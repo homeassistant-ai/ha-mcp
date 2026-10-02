@@ -32,6 +32,8 @@ from .component_api import (
     is_unknown_command,
 )
 from .helpers import (
+    WHITESPACE_CLEARS_NOTE,
+    clearable_value,
     exception_to_structured_error,
     extract_tool_error_message,
     log_tool_usage,
@@ -63,6 +65,11 @@ _GET_ENTRIES_CHUNK_SIZE = 500
 # Max entity IDs accepted by the bulk-removal path of ha_remove_entity. Mirrors
 # the cap the other bulk tools use (ha_get_state's _get_bulk_entity_states).
 _MAX_BULK_REMOVE = 100
+
+_CLEAR_DEVICE_NAME_HINT = (
+    "new_device_name cannot clear the device name; use ha_set_device(name='') "
+    "instead, or name=' ' if your client cannot send an empty string"
+)
 
 
 def _format_fetched_entity(entry: dict[str, Any]) -> dict[str, Any]:
@@ -255,13 +262,16 @@ def _build_name_visibility_fields(
 ) -> None:
     """Add basic positioning/appearance fields to the update message."""
     if area_id is not None:
-        message["area_id"] = area_id if area_id else None
+        area_id = clearable_value(area_id, "area_id")
+        message["area_id"] = area_id
         updates_made.append(f"area_id='{area_id}'" if area_id else "area cleared")
     if name is not None:
-        message["name"] = name if name else None
+        name = clearable_value(name, "name")
+        message["name"] = name
         updates_made.append(f"name='{name}'" if name else "name cleared")
     if icon is not None:
-        message["icon"] = icon if icon else None
+        icon = clearable_value(icon, "icon")
+        message["icon"] = icon
         updates_made.append(f"icon='{icon}'" if icon else "icon cleared")
     if device_class is not None:
         # Treat whitespace-only as the documented "clear" sentinel so
@@ -1194,7 +1204,7 @@ class EntityTools:
             # cleanup path (label_operation="remove") must stay open.
             await validate_registry_ids(
                 self._client,
-                area_id,
+                clearable_value(area_id, "area_id"),
                 parsed_labels if label_operation in ("set", "add") else None,
                 parsed_categories,
                 fail_closed=True,
@@ -1218,7 +1228,7 @@ class EntityTools:
         device_rename_result, entity_entry = await self._apply_device_rename(
             entity_id, entity_entry, new_device_name
         )
-        if new_device_name is not None:
+        if device_rename_result and device_rename_result.get("success"):
             updates_made.append(f"device_name -> {new_device_name}")
 
         # Phase 6: Expose to assistants
@@ -1656,21 +1666,30 @@ class EntityTools:
         area_id: Annotated[
             str | None,
             Field(
-                description="Area/room ID to assign the entity to. Use empty string '' to unassign from current area.",
+                description=(
+                    "Area/room ID to assign the entity to. Use empty string '' to "
+                    "unassign from current area. " + WHITESPACE_CLEARS_NOTE
+                ),
                 default=None,
             ),
         ] = None,
         name: Annotated[
             str | None,
             Field(
-                description="Display name for the entity. Use empty string '' to remove custom name and revert to default.",
+                description=(
+                    "Display name for the entity. Use empty string '' to remove custom "
+                    "name and revert to default. " + WHITESPACE_CLEARS_NOTE
+                ),
                 default=None,
             ),
         ] = None,
         icon: Annotated[
             str | None,
             Field(
-                description="Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon.",
+                description=(
+                    "Icon for the entity (e.g., 'mdi:thermometer'). Use empty string "
+                    "'' to remove custom icon. " + WHITESPACE_CLEARS_NOTE
+                ),
                 default=None,
             ),
         ] = None,
@@ -1681,7 +1700,8 @@ class EntityTools:
                     "Override the entity's display device class — what the HA UI's 'Show "
                     "As' dropdown writes. Use empty string '' to clear the override and "
                     "fall back to the integration default. Examples: 'window', 'door', "
-                    "'motion' for binary_sensor; 'temperature', 'humidity' for sensor."
+                    "'motion' for binary_sensor; 'temperature', 'humidity' for sensor. "
+                    + WHITESPACE_CLEARS_NOTE
                 ),
                 default=None,
             ),
@@ -1800,7 +1820,9 @@ class EntityTools:
             Field(
                 description=(
                     "New display name for the associated device. "
-                    "If provided, both entity and device are updated in one operation."
+                    "If provided, both entity and device are updated in one operation. "
+                    "Empty or whitespace-only is ignored (no change); to clear the "
+                    "device name use ha_set_device(name='')."
                 ),
                 default=None,
             ),
@@ -1903,6 +1925,14 @@ class EntityTools:
                 )
 
             _validate_enabled_constraint(enabled, entity_ids)
+            # Checked up front: the entity registry write runs before the device rename.
+            clearable_value(name, "name", reject_quote_only=True)
+            clearable_value(
+                new_device_name,
+                "new_device_name",
+                reject_quote_only=True,
+                clear_hint=_CLEAR_DEVICE_NAME_HINT,
+            )
 
             parsed_aliases = _parse_aliases_param(aliases)
             parsed_categories = _parse_categories_param(categories)
