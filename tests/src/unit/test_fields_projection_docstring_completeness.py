@@ -601,6 +601,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
     for module, fn in (
         ("tools/search_modes.py", "_search_regular"),
         ("tools/search_modes.py", "_search_domain_only"),
+        ("tools/search_modes.py", "_search_state_only"),
         ("tools/search_modes.py", "_search_area_with_query"),
         ("tools/search_modes.py", "_search_area_only_populated"),
         ("tools/search_modes.py", "_search_area_only"),
