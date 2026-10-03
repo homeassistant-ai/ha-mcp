@@ -204,7 +204,7 @@ def test_javascript_findings_gate_and_vendored_js_is_ignored(tmp_path: Path) -> 
     assert [f[0] for f in findings] == [
         "src/ha_mcp/settings_ui/settings_js/03_render_save.js"
     ]
-    assert not suppressed  # no JS entries in the (python-only) ALLOWLIST
+    assert not suppressed  # no ALLOWLIST entry covers js/useless-assignment
     assert gate.main(["prog", str(path)]) == 1
 
 
