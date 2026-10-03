@@ -293,7 +293,7 @@ jobs:
         #
         # -n2 --dist loadscope: pytest-xdist parallelizes across 2 workers,
         # each booting its own QEMU (per-worker port offset + qcow2 overlay
-        # — see _haos_worker_setup in tests/src/e2e/conftest.py). loadscope
+        # — see _haos_worker_setup in tests/src/e2e/_conftest_haos.py). loadscope
         # keeps all tests in the same module on the same worker so each
         # worker amortizes its boot cost. 4-vCPU/16-GB runner fits 2x
         # QEMU at -smp 2 -m 4096 each (#1350).
@@ -759,7 +759,7 @@ jobs:
         #
         # -n2 --dist loadscope: pytest-xdist parallelizes across 2 workers,
         # each booting its own QEMU (per-worker port offset + qcow2 overlay
-        # — see _haos_worker_setup in tests/src/e2e/conftest.py). Same
+        # — see _haos_worker_setup in tests/src/e2e/_conftest_haos.py). Same
         # rationale as the external HAOS workflow (#1350).
         # Two phases (live-found isolation flaw): addon_disruptive tests
         # self-restart the dev addon, killing any OTHER worker's in-flight
@@ -1463,7 +1463,7 @@ jobs:
         #
         # -n2 --dist loadscope: pytest-xdist parallelizes across 2 workers,
         # each booting its own QEMU (per-worker port offset + qcow2 overlay
-        # — see _haos_worker_setup in tests/src/e2e/conftest.py). Same
+        # — see _haos_worker_setup in tests/src/e2e/_conftest_haos.py). Same
         # rationale as the external HAOS workflow (#1350).
         # Two phases (live-found isolation flaw): addon_disruptive tests
         # self-restart the dev addon, killing any OTHER worker's in-flight

@@ -128,11 +128,11 @@ class TestErrorHandling:
         copied in at container prep — so a successful search on a settled
         instance always has entities. The boot poll that waits for
         light.bed_light to land in the state machine
-        (conftest._wait_for_haos_light_ready) runs only on the HAOS lanes,
+        (_conftest_haos._wait_for_haos_light_ready) runs only on the HAOS lanes,
         though, and the demo platform publishes its states after the
         integration's async_setup returns, so container / embedded lanes can
         briefly race a search that fires first (documented at
-        conftest.py:1863-1874, PR #1379). With ``require_entities`` the
+        ``_wait_for_haos_light_ready``, PR #1379). With ``require_entities`` the
         bounded poll below absorbs that lag, and only a still-empty result
         after the window is a search regression rather than an empty instance.
 

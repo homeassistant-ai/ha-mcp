@@ -481,7 +481,7 @@ def _shift_recorder_timestamps(db_local: Path, target_age_seconds: float) -> boo
     """
     import sqlite3
 
-    # Same logic as conftest._refresh_recorder_timestamps. Kept inline
+    # Same logic as _conftest_seed._refresh_recorder_timestamps. Kept inline
     # rather than importing because conftest pulls in heavy dev deps
     # (docker, testcontainers) that the HAOS-only paths don't need.
     TIMESTAMP_COLUMNS = {
@@ -553,7 +553,7 @@ def refresh_recorder_in_qcow2(
     once that exceeds the ~24h window history queries use, every history
     pagination test silently regresses. This helper extracts the DB from
     the qcow2, runs the same uniform timestamp shift the testcontainer
-    path does (``conftest._refresh_recorder_timestamps``), and copies the
+    path does (``_conftest_seed._refresh_recorder_timestamps``), and copies the
     file back in place. Done once per pytest session before QEMU boots.
 
     Uses guestfish (libguestfs) for both copy-out and copy-in; sqlite3

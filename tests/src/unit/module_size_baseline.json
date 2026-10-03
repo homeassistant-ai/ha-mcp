@@ -50,7 +50,6 @@
   "src/ha_mcp/tools/util_helpers.py": 2544,
   "tests/addon/test_webhook_proxy.py": 7378,
   "tests/haos_image_build/build_image.py": 2862,
-  "tests/src/e2e/conftest.py": 3519,
   "tests/src/e2e/error_handling/test_network_errors.py": 1150,
   "tests/src/e2e/tools/test_create_custom_tool.py": 2037,
   "tests/src/e2e/tools/test_search_entities.py": 2387,

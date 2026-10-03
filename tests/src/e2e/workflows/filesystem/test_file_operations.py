@@ -100,7 +100,7 @@ async def mcp_client_with_filesystem(
             f"{missing}. The inaddon addon needs enable_filesystem_tools=true in "
             f"its install-time options (build_image.install_ha_mcp_dev_addon); the "
             f"embedded backend needs it in feature_flags.json "
-            f"(conftest._EMBEDDED_FEATURE_FLAGS)."
+            f"(_conftest_embedded._EMBEDDED_FEATURE_FLAGS)."
         )
         logger.debug("FastMCP client (%s, HTTP) reused for filesystem tests", backend)
         # Session-scope mcp_client owns __aexit__; the per-test fixture

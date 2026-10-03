@@ -85,7 +85,7 @@ _SERVER_PORT = 9584
 # HA_MCP_CONFIG_DIR at ``hass.config.path(SERVER_CONFIG_SUBDIR)``, so it lands
 # under the bind-mounted /config and is readable from the host. Duplicated from
 # custom_components/ha_mcp_tools/const.py (SERVER_CONFIG_SUBDIR), same as
-# conftest's _EMBEDDED_SERVER_CONFIG_SUBDIR.
+# _conftest_embedded's _EMBEDDED_SERVER_CONFIG_SUBDIR.
 _SERVER_CONFIG_SUBDIR = ".ha_mcp"
 
 # The whole fastmcp dependency tree is runtime-installed on first bring-up.
@@ -149,7 +149,7 @@ def _build_wheel(dest_dir: Path) -> Path:
     wheel`` exits non-zero — which used to make this test green-by-SKIP on every CI
     run (its wheel path never actually executed). ``uv`` is always on PATH (setup-uv)
     and builds in an isolated env without needing pip in the venv, matching
-    conftest._build_embedded_server_wheel.
+    _conftest_embedded._build_embedded_server_wheel.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(
