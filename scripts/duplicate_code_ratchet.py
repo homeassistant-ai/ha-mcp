@@ -21,12 +21,13 @@ passes ``--staged`` to read the staged content, so the baseline it stages
 matches the files in the commit.
 
 The command writes the baseline only when every group passes, so it cannot
-accept a new copy: import the existing function instead.
+accept a new copy: import the existing function instead. CI also runs
+``--base <ref>``, which fails when the baseline lists a group that the
+baseline at that commit does not allow.
 """
 
 from __future__ import annotations
 
-import argparse
 import ast
 import hashlib
 import json
@@ -292,15 +293,29 @@ def find_violations(
     return messages
 
 
+def find_added_groups(
+    baseline: dict[str, list[str]], base: dict[str, list[str]]
+) -> list[str]:
+    """Return one message per group ``baseline`` lists that ``base`` does
+    not allow."""
+    return [
+        f"{', '.join(group)}: listed in {BASELINE_NAME}, but the base branch's "
+        f"baseline does not allow this group. Only `{REPIN_COMMAND}` edits the "
+        "baseline, and it never accepts a new copy: import the existing "
+        "definition instead."
+        for code, group in sorted(baseline.items())
+        if not _is_listed(code, group, base)
+    ]
+
+
 def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
     """Fail on a new copy; otherwise rewrite the baseline to the current groups."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--staged",
-        action="store_true",
-        help="read the staged content instead of the working tree",
-    )
-    args = parser.parse_args(argv)
+    args = module_size_ratchet.parse_args(argv, __doc__.splitlines()[0])
+    if args.base:
+        status: int = module_size_ratchet.compare_with_base(
+            repo_root, args.base, BASELINE_NAME, find_added_groups
+        )
+        return status
     baseline_path = repo_root / BASELINE_NAME
     # With --staged the baseline comes from the index too, so an unstaged
     # edit to it cannot let a staged copy through.

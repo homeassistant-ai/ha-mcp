@@ -19,7 +19,7 @@ from types import ModuleType
 
 import pytest
 
-from ._ratchet_repo import make_ratchet_repo
+from ._ratchet_repo import commit, make_ratchet_repo
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "duplicate_code_ratchet.py"
@@ -241,6 +241,14 @@ def test_copies_edited_the_same_way_pass() -> None:
     assert ratchet.find_violations(groups, baseline) == []
 
 
+def test_baseline_listing_a_group_the_base_does_not_allow_is_rejected() -> None:
+    """A hand edit that lists a new copy in the baseline must fail in CI."""
+    listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
+
+    assert len(ratchet.find_added_groups(listed, {})) == 1
+    assert ratchet.find_added_groups(listed, listed) == []
+
+
 def test_copied_class_is_reported_once() -> None:
     """A copied class also copies its methods; one message per method would
     bury the one fix: import the class."""
@@ -341,6 +349,16 @@ def test_staged_run_ignores_an_unstaged_baseline_edit(temp_repo: Path) -> None:
     (temp_repo / ratchet.BASELINE_NAME).write_text(json.dumps(listed), encoding="utf-8")
 
     assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
+
+
+def test_base_check_rejects_a_hand_listed_group(temp_repo: Path) -> None:
+    """The CI step runs the script with --base. If the script ignored it,
+    the step would check the tree against the edited baseline and pass."""
+    commit(temp_repo)
+    listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
+    (temp_repo / ratchet.BASELINE_NAME).write_text(json.dumps(listed), encoding="utf-8")
+
+    assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
 
 
 def test_repository_matches_the_baseline() -> None:

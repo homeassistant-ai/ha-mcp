@@ -40,3 +40,12 @@ def make_ratchet_repo(
         ["git", "add", "pyproject.toml", baseline_name], cwd=tmp_path, check=True
     )
     return tmp_path
+
+
+def commit(repo: Path) -> None:
+    """Commit what is staged, as a throwaway author."""
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "c"],
+        cwd=repo,
+        check=True,
+    )
