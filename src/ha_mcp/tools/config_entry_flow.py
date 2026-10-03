@@ -30,6 +30,7 @@ imported in one direction only (menu <- form <- walker <- here):
 import asyncio
 import json
 import logging
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
@@ -460,6 +461,34 @@ FLOW_HELPER_TYPES: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
+async def _subentry_ids(client: Any, entry_id: str) -> set[str] | None:
+    """IDs of the entry's subentries; None when they can't be listed."""
+    try:
+        listed = await client.list_config_subentries(entry_id)
+    except Exception:
+        logger.debug("Listing subentries of %s failed", entry_id, exc_info=True)
+        return None
+    if not isinstance(listed, dict) or not listed.get("success"):
+        return None
+    return {
+        s["subentry_id"]
+        for s in listed.get("result") or []
+        if isinstance(s, dict) and s.get("subentry_id")
+    }
+
+
+async def _created_subentry_id(
+    client: Any, entry_id: str, before: set[str]
+) -> str | None:
+    created = (await _subentry_ids(client, entry_id) or before) - before
+    return created.pop() if len(created) == 1 else None
+
+
+# A create finds its subentry by diffing the parent's listing, so creates under
+# one parent run one at a time.
+_SUBENTRY_CREATE_LOCKS: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
 async def set_config_subentry(
     client: Any,
     entry_id: str,
@@ -483,7 +512,28 @@ async def set_config_subentry(
     subentry fields it does not name instead of resetting them. The create
     branch is unchanged on both counts.
     """
+    if subentry_id is not None:
+        return await _run_config_subentry_flow(
+            client, entry_id, subentry_type, config_dict, subentry_id,
+            show_advanced_options,
+        )  # fmt: skip
+    async with _SUBENTRY_CREATE_LOCKS[entry_id]:
+        return await _run_config_subentry_flow(
+            client, entry_id, subentry_type, config_dict, None, show_advanced_options
+        )
+
+
+async def _run_config_subentry_flow(
+    client: Any,
+    entry_id: str,
+    subentry_type: str,
+    config_dict: dict[str, Any],
+    subentry_id: str | None,
+    show_advanced_options: bool | None,
+) -> dict[str, Any]:
     _reject_redaction_sentinels(config_dict)
+    # Core's create result carries no subentry_id; the new one is the difference.
+    before = None if subentry_id else await _subentry_ids(client, entry_id)
     flow_result = await client.start_config_subentry_flow(
         entry_id,
         subentry_type,
@@ -536,6 +586,8 @@ async def set_config_subentry(
             await _abort_subentry_flow_best_effort(client, flow_id)
         raise
 
+    if before is not None and result["operation"] == "created":
+        subentry_id = await _created_subentry_id(client, entry_id, before)
     response = {
         "success": True,
         "entry_id": entry_id,

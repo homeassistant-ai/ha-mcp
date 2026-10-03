@@ -37,7 +37,7 @@ The dev app uses the same configuration as the stable version. See the main app'
 | `auto_backup_retain_per_entity` | The most snapshots kept per entity (range 1-10000). | `100` |
 | `enable_snapshot_delete` | Lets `ha_manage_backup` delete full Home Assistant snapshots. Scheduled, newest and too-young snapshots stay protected. | `false` |
 | `snapshot_delete_min_age_days` | How old a snapshot must be, in days, before it can be deleted (range 0-365). `0` turns off the age limit. | `7` |
-| `tool_search_max_results` | Max results from `ha_search_tools` (range 2-10) | `5` |
+| `tool_search_max_results` | Max hidden tools returned per `ha_search_tools` call (range 2-10); a pinned tool that ranks inside that top count is added as a name-only stub on top of it | `5` |
 | `disabled_tools` | Comma-separated list of tool names to disable (seed value; web UI is primary). Mandatory tools can't be disabled and are unaffected. | empty |
 | `pinned_tools` | Comma-separated list of tool names to pin when tool search is enabled (seed value; web UI is primary) | empty |
 | `verify_ssl` | Verify the HA server's TLS certificate. Disable for self-signed certs or hostname mismatches. Weakens security — leave on unless needed. | `true` |
