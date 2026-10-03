@@ -2529,7 +2529,7 @@
   {
     "name": "ha_get_logs",
     "title": "Get Logs",
-    "description": "Get Home Assistant logs from various sources.\n\nPrefer source='system' for triage: it returns HA's own deduplicated\nsystem_log entries with counts, first_occurred and full tracebacks, and\nits counts run since each error first occurred. error_log with\nstructured=True counts only what is inside the fetched window (reported\nas window_start/window_end; every install reads a capped window) and\ndrops tracebacks, which structured=False gets back; use it for entries\nbelow system_log's WARNING+ ~50-entry cap, or for the per-component\nrollup. In structured mode limit/order do not apply: issues are ranked\nby count, then severity, then recency, over a fixed deep window.\n\nRaw-text sources (error_log, supervisor, system_service) read a bounded\nwindow per call, so level/search filter and limit slice within that\nwindow only; window_lines reports the size requested. Logbook responses\ncarry has_more plus a pagination_hint; error_log and fault_log carry\nhas_more with a next_offset to pass back while it stays true.",
+    "description": "Get Home Assistant logs from various sources.\n\nPrefer source='system' for triage: it returns HA's own deduplicated\nsystem_log entries with counts, first_occurred and the full exception\ntraceback, and its counts run since each error first occurred. error_log with\nstructured=True counts only what is inside the fetched window (reported\nas window_start/window_end; every install reads a capped window) and\ndrops tracebacks, which structured=False gets back; use it for entries\nbelow system_log's WARNING+ ~50-entry cap, or for the per-component\nrollup. In structured mode limit/order do not apply: issues are ranked\nby count, then severity, then recency, over a fixed deep window.\n\nRaw-text sources (error_log, supervisor, system_service) read a bounded\nwindow per call, so level/search filter and limit slice within that\nwindow only; window_lines reports the size requested. Logbook responses\ncarry has_more plus a pagination_hint; error_log and fault_log carry\nhas_more with a next_offset to pass back while it stays true.",
     "inputSchema": {
       "properties": {
         "source": {
@@ -2580,7 +2580,7 @@
         },
         "compact": {
           "type": "bool",
-          "description": "Logbook only: strip attribute dicts to save context.",
+          "description": "logbook / system only: save context. Logbook strips attribute dicts; system keeps the start and end of each message string within 2000 characters (counted in 'truncated_messages'). search still matches the full message; text inside the cut is not shown. To read one message whole, pass False with a narrow search and limit=1.",
           "default": true
         },
         "level": {
