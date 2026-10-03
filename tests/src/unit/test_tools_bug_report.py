@@ -702,8 +702,8 @@ class TestBugReportTool:
         assert "'runtime_bug'" in instructions
         assert "'agent_behavior'" in instructions
         assert "'feature_request'" in instructions
-        # Without the report body itself, the filed issue is closed on open.
-        assert "closed automatically" in instructions
+        # Without the report body itself, a filed bug report is closed.
+        assert "closed after 24 hours" in instructions
         assert "anonymize" in instructions.lower()
         assert "personal information" in instructions.lower()
 
