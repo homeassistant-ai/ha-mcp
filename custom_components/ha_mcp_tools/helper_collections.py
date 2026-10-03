@@ -186,6 +186,22 @@ def _invalid_errors() -> tuple[type[BaseException], ...]:
 _INVALID_ERRORS = _invalid_errors()
 
 
+class _NeverRaised(Exception):
+    """Stands in for an exception class this Core build doesn't provide."""
+
+
+def _home_assistant_error() -> type[BaseException]:
+    try:
+        from homeassistant.exceptions import HomeAssistantError
+    except ImportError:
+        return _NeverRaised
+    if isinstance(HomeAssistantError, type) and issubclass(
+        HomeAssistantError, BaseException
+    ):
+        return HomeAssistantError
+    return _NeverRaised
+
+
 def _item_not_found() -> type[BaseException]:
     try:
         from homeassistant.helpers.collection import ItemNotFound
@@ -244,6 +260,7 @@ async def async_write_item(
         return _failure("unavailable", f"No {helper_type} storage collection")
     collection = owner.storage_collection
     data = dict(msg["data"])
+    before = dict(collection.data)
     try:
         if msg["action"] == "create":
             item = await collection.async_create_item(data)
@@ -252,6 +269,12 @@ async def async_write_item(
     except _item_not_found() as err:
         return _failure("not_found", f"{helper_type} config not found: {err}")
     except _INVALID_ERRORS as err:
+        return _failure("invalid", str(err))
+    except _home_assistant_error() as err:
+        # Core rejected it before storing (a duplicate tag_id); an error after a
+        # stored change is not a rejection, so it surfaces as an unknown outcome.
+        if collection.data != before:
+            raise
         return _failure("invalid", str(err))
 
     item = dict(item)

@@ -701,6 +701,11 @@ async def safe_progress(
         logger.debug("ctx.report_progress failed (%s): %s", type(e).__name__, e)
 
 
+def clear_or_keep(value: str | None, param_name: str) -> str | None:
+    """``clearable_value`` for params where None means "not passed": blank → ''."""
+    return None if value is None else clearable_value(value, param_name) or ""
+
+
 class _HiddenParam:
     """Annotated marker for a parameter left out of the published input schema."""
 

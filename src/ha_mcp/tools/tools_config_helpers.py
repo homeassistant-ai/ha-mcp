@@ -76,7 +76,7 @@ from .helper_field_schemas import (
 )
 from .helpers import (
     HIDDEN_PARAM,
-    clearable_value,
+    clear_or_keep,
     exception_to_structured_error,
     hidden_param_names,
     log_tool_usage,
@@ -3410,6 +3410,7 @@ def _prepare_typed_params(
             helper_type, config, {"name": name, "icon": icon, **type_kw}
         )
         name, icon = merged.pop("name"), merged.pop("icon")
+        icon = clear_or_keep(icon, "icon")  # a config icon too
         type_kw = merged
     _validate_applicable_params(helper_type, {"icon": icon, **type_kw})
     return name, icon, type_kw
@@ -4453,15 +4454,10 @@ class HelperConfigTools:
         - config subentry: ha_config_set_helper(helper_type="config_subentry", entry_id="01HXYZ...", subentry_type="conversation", config={"name": "Local agent", "model": "gemma3:27b"})
         """
         try:
-            # None = not passed; '' = clear ('' or whitespace, #2617's convention).
-            area_id, icon, category = (
-                None if value is None else clearable_value(value, param) or ""
-                for value, param in (
-                    (area_id, "area_id"),
-                    (icon, "icon"),
-                    (category, "category"),
-                )
-            )
+            # '' or whitespace clears (#2617's convention); None = not passed.
+            area_id = clear_or_keep(area_id, "area_id")
+            icon = clear_or_keep(icon, "icon")
+            category = clear_or_keep(category, "category")
             if helper_type == "config_subentry":
                 return await _handle_set_config_subentry(
                     self._client,

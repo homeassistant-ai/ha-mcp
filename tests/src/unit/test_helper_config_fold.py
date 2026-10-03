@@ -276,6 +276,8 @@ async def test_blank_clears_and_quote_only_is_rejected(capture_create) -> None:
     assert (args[3], args[4], args[6]) == ("", "", "")
     with pytest.raises(ToolError, match="only quote characters"):
         await _call(mcp, **base, category='""')
+    await _call(mcp, **base, config={"icon": " "})  # a config icon clears too
+    assert capture_create.args[1][3] == ""
 
 
 async def test_empty_category_clears_the_scope() -> None:

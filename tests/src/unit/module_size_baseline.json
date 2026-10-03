@@ -32,7 +32,7 @@
   "src/ha_mcp/tools/tools_code.py": 1432,
   "src/ha_mcp/tools/tools_config_automations.py": 2022,
   "src/ha_mcp/tools/tools_config_dashboards.py": 4131,
-  "src/ha_mcp/tools/tools_config_helpers.py": 4638,
+  "src/ha_mcp/tools/tools_config_helpers.py": 4634,
   "src/ha_mcp/tools/tools_config_scenes.py": 1474,
   "src/ha_mcp/tools/tools_config_scripts.py": 1199,
   "src/ha_mcp/tools/tools_dev.py": 2446,

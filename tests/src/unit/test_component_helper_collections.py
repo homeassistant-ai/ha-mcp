@@ -225,6 +225,31 @@ def test_write_clears_the_helpers_category() -> None:
     ]
 
 
+class _CoreError(Exception):
+    pass
+
+
+def test_core_error_is_invalid_only_when_nothing_was_stored(monkeypatch) -> None:
+    monkeypatch.setattr(hc, "_home_assistant_error", lambda: _CoreError)
+    rejected = FakeCollection()
+    rejected.invalid = _CoreError("tag_id already exists")
+    msg = {"helper_type": "tag", "action": "create", "data": {"name": "T"}}
+    result = asyncio.run(
+        hc.async_write_item(_hass(rejected, "tag"), FakeRegistry(), msg)
+    )
+    assert result["error"] == {"code": "invalid", "message": "tag_id already exists"}
+
+    class StoredThenFailed(FakeCollection):
+        async def async_create_item(self, data):
+            self.data["t"] = {"id": "t", **data}
+            raise _CoreError("entity setup failed")
+
+    with pytest.raises(_CoreError):
+        asyncio.run(
+            hc.async_write_item(_hass(StoredThenFailed(), "tag"), FakeRegistry(), msg)
+        )
+
+
 def test_write_reports_invalid_missing_and_unavailable() -> None:
     collection = FakeCollection()
     collection.invalid = ValueError("min must be below max")
