@@ -135,7 +135,10 @@ class RadioTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Action-specific parameters (e.g. code, pin, channel, property, value)."
+                    "Action-specific parameters (e.g. code, pin, channel, property, value). "
+                    "Z-Wave get_config_param: property (parameter number), endpoint "
+                    "(default 0), property_key (partial-parameter bit mask), refresh "
+                    "(default False; full root parameters only)."
                 ),
                 default=None,
             ),
@@ -156,7 +159,12 @@ class RadioTools:
 
         For read-only inspection prefer ha_get_device / ha_get_system_health,
         which mirror the 'diagnostics' and 'network_status' actions; use this
-        tool for writes and the active 'ping' probe (unique to this tool). Write
+        tool for writes and the active 'ping' probe (unique to this tool).
+        Z-Wave 'get_config_params' lists cached configuration values/metadata;
+        'get_config_param' reads one, without enabling or creating entities.
+        params.refresh=True requests a device read of a full root parameter;
+        cached reads support endpoints and property_key bit masks. HA admin
+        access is required for parameter reads. Write
         actions perform inclusion/commissioning, removal, healing,
         reconfiguration, firmware updates and credential provisioning.
 
