@@ -241,6 +241,14 @@ def test_copies_edited_the_same_way_pass() -> None:
     assert ratchet.find_violations(groups, baseline) == []
 
 
+def test_baseline_listing_a_group_the_base_does_not_allow_is_rejected() -> None:
+    """A hand edit that lists a new copy in the baseline must fail in CI."""
+    listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
+
+    assert len(ratchet.find_added_groups(listed, {})) == 1
+    assert ratchet.find_added_groups(listed, listed) == []
+
+
 def test_copied_class_is_reported_once() -> None:
     """A copied class also copies its methods; one message per method would
     bury the one fix: import the class."""

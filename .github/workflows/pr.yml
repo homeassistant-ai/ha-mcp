@@ -437,6 +437,25 @@ jobs:
         uv run mypy homeassistant-addon-webhook-proxy-dev/ || status=1
         exit "$status"
 
+    # The ratchet scripts only lower their baselines, but the baselines are
+    # plain files: a hand edit could raise an entry or list a new copy and
+    # every other check would pass. A pull request is checked out merged
+    # with its base, so comparing with the base branch's tip is exact.
+    - name: Check the ratchet baselines did not grow
+      if: success() || failure()
+      env:
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        if [ -z "$BASE_REF" ]; then
+          echo "not a pull request - no base branch to compare with"
+          exit 0
+        fi
+        git fetch --depth=1 origin "$BASE_REF"
+        status=0
+        uv run python scripts/module_size_ratchet.py --base "origin/$BASE_REF" || status=1
+        uv run python scripts/duplicate_code_ratchet.py --base "origin/$BASE_REF" || status=1
+        exit "$status"
+
   # Anchors the docs-site accessibility work (#1574/#1595): astro check (types
   # + a11y diagnostics), eslint-plugin-astro + jsx-a11y, and an axe-core audit
   # over the built pages — all blocking. The baseline is clean, so any
