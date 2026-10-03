@@ -31,6 +31,10 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .entity_update_fields import (
+    build_name_visibility_fields,
+    build_state_tag_fields,
+)
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
     clearable_value,
@@ -250,69 +254,6 @@ def _extract_ws_error(result: dict[str, Any]) -> str:
         return error
     logger.warning("HA WS response had no usable error detail: %r", result)
     return "no error detail returned by Home Assistant"
-
-
-def _build_name_visibility_fields(
-    message: dict[str, Any],
-    updates_made: list[str],
-    area_id: str | None,
-    name: str | None,
-    icon: str | None,
-    device_class: str | None,
-) -> None:
-    """Add basic positioning/appearance fields to the update message."""
-    if area_id is not None:
-        area_id = clearable_value(area_id, "area_id")
-        message["area_id"] = area_id
-        updates_made.append(f"area_id='{area_id}'" if area_id else "area cleared")
-    if name is not None:
-        name = clearable_value(name, "name")
-        message["name"] = name
-        updates_made.append(f"name='{name}'" if name else "name cleared")
-    if icon is not None:
-        icon = clearable_value(icon, "icon")
-        message["icon"] = icon
-        updates_made.append(f"icon='{icon}'" if icon else "icon cleared")
-    if device_class is not None:
-        device_class = clearable_value(device_class, "device_class")
-        message["device_class"] = device_class
-        updates_made.append(
-            f"device_class='{device_class}'" if device_class else "device_class cleared"
-        )
-
-
-def _build_state_tag_fields(
-    message: dict[str, Any],
-    updates_made: list[str],
-    enabled: bool | None,
-    hidden: bool | None,
-    parsed_aliases: list[str | None] | None,
-    parsed_categories: dict[str, str | None] | None,
-    final_labels: list[str] | None,
-    label_operation: str,
-    parsed_labels: list[str] | None,
-) -> None:
-    """Add enabled/hidden/alias/category/label fields to the update message."""
-    if enabled is not None:
-        message["disabled_by"] = None if enabled else "user"
-        updates_made.append("enabled" if enabled else "disabled")
-    if hidden is not None:
-        message["hidden_by"] = "user" if hidden else None
-        updates_made.append("hidden" if hidden else "visible")
-    if parsed_aliases is not None:
-        message["aliases"] = parsed_aliases
-        updates_made.append(f"aliases={parsed_aliases}")
-    if parsed_categories is not None:
-        message["categories"] = parsed_categories
-        updates_made.append(f"categories={parsed_categories}")
-    if final_labels is not None:
-        message["labels"] = final_labels
-        if label_operation == "set":
-            updates_made.append(f"labels={final_labels}")
-        elif label_operation == "add":
-            updates_made.append(f"labels added: {parsed_labels} -> {final_labels}")
-        else:  # remove
-            updates_made.append(f"labels removed: {parsed_labels} -> {final_labels}")
 
 
 def _parse_set_entity_ids(
@@ -1163,10 +1104,10 @@ class EntityTools:
                 "entity_id": entity_id,
             }
             updates_made: list[str] = []
-            _build_name_visibility_fields(
+            build_name_visibility_fields(
                 message, updates_made, area_id, name, icon, device_class
             )
-            _build_state_tag_fields(
+            build_state_tag_fields(
                 message,
                 updates_made,
                 enabled,
@@ -1221,7 +1162,7 @@ class EntityTools:
             # cleanup path (label_operation="remove") must stay open.
             await validate_registry_ids(
                 self._client,
-                message.get("area_id"),  # normalized by _build_name_visibility_fields
+                message.get("area_id"),  # normalized by build_name_visibility_fields
                 parsed_labels if label_operation in ("set", "add") else None,
                 parsed_categories,
                 fail_closed=True,
