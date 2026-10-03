@@ -9,22 +9,13 @@ module holds the settings singleton and the embedded-mode connection.
 # isort: off
 from ha_mcp.config_backup import (
     _apply_backup_overrides as _apply_backup_overrides,
-    _apply_one_backup_override as _apply_one_backup_override,
-    _coerce_backup_int_value as _coerce_backup_int_value,
-    _coerce_backup_override_value as _coerce_backup_override_value,
-    _read_backup_override_file as _read_backup_override_file,
     get_backup_setting_origin as get_backup_setting_origin,
 )
 from ha_mcp.config_overrides import (
     _BETA_GATE_LOGGED as _BETA_GATE_LOGGED,
-    _advanced_override_passes_constraints as _advanced_override_passes_constraints,
     _apply_advanced_overrides as _apply_advanced_overrides,
-    _apply_beta_master_gate as _apply_beta_master_gate,
     _apply_feature_flag_overrides as _apply_feature_flag_overrides,
-    _apply_one_advanced_override as _apply_one_advanced_override,
-    _apply_one_feature_flag_override as _apply_one_feature_flag_override,
     _coerce_advanced_override_value as _coerce_advanced_override_value,
-    _coerce_feature_flag_value as _coerce_feature_flag_value,
     _read_feature_flag_override_file as _read_feature_flag_override_file,
     get_feature_flag_origin as get_feature_flag_origin,
 )
@@ -32,7 +23,6 @@ from ha_mcp.config_registry import (
     _ADVANCED_SETTINGS_BOUNDS as _ADVANCED_SETTINGS_BOUNDS,
     _ADVANCED_SETTINGS_CHOICES as _ADVANCED_SETTINGS_CHOICES,
     _ADVANCED_SETTINGS_SENTINELS as _ADVANCED_SETTINGS_SENTINELS,
-    _BACKUP_OVERRIDE_FILENAME as _BACKUP_OVERRIDE_FILENAME,
     _FEATURE_FLAG_INT_BOUNDS as _FEATURE_FLAG_INT_BOUNDS,
     _FEATURE_FLAG_OVERRIDE_FILENAME as _FEATURE_FLAG_OVERRIDE_FILENAME,
     ADDON_SYNCED_ADVANCED_FIELDS as ADDON_SYNCED_ADVANCED_FIELDS,
@@ -41,24 +31,49 @@ from ha_mcp.config_registry import (
     BETA_FEATURE_FIELDS as BETA_FEATURE_FIELDS,
     FEATURE_FLAG_FIELDS as FEATURE_FLAG_FIELDS,
     AdvancedField as AdvancedField,
-    AdvancedSection as AdvancedSection,
     BackupOverrideField as BackupOverrideField,
     FeatureFlagField as FeatureFlagField,
-    OverrideField as OverrideField,
-    RegistryFieldType as RegistryFieldType,
 )
 from ha_mcp.config_settings import (
     _PACKAGE_VERSION as _PACKAGE_VERSION,
-    DEMO_TOKEN as DEMO_TOKEN,
     OAUTH_MODE_TOKEN as OAUTH_MODE_TOKEN,
     OAUTH_MODE_URL as OAUTH_MODE_URL,
     Settings as Settings,
-    env_file as env_file,
-    env_path as env_path,
     get_settings as get_settings,
-    project_root as project_root,
 )
 # isort: on
+
+__all__ = [
+    "ADDON_SYNCED_ADVANCED_FIELDS",
+    "ADVANCED_SETTINGS_FIELDS",
+    "BACKUP_OVERRIDE_FIELDS",
+    "BETA_FEATURE_FIELDS",
+    "FEATURE_FLAG_FIELDS",
+    "OAUTH_MODE_TOKEN",
+    "OAUTH_MODE_URL",
+    "_ADVANCED_SETTINGS_BOUNDS",
+    "_ADVANCED_SETTINGS_CHOICES",
+    "_ADVANCED_SETTINGS_SENTINELS",
+    "_FEATURE_FLAG_INT_BOUNDS",
+    "_FEATURE_FLAG_OVERRIDE_FILENAME",
+    "_PACKAGE_VERSION",
+    "BackupOverrideField",
+    "FeatureFlagField",
+    "Settings",
+    "_coerce_advanced_override_value",
+    "_read_feature_flag_override_file",
+    "_reset_global_settings",
+    "_settings",
+    "get_backup_setting_origin",
+    "get_embedded_config_dir",
+    "get_feature_flag_origin",
+    "get_global_settings",
+    "get_settings",
+    "parse_extra_yaml_write_keys",
+    "reset_global_settings",
+    "set_embedded_connection",
+    "should_emit_llm_api_metadata",
+]
 
 
 def parse_extra_yaml_write_keys(settings: "Settings") -> list[str]:

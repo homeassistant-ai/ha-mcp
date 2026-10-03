@@ -2,6 +2,26 @@
 
 from typing import Literal, NamedTuple
 
+__all__ = [
+    "ADDON_SYNCED_ADVANCED_FIELDS",
+    "ADVANCED_SETTINGS_FIELDS",
+    "BACKUP_OVERRIDE_FIELDS",
+    "BETA_FEATURE_FIELDS",
+    "FEATURE_FLAG_FIELDS",
+    "_ADVANCED_SETTINGS_BOUNDS",
+    "_ADVANCED_SETTINGS_CHOICES",
+    "_ADVANCED_SETTINGS_SENTINELS",
+    "_BACKUP_OVERRIDE_FILENAME",
+    "_FEATURE_FLAG_INT_BOUNDS",
+    "_FEATURE_FLAG_OVERRIDE_FILENAME",
+    "AdvancedField",
+    "AdvancedSection",
+    "BackupOverrideField",
+    "FeatureFlagField",
+    "OverrideField",
+    "RegistryFieldType",
+]
+
 # Runtime-editable feature flags surfaced in the /settings web UI
 # (issue #863). Each entry is (field_name, env_var_name, python_type).
 # The web UI's /api/settings/features GET/POST endpoints iterate this
