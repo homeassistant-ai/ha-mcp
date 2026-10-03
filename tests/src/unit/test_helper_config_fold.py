@@ -216,6 +216,57 @@ async def test_schedule_update_keeps_unpassed_days() -> None:
     assert message["sunday"] == []
 
 
+_STORED_SCHEDULE = {
+    "id": "s", "name": "S", "monday": [{"from": "07:00:00", "to": "08:00:00"}],
+}  # fmt: skip
+_TUESDAY = [{"from": "09:00", "to": "10:00"}]
+
+
+async def test_schedule_update_keeps_unpassed_days_via_component() -> None:
+    read = AsyncMock(
+        return_value={"success": True, "item_id": "s", "item": _STORED_SCHEDULE}
+    )
+    write = AsyncMock(
+        return_value={"success": True, "item": {}, "entity_id": "schedule.s",
+                      "registry_applied": {}, "warnings": []}
+    )  # fmt: skip
+    with (
+        patch.object(hc_update, "read_helper_item", read),
+        patch.object(hc_update, "write_helper_item", write),
+    ):
+        await hc_update._execute_update_simple_helper(
+            MagicMock(), "schedule", "schedule.s", "s", None, None, None, None,
+            None, False, False, **_type_kw(tuesday=_TUESDAY),
+        )  # fmt: skip
+    payload = write.call_args.args[3]
+    assert payload["monday"] == _STORED_SCHEDULE["monday"]
+    assert payload["tuesday"] == [{"from": "09:00:00", "to": "10:00:00"}]
+
+
+async def test_schedule_update_keeps_unpassed_days_via_websocket() -> None:
+    replies = {
+        "schedule/list": [_STORED_SCHEDULE],
+        "config/entity_registry/get": {"unique_id": "s"},
+        "schedule/update": _STORED_SCHEDULE,
+    }
+    client = MagicMock()
+    client.send_websocket_message = AsyncMock(
+        side_effect=lambda m: {"success": True, "result": replies.get(m["type"], {})}
+    )
+    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+        await hc_update._execute_update_simple_helper(
+            client, "schedule", "schedule.s", "s", None, None, None, None,
+            None, False, False, **_type_kw(tuesday=_TUESDAY),
+        )  # fmt: skip
+    (update,) = [
+        c.args[0]
+        for c in client.send_websocket_message.call_args_list
+        if c.args[0]["type"] == "schedule/update"
+    ]
+    assert update["monday"] == _STORED_SCHEDULE["monday"]
+    assert update["tuesday"] == [{"from": "09:00:00", "to": "10:00:00"}]
+
+
 async def test_collection_payload_keeps_tag_id_on_create() -> None:
     create = {"type": "tag/create", "name": "T", "tag_id": "abc"}
     update = {"type": "tag/update", "tag_id": "abc", "name": "T2"}
