@@ -25,7 +25,7 @@ _HIDDEN = {
     "mode", "has_date", "has_time", "restore", "duration", "monday", "tuesday",
     "wednesday", "thursday", "friday", "saturday", "sunday", "latitude",
     "longitude", "radius", "passive", "user_id", "device_trackers", "picture",
-    "tag_id", "description",
+    "tag_id", "description", "pattern",
 }  # fmt: skip
 
 _CORE_SCHEMAS: dict[str, Any] = {
@@ -303,6 +303,87 @@ async def test_input_text_unit_and_pattern() -> None:
     existing = {"pattern": "[0-9]+", "unit_of_measurement": "u", "max": 5}
     kept = tch._update_fields_input_text(existing, None, None, None, None)
     assert (kept["pattern"], kept["unit_of_measurement"]) == ("[0-9]+", "u")
+
+
+_TAG_ENTITY = {"entity_id": "tag.front_door", "platform": "tag", "unique_id": "abc-1"}
+
+
+def _ws(*responses: dict[str, Any]) -> MagicMock:
+    client = MagicMock()
+    client.send_websocket_message = AsyncMock(side_effect=list(responses))
+    return client
+
+
+@pytest.mark.parametrize(
+    ("error_code", "expected"),
+    [("invalid_format", "VALIDATION_INVALID_PARAMETER"),
+     ("home_assistant_error", "SERVICE_CALL_FAILED")],
+)  # fmt: skip
+async def test_websocket_create_failure_code(error_code: str, expected: str) -> None:
+    client = _ws({"success": False, "error": "bad", "error_code": error_code})
+    with (
+        patch.object(tch, "write_helper_item", AsyncMock(return_value=None)),
+        pytest.raises(ToolError, match=expected),
+    ):
+        await tch._execute_create_simple_helper(
+            client, "input_boolean", "B", None, None, None, None, False, False,
+            **_type_kw(),
+        )  # fmt: skip
+
+
+async def test_websocket_tag_create_reports_the_real_entity() -> None:
+    client = _ws(
+        {"success": True, "result": {"id": "abc-1", "name": "Front door"}},
+        {"success": True, "result": [_TAG_ENTITY]},
+    )
+    with patch.object(tch, "write_helper_item", AsyncMock(return_value=None)):
+        result = await tch._execute_create_simple_helper(
+            client, "tag", "Front door", None, None, None, None, False, False,
+            **_type_kw(tag_id="abc-1"),
+        )  # fmt: skip
+    assert result["entity_id"] == "tag.front_door"
+
+
+@pytest.mark.parametrize("helper_id", ["tag.front_door", "abc-1", "tag.abc-1"])
+async def test_websocket_tag_update_resolves_the_tag_id(helper_id: str) -> None:
+    replies = {
+        "config/entity_registry/list": [_TAG_ENTITY],
+        "tag/update": {"id": "abc-1", "name": "Front"},
+    }
+    client = MagicMock()
+    client.send_websocket_message = AsyncMock(
+        side_effect=lambda m: {"success": True, "result": replies.get(m["type"], {})}
+    )
+    with patch.object(tch, "read_helper_item", AsyncMock(return_value=None)):
+        result = await tch._execute_update_simple_helper(
+            client, "tag", helper_id, helper_id, "Front", None, None, None, None,
+            False, False, **_type_kw(),
+        )  # fmt: skip
+    sent = [c.args[0] for c in client.send_websocket_message.call_args_list]
+    assert {"type": "tag/update", "tag_id": "abc-1", "name": "Front"} in sent
+    assert result["entity_id"] == "tag.front_door"
+
+
+async def test_component_tag_update_reports_the_component_entity() -> None:
+    client = _ws({"success": True, "result": [_TAG_ENTITY]})
+    read = AsyncMock(
+        return_value={"success": True, "item_id": "abc-1", "item": {"id": "abc-1"}}
+    )
+    write = AsyncMock(
+        return_value={"success": True, "item": {"id": "abc-1", "name": "F"},
+                      "entity_id": "tag.front_door", "registry_applied": {},
+                      "warnings": []}
+    )  # fmt: skip
+    with (
+        patch.object(tch, "read_helper_item", read),
+        patch.object(tch, "write_helper_item", write),
+    ):
+        result = await tch._execute_update_simple_helper(
+            client, "tag", "tag.front_door", "tag.front_door", "F", None, None,
+            None, None, False, False, **_type_kw(),
+        )  # fmt: skip
+    assert read.call_args.kwargs == {"item_id": "abc-1"}
+    assert result["entity_id"] == "tag.front_door"
 
 
 async def test_cleared_icon_is_left_out_of_the_item() -> None:

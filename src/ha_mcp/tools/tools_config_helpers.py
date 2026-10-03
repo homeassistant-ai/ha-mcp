@@ -52,6 +52,7 @@ from .component_helper_collections import (
     native_result,
     read_helper_item,
     tag_entity_id,
+    tag_item_id,
     write_helper_item,
 )
 from .component_registry_lookup import fetch_entities_for_config_entry_via_component
@@ -3038,7 +3039,7 @@ async def _update_via_component(
     reports it with its usual error.
     """
     if helper_type == "tag":
-        target: dict[str, Any] = {"item_id": helper_id.removeprefix("tag.")}
+        target: dict[str, Any] = {"item_id": await tag_item_id(client, helper_id)}
     else:
         target = {"entity_id": entity_id}
     item = await read_helper_item(client, helper_type, **target)
@@ -3123,14 +3124,9 @@ async def _execute_update_simple_helper(
         return native_response
 
     if helper_type == "tag":
-        tag_update_id = (
-            helper_id.removeprefix("tag.")
-            if helper_id.startswith("tag.")
-            else helper_id
-        )
+        tag_update_id = await tag_item_id(client, helper_id)
         update_msg = _tag_update_message(tag_update_id, name, kw.get("description"))
         result = await client.send_websocket_message(update_msg)
-        entity_id = await tag_entity_id(client, tag_update_id) or entity_id
         if not result.get("success"):
             raise_tool_error(
                 create_error_response(
@@ -3141,6 +3137,7 @@ async def _execute_update_simple_helper(
                     ),
                 )
             )
+        entity_id = await tag_entity_id(client, tag_update_id) or entity_id
         tag_response = _helper_response(
             "update",
             helper_type,

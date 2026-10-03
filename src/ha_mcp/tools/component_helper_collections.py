@@ -204,18 +204,36 @@ def native_result(
     return data, entity_id, list(result.get("warnings") or [])
 
 
+async def _tag_entities(client: Any) -> list[dict[str, Any]]:
+    listed = await client.send_websocket_message(
+        {"type": "config/entity_registry/list"}
+    )
+    return [e for e in listed.get("result") or [] if e.get("platform") == "tag"]
+
+
 async def tag_entity_id(client: Any, tag_id: str | None) -> str | None:
     """The entity of a tag: its entity_id follows the tag's name, not its ID."""
     if not tag_id:
         return None
-    listed = await client.send_websocket_message(
-        {"type": "config/entity_registry/list"}
-    )
     return next(
         (
-            entry.get("entity_id")
-            for entry in listed.get("result") or []
-            if entry.get("platform") == "tag" and entry.get("unique_id") == tag_id
+            e.get("entity_id")
+            for e in await _tag_entities(client)
+            if e.get("unique_id") == tag_id
         ),
         None,
+    )
+
+
+async def tag_item_id(client: Any, helper_id: str) -> str:
+    """A tag's ID from its entity_id, its ID, or ``tag.<id>``."""
+    if not helper_id.startswith("tag."):
+        return helper_id
+    return next(
+        (
+            e["unique_id"]
+            for e in await _tag_entities(client)
+            if e.get("entity_id") == helper_id and e.get("unique_id")
+        ),
+        helper_id.removeprefix("tag."),
     )

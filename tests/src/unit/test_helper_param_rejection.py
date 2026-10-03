@@ -263,22 +263,28 @@ class TestInputTextRejectsInapplicableParams:
             )
         _assert_invalid_param(excinfo)
 
-    async def test_rejects_unit_of_measurement(self, register_tools, mock_client):
+    async def test_accepts_unit_of_measurement_and_pattern(
+        self, register_tools, mock_client
+    ):
+        """Core's input_text STORAGE_FIELDS carry both keys."""
         _wire_default_ws(mock_client, "input_text")
-        with (
-            patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            pytest.raises(ToolError) as excinfo,
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
         ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_text",
                 name="Note",
                 unit_of_measurement="W",
+                pattern="[0-9]+",
             )
-        _assert_invalid_param(excinfo)
+        create = next(
+            c.args[0]
+            for c in mock_client.send_websocket_message.await_args_list
+            if c.args[0].get("type") == "input_text/create"
+        )
+        assert (create["unit_of_measurement"], create["pattern"]) == ("W", "[0-9]+")
 
 
 class TestInputDatetimeRejectsInapplicableParams:

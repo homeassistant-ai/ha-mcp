@@ -243,6 +243,31 @@ async def test_config_set_helper_creates_config_subentry(helper_tools, mock_clie
     )
 
 
+async def test_config_subentry_create_returns_the_new_subentry_id(
+    helper_tools, mock_client
+):
+    """Core's create_entry result carries no subentry_id; the tool reports it."""
+    listed = [{"subentry_id": "old", "subentry_type": "conversation"}]
+    mock_client.list_config_subentries.side_effect = [
+        {"success": True, "result": listed},
+        {"success": True, "result": [*listed, {"subentry_id": "new"}]},
+    ]
+    mock_client.start_config_subentry_flow.return_value = {
+        "flow_id": "flow-1",
+        "type": "form",
+        "step_id": "set_options",
+        "data_schema": [{"name": "model"}],
+    }
+    mock_client.submit_config_subentry_flow_step.return_value = {"type": "create_entry"}
+    result = await helper_tools["ha_config_set_helper"](
+        helper_type="config_subentry",
+        entry_id="entry-1",
+        subentry_type="conversation",
+        config={"model": "m"},
+    )
+    assert result["subentry_id"] == "new"
+
+
 async def test_config_set_helper_walks_multistep_subentry_flow(
     helper_tools, mock_client
 ):

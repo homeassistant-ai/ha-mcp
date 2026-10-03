@@ -203,6 +203,19 @@ def test_invalid_errors_include_real_voluptuous(monkeypatch) -> None:
     assert _REAL_VOL.Invalid in hc._invalid_errors()
 
 
+def test_invalid_reports_every_error(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "voluptuous", _REAL_VOL)
+    collection = FakeCollection()
+    collection.invalid = _REAL_VOL.MultipleInvalid(
+        [_REAL_VOL.Invalid("too low", path=["min"]),
+         _REAL_VOL.Invalid("not a mode", path=["mode"])]
+    )  # fmt: skip
+    msg = {"helper_type": "input_number", "action": "create", "data": {"name": "X"}}
+    result = asyncio.run(hc.async_write_item(_hass(collection), FakeRegistry(), msg))
+    message = result["error"]["message"]
+    assert "too low" in message and "not a mode" in message
+
+
 def test_write_clears_the_helpers_category() -> None:
     collection = FakeCollection({"t": {"id": "t", "name": "T"}})
     registry = FakeRegistry()
