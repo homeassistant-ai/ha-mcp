@@ -10,6 +10,7 @@ import nothing outside the standard library.
 """
 
 import ast
+from collections.abc import Callable
 from typing import Any
 
 
@@ -37,7 +38,10 @@ def write_hints(
     }
 
 
-_BUILDERS = {"read_only_hints": read_only_hints, "write_hints": write_hints}
+_BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
+    "read_only_hints": read_only_hints,
+    "write_hints": write_hints,
+}
 
 
 def annotations_from_ast(node: ast.expr) -> dict[str, Any]:
@@ -47,14 +51,21 @@ def annotations_from_ast(node: ast.expr) -> dict[str, Any]:
     arguments; anything else yields ``{}``.
     """
     if isinstance(node, ast.Dict):
-        return {
-            k.value: v.value
-            for k, v in zip(node.keys, node.values, strict=True)
-            if isinstance(k, ast.Constant) and isinstance(v, ast.Constant)
-        }
-    if isinstance(node, ast.Call) and getattr(node.func, "id", None) in _BUILDERS:
-        return _BUILDERS[node.func.id](  # type: ignore[attr-defined]
-            *(ast.literal_eval(arg) for arg in node.args),
-            **{kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg},
-        )
+        found: dict[str, Any] = {}
+        for key, value in zip(node.keys, node.values, strict=True):
+            if (
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and isinstance(value, ast.Constant)
+            ):
+                found[key.value] = value.value
+        return found
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        builder = _BUILDERS.get(node.func.id)
+        if builder is not None:
+            kwargs: dict[str, Any] = {}
+            for kw in node.keywords:
+                if kw.arg is not None:
+                    kwargs[kw.arg] = ast.literal_eval(kw.value)
+            return builder(*(ast.literal_eval(arg) for arg in node.args), **kwargs)
     return {}
