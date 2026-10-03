@@ -40,6 +40,7 @@ from .response_helpers import (
     project_fields,
     result_fields_warning,
 )
+from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +59,7 @@ class ServiceDiscoveryTools:
     @tool(
         name="ha_list_services",
         tags={"Service & Device Control"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Available Services",
-        },
+        annotations=read_only_hints("List Available Services", open_world=False),
     )
     @log_tool_usage
     async def ha_list_services(

@@ -45,6 +45,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -370,12 +371,12 @@ class EnergyTools:
     @tool(
         name="ha_manage_energy_prefs",
         tags={"Energy"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "title": "Manage Energy Dashboard Preferences",
-        },
+        annotations=write_hints(
+            "Manage Energy Dashboard Preferences",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_manage_energy_prefs(

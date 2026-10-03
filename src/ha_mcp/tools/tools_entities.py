@@ -47,6 +47,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .tools_voice_assistant import KNOWN_ASSISTANTS
 
 logger = logging.getLogger(__name__)
@@ -1596,12 +1597,9 @@ class EntityTools:
     @tool(
         name="ha_set_entity",
         tags={"Entity Registry"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Set Entity",
-        },
+        annotations=write_hints(
+            "Set Entity", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(
         domain="entity",
@@ -1946,12 +1944,7 @@ class EntityTools:
     @tool(
         name="ha_get_entity",
         tags={"Entity Registry"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "idempotentHint": True,
-            "title": "Get Entity",
-        },
+        annotations=read_only_hints("Get Entity", open_world=False),
     )
     @log_tool_usage
     async def ha_get_entity(
@@ -2247,12 +2240,9 @@ class EntityTools:
     @tool(
         name="ha_remove_entity",
         tags={"Entity Registry"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Entity",
-        },
+        annotations=write_hints(
+            "Remove Entity", destructive=True, idempotent=True, open_world=False
+        ),
     )
     # Single-entity removal is snapshotted via id_param. A bulk (list) call
     # stringifies to a non-matching target, so its pre-write snapshot is a

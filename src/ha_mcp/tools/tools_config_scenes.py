@@ -58,6 +58,7 @@ from .helpers import (
 )
 from .reference_validator import validate_config_references
 from .scene_discovery import discover_scenes
+from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
 
 # No scene-specific reference file exists in home-assistant-best-practices;
@@ -299,12 +300,7 @@ class ConfigSceneTools:
     @tool(
         name="ha_config_get_scene",
         tags={"Scenes"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get or Find Scenes",
-        },
+        annotations=read_only_hints("Get or Find Scenes", open_world=False),
     )
     @log_tool_usage
     async def ha_config_get_scene(
@@ -600,11 +596,12 @@ class ConfigSceneTools:
     @tool(
         name="ha_config_set_scene",
         tags={"Scenes"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Scene",
-        },
+        annotations=write_hints(
+            "Create or Update Scene",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(
         domain="scene",
@@ -1352,12 +1349,9 @@ class ConfigSceneTools:
     @tool(
         name="ha_config_remove_scene",
         tags={"Scenes"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Scene",
-        },
+        annotations=write_hints(
+            "Remove Scene", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="scene", id_param="scene_id")
     @log_tool_usage

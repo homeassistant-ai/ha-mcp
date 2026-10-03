@@ -55,6 +55,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .response_helpers import compact_service_result, project_entity_record
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     _SERVICE_TO_STATE,
     BLOCKED_WS_WRITE_COMMANDS,
@@ -1808,12 +1809,9 @@ class ServiceTools:
     @tool(
         name="ha_call_service",
         tags={"Service & Device Control"},
-        annotations={
-            "readOnlyHint": False,
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Call Service",
-        },
+        annotations=write_hints(
+            "Call Service", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_call_service(
@@ -2124,11 +2122,7 @@ class ServiceTools:
     @tool(
         name="ha_get_operation_status",
         tags={"Service & Device Control"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "title": "Get Operation Status",
-        },
+        annotations=read_only_hints("Get Operation Status", open_world=False),
     )
     @log_tool_usage
     async def ha_get_operation_status(
@@ -2152,7 +2146,8 @@ class ServiceTools:
                     "returning its status. 0 returns the current status at once."
                 ),
             ),
-        ] = 10,
+            # Home Assistant's MCP client abandons any call after 10 seconds.
+        ] = 8,
     ) -> dict[str, Any]:
         """
         Get the status of one or more device operations with real-time WebSocket verification.
@@ -2193,11 +2188,9 @@ class ServiceTools:
     @tool(
         name="ha_bulk_control",
         tags={"Service & Device Control"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Bulk Control",
-        },
+        annotations=write_hints(
+            "Bulk Control", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_bulk_control(
@@ -2481,12 +2474,9 @@ class ServiceTools:
     @tool(
         name="ha_call_event",
         tags={"Service & Device Control"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "title": "Call Event",
-        },
+        annotations=write_hints(
+            "Call Event", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_call_event(
