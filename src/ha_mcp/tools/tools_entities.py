@@ -1844,8 +1844,10 @@ class EntityTools:
                 description=(
                     "New display name for the associated device. "
                     "If provided, both entity and device are updated in one operation. "
-                    "Empty or whitespace-only is ignored (no change); to clear the "
-                    "device name use ha_set_device(name='')."
+                    "Empty or whitespace-only never changes the device name: it is "
+                    "reported under warnings when other fields are given and is an "
+                    "error when it is the only update. To clear the device name use "
+                    "ha_set_device(name='')."
                 ),
                 default=None,
             ),
