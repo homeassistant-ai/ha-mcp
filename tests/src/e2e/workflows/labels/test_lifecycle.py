@@ -69,10 +69,10 @@ class TestLabelLifecycle:
                     {"label_id": label_id},
                 )
                 logger.info(f"Cleaned up label: {label_id}")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning(f"Failed to cleanup label {label_id}: {e}")
 
-    async def test_basic_label_lifecycle(self, mcp_client, cleanup_tracker):
+    async def test_basic_label_lifecycle(self, mcp_client, cleanup_tracker):  # noqa: PLR0915
         """
         Test: Create label -> List -> Update -> Delete
 
@@ -479,7 +479,7 @@ class TestLabelValidation:
                         "ha_config_remove_label",
                         {"label_id": lid},
                     )
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.warning(f"Failed to cleanup label {lid}: {e}")
 
 

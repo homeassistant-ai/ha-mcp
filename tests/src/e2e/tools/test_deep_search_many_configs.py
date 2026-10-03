@@ -156,7 +156,7 @@ async def bulk_automations(mcp_client):
                 "ha_config_remove_automation",
                 {"identifier": auto_id},
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Cleanup failed for {auto_id}: {e}")
     logger.info(f"Cleaned up {len(created_ids)} bulk test automations")
 
@@ -222,7 +222,7 @@ async def bulk_scripts(mcp_client):
                 "ha_config_remove_script",
                 {"script_id": script_id},
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Cleanup failed for script {script_id}: {e}")
     logger.info(f"Cleaned up {len(created_ids)} bulk test scripts")
 

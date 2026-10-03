@@ -145,7 +145,7 @@ asyncio.run(run())
             print(f"Branch measurement failed: {result.stderr}", file=sys.stderr)
             return {}
         return json.loads(result.stdout)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Branch measurement error: {e}", file=sys.stderr)
         return {}
     finally:

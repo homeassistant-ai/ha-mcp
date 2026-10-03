@@ -54,6 +54,7 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION, parse_json_param
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -61,6 +62,11 @@ from .component_api import (
     is_unknown_command,
 )
 from .component_dashboard_edit import edit_dashboard_via_component
+from .config_write_helpers import (
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+)
 from .dashboard_edit_errors import (
     raise_dashboard_edit_error,
     raise_dashboard_edit_fetch_error,
@@ -79,13 +85,6 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
-)
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    attach_skill_content,
-    augment_error_dict_with_skill_content,
-    augment_tool_error_with_skill_content,
-    parse_json_param,
 )
 
 logger = logging.getLogger(__name__)
@@ -919,7 +918,7 @@ async def _dashboards_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_DASHBOARDS, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError: a pooled-WS drop or a failed
         # (re)connect. Fall back to the
         # legacy bridge rather than escape here; if the transport is genuinely
@@ -996,7 +995,7 @@ async def _component_dashboard_config(
 
 # --- Cross-dashboard search walk (component-less legacy path) -----------------
 # Byte-for-byte port of the component's ``_search_dashboard_docs`` walk
-# (custom_components/ha_mcp_tools/websocket_api.py) so a component-less install
+# (custom_components/ha_mcp_tools/websocket_api/dashboards.py) so a component-less install
 # gets the SAME cross-dashboard ``search`` matches, just at N+1 WS cost. The two
 # implementations are pinned equal by test_component_dashboards_contract.py.
 
@@ -1461,7 +1460,7 @@ async def _lazy_resolve_and_retry(
 
     try:
         resolved, _ = await _resolve_dashboard(client, url_path)
-    except Exception as resolver_exc:
+    except Exception as resolver_exc:  # noqa: BLE001
         # Resolver itself raised (timeout, network blip, etc.). Don't let
         # this exception escape and replace the original HA error with
         # one about the resolver — fall through with the original
@@ -1643,7 +1642,7 @@ async def _capture_dashboard_screenshot_result(
         )
     except ToolError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         error_payload = create_error_response(
             ErrorCode.IMAGE_SERIALIZATION_FAILED,
             "Rendered dashboard images could not be packaged into the MCP response.",
@@ -2011,7 +2010,7 @@ class DashboardConfigTools:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             effective_url_path = resolved_url_path[0]
             if mode == "search":
                 suggestions = [
@@ -2981,7 +2980,7 @@ class DashboardConfigTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error = exception_to_structured_error(
                 e,
                 context={"action": action, "url_path": url_path},
@@ -3713,7 +3712,7 @@ class DashboardConfigTools:
             raise_dashboard_edit_error(
                 url_path, "write_not_sent", str(exc), False, action
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             exception_to_structured_error(
                 exc,
                 context={
@@ -4101,7 +4100,7 @@ class DashboardConfigTools:
             return result
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"action": "delete", "url_path": url_path},

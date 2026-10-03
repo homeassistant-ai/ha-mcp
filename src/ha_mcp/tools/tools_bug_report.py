@@ -39,6 +39,7 @@ from ..utils.usage_logger import (
     get_recent_logs,
     get_startup_logs,
 )
+from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION, parse_string_list_param
 from .component_api import get_component_caps
 from .helpers import (
     extract_tool_error_message,
@@ -46,12 +47,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import (
-    ANSI_ESCAPE_RE,
-    JSON_STRING_COERCION,
-    parse_string_list_param,
-    project_fields,
-)
+from .response_helpers import project_fields
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +180,7 @@ def _detect_installation_method() -> str:
         project_root = Path(__file__).parent.parent.parent.parent
         if (project_root / ".git").exists():
             return "git"
-    except Exception:
+    except Exception:  # noqa: BLE001
         # Best-effort probe: path resolution may fail in unusual layouts;
         # fall through to the next detection heuristic.
         pass
@@ -194,7 +190,7 @@ def _detect_installation_method() -> str:
         marker_path = Path(__file__).parent.parent / "_pypi_marker"
         if marker_path.exists():
             return "pypi"
-    except Exception:
+    except Exception:  # noqa: BLE001
         # Best-effort probe: marker lookup may fail in unusual layouts;
         # fall through to the default "unknown" result.
         pass
@@ -215,7 +211,7 @@ def _detect_installed_version() -> str | None:
     try:
         importlib.invalidate_caches()
         return get_version()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.info("Installed-version probe failed: %s", e)
         return None
 
@@ -312,7 +308,7 @@ def _websockets_dependency_state() -> dict[str, Any]:
         importlib.import_module("ha_mcp._vendor.websockets.asyncio.client")
         state["vendored_version"] = getattr(vendored, "__version__", "Unknown")
         state["vendored_import_ok"] = True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         state["vendored_version"] = None
         state["vendored_import_ok"] = False
         state["vendored_import_error"] = f"{type(e).__name__}: {e}"
@@ -333,7 +329,7 @@ def _websockets_dependency_state() -> dict[str, Any]:
         state["shared_metadata_version"] = importlib.metadata.version("websockets")
     except importlib.metadata.PackageNotFoundError:
         state["shared_metadata_version"] = None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         state["shared_metadata_version"] = None
         state["shared_metadata_error"] = f"{type(e).__name__}: {e}"
     return state
@@ -395,7 +391,7 @@ def _get_config_toggles(settings: Settings | None = None) -> dict[str, Any]:
             toggles[f"{list_field}_count"] = count
 
         return toggles
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(
             "Failed to read settings for bug report toggles: %s (%s)",
             e,
@@ -415,7 +411,7 @@ def _tool_policy_summary() -> str:
         from ..utils.data_paths import get_data_dir
 
         policy = load_policy(get_data_dir())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("Tool policy probe failed: %s (%s)", e, type(e).__name__)
         # load_policy's message can quote rule contents, so only its kind
         # reaches the report.
@@ -472,7 +468,7 @@ def _extract_client_info(ctx: Context | None) -> dict[str, str]:
             "version": getattr(client, "version", None) or "unknown",
             "title": getattr(client, "title", None) or "",
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.info(
             "Failed to read MCP client info from context: %s (%s)",
             e,
@@ -795,7 +791,7 @@ async def _fetch_core_error_log(client: Any) -> str:
     """
     try:
         page = await client.get_error_log(lines=_CORE_LOG_WINDOW_LINES)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Broad by design — the bug-report path must stay robust whatever the
         # client raises (auth, role, connection, transport). Logged at INFO so
         # a missing error log is visible without alarming on a routine 403.
@@ -961,7 +957,7 @@ class BugReportTools:
             )
             version = payload.get("version") if isinstance(payload, dict) else None
             return str(version) if version else None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.info("Component version probe failed: %s", e)
             return None
 
@@ -980,7 +976,7 @@ class BugReportTools:
             domain_registered, bootstrap_registered = await _bootstrap_service_state(
                 self._client
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.info("Tools-entry status probe failed: %s", e)
             return None
         if not domain_registered:
@@ -1015,7 +1011,7 @@ class BugReportTools:
             result = response.get("result")
             if not isinstance(result, list):
                 return None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.info("Server-entry status probe failed: %s", e)
             return None
         server, unrecognized = _classify_component_entries(result)
@@ -1043,7 +1039,7 @@ class BugReportTools:
                 _supervisor_api_call(self._client, "/info"),
                 timeout=_SUPERVISOR_PROBE_TIMEOUT,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.info("Supervisor info probe failed: %s (%s)", e, type(e).__name__)
             return {"error": type(e).__name__}
         info = response.get("result")
@@ -1053,6 +1049,33 @@ class BugReportTools:
             "supervisor_version": str(info.get("supervisor") or "unknown"),
             "host_os": str(info.get("operating_system") or "unknown"),
         }
+
+    async def _add_home_assistant_info(self, diagnostic_info: dict[str, Any]) -> None:
+        """Fill in connection status, HA config and entity count; never raises."""
+        try:
+            config = await self._client.get_config()
+            diagnostic_info["connection_status"] = "Connected"
+            diagnostic_info["home_assistant_version"] = config.get("version", "Unknown")
+            diagnostic_info["location_name"] = config.get("location_name", "Unknown")
+            diagnostic_info["time_zone"] = config.get("time_zone", "Unknown")
+            # Only a supervised install loads the hassio integration. Probing
+            # without it only produces an "Unknown command" error.
+            if "hassio" in config.get("components", []):
+                diagnostic_info["supervisor"] = await self._detect_supervisor_info()
+            else:
+                diagnostic_info["supervisor"] = {"none": "true"}
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to get Home Assistant config: {e}")
+            diagnostic_info["connection_status"] = (
+                f"Connection Error: {_sanitize_log_text(str(e))}"
+            )
+
+        try:
+            states = await self._client.get_states()
+            if states:
+                diagnostic_info["entity_count"] = len(states)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to get entity count: {e}")
 
     @tool(
         name="ha_report_issue",
@@ -1268,32 +1291,7 @@ class BugReportTools:
             "entity_count": 0,
         }
 
-        # Try to get Home Assistant config and connection status
-        try:
-            config = await self._client.get_config()
-            diagnostic_info["connection_status"] = "Connected"
-            diagnostic_info["home_assistant_version"] = config.get("version", "Unknown")
-            diagnostic_info["location_name"] = config.get("location_name", "Unknown")
-            diagnostic_info["time_zone"] = config.get("time_zone", "Unknown")
-            # Only a supervised install loads the hassio integration. Probing
-            # without it only produces an "Unknown command" error.
-            if "hassio" in config.get("components", []):
-                diagnostic_info["supervisor"] = await self._detect_supervisor_info()
-            else:
-                diagnostic_info["supervisor"] = {"none": "true"}
-        except Exception as e:
-            logger.warning(f"Failed to get Home Assistant config: {e}")
-            diagnostic_info["connection_status"] = (
-                f"Connection Error: {_sanitize_log_text(str(e))}"
-            )
-
-        # Try to get entity count
-        try:
-            states = await self._client.get_states()
-            if states:
-                diagnostic_info["entity_count"] = len(states)
-        except Exception as e:
-            logger.warning(f"Failed to get entity count: {e}")
+        await self._add_home_assistant_info(diagnostic_info)
 
         # Calculate how many log entries to retrieve
         # Formula: AVG_LOG_ENTRIES_PER_TOOL * 4 * tool_call_count (doubled from 2x to 4x)
@@ -1365,9 +1363,6 @@ class BugReportTools:
             issue_title, lambda cap: build_body(include_logs=False, text_cap=cap)
         )
 
-        # Anonymization instructions
-        anonymization_guide = _generate_anonymization_guide()
-
         # Generate search keywords and URLs for duplicate check
         search_keywords = _generate_search_keywords(diagnostic_info, recent_logs)
         duplicate_check_urls = [
@@ -1400,7 +1395,7 @@ class BugReportTools:
             "issue_title": issue_title,
             "issue_body": issue_body,
             "issue_url": issue_url,
-            "anonymization_guide": anonymization_guide,
+            "anonymization_guide": _generate_anonymization_guide(),
             "duplicate_check_urls": duplicate_check_urls,
             "missing_tool_hint": MISSING_TOOL_HINT,
             "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,

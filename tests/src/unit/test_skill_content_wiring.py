@@ -56,6 +56,17 @@ _ATTACH_CALL_NAMES = frozenset(
     {"attach_skill_content", "_attach_helper_skill", "_attach_dashboard_skill"}
 )
 
+# Modules split out of a tool module, whose attach calls count toward that
+# tool's return paths. Named explicitly so an unrelated new module cannot
+# satisfy the check.
+_ATTACH_SIBLING_MODULES: dict[str, tuple[str, ...]] = {
+    "tools_config_helpers.py": (
+        "config_helpers/create.py",
+        "config_helpers/flow.py",
+        "config_helpers/schemas.py",
+        "config_helpers/update.py",
+    )
+}
 
 # ---------------------------------------------------------------------------
 # Structural coverage of attach_skill_content on every success return path
@@ -241,8 +252,15 @@ def test_write_tool_attaches_skill_content_somewhere(
 
     # Count attach calls anywhere in the module — the helper tool wraps
     # at the class-level method, others wrap inline in the @tool method,
-    # and dashboards/helpers use shared wrappers. All count.
-    total_attaches = _count_attach_calls(tree)
+    # and dashboards/helpers use shared wrappers. All count. The helper
+    # tool's create, update and flow paths live in the helper_*.py modules.
+    sibling_paths = [
+        TOOLS_DIR / name for name in _ATTACH_SIBLING_MODULES.get(module_file, ())
+    ]
+    attach_tree = ast.parse(
+        "\n".join(p.read_text() for p in [module_path, *sibling_paths])
+    )
+    total_attaches = _count_attach_calls(attach_tree)
 
     fn = _find_function_by_name(tree, tool_name)
     assert fn is not None, f"{tool_name} not found in {module_file}"

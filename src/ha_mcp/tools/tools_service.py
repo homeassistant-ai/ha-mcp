@@ -41,6 +41,7 @@ from .bulk_selector import (
     InfrastructureErrorCause,
     resolve_bulk_selector,
 )
+from .coercion import JSON_STRING_COERCION, parse_json_param, parse_string_list_param
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -53,17 +54,13 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .response_helpers import compact_service_result, project_entity_record
 from .util_helpers import (
     _SERVICE_TO_STATE,
     BLOCKED_WS_WRITE_COMMANDS,
-    JSON_STRING_COERCION,
-    compact_service_result,
     is_single_entity_target,
-    parse_json_param,
-    parse_string_list_param,
-    project_entity_record,
-    wait_for_state_change,
 )
+from .ws_waiters import wait_for_state_change
 
 # The ha_mcp_tools/call_service WS command: the first WRITE capability (Phase 3,
 # issue #1813). When the component advertises ``call_service`` the consumer routes a
@@ -982,7 +979,7 @@ class ServiceTools:
                 f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded"
             )
             return None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(
                 f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded"
             )
@@ -1031,7 +1028,7 @@ class ServiceTools:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             response.setdefault("warnings", []).append(
                 f"Service executed but state verification failed: {e}"
             )
@@ -1051,7 +1048,7 @@ class ServiceTools:
         generic verification-failed wording instead of confidently asserting
         an unproven "still unavailable". Logged at WARNING (matching the
         sibling re-check in ``_validate_entity_before_wait`` and
-        ``wait_for_state_change`` in util_helpers.py) so an operational
+        ``wait_for_state_change`` in ws_waiters.py) so an operational
         failure here -- an expired token, in particular -- leaves a
         server-side trace instead of silently reading as a generic timeout.
         """
@@ -1064,7 +1061,7 @@ class ServiceTools:
                 f"Post-timeout unavailable re-check for {entity_id} failed: {e} — treating as inconclusive"
             )
             return False
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(
                 f"Post-timeout unavailable re-check for {entity_id} failed: {e} — treating as inconclusive"
             )
@@ -1454,7 +1451,7 @@ class ServiceTools:
                 token=self._client.token,
                 verify_ssl=getattr(self._client, "verify_ssl", None),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "%s establishment failed; falling back to legacy: %r",
                 WS_CALL_SERVICE,
@@ -1512,7 +1509,7 @@ class ServiceTools:
                     exc,
                 )
             return None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # HomeAssistantCommandTimeout (response-wait expired — the frame WAS sent)
             # or any post-send transport drop (e.g. a pooled-WS drop after send). The
             # component may still be lawfully mid-write, so this is ambiguous-
@@ -2116,7 +2113,7 @@ class ServiceTools:
             )
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             self._raise_unexpected_call_service_error(
                 error, domain=domain, service=service, entity_id=entity_id
             )
@@ -2181,7 +2178,7 @@ class ServiceTools:
             return cast(dict[str, Any], result)
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             op_context: dict[str, Any] = {"operation_id": operation_id}
             exception_to_structured_error(
                 e,
@@ -2567,7 +2564,7 @@ class ServiceTools:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"event_type": event_type},

@@ -155,7 +155,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
-        "tests/src/unit/test_ha_search_dashboard_split.py",
+        "tests/src/unit/test_ha_search_dashboard_leg_failure.py",
         "This statement has no effect",
         "await call",
         "False positive on the bare 'await call' inside pytest.raises in "
@@ -281,6 +281,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "Intentional side-effect import: sets HA_MCP_CONFIG_DIR to a temp dir "
         "before the conftest imports ha_mcp, which reads settings at import. "
         "Code in the conftest itself would break the import-order lint.",
+    ),
+    (
+        "py/unused-import",
+        "tests/src/e2e/conftest.py",
+        "Import of 'pytest_",
+        "",
+        "Hook registration: pytest finds hooks by name in the conftest "
+        "namespace, so importing a pytest_* hook from a _conftest_* module "
+        "registers it. pytest_plugins is not allowed in a conftest below the "
+        "root directory.",
     ),
     (
         "py/import-and-import-from",

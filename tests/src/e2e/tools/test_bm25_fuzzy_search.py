@@ -175,7 +175,7 @@ async def test_deep_search_fuzzy_multi_word(mcp_client):
                 "ha_config_remove_automation",
                 {"entity_id": "automation.bm25_test_load_sharing"},
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug("Cleanup of BM25 test automation failed: %s", e)
 
 
@@ -232,5 +232,5 @@ async def test_deep_search_exact_match_still_works(mcp_client):
                 "ha_config_remove_automation",
                 {"entity_id": "automation.bm25_exact_match_test"},
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug("Cleanup of exact match test automation failed: %s", e)

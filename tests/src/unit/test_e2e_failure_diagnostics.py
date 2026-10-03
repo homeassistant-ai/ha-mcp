@@ -11,7 +11,7 @@ from typing import Any
 import docker
 import pytest
 
-from ..e2e import conftest as e2e_fixtures
+from ..e2e import _conftest_readiness as readiness
 
 
 class _FakeContainer:
@@ -33,11 +33,11 @@ class _FakeContainer:
 def _run_makereport(container: _FakeContainer | None, *, failed: bool) -> Any:
     stash = pytest.Stash()
     if container is not None:
-        stash[e2e_fixtures._HA_CONTAINER_KEY] = container
+        stash[readiness._HA_CONTAINER_KEY] = container
     item = SimpleNamespace(config=SimpleNamespace(stash=stash))
     call = SimpleNamespace(start=1_700_000_000.7)
     report = SimpleNamespace(when="call", failed=failed, sections=[])
-    hook = e2e_fixtures.pytest_runtest_makereport(item, call)
+    hook = readiness.pytest_runtest_makereport(item, call)
     next(hook)
     with pytest.raises(StopIteration) as done:
         hook.send(report)
@@ -88,23 +88,23 @@ def test_timed_out_entries_gate_shows_the_home_assistant_log_in_the_summary(
         "_READINESS_DIAGNOSTICS",
         "_ALL_READINESS_DIAGNOSTICS",
     ):
-        monkeypatch.setattr(e2e_fixtures, name, [])
+        monkeypatch.setattr(readiness, name, [])
     monkeypatch.setattr(
-        e2e_fixtures,
+        readiness,
         "_snapshot_config_entries",
         lambda *_args, **_kwargs: (1, 2, True, "hacs:not_loaded"),
     )
     container = _FakeContainer(b"Setup failed for custom integration 'hacs'\n")
 
     # Worker side: the gate gives up and the session hands its records over.
-    e2e_fixtures._wait_for_entries_loaded(container, "http://ha", {}, timeout=0)
+    readiness._wait_for_entries_loaded(container, "http://ha", {}, timeout=0)
     worker = SimpleNamespace(config=SimpleNamespace(workeroutput={}))
-    e2e_fixtures.pytest_sessionfinish(worker, 0)
-    monkeypatch.setattr(e2e_fixtures, "_READINESS_DIAGNOSTICS", [])
-    monkeypatch.setattr(e2e_fixtures, "_READINESS_TIMINGS", [])
+    readiness.pytest_sessionfinish(worker, 0)
+    monkeypatch.setattr(readiness, "_READINESS_DIAGNOSTICS", [])
+    monkeypatch.setattr(readiness, "_READINESS_TIMINGS", [])
 
     # Controller side: collect the worker's output and render the summary.
-    e2e_fixtures.pytest_testnodedown(
+    readiness.pytest_testnodedown(
         SimpleNamespace(workeroutput=worker.config.workeroutput), None
     )
     lines: list[str] = []
@@ -112,7 +112,7 @@ def test_timed_out_entries_gate_shows_the_home_assistant_log_in_the_summary(
         section=lambda title: lines.append(f"== {title}"),
         write_line=lines.append,
     )
-    e2e_fixtures.pytest_terminal_summary(terminal, 0, None)
+    readiness.pytest_terminal_summary(terminal, 0, None)
 
     summary = "\n".join(lines)
     assert "hacs:not_loaded" in summary

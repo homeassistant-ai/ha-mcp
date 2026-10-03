@@ -11,7 +11,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import auto_backup, tools_config_automations, util_helpers
+from ha_mcp.tools import auto_backup, config_write_helpers, tools_config_automations
 
 
 class _FakeClient:
@@ -818,9 +818,9 @@ async def test_reload_waiter_returns_true_after_reload_event(monkeypatch) -> Non
     async def get_ws(_client):
         return ws
 
-    monkeypatch.setattr(util_helpers, "_get_waiter_ws_client", get_ws)
+    monkeypatch.setattr(config_write_helpers, "_get_waiter_ws_client", get_ws)
 
-    async with util_helpers.config_reload_waiter(
+    async with config_write_helpers.config_reload_waiter(
         object(), "automation_reloaded"
     ) as wait_for_reload:
         await ws.fire("automation_reloaded")
@@ -838,13 +838,13 @@ async def test_reload_waiter_times_out_and_skips_without_ws(monkeypatch) -> None
     async def get_ws(_client):
         return ws
 
-    monkeypatch.setattr(util_helpers, "_get_waiter_ws_client", get_ws)
-    async with util_helpers.config_reload_waiter(
+    monkeypatch.setattr(config_write_helpers, "_get_waiter_ws_client", get_ws)
+    async with config_write_helpers.config_reload_waiter(
         object(), "automation_reloaded", timeout=0.01
     ) as wait_for_reload:
         assert await wait_for_reload() is False
 
-    async with util_helpers.config_reload_waiter(
+    async with config_write_helpers.config_reload_waiter(
         object(), "automation_reloaded", enabled=False
     ) as wait_for_reload:
         assert await wait_for_reload() is None

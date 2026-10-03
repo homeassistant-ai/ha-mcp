@@ -497,7 +497,7 @@ def _installed_distributions(
     for dist in scan:
         try:
             raw_name = dist.name
-        except Exception:  # corrupt METADATA must not abort the whole scan
+        except Exception:  # noqa: BLE001  # corrupt METADATA must not abort the whole scan
             continue
         if raw_name:
             found.setdefault(canonicalize_name(raw_name), dist)
@@ -510,7 +510,7 @@ def _applicable_requirements(
     """Yield ``dist``'s requirements that apply under ``extras``."""
     try:
         declared = dist.requires
-    except Exception:  # corrupt METADATA yields no edges, not a crash
+    except Exception:  # corrupt METADATA yields no edges, not a crash  # noqa: BLE001
         return
     for raw in declared or []:
         try:
@@ -572,7 +572,7 @@ def _dist_has_direct_url(dist: Distribution) -> bool:
     """
     try:
         return dist.read_text("direct_url.json") is not None
-    except Exception:
+    except Exception:  # noqa: BLE001
         return True
 
 
@@ -580,7 +580,7 @@ def _dist_version(dist: Distribution) -> str | None:
     """``dist``'s version, or None when its metadata does not provide one."""
     try:
         version = dist.version
-    except Exception:  # corrupt METADATA reads as "version unknown"
+    except Exception:  # corrupt METADATA reads as "version unknown"  # noqa: BLE001
         return None
     return version if isinstance(version, str) and version else None
 

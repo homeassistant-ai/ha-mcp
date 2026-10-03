@@ -25,6 +25,11 @@ from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from ..strict_bps import BestPracticeKeyParam
 from .auto_backup import with_auto_backup
+from .config_write_helpers import (
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -38,12 +43,7 @@ from .tools_filesystem import (
     call_mcp_tools_service,
     effective_extra_yaml_write_keys,
 )
-from .util_helpers import (
-    attach_skill_content,
-    augment_error_dict_with_skill_content,
-    augment_tool_error_with_skill_content,
-    unwrap_service_response,
-)
+from .util_helpers import unwrap_service_response
 
 # YAML packages frequently include template sensors, command_line entities,
 # and mqtt templates — exactly where template misuse causes the most
@@ -92,7 +92,7 @@ def _is_preview_only_call(kwargs: dict[str, Any]) -> bool:
         return False
     try:
         return bool(get_global_settings().enable_yaml_edit_confirm)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -261,7 +261,7 @@ async def _check_storage_mode_dashboard_collision(client: Any, yaml_path: str) -
     url_path = yaml_path[len(_LOVELACE_DASHBOARD_PREFIX) :]
     try:
         dashboards = await fetch_dashboards_list(client)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "lovelace/dashboards/list WS query failed (%s); skipping collision check",
             exc,
@@ -499,7 +499,7 @@ class YamlConfigTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error = exception_to_structured_error(
                 e,
                 context={

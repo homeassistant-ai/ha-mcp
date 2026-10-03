@@ -148,7 +148,7 @@ class CategoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting categories: {e}")
             exception_to_structured_error(
                 e,
@@ -294,7 +294,7 @@ class CategoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error setting category {name!r}: {e}")
             exception_to_structured_error(
                 e,
@@ -405,7 +405,7 @@ class CategoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing category {category_id!r}: {e}")
             exception_to_structured_error(
                 e,

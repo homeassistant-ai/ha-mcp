@@ -44,7 +44,19 @@ from .blueprint_substitute import (
     take_control_config,
     validate_write_modes,
 )
+from .coercion import JSON_STRING_COERCION, coerce_to_list, parse_json_param
 from .component_config_reads import fetch_entity_lookup_via_component
+from .config_helpers.registry import validate_registry_ids
+from .config_write_helpers import (
+    apply_entity_category,
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+    config_reload_waiter,
+    fetch_entity_category,
+    merge_validation_meta,
+    note_reload_outcome,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -54,19 +66,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
-from .tools_config_helpers import validate_registry_ids
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    apply_entity_category,
-    attach_skill_content,
-    augment_error_dict_with_skill_content,
-    augment_tool_error_with_skill_content,
-    coerce_to_list,
-    config_reload_waiter,
-    fetch_entity_category,
-    merge_validation_meta,
-    note_reload_outcome,
-    parse_json_param,
+from .ws_waiters import (
     wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -521,7 +521,7 @@ class AutomationConfigTools:
                     and state.get("attributes", {}).get("id") == identifier
                 ):
                     return str(state["entity_id"])
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(
                 f"Failed to resolve entity_id for automation {identifier}: {e}"
             )
@@ -608,7 +608,7 @@ class AutomationConfigTools:
             return await self._legacy_get_automation(identifier)
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "get"},
@@ -967,7 +967,7 @@ class AutomationConfigTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # 404 during update only — create (identifier=None) never hits this branch.
             if (
                 identifier
@@ -1616,7 +1616,7 @@ class AutomationConfigTools:
             result = await self._client.send_websocket_message(
                 {"type": "config/entity_registry/list"}
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug("Failed to list automation entity_ids from registry: %s", e)
             return []
         entries = result.get("result", []) if isinstance(result, dict) else result
@@ -2002,7 +2002,7 @@ class AutomationConfigTools:
             }
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 await self._raise_automation_not_found(identifier)
             exception_to_structured_error(

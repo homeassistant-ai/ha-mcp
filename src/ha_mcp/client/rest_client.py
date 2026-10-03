@@ -112,7 +112,7 @@ class HomeAssistantAuthError(HomeAssistantError):
     """Authentication error with Home Assistant.
 
     Sibling of ``HomeAssistantAPIError`` (not a subclass). The codebase has
-    18 ``except HomeAssistantAPIError`` sites (util_helpers polling,
+    18 ``except HomeAssistantAPIError`` sites (ws_waiters polling,
     tools_integrations registry lookups, etc.) that deliberately rely on
     auth errors NOT matching so they can propagate to a paired
     ``except (HomeAssistantConnectionError, HomeAssistantAuthError): raise``
@@ -445,7 +445,7 @@ class HomeAssistantClient:
         """
         try:
             error_data = response.json()
-        except Exception:
+        except Exception:  # noqa: BLE001
             error_data = {"message": response.text}
 
         message = error_data.get("message")
@@ -1459,7 +1459,7 @@ class HomeAssistantClient:
                 return True, None
             else:
                 return False, "Invalid response from Home Assistant"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Intentional broad-catch: is_connected() contract maps any failure
             # to (False, error_msg); styleguide § "broad except at top-level
             # setup/teardown handlers" applies (connection probe is the analog).
@@ -1638,7 +1638,7 @@ class HomeAssistantClient:
     # is fine when the WS happy path is the primary route. #1389's
     # cadence-measurement instrumentation also retired with the loop;
     # the WS waiter logs `time.monotonic()` elapsed via its own debug
-    # line at ``util_helpers._ws_wait_for_condition``.
+    # line at ``ws_waiters._ws_wait_for_condition``.
     _POLL_BUDGET_S: float = 6.0
 
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
@@ -1650,10 +1650,10 @@ class HomeAssistantClient:
         polling of ``get_states()`` when the WebSocket is unavailable.
         See #1152 / #1395 for context.
         """
-        # Local import: ``util_helpers`` imports from ``rest_client`` for
+        # Local import: ``ws_waiters`` imports from ``rest_client`` for
         # the typed-error classes, so a module-level import here would be
         # circular. Mirrors the same pattern in ``_get_waiter_ws_client``.
-        from ..tools.util_helpers import wait_for_automation_entity_by_unique_id
+        from ..tools.ws_waiters import wait_for_automation_entity_by_unique_id
 
         try:
             entity_id = await wait_for_automation_entity_by_unique_id(

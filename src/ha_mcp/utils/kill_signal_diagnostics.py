@@ -334,7 +334,7 @@ def _chain_or_reraise(signum: int) -> None:
         try:
             chained(signum, None)
             return
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Fall through to the default-disposition path so the
             # process still terminates if the chained handler explodes.
             pass
@@ -363,7 +363,7 @@ def _make_handler() -> Any:
                 proc_status=read_proc_status_summary(),
             )
             _emit_block_safely(block)
-        except Exception as exc:  # pragma: no cover — last-resort safety
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover — last-resort safety
             try:
                 os.write(
                     2,
@@ -458,7 +458,7 @@ def install_kill_signal_diagnostics() -> bool:
                 )
                 continue
             installed_for.append(sig.name)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "kill-signal diagnostics: install failed (%r); continuing without diagnostics",
             exc,

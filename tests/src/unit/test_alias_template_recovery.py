@@ -3,7 +3,8 @@
 from copy import deepcopy
 from unittest.mock import AsyncMock
 
-from ha_mcp.tools import auto_backup, tools_config_helpers
+from ha_mcp.tools import auto_backup
+from ha_mcp.tools.config_helpers import registry as helper_registry
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from .test_template_deleted_recovery import ENTITY, OPTIONS
@@ -61,7 +62,7 @@ async def test_alias_deletion_captures_before_remove_and_restores_exact_snapshot
     monkeypatch.setattr(auto_backup, "get_global_settings", lambda: manager._settings)
     monkeypatch.setattr(auto_backup, "get_backup_manager", lambda *_: manager)
     monkeypatch.setattr(
-        tools_config_helpers,
+        helper_registry,
         "fetch_entities_for_config_entry_via_component",
         AsyncMock(return_value=None),
     )

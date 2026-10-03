@@ -65,7 +65,7 @@ async def wait_for_entity_state(
                     )
             elif state_data.get("success") is True:
                 return state_data
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"⚠️ Attempt {attempt + 1} failed for {entity_id}: {e}")
         if attempt < max_retries - 1:
             logger.debug(
@@ -239,7 +239,7 @@ class TestHelperIntegration:
         )
         logger.info("✅ Helper deletion verified")
 
-    async def test_input_number_validation(self, mcp_client, cleanup_tracker):
+    async def test_input_number_validation(self, mcp_client, cleanup_tracker):  # noqa: PLR0915
         """
         Test: input_number with range validation and constraints
 

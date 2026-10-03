@@ -39,6 +39,16 @@ from .blueprint_substitute import (
     take_control_config,
     validate_write_modes,
 )
+from .coercion import JSON_STRING_COERCION, parse_json_param
+from .config_helpers.registry import validate_registry_ids
+from .config_write_helpers import (
+    apply_entity_category,
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+    fetch_entity_category,
+    merge_validation_meta,
+)
 from .entity_registration import resolve_entity_id_after_write
 from .helpers import (
     exception_to_structured_error,
@@ -49,19 +59,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
-from .tools_config_helpers import validate_registry_ids
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    apply_entity_category,
-    attach_skill_content,
-    augment_error_dict_with_skill_content,
-    augment_tool_error_with_skill_content,
-    fetch_entity_category,
-    merge_validation_meta,
-    parse_json_param,
-    wait_for_entity_registered,
-    wait_for_entity_removed,
-)
+from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +186,7 @@ class ConfigScriptTools:
             return await self._legacy_get_script(script_id)
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"script_id": script_id},
@@ -276,7 +274,7 @@ class ConfigScriptTools:
             result = await self._client.send_websocket_message(
                 {"type": "config/entity_registry/list"}
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug("Failed to list script entity_ids from registry: %s", e)
             return []
         entries = result.get("result", []) if isinstance(result, dict) else result
@@ -772,7 +770,7 @@ class ConfigScriptTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             suggestions = [
                 "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
                 "For blueprint scripts, use ha_manage_blueprints(action='list', domain='script') to list available blueprints",
@@ -1094,7 +1092,7 @@ class ConfigScriptTools:
             response["took_control_of_blueprint"] = detached_blueprint
         # attach AFTER the outer dict is built so hint lands at
         # position 0 of the FINAL response (see BAT history in
-        # util_helpers._SKILL_CONTENT_OPTOUT_HINT).
+        # config_write_helpers._SKILL_CONTENT_OPTOUT_HINT).
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
@@ -1179,7 +1177,7 @@ class ConfigScriptTools:
             return {"success": True, "action": "delete", **result}
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 await self._raise_script_not_found(script_id)
             exception_to_structured_error(

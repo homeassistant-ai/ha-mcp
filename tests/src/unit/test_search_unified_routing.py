@@ -4,7 +4,8 @@ from typing import Any
 
 import pytest
 
-from ha_mcp.tools import tools_search
+from ha_mcp.tools.search import component as search_component
+from ha_mcp.tools.search import response as search_response
 
 from ._component_routing_helpers import make_ws, patch_ws
 from .test_ha_search_component_routing import (
@@ -41,7 +42,7 @@ async def test_unified_component_serves_listings_and_locations(
         cmd_result=result,
     )
     client = RoutingClient()
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         response = await _build_ha_search(client)(**arguments)
     assert response["entities"][0]["entity_id"] == "light.kitchen"
     assert response["search_type"] == mode
@@ -67,7 +68,7 @@ async def test_explicit_config_pin_explains_skipped_entities(
         info_result=_CAPS_SEARCH,
         cmd_result={"automations": [], "config_total_matches": 0, "partial": False},
     )
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         response = await _build_ha_search(RoutingClient())(
             query="sensi", domain_filter="switch", search_types=["automation"]
         )
@@ -78,7 +79,7 @@ async def test_explicit_config_pin_explains_skipped_entities(
 def test_unified_component_large_dashboard_window_is_serviceable() -> None:
     from types import SimpleNamespace
 
-    req = tools_search._ResolvedSearch(
+    req = search_response._ResolvedSearch(
         query="kitchen",
         query_text="kitchen",
         domain_filter=None,
@@ -102,4 +103,4 @@ def test_unified_component_large_dashboard_window_is_serviceable() -> None:
     caps = SimpleNamespace(
         capabilities=frozenset({"search_unified"}), limits={"max_results": 500}
     )
-    assert tools_search._dashboard_split_serviceable(req, caps)
+    assert search_component._dashboard_split_serviceable(req, caps)

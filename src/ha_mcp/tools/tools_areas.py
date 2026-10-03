@@ -18,7 +18,9 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_registries import fetch_registries_via_component
+from .config_helpers.registry import validate_registry_ids
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -26,14 +28,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .tools_config_helpers import validate_registry_ids
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    parse_string_list_param,
-    project_fields,
-    project_records,
-    result_fields_warning,
-)
+from .response_helpers import project_fields, project_records, result_fields_warning
 
 logger = logging.getLogger(__name__)
 
@@ -396,7 +391,7 @@ class AreaTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(
                 f"Error listing floors and areas in phase {progress['phase']!r}: {e} "
                 f"(progress={progress})"
@@ -616,7 +611,7 @@ class AreaTools:
             listed = await self._client.send_websocket_message(
                 {"type": "config/area_registry/list"}
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Write already succeeded; a transport failure on re-read must
             # not look like a failed create (retry would duplicate the area).
             raise_tool_error(
@@ -925,7 +920,7 @@ class AreaTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error {operation} {kind} {name!r}: {e}")
             suggestions = [
                 "Check Home Assistant connection",
@@ -1024,7 +1019,7 @@ class AreaTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing {kind} {id!r}: {e}")
             exception_to_structured_error(
                 e,

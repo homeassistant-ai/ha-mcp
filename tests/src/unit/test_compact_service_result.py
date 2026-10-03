@@ -8,8 +8,8 @@ heavy attributes stripped; the tool exposes ``verbose=True`` and
 ``result_fields``/``result_attribute_keys`` for explicit control.
 """
 
+from ha_mcp.tools.response_helpers import compact_service_result
 from ha_mcp.tools.tools_service import ServiceTools
-from ha_mcp.tools.util_helpers import compact_service_result
 
 
 def _make_record(entity_id: str, *, effect_list_size: int = 0) -> dict:

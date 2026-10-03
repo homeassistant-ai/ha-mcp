@@ -23,6 +23,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -30,16 +31,14 @@ from .helpers import (
     register_tool_methods,
     safe_progress,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
+from .response_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
     fetch_ha_timezone,
-    is_connection_error_message,
-    parse_string_list_param,
     project_fields,
     resolve_local_timezone,
 )
+from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -474,7 +473,7 @@ class HistoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if source == "statistics":
                 suggestions = [
                     "Check Home Assistant connection",

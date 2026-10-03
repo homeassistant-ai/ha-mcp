@@ -107,7 +107,7 @@ async def test_malformed_json_container_preserves_decoder_location():
     """JSON-like strings retain the decoder detail through FastMCP middleware."""
     from typing import Annotated
 
-    from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+    from ha_mcp.tools.coercion import JSON_STRING_COERCION
 
     mcp = FastMCP("test")
     mcp.add_middleware(ValidationErrorMiddleware())
@@ -186,7 +186,7 @@ async def test_union_param_malformed_container_names_param_not_union_tags():
     """
     from typing import Annotated
 
-    from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+    from ha_mcp.tools.coercion import JSON_STRING_COERCION
 
     mcp = FastMCP("test")
     mcp.add_middleware(ValidationErrorMiddleware())
@@ -235,7 +235,7 @@ async def test_union_error_details_are_deduped():
     """`details` collapses duplicate error types from union arms (#1601)."""
     from typing import Annotated
 
-    from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+    from ha_mcp.tools.coercion import JSON_STRING_COERCION
 
     mcp = FastMCP("test")
     mcp.add_middleware(ValidationErrorMiddleware())

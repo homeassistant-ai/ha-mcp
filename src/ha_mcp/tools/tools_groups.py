@@ -19,6 +19,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -26,12 +27,8 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    build_pagination_metadata,
-    wait_for_entity_registered,
-    wait_for_entity_removed,
-)
+from .response_helpers import build_pagination_metadata
+from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +216,7 @@ class GroupTools:
                 "message": f"Found {total_count} group(s)",
             }
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error listing groups: {e}")
             exception_to_structured_error(
                 e,
@@ -395,7 +392,7 @@ class GroupTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error setting group {object_id!r}: {e}")
             exception_to_structured_error(
                 e,
@@ -512,7 +509,7 @@ class GroupTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing group {object_id!r}: {e}")
             exception_to_structured_error(
                 e,

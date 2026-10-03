@@ -203,6 +203,7 @@ select = [
     "LOG",   # logging best practices
     "SIM",   # simplify
     "PLE",   # pylint errors (real bugs: bad logging args, await outside async)
+    "BLE001", # blind except: catches Exception without re-raising or logging the traceback
     # Targeted pylint conventions/refactors/warnings. The PL family is NOT
     # selected wholesale: PLC0415 (import-outside-top-level) fights the
     # deliberate lazy-init architecture, and PLR2004 (magic values),
@@ -214,6 +215,7 @@ select = [
     "PLC0206", # dict-index-missing-items
     "PLC0207", # missing-maxsplit-arg
     "PLR0402", # manual-from-import
+    "PLR0915", # too-many-statements (default limit 50)
     "PLR1711", # useless-return
     "PLR1714", # repeated-equality-comparison
     "PLR1730", # if-stmt-min-max
@@ -248,6 +250,11 @@ ignore = [
 # list was fully cleared by issue #925). Do NOT add "path" = ["C901"] entries
 # here — extract helpers to bring the function below the threshold instead:
 # "some/path.py" = ["C901"]  <- never this
+# Every other blind except carries an inline noqa, which RUF100 fails once it
+# is unused. These two are exempt here because a pull request cannot edit the
+# stable tree, and an edit to the dev tree needs an app version bump.
+"homeassistant-addon-webhook-proxy/start.py" = ["BLE001"]
+"homeassistant-addon-webhook-proxy-dev/start.py" = ["BLE001"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

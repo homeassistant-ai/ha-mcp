@@ -21,6 +21,7 @@ from ..config import get_global_settings
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -28,11 +29,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    parse_string_list_param,
-    websocket_error_message,
-)
+from .util_helpers import websocket_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -429,7 +426,7 @@ class LabelTools:
         for area_id in unique:
             try:
                 await self._add_label_to_one_area(label_id, area_id, assigned)
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001
                 # Catch ordinary failures (transport, ToolError). Cancellation
                 # is BaseException and must propagate.
                 self._reraise_assign_failure(
@@ -672,7 +669,7 @@ class LabelTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting labels: {e}")
             exception_to_structured_error(
                 e,
@@ -771,7 +768,7 @@ class LabelTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error setting label {name!r}: {e}")
             exception_to_structured_error(
                 e,
@@ -864,7 +861,7 @@ class LabelTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing label {label_id!r}: {e}")
             exception_to_structured_error(
                 e,

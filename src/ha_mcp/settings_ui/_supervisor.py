@@ -281,7 +281,7 @@ async def _live_addon_options(
         options, err = await _supervisor_fetch_current_options(
             server.settings.verify_ssl
         )
-    except Exception as exc:  # pragma: no cover - defensive belt-and-braces
+    except Exception as exc:  # noqa: BLE001  # pragma: no cover - defensive belt-and-braces
         logger.debug("Live add-on options fetch raised %s — using boot-env values", exc)
         return {}
     if err is not None:

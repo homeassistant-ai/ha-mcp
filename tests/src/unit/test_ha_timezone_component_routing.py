@@ -20,7 +20,7 @@ import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools import component_api
-from ha_mcp.tools.util_helpers import fetch_ha_timezone
+from ha_mcp.tools.response_helpers import fetch_ha_timezone
 
 from ._component_routing_helpers import make_ws, patch_ws
 

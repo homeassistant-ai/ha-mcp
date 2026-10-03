@@ -107,7 +107,7 @@ MANDATORY_TOOLS: set[str] = {
 # exclusively through ha_get_skill_guide, so disabling the tool in strict
 # mode would permanently lock out every gated write. Regular
 # (non-strict) mandatory BPS does NOT need the tool: it attaches skill
-# content server-side straight from the skills-vendor (util_helpers.
+# content server-side straight from the skills-vendor (config_write_helpers.
 # build_skill_content), so users who consume the skills through a local
 # install (``npx skills add homeassistant-ai/skills``) may disable the
 # tool whenever strict mode is off. Enforced in three places: here at

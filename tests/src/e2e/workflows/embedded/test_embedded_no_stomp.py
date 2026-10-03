@@ -26,7 +26,7 @@ The policy this test enforces is the linked/unlinked split:
 - **Removals** are never legitimate for either class.
 
 The snapshots come from the session container every embedded-lane test
-already boots (see ``_build_ha_testcontainer`` in the e2e conftest), so the
+already boots (see ``_build_ha_testcontainer`` in ``_conftest_testcontainer``), so the
 guard also covers dependencies we don't declare directly — a transitive
 floor-bump into governed territory trips it the same way the old exact
 websockets pin would have.
@@ -43,7 +43,7 @@ import pytest
 import requests
 from test_constants import HA_TEST_IMAGE
 
-from ...conftest import (
+from ..._conftest_embedded import (
     EMBEDDED_FREEZE_AFTER,
     EMBEDDED_FREEZE_BEFORE,
     EMBEDDED_HA_CONSTRAINTS_COPY,

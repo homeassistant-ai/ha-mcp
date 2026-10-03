@@ -47,7 +47,7 @@ async def _send_with_short_timeout(
         "unexpected",
     ],
 )
-async def test_background_release_collects_outcome(
+async def test_background_release_collects_outcome(  # noqa: PLR0915
     release_path: str,
     failure: str,
     monkeypatch: pytest.MonkeyPatch,

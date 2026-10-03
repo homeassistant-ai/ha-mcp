@@ -304,7 +304,7 @@ async def fetch_related_buckets(client: Any, entity_id: str) -> GraphResult | No
                 "_wait_timeout": _GRAPH_TIMEOUT_S,
             }
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Transport-class failure: ``send_websocket_message`` raises only when
         # the socket itself could not carry the frame. Not cached — the next
         # search may well reconnect.

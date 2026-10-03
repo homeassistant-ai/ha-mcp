@@ -86,7 +86,7 @@ class TestEntityCleaner:
 
             return result
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"❌ Error cleaning up {entity_id}: {e}")
             self.cleanup_attempted[cleanup_key] = False
             return False
@@ -101,7 +101,7 @@ class TestEntityCleaner:
             delete_data = parse_mcp_result(delete_result)
             return delete_data.get("success", False)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"Automation cleanup error: {e}")
             return False
 
@@ -118,7 +118,7 @@ class TestEntityCleaner:
             delete_data = parse_mcp_result(delete_result)
             return delete_data.get("success", False)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"Script cleanup error: {e}")
             return False
 
@@ -140,7 +140,7 @@ class TestEntityCleaner:
             delete_data = parse_mcp_result(delete_result)
             return delete_data.get("success", False)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"Helper cleanup error: {e}")
             return False
 
@@ -247,7 +247,7 @@ async def _cleanup_domain_test_entities(
                     if success:
                         cleaned_count += 1
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ Error cleaning up {domain} entities: {e}")
 
     return found_count, cleaned_count
@@ -344,7 +344,7 @@ async def verify_entity_cleanup(mcp_client, entity_id: str, entity_type: str) ->
             logger.debug(f"✅ Entity {entity_id} successfully removed")
             return True
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Error verifying cleanup for {entity_id}: {e}")
         # Assume cleanup was successful if we can't verify
         return True
@@ -438,7 +438,7 @@ async def reset_entity_states(mcp_client, entity_ids: list[str]) -> dict[str, bo
             else:
                 logger.warning(f"⚠️ Failed to reset {entity_id}")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"⚠️ Error resetting {entity_id}: {e}")
             results[entity_id] = False
 
@@ -490,7 +490,7 @@ class TestEnvironmentManager:
                     f"📸 Captured initial state for {entity_id}: {self.initial_states[entity_id]}"
                 )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"⚠️ Could not capture initial state for {entity_id}: {e}")
 
     async def restore_initial_states(self) -> dict[str, bool]:

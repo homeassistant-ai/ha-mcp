@@ -36,7 +36,18 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION, parse_json_param
 from .component_config_reads import fetch_entity_lookup_via_component
+from .config_helpers.registry import validate_registry_ids
+from .config_write_helpers import (
+    apply_entity_category,
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+    config_reload_waiter,
+    fetch_entity_category,
+    merge_validation_meta,
+)
 from .entity_registration import resolve_entity_id_after_write
 from .helpers import (
     exception_to_structured_error,
@@ -47,20 +58,7 @@ from .helpers import (
 )
 from .reference_validator import validate_config_references
 from .scene_discovery import discover_scenes
-from .tools_config_helpers import validate_registry_ids
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    apply_entity_category,
-    attach_skill_content,
-    augment_error_dict_with_skill_content,
-    augment_tool_error_with_skill_content,
-    config_reload_waiter,
-    fetch_entity_category,
-    merge_validation_meta,
-    parse_json_param,
-    wait_for_entity_registered,
-    wait_for_entity_removed,
-)
+from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
 
 # No scene-specific reference file exists in home-assistant-best-practices;
 # SKILL.md is the top-level generic best-practice doc covering entity-naming,
@@ -816,7 +814,7 @@ class ConfigSceneTools:
             # config (Hue/vendor or raw-YAML). Same CONFIG_NOT_FOUND
             # classification as get/delete (#1971), not a generic write failure.
             _raise_scene_not_storage_error(e.scene_id, e.platform)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error = exception_to_structured_error(
                 e,
                 context={"scene_id": scene_id},
@@ -1342,7 +1340,7 @@ class ConfigSceneTools:
         }
         # attach AFTER the outer dict is built so hint lands at
         # position 0 of the FINAL response (see
-        # util_helpers._SKILL_CONTENT_OPTOUT_HINT).
+        # config_write_helpers._SKILL_CONTENT_OPTOUT_HINT).
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,

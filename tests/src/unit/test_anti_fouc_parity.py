@@ -76,7 +76,7 @@ def test_anti_fouc_resolvers_are_logically_identical() -> None:
     )
 
 
-# The runtime binding scripts (settings.js / Layout.astro theme-toggle
+# The runtime binding scripts (settings_js/ / Layout.astro theme-toggle
 # module) wire different DOMs, but their state semantics — pref keys,
 # defaults, preset triples, apply functions, custom-color layering — live
 # in a shared core from `const PREFS = {` through the `const APPLY = ...`
@@ -87,21 +87,20 @@ _BINDING_CORE_RE = re.compile(r"const PREFS = \{.*?const APPLY = \{[^}]*\};", re
 
 def test_binding_script_cores_are_logically_identical() -> None:
     repo = Path(__file__).resolve().parents[3]
-    settings_js = (repo / "src" / "ha_mcp" / "settings_ui" / "settings.js").read_text(
-        encoding="utf-8"
-    )
+    from ha_mcp.settings_ui import _settings_js_template as settings_js
+
     layout = (repo / "site" / "src" / "layouts" / "Layout.astro").read_text(
         encoding="utf-8"
     )
 
     settings_core = _BINDING_CORE_RE.search(settings_js)
     layout_core = _BINDING_CORE_RE.search(layout)
-    assert settings_core is not None, "no PREFS..APPLY core found in settings.js"
+    assert settings_core is not None, "no PREFS..APPLY core found in settings_js/"
     assert layout_core is not None, "no PREFS..APPLY core found in Layout.astro"
 
     assert _normalize(settings_core.group(0)) == _normalize(layout_core.group(0)), (
         "The accessibility binding cores (PREFS/PRESETS/apply functions/"
-        "custom-color layering) in src/ha_mcp/settings_ui/settings.js and "
+        "custom-color layering) in src/ha_mcp/settings_ui/settings_js/ and "
         "site/src/layouts/Layout.astro have diverged. Mirror your change "
         "into both surfaces."
     )

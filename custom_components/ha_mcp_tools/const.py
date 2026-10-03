@@ -24,8 +24,8 @@ DOMAIN = "ha_mcp_tools"
 # together so a manifest bump that forgets this constant (or vice-versa) fails
 # in CI. The
 # capability negotiation — not this version — gates each WS command (see
-# ``websocket_api.CAPABILITIES``).
-COMPONENT_VERSION = "2.2.1"
+# ``websocket_api.constants.CAPABILITIES``).
+COMPONENT_VERSION = "2.2.2"
 
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the

@@ -46,7 +46,7 @@ FEATURE_FLAG = "ENABLE_YAML_CONFIG_EDITING"
 # detects the configured folder at runtime rather than assuming "packages".
 PACKAGES_DIR = "custom_packages"
 
-# Staged pre-boot by conftest._seed_non_yaml_package_file — the file a
+# Staged pre-boot by _conftest_seed._seed_non_yaml_package_file — the file a
 # `custom_packages/*` glob must skip rather than fail on.
 NON_YAML_FILE = f"{PACKAGES_DIR}/_e2e_not_yaml.md"
 

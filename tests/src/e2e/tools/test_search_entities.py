@@ -675,7 +675,7 @@ async def test_ha_search_combined_surface_populated(mcp_client):
                 "ha_config_remove_automation",
                 {"entity_id": "automation.combined_surface_fixture"},
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug("Cleanup of combined-surface fixture failed: %s", e)
 
 
@@ -855,13 +855,13 @@ async def area_with_mixed_domains(mcp_client):
                     "confirm": True,
                 },
             )
-        except Exception as exc:  # pragma: no cover — cleanup best-effort
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover — cleanup best-effort
             logger.warning(f"Cleanup failed for {entity_id}: {exc}")
     try:
         await mcp_client.call_tool(
             "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
         )
-    except Exception as exc:  # pragma: no cover — cleanup best-effort
+    except Exception as exc:  # pragma: no cover — cleanup best-effort  # noqa: BLE001
         logger.warning(f"Cleanup failed for area {area_id}: {exc}")
 
 
@@ -1159,7 +1159,7 @@ async def two_areas_fuzzy_match(mcp_client):
                     "ha_remove_helpers_integrations",
                     {"target": oid, "helper_type": kind, "confirm": True},
                 )
-        except Exception as exc:  # pragma: no cover — cleanup best-effort
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover — cleanup best-effort
             logger.warning(f"Cleanup failed for {kind} {oid}: {exc}")
 
 
@@ -1332,13 +1332,13 @@ async def populated_area_for_shape_test(mcp_client):
             "ha_remove_helpers_integrations",
             {"target": boolean_id, "helper_type": "input_boolean", "confirm": True},
         )
-    except Exception as exc:  # pragma: no cover — cleanup best-effort
+    except Exception as exc:  # pragma: no cover — cleanup best-effort  # noqa: BLE001
         logger.warning(f"Cleanup of {boolean_id} failed: {exc}")
     try:
         await mcp_client.call_tool(
             "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
         )
-    except Exception as exc:  # pragma: no cover — cleanup best-effort
+    except Exception as exc:  # pragma: no cover — cleanup best-effort  # noqa: BLE001
         logger.warning(f"Cleanup of area {area_id} failed: {exc}")
 
 
@@ -1544,14 +1544,14 @@ async def two_areas_with_shared_prefix(mcp_client):
                 "ha_remove_helpers_integrations",
                 {"target": h, "helper_type": "input_boolean", "confirm": True},
             )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
             logger.warning(f"Cleanup of {h} failed: {exc}")
     for area in areas:
         try:
             await mcp_client.call_tool(
                 "ha_remove_area_or_floor", {"kind": "area", "id": area}
             )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
             logger.warning(f"Cleanup of area {area} failed: {exc}")
 
 
@@ -1652,7 +1652,7 @@ async def helper_with_alias(mcp_client):
             "ha_remove_helpers_integrations",
             {"target": eid, "helper_type": "input_boolean", "confirm": True},
         )
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover  # noqa: BLE001
         logger.warning(f"Cleanup of {eid} failed: {exc}")
 
 
@@ -1723,13 +1723,13 @@ async def area_with_alias(mcp_client):
                 "ha_remove_helpers_integrations",
                 {"target": eid, "helper_type": "input_boolean", "confirm": True},
             )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
             logger.warning(f"Cleanup of {eid} failed: {exc}")
         try:
             await mcp_client.call_tool(
                 "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
             )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
             logger.warning(f"Cleanup of area {area_id} failed: {exc}")
 
 
@@ -1795,7 +1795,7 @@ async def hidden_helper(mcp_client):
             "ha_remove_helpers_integrations",
             {"target": eid, "helper_type": "input_boolean", "confirm": True},
         )
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover  # noqa: BLE001
         logger.warning(f"Cleanup of {eid} failed: {exc}")
 
 
@@ -1857,7 +1857,7 @@ async def test_search_fuzzy_mode_penalises_hidden_issue_1170(mcp_client, hidden_
     """Fuzzy mode applies the same hidden-score penalty.
 
     Default-True ``exact_match`` and the fuzzy path are SEPARATE code
-    paths in tools_search.py — substring matching vs ``smart_entity_search``
+    paths in search/modes.py — substring matching vs ``smart_entity_search``
     (BM25). Both must apply the penalty or one path silently regresses
     while the other test passes.
     """
@@ -1971,13 +1971,13 @@ async def test_search_area_only_penalises_hidden_issue_1170(mcp_client):
                 "ha_remove_helpers_integrations",
                 {"target": eid, "helper_type": "input_boolean", "confirm": True},
             )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
             logger.warning(f"Cleanup of {eid} failed: {exc}")
         try:
             await mcp_client.call_tool(
                 "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
             )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
             logger.warning(f"Cleanup of area {area_id} failed: {exc}")
 
 
@@ -2083,13 +2083,13 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
                         "confirm": True,
                     },
                 )
-            except Exception as exc:  # pragma: no cover
+            except Exception as exc:  # pragma: no cover  # noqa: BLE001
                 logger.warning(f"Cleanup of {eid} failed: {exc}")
         try:
             await mcp_client.call_tool(
                 "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
             )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
             logger.warning(f"Cleanup of area {area_id} failed: {exc}")
 
 
@@ -2165,7 +2165,7 @@ async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
                         "confirm": True,
                     },
                 )
-            except Exception as exc:  # pragma: no cover
+            except Exception as exc:  # pragma: no cover  # noqa: BLE001
                 logger.warning(f"Cleanup of {eid} failed: {exc}")
 
 
@@ -2233,7 +2233,7 @@ class TestSearchEntitiesSeededAreasIssue1170:
                     await mcp_client.call_tool(
                         "ha_set_entity", {"entity_id": eid, "area_id": area_id}
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     pytest.skip(f"Seed entity {eid} unavailable: {exc}")
             # Wait until all 4 are visible in the bedroom area
             expected = {eid for eid, _ in self.SEED_ASSIGNMENTS}
@@ -2260,7 +2260,7 @@ class TestSearchEntitiesSeededAreasIssue1170:
                     await mcp_client.call_tool(
                         "ha_set_entity", {"entity_id": eid, "area_id": ""}
                     )
-                except Exception as exc:  # pragma: no cover — cleanup best-effort
+                except Exception as exc:  # noqa: BLE001  # pragma: no cover — cleanup best-effort
                     logger.warning(
                         f"Cleanup of area assignment for {eid} failed: {exc}"
                     )

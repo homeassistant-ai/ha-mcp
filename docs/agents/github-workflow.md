@@ -162,6 +162,12 @@ The permission, worktree, draft, testing, scope, and completion rules are in
 7. If the pull request is already ready for review, refresh the description
    whenever the implemented scope has changed.
 
+`pr.yml` (unit tests, lint, E2E validation and the required gates),
+`codeql-quality.yml`, `build-binary.yml` and `performance-tests.yml` run only
+for pull requests that target `master`; HAOS E2E and a few path-filtered
+workflows run for any base. Open a stacked pull request against `master` and
+say in its body which pull request must merge first.
+
 Before declaring the pull request ready, verify the current head, the complete
 required-check state, and the review-thread state. Post an implementation
 summary only when the pull request actually reaches that state.
