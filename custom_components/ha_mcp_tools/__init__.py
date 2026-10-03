@@ -3431,7 +3431,7 @@ def _build_read_legacy_backup_handler(
     return handle_read_legacy_backup
 
 
-async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:  # noqa: PLR0915
+async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the File & YAML services (tools entry) from a config entry."""
     config_dir = Path(hass.config.config_dir)
 
@@ -3516,115 +3516,60 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
                 err,
             )
 
-    handle_list_files = _build_list_files_handler(hass)
-    handle_read_file = _build_read_file_handler(hass)
-    handle_write_file = _build_write_file_handler(hass)
-    handle_delete_file = _build_delete_file_handler(hass)
-    handle_edit_yaml_config = _build_edit_yaml_config_handler(hass)
-    handle_get_caller_token = _build_get_caller_token_handler(hass)
-    handle_get_allowed_paths = _build_get_allowed_paths_handler(hass)
-    handle_set_allowed_paths = _build_set_allowed_paths_handler(hass)
-    handle_get_extra_yaml_keys = _build_get_extra_yaml_keys_handler(hass)
-    handle_set_extra_yaml_keys = _build_set_extra_yaml_keys_handler(hass)
-    handle_list_legacy_backups = _build_list_legacy_backups_handler(hass)
-    handle_read_legacy_backup = _build_read_legacy_backup_handler(hass)
-
     # Register all services with response support
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_EDIT_YAML_CONFIG,
-        handle_edit_yaml_config,
-        schema=SERVICE_EDIT_YAML_CONFIG_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_LIST_FILES,
-        handle_list_files,
-        schema=SERVICE_LIST_FILES_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_READ_FILE,
-        handle_read_file,
-        schema=SERVICE_READ_FILE_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_WRITE_FILE,
-        handle_write_file,
-        schema=SERVICE_WRITE_FILE_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_DELETE_FILE,
-        handle_delete_file,
-        schema=SERVICE_DELETE_FILE_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_GET_CALLER_TOKEN,
-        handle_get_caller_token,
-        schema=SERVICE_GET_CALLER_TOKEN_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_GET_ALLOWED_PATHS,
-        handle_get_allowed_paths,
-        schema=SERVICE_GET_ALLOWED_PATHS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_ALLOWED_PATHS,
-        handle_set_allowed_paths,
-        schema=SERVICE_SET_ALLOWED_PATHS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_GET_EXTRA_YAML_KEYS,
-        handle_get_extra_yaml_keys,
-        schema=SERVICE_GET_EXTRA_YAML_KEYS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_EXTRA_YAML_KEYS,
-        handle_set_extra_yaml_keys,
-        schema=SERVICE_SET_EXTRA_YAML_KEYS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_LIST_LEGACY_BACKUPS,
-        handle_list_legacy_backups,
-        schema=SERVICE_LIST_LEGACY_BACKUPS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_READ_LEGACY_BACKUP,
-        handle_read_legacy_backup,
-        schema=SERVICE_READ_LEGACY_BACKUP_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
+    for service, schema, build_handler in (
+        (
+            SERVICE_EDIT_YAML_CONFIG,
+            SERVICE_EDIT_YAML_CONFIG_SCHEMA,
+            _build_edit_yaml_config_handler,
+        ),
+        (SERVICE_LIST_FILES, SERVICE_LIST_FILES_SCHEMA, _build_list_files_handler),
+        (SERVICE_READ_FILE, SERVICE_READ_FILE_SCHEMA, _build_read_file_handler),
+        (SERVICE_WRITE_FILE, SERVICE_WRITE_FILE_SCHEMA, _build_write_file_handler),
+        (SERVICE_DELETE_FILE, SERVICE_DELETE_FILE_SCHEMA, _build_delete_file_handler),
+        (
+            SERVICE_GET_CALLER_TOKEN,
+            SERVICE_GET_CALLER_TOKEN_SCHEMA,
+            _build_get_caller_token_handler,
+        ),
+        (
+            SERVICE_GET_ALLOWED_PATHS,
+            SERVICE_GET_ALLOWED_PATHS_SCHEMA,
+            _build_get_allowed_paths_handler,
+        ),
+        (
+            SERVICE_SET_ALLOWED_PATHS,
+            SERVICE_SET_ALLOWED_PATHS_SCHEMA,
+            _build_set_allowed_paths_handler,
+        ),
+        (
+            SERVICE_GET_EXTRA_YAML_KEYS,
+            SERVICE_GET_EXTRA_YAML_KEYS_SCHEMA,
+            _build_get_extra_yaml_keys_handler,
+        ),
+        (
+            SERVICE_SET_EXTRA_YAML_KEYS,
+            SERVICE_SET_EXTRA_YAML_KEYS_SCHEMA,
+            _build_set_extra_yaml_keys_handler,
+        ),
+        (
+            SERVICE_LIST_LEGACY_BACKUPS,
+            SERVICE_LIST_LEGACY_BACKUPS_SCHEMA,
+            _build_list_legacy_backups_handler,
+        ),
+        (
+            SERVICE_READ_LEGACY_BACKUP,
+            SERVICE_READ_LEGACY_BACKUP_SCHEMA,
+            _build_read_legacy_backup_handler,
+        ),
+    ):
+        hass.services.async_register(
+            DOMAIN,
+            service,
+            build_handler(hass),
+            schema=schema,
+            supports_response=SupportsResponse.ONLY,
+        )
 
     # Register the in-process ha_mcp_tools/* WebSocket commands (info + search)
     # the server calls behind a capability gate. Idempotent, and independent of
