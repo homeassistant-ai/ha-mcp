@@ -386,6 +386,28 @@ async def test_component_tag_update_reports_the_component_entity() -> None:
     assert result["entity_id"] == "tag.front_door"
 
 
+async def test_stale_stored_initial_names_its_source() -> None:
+    existing = {"options": ["a", "b"], "initial": "b"}
+    with pytest.raises(ToolError) as excinfo:
+        tch._update_fields_input_select(existing, options=["a", "d"], initial=None)
+    assert "the stored initial='b'" in str(excinfo.value)
+    assert "Pass `initial` with the new options." in str(excinfo.value)
+    assert tch._update_fields_input_select(existing, options=["a", "d"], initial="a")
+
+
+async def test_update_checks_the_merged_range() -> None:
+    existing = {"min": 0.0, "max": 80.0, "step": 5.0}
+    with pytest.raises(ToolError, match="cannot be greater than max_value"):
+        tch._update_fields_input_number(existing, 90, None, None, None, None, None)
+    with pytest.raises(ToolError, match="cannot be greater than max_value"):
+        tch._update_fields_counter({"maximum": 3}, None, 9, None, None, None)
+    with pytest.raises(ToolError, match="cannot be greater than max_value"):
+        tch._update_fields_input_text({"max": 4}, 9, None, None, None)
+    # Untouched bounds are not re-judged: a rename keeps a stored wide step.
+    odd = {"min": 0.0, "max": 1.0, "step": 5.0}
+    assert tch._update_fields_input_number(odd, None, None, None, None, None, None)
+
+
 async def test_cleared_icon_is_left_out_of_the_item() -> None:
     existing = {"id": "b", "name": "B", "icon": "mdi:star"}
     kept = tch._build_standard_update_message(

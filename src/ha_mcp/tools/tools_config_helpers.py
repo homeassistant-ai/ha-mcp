@@ -551,8 +551,16 @@ def _validate_numeric_range(
             )
 
 
+def _validate_merged_range(
+    helper_type: str, supplied: tuple[Any, ...], low: Any, high: Any, step: Any = None
+) -> None:
+    """An update merges stored bounds: check the result when the caller moved one."""
+    if any(value is not None for value in supplied):
+        _validate_numeric_range(helper_type, low, high, step)
+
+
 def _validate_initial_in_options(
-    options: Any, initial: Any, helper_type: str = "input_select"
+    options: Any, initial: Any, helper_type: str = "input_select", stored: bool = False
 ) -> None:
     """Reject ``initial`` values not in ``options``.
 
@@ -568,10 +576,12 @@ def _validate_initial_in_options(
     if not isinstance(options, list) or initial is None:
         return
     if initial not in options:
+        # An update keeps the stored initial, so the caller must replace it.
+        source = "the stored initial" if stored else "initial"
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"initial={initial!r} must be one of options "
+                f"{source}={initial!r} must be one of options "
                 f"{options!r} for {helper_type}.",
                 context=_simple_helper_error_context(
                     helper_type,
@@ -580,7 +590,9 @@ def _validate_initial_in_options(
                 ),
                 suggestions=[
                     "Pick an `initial` value that's in `options`.",
-                    "Or omit `initial` to use the default or existing value.",
+                    "Pass `initial` with the new options."
+                    if stored
+                    else "Or omit `initial` to use the default or existing value.",
                 ],
             )
         )
@@ -2393,7 +2405,9 @@ def _update_fields_input_select(
 ) -> dict[str, Any]:
     merged_options = options if options is not None else existing.get("options", [])
     initial_val = initial if initial is not None else existing.get("initial")
-    _validate_initial_in_options(merged_options, initial_val)
+    _validate_initial_in_options(
+        merged_options, initial_val, stored=initial is None and options is not None
+    )
     fields: dict[str, Any] = {"options": merged_options}
     if initial_val is not None:
         fields["initial"] = initial_val
@@ -2424,6 +2438,13 @@ def _update_fields_input_number(
     )
     if unit_val is not None:
         fields["unit_of_measurement"] = unit_val
+    _validate_merged_range(
+        "input_number",
+        (min_value, max_value, step),
+        fields["min"],
+        fields["max"],
+        step_val,
+    )
     _validate_mode("input_number", mode)
     mode_val = mode if mode is not None else existing.get("mode")
     if mode_val is not None:
@@ -2459,6 +2480,7 @@ def _update_fields_input_text(
     max_val = int(max_value) if max_value is not None else existing.get("max")
     if max_val is not None:
         fields["max"] = max_val
+    _validate_merged_range("input_text", (min_value, max_value), min_val, max_val)
     _validate_mode("input_text", mode)
     mode_val = mode if mode is not None else existing.get("mode")
     if mode_val is not None:
@@ -2522,6 +2544,9 @@ def _update_fields_counter(
     step_val = int(step) if step is not None else existing.get("step")
     if step_val is not None:
         fields["step"] = step_val
+    _validate_merged_range(
+        "counter", (min_value, max_value, step), minimum_val, maximum_val, step_val
+    )
     restore_val = restore if restore is not None else existing.get("restore")
     if restore_val is not None:
         fields["restore"] = restore_val
