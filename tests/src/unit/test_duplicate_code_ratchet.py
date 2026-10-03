@@ -120,6 +120,45 @@ def test_imports_of_different_modules_are_not_copies() -> None:
     assert ratchet.find_copies({"a.py": first, "b.py": second}) == {}
 
 
+def test_a_nested_name_does_not_rename_the_outer_global() -> None:
+    """A nested function's own ``json`` must not make the outer function's
+    global ``json`` look local, or helpers calling different modules match."""
+    first = b"""
+def load(path):
+    def clean(json):
+        return json.strip()
+    return json.loads(clean(open(path).read()))
+"""
+    second = first.replace(b"json", b"yaml")
+
+    assert ratchet.find_copies({"a.py": first, "b.py": second}) == {}
+
+
+def test_renamed_match_capture_is_still_a_copy() -> None:
+    """A ``case`` capture binds a name like an assignment does."""
+    original = b"""
+def kind(event):
+    match event:
+        case {"type": item, **rest}:
+            return item, rest
+    return None
+"""
+    renamed = original.replace(b"item", b"payload").replace(b"rest", b"extra")
+
+    groups = ratchet.find_copies({"a.py": original, "b.py": renamed})
+
+    assert list(groups.values()) == [["a.py::kind", "b.py::kind"]]
+
+
+def test_field_types_of_a_class_inside_a_function_are_kept() -> None:
+    """The types of a local class's fields are its schema, not hints on
+    function variables."""
+    first = b"def build():\n    class Row:\n        name: str\n        size: int\n    return Row\n"
+    second = first.replace(b"str", b"bytes").replace(b"int", b"float")
+
+    assert ratchet.find_copies({"a.py": first, "b.py": second}) == {}
+
+
 def test_one_statement_bodies_are_not_compared() -> None:
     """Stubs and one-line delegations would fill the baseline with noise."""
     stub = b"def f(x):\n    return g(x)\n"

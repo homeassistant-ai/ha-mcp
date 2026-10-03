@@ -65,35 +65,40 @@ def _without_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
     return body
 
 
-def _names_bound_in_functions(root: ast.AST) -> set[str]:
-    """Return the names bound inside functions.
+def _arguments(args: ast.arguments) -> list[ast.arg]:
+    optional = [arg for arg in (args.vararg, args.kwarg) if arg is not None]
+    return [*args.posonlyargs, *args.args, *args.kwonlyargs, *optional]
 
-    That is arguments, assigned names, exception targets, import aliases and
-    nested definitions. Class attributes and method names are left out: they
-    are the class's interface, and two classes that differ only in them are
-    not copies.
+
+def _scope_bindings(
+    function: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+) -> set[str]:
+    """Return the names a function binds in its own scope.
+
+    Nested functions and classes are scopes of their own; only their names
+    belong to this one.
     """
-    names: set[str] = set()
-    # Each node is paired with whether a function encloses it.
-    stack: list[tuple[ast.AST, bool]] = [(root, False)]
+    names = {arg.arg for arg in _arguments(function.args)}
+    body = function.body if isinstance(function.body, list) else [function.body]
+    stack: list[ast.AST] = list(body)
     while stack:
-        node, inside = stack.pop()
-        if isinstance(node, ast.arg):
-            names.add(node.arg)
-        elif inside:
-            names.update(_bound_name(node))
-        stack.extend(
-            (child, inside or isinstance(node, _FUNCTIONS))
-            for child in ast.iter_child_nodes(node)
-        )
+        node = stack.pop()
+        names.update(_bound_names(node))
+        if not isinstance(node, (*_FUNCTIONS, ast.ClassDef)):
+            stack.extend(ast.iter_child_nodes(node))
     return names
 
 
-def _bound_name(node: ast.AST) -> list[str]:
+_NAMED_BINDINGS = (ast.ExceptHandler, ast.MatchAs, ast.MatchStar, *_DEFS)
+
+
+def _bound_names(node: ast.AST) -> list[str]:
     if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
         return [node.id]
-    if isinstance(node, (ast.ExceptHandler, *_DEFS)) and node.name:
+    if isinstance(node, _NAMED_BINDINGS) and node.name:
         return [node.name]
+    if isinstance(node, ast.MatchMapping) and node.rest:
+        return [node.rest]
     if isinstance(node, ast.alias):
         return [node.asname or node.name.partition(".")[0]]
     return []
@@ -106,43 +111,61 @@ def _binds(node: ast.AST, field: str) -> bool:
     """
     if isinstance(node, ast.alias):
         return field == "asname"
-    return field == "name" and isinstance(node, (ast.ExceptHandler, *_DEFS))
+    if isinstance(node, ast.MatchMapping):
+        return field == "rest"
+    return field == "name" and isinstance(node, _NAMED_BINDINGS)
 
 
 class _Fingerprint:
-    """Serialize a definition in its normalized form and count its statements."""
+    """Serialize a definition in its normalized form and count its statements.
+
+    Names bound in a function scope are renamed in order of use, per scope,
+    the way Python resolves them: a function sees its own names and those of
+    the functions around it, not those of a class body. Class attributes and
+    method names keep their names: they are the class's interface, and two
+    classes that differ only in them are not copies.
+    """
 
     def __init__(
         self, definition: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
     ) -> None:
-        self._local = _names_bound_in_functions(definition)
-        self._renamed: dict[str, str] = {}
+        # One entry per enclosing scope: its number and, for a function, the
+        # names it binds. A class body has no entry in the lookup.
+        self._scopes: list[tuple[int, set[str] | None]] = []
+        self._scope_count = 0
+        self._renamed: dict[tuple[int, str], str] = {}
         self._parts: list[str] = [type(definition).__name__]
         self.statements = 0
         if isinstance(definition, ast.ClassDef):
-            self._dump(definition.bases, in_function=False)
-            self._dump(definition.keywords, in_function=False)
+            self._dump(definition.bases)
+            self._dump(definition.keywords)
         else:
-            self._dump(definition.args, in_function=True)
-        self._dump(
-            _without_docstring(definition.body),
-            in_function=not isinstance(definition, ast.ClassDef),
-        )
+            self._enter(_scope_bindings(definition))
+            self._dump(definition.args)
+        self._dump(_without_docstring(definition.body))
 
     def digest(self) -> str:
         return hashlib.sha1("\0".join(self._parts).encode()).hexdigest()[:12]
 
-    def _name(self, name: str) -> str:
-        if name not in self._local:
-            return name
-        return self._renamed.setdefault(name, f"_{len(self._renamed)}")
+    def _enter(self, bound: set[str] | None) -> None:
+        self._scopes.append((self._scope_count, bound))
+        self._scope_count += 1
 
-    def _dump(self, value: object, in_function: bool) -> None:
+    def _in_function(self) -> bool:
+        return bool(self._scopes) and self._scopes[-1][1] is not None
+
+    def _name(self, name: str) -> str:
+        for scope, bound in reversed(self._scopes):
+            if bound is not None and name in bound:
+                return self._renamed.setdefault((scope, name), f"_{len(self._renamed)}")
+        return name
+
+    def _dump(self, value: object) -> None:
         parts = self._parts
         if isinstance(value, list):
             parts.append("[")
             for item in value:
-                self._dump(item, in_function)
+                self._dump(item)
             parts.append("]")
             return
         if not isinstance(value, ast.AST):
@@ -152,33 +175,37 @@ class _Fingerprint:
         if isinstance(value, ast.stmt):
             self.statements += 1
         if isinstance(value, ast.Name):
-            parts.append(self._name(value.id) if in_function else value.id)
+            parts.append(self._name(value.id))
             parts.append(type(value.ctx).__name__)
             return
         if isinstance(value, ast.arg):
             # The annotation is a type hint.
             parts.append(self._name(value.arg))
             return
-        self._dump_fields(value, in_function)
+        self._dump_fields(value)
 
-    def _dump_fields(self, node: ast.AST, in_function: bool) -> None:
-        inner = in_function or isinstance(node, _FUNCTIONS)
+    def _dump_fields(self, node: ast.AST) -> None:
+        depth = len(self._scopes)
         for field in node._fields:
             if field in _IGNORED_FIELDS:
                 continue
-            if (
-                field == "annotation"
-                and isinstance(node, ast.AnnAssign)
-                and in_function
-            ):
-                continue
+            if field == "annotation" and isinstance(node, ast.AnnAssign):
+                if self._in_function():
+                    continue
+            # A function's name belongs to the scope around it; its arguments
+            # and body to its own. A class's bases are evaluated outside it.
+            if field == "args" and isinstance(node, _FUNCTIONS):
+                self._enter(_scope_bindings(node))
+            elif field == "body" and isinstance(node, ast.ClassDef):
+                self._enter(None)
             child = getattr(node, field, None)
             if field == "body" and isinstance(node, _DEFS):
                 child = _without_docstring(node.body)
-            elif in_function and child and _binds(node, field):
+            elif child and _binds(node, field):
                 child = self._name(child)
             self._parts.append(field)
-            self._dump(child, inner)
+            self._dump(child)
+        del self._scopes[depth:]
 
 
 def find_copies(sources: dict[str, bytes]) -> dict[str, list[str]]:

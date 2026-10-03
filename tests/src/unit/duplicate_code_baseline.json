@@ -27,9 +27,9 @@
     "custom_components/ha_mcp_tools/oauth_autoapprove.py::AutoApproveTokenView._ha_auth_token",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_autoapprove.py::AutoApproveTokenView._ha_auth_token"
   ],
-  "0c2bd1b650fb": [
-    "tests/src/unit/test_component_server_entry_update_contract.py::_RecordingConfigEntries",
-    "tests/src/unit/test_ha_dev_manage_server_component_contract.py::_RecordingConfigEntries"
+  "09ae9962c12e": [
+    "tests/src/unit/test_component_server_entry_update_contract.py::_BgHass",
+    "tests/src/unit/test_ha_dev_manage_server_component_contract.py::_ComponentHass"
   ],
   "0cd154771557": [
     "tests/src/unit/visibility/test_search_filter.py::_DomainClient.__init__",
@@ -71,19 +71,11 @@
     "tests/src/unit/test_helper_param_rejection.py::_assert_invalid_param",
     "tests/src/unit/test_helper_registry_id_validation.py::_assert_invalid_param"
   ],
-  "15755f2181a5": [
-    "tests/src/unit/test_embedded_server.py::TestServeBrowserLanding.test_serve_tolerates_missing_browser_landing_module",
-    "tests/src/unit/test_embedded_server.py::TestServeLogFilters.test_serve_tolerates_missing_log_filters_module"
-  ],
   "16880f41f844": [
     "tests/src/unit/test_embedded_server.py::TestImportingWorkerRegistry._isolate_env",
     "tests/src/unit/test_embedded_server.py::TestServeBrowserLanding._isolate_env",
     "tests/src/unit/test_embedded_server.py::TestServeLogFilters._isolate_env",
     "tests/src/unit/test_embedded_server.py::TestServeRunningVersionCapture._isolate_env"
-  ],
-  "16b4e4f29ce1": [
-    "custom_components/ha_mcp_tools/repairs.py::LegacyOAuthRestartRepairFlow",
-    "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/repairs.py::OAuthRestartRepairFlow"
   ],
   "174fabbfcee4": [
     "tests/src/unit/test_categorized_search.py::TestArgumentsAsString._get_proxy_fn",
@@ -127,6 +119,10 @@
   "22e2fb5e3c46": [
     "tests/src/unit/test_coordinator.py::_FakeResp.raise_for_status",
     "tests/src/unit/test_update.py::_FakeResp.raise_for_status"
+  ],
+  "246e0f0bcdc2": [
+    "tests/src/unit/test_coordinator.py::_FakeResp",
+    "tests/src/unit/test_update.py::_FakeResp"
   ],
   "249c00bc1fd6": [
     "tests/src/unit/test_error_code_consistency_1297.py::_register_registry_tools_and_capture",
@@ -279,6 +275,10 @@
     "tests/src/e2e/workflows/embedded/test_embedded_server.py::_mcp_post",
     "tests/src/e2e/workflows/embedded/test_embedded_update_path.py::_mcp_post"
   ],
+  "46d66ff0b115": [
+    "tests/src/unit/test_automation_enabled.py::_ConfirmedReload",
+    "tests/src/unit/test_scene_activate.py::_ConfirmedReload"
+  ],
   "46ec75a56e7e": [
     "tests/src/unit/test_tools_entities.py::TestHaSetEntityExposeTo.set_entity_tool",
     "tests/src/unit/test_tools_entities.py::TestHaSetEntityLabels.set_entity_tool",
@@ -356,10 +356,6 @@
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::unwrap_refresh_token",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::unwrap_refresh_token"
   ],
-  "55b918bb8a95": [
-    "tests/src/unit/test_component_server_entry_update_contract.py::_BgHass",
-    "tests/src/unit/test_ha_dev_manage_server_component_contract.py::_ComponentHass"
-  ],
   "57e36fc3ae5a": [
     "src/ha_mcp/tools/best_practice_checker.py::_as_list",
     "src/ha_mcp/tools/coercion.py::coerce_to_list"
@@ -376,10 +372,6 @@
     "tests/src/unit/test_stdio_settings_sidecar.py::TestFeatureFlagAddonMode._reset_settings",
     "tests/src/unit/test_stdio_settings_sidecar.py::TestFeatureFlagOverrideReadErrors._reset_settings",
     "tests/src/unit/test_stdio_settings_sidecar.py::TestFeatureFlagsEndpoint._reset_settings"
-  ],
-  "5ad79a14d9a6": [
-    "tests/src/unit/test_component_info_timezone_contract.py::RoutingClient",
-    "tests/src/unit/test_ha_timezone_component_routing.py::RoutingClient"
   ],
   "5de8ad3f0a84": [
     "custom_components/ha_mcp_tools/oauth_autoapprove.py::_unavailable",
@@ -400,10 +392,6 @@
     "tests/src/unit/test_registry_name_clearing.py::client",
     "tests/src/unit/test_tools_config_dashboards.py::fake_client",
     "tests/src/unit/test_tools_entities_p2.py::_make_client"
-  ],
-  "658728af2bb9": [
-    "tests/src/unit/test_oauth_autoapprove.py::_FakeURL",
-    "tests/src/unit/test_oauth_legacy_component.py::_FakeURL"
   ],
   "669674f33eb1": [
     "tests/src/unit/test_history_pagination.py::TestHistoryLimitBoundary.history_tool",
@@ -428,6 +416,10 @@
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::RefreshDisposition",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::RefreshDisposition"
   ],
+  "6a582e185555": [
+    "tests/src/unit/test_oauth_autoapprove.py::_FakeURL",
+    "tests/src/unit/test_oauth_legacy_component.py::_FakeURL"
+  ],
   "6a6fc02d9091": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::origin_client_id",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::origin_client_id"
@@ -435,6 +427,10 @@
   "6a7b9edd34ce": [
     "tests/src/unit/test_component_ws_phase2_async.py::TestNewCommandRegistration.test_non_admin_rejected",
     "tests/src/unit/test_component_ws_search.py::TestRegistrationAndAdminGate.test_non_admin_rejected"
+  ],
+  "6aafcb28909a": [
+    "tests/src/unit/test_embedded_server.py::TestServeBrowserLanding.test_serve_tolerates_missing_browser_landing_module",
+    "tests/src/unit/test_embedded_server.py::TestServeLogFilters.test_serve_tolerates_missing_log_filters_module"
   ],
   "6d187cc48968": [
     "tests/src/unit/test_label_area_assignment.py::register_tools",
@@ -463,6 +459,12 @@
     "tests/src/unit/test_component_ws_phase2_async.py::TestCallServiceSchema.test_malformed_rejected",
     "tests/src/unit/test_component_ws_phase2_async.py::TestDashboardsSchema.test_malformed_rejected",
     "tests/src/unit/test_component_ws_phase2_async.py::TestServicesListSchema.test_malformed_rejected"
+  ],
+  "74c089208785": [
+    "tests/src/unit/test_rest_client_automations.py::TestDeleteAutomationConfig.mock_client",
+    "tests/src/unit/test_rest_client_automations.py::TestPollForAutomationEntity.mock_client",
+    "tests/src/unit/test_rest_client_automations.py::TestUpsertAutomationConfigIdMismatch.mock_client",
+    "tests/src/unit/test_rest_client_automations.py::TestUpsertAutomationResolvedShortCircuit.mock_client"
   ],
   "760e737136f8": [
     "tests/src/unit/test_tools_get_states.py::TestHaGetStateAttributeKeysWarningBulk.mock_client",
@@ -655,15 +657,9 @@
     "tests/src/unit/test_ha_get_integration_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_remove_helpers_component_routing.py::_clear_caps_cache"
   ],
-  "9da6af735207": [
-    "tests/src/unit/test_rest_client_automations.py::TestDeleteAutomationConfig.mock_client",
-    "tests/src/unit/test_rest_client_automations.py::TestPollForAutomationEntity.mock_client",
-    "tests/src/unit/test_rest_client_automations.py::TestUpsertAutomationConfigIdMismatch.mock_client",
-    "tests/src/unit/test_rest_client_automations.py::TestUpsertAutomationResolvedShortCircuit.mock_client"
-  ],
-  "9dd000ea80af": [
-    "tests/src/unit/test_automation_enabled.py::_ConfirmedReload",
-    "tests/src/unit/test_scene_activate.py::_ConfirmedReload"
+  "9c0d2742752d": [
+    "custom_components/ha_mcp_tools/repairs.py::LegacyOAuthRestartRepairFlow",
+    "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/repairs.py::OAuthRestartRepairFlow"
   ],
   "9e26240df256": [
     "tests/src/unit/test_radio_management.py::_capture",
@@ -679,10 +675,6 @@
     "tests/src/unit/visibility/test_search_filter.py::_DomainClient.send_websocket_message",
     "tests/src/unit/visibility/test_search_filter.py::_FakeClient.send_websocket_message",
     "tests/src/unit/visibility/test_warnings_surface.py::_SearchClient.send_websocket_message"
-  ],
-  "a092b84d30d7": [
-    "tests/src/unit/visibility/test_overview_filter.py::_OverviewClient",
-    "tests/src/unit/visibility/test_warnings_surface.py::_OverviewClient"
   ],
   "a0a761eca63b": [
     "tests/src/unit/test_tools_calendar_rrule.py::_make_mock_client",
@@ -712,11 +704,6 @@
   "a7a3c8f24529": [
     "custom_components/ha_mcp_tools/oauth_legacy.py::LegacyOAuthProvider.validate_bearer",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::OAuthProvider.validate_bearer"
-  ],
-  "a9bdcb5888f9": [
-    "tests/src/unit/visibility/test_search_filter.py::_DomainClient",
-    "tests/src/unit/visibility/test_search_filter.py::_FakeClient",
-    "tests/src/unit/visibility/test_warnings_surface.py::_SearchClient"
   ],
   "ae9c2472dc15": [
     "tests/src/unit/test_helper_field_persistence.py::mock_client",
@@ -765,10 +752,6 @@
     "tests/src/unit/test_settings_ui.py::TestSaveFeatureFlagsStandaloneMode._make_request",
     "tests/src/unit/test_settings_ui.py::TestSaveToolsResponseShape._make_request",
     "tests/src/unit/test_settings_ui.py::TestSaveToolsValidation._make_request"
-  ],
-  "b60d4dc35e90": [
-    "tests/src/unit/test_coordinator.py::_FakeResp",
-    "tests/src/unit/test_update.py::_FakeResp"
   ],
   "b7bf3fbc8949": [
     "custom_components/ha_mcp_tools/oauth_dcr.py::_refresh_identity_is_reproducible",
@@ -836,6 +819,10 @@
     "tests/src/e2e/workflows/config/test_ws_event_waiter.py::_entity_id_from_response",
     "tests/src/e2e/workflows/core/test_service.py::get_entity_id_from_response"
   ],
+  "c93dcdcfbd9c": [
+    "tests/src/unit/test_component_server_entry_update_contract.py::_RecordingConfigEntries",
+    "tests/src/unit/test_ha_dev_manage_server_component_contract.py::_RecordingConfigEntries"
+  ],
   "ca3c31a1fa20": [
     "tests/src/unit/test_overview_repairs.py::TestHaGetOverviewRepairs._build_tool",
     "tests/src/unit/test_overview_system_info.py::TestHaGetOverviewAlwaysEmittedKeys.overview_tool",
@@ -888,6 +875,11 @@
     "tests/src/e2e/tools/test_dev_mode_tools.py::_reset_settings_state",
     "tests/src/e2e/tools/test_security_policy_tool.py::_reset_settings_state"
   ],
+  "d2b361879c4a": [
+    "tests/src/unit/visibility/test_search_filter.py::_DomainClient",
+    "tests/src/unit/visibility/test_search_filter.py::_FakeClient",
+    "tests/src/unit/visibility/test_warnings_surface.py::_SearchClient"
+  ],
   "d41845b97bca": [
     "custom_components/ha_mcp_tools/websocket_api/search.py::_normalize_member_entity_ids",
     "src/ha_mcp/utils/entity_membership.py::normalize_member_entity_ids"
@@ -915,6 +907,10 @@
   "d7a477e102ee": [
     "tests/src/unit/test_helper_registry_id_validation.py::mock_client",
     "tests/src/unit/test_helper_response_shape.py::mock_client"
+  ],
+  "d8d77a6c1ecf": [
+    "tests/src/unit/visibility/test_overview_filter.py::_OverviewClient",
+    "tests/src/unit/visibility/test_warnings_surface.py::_OverviewClient"
   ],
   "d93ceddc57f3": [
     "src/ha_mcp/transforms/lite_docstrings.py::LiteDocstringsTransform.get_tool",
@@ -1045,6 +1041,10 @@
   "f7fb67a64cd9": [
     "tests/addon/test_webhook_proxy.py::_FakeClientTimeout",
     "tests/src/unit/_embedded_stubs.py::ClientTimeout"
+  ],
+  "f938061f65f7": [
+    "tests/src/unit/test_component_info_timezone_contract.py::RoutingClient",
+    "tests/src/unit/test_ha_timezone_component_routing.py::RoutingClient"
   ],
   "f9dc41bb2096": [
     "tests/src/e2e/workflows/filesystem/test_custom_paths.py::_bootstrap_token",
