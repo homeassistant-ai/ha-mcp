@@ -125,9 +125,9 @@ async def enrich_matter_diagnostics(
         TimeoutError,
         OSError,
     ) as e:
-        warnings.append(f"Matter node diagnostics unavailable: {e}")
         logger.warning(
             "Could not fetch Matter node diagnostics for device %s: %s",
             device_info.get("device_id"),
             e,
         )
+        warnings.append(f"Matter node diagnostics unavailable: {e}")
