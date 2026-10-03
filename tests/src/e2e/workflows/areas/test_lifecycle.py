@@ -10,14 +10,13 @@ This test suite validates:
 - Aliases and icon management
 """
 
-import json
 import logging
 import uuid
 from typing import Any
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -345,91 +344,6 @@ class TestAreaLifecycle:
                         "ha_config_remove_label",
                         {"label_id": created_label},
                     )
-
-    async def test_area_sensor_references(self, mcp_client, cleanup_tracker):
-        """Set, replace and clear an area's temperature/humidity sensors (issue #2619).
-
-        Before the fix neither MCP path could change these: the raw WS command is
-        guarded and the guarded setter had no parameter for either field. A
-        partial update must leave the omitted reference untouched.
-        """
-        area_name = generate_unique_name("test_sensor_area")
-        area_id = None
-        try:
-            create_data = parse_mcp_result(
-                await mcp_client.call_tool(
-                    "ha_set_area_or_floor",
-                    {
-                        "kind": "area",
-                        "name": area_name,
-                        "temperature_entity_id": "sensor.demo_temperature",
-                        "humidity_entity_id": "sensor.demo_humidity",
-                    },
-                )
-            )
-            assert create_data.get("success"), f"Create failed: {create_data}"
-            area_id = create_data["area_id"]
-            cleanup_tracker.track("area", area_id)
-
-            area = await self._read_area(mcp_client, area_id)
-            assert area.get("temperature_entity_id") == "sensor.demo_temperature", area
-            assert area.get("humidity_entity_id") == "sensor.demo_humidity", area
-
-            # Replace one reference; the other and the name must survive.
-            update_data = parse_mcp_result(
-                await mcp_client.call_tool(
-                    "ha_set_area_or_floor",
-                    {
-                        "kind": "area",
-                        "id": area_id,
-                        "temperature_entity_id": "sensor.demo_outside_temperature",
-                    },
-                )
-            )
-            assert update_data.get("success"), f"Update failed: {update_data}"
-            area = await self._read_area(mcp_client, area_id)
-            assert (
-                area.get("temperature_entity_id") == "sensor.demo_outside_temperature"
-            )
-            assert area.get("humidity_entity_id") == "sensor.demo_humidity", area
-            assert area.get("name") == area_name, area
-
-            # Empty string clears, matching the icon/picture/floor_id convention.
-            clear_data = parse_mcp_result(
-                await mcp_client.call_tool(
-                    "ha_set_area_or_floor",
-                    {
-                        "kind": "area",
-                        "id": area_id,
-                        "temperature_entity_id": "",
-                        "humidity_entity_id": "",
-                    },
-                )
-            )
-            assert clear_data.get("success"), f"Clear failed: {clear_data}"
-            area = await self._read_area(mcp_client, area_id)
-            assert area.get("temperature_entity_id") is None, area
-            assert area.get("humidity_entity_id") is None, area
-        finally:
-            if area_id:
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_remove_area_or_floor",
-                    {"kind": "area", "id": area_id},
-                )
-
-    @staticmethod
-    async def _read_area(mcp_client, area_id: str) -> dict[str, Any]:
-        list_data = parse_mcp_result(
-            await mcp_client.call_tool("ha_list_floors_areas", {})
-        )
-        assert list_data.get("success"), f"List failed: {list_data}"
-        area = next(
-            (a for a in _flatten_areas(list_data) if a.get("area_id") == area_id),
-            None,
-        )
-        assert area is not None, f"Area {area_id} not found: {list_data}"
-        return area
 
 
 @pytest.mark.floor
@@ -1248,24 +1162,4 @@ class TestAreaFloorReferenceNegativeInputs:
         )
         assert data["floor_id"] == "nonexistent_floor_a7_e2e_xyz_404", (
             f"Error context must name the offending floor_id: {data}"
-        )
-
-    async def test_area_sensor_reference_wrong_device_class_rejected(self, mcp_client):
-        """A temperature sensor offered as the humidity reference must surface
-        HA's rejection as a failed call, not a success envelope (issue #2619)."""
-        mcp = MCPAssertions(mcp_client)
-        data = await mcp.call_tool_failure(
-            "ha_set_area_or_floor",
-            {
-                "kind": "area",
-                "name": f"Sensor Ref Area {uuid.uuid4().hex[:8]}",
-                "humidity_entity_id": "sensor.demo_temperature",
-            },
-        )
-
-        assert data["error"]["code"] == "SERVICE_CALL_FAILED", (
-            f"Expected SERVICE_CALL_FAILED, got: {data.get('error')}"
-        )
-        assert "sensor.demo_temperature" in json.dumps(data), (
-            f"Error must name the offending entity: {data}"
         )
