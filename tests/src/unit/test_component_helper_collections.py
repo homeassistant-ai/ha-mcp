@@ -315,6 +315,12 @@ async def test_write_after_dispatch_failure_is_outcome_unknown(ws) -> None:
         await client_mod.write_helper_item(_client(), "input_boolean", "create", {})
 
 
+async def test_write_cancellation_propagates(ws) -> None:
+    ws.send_command.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await client_mod.write_helper_item(_client(), "input_boolean", "create", {})
+
+
 async def test_write_invalid_carries_error_context(ws) -> None:
     ws.send_command.return_value = {"success": True, "result": {
         "success": False, "error": {"code": "invalid", "message": "bad min"}}}  # fmt: skip

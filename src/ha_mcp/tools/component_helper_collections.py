@@ -8,7 +8,6 @@ sent, Core answered ``unknown_command``, or the component found no collection.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 import weakref
@@ -170,8 +169,9 @@ async def write_helper_item(
         raw = await ws.send_command(WS_HELPER_WRITE, **kwargs)
     except HomeAssistantCommandNotSent:
         return None
-    except (asyncio.CancelledError, Exception) as exc:
-        if isinstance(exc, Exception) and is_unknown_command(exc):
+    except Exception as exc:
+        # Cancellation propagates; only a definitive unknown_command falls back.
+        if is_unknown_command(exc):
             invalidate_caps(client)
             return None
         _raise_outcome_unknown(helper_type, action, exc)

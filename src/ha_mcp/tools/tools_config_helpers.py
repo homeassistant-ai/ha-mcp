@@ -2264,7 +2264,7 @@ async def _create_via_component(
         for key, value in (
             ("area_id", area_id),
             ("labels", labels),
-            ("category", category),
+            ("category", category or None),
         )
         if value is not None
     }
@@ -3036,7 +3036,7 @@ async def _update_via_component(
             ("icon", icon),
             ("area_id", area_id),
             ("labels", labels),
-            ("category", category),
+            ("category", category or None),
         )
         if value is not None and helper_type != "tag"
     }
@@ -4383,8 +4383,6 @@ class HelperConfigTools:
                     "FLOW types and config_subentry take the flow's fields; a "
                     "field set to null is cleared where the schema allows "
                     "that field to be empty. A field two "
-                    "current value, and a field set to null is cleared where "
-                    "the schema allows that field to be empty. A field two "
                     "steps declare gets your one value both times; pass "
                     "step_values={'<step_id>': {'<field>': <value>}} to give "
                     "a step its own value, or to leave it out of that step; a "

@@ -248,6 +248,20 @@ async def test_tag_update_routes_through_component() -> None:
     assert kwargs["registry"] == {}  # tags carry no registry fields
 
 
+async def test_empty_category_is_not_sent_to_the_component() -> None:
+    client = MagicMock()
+    write = AsyncMock(
+        return_value={"success": True, "item": {"id": "b"}, "entity_id": "input_boolean.b",
+                      "registry_applied": {}, "warnings": []}
+    )  # fmt: skip
+    with patch.object(tch, "write_helper_item", write):
+        await tch._execute_create_simple_helper(
+            client, "input_boolean", "B", None, None, None, "", False, False,
+            **_type_kw(),
+        )  # fmt: skip
+    assert write.call_args.kwargs["registry"] == {}
+
+
 async def test_write_falls_back_to_websocket_when_component_unavailable() -> None:
     client = MagicMock()
     client.send_websocket_message = AsyncMock(
