@@ -3,8 +3,10 @@ formatting and redaction helpers they share."""
 
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
+from urllib.parse import urlencode
 
 # Last line of every generated issue body. A paste that lost its end, for
 # example because a chat UI closed the code block early, is visibly short.
@@ -796,9 +798,60 @@ def _generate_feature_request_template(
 """
 
 
-# Report types whose body carries the tool-call log, environment and
-# configuration, but no startup, app or Core error logs.
-_AGENT_SIDE_TEMPLATES = {
-    "agent_behavior": _generate_agent_behavior_template,
-    "feature_request": _generate_feature_request_template,
-}
+NEW_ISSUE_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new"
+
+
+# GitHub rejects an /issues/new URL of about 8 KB or more with 414 URI Too
+# Long (measured 2026-09-30: 8,167 characters loaded, 8,217 did not). That is
+# observed behaviour, not a documented limit, so the budget stays below it.
+_ISSUE_URL_MAX_CHARS = 7500
+
+
+def _new_issue_url(title: str, body: str) -> str:
+    return f"{NEW_ISSUE_URL}?{urlencode({'title': title, 'body': body})}"
+
+
+def _build_issue_url(title: str, render: Callable[[int | None], str]) -> str:
+    """Return a new-issue link with title and body filled in.
+
+    ``render(cap)`` builds the body with every part of the agent's text
+    except the title, and the error messages, cut to ``cap`` characters, or
+    uncut for None. Long text is shortened first, so the
+    environment block, which triage needs most, stays in the link. Only when
+    that is not enough is the body itself cut from the end.
+    """
+    url = _new_issue_url(title, render(None))
+    if len(url) <= _ISSUE_URL_MAX_CHARS:
+        return url
+    best: str | None = None
+    low, high = 0, len(url)
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = _new_issue_url(title, render(mid))
+        if len(candidate) <= _ISSUE_URL_MAX_CHARS:
+            best, low = candidate, mid + 1
+        else:
+            high = mid - 1
+    return best or _cut_to_fit(title, render(0))
+
+
+def _cut_to_fit(title: str, body: str) -> str:
+    """Cut ``body`` at the longest prefix whose link fits, and say so."""
+    note = (
+        "\n\n_(Cut to fit the link. The full report is in the chat.)_\n\n"
+        f"{REPORT_END_MARKER}\n"
+    )
+    core = body.removesuffix(f"{REPORT_END_MARKER}\n").rstrip()
+
+    def fits(length: int) -> bool:
+        cut = _close_open_block(core[:length]) + note
+        return len(_new_issue_url(title, cut)) <= _ISSUE_URL_MAX_CHARS
+
+    low, high = 0, len(core)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if fits(mid):
+            low = mid
+        else:
+            high = mid - 1
+    return _new_issue_url(title, _close_open_block(core[:low]) + note)

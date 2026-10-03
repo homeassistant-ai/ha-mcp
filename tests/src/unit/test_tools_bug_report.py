@@ -2612,8 +2612,7 @@ class TestFinishedIssue:
 
         from markdown_it import MarkdownIt
 
-        from ha_mcp.tools.bug_report_templates import REPORT_END_MARKER
-        from ha_mcp.tools.tools_bug_report import _cut_to_fit
+        from ha_mcp.tools.bug_report_templates import REPORT_END_MARKER, _cut_to_fit
 
         url = _cut_to_fit("t", f"{body}{REPORT_END_MARKER}\n")
         assert len(url) <= 8167

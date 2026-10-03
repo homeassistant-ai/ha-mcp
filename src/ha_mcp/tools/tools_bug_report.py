@@ -14,10 +14,9 @@ import os
 import platform
 import sys
 import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus
 
 import httpx
 from pydantic import Field
@@ -38,15 +37,16 @@ from ..utils.usage_logger import (
     get_startup_logs,
 )
 from .bug_report_templates import (
-    _AGENT_SIDE_TEMPLATES,
     REPORT_END_MARKER,
-    _close_open_block,
+    _build_issue_url,
     _format_client_host_for_template,
     _format_client_info_for_template,
     _format_server_entry_value,
     _format_supervisor_value,
     _format_tools_entry_value,
     _format_version_value,
+    _generate_agent_behavior_template,
+    _generate_feature_request_template,
     _generate_runtime_bug_template,
     _ReportText,
     _sanitize_log_text,
@@ -67,12 +67,12 @@ from .util_helpers import (
 
 logger = logging.getLogger(__name__)
 
-NEW_ISSUE_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new"
-
-# GitHub rejects an /issues/new URL of about 8 KB or more with 414 URI Too
-# Long (measured 2026-09-30: 8,167 characters loaded, 8,217 did not). That is
-# observed behaviour, not a documented limit, so the budget stays below it.
-_ISSUE_URL_MAX_CHARS = 7500
+# Report types whose body carries the tool-call log, environment and
+# configuration, but no startup, app or Core error logs.
+_AGENT_SIDE_TEMPLATES = {
+    "agent_behavior": _generate_agent_behavior_template,
+    "feature_request": _generate_feature_request_template,
+}
 
 
 _TITLE_PREFIXES = {
@@ -1466,56 +1466,6 @@ def _issue_title(report_type: str, text: _ReportText, suggested_title: str) -> s
     if len(title) > _ISSUE_TITLE_MAX_CHARS:
         title = title[: _ISSUE_TITLE_MAX_CHARS - 3] + "..."
     return title
-
-
-def _new_issue_url(title: str, body: str) -> str:
-    return f"{NEW_ISSUE_URL}?{urlencode({'title': title, 'body': body})}"
-
-
-def _build_issue_url(title: str, render: Callable[[int | None], str]) -> str:
-    """Return a new-issue link with title and body filled in.
-
-    ``render(cap)`` builds the body with every part of the agent's text
-    except the title, and the error messages, cut to ``cap`` characters, or
-    uncut for None. Long text is shortened first, so the
-    environment block, which triage needs most, stays in the link. Only when
-    that is not enough is the body itself cut from the end.
-    """
-    url = _new_issue_url(title, render(None))
-    if len(url) <= _ISSUE_URL_MAX_CHARS:
-        return url
-    best: str | None = None
-    low, high = 0, len(url)
-    while low <= high:
-        mid = (low + high) // 2
-        candidate = _new_issue_url(title, render(mid))
-        if len(candidate) <= _ISSUE_URL_MAX_CHARS:
-            best, low = candidate, mid + 1
-        else:
-            high = mid - 1
-    return best or _cut_to_fit(title, render(0))
-
-
-def _cut_to_fit(title: str, body: str) -> str:
-    """Cut ``body`` at the longest prefix whose link fits, and say so."""
-    note = (
-        "\n\n_(Cut to fit the link. The full report is in the chat.)_\n\n"
-        f"{REPORT_END_MARKER}\n"
-    )
-    core = body.removesuffix(f"{REPORT_END_MARKER}\n").rstrip()
-
-    def fits(length: int) -> bool:
-        cut = _close_open_block(core[:length]) + note
-        return len(_new_issue_url(title, cut)) <= _ISSUE_URL_MAX_CHARS
-
-    low, high = 0, len(core)
-    while low < high:
-        mid = (low + high + 1) // 2
-        if fits(mid):
-            low = mid
-        else:
-            high = mid - 1
-    return _new_issue_url(title, _close_open_block(core[:low]) + note)
 
 
 def _generate_anonymization_guide() -> str:
