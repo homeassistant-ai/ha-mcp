@@ -197,11 +197,11 @@ def _restart_core() -> bool:
             result.returncode,
             (result.stderr or result.stdout).strip()[:200],
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning("`ha core restart` failed (%s); restarting the container", exc)
     try:
         result = ssh_exec(["sh", "-c", "docker restart homeassistant"], timeout=300.0)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.error("container restart also failed: %s", exc)
         return False
     if result.returncode != 0:
@@ -230,7 +230,7 @@ def _py_spy_dump() -> str:
             timeout=420.0,
         )
         return result.stdout or result.stderr
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return f"(py-spy dump unavailable: {type(exc).__name__}: {exc})"
 
 

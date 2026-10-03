@@ -218,7 +218,7 @@ async def _via_component(client: Any, domain: str, path: str) -> _ComponentBody:
                 "ha_mcp_tools/blueprint_get failed; served metadata-only: %r", exc
             )
         return _NO_COMPONENT_BODY
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError / plain establish Exception → metadata-only
         # (no full-body legacy fetch exists; the base metadata is already served).
         logger.warning(
@@ -252,7 +252,7 @@ async def _via_tools_entry(client: Any, domain: str, path: str) -> str | None:
 
     try:
         content = await _fetch_file(client, f"blueprints/{domain}/{path}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug(
             "File & YAML Tools read of blueprint %r unavailable (%r)", path, exc
         )
@@ -294,7 +294,7 @@ async def _via_source_url(
         imported = await client.send_websocket_message(
             {"type": "blueprint/import", "url": source_url}
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug(
             "Re-fetch of blueprint %r from %s failed: %r",
             path,

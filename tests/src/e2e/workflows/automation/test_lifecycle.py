@@ -79,7 +79,7 @@ async def _trigger_and_verify_automation(
                     "📋 Logbook fallback also timed out — trigger service call "
                     "succeeded, treating as informational"
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Logbook fallback failed: {e} - continuing with test")
 
 
@@ -536,7 +536,7 @@ class TestAutomationLifecycle:
             else:
                 logger.info("✅ Invalid configuration properly rejected")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.info(
                 f"✅ Invalid configuration properly rejected with exception: {e}"
             )

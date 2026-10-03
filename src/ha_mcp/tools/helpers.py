@@ -653,7 +653,7 @@ async def safe_progress(
         logger.warning(
             "ctx.report_progress signature error (%s): %s", type(e).__name__, e
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug("ctx.report_progress failed (%s): %s", type(e).__name__, e)
 
 

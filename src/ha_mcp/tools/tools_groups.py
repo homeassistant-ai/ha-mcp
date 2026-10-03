@@ -219,7 +219,7 @@ class GroupTools:
                 "message": f"Found {total_count} group(s)",
             }
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error listing groups: {e}")
             exception_to_structured_error(
                 e,
@@ -395,7 +395,7 @@ class GroupTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error setting group {object_id!r}: {e}")
             exception_to_structured_error(
                 e,
@@ -512,7 +512,7 @@ class GroupTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing group {object_id!r}: {e}")
             exception_to_structured_error(
                 e,

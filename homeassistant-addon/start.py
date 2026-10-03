@@ -119,7 +119,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
                 )
             else:
                 log_error("Stored secret path is empty, regenerating")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log_error(f"Failed to read stored secret path: {e}")
 
     # Generate new secret path
@@ -129,7 +129,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         data_dir.mkdir(parents=True, exist_ok=True)
         secret_file.write_text(new_path)
         return new_path
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"Failed to save secret path: {e}")
         # Return the path anyway - it will work for this session
         return new_path
@@ -260,7 +260,7 @@ def resolve_effective_log_level() -> int:
         from ha_mcp.config import get_global_settings
 
         return getattr(logging, get_global_settings().log_level, logging.INFO)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Loud fallback: without this line, a user who set DEBUG in the
         # web UI can't tell "I'm on INFO" from "my DEBUG request crashed
         # on load" — the same silent-no-op class this fix exists to kill.
@@ -475,7 +475,7 @@ def _arm_kill_signal_diagnostics_if_debug(effective_log_level: int) -> None:
         )
 
         schedule_install_after_uvicorn()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"kill-signal diagnostics install failed: {e!r}; continuing")
 
 
@@ -505,7 +505,7 @@ def _run_mcp_server(
     except KeyboardInterrupt:
         log_info("Interrupted, exiting")
         return 0
-    except BaseException as e:
+    except BaseException as e:  # noqa: BLE001
         # Top-level crash handler: intentionally catch ANY exit (including
         # SystemExit, translated to its code below) so the add-on supervisor
         # always sees a clean process exit code instead of a traceback.
@@ -750,7 +750,7 @@ def main() -> int:
             raw_pinned = config.get("pinned_tools", "")
             pinned_tools_raw = raw_pinned if isinstance(raw_pinned, str) else ""
             verify_ssl = resolve_bool_option(config, "verify_ssl", True)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log_error(f"Failed to read config: {e}, using defaults")
             # Persistent "you lost your features" line so an operator
             # who scrolled past the cryptic exception trace still sees
@@ -943,7 +943,7 @@ def main() -> int:
     # Wrapped because log cosmetics must never block addon startup.
     try:
         widen_fastmcp_log_console()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_warning(f"Could not widen fastmcp log console: {e!r}; continuing")
 
     # Log the ha-mcp version + a self-update banner when a newer release is

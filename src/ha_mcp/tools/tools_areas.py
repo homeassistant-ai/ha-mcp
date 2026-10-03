@@ -396,7 +396,7 @@ class AreaTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(
                 f"Error listing floors and areas in phase {progress['phase']!r}: {e} "
                 f"(progress={progress})"
@@ -616,7 +616,7 @@ class AreaTools:
             listed = await self._client.send_websocket_message(
                 {"type": "config/area_registry/list"}
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Write already succeeded; a transport failure on re-read must
             # not look like a failed create (retry would duplicate the area).
             raise_tool_error(
@@ -925,7 +925,7 @@ class AreaTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error {operation} {kind} {name!r}: {e}")
             suggestions = [
                 "Check Home Assistant connection",
@@ -1024,7 +1024,7 @@ class AreaTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing {kind} {id!r}: {e}")
             exception_to_structured_error(
                 e,

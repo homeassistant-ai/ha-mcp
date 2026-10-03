@@ -275,7 +275,7 @@ async def fetch_dashboard_render_config(client: Any, url_path: str) -> dict[str,
         response = await client.send_websocket_message(request)
     except ToolError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,

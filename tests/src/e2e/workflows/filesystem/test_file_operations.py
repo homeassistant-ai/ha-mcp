@@ -138,7 +138,7 @@ async def _check_filesystem_tools_available(mcp_client) -> tuple[bool, str | Non
 
         return True, None
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return False, f"Error checking tools: {e}"
 
 
@@ -178,7 +178,7 @@ async def _check_mcp_tools_service_available(mcp_client) -> tuple[bool, str | No
 
         return False, "Unexpected response format"
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return False, f"Error checking services: {e}"
 
 

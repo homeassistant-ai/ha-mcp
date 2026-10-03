@@ -230,7 +230,7 @@ async def fetch_helper_flow_info(
             )
 
         return info
-    except Exception:
+    except Exception:  # noqa: BLE001
         return info
     finally:
         if intro_flow_id:
@@ -238,7 +238,7 @@ async def fetch_helper_flow_info(
                 await asyncio.wait_for(
                     client.abort_config_flow(intro_flow_id), timeout=5.0
                 )
-            except Exception as abort_err:
+            except Exception as abort_err:  # noqa: BLE001
                 logger.debug(
                     f"Failed to abort introspection flow {intro_flow_id}: {abort_err}"
                 )

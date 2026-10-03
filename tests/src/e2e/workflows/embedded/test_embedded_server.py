@@ -137,7 +137,7 @@ def _docker_available() -> bool:
 
         docker_sdk.from_env().ping()
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 

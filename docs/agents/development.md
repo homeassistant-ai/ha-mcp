@@ -104,6 +104,20 @@ The command lowers or drops entries and never raises or adds one, so a file
 that grew has to be split. Vendored trees, test fixtures and the stable
 webhook-proxy copy are not counted.
 
+`BLE001` (a handler that catches `Exception` without re-raising it or logging
+its traceback) is enabled. Each handler that existed before carries
+`# noqa: BLE001`. Do not add that comment to a new handler: catch the specific
+exception, re-raise, or log with `logger.exception(...)` or `exc_info=True`.
+One case may add it: a tool-boundary handler that ends in
+`exception_to_structured_error(exc, ...)` or
+`raise_tool_error(create_error_response(...))`. Those calls raise a
+`ToolError` for the agent, which ruff cannot see. With `raise_error=False`,
+`exception_to_structured_error` returns the payload instead and the handler
+needs a real fix.
+Logging only the message does not satisfy the rule. `RUF100` fails a `noqa`
+that is no longer needed. The two webhook-proxy `start.py` files are exempt
+through `per-file-ignores` in `pyproject.toml` and carry no `noqa`.
+
 ## Docker
 
 Stdio mode is local to the process and does not expose a network port:

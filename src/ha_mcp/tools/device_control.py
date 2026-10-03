@@ -97,7 +97,7 @@ class DeviceControlTools:
                     logger.warning(
                         "Failed to start WebSocket listener - async verification disabled"
                     )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Error starting WebSocket listener: {e}")
 
     async def control_device_smart(
@@ -227,7 +227,7 @@ class DeviceControlTools:
             except ToolError:
                 fail_pending_operation(operation_id, "Service dispatch failed")
                 raise
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 fail_pending_operation(operation_id, f"Service dispatch failed: {e}")
                 exception_to_structured_error(
                     e,
@@ -986,7 +986,7 @@ class DeviceControlTools:
                 return None
             parsed = self._parse_parameters(parameters, entity_id, action)
             service_call = self._build_service_call(entity_id, domain, action, parsed)
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Any resolution failure (incl. a ToolError from _parse_parameters on
             # invalid JSON) → abort the batch to legacy, which surfaces the error.
             return None
@@ -1232,7 +1232,7 @@ class DeviceControlTools:
                 token=self.client.token,
                 verify_ssl=getattr(self.client, "verify_ssl", None),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "%s establishment failed; falling back to legacy: %r",
                 WS_BULK_CALL_SERVICE,
@@ -1285,7 +1285,7 @@ class DeviceControlTools:
                     exc,
                 )
             return None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # HomeAssistantCommandTimeout (the response-wait expired — the batch frame
             # WAS sent) or any post-send transport drop: the batch is ambiguous-
             # dispatched. Report partial, NEVER re-dispatch (D9 at-most-once).
@@ -1499,7 +1499,7 @@ class DeviceControlTools:
                     operation_ids.append(result["operation_id"])
             except ToolError as e:
                 results.append(self._tool_error_to_dict(e))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 results.append(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,

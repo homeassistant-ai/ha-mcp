@@ -486,7 +486,7 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
                 if "helpers.frame" in line and "ha_mcp_tools" in line
             ]
             assert deprecated_component_lines == []
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         body_error = err
     finally:
         try:
@@ -500,7 +500,7 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
                 )
             )
             assert restore.get("success") is True, restore
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             restore_error = err
 
     if body_error is not None and restore_error is not None:

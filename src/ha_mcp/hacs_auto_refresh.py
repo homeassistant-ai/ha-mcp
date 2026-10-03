@@ -151,7 +151,7 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
         attempted += 1
         try:
             await send_hacs_repository_refresh(ws_client, str(repo["id"]))
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             # Both entries read installed only when someone downloaded the
             # mirror without removing the legacy record — HACS guards against
             # adding the same repository twice but not against two

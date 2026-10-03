@@ -874,7 +874,7 @@ class TestFlowHelperDirectGuard:
                 wait=False,
                 action=None,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Downstream may raise (mocked client returns nothing useful);
             # the guard-not-invoked assertion below is independent of that.
             pass

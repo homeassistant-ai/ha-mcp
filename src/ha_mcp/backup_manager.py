@@ -470,7 +470,7 @@ async def _await_backup_io[T](operation: Callable[..., T], *args: Any) -> T:
                 await asyncio.shield(worker)
             except asyncio.CancelledError:
                 continue  # Repeated cancellation must not release the lock early.
-            except Exception:
+            except Exception:  # noqa: BLE001
                 break  # Consume the worker failure below; preserve cancellation.
         if not worker.cancelled():
             worker.exception()

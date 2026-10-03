@@ -282,7 +282,7 @@ def _install_log_filters_if_available() -> None:
         return
     try:
         install_sdk_log_filters()
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         _LOGGER.warning(
             "Could not install MCP SDK log-noise filters; continuing without them: %s",
             err,
@@ -1986,7 +1986,7 @@ async def _shutdown_server_resources(server: Any) -> None:
         await stop_websocket_listener()
     except ImportError:
         _LOGGER.debug("WebSocket listener module not available")
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         _LOGGER.warning("WebSocket listener cleanup failed: %s", err)
 
     try:
@@ -1995,12 +1995,12 @@ async def _shutdown_server_resources(server: Any) -> None:
         await websocket_manager.disconnect()
     except ImportError:
         _LOGGER.debug("WebSocket manager module not available")
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         _LOGGER.warning("WebSocket manager cleanup failed: %s", err)
 
     try:
         await server.close()
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         _LOGGER.warning("Server cleanup failed: %s", err)
 
 

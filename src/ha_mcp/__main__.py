@@ -534,7 +534,7 @@ async def _cleanup_resources() -> None:
         logger.debug("WebSocket listener stopped")
     except ImportError:
         logger.debug("WebSocket listener module not available")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"WebSocket listener cleanup failed: {e}")
 
     # Close WebSocket manager connections
@@ -545,7 +545,7 @@ async def _cleanup_resources() -> None:
         logger.debug("WebSocket manager disconnected")
     except ImportError:
         logger.debug("WebSocket manager module not available")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"WebSocket manager cleanup failed: {e}")
 
     # Close the server's HTTP client
@@ -553,7 +553,7 @@ async def _cleanup_resources() -> None:
         try:
             await _server.close()
             logger.debug("Server closed")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Server cleanup failed: {e}")
 
     logger.info("Server resources cleaned up")
@@ -676,7 +676,7 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
 
         try:
             await _cancel_tasks(server_task, shutdown_task)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Teardown must never mask the exception being propagated from the
             # try block (Python drops the original if finally raises).
             logger.warning(f"Task cancellation during shutdown failed: {e}")
@@ -780,7 +780,7 @@ def _force_exit(code: int) -> NoReturn:
         for stream in (sys.stdout, sys.stderr):
             try:
                 stream.flush()
-            except Exception:  # nothing actionable at exit
+            except Exception:  # nothing actionable at exit  # noqa: BLE001
                 pass
 
     try:

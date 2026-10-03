@@ -1663,7 +1663,7 @@ def _dump_services_diagnostics(base_url: str, headers: dict[str, str]) -> None:
             logger.warning(
                 f"  /api/services: HTTP {svc_resp.status_code} {svc_resp.text[:200]}"
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # Broad catch by design: this is a diagnostic dump, and an
         # unexpected exception class (e.g. SSL error subclass, unicode
         # decode of an HTML 5xx body) should not abort the remaining
@@ -1726,7 +1726,7 @@ def _dump_config_entries_diagnostics(
             logger.warning(
                 f"  /api/config/config_entries/entry: HTTP {entries_resp.status_code}"
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # Same broad-catch rationale as the /api/services dump above.
         logger.warning(
             f"  /api/config/config_entries/entry: request failed: {type(exc).__name__}: {exc}"
@@ -1871,7 +1871,7 @@ def _detect_docker_host() -> dict:
                 "🔍 Docker Desktop DNS detected — using host.docker.internal as-is"
             )
             return {"hostname": "host.docker.internal", "extra_hosts": {}}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug(f"Docker Desktop DNS probe failed: {exc}")
 
     # Plain Linux Docker — inject the mapping so the hostname resolves in the container
@@ -2673,7 +2673,7 @@ def _wait_for_testcontainer_ready(
         # Get recent logs for debugging
         logs = container_obj.logs(tail=20).decode("utf-8", errors="ignore")
         logger.info(f"📄 Container logs:\n{logs}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ Could not inspect container: {e}")
 
     # Wait for API to be ready via the module-level
@@ -2884,7 +2884,7 @@ def ha_container_with_fresh_config(request, in_process_data_dir):
         import docker as docker_sdk
 
         docker_sdk.from_env().ping()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         pytest.fail(
             f"Docker is not available: {e}\n"
             "E2E tests require a running Docker daemon (testcontainers).\n"
@@ -3041,7 +3041,7 @@ async def ha_client(
         )
         logger.info(f"🏠 Components: {len(config.get('components', []))} loaded")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         pytest.fail(f"Home Assistant connection failed: {e}\nURL: {base_url}")
 
     yield client

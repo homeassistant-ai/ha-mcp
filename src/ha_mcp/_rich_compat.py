@@ -55,7 +55,7 @@ def ensure_rich_handler_compat() -> bool:
     """
     try:
         from rich.logging import RichHandler
-    except Exception:  # pragma: no cover - rich absent or broken
+    except Exception:  # pragma: no cover - rich absent or broken  # noqa: BLE001
         # fastmcp depends on rich, so this means the import would fail anyway
         # for reasons this shim cannot address.
         logger.debug("rich.logging unavailable; skipping RichHandler shim")

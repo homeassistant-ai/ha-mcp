@@ -83,7 +83,7 @@ def _read_only_mode() -> bool:
         from ..read_only import is_read_only
 
         return is_read_only()
-    except Exception:  # pragma: no cover - settings must never break a read
+    except Exception:  # noqa: BLE001  # pragma: no cover - settings must never break a read
         return False
 
 
@@ -319,7 +319,7 @@ class ThemeGuard:
                 await asyncio.wait_for(
                     asyncio.shield(close), timeout=CLOSE_TIMEOUT_SECONDS
                 )
-            except (Exception, TimeoutError) as close_error:
+            except (Exception, TimeoutError) as close_error:  # noqa: BLE001
                 logger.debug(
                     "Ignoring error while closing the theme-guard session: %s",
                     close_error,
@@ -354,7 +354,7 @@ class ThemeGuard:
         try:
             self._snapshot = await self._read_theme()
             self._snapshot_taken = True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Could not read the screenshot engine user's saved theme "
                 "before rendering: %s",
@@ -381,7 +381,7 @@ class ThemeGuard:
             # it land before reading (see RESTORE_SETTLE_SECONDS).
             await asyncio.sleep(RESTORE_SETTLE_SECONDS)
             current = await self._read_theme()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Could not re-read the screenshot engine user's saved theme "
                 "after rendering: %s",

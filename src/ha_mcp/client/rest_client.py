@@ -445,7 +445,7 @@ class HomeAssistantClient:
         """
         try:
             error_data = response.json()
-        except Exception:
+        except Exception:  # noqa: BLE001
             error_data = {"message": response.text}
 
         message = error_data.get("message")
@@ -1459,7 +1459,7 @@ class HomeAssistantClient:
                 return True, None
             else:
                 return False, "Invalid response from Home Assistant"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Intentional broad-catch: is_connected() contract maps any failure
             # to (False, error_msg); styleguide § "broad except at top-level
             # setup/teardown handlers" applies (connection probe is the analog).

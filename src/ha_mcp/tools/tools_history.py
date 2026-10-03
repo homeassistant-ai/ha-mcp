@@ -474,7 +474,7 @@ class HistoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if source == "statistics":
                 suggestions = [
                     "Check Home Assistant connection",

@@ -53,7 +53,7 @@ async def _component_inventory(client: Any) -> list[dict[str, Any]] | None:
                 verify_ssl=getattr(client, "verify_ssl", None),
             )
             return await _component_inventory_pages(ws, limit)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # Optional component reads always retain the independent REST fallback.
         if is_unknown_command(exc):
             invalidate_caps(client)

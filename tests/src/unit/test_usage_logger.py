@@ -119,7 +119,7 @@ class TestUsageLoggerRingBuffer:
                         execution_time_ms=0,
                         success=True,
                     )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 errors.append(e)
 
         def reader_thread():
@@ -127,7 +127,7 @@ class TestUsageLoggerRingBuffer:
                 for _ in range(50):
                     _ = logger.get_recent_entries(5)
                     time.sleep(0.001)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 errors.append(e)
 
         threads = []

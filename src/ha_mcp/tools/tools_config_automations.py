@@ -521,7 +521,7 @@ class AutomationConfigTools:
                     and state.get("attributes", {}).get("id") == identifier
                 ):
                     return str(state["entity_id"])
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(
                 f"Failed to resolve entity_id for automation {identifier}: {e}"
             )
@@ -608,7 +608,7 @@ class AutomationConfigTools:
             return await self._legacy_get_automation(identifier)
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "get"},
@@ -967,7 +967,7 @@ class AutomationConfigTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # 404 during update only — create (identifier=None) never hits this branch.
             if (
                 identifier
@@ -1616,7 +1616,7 @@ class AutomationConfigTools:
             result = await self._client.send_websocket_message(
                 {"type": "config/entity_registry/list"}
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug("Failed to list automation entity_ids from registry: %s", e)
             return []
         entries = result.get("result", []) if isinstance(result, dict) else result
@@ -2002,7 +2002,7 @@ class AutomationConfigTools:
             }
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 await self._raise_automation_not_found(identifier)
             exception_to_structured_error(

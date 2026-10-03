@@ -204,7 +204,7 @@ class ServiceDiscoveryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to list services: {e}")
             exception_to_structured_error(
                 e,
@@ -306,7 +306,7 @@ async def _fetch_services_list_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_SERVICES_LIST, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # DEVIATION (see docstring): the legacy path is REST + a per-request WS
         # bridge, NOT the shared pooled WS. A pooled-WS drop or a failed
         # (re)connect, both HomeAssistantConnectionError since #1947, must fall

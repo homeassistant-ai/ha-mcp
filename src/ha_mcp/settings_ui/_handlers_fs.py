@@ -102,7 +102,7 @@ async def _get_fs_custom_paths(
         )
     try:
         result = await _fs_custom_paths_call(server, "get_allowed_paths", {})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning("fs-custom-paths GET could not reach ha_mcp_tools: %s", exc)
         return _unavailable(
             _component_error_reason(exc)
@@ -175,7 +175,7 @@ async def _save_fs_custom_paths(
         result = await _fs_custom_paths_call(
             server, "set_allowed_paths", {"paths": paths}
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning("fs-custom-paths POST could not reach ha_mcp_tools: %s", exc)
         return JSONResponse(
             create_error_response(
