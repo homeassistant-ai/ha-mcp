@@ -1258,7 +1258,7 @@ class DevTools:
         # net, not a security boundary — never brick set_tool over it).
         try:
             known = {t["name"] for t in await self._tool_metadata_rows()}
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug(
                 "set_tool name validation skipped: metadata unavailable",
                 exc_info=True,
