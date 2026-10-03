@@ -28,6 +28,7 @@ from .server_tool_text import (
     SEARCH_KEYWORDS,
     SEARCH_TOOL_DESCRIPTION,
     SKILL_USE_BEFORE_KEYWORDS,
+    TOOL_DISCOVERY_INSTRUCTIONS,
 )
 from .tools.helpers import raise_tool_error
 from .transforms import DEFAULT_PINNED_TOOLS
@@ -456,38 +457,8 @@ class HomeAssistantSmartMCPServer:
 
         # Append tool search instructions when enabled
         if self.settings.enable_tool_search:
-            instructions += (
-                "\n\n## Tool Discovery\n"
-                "Tools already in your tool list are callable directly — "
-                "do not search for them. Once you know any tool’s name, "
-                "call it directly; never search for the same tool twice.\n\n"
-                "Most other tools are NOT listed directly — use "
-                "ha_search_tools to find them.\n\n"
-                "WORKFLOW:\n"
-                '1. Call ha_search_tools(query="...") with ENGLISH keywords '
-                "naming the operation (e.g. 'get entity state'). Translate "
-                "other languages first; entity, area and device names keep "
-                "their original spelling.\n"
-                "2. Results include name, description, parameters, and "
-                "annotations (readOnlyHint/destructiveHint). A tool already "
-                "in your list comes back as a name-only stub (pinned: true) "
-                "— use the schema you already have.\n"
-                "3. Execute the discovered tool — two options:\n"
-                "   a) DIRECT CALL (preferred): Call the tool directly by "
-                "name. All discovered tools are callable without a proxy.\n"
-                "   b) VIA PROXY: For permission-gated execution, use the "
-                "matching proxy:\n"
-                "      - ha_call_read_tool — safe, read-only operations\n"
-                "      - ha_call_write_tool — creates or modifies data\n"
-                "      - ha_call_delete_tool — removes data permanently\n\n"
-                f"A few default tools are listed directly "
-                f"({', '.join(DEFAULT_PINNED_TOOLS)}) — these are the "
-                f"starting pins, and users can unpin the non-mandatory "
-                f"ones via the Tools tab in the settings UI, so the "
-                f"actual visible set may be a subset of this list. "
-                f"Everything else must be discovered via search.\n\n"
-                "DO NOT assume a capability is unavailable because you "
-                "don't see a direct tool for it. ALWAYS search first."
+            instructions += TOOL_DISCOVERY_INSTRUCTIONS.format(
+                pinned=", ".join(DEFAULT_PINNED_TOOLS)
             )
 
         return instructions

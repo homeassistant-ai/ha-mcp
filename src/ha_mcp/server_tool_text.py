@@ -37,6 +37,42 @@ SEARCH_TOOL_DESCRIPTION = (
     "Most tools are discoverable only through this search."
 )
 
+# Appended to the server instructions when tool search is on; ``{pinned}``
+# is the comma-joined DEFAULT_PINNED_TOOLS.
+TOOL_DISCOVERY_INSTRUCTIONS = (
+    "\n\n## Tool Discovery\n"
+    "Tools already in your tool list are callable directly — "
+    "do not search for them. Once you know any tool’s name, "
+    "call it directly; never search for the same tool twice.\n\n"
+    "Most other tools are NOT listed directly — use "
+    "ha_search_tools to find them.\n\n"
+    "WORKFLOW:\n"
+    '1. Call ha_search_tools(query="...") with ENGLISH keywords '
+    "naming the operation (e.g. 'get entity state'). Translate "
+    "other languages first; entity, area and device names keep "
+    "their original spelling.\n"
+    "2. Results include name, description, parameters, and "
+    "annotations (readOnlyHint/destructiveHint). A tool already "
+    "in your list comes back as a name-only stub (pinned: true) "
+    "— use the schema you already have.\n"
+    "3. Execute the discovered tool — two options:\n"
+    "   a) DIRECT CALL (preferred): Call the tool directly by "
+    "name. All discovered tools are callable without a proxy.\n"
+    "   b) VIA PROXY: For permission-gated execution, use the "
+    "matching proxy:\n"
+    "      - ha_call_read_tool — safe, read-only operations\n"
+    "      - ha_call_write_tool — creates or modifies data\n"
+    "      - ha_call_delete_tool — removes data permanently\n\n"
+    "A few default tools are listed directly "
+    "({pinned}) — these are the "
+    "starting pins, and users can unpin the non-mandatory "
+    "ones via the Tools tab in the settings UI, so the "
+    "actual visible set may be a subset of this list. "
+    "Everything else must be discovered via search.\n\n"
+    "DO NOT assume a capability is unavailable because you "
+    "don't see a direct tool for it. ALWAYS search first."
+)
+
 # Extra keywords appended to tool descriptions for BM25 ranking.
 # Applied unconditionally via SearchKeywordsTransform so they also
 # improve retrieval for Claude's native deferred-tool search on
