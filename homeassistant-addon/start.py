@@ -528,6 +528,25 @@ def _run_mcp_server(
     return 0
 
 
+def _apply_backup_env(config: dict[str, Any]) -> None:
+    """Export Supervisor backup options, including human-controlled AI permissions."""
+    for key, default, invalid in (
+        ("enable_auto_backup", True, False),
+        ("enable_snapshot_actions", True, True),
+        ("backup_read_only", False, False),
+        ("enable_snapshot_delete", False, False),
+    ):
+        raw = config.get(key, default)
+        os.environ[key.upper()] = str(raw if isinstance(raw, bool) else invalid).lower()
+    for key, default in (
+        ("auto_backup_throttle_minutes", 0),
+        ("auto_backup_retain_per_entity", 100),
+        ("snapshot_delete_min_age_days", 7),
+    ):
+        raw = config.get(key, default)
+        os.environ[key.upper()] = str(raw if isinstance(raw, int) else default)
+
+
 def main() -> int:  # noqa: PLR0915
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
@@ -583,16 +602,6 @@ def main() -> int:  # noqa: PLR0915
     # flips to True and the actual value comes from the addon options.
     beta_master_in_config = False
     enable_beta_features = False
-    enable_auto_backup = (
-        True  # default (#1288 — on by default; opt out via ENABLE_AUTO_BACKUP=false)
-    )
-    auto_backup_throttle_minutes = 0  # default — every write
-    auto_backup_retain_per_entity = 100  # default
-    # Off by default (#1861 — a snapshot may be the last recovery point
-    # after the agent itself broke something; a human opts in, not the
-    # agent).
-    enable_snapshot_delete = False  # default
-    snapshot_delete_min_age_days = 7  # default
     tool_search_max_results = 5  # default
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
@@ -720,26 +729,6 @@ def main() -> int:  # noqa: PLR0915
             raw_beta_master = config.get("enable_beta_features", False)
             enable_beta_features = (
                 raw_beta_master if isinstance(raw_beta_master, bool) else False
-            )
-            raw_auto_backup = config.get("enable_auto_backup", True)
-            enable_auto_backup = (
-                raw_auto_backup if isinstance(raw_auto_backup, bool) else False
-            )
-            raw_throttle = config.get("auto_backup_throttle_minutes", 0)
-            auto_backup_throttle_minutes = (
-                raw_throttle if isinstance(raw_throttle, int) else 0
-            )
-            raw_retain = config.get("auto_backup_retain_per_entity", 100)
-            auto_backup_retain_per_entity = (
-                raw_retain if isinstance(raw_retain, int) else 100
-            )
-            raw_snapshot_delete = config.get("enable_snapshot_delete", False)
-            enable_snapshot_delete = (
-                raw_snapshot_delete if isinstance(raw_snapshot_delete, bool) else False
-            )
-            raw_min_age = config.get("snapshot_delete_min_age_days", 7)
-            snapshot_delete_min_age_days = (
-                raw_min_age if isinstance(raw_min_age, int) else 7
             )
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = (
@@ -881,11 +870,7 @@ def main() -> int:  # noqa: PLR0915
         # tools on. Keep the auto-enable as a one-cycle bridge until
         # Supervisor merges the new schema default into options.json.
         maybe_auto_enable_beta_master(config)
-    os.environ["ENABLE_AUTO_BACKUP"] = str(enable_auto_backup).lower()
-    os.environ["AUTO_BACKUP_THROTTLE_MINUTES"] = str(auto_backup_throttle_minutes)
-    os.environ["AUTO_BACKUP_RETAIN_PER_ENTITY"] = str(auto_backup_retain_per_entity)
-    os.environ["ENABLE_SNAPSHOT_DELETE"] = str(enable_snapshot_delete).lower()
-    os.environ["SNAPSHOT_DELETE_MIN_AGE_DAYS"] = str(snapshot_delete_min_age_days)
+    _apply_backup_env(config)
     # Persist saved custom tools across addon restarts. /data is the
     # per-addon writable directory mapped by Supervisor and survives
     # add-on updates (but not uninstall/reinstall — users should copy

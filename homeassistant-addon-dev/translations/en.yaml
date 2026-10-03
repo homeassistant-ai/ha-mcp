@@ -223,6 +223,20 @@ configuration:
       it. On by default; unchecking opts out of the best-effort captures and takes
       the file and raw-YAML tools out of service with them. Requires restart to take
       effect.'
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot'). Turning this off blocks every snapshot action,
+      including listing, while edit backups remain available. On by default. Change
+      this option or use the web Settings UI Backups tab; requires restart in the
+      app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Auto-backup throttle (minutes)
     description: Per-entity throttle window. 0 (default) captures a snapshot on every

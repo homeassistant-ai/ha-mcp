@@ -60,6 +60,8 @@ options:
   disabled_tools: ""
   pinned_tools: ""
   enable_auto_backup: true
+  enable_snapshot_actions: true
+  backup_read_only: false
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
   # Off by default (#1861) — an agent deleting a full HA snapshot is
@@ -84,6 +86,8 @@ schema:
   disabled_tools: str?
   pinned_tools: str?
   enable_auto_backup: bool?
+  enable_snapshot_actions: bool?
+  backup_read_only: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?
   enable_snapshot_delete: bool?

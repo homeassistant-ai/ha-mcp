@@ -43,6 +43,15 @@ from ..client.rest_client import (
 from ..client.websocket_client import HomeAssistantWebSocketClient, get_websocket_client
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
+from .backup_access import (
+    gate_backup_combo as _gate_combo,
+)
+from .backup_access import (
+    require_backup_access,
+)
+from .backup_access import (
+    require_backup_param as _require,
+)
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -1562,60 +1571,6 @@ async def _execute_snapshot_delete(
     }
 
 
-# Valid (scope, action) combinations. Anything outside this set is
-# rejected with a structured VALIDATION_INVALID_PARAMETER error.
-_VALID_COMBOS: set[tuple[str, str]] = {
-    ("snapshot", "create"),
-    ("snapshot", "list"),
-    ("snapshot", "restore"),
-    ("snapshot", "delete"),
-    ("edits", "create"),
-    ("edits", "list"),
-    ("edits", "view"),
-    ("edits", "diff"),
-    ("edits", "restore"),
-    ("edits", "delete"),
-}
-
-
-def _gate_combo(scope: str, action: str) -> None:
-    """Reject (scope, action) combinations that do not exist.
-
-    Strong gating defends against the LLM accidentally routing "restore
-    my automation" through ``(snapshot, restore)`` (which would restart
-    HA). The error response lists every legal combo so the LLM can
-    self-correct on the next call.
-    """
-    if (scope, action) in _VALID_COMBOS:
-        return
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"Invalid combination: scope={scope!r}, action={action!r}",
-            context={"scope": scope, "action": action},
-            suggestions=[
-                "Valid combinations: "
-                + ", ".join(sorted(f"({s},{a})" for s, a in _VALID_COMBOS)),
-                "scope='snapshot' is for full HA tarball backups (heavy, restart on restore)",
-                "scope='edits' is for per-entity auto-backups produced by write tools (lightweight)",
-            ],
-        )
-    )
-
-
-def _require(param_name: str, value: Any, scope: str, action: str) -> Any:
-    """Validate a required parameter for the picked (scope, action) cell."""
-    if value is None or (isinstance(value, str) and not value.strip()):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"{param_name!r} is required for scope={scope!r}, action={action!r}",
-                context={"scope": scope, "action": action, "missing_param": param_name},
-            )
-        )
-    return value
-
-
 def register_backup_tools(
     mcp: "FastMCP", client: HomeAssistantClient, **kwargs: Any
 ) -> None:
@@ -1657,6 +1612,8 @@ refused if: the target is a scheduled/automatic backup; it's younger than
 `snapshot_delete_min_age_days` (default 7, 0 disables the floor); or it's the single
 newest snapshot remaining. These guarantee at least one recovery point always
 survives an agent's own mistakes.
+
+**Human-managed backup controls:** `enable_snapshot_actions=false` (ENABLE_SNAPSHOT_ACTIONS) blocks every snapshot action, including listing. `backup_read_only=true` (BACKUP_READ_ONLY) allows edits list/view/diff and snapshot list when snapshots are enabled; it blocks explicit create/restore/delete in both scopes. Automatic pre-edit capture still follows `enable_auto_backup`. A human must change these controls in the Backups tab, app configuration, or environment; developer tools cannot change them. Global and connection Read Only Mode still restrict writes.
 
 **`enable_auto_backup` and `scope="edits"`:** the automatic-on-write capture (every wrapped tool call) is gated by `enable_auto_backup=true` — if the listing is empty, check the toggle (web settings UI or `ENABLE_AUTO_BACKUP=true` env var). The explicit `(edits, create)` action bypasses the toggle since the request is explicit; `list` / `view` / `restore` / `delete` operate on whatever's already on disk regardless of the toggle's current state.
 
@@ -1777,6 +1734,8 @@ survives an agent's own mistakes.
     ) -> dict[str, Any]:
         """Polymorphic backup tool. See the tool description for the routing matrix."""
         _gate_combo(scope, action)
+        settings = get_global_settings()
+        require_backup_access(settings, scope, action)
 
         if scope == "snapshot":
             return await _dispatch_snapshot_action(
@@ -1792,7 +1751,6 @@ survives an agent's own mistakes.
             )
 
         # scope == "edits"
-        settings = get_global_settings()
         mgr = get_backup_manager(client, settings)
         return await _dispatch_edits_action(
             mgr,

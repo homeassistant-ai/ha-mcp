@@ -25,6 +25,8 @@ from ._tools_meta import (
     BPS_MANDATORY_TOOLS,
     _get_tool_metadata,
     gate_is_beta,
+    ignored_disabled_tools,
+    tool_config_warnings,
 )
 
 if TYPE_CHECKING:
@@ -87,11 +89,10 @@ def _bps_locked_tools() -> list[str]:
         if not (settings.enable_mandatory_bps and settings.enable_strict_mandatory_bps):
             return []
     except Exception:
-        logger.warning(
+        logger.exception(
             "settings lookup failed while computing BPS-locked tools; "
             "locking %s conservatively",
             ", ".join(sorted(BPS_MANDATORY_TOOLS)),
-            exc_info=True,
         )
     return sorted(BPS_MANDATORY_TOOLS)
 
@@ -149,6 +150,9 @@ async def _get_tools(
                 _persistence._get_tool_metadata_cache_path(),
             )
     config = _persistence.effective_tool_config()
+    from ..config import get_global_settings
+
+    settings = get_global_settings()
     states = config.get("tools", {})
     pinned = _persistence.env_pinned_tools()
     for name in DEFAULT_PINNED_TOOLS:
@@ -189,6 +193,8 @@ async def _get_tools(
             "tools": tools,
             "states": states,
             "env_pinned": pinned,
+            "ignored_disabled_tools": ignored_disabled_tools(config, settings),
+            "tool_config_warnings": tool_config_warnings(config, settings),
             "read_only_exempt": sorted(READ_ONLY_EXEMPT_TOOLS),
             "llm_api": llm_effective,
             "llm_api_overrides": llm_overrides,

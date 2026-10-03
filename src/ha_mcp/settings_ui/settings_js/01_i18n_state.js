@@ -204,6 +204,7 @@ let toolEnvPinned = {};
 // Server-side saves reject the conflict too — this lock is the
 // courteous UI half.
 let bpsLockedTools = new Set();
+let ignoredDisabledTools = new Set();
 // Conversation-agent LLM API exposure (#1745). toolLlm mirrors the
 // server-computed EFFECTIVE value per tool (user override, else the
 // deny-by-default for beta/dev/restart tools); toolLlmOverrides holds

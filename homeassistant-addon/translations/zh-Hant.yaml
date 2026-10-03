@@ -71,6 +71,20 @@ configuration:
       — 失敗會記錄 WARNING 且寫入會繼續進行。檔案和原始 YAML 工具是特例：ha_write_file、ha_delete_file 和 ha_config_set_yaml
       將快照視為先決條件，因此在關閉此功能時透過它們進行的寫入將被拒絕，而擷取失敗也會阻止寫入。預設為開啟；取消勾選則會退出盡力而為的擷取，並同時停用檔案和原始
       YAML 工具。需要重新啟動才能生效。
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot'). Turning this off blocks every snapshot action,
+      including listing, while edit backups remain available. On by default. Change
+      this option or use the web Settings UI Backups tab; requires restart in the
+      app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: 自動備份節流（分鐘）
     description: 每個實體的節流視窗。0（預設）在每次封裝的寫入時擷取快照。N>0 每隔 N 分鐘每個實體最多擷取一個快照。範圍 0–1440。
