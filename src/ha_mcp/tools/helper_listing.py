@@ -11,11 +11,6 @@ from .util_helpers import build_pagination_metadata
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# REGISTRATION
-# ---------------------------------------------------------------------------
-
-
 def _shape_collection_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
     """Map one component collection-helper record onto the legacy list record.
 
