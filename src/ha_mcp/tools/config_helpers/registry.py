@@ -759,7 +759,7 @@ async def _apply_registry_updates_to_entity(
     # string / empty list). A transient raise on either call is captured via
     # return_exceptions so a multi-entity flow helper can still report partial success.
     needs_registry = area_id is not None or labels is not None or icon is not None
-    needs_category = bool(category)
+    needs_category = category is not None
     if not (needs_registry or needs_category):
         return applied
 

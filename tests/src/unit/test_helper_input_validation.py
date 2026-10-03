@@ -399,16 +399,19 @@ class TestInputTextLengthValidation:
             )
         _assert_invalid_param(excinfo)
 
-    async def test_rejects_min_equal_max(self, register_tools, mock_client):
+    async def test_accepts_exact_length(self, register_tools, mock_client):
+        """Core accepts min == max for input_text: an exact-length value."""
         _wire_default_ws(mock_client, "input_text")
-        with pytest.raises(ToolError) as excinfo:
+        with patch(
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             await register_tools["ha_config_set_helper"](
-                helper_type="input_text",
-                name="Note",
-                min_value=10,
-                max_value=10,
+                helper_type="input_text", name="Pin", min_value=4, max_value=4
             )
-        _assert_invalid_param(excinfo)
+        msg = _find_msg(mock_client, "input_text/create")
+        assert msg["min"] == 4 and msg["max"] == 4
 
     async def test_valid_lengths_pass(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_text")
