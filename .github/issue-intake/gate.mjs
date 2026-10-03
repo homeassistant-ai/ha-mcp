@@ -72,9 +72,12 @@ const reporterTexts = ({ issue, comments }) => [
     .filter((c) => c.user?.login === issue.user.login)
     .map((c) => c.body || ""),
 ];
-const isFeatureRequest = (issue) =>
+// Feature requests and documentation issues are not gated. An issue that
+// becomes one after it was labeled loses the label instead of closing.
+const exemptKind = (issue) =>
   issue.title.trim().toUpperCase().startsWith("[FEATURE]") ||
-  issue.labels.some((l) => l.name === "enhancement");
+  issue.labels.some((l) => ["enhancement", "documentation"].includes(l.name));
+const hasGateLabel = (issue) => issue.labels.some((l) => l.name === gateLabel);
 const isLabelEvent = (e, kind) =>
   e.event === kind && e.label?.name === gateLabel;
 const gateNotice = (snapshot, bot) =>
@@ -102,8 +105,8 @@ export function gateAction(snapshot, bot, event) {
   const author = issue.user;
   if (!isHuman(author) || gateExemptRoles.includes(roles[author.login]))
     return null;
-  if (issue.labels.some((l) => l.name === "documentation")) return null;
-  if (isFeatureRequest(issue)) return null;
+  if (exemptKind(issue))
+    return issue.state === "open" && hasGateLabel(issue) ? "clear" : null;
   const done = satisfied(snapshot);
   // An issue moved in from the HACS mirror is asked once, never labeled or
   // closed: a reporter whose issue was closed would refile it on the mirror.
@@ -115,7 +118,7 @@ export function gateAction(snapshot, bot, event) {
       ? "request"
       : null;
   if (waived(snapshot)) return null;
-  const labeled = issue.labels.some((l) => l.name === gateLabel);
+  const labeled = hasGateLabel(issue);
   if (done) {
     const closed = latestEvent(events, (e) => e.event === "closed");
     if (issue.state === "closed" && closed?.actor?.login === bot)
@@ -139,9 +142,8 @@ export function gateAction(snapshot, bot, event) {
 // out, or clear the label when the gate missed the answer.
 export function expireAction(snapshot, now) {
   const { issue, events } = snapshot;
-  if (issue.state !== "open" || !issue.labels.some((l) => l.name === gateLabel))
-    return null;
-  if (satisfied(snapshot)) return "clear";
+  if (issue.state !== "open" || !hasGateLabel(issue)) return null;
+  if (exemptKind(issue) || satisfied(snapshot)) return "clear";
   // A maintainer may apply the label by hand to start the same clock.
   const applied = latestEvent(events, (e) => isLabelEvent(e, "labeled"));
   if (!applied) return null;

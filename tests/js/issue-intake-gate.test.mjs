@@ -116,6 +116,18 @@ test("feature requests, maintainers, bots and documentation issues are not gated
     assert.equal(gateAction(s, bot, opened), null);
 });
 
+test("a labeled issue that becomes a feature request loses the label instead of closing", () => {
+  const at = Date.parse("2026-09-20T00:00:00Z");
+  const retitled = labeled();
+  retitled.issue.title = "[FEATURE] Manage Thread datasets";
+  const relabeled = labeled();
+  relabeled.issue.labels.push({ name: "enhancement" });
+  for (const s of [retitled, relabeled]) {
+    assert.equal(gateAction(s, bot, edited), "clear");
+    assert.equal(expireAction(s, at + 48 * hour), "clear");
+  }
+});
+
 test("answering a labeled issue clears the label and rewrites the warning", async () => {
   const s = labeled();
   s.issue.body += `\n\n${reason("N/A")}`;
