@@ -38,6 +38,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     JSON_STRING_COERCION,
     fetch_integration_diagnostics,
@@ -165,13 +166,12 @@ class SystemTools:
     @tool(
         name="ha_restart",
         tags={"System"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Restart Home Assistant",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Restart Home Assistant",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_restart(
@@ -276,13 +276,12 @@ class SystemTools:
     @tool(
         name="ha_reload_core",
         tags={"System"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Reload Core Components",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Reload Core Components",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_reload_core(
@@ -544,13 +543,10 @@ class SystemTools:
     @tool(
         name="ha_get_system_health",
         tags={"System", "Zigbee", "Z-Wave", "Thread", "Matter", "Integrations"},
-        annotations={
-            "openWorldHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints(
+            "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
+            open_world=True,
+        ),
     )
     @log_tool_usage
     async def ha_get_system_health(

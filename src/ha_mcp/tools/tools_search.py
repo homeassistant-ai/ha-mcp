@@ -52,6 +52,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .smart_search import DEFAULT_CONCURRENCY_LIMIT, DeepSearchMixin
+from .tool_hints import read_only_hints
 from .util_helpers import (
     JSON_STRING_COERCION,
     add_timezone_metadata,
@@ -2126,13 +2127,7 @@ class SearchTools:
     @tool(
         name="ha_search",
         tags={"Search & Discovery"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Search",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Search", open_world=False),
     )
     @log_tool_usage
     async def ha_search(
@@ -3985,13 +3980,7 @@ class SearchTools:
     @tool(
         name="ha_get_overview",
         tags={"Search & Discovery"},
-        annotations={
-            "openWorldHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get System Overview",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Get System Overview", open_world=True),
     )
     @log_tool_usage
     async def ha_get_overview(
@@ -4762,13 +4751,7 @@ class SearchTools:
     @tool(
         name="ha_get_state",
         tags={"Search & Discovery"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Entity State",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Get Entity State", open_world=False),
     )
     @log_tool_usage
     async def ha_get_state(

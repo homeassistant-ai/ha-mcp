@@ -25,6 +25,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +39,7 @@ class TodoTools:
     @tool(
         name="ha_get_todo",
         tags={"Todo Lists"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Todo",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Get Todo", open_world=False),
     )
     @log_tool_usage
     async def ha_get_todo(
@@ -187,13 +182,9 @@ class TodoTools:
     @tool(
         name="ha_set_todo_item",
         tags={"Todo Lists"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Set Todo Item",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Set Todo Item", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @with_auto_backup(
         domain="todo_item",
@@ -501,13 +492,9 @@ class TodoTools:
     @tool(
         name="ha_remove_todo_item",
         tags={"Todo Lists"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Todo Item",
-            "readOnlyHint": False,
-        },
+        annotations=write_hints(
+            "Remove Todo Item", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(
         domain="todo_item",

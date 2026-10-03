@@ -80,6 +80,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     JSON_STRING_COERCION,
     attach_skill_content,
@@ -1789,13 +1790,7 @@ class DashboardConfigTools:
     @tool(
         name="ha_config_get_dashboard",
         tags={"Dashboards"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "idempotentHint": True,
-            "title": "Get Dashboard",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Get Dashboard", open_world=False),
     )
     @log_tool_usage
     async def ha_config_get_dashboard(
@@ -2728,13 +2723,12 @@ class DashboardConfigTools:
     @tool(
         name="ha_config_set_dashboard",
         tags={"Dashboards"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Dashboard",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Create or Update Dashboard",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(domain="dashboard", id_param="url_path")
     @log_tool_usage
@@ -3981,13 +3975,9 @@ class DashboardConfigTools:
     @tool(
         name="ha_config_delete_dashboard",
         tags={"Dashboards"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Delete Dashboard",
-            "readOnlyHint": False,
-            "idempotentHint": True,
-        },
+        annotations=write_hints(
+            "Delete Dashboard", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="dashboard", id_param="url_path")
     @log_tool_usage

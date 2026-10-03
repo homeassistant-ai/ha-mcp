@@ -96,7 +96,10 @@ Set all four hints and a `title` explicitly on every tool. Home Assistant
 with that least-safe default even when another hint makes it irrelevant, so a
 read-only tool without `destructiveHint: False` reaches Home Assistant as
 destructive, and a local tool without `openWorldHint: False` as open-world.
-`tests/src/unit/test_tool_annotations_complete.py` enforces this.
+`tests/src/unit/test_tool_annotations_complete.py` enforces this. Build the
+annotations with `read_only_hints()` or `write_hints()` from
+`src/ha_mcp/tools/tool_hints.py`, which take the title and each hint that
+matters for the tool as required arguments and fill in the rest.
 Annotations describe behavior against current supported upstream versions. A
 side effect present only in an outdated external build does not demote a tool
 from `readOnlyHint`; document the required upstream update instead (the old
@@ -163,6 +166,7 @@ from typing import Any
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from .helpers import log_tool_usage, register_tool_methods
+from .tool_hints import read_only_hints
 
 
 class DomainTools:
@@ -172,13 +176,7 @@ class DomainTools:
     @tool(
         name="ha_<verb>_<noun>",
         tags={"Category Name"},
-        annotations={
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-            "title": "<Verb> <Noun>",
-        },
+        annotations=read_only_hints("<Verb> <Noun>", open_world=False),
     )
     @log_tool_usage
     async def ha_<verb>_<noun>(self, param: str) -> dict[str, Any]:

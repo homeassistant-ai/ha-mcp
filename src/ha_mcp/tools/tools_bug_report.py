@@ -46,6 +46,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import read_only_hints
 from .util_helpers import (
     ANSI_ESCAPE_RE,
     JSON_STRING_COERCION,
@@ -1084,13 +1085,7 @@ class BugReportTools:
     @tool(
         name="ha_report_issue",
         tags={"Utilities"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Report Issue or Feedback",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Report Issue or Feedback", open_world=False),
     )
     @log_tool_usage
     async def ha_report_issue(

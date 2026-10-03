@@ -14,6 +14,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ha_mcp._vendor.fastmcp.utilities.types import Image
 
 from .helpers import log_tool_usage, register_tool_methods
+from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +64,7 @@ class CameraTools:
     @tool(
         name="ha_get_camera_image",
         tags={"Camera"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Camera Image",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Get Camera Image", open_world=False),
     )
     @log_tool_usage
     async def ha_get_camera_image(

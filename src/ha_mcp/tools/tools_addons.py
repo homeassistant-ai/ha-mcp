@@ -59,6 +59,7 @@ from .helpers import (
     raise_tool_error,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
@@ -3748,13 +3749,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
     @mcp.tool(
         tags={"Apps (add-ons)"},
-        annotations={
-            "openWorldHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Apps (add-ons)",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Get Apps (add-ons)", open_world=True),
     )
     @log_tool_usage
     async def ha_get_app(
@@ -3819,13 +3814,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
     @mcp.tool(
         tags={"Apps (add-ons)"},
-        annotations={
-            "openWorldHint": True,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "readOnlyHint": False,
-            "title": "Manage App (add-on)",
-        },
+        annotations=write_hints(
+            "Manage App (add-on)", destructive=True, idempotent=False, open_world=True
+        ),
     )
     @log_tool_usage
     async def ha_manage_app(

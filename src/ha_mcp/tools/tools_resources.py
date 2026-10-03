@@ -35,6 +35,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import build_pagination_metadata
 
 logger = logging.getLogger(__name__)
@@ -352,13 +353,7 @@ class ResourceTools:
     @tool(
         name="ha_config_list_dashboard_resources",
         tags={"Dashboards"},
-        annotations={
-            "openWorldHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Dashboard Resources",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("List Dashboard Resources", open_world=True),
     )
     @log_tool_usage
     async def ha_config_list_dashboard_resources(
@@ -471,13 +466,12 @@ class ResourceTools:
     @tool(
         name="ha_config_set_dashboard_resource",
         tags={"Dashboards"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Set Dashboard Resource",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Set Dashboard Resource",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(domain="dashboard_resource", id_param="resource_id")
     @log_tool_usage
@@ -929,13 +923,12 @@ class ResourceTools:
     @tool(
         name="ha_config_delete_dashboard_resource",
         tags={"Dashboards"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Delete Dashboard Resource",
-            "readOnlyHint": False,
-            "idempotentHint": True,
-        },
+        annotations=write_hints(
+            "Delete Dashboard Resource",
+            destructive=True,
+            idempotent=True,
+            open_world=False,
+        ),
     )
     @with_auto_backup(domain="dashboard_resource", id_param="resource_id")
     @log_tool_usage

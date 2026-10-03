@@ -32,6 +32,7 @@ from .radio import thread as thread_handler
 from .radio import zigbee as zigbee_handler
 from .radio import zwave as zwave_handler
 from .radio.base import confirm_required, require
+from .tool_hints import write_hints
 from .util_helpers import JSON_STRING_COERCION, is_connection_error_message
 
 logger = logging.getLogger(__name__)
@@ -90,13 +91,12 @@ class RadioTools:
     @tool(
         name="ha_manage_radio",
         tags={"Radio Management", "Z-Wave", "Zigbee", "Matter", "Thread"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "title": "Manage Radios (Z-Wave / Zigbee / Matter / Thread)",
-            "readOnlyHint": False,
-        },
+        annotations=write_hints(
+            "Manage Radios (Z-Wave / Zigbee / Matter / Thread)",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_manage_radio(

@@ -36,6 +36,7 @@ from .helpers import (
     safe_progress,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import add_timezone_metadata
 
 logger = logging.getLogger(__name__)
@@ -131,13 +132,7 @@ class HacsTools:
     @tool(
         name="ha_get_hacs_info",
         tags={"HACS"},
-        annotations={
-            "openWorldHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get HACS Info",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Get HACS Info", open_world=True),
     )
     @log_tool_usage
     async def ha_get_hacs_info(
@@ -233,13 +228,9 @@ class HacsTools:
     @tool(
         name="ha_manage_hacs",
         tags={"HACS"},
-        annotations={
-            "openWorldHint": True,
-            "destructiveHint": True,
-            "title": "Manage HACS",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Manage HACS", destructive=True, idempotent=False, open_world=True
+        ),
     )
     @log_tool_usage
     async def ha_manage_hacs(

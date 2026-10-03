@@ -26,6 +26,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     JSON_STRING_COERCION,
     build_pagination_metadata,
@@ -137,13 +138,7 @@ class GroupTools:
     @tool(
         name="ha_config_list_groups",
         tags={"Groups"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Groups",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("List Groups", open_world=False),
     )
     @log_tool_usage
     async def ha_config_list_groups(
@@ -235,13 +230,12 @@ class GroupTools:
     @tool(
         name="ha_config_set_group",
         tags={"Groups"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Group",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Create or Update Group",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage
@@ -415,13 +409,9 @@ class GroupTools:
     @tool(
         name="ha_config_remove_group",
         tags={"Groups"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Group",
-            "readOnlyHint": False,
-        },
+        annotations=write_hints(
+            "Remove Group", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage

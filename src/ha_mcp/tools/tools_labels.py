@@ -28,6 +28,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     JSON_STRING_COERCION,
     parse_string_list_param,
@@ -588,13 +589,7 @@ class LabelTools:
     @tool(
         name="ha_config_get_label",
         tags={"Labels & Categories"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Label",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Get Label", open_world=False),
     )
     @log_tool_usage
     async def ha_config_get_label(
@@ -689,13 +684,12 @@ class LabelTools:
     @tool(
         name="ha_config_set_label",
         tags={"Labels & Categories"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Label",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Create or Update Label",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(domain="label", id_param="label_id")
     @log_tool_usage
@@ -791,13 +785,9 @@ class LabelTools:
     @tool(
         name="ha_config_remove_label",
         tags={"Labels & Categories"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Label",
-            "readOnlyHint": False,
-        },
+        annotations=write_hints(
+            "Remove Label", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="label", id_param="label_id")
     @log_tool_usage

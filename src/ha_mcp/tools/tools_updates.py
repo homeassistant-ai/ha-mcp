@@ -27,6 +27,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import write_hints
 from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
@@ -977,13 +978,9 @@ class UpdateTools:
     @tool(
         name="ha_manage_updates",
         tags={"System"},
-        annotations={
-            "destructiveHint": True,
-            "openWorldHint": True,
-            "title": "Manage Updates",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Manage Updates", destructive=True, idempotent=False, open_world=True
+        ),
     )
     @log_tool_usage
     async def ha_manage_updates(

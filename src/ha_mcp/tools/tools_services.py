@@ -34,6 +34,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import read_only_hints
 from .util_helpers import (
     JSON_STRING_COERCION,
     build_pagination_metadata,
@@ -59,13 +60,7 @@ class ServiceDiscoveryTools:
     @tool(
         name="ha_list_services",
         tags={"Service & Device Control"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Available Services",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("List Available Services", open_world=False),
     )
     @log_tool_usage
     async def ha_list_services(

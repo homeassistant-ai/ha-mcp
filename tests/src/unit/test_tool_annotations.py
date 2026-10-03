@@ -10,6 +10,7 @@ Additionally, every tool SHOULD have a title for UI display.
 """
 
 import ast
+import importlib.util
 import re
 import textwrap
 from pathlib import Path
@@ -35,16 +36,29 @@ def _is_mcp_tool(func: ast.expr) -> bool:
     )
 
 
+def _load_tool_hints():
+    """``tool_hints.py`` by path, as ``scripts/extract_tools.py`` loads it."""
+    spec = importlib.util.spec_from_file_location(
+        "tool_hints", get_tools_dir() / "tool_hints.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+tool_hints = _load_tool_hints()
+
+
 def _annotations_dict(decorator: ast.Call) -> dict[str, ast.expr]:
-    """The decorator's ``annotations={...}`` mapping, keyed by literal name."""
+    """The decorator's ``annotations=`` mapping, keyed by literal name: a dict
+    literal or a ``tool_hints`` builder call."""
     for keyword in decorator.keywords:
-        if keyword.arg == "annotations" and isinstance(keyword.value, ast.Dict):
+        if keyword.arg == "annotations":
             return {
-                key.value: value
-                for key, value in zip(
-                    keyword.value.keys, keyword.value.values, strict=True
-                )
-                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                key: ast.Constant(value)
+                for key, value in tool_hints.annotations_from_ast(keyword.value).items()
+                if isinstance(key, str)
             }
     return {}
 
@@ -412,8 +426,8 @@ class TestToolAnnotations:
                 (kw.value for kw in call.keywords if kw.arg == "annotations"), None
             )
             keys = (
-                {k.value for k in annotations.keys if isinstance(k, ast.Constant)}
-                if isinstance(annotations, ast.Dict)
+                set(tool_hints.annotations_from_ast(annotations))
+                if annotations is not None
                 else set()
             )
             if "openWorldHint" not in keys:
@@ -421,7 +435,7 @@ class TestToolAnnotations:
 
         assert not missing, (
             f"server-registered tools missing openWorldHint: {missing}. Add it to "
-            "the annotations dict in the self.mcp.tool(...) call in server.py."
+            "the annotations in the self.mcp.tool(...) call in server.py."
         )
 
     def test_search_proxy_tools_have_open_world_hint(self):

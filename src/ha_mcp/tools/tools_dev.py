@@ -48,6 +48,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import write_hints
 from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
@@ -816,13 +817,12 @@ class DevTools:
     @tool(
         name="ha_dev_manage_settings",
         tags={"Developer"},
-        annotations={
-            "openWorldHint": False,
-            "title": "Manage Server Settings (dev)",
-            "destructiveHint": True,
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Manage Server Settings (dev)",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_dev_manage_settings(
@@ -1825,13 +1825,12 @@ class DevTools:
     @tool(
         name="ha_dev_manage_server",
         tags={"Developer"},
-        annotations={
-            "openWorldHint": True,
-            "title": "Manage MCP Server (dev)",
-            "destructiveHint": True,
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Manage MCP Server (dev)",
+            destructive=True,
+            idempotent=False,
+            open_world=True,
+        ),
     )
     @log_tool_usage
     async def ha_dev_manage_server(

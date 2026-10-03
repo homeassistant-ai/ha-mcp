@@ -24,6 +24,7 @@ from .log_common import (
 from .log_sources import _SYSTEM_LOG_MESSAGE_CAP, CoreLogSourcesMixin
 from .log_sources_fault import FaultLogSourceMixin
 from .log_sources_supervisor import SupervisorLogSourcesMixin
+from .tool_hints import read_only_hints
 
 
 class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMixin):
@@ -160,13 +161,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         tags={"History & Statistics"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Logs",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Get Logs", open_world=False),
     )
     @log_tool_usage
     async def ha_get_logs(

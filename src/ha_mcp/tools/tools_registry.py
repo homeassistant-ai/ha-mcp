@@ -39,6 +39,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
@@ -768,13 +769,9 @@ class RegistryTools:
     @tool(
         name="ha_get_device",
         tags={"Device Registry", "Zigbee", "Z-Wave", "Matter"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Device (incl. Zigbee/ZHA/Z2M, Z-Wave and Matter)",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints(
+            "Get Device (incl. Zigbee/ZHA/Z2M, Z-Wave and Matter)", open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_get_device(
@@ -911,13 +908,9 @@ class RegistryTools:
     @tool(
         name="ha_set_device",
         tags={"Device Registry"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Set Device",
-            "readOnlyHint": False,
-            "idempotentHint": True,
-        },
+        annotations=write_hints(
+            "Set Device", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="device", id_param="device_id")
     @log_tool_usage
@@ -1018,13 +1011,9 @@ class RegistryTools:
     @tool(
         name="ha_remove_device",
         tags={"Device Registry"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Device",
-            "readOnlyHint": False,
-        },
+        annotations=write_hints(
+            "Remove Device", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="device", id_param="device_id")
     @log_tool_usage

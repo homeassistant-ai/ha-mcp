@@ -56,6 +56,7 @@ from .helpers import (
     raise_tool_error,
     safe_progress,
 )
+from .tool_hints import write_hints
 
 if TYPE_CHECKING:
     from ha_mcp._vendor.fastmcp import FastMCP
@@ -1679,13 +1680,9 @@ survives an agent's own mistakes.
     @mcp.tool(
         description=manage_backup_description,
         tags={"System"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Manage Backups",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Manage Backups", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_manage_backup(

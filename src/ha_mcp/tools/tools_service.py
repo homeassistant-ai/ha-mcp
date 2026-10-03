@@ -53,6 +53,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     _SERVICE_TO_STATE,
     BLOCKED_WS_WRITE_COMMANDS,
@@ -1811,13 +1812,9 @@ class ServiceTools:
     @tool(
         name="ha_call_service",
         tags={"Service & Device Control"},
-        annotations={
-            "readOnlyHint": False,
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Call Service",
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Call Service", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_call_service(
@@ -2128,13 +2125,7 @@ class ServiceTools:
     @tool(
         name="ha_get_operation_status",
         tags={"Service & Device Control"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "title": "Get Operation Status",
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
+        annotations=read_only_hints("Get Operation Status", open_world=False),
     )
     @log_tool_usage
     async def ha_get_operation_status(
@@ -2200,13 +2191,9 @@ class ServiceTools:
     @tool(
         name="ha_bulk_control",
         tags={"Service & Device Control"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Bulk Control",
-            "readOnlyHint": False,
-            "idempotentHint": False,
-        },
+        annotations=write_hints(
+            "Bulk Control", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_bulk_control(
@@ -2490,13 +2477,9 @@ class ServiceTools:
     @tool(
         name="ha_call_event",
         tags={"Service & Device Control"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "title": "Call Event",
-            "readOnlyHint": False,
-        },
+        annotations=write_hints(
+            "Call Event", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_call_event(

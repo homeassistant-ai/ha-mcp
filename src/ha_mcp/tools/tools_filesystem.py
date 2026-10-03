@@ -36,6 +36,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import unwrap_service_response
 
 logger = logging.getLogger(__name__)
@@ -542,13 +543,7 @@ class FilesystemTools:
     @tool(
         name="ha_list_files",
         tags={"Files", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "title": "List Files",
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
+        annotations=read_only_hints("List Files", open_world=False),
     )
     @log_tool_usage
     async def ha_list_files(
@@ -638,13 +633,7 @@ class FilesystemTools:
     @tool(
         name="ha_read_file",
         tags={"Files", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "title": "Read File",
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
+        annotations=read_only_hints("Read File", open_world=False),
     )
     @log_tool_usage
     async def ha_read_file(
@@ -759,13 +748,9 @@ class FilesystemTools:
     @tool(
         name="ha_write_file",
         tags={"Files", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Write File",
-            "readOnlyHint": False,
-            "idempotentHint": True,
-        },
+        annotations=write_hints(
+            "Write File", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="file", id_param="path", mandatory=True)
     @log_tool_usage
@@ -872,13 +857,9 @@ class FilesystemTools:
     @tool(
         name="ha_delete_file",
         tags={"Files", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Delete File",
-            "readOnlyHint": False,
-            "idempotentHint": True,
-        },
+        annotations=write_hints(
+            "Delete File", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="file", id_param="path", mandatory=True)
     @log_tool_usage

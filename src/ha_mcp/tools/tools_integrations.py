@@ -56,6 +56,7 @@ from .integration_reconfigure import (
     ReconfigureRunner,
     reject_reconfigure_only_parameters,
 )
+from .tool_hints import read_only_hints, write_hints
 from .tools_config_helpers import (
     SIMPLE_HELPER_TYPES,
     _get_entities_for_config_entry,
@@ -481,13 +482,7 @@ class IntegrationTools:
     @tool(
         name="ha_get_integration",
         tags={"Integrations"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Integration",
-            "destructiveHint": False,
-        },
+        annotations=read_only_hints("Get Integration", open_world=False),
     )
     @log_tool_usage
     async def ha_get_integration(
@@ -1761,13 +1756,9 @@ class IntegrationTools:
     @tool(
         name="ha_set_integration",
         tags={"Integrations"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "readOnlyHint": False,
-            "idempotentHint": False,
-            "title": "Set Integration",
-        },
+        annotations=write_hints(
+            "Set Integration", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @with_auto_backup(
         domain="integration",
@@ -2188,13 +2179,12 @@ class IntegrationTools:
     @tool(
         name="ha_remove_helpers_integrations",
         tags={"Helper Entities", "Integrations"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Helper or Integration",
-            "readOnlyHint": False,
-        },
+        annotations=write_hints(
+            "Remove Helper or Integration",
+            destructive=True,
+            idempotent=True,
+            open_world=False,
+        ),
     )
     @with_auto_backup(
         # ``target`` is one of three shapes: a flow-helper entity_id like
