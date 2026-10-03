@@ -7,12 +7,23 @@ input_number, input_text, input_datetime, counter, timer, schedule).
 """
 
 import asyncio
+import contextlib
+import functools
+import inspect
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextvars import ContextVar
 from typing import Annotated, Any, Literal, NoReturn, TypedDict
 
-from pydantic import AliasChoices, Field
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    create_model,
+)
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
@@ -35,6 +46,11 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .component_helper_collections import (
+    fetch_helper_schemas,
+    read_helper_item,
+    write_helper_item,
+)
 from .component_registry_lookup import fetch_entities_for_config_entry_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
@@ -46,7 +62,9 @@ from .config_entry_flow import (
 )
 from .config_entry_flow_walker import fetch_helper_flow_info
 from .helpers import (
+    HIDDEN_PARAM,
     exception_to_structured_error,
+    hidden_param_names,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
@@ -112,14 +130,25 @@ _INITIAL_DISABLES_RESTORE_DESCRIPTION = (
     "value on every HA restart. Omit unless you want the helper to reset to this "
     "value on every restart instead of restoring its last state."
 )
-_INITIAL_PARAM_DESCRIPTION = (
-    "Initial value for applicable helper types. For "
-    "input_boolean, input_select, input_number, input_text, and input_datetime: "
-    "setting `initial` — even to false/0 — disables last-state restore and forces "
-    "that value on every HA restart; omit unless you want the helper to reset to "
-    "that value on every restart instead of restoring its last state. For counter, "
-    "`initial` is just the starting value — restore-on-restart is controlled "
-    "separately by `restore` (default True)."
+# Per-type `config` keys for SIMPLE helpers, published in the `config` description.
+_SIMPLE_CONFIG_KEYS_DESCRIPTION = (
+    "input_select: options (list, required), initial. "
+    "input_number: min_value, max_value, step, unit_of_measurement, "
+    "mode ('box'/'slider'), initial. "
+    "input_text: min_value, max_value (length), mode ('text'/'password'), initial. "
+    "input_datetime: has_date, has_time, initial. "
+    "input_boolean: initial. "
+    "counter: initial (starting value), min_value, max_value, step, "
+    "restore (default true). "
+    "timer: duration ('HH:MM:SS' or seconds), restore (default false). "
+    "schedule: monday..sunday, each a list of {'from': 'HH:MM', 'to': 'HH:MM'} "
+    "with optional 'data' dict of extra attributes. "
+    "zone: latitude, longitude (both required), radius (meters, default 100), "
+    "passive (won't trigger person state changes). "
+    "person: user_id, device_trackers (device_tracker entity IDs), picture (URL). "
+    "tag: tag_id (omit on create to auto-generate), description. "
+    "On input_* types, `initial` — even false/0 — disables last-state restore "
+    "and forces that value on every HA restart."
 )
 
 
@@ -655,11 +684,48 @@ def _simple_helper_error_context(
     type), and any caller-supplied extra fields.
     """
     context: dict[str, Any] = {"helper_type": helper_type}
-    schema = get_simple_helper_schema(helper_type)
+    schema = _core_helper_fields(helper_type) or get_simple_helper_schema(helper_type)
     if schema is not None:
         context["data_schema"] = schema
     context.update(extra)
     return context
+
+
+# Core's simple-helper field lists and the call's action, fetched from the
+# component once per ha_config_set_helper call; None falls back to
+# SIMPLE_HELPER_SCHEMAS.
+_CORE_HELPER_SCHEMAS: ContextVar[tuple[dict[str, Any], str] | None] = ContextVar(
+    "_CORE_HELPER_SCHEMAS", default=None
+)
+
+# Core's field names that differ from this tool's parameter names.
+_CORE_FIELD_ALIASES: dict[str, str] = {
+    "min": "min_value",
+    "max": "max_value",
+    "minimum": "min_value",
+    "maximum": "max_value",
+}
+
+
+def supported_core_fields(
+    helper_type: str, fields: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Core's fields for ``helper_type`` that this tool accepts in ``config``."""
+    accepted = _TYPE_TYPED_PARAMS.get(helper_type, frozenset()) | {"name"}
+    return [
+        field
+        for field in fields
+        if _CORE_FIELD_ALIASES.get(field.get("name", ""), field.get("name")) in accepted
+    ]
+
+
+def _core_helper_fields(helper_type: str) -> list[dict[str, Any]] | None:
+    current = _CORE_HELPER_SCHEMAS.get()
+    if current is None:
+        return None
+    schemas, action = current
+    fields = (schemas.get(helper_type) or {}).get(action)
+    return supported_core_fields(helper_type, fields) if fields else None
 
 
 # Flow helper types whose top-level config-flow step is a MENU rather than a
@@ -2674,6 +2740,61 @@ async def _apply_create_category(
         warnings.extend(cat_result["warnings"])
 
 
+def _collection_payload(helper_type: str, message: dict[str, Any]) -> dict[str, Any]:
+    """A ``{type}/create|update`` WS message's item fields.
+
+    ``<type>_id`` addresses the item on update; on a tag create it is a field.
+    """
+    drop = {"type"}
+    if str(message.get("type", "")).endswith("/update"):
+        drop.add(f"{helper_type}_id")
+    return {key: value for key, value in message.items() if key not in drop}
+
+
+def _native_result(
+    helper_type: str, result: dict[str, Any]
+) -> tuple[dict[str, Any], str, list[str]]:
+    """Split a component write into (helper data, entity_id, warnings)."""
+    item = result.get("item") or {}
+    entity_id = result.get("entity_id") or f"{helper_type}.{item.get('id')}"
+    data = {**item, **(result.get("registry_applied") or {})}
+    return data, entity_id, list(result.get("warnings") or [])
+
+
+async def _create_via_component(
+    client: Any,
+    helper_type: str,
+    message: dict[str, Any],
+    area_id: str | None,
+    labels: list[str] | None,
+    category: str | None,
+) -> tuple[dict[str, Any], str, list[str]] | None:
+    """Create through Core's collection in-process; ``None`` uses the WS command.
+
+    The entity exists when Core's create returns, so no ``wait`` polling is needed.
+    """
+    registry = {
+        key: value
+        for key, value in (
+            ("area_id", area_id),
+            ("labels", labels),
+            ("category", category),
+        )
+        if value is not None
+    }
+    result = await write_helper_item(
+        client,
+        helper_type,
+        "create",
+        _collection_payload(helper_type, message),
+        registry=registry,
+        error_context=_simple_helper_error_context(
+            helper_type, name=message.get("name")
+        ),
+    )
+    return None if result is None else _native_result(helper_type, result)
+
+
 async def _execute_create_simple_helper(
     client: Any,
     helper_type: str,
@@ -2703,6 +2824,22 @@ async def _execute_create_simple_helper(
         )
 
     message = _build_create_message(helper_type, name, icon, **kw)
+    native = await _create_via_component(
+        client, helper_type, message, area_id, labels, category
+    )
+    if native is not None:
+        helper_data, entity_id, warnings = native
+        create_response = _helper_response(
+            "create",
+            helper_type,
+            data=helper_data,
+            entity_id=entity_id,
+            message=f"Successfully created {helper_type}: {name}",
+            warnings=warnings,
+        )
+        _attach_helper_skill(create_response, MandatoryBPS)
+        return create_response
+
     result = await client.send_websocket_message(message)
     if not result.get("success"):
         raise_tool_error(
@@ -2718,7 +2855,7 @@ async def _execute_create_simple_helper(
     if not entity_id and helper_data.get("id"):
         entity_id = f"{helper_type}.{helper_data['id']}"
 
-    warnings: list[str] = []
+    warnings = []
     # Tags live in their own tag registry and never appear in /api/states/<entity_id> —
     # polling there always 404s for the full timeout (~10s per tag), burning CI time.
     if wait and entity_id and helper_type != "tag":
@@ -2903,6 +3040,12 @@ def _update_fields_timer(
     return fields
 
 
+def _update_fields_schedule(existing: dict[str, Any], **kw: Any) -> dict[str, Any]:
+    """schedule/update is full-replace: an unpassed day keeps its stored ranges."""
+    passed = _format_schedule_days(*(kw.get(day) for day in _SCHEDULE_DAYS))
+    return {day: passed.get(day, existing.get(day, [])) for day in _SCHEDULE_DAYS}
+
+
 _SIMPLE_UPDATE_FIELD_BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
     "input_select": _update_fields_input_select,
     "input_number": _update_fields_input_number,
@@ -2911,6 +3054,7 @@ _SIMPLE_UPDATE_FIELD_BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
     "input_datetime": _update_fields_input_datetime,
     "counter": _update_fields_counter,
     "timer": _update_fields_timer,
+    "schedule": _update_fields_schedule,
 }
 
 
@@ -2942,6 +3086,86 @@ def _build_standard_update_message(
     if builder is not None:
         message.update(builder(existing=existing, icon=icon, **kw))
     return message
+
+
+def _person_update_message(
+    unique_id: str,
+    current: dict[str, Any],
+    name: str | None,
+    user_id: str | None,
+    device_trackers: list[str] | None,
+    picture: str | None,
+    **_: Any,
+) -> dict[str, Any]:
+    """person/update is full-replace, so unpassed fields keep their current value."""
+    update_msg: dict[str, Any] = {
+        "type": "person/update",
+        "person_id": unique_id,
+        "name": name if name is not None else current.get("name"),
+        "user_id": user_id if user_id is not None else current.get("user_id"),
+        "device_trackers": device_trackers
+        if device_trackers is not None
+        else current.get("device_trackers", []),
+    }
+    if picture is not None:
+        update_msg["picture"] = picture
+    elif current.get("picture"):
+        update_msg["picture"] = current["picture"]
+    return update_msg
+
+
+def _zone_update_message(
+    unique_id: str,
+    name: str | None,
+    latitude: float | None,
+    longitude: float | None,
+    radius: float | None,
+    passive: bool | None,
+    **_: Any,
+) -> dict[str, Any]:
+    fields = {
+        "name": name,
+        "latitude": latitude,
+        "longitude": longitude,
+        "radius": radius,
+        "passive": passive,
+    }
+    return {
+        "type": "zone/update",
+        "zone_id": unique_id,
+        **{key: value for key, value in fields.items() if value is not None},
+    }
+
+
+def _tag_update_message(
+    item_id: str, name: str | None, description: str | None = None, **_: Any
+) -> dict[str, Any]:
+    update_msg: dict[str, Any] = {"type": "tag/update", "tag_id": item_id}
+    if name is not None:
+        update_msg["name"] = name
+    if description is not None:
+        update_msg["description"] = description
+    return update_msg
+
+
+def _build_update_message(
+    helper_type: str,
+    unique_id: str,
+    existing: dict[str, Any],
+    name: str | None,
+    icon: str | None,
+    **kw: Any,
+) -> dict[str, Any]:
+    """The ``{type}/update`` WS message for any simple helper type."""
+    if helper_type == "person":
+        return _person_update_message(unique_id, existing, name, **kw)
+    if helper_type == "zone":
+        return _zone_update_message(unique_id, name, **kw)
+    if helper_type == "tag":
+        return _tag_update_message(unique_id, name, **kw)
+    return _build_standard_update_message(
+        helper_type, unique_id, existing, name, icon, **kw
+    )
 
 
 async def _execute_person_config_update(
@@ -2981,19 +3205,9 @@ async def _execute_person_config_update(
                 context=_simple_helper_error_context("person", entity_id=entity_id),
             )
         )
-    update_msg: dict[str, Any] = {
-        "type": "person/update",
-        "person_id": unique_id,
-        "name": name if name is not None else current_config.get("name"),
-        "user_id": user_id if user_id is not None else current_config.get("user_id"),
-        "device_trackers": device_trackers
-        if device_trackers is not None
-        else current_config.get("device_trackers", []),
-    }
-    if picture is not None:
-        update_msg["picture"] = picture
-    elif current_config.get("picture"):
-        update_msg["picture"] = current_config["picture"]
+    update_msg = _person_update_message(
+        unique_id, current_config, name, user_id, device_trackers, picture
+    )
     result = await client.send_websocket_message(update_msg)
     if not result.get("success"):
         raise_tool_error(
@@ -3017,17 +3231,9 @@ async def _execute_zone_config_update(
     passive: bool | None,
 ) -> dict[str, Any]:
     """Update a zone entity via zone/update."""
-    update_msg: dict[str, Any] = {"type": "zone/update", "zone_id": unique_id}
-    if name is not None:
-        update_msg["name"] = name
-    if latitude is not None:
-        update_msg["latitude"] = latitude
-    if longitude is not None:
-        update_msg["longitude"] = longitude
-    if radius is not None:
-        update_msg["radius"] = radius
-    if passive is not None:
-        update_msg["passive"] = passive
+    update_msg = _zone_update_message(
+        unique_id, name, latitude, longitude, radius, passive
+    )
     result = await client.send_websocket_message(update_msg)
     if not result.get("success"):
         raise_tool_error(
@@ -3035,43 +3241,6 @@ async def _execute_zone_config_update(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"Failed to update zone config: {result.get('error', 'Unknown error')}",
                 context=_simple_helper_error_context("zone", entity_id=entity_id),
-            )
-        )
-    return result.get("result", {})  # type: ignore[no-any-return]
-
-
-async def _execute_schedule_config_update(
-    client: Any,
-    entity_id: str,
-    unique_id: str,
-    name: str | None,
-    icon: str | None,
-    monday: list | None,
-    tuesday: list | None,
-    wednesday: list | None,
-    thursday: list | None,
-    friday: list | None,
-    saturday: list | None,
-    sunday: list | None,
-) -> dict[str, Any]:
-    """Update a schedule entity via schedule/update."""
-    update_msg: dict[str, Any] = {"type": "schedule/update", "schedule_id": unique_id}
-    if name is not None:
-        update_msg["name"] = name
-    if icon is not None:
-        update_msg["icon"] = icon
-    update_msg.update(
-        _format_schedule_days(
-            monday, tuesday, wednesday, thursday, friday, saturday, sunday
-        )
-    )
-    result = await client.send_websocket_message(update_msg)
-    if not result.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to update schedule config: {result.get('error', 'Unknown error')}",
-                context=_simple_helper_error_context("schedule", entity_id=entity_id),
             )
         )
     return result.get("result", {})  # type: ignore[no-any-return]
@@ -3174,21 +3343,6 @@ async def _execute_config_store_update(
             kw.get("longitude"),
             kw.get("radius"),
             kw.get("passive"),
-        )
-    if helper_type == "schedule":
-        return await _execute_schedule_config_update(
-            client,
-            entity_id,
-            unique_id,
-            name,
-            icon,
-            kw.get("monday"),
-            kw.get("tuesday"),
-            kw.get("wednesday"),
-            kw.get("thursday"),
-            kw.get("friday"),
-            kw.get("saturday"),
-            kw.get("sunday"),
         )
     return await _execute_standard_helper_update(
         client, helper_type, entity_id, unique_id, name, icon, **kw
@@ -3362,6 +3516,56 @@ async def _execute_fallback_registry_update(
     return updated_data
 
 
+async def _update_via_component(
+    client: Any,
+    helper_type: str,
+    entity_id: str,
+    helper_id: str,
+    name: str | None,
+    icon: str | None,
+    area_id: str | None,
+    labels: list[str] | None,
+    category: str | None,
+    **kw: Any,
+) -> tuple[dict[str, Any], str, list[str]] | None:
+    """Update through Core's collection in-process; ``None`` uses the WS commands.
+
+    A helper the component cannot find also returns ``None``, so the legacy path
+    reports it with its usual error.
+    """
+    if helper_type == "tag":
+        target: dict[str, Any] = {"item_id": helper_id.removeprefix("tag.")}
+    else:
+        target = {"entity_id": entity_id}
+    item = await read_helper_item(client, helper_type, **target)
+    if item is None:
+        return None
+    message = _build_update_message(
+        helper_type, item["item_id"], item["item"], name, icon, **kw
+    )
+    # Tags carry no entity-registry fields, matching the legacy tag path.
+    registry = {
+        key: value
+        for key, value in (
+            ("icon", icon),
+            ("area_id", area_id),
+            ("labels", labels),
+            ("category", category),
+        )
+        if value is not None and helper_type != "tag"
+    }
+    result = await write_helper_item(
+        client,
+        helper_type,
+        "update",
+        _collection_payload(helper_type, message),
+        item_id=item["item_id"],
+        registry=registry,
+        error_context=_simple_helper_error_context(helper_type, entity_id=entity_id),
+    )
+    return None if result is None else _native_result(helper_type, result)
+
+
 async def _execute_update_simple_helper(
     client: Any,
     helper_type: str,
@@ -3389,17 +3593,38 @@ async def _execute_update_simple_helper(
     warnings: list[str] = []
     updated_data: dict[str, Any] = {}
 
+    native = await _update_via_component(
+        client,
+        helper_type,
+        entity_id,
+        helper_id,
+        name,
+        icon,
+        area_id,
+        labels,
+        category,
+        **kw,
+    )
+    if native is not None:
+        updated_data, _, warnings = native
+        native_response = _helper_response(
+            "update",
+            helper_type,
+            data=updated_data,
+            entity_id=entity_id,
+            message=f"Successfully updated {helper_type}: {entity_id}",
+            warnings=warnings,
+        )
+        _attach_helper_skill(native_response, MandatoryBPS)
+        return native_response
+
     if helper_type == "tag":
         tag_update_id = (
             helper_id.removeprefix("tag.")
             if helper_id.startswith("tag.")
             else helper_id
         )
-        update_msg: dict[str, Any] = {"type": "tag/update", "tag_id": tag_update_id}
-        if name is not None:
-            update_msg["name"] = name
-        if kw.get("description") is not None:
-            update_msg["description"] = kw["description"]
+        update_msg = _tag_update_message(tag_update_id, name, kw.get("description"))
         result = await client.send_websocket_message(update_msg)
         if not result.get("success"):
             raise_tool_error(
@@ -3638,6 +3863,100 @@ async def _validate_set_helper_action(
             context={"helper_type": helper_type},
         )
     return "update" if helper_id else "create"
+
+
+@functools.cache
+def _simple_config_model() -> type[BaseModel]:
+    """Validate SIMPLE-helper `config` keys exactly as the hidden tool params are."""
+    tool_fn = HelperConfigTools.ha_config_set_helper
+    params = inspect.signature(tool_fn).parameters
+    # name/icon are top-level params, but HA's own schemas list them too.
+    keys = hidden_param_names(tool_fn) | {"name", "icon"}
+    fields: dict[str, Any] = {name: (params[name].annotation, None) for name in keys}
+    return create_model(
+        "SimpleHelperConfig", __config__=ConfigDict(extra="forbid"), **fields
+    )
+
+
+def _merge_simple_helper_config(
+    helper_type: str, config: Any, values: dict[str, Any]
+) -> dict[str, Any]:
+    """Fold SIMPLE-helper fields passed inside `config` into the typed params."""
+    if config in (None, {}, ""):
+        return values
+    valid_keys = sorted(_TYPE_TYPED_PARAMS.get(helper_type, frozenset()) | {"name"})
+    suggestions = [
+        f"Valid config keys for {helper_type}: {', '.join(valid_keys)}",
+        "area_id, labels and category are top-level parameters, not config keys",
+    ]
+    try:
+        fields = _simple_config_model().model_validate(config)
+    except ValidationError as e:
+        problems = "; ".join(
+            f"{'.'.join(map(str, err['loc'])) or 'config'}: {err['msg']}"
+            for err in e.errors()
+        )
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid config for helper_type='{helper_type}': {problems}",
+                context=_simple_helper_error_context(helper_type),
+                suggestions=suggestions,
+            )
+        )
+    merged = dict(values)
+    for key in fields.model_fields_set:
+        value = getattr(fields, key)
+        if value is None:
+            continue
+        if values[key] is not None and values[key] != value:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"'{key}' was passed both as a parameter and in config with "
+                    "different values.",
+                    context=_simple_helper_error_context(helper_type),
+                    suggestions=[f"Pass '{key}' once, inside config"],
+                )
+            )
+        merged[key] = value
+    return merged
+
+
+def _prepare_typed_params(
+    helper_type: str,
+    config: Any,
+    name: str | None,
+    icon: str | None,
+    type_kw: dict[str, Any],
+) -> tuple[str | None, str | None, dict[str, Any]]:
+    """Fold a SIMPLE helper's `config` into its typed params, then reject
+    params that don't apply to the type (Bug 4b/7c/10/14, issue #1150)."""
+    if helper_type in SIMPLE_HELPER_TYPES:
+        merged = _merge_simple_helper_config(
+            helper_type, config, {"name": name, "icon": icon, **type_kw}
+        )
+        name, icon = merged.pop("name"), merged.pop("icon")
+        type_kw = merged
+    _validate_applicable_params(helper_type, {"icon": icon, **type_kw})
+    return name, icon, type_kw
+
+
+@contextlib.asynccontextmanager
+async def _core_schema_context(
+    client: Any, helper_type: str, action: str | None
+) -> AsyncIterator[None]:
+    """Serve Core's field lists to validation errors raised inside the block."""
+    token = None
+    if helper_type in SIMPLE_HELPER_TYPES:
+        schemas = await fetch_helper_schemas(client)
+        if schemas:
+            token = _CORE_HELPER_SCHEMAS.set((schemas, action or "create"))
+    try:
+        yield
+    finally:
+        if token is not None:
+            _CORE_HELPER_SCHEMAS.reset(token)
 
 
 def _validate_pre_dispatch_params(
@@ -4492,189 +4811,74 @@ class HelperConfigTools:
             JSON_STRING_COERCION,
             Field(description="Labels to categorize the helper", default=None),
         ] = None,
+        # Type fields for SIMPLE helpers, also accepted inside `config`; hidden from
+        # the schema so only `config` documents them.
         min_value: Annotated[
             float | None,
+            HIDDEN_PARAM,
             Field(
-                description="Minimum value (input_number/counter) or minimum length (input_text). Also accepts shorthand 'min'.",
                 default=None,
-                validation_alias=AliasChoices("min_value", "min"),
+                validation_alias=AliasChoices("min_value", "min", "minimum"),
             ),
         ] = None,
         max_value: Annotated[
             float | None,
+            HIDDEN_PARAM,
             Field(
-                description="Maximum value (input_number/counter) or maximum length (input_text). Also accepts shorthand 'max'.",
                 default=None,
-                validation_alias=AliasChoices("max_value", "max"),
+                validation_alias=AliasChoices("max_value", "max", "maximum"),
             ),
         ] = None,
-        step: Annotated[
-            float | None,
-            Field(
-                description="Step/increment value for input_number or counter",
-                default=None,
-            ),
-        ] = None,
+        step: Annotated[float | None, HIDDEN_PARAM] = None,
         unit_of_measurement: Annotated[
             str | None,
+            HIDDEN_PARAM,
             Field(
-                description="Unit of measurement for input_number (e.g., '°C', '%', 'W'). Also accepts shorthand 'unit'.",
                 default=None,
                 validation_alias=AliasChoices("unit_of_measurement", "unit"),
             ),
         ] = None,
         options: Annotated[
-            str | list[str] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="List of options for input_select (required for input_select)",
-                default=None,
-            ),
+            str | list[str] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
-        initial: Annotated[
-            str | int | None,
-            Field(
-                description=_INITIAL_PARAM_DESCRIPTION,
-                default=None,
-            ),
-        ] = None,
-        mode: Annotated[
-            str | None,
-            Field(
-                description="Display mode: 'box'/'slider' for input_number, 'text'/'password' for input_text",
-                default=None,
-            ),
-        ] = None,
-        has_date: Annotated[
-            bool | None,
-            Field(
-                description="Include date component for input_datetime", default=None
-            ),
-        ] = None,
-        has_time: Annotated[
-            bool | None,
-            Field(
-                description="Include time component for input_datetime", default=None
-            ),
-        ] = None,
-        restore: Annotated[
-            bool | None,
-            Field(
-                description="Restore state after restart (counter, timer). Defaults to True for counter, False for timer",
-                default=None,
-            ),
-        ] = None,
-        duration: Annotated[
-            str | None,
-            Field(
-                description="Default duration for timer in format 'HH:MM:SS' or seconds (e.g., '0:05:00' for 5 minutes)",
-                default=None,
-            ),
-        ] = None,
+        initial: Annotated[str | int | None, HIDDEN_PARAM] = None,
+        mode: Annotated[str | None, HIDDEN_PARAM] = None,
+        has_date: Annotated[bool | None, HIDDEN_PARAM] = None,
+        has_time: Annotated[bool | None, HIDDEN_PARAM] = None,
+        restore: Annotated[bool | None, HIDDEN_PARAM] = None,
+        duration: Annotated[str | None, HIDDEN_PARAM] = None,
         monday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes (e.g. {'from': '07:00', 'to': '22:00', 'data': {'mode': 'comfort'}})",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         tuesday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Tuesday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         wednesday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Wednesday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         thursday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Thursday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         friday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Friday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         saturday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Saturday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         sunday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Sunday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
-        latitude: Annotated[
-            float | None,
-            Field(description="Latitude for zone (required for zone)", default=None),
-        ] = None,
-        longitude: Annotated[
-            float | None,
-            Field(description="Longitude for zone (required for zone)", default=None),
-        ] = None,
-        radius: Annotated[
-            float | None,
-            Field(description="Radius in meters for zone (default: 100)", default=None),
-        ] = None,
-        passive: Annotated[
-            bool | None,
-            Field(
-                description="Passive zone (won't trigger state changes for person entities)",
-                default=None,
-            ),
-        ] = None,
-        user_id: Annotated[
-            str | None,
-            Field(description="User ID to link to person entity", default=None),
-        ] = None,
+        latitude: Annotated[float | None, HIDDEN_PARAM] = None,
+        longitude: Annotated[float | None, HIDDEN_PARAM] = None,
+        radius: Annotated[float | None, HIDDEN_PARAM] = None,
+        passive: Annotated[bool | None, HIDDEN_PARAM] = None,
+        user_id: Annotated[str | None, HIDDEN_PARAM] = None,
         device_trackers: Annotated[
-            list[str] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="List of device_tracker entity IDs for person", default=None
-            ),
+            list[str] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
-        picture: Annotated[
-            str | None,
-            Field(description="Picture URL for person entity", default=None),
-        ] = None,
-        tag_id: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "Tag ID. On create, omit to auto-generate a uuid4 hex. On update, the "
-                    "existing tag_id is required (passed via helper_id)."
-                ),
-                default=None,
-            ),
-        ] = None,
-        description: Annotated[
-            str | None,
-            Field(description="Description for tag", default=None),
-        ] = None,
+        picture: Annotated[str | None, HIDDEN_PARAM] = None,
+        tag_id: Annotated[str | None, HIDDEN_PARAM] = None,
+        description: Annotated[str | None, HIDDEN_PARAM] = None,
         category: Annotated[
             str | None,
             Field(
@@ -4687,10 +4891,12 @@ class HelperConfigTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Config dict for flow-based helper types and "
-                    "helper_type='config_subentry'. "
-                    "Ignored for simple helper types. "
-                    "On update it is a patch: a field you omit keeps its "
+                    "Type-specific fields. On update it is a patch: a field "
+                    "you omit keeps its current value. SIMPLE types take "
+                    f"these keys: {_SIMPLE_CONFIG_KEYS_DESCRIPTION} "
+                    "FLOW types and config_subentry take the flow's fields; a "
+                    "field set to null is cleared where the schema allows "
+                    "that field to be empty. A field two "
                     "current value, and a field set to null is cleared where "
                     "the schema allows that field to be empty. A field two "
                     "steps declare gets your one value both times; pass "
@@ -4735,7 +4941,7 @@ class HelperConfigTools:
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
         ``helper-selection.md`` ships under ``skill_content`` by default.
 
-        SIMPLE types (structured params, WebSocket API): input_boolean, input_button,
+        SIMPLE types (pass `config` dict): input_boolean, input_button,
         input_select, input_number, input_text, input_datetime, counter, timer, schedule,
         zone, person, tag. Create requires `name`; update requires `helper_id`.
 
@@ -4767,7 +4973,8 @@ class HelperConfigTools:
           reconfigure looping through its summary menu) take `next_step_id` as a
           LIST of successive selections, consumed one per menu encounter.
 
-        EXAMPLES (menu-based types, where the first-call payload is non-obvious):
+        EXAMPLES:
+        - input_number: ha_config_set_helper(helper_type="input_number", name="Target", config={"min_value": 0, "max_value": 100, "step": 5})
         - template sensor: ha_config_set_helper(helper_type="template", name="Room Temp", config={"next_step_id": "sensor", "state": "{{ states('sensor.x')|float }}", "unit_of_measurement": "°C"})
         - group: ha_config_set_helper(helper_type="group", name="Kitchen Lights", config={"group_type": "light", "entities": ["light.a", "light.b"]})
         - config subentry: ha_config_set_helper(helper_type="config_subentry", entry_id="01HXYZ...", subentry_type="conversation", config={"name": "Local agent", "model": "gemma3:27b"})
@@ -4788,19 +4995,14 @@ class HelperConfigTools:
             action = await _validate_set_helper_action(
                 self._client, action, helper_id, helper_type
             )  # type: ignore[assignment]
-
-            # Bug 4b/7c/10/14 (issue #1150): reject typed params that don't apply
-            # to the chosen helper_type instead of silently dropping them.
-            _validate_applicable_params(
-                helper_type,
-                {
-                    "icon": icon,
+            async with _core_schema_context(self._client, helper_type, action):
+                type_kw: dict[str, Any] = {
+                    "options": options,
+                    "initial": initial,
                     "min_value": min_value,
                     "max_value": max_value,
                     "step": step,
                     "unit_of_measurement": unit_of_measurement,
-                    "options": options,
-                    "initial": initial,
                     "mode": mode,
                     "has_date": has_date,
                     "has_time": has_time,
@@ -4822,116 +5024,102 @@ class HelperConfigTools:
                     "picture": picture,
                     "tag_id": tag_id,
                     "description": description,
-                },
-            )
-
-            # The `config` parameter only applies to flow-based types; reject early
-            # so the caller realizes simple types use explicit params, not `config`.
-            if helper_type not in FLOW_HELPER_TYPES and config not in (None, {}, ""):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"The 'config' parameter is only valid for flow-based helper types. "
-                        f"For '{helper_type}', use the explicit parameters (name, options, min_value, etc.).",
-                        context=_simple_helper_error_context(helper_type),
-                        suggestions=[
-                            f"Pass values for '{helper_type}' via explicit parameters (e.g. options=..., min_value=...)",
-                            "For flow-based types (template, group, utility_meter, ...), use 'config' as a dict or JSON string",
-                        ],
-                    )
+                }
+                name, icon, type_kw = _prepare_typed_params(
+                    helper_type, config, name, icon, type_kw
                 )
 
-            # Bug 12: detect name collision before sending so the caller isn't silently given a duplicate.
-            if action == "create":
-                await _check_name_collision(self._client, helper_type, name)
+                # Bug 12: detect name collision before sending so the caller isn't silently given a duplicate.
+                if action == "create":
+                    await _check_name_collision(self._client, helper_type, name)
 
-            if helper_type in FLOW_HELPER_TYPES:
-                flow_response = await _handle_flow_helper(
+                if helper_type in FLOW_HELPER_TYPES:
+                    flow_response = await _handle_flow_helper(
+                        self._client,
+                        helper_type,
+                        name,
+                        helper_id,
+                        config,
+                        area_id,
+                        labels,
+                        category,
+                        wait,
+                        icon=icon,
+                        action=action,
+                    )
+                    _attach_helper_skill(flow_response, MandatoryBPS)
+                    return flow_response
+
+                try:
+                    labels = parse_string_list_param(labels, "labels")
+                    type_kw["options"] = parse_string_list_param(
+                        type_kw["options"], "options"
+                    )
+                except ValueError as e:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"Invalid list parameter: {e}",
+                        )
+                    )
+
+                # Bug 16 (issue #1150): validate area_id / labels / category exist.
+                await validate_registry_ids(
                     self._client,
-                    helper_type,
-                    name,
-                    helper_id,
-                    config,
                     area_id,
                     labels,
-                    category,
-                    wait,
-                    icon=icon,
-                    action=action,
+                    {"helpers": category},
+                    fail_closed=True,
                 )
-                _attach_helper_skill(flow_response, MandatoryBPS)
-                return flow_response
 
-            try:
-                labels = parse_string_list_param(labels, "labels")
-                options = parse_string_list_param(options, "options")
-            except ValueError as e:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid list parameter: {e}",
+                # Bug 13/17 (issue #1150): pre-validate per-type schema constraints.
+                _validate_pre_dispatch_params(
+                    helper_type,
+                    type_kw["min_value"],
+                    type_kw["max_value"],
+                    type_kw["step"],
+                    type_kw["options"],
+                    type_kw["monday"],
+                    type_kw["tuesday"],
+                    type_kw["wednesday"],
+                    type_kw["thursday"],
+                    type_kw["friday"],
+                    type_kw["saturday"],
+                    type_kw["sunday"],
+                )
+
+                if action == "create":
+                    return await _execute_create_simple_helper(
+                        self._client,
+                        helper_type,
+                        name,
+                        icon,
+                        area_id,
+                        labels,
+                        category,
+                        wait,
+                        MandatoryBPS,
+                        **type_kw,
                     )
+
+                if action != "update":
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.INTERNAL_ERROR,
+                            f"Unexpected action: {action}",
+                        )
+                    )
+
+                # helper_id is guaranteed non-None by _validate_set_helper_action for update
+                hid: str = helper_id  # type: ignore[assignment]
+                entity_id = (
+                    hid if hid.startswith(helper_type) else f"{helper_type}.{hid}"
                 )
-
-            # Bug 16 (issue #1150): validate area_id / labels / category exist.
-            await validate_registry_ids(
-                self._client,
-                area_id,
-                labels,
-                {"helpers": category},
-                fail_closed=True,
-            )
-
-            # Bug 13/17 (issue #1150): pre-validate per-type schema constraints.
-            _validate_pre_dispatch_params(
-                helper_type,
-                min_value,
-                max_value,
-                step,
-                options,
-                monday,
-                tuesday,
-                wednesday,
-                thursday,
-                friday,
-                saturday,
-                sunday,
-            )
-
-            type_kw: dict[str, Any] = {
-                "options": options,
-                "initial": initial,
-                "min_value": min_value,
-                "max_value": max_value,
-                "step": step,
-                "unit_of_measurement": unit_of_measurement,
-                "mode": mode,
-                "has_date": has_date,
-                "has_time": has_time,
-                "restore": restore,
-                "duration": duration,
-                "monday": monday,
-                "tuesday": tuesday,
-                "wednesday": wednesday,
-                "thursday": thursday,
-                "friday": friday,
-                "saturday": saturday,
-                "sunday": sunday,
-                "latitude": latitude,
-                "longitude": longitude,
-                "radius": radius,
-                "passive": passive,
-                "user_id": user_id,
-                "device_trackers": device_trackers,
-                "picture": picture,
-                "tag_id": tag_id,
-                "description": description,
-            }
-
-            if action == "create":
-                return await _execute_create_simple_helper(
+                return await _execute_update_simple_helper(
                     self._client,
                     helper_type,
+                    entity_id,
+                    hid,
                     name,
                     icon,
                     area_id,
@@ -4941,32 +5129,6 @@ class HelperConfigTools:
                     MandatoryBPS,
                     **type_kw,
                 )
-
-            if action != "update":
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.INTERNAL_ERROR,
-                        f"Unexpected action: {action}",
-                    )
-                )
-
-            # helper_id is guaranteed non-None by _validate_set_helper_action for update
-            hid: str = helper_id  # type: ignore[assignment]
-            entity_id = hid if hid.startswith(helper_type) else f"{helper_type}.{hid}"
-            return await _execute_update_simple_helper(
-                self._client,
-                helper_type,
-                entity_id,
-                hid,
-                name,
-                icon,
-                area_id,
-                labels,
-                category,
-                wait,
-                MandatoryBPS,
-                **type_kw,
-            )
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None

@@ -98,22 +98,19 @@ def _find_msg(client: Any, msg_type: str) -> dict | None:
 
 
 class TestSchemaSurfacesCanonicalNames:
-    """The MCP-exposed schema should advertise the canonical names only.
+    """The canonical names are documented once, in the ``config`` description.
 
-    The aliases are accepted at validation time but should NOT pollute the
-    tool-discovery surface — agents see the long-form names per the existing
-    contract.
+    The type fields and their aliases stay accepted as top-level arguments but
+    are not advertised there (issue #2479), so the schema carries one copy.
     """
 
-    def test_schema_exposes_min_value_not_min(self, helper_tool):
+    def test_schema_documents_canonical_names_in_config(self, helper_tool):
         props = helper_tool.parameters.get("properties", {})
-        assert "min_value" in props
-        assert "max_value" in props
-        assert "unit_of_measurement" in props
-        # Aliases are not advertised separately (they'd duplicate the schema).
-        assert "min" not in props
-        assert "max" not in props
-        assert "unit" not in props
+        for name in ("min_value", "max_value", "unit_of_measurement", "min", "unit"):
+            assert name not in props
+        config = props["config"]["description"]
+        for name in ("min_value", "max_value", "unit_of_measurement"):
+            assert name in config
 
 
 class TestShorthandAliasesAccepted:

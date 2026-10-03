@@ -5,6 +5,7 @@ Centralized utilities that can be shared across multiple tool implementations.
 """
 
 import functools
+import inspect
 import json
 import logging
 import re
@@ -657,18 +658,46 @@ async def safe_progress(
         logger.debug("ctx.report_progress failed (%s): %s", type(e).__name__, e)
 
 
+class _HiddenParam:
+    """Annotated marker for a parameter left out of the published input schema."""
+
+
+# Argument validation runs on the function signature, not the published schema,
+# so a hidden parameter is still accepted from callers that pass it.
+HIDDEN_PARAM = _HiddenParam()
+
+
+def hidden_param_names(fn: Any) -> frozenset[str]:
+    """Names of ``fn``'s parameters annotated with ``HIDDEN_PARAM``."""
+    try:
+        signature = inspect.signature(fn, eval_str=True)
+    except NameError:
+        # A string annotation naming a TYPE_CHECKING-only import can't resolve.
+        signature = inspect.signature(fn)
+    return frozenset(
+        name
+        for name, param in signature.parameters.items()
+        if HIDDEN_PARAM in getattr(param.annotation, "__metadata__", ())
+    )
+
+
 def register_tool_methods(mcp: Any, instance: Any) -> None:
     """Register all @tool-decorated methods from a class instance with the MCP server.
 
     Discovers methods bearing a ``__fastmcp__`` attribute (set by the outermost
     ``@tool`` decorator — must be listed above ``@log_tool_usage``) and registers
-    them via ``mcp.add_tool()``.
+    them via ``mcp.add_tool()``, dropping ``HIDDEN_PARAM`` parameters from the
+    published schema.
     """
     count = 0
     for attr in dir(instance):
         method = getattr(instance, attr)
         if callable(method) and hasattr(method, "__fastmcp__"):
-            mcp.add_tool(method)
+            registered = mcp.add_tool(method)
+            properties = getattr(registered, "parameters", {}).get("properties")
+            if isinstance(properties, dict):
+                for name in hidden_param_names(method):
+                    properties.pop(name, None)
             count += 1
     if count == 0:
         logger.warning(f"No @tool-decorated methods found on {type(instance).__name__}")

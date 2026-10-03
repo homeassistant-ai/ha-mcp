@@ -311,7 +311,7 @@ from homeassistant.helpers import (
     label_registry as lr,
 )
 
-from . import template_diagnose
+from . import helper_collections, template_diagnose
 from .const import (
     CHANNEL_DEV,
     CHANNEL_STABLE,
@@ -358,6 +358,9 @@ WS_SERVER_ENTRY_UPDATE = f"{WS_API_PREFIX}/server_entry_update"
 WS_CALL_SERVICE = f"{WS_API_PREFIX}/call_service"
 WS_BULK_CALL_SERVICE = f"{WS_API_PREFIX}/bulk_call_service"
 WS_TEMPLATE_DIAGNOSE = f"{WS_API_PREFIX}/template_diagnose"
+WS_HELPER_SCHEMAS = f"{WS_API_PREFIX}/helper_schemas"
+WS_HELPER_ITEM = f"{WS_API_PREFIX}/helper_item"
+WS_HELPER_WRITE = f"{WS_API_PREFIX}/helper_write"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -438,6 +441,12 @@ CAPABILITIES: list[str] = [
     # The server's ha_eval_template asks for a failed template's line only when
     # this is advertised; without it the error is returned as Core reported it.
     "template_diagnose",
+    # Simple-helper (input_*, counter, timer, schedule, zone, person, tag) schemas,
+    # reads and writes through Core's own storage collections; the server routes
+    # ha_config_set_helper through these and falls back to Core's WS commands.
+    "helper_schemas",
+    "helper_item",
+    "helper_write",
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates
@@ -670,6 +679,10 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
             _bulk_call_service_prep,
         ),
         (_template_diagnose_schema(), _do_template_diagnose, _template_diagnose_prep),
+        (_helper_schemas_schema(), _do_helper_schemas, None),
+        (_helper_item_schema(), _do_helper_item, None),
+        # The write is async, so it runs in the prep; ``_do_helper_write`` formats.
+        (_helper_write_schema(), _do_helper_write, _helper_write_prep),
     ]
 
 
@@ -6933,4 +6946,74 @@ def _do_dashboard_edit(
     hass: HomeAssistant, msg: dict[str, Any], *, result: dict[str, Any]
 ) -> dict[str, Any]:
     """Preserve the write outcome assembled by the async edit lifecycle."""
+    return result
+
+
+def _helper_schemas_schema() -> dict[Any, Any]:
+    return {vol.Required("type"): WS_HELPER_SCHEMAS}
+
+
+def _do_helper_schemas(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    return helper_collections.describe_schemas(hass)
+
+
+def _helper_item_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_HELPER_ITEM,
+        vol.Required("helper_type"): vol.In(helper_collections.SIMPLE_HELPER_TYPES),
+        vol.Exclusive("entity_id", "target"): str,
+        vol.Exclusive("item_id", "target"): str,
+    }
+
+
+def _do_helper_item(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    return helper_collections.read_item(
+        hass,
+        er.async_get(hass),
+        msg["helper_type"],
+        msg.get("entity_id"),
+        msg.get("item_id"),
+    )
+
+
+def _helper_write_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_HELPER_WRITE,
+        vol.Required("helper_type"): vol.In(helper_collections.SIMPLE_HELPER_TYPES),
+        vol.Required("action"): vol.In(("create", "update")),
+        vol.Optional("item_id"): str,
+        vol.Required("data"): dict,
+        vol.Optional("registry"): {
+            vol.Optional("icon"): vol.Any(str, None),
+            vol.Optional("area_id"): vol.Any(str, None),
+            vol.Optional("labels"): [str],
+            vol.Optional("category"): vol.Any(str, None),
+        },
+    }
+
+
+async def _helper_write_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    if msg["action"] == "update" and not msg.get("item_id"):
+        return {
+            "result": {
+                "success": False,
+                "error": {
+                    "code": "invalid",
+                    "message": "item_id is required for update",
+                },
+            }
+        }
+    return {
+        "result": await helper_collections.async_write_item(
+            hass, er.async_get(hass), msg
+        )
+    }
+
+
+def _do_helper_write(
+    hass: HomeAssistant, msg: dict[str, Any], *, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Return the outcome assembled by the async write."""
     return result

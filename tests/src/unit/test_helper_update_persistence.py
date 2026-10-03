@@ -1025,15 +1025,16 @@ class TestFlowHelperRouting:
 
         assert captured_config.get("name") == "my_helper_name"
 
-    async def test_simple_type_rejects_config_param(self, register_tools, mock_client):
-        """Passing config for a simple helper type raises VALIDATION_INVALID_PARAMETER.
+    async def test_simple_type_rejects_unknown_config_keys(
+        self, register_tools, mock_client
+    ):
+        """A SIMPLE type's config takes only that type's fields (issue #2479).
 
-        Silent-ignore would mislead agents into thinking the payload took effect.
-        Empty dict and empty string are tolerated (explicit 'nothing').
+        Unknown keys are rejected rather than silently dropped; an empty dict or
+        string is an explicit "nothing".
         """
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        # Non-empty config on simple type → reject
         with pytest.raises(ToolError) as excinfo:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
@@ -1042,11 +1043,8 @@ class TestFlowHelperRouting:
             )
         err_text = str(excinfo.value)
         assert "VALIDATION_INVALID_PARAMETER" in err_text
-        assert "flow-based" in err_text.lower()
+        assert "some_key" in err_text
 
-        # Empty dict → tolerated (would proceed to simple path). We only check
-        # that no ToolError with VALIDATION_INVALID_PARAMETER for the config
-        # reason is raised; the call itself may fail downstream due to mocks.
         try:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
@@ -1054,8 +1052,8 @@ class TestFlowHelperRouting:
                 config={},
             )
         except ToolError as e:
-            assert "flow-based" not in str(e).lower(), (
-                f"empty config should not trigger the flow-based-rejection message: {e}"
+            assert "Invalid config" not in str(e), (
+                f"empty config should not be rejected as invalid: {e}"
             )
 
     async def test_flow_type_accepts_empty_string_as_no_config(
