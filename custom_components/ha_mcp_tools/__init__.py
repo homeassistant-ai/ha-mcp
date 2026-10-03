@@ -3431,7 +3431,7 @@ def _build_read_legacy_backup_handler(
     return handle_read_legacy_backup
 
 
-async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:  # noqa: PLR0915
     """Set up the File & YAML services (tools entry) from a config entry."""
     config_dir = Path(hass.config.config_dir)
 

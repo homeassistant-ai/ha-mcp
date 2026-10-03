@@ -1660,7 +1660,7 @@ DEV_ADDON_REPO_FILES = (
 )
 
 
-def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
+def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:  # noqa: PLR0915
     """Overwrite the staged ha-mcp dev addon source with the PR's current source.
 
     The cached qcow2 ships with the addon installed + Docker image built

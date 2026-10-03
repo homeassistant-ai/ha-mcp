@@ -528,7 +528,7 @@ def _run_mcp_server(
     return 0
 
 
-def main() -> int:
+def main() -> int:  # noqa: PLR0915
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
 

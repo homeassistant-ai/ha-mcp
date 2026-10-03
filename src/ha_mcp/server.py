@@ -1264,7 +1264,7 @@ class HomeAssistantSmartMCPServer:
         except Exception:
             logger.exception("Failed to apply tool search transform")
 
-    def _apply_tool_security_policies(self) -> None:
+    def _apply_tool_security_policies(self) -> None:  # noqa: PLR0915
         """Register the tool security policies middleware (#966).
 
         Opt-in via ``ENABLE_TOOL_SECURITY_POLICIES``. When enabled, every

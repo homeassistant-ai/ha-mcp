@@ -239,7 +239,7 @@ class TestHelperIntegration:
         )
         logger.info("✅ Helper deletion verified")
 
-    async def test_input_number_validation(self, mcp_client, cleanup_tracker):
+    async def test_input_number_validation(self, mcp_client, cleanup_tracker):  # noqa: PLR0915
         """
         Test: input_number with range validation and constraints
 

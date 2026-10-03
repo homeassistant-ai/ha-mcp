@@ -1152,7 +1152,7 @@ def _substrate_unavailable(name: str) -> Exception:
     return err
 
 
-def _do_search(
+def _do_search(  # noqa: PLR0915
     hass: HomeAssistant,
     params: dict[str, Any],
     *,

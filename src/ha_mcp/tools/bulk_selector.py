@@ -654,7 +654,7 @@ async def _load_hidden_entities(
     return visibility_hidden | registry_hidden, warnings
 
 
-async def resolve_bulk_selector(
+async def resolve_bulk_selector(  # noqa: PLR0915
     client: HomeAssistantClient,
     selector: Mapping[str, Any],
     *,

@@ -1065,7 +1065,7 @@ class BugReportTools:
         },
     )
     @log_tool_usage
-    async def ha_report_issue(
+    async def ha_report_issue(  # noqa: PLR0915
         self,
         report_type: Annotated[
             Literal["runtime_bug", "agent_behavior"],

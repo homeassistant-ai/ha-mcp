@@ -498,7 +498,7 @@ def test_font_size_clamp_parity(
         )
 
 
-def test_reset_clears_all_and_clear_only_custom(
+def test_reset_clears_all_and_clear_only_custom(  # noqa: PLR0915
     theme_toggle_script: str, a11y_controls_html: str
 ) -> None:
     """Reset button clears all prefs to defaults; clear button only clears custom colors.

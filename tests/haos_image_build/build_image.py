@@ -2485,7 +2485,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
         )
 
 
-def bake_test_state(qcow2: Path) -> None:
+def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
     """Inject tests/initial_test_state into the qcow2 via libguestfs.
 
     Runs *after* HAOS has been shut down so the qcow2 isn't in use. Uses
