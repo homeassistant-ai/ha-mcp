@@ -383,7 +383,7 @@ def test_move_haos_tls_item_last() -> None:
     The scheduling consequence (Core restarts only after a worker's ordinary
     work) is documented on ``_move_haos_tls_items_last`` itself.
     """
-    from tests.src.e2e import conftest as e2e_conftest
+    from tests.src.e2e import _conftest_collection
 
     class Item:
         def __init__(self, name: str, *, tls: bool = False) -> None:
@@ -392,7 +392,7 @@ def test_move_haos_tls_item_last() -> None:
 
     items = [Item("first"), Item("tls", tls=True), Item("last")]
 
-    e2e_conftest._move_haos_tls_items_last(items)
+    _conftest_collection._move_haos_tls_items_last(items)
 
     assert [item.name for item in items] == ["first", "last", "tls"]
 
@@ -403,7 +403,7 @@ def test_apply_haos_tls_skip_gates_on_the_embedded_lane() -> None:
     An inverted condition would silently stop the #2241 regression proof from
     running anywhere, under the skip ceilings' radar.
     """
-    from tests.src.e2e import conftest as e2e_conftest
+    from tests.src.e2e import _conftest_collection
 
     class Item:
         def __init__(self, *, tls: bool) -> None:
@@ -416,21 +416,21 @@ def test_apply_haos_tls_skip_gates_on_the_embedded_lane() -> None:
     marker = object()
 
     disabled = Item(tls=True)
-    e2e_conftest._apply_haos_tls_skip(disabled, False, marker)
+    _conftest_collection._apply_haos_tls_skip(disabled, False, marker)
     assert disabled.markers == [marker]
 
     enabled = Item(tls=True)
-    e2e_conftest._apply_haos_tls_skip(enabled, True, marker)
+    _conftest_collection._apply_haos_tls_skip(enabled, True, marker)
     assert enabled.markers == []
 
     ordinary = Item(tls=False)
-    e2e_conftest._apply_haos_tls_skip(ordinary, False, marker)
+    _conftest_collection._apply_haos_tls_skip(ordinary, False, marker)
     assert ordinary.markers == []
 
 
 def test_apply_beta_haos_only_skip_gates_on_beta_expectations() -> None:
     """The runtime-version canary runs only in a selected beta HAOS lane."""
-    from tests.src.e2e import conftest as e2e_conftest
+    from tests.src.e2e import _conftest_collection
 
     class Item:
         def __init__(self, *, beta: bool) -> None:
@@ -443,15 +443,15 @@ def test_apply_beta_haos_only_skip_gates_on_beta_expectations() -> None:
     marker = object()
 
     disabled = Item(beta=True)
-    e2e_conftest._apply_beta_haos_only_skip(disabled, False, marker)
+    _conftest_collection._apply_beta_haos_only_skip(disabled, False, marker)
     assert disabled.markers == [marker]
 
     enabled = Item(beta=True)
-    e2e_conftest._apply_beta_haos_only_skip(enabled, True, marker)
+    _conftest_collection._apply_beta_haos_only_skip(enabled, True, marker)
     assert enabled.markers == []
 
     ordinary = Item(beta=False)
-    e2e_conftest._apply_beta_haos_only_skip(ordinary, False, marker)
+    _conftest_collection._apply_beta_haos_only_skip(ordinary, False, marker)
     assert ordinary.markers == []
 
 

@@ -34,7 +34,7 @@ from tests.src.haos_runtime import (
     promote_home_assistant_http_config,
 )
 
-from ..conftest import _wait_for_embedded_webhook_ready
+from .._conftest_embedded import _wait_for_embedded_webhook_ready
 from ..utilities.assertions import MCPAssertions, safe_call_tool
 from .test_manage_addon_modes import (
     NODERED_NAME,

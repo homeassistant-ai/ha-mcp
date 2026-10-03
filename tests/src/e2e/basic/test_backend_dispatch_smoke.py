@@ -47,7 +47,7 @@ Three layers of guard, each catching a different silent-failure mode:
    tests transition pass→skip silently because a marker was applied
    too broadly. The conftest documents a prior incident of this kind
    (PR #1375 audit, 14 ``supervisor_mock`` tests silently skipping on
-   every testcontainer run — see the PR #1375 audit comment in ``tests/src/e2e/conftest.py``).
+   every testcontainer run — see the PR #1375 audit comment in ``tests/src/e2e/_conftest_collection.py``).
 
 This file is placed under ``basic/`` (NOT ``haos_only/``) on purpose: the
 auto-applied ``haos_only`` marker would skip these whenever
@@ -444,7 +444,7 @@ def test_session_skipped_count_below_ceiling(
     ``pytest_collection_modifyitems`` hook.
 
     The conftest itself documents a real prior incident of this kind
-    (the PR #1375 audit comment in ``tests/src/e2e/conftest.py`` — 14
+    (the PR #1375 audit comment in ``tests/src/e2e/_conftest_collection.py`` — 14
     ``supervisor_mock`` tests silently skipping on every testcontainer
     run because an ``external_only`` skip was scoped wrong). A
     skip-count ceiling per lane catches that whole class of bug.
@@ -474,7 +474,7 @@ def test_session_skipped_count_below_ceiling(
         f"{skipped} tests have skip markers on the {lane} lane, "
         f"which exceeds the ceiling of {ceiling}. A marker may be "
         f"applied too broadly in pytest_collection_modifyitems — "
-        f"check pytest_collection_modifyitems in tests/src/e2e/conftest.py for recent changes. "
+        f"check pytest_collection_modifyitems in tests/src/e2e/_conftest_collection.py for recent changes. "
         f"If the increase is intentional (legitimate new marker-gated "
         f"tests), add the per-lane increments in a "
         f"tests/src/e2e/basic/skip_ceiling/pr<N>.json fragment (see "

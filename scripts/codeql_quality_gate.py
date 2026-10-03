@@ -283,6 +283,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "Code in the conftest itself would break the import-order lint.",
     ),
     (
+        "py/unused-import",
+        "tests/src/e2e/conftest.py",
+        "Import of 'pytest_",
+        "",
+        "Hook registration: pytest finds hooks by name in the conftest "
+        "namespace, so importing a pytest_* hook from a _conftest_* module "
+        "registers it. pytest_plugins is not allowed in a conftest below the "
+        "root directory.",
+    ),
+    (
         "py/import-and-import-from",
         "tests/src/unit/test_translate_locales.py",
         "Module 'translate_locales' is imported with both",

@@ -168,7 +168,7 @@ def test_xdist_abort_retains_first_shared_fixture_failure(tmp_path):
 
 @pytest.mark.parametrize("when", ["setup", "teardown"])
 def test_controller_reports_first_fixture_failure_per_worker(monkeypatch, when):
-    from tests.src.e2e import conftest as e2e
+    from tests.src.e2e import _conftest_collection as e2e
 
     doomed_run = e2e.doomed_run
     monkeypatch.setattr(doomed_run, "_doomed_detector", DoomedRunDetector())

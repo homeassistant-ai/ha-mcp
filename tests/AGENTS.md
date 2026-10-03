@@ -2,7 +2,7 @@
 
 ## Custom Component (ha_mcp_tools)
 
-- Component is installed into the Docker container by `_install_custom_component` in `src/e2e/conftest.py`
+- Component is installed into the Docker container by `_install_custom_component` in `src/e2e/_conftest_seed.py`
 - HA's `call_service(return_response=True)` wraps results in `{"changed_states": [], "service_response": {...}}`. Most tools unwrap it with `unwrap_service_response()` (`src/ha_mcp/tools/util_helpers.py`); `ha_call_service` instead *splits* it, projecting `changed_states` into `result` and surfacing `service_response` once at the top level (issue #2085)
 - `hass.async_add_executor_job` only passes positional args — use `lambda:` wrappers for calls needing kwargs (e.g., `mkdir(parents=True, exist_ok=True)`)
 - HA Docker image uses `annotatedyaml` (PyYAML wrapper), NOT `ruamel.yaml` — custom components needing ruamel must declare it in `manifest.json` requirements
@@ -13,7 +13,7 @@
 The suite runs on several backends, and a test that only makes sense on some
 of them is gated by a marker rather than a runtime `skip`. The markers and
 their exact skip conditions are defined in
-`src/e2e/conftest.py::pytest_collection_modifyitems` — read that docstring
+`src/e2e/_conftest_collection.py::pytest_collection_modifyitems` — read that docstring
 before adding a gate:
 
 | Marker | Runs on |
@@ -88,8 +88,8 @@ It is orthogonal to the backend selectors, so each backend has its own shape:
 | HAOS `inaddon` | **no component** in effect — `remove_tools_entry_in_qcow2` drops the baked tools entry pre-boot; nothing else sets one up |
 | HAOS `embedded` | **server entry only** — same pre-boot removal, and the staged (disabled) server entry is deliberately kept |
 
-The staging lives in `conftest._prepare_testcontainer_config` (container) and
-`conftest._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
+The staging lives in `_conftest_testcontainer._prepare_testcontainer_config` (container) and
+`_conftest_haos._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
 (HAOS). The qcow2 edit is offline and per-worker, like the recorder / HACS
 refreshers, and raises rather than warning: a silent no-op would leave the
 entry in place and the lane would re-test the ordinary topology while
