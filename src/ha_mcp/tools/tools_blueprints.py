@@ -26,13 +26,13 @@ from .blueprint_write import (
     normalize_blueprint_path,
     write_blueprint,
 )
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 

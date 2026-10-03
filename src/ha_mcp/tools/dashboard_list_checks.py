@@ -8,8 +8,8 @@ core stack cards (also inside core wrapper cards).
 import re
 from typing import Any, Literal
 
+from .coercion import loads_if_json_container_str
 from .helpers import reject_malformed_list_fields
-from .util_helpers import loads_if_json_container_str
 
 # Core stack cards; custom cards may give ``cards`` any shape, so they are skipped.
 _STACK_CARD_TYPES = frozenset({"vertical-stack", "horizontal-stack", "grid"})

@@ -2452,7 +2452,7 @@ class TestSceneVerificationFailureWarnings:
     call sites. ``TimeoutError`` returns False (handled separately;
     surfaces a different "not yet queryable" warning), and
     ``HomeAssistantAPIError`` is fully swallowed by the helpers in
-    ``util_helpers.py``.
+    ``ws_waiters.py``.
 
     Distinct from the cross-cutting shape regression in
     ``test_helper_response_shape.py::TestLifecycleWriteWarningsShape`` —

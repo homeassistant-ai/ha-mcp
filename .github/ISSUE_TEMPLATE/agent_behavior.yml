@@ -63,33 +63,29 @@ body:
         - Timestamps and performance data
 
   - type: textarea
-    id: conversation_paste
+    id: report
     attributes:
-      label: "📋 Copy-Paste from Conversation"
+      label: "📋 ha_report_issue Report"
       description: |
-        **Paste the relevant part of your conversation here.**
+        **Required.** Ask your AI agent: *"Report this with the ha_report_issue tool."* Run it in
+        the session where the problem happened. Paste the whole report it generates here (from its
+        Auto-Generated heading to the end), with tokens and passwords removed. It collects the
+        versions, install type, client, settings and tool calls we otherwise have to ask for.
 
-        Include:
-        - Your original request to the agent
-        - The agent's tool calls and responses
-        - The ha_report_issue output (if you used it)
-
-        **Don't worry about formatting** - just copy and paste! We can read messy text, code blocks, JSON, whatever.
-      placeholder: |
-        User: Can you turn on the living room lights?
-
-        Agent: I'll search for the living room light entity.
-        [Tool: ha_search, query="living room light"]
-        Result: Found entity light.living_room
-
-        Agent: Now I'll search for it again to confirm...
-        [Tool: ha_search, query="living room"]
-        Result: ...
-
-        [Paste everything here, including ha_report_issue output if available]
-      render: markdown
+        If no report can exist, for example because ha-mcp does not start or connect or the problem
+        was found by reading the code, typing `N/A` here is acceptable; say why in the next field.
+      placeholder: "Paste the whole ha_report_issue report here, or N/A"
     validations:
       required: true
+
+  - type: textarea
+    id: no_report_reason
+    attributes:
+      label: "Why there is no ha_report_issue report"
+      description: |
+        If you typed N/A above, say why there is no report. A short reason, even "N/A", is enough.
+    validations:
+      required: false
 
   - type: markdown
     attributes:

@@ -2,8 +2,11 @@
 
 `issue-intake.yml` documents reports, translates non-English reports, and asks
 for essential missing information. The model must not diagnose, propose fixes,
-assign blame or priority, promise a PR, or close an issue. CodeRabbit issue
-enrichment is disabled so this workflow owns the consolidated issue comment.
+assign blame or priority, promise a PR, or close an issue. Within this
+workflow only the deterministic [report gate](#report-gate) closes issues;
+`close-needs-info.yml` separately closes unanswered needs-info issues, as
+described below. CodeRabbit issue enrichment is disabled so this workflow owns
+the consolidated issue comment.
 CodeRabbit and Codex PR reviews retain their existing responsibilities.
 
 ## Execution and permissions
@@ -53,6 +56,46 @@ callers share the repository's auth concurrency group. Step timeouts reserve
 room for auth persistence on failure. No Administration, organization membership,
 workflow/PR write permission, or ruleset bypass is needed for issue documentation.
 
+## Report gate
+
+The `gate` job (`.github/issue-intake/gate.mjs`) runs before admission on issue
+opens, edits, reopenings and new or edited comments, without the model. An issue passes when its reporter's body
+or one of their comments carries the `ha_report_issue` report heading together
+with the report's `ha-mcp Version:` line, or any text, even "N/A", under the
+forms' `📋 ha_report_issue Report` field or a
+`### Why there is no ha_report_issue report` heading. The forms make the report
+field required, so an issue filed through them always passes; the gate exists
+for blank and API-filed issues. Maintainers (write role or above), bots,
+`documentation` issues and feature requests (a `[FEATURE]` title or the
+`enhancement` label) are exempt.
+
+A failing issue gets the `missing bug report output` label and an App comment that mentions
+the reporter, says it will be closed in 24 hours, and says when it holds a
+report heading without the rest of the report. Only an opened issue, or one
+reopened by someone below the write role, is labeled, so an edit never starts
+the clock on an issue that predates the gate. A reply alone does not clear the
+label; the report or a reason does, and then the gate removes the label and
+rewrites its comment. A maintainer removing the label waives the requirement:
+the gate never adds it back to that issue.
+
+`report-gate.yml` runs hourly. It closes, as not planned and with a new comment
+mentioning the reporter, an open issue that is still unanswered 24 or more
+hours after the label was last applied, whether by the gate or by a maintainer
+by hand. An issue that becomes a feature request or documentation issue while
+labeled loses the label instead, with a note that no report is needed. When the report or reason is added
+later, the gate reopens an issue it closed itself; it never reopens an issue a
+human closed. Admission waits for the gate, so a labeled issue is still
+documented.
+
+An issue transferred in from another repository (the HACS mirror files against
+its own forms) is never labeled or closed: if it arrives without a report or a
+reason, the gate posts one notice asking for it, so the reporter continues here
+instead of refiling on the mirror.
+
+Reads and idempotent writes retry twice after a rate limit or server error. The
+gate fails open: if it still fails, its run goes red and admission documents the
+issue anyway, so a gate outage never stops documentation.
+
 ## Conversation, control and lifecycle
 
 One App-owned comment contains the summary, optional English translation,
@@ -61,9 +104,10 @@ excluded from model input. The publisher owns question wording and manages two
 kinds of label; it does not execute instructions from the report.
 
 - needs-info, driven by the model's missing fields, as described below.
-- Report type labels, set without the model. An issue whose body carries the
-  `ha_report_issue` report heading gets `bug` for a `[BUG]` title, or
-  `agent-behavior` for an `[AGENT]` title. That tool files blank issues,
+- Report type labels, set without the model. An issue whose body carries an
+  `ha_report_issue` report (its heading and `ha-mcp Version:` line) gets `bug` for a `[BUG]` title,
+  `agent-behavior` for an `[AGENT]` title, or `enhancement` for a
+  `[FEATURE]` title. That tool files blank issues,
   which no issue form labels. Whether a bug is a runtime or startup bug is
   left to a maintainer. A type label a human removed is not added back.
 
@@ -73,7 +117,7 @@ whose body and human replies carry no report gets a request for
 It follows the labels present when the comment is published. Labels other
 than needs-info do not start a run, so a later label change keeps the comment
 as it is until the next run; `/triage refresh` requests one.
-The heading string is shared with `tools_bug_report.py`;
+The heading string is shared with `bug_report_templates.py`;
 `tests/js/issue-intake.test.mjs` fails when the two drift apart.
 
 Maintainers with the actual maintain/admin role can post exact commands:

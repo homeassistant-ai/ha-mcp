@@ -26,9 +26,7 @@ from ..component_api import (
     is_unknown_command,
 )
 from ..smart_search import DEFAULT_CONCURRENCY_LIMIT, DeepSearchMixin
-from ..util_helpers import (
-    merge_visibility_warnings,
-)
+from ..util_helpers import merge_visibility_warnings
 from .entities import (
     _ENTITY_RECORD_KEYS,
     _requested_enrichment,

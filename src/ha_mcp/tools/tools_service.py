@@ -41,6 +41,7 @@ from .bulk_selector import (
     InfrastructureErrorCause,
     resolve_bulk_selector,
 )
+from .coercion import JSON_STRING_COERCION, parse_json_param, parse_string_list_param
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -53,17 +54,13 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .response_helpers import compact_service_result, project_entity_record
 from .util_helpers import (
     _SERVICE_TO_STATE,
     BLOCKED_WS_WRITE_COMMANDS,
-    JSON_STRING_COERCION,
-    compact_service_result,
     is_single_entity_target,
-    parse_json_param,
-    parse_string_list_param,
-    project_entity_record,
-    wait_for_state_change,
 )
+from .ws_waiters import wait_for_state_change
 
 # The ha_mcp_tools/call_service WS command: the first WRITE capability (Phase 3,
 # issue #1813). When the component advertises ``call_service`` the consumer routes a
@@ -1051,7 +1048,7 @@ class ServiceTools:
         generic verification-failed wording instead of confidently asserting
         an unproven "still unavailable". Logged at WARNING (matching the
         sibling re-check in ``_validate_entity_before_wait`` and
-        ``wait_for_state_change`` in util_helpers.py) so an operational
+        ``wait_for_state_change`` in ws_waiters.py) so an operational
         failure here -- an expired token, in particular -- leaves a
         server-side trace instead of silently reading as a generic timeout.
         """

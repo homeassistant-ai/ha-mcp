@@ -24,12 +24,14 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from .coercion import JSON_STRING_COERCION
 from .component_api import (
     component_supports,
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
 )
+from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
@@ -38,13 +40,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    fetch_integration_diagnostics,
-    filter_active_repairs,
-    parse_diagnostics_fields,
-    summarize_theme_listing,
-)
+from .util_helpers import filter_active_repairs, summarize_theme_listing
 
 logger = logging.getLogger(__name__)
 

@@ -316,7 +316,7 @@ Requires app restart to take effect.
 
 **Default:** `5` (range 2-10)
 
-Maximum number of tools returned by `ha_search_tools` when `enable_tool_search` is on. Lower values (2-3) save context tokens but may miss relevant tools. Has no effect unless tool search is enabled.
+Maximum number of hidden tools returned per `ha_search_tools` call when `enable_tool_search` is on; a pinned tool that ranks inside that top count is added as a short name-only entry on top of it. Lower values (2-3) save context tokens but may miss relevant tools. Has no effect unless tool search is enabled.
 
 Requires app restart to take effect.
 
@@ -664,7 +664,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### Utilities
 - `ha_eval_template` — Execute a Jinja2 template render, or an automation condition check, in Home Assistant.
-- `ha_report_issue` — Get diagnostics and a finished GitHub issue for a bug report or agent feedback.
+- `ha_report_issue` — Get diagnostics and a finished GitHub issue for a bug, agent feedback or a feature request.
 
 ### Zones
 - `ha_get_zone` — Get zone information - list all zones or get details for a specific one.

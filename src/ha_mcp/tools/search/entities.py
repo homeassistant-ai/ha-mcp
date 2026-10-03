@@ -20,13 +20,11 @@ from ...visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
+from ..coercion import parse_string_list_param
 from ..helpers import (
     raise_tool_error,
 )
-from ..util_helpers import (
-    merge_visibility_warnings,
-    parse_string_list_param,
-)
+from ..util_helpers import merge_visibility_warnings
 from .base import SearchToolsBase
 from .response import (
     _build_hidden_ids,

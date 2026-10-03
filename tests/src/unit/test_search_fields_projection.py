@@ -1,4 +1,4 @@
-"""Unit tests for project_fields helper in util_helpers (issue #1199)."""
+"""Unit tests for project_fields helper in response_helpers (issue #1199)."""
 
 import logging
 from unittest.mock import AsyncMock, MagicMock
@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.tools.response_helpers import project_fields
 from ha_mcp.tools.search.entities import (
     _add_membership_fields,
     _entity_enrichment_fields,
 )
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import register_search_tools
-from ha_mcp.tools.util_helpers import project_fields
 
 
 class TestProjectFields:

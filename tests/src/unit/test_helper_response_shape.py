@@ -672,7 +672,7 @@ class TestLifecycleWriteWarningsShape:
     only HomeAssistantConnectionError and HomeAssistantAuthError propagate
     from wait_for_entity_registered / wait_for_entity_removed to the call
     sites — TimeoutError returns False (handled separately), HomeAssistantAPIError
-    is fully swallowed by the helpers (util_helpers.py:495-499 + :537-543).
+    is fully swallowed by the helpers (ws_waiters.py).
     Tests only the two exception types that actually reach the call sites.
     """
 

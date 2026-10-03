@@ -10,8 +10,8 @@ import pytest
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
+from ha_mcp.tools.config_write_helpers import augment_tool_error_with_skill_content
 from ha_mcp.tools.helpers import raise_tool_error
-from ha_mcp.tools.util_helpers import augment_tool_error_with_skill_content
 
 _SRC = Path(__file__).resolve().parents[3] / "src" / "ha_mcp"
 

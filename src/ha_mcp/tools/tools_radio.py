@@ -21,6 +21,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -32,7 +33,7 @@ from .radio import thread as thread_handler
 from .radio import zigbee as zigbee_handler
 from .radio import zwave as zwave_handler
 from .radio.base import confirm_required, require
-from .util_helpers import JSON_STRING_COERCION, is_connection_error_message
+from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
 
