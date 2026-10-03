@@ -30,6 +30,7 @@ from .device_enrichment import (
     enrich_zha_metrics,
     enrich_zwave_status,
 )
+from .helper_registry import validate_registry_ids
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
     clearable_value,
@@ -39,7 +40,6 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
     build_pagination_metadata,

@@ -179,7 +179,7 @@ class TestImplicitDiscriminatorBackCompat:
             side_effect=_make_simple_handler(helper_type="input_boolean")
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -199,7 +199,7 @@ class TestImplicitDiscriminatorBackCompat:
             )
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -224,7 +224,7 @@ class TestImplicitDiscriminatorBackCompat:
             )
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -297,7 +297,7 @@ class TestExplicitActionCreate:
             side_effect=_make_simple_handler(helper_type="input_boolean")
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -382,7 +382,7 @@ class TestExplicitActionUpdate:
             )
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -408,7 +408,7 @@ class TestExplicitActionUpdate:
             )
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):

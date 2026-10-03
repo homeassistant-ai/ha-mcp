@@ -43,13 +43,11 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, tools_config_helpers
+from ha_mcp.tools import component_api, helper_registry, tools_config_helpers
 from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
-from ha_mcp.tools.tools_config_helpers import (
-    SIMPLE_HELPER_TYPES,
-    _shape_collection_helper_record,
-    register_config_helper_tools,
-)
+from ha_mcp.tools.helper_listing import _shape_collection_helper_record
+from ha_mcp.tools.helper_schemas import SIMPLE_HELPER_TYPES
+from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
 from ._component_routing_helpers import (
     make_ws,
@@ -411,10 +409,7 @@ async def test_all_types_merge_surfaces_legacy_enrichment_warning() -> None:
     ``_legacy_helper_list("tag")``; its registry read then fails, and the
     degrade-open warning must reach the merged response rather than vanish.
     """
-    covered = sorted(
-        (tools_config_helpers.SIMPLE_HELPER_TYPES - {"tag"})
-        | tools_config_helpers.FLOW_HELPER_TYPES
-    )
+    covered = sorted((SIMPLE_HELPER_TYPES - {"tag"}) | FLOW_HELPER_TYPES)
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
@@ -427,7 +422,7 @@ async def test_all_types_merge_surfaces_legacy_enrichment_warning() -> None:
         resp = await list_helpers(helper_type="all")
 
     assert resp["success"] is True
-    assert tools_config_helpers._REGISTRY_JOIN_STALE_WARNING in resp.get("warnings", [])
+    assert helper_registry._REGISTRY_JOIN_STALE_WARNING in resp.get("warnings", [])
 
 
 @pytest.mark.asyncio

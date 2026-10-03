@@ -25,7 +25,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ha_mcp.tools import component_api, tools_config_helpers
+from ha_mcp.tools import (
+    component_api,
+    helper_listing,
+    helper_registry,
+    tools_config_helpers,
+)
+from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
+from ha_mcp.tools.helper_schemas import SIMPLE_HELPER_TYPES
 from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 from ha_mcp.tools.tools_groups import GroupTools
 from ha_mcp.tools.tools_resources import ResourceTools
@@ -261,14 +268,14 @@ class TestFlattenHelperListResult:
 
     def test_unrecognised_result_type_is_logged(self, caplog):
         with caplog.at_level("WARNING"):
-            items = tools_config_helpers._flatten_helper_list_result("not a shape")
+            items = helper_registry._flatten_helper_list_result("not a shape")
 
         assert items == []
         assert any("Cannot flatten" in rec.message for rec in caplog.records)
 
     def test_split_shape_without_the_expected_lists_is_logged(self, caplog):
         with caplog.at_level("WARNING"):
-            items = tools_config_helpers._flatten_helper_list_result(
+            items = helper_registry._flatten_helper_list_result(
                 {"result": {"unexpected": [{"id": "p1"}]}}
             )
 
@@ -278,7 +285,7 @@ class TestFlattenHelperListResult:
     def test_empty_person_split_is_not_flagged(self, caplog):
         """A person type with no entries is legitimately empty, not malformed."""
         with caplog.at_level("WARNING"):
-            items = tools_config_helpers._flatten_helper_list_result(
+            items = helper_registry._flatten_helper_list_result(
                 {"result": {"storage": [], "config": []}}
             )
 
@@ -287,10 +294,10 @@ class TestFlattenHelperListResult:
 
     def test_known_shapes_are_not_flagged(self, caplog):
         with caplog.at_level("WARNING"):
-            flat = tools_config_helpers._flatten_helper_list_result(
+            flat = helper_registry._flatten_helper_list_result(
                 {"result": [{"id": "h1"}]}
             )
-            split = tools_config_helpers._flatten_helper_list_result(
+            split = helper_registry._flatten_helper_list_result(
                 {"result": {"storage": [{"id": "p1"}], "config": [{"id": "p2"}]}}
             )
 
@@ -316,7 +323,7 @@ class TestPaginateHelpersGuard:
             "helpers": {"storage": [], "config": []},
         }
 
-        result = tools_config_helpers._paginate_helpers_response(envelope, 0, 100)
+        result = helper_listing._paginate_helpers_response(envelope, 0, 100)
 
         assert result["helpers"] == envelope["helpers"]
         assert set(result) & _PAGINATION_KEYS == {"count"}, (
@@ -333,7 +340,7 @@ class TestPaginateHelpersGuard:
             "warnings": ["served via legacy path"],
         }
 
-        result = tools_config_helpers._paginate_helpers_response(envelope, 0, 100)
+        result = helper_listing._paginate_helpers_response(envelope, 0, 100)
 
         assert result["warnings"][0] == "served via legacy path"
         assert len(result["warnings"]) == 2
@@ -444,10 +451,7 @@ class TestListHelpersPagination:
                 for i in range(120)
             ],
             "count": 120,
-            "covered_types": sorted(
-                tools_config_helpers.SIMPLE_HELPER_TYPES - {"tag"}
-                | tools_config_helpers.FLOW_HELPER_TYPES
-            ),
+            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | FLOW_HELPER_TYPES),
         }
         caps = {
             "schema_version": 1,
@@ -503,10 +507,7 @@ class TestListHelpersPagination:
         component_result = {
             "helpers": [],
             "count": 0,
-            "covered_types": sorted(
-                tools_config_helpers.SIMPLE_HELPER_TYPES - {"tag"}
-                | tools_config_helpers.FLOW_HELPER_TYPES
-            ),
+            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | FLOW_HELPER_TYPES),
         }
 
         class _MalformedTagClient:
@@ -551,10 +552,7 @@ class TestListHelpersPagination:
                 for i in range(120)
             ],
             "count": 120,
-            "covered_types": sorted(
-                tools_config_helpers.SIMPLE_HELPER_TYPES - {"tag"}
-                | tools_config_helpers.FLOW_HELPER_TYPES
-            ),
+            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | FLOW_HELPER_TYPES),
         }
         caps = {
             "schema_version": 1,

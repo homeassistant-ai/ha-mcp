@@ -101,7 +101,7 @@ class TestInputSelectUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -135,7 +135,7 @@ class TestInputSelectUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -165,7 +165,7 @@ class TestInputNumberUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -206,7 +206,7 @@ class TestInputTextUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -242,7 +242,7 @@ class TestInputBooleanUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -274,7 +274,7 @@ class TestInputDatetimeUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -308,7 +308,7 @@ class TestCounterUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -348,7 +348,7 @@ class TestTimerUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -382,7 +382,7 @@ class TestInputButtonUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -418,7 +418,7 @@ class TestEntityRegistryFallback:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -1244,7 +1244,7 @@ class TestOptionalNameOnUpdate:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):

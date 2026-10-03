@@ -676,7 +676,7 @@ class TestWriteFlowErrorSchemaRedaction:
 
     @pytest.mark.asyncio
     async def test_flow_helper_error_context_redacts_schema(self, redact_on):
-        from ha_mcp.tools.tools_config_helpers import _flow_helper_error_context
+        from ha_mcp.tools.helper_flow import _flow_helper_error_context
 
         client = AsyncMock()
         client.start_config_flow = AsyncMock(

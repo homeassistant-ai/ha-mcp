@@ -40,6 +40,7 @@ from .blueprint_substitute import (
     validate_write_modes,
 )
 from .entity_registration import resolve_entity_id_after_write
+from .helper_registry import validate_registry_ids
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -49,7 +50,6 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
-from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
     apply_entity_category,

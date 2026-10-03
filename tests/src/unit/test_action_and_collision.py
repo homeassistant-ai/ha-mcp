@@ -176,7 +176,7 @@ class TestBug11RenameOnUpdateIsAllowed:
             side_effect=_make_simple_handler(helper_type="input_boolean")
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -197,7 +197,7 @@ class TestBug11RenameOnUpdateIsAllowed:
             )
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -220,7 +220,7 @@ class TestBug11RenameOnUpdateIsAllowed:
             )
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -294,7 +294,7 @@ class TestBug12NameCollisionSimpleHelpers:
             )
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.helper_create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -345,7 +345,7 @@ class TestBug12NameCollisionFlowHelper:
         # collision check fires before HA is called.
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.create_flow_helper",
+                "ha_mcp.tools.helper_flow.create_flow_helper",
                 new_callable=AsyncMock,
                 return_value={
                     "entry_id": "shouldnotbecreated",
@@ -377,7 +377,7 @@ class TestBug12NameCollisionFlowHelper:
             )
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.create_flow_helper",
+            "ha_mcp.tools.helper_flow.create_flow_helper",
             new_callable=AsyncMock,
             return_value={
                 "entry_id": "NEWENTRY",
