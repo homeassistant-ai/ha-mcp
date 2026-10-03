@@ -4,6 +4,20 @@ from typing import Any, TypedDict
 
 from .util_helpers import attach_skill_content
 
+__all__ = [
+    "SIMPLE_HELPER_SCHEMAS",
+    "SIMPLE_HELPER_TYPES",
+    "_ALL_TYPED_PARAMS",
+    "_HELPER_SKILL_FILES",
+    "_INITIAL_PARAM_DESCRIPTION",
+    "_TYPE_TYPED_PARAMS",
+    "HelperResponse",
+    "_attach_helper_skill",
+    "_helper_response",
+    "_simple_helper_error_context",
+    "get_simple_helper_schema",
+]
+
 # helper-selection.md guides which helper type fits the agent's use case
 # (input_*, counter, timer, template, group, utility_meter, etc.).
 _HELPER_SKILL_FILES: tuple[str, ...] = ("references/helper-selection.md",)
