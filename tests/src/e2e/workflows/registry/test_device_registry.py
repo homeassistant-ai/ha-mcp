@@ -16,10 +16,11 @@ Key test scenarios:
 """
 
 import logging
+from typing import Any
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -717,6 +718,64 @@ class TestDeviceSet:
         logger.info(
             f"Non-existent device update correctly rejected: {update_data.get('error')}"
         )
+
+
+async def _device_for_entity(mcp_client: Any, entity_id: str) -> dict[str, Any]:
+    data = parse_mcp_result(
+        await mcp_client.call_tool("ha_get_device", {"entity_id": entity_id})
+    )
+    assert data.get("success"), f"Failed to resolve device of {entity_id}: {data}"
+    return data["device"]
+
+
+@pytest.mark.registry
+class TestDeviceSetBlankAndQuoteOnlyValues:
+    """Issue #2585: clients that cannot send ``''`` send ``'""'`` or ``' '``.
+
+    Wiring checks against real HA; the value table lives in the unit tests.
+    Each test uses a demo device no other e2e test touches and restores it.
+    """
+
+    async def test_quote_only_name_is_not_stored(self, mcp_client: Any) -> None:
+        name = '""'
+        device = await _device_for_entity(mcp_client, "sensor.total_gas_ft3")
+        device_id = device["device_id"]
+        original = device.get("name_by_user")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                data = await mcp.call_tool_failure(
+                    "ha_set_device", {"device_id": device_id, "name": name}
+                )
+            assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", data
+
+            after = await _device_for_entity(mcp_client, "sensor.total_gas_ft3")
+            assert after.get("name_by_user") == original, after
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_set_device",
+                {"device_id": device_id, "name": original or ""},
+            )
+
+    async def test_whitespace_name_clears_custom_name(self, mcp_client: Any) -> None:
+        device = await _device_for_entity(mcp_client, "number.small_range")
+        device_id = device["device_id"]
+        original = device.get("name_by_user")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                await mcp.call_tool_success(
+                    "ha_set_device", {"device_id": device_id, "name": "E2E 2585"}
+                )
+                data = await mcp.call_tool_success(
+                    "ha_set_device", {"device_id": device_id, "name": " "}
+                )
+            assert data["device_entry"]["name_by_user"] is None, data
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_set_device",
+                {"device_id": device_id, "name": original or ""},
+            )
 
 
 @pytest.mark.registry

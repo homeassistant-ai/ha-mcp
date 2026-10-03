@@ -1159,9 +1159,8 @@ class TestHaSetEntityCombined:
     ):
         """Registry lookup failure during device rename must mark response partial.
 
-        The user requested a device rename but the lookup that would identify the
-        target device failed — the rename was effectively skipped. ``partial: True``
-        signals to the agent that the operation didn't fully complete.
+        The rename was effectively skipped, so ``partial: True`` tells the agent
+        the operation didn't fully complete, and no device_name echo is claimed.
         """
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -1179,6 +1178,7 @@ class TestHaSetEntityCombined:
 
         assert result["success"] is True
         assert result.get("partial") is True
+        assert not any(u.startswith("device_name") for u in result["updates"])
         device_rename = result["device_rename"]
         assert device_rename.get("lookup_failed") is True
         assert any(
