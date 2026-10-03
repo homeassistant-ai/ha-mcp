@@ -5,8 +5,8 @@ custom component's config/options flow, and the two add-on flavors. Two of
 them are authored directly — the settings UI catalogs
 (``src/ha_mcp/settings_ui/locales/<code>.json``, the canonical store) and the
 component catalogs — while both add-on flavors' ``translations/*.yaml`` and
-the ``FEATURE_META`` block in ``settings.js`` are *generated* from the
-canonical store by ``scripts/generate_locales.py``
+the ``FEATURE_META`` block in ``settings_js/05_feature_flags.js`` are
+*generated* from the canonical store by ``scripts/generate_locales.py``
 (``test_derived_catalogs_match_the_canonical_store``). Cross-surface wording
 identity therefore holds by construction; what these tests police is the
 authored content.
@@ -706,9 +706,9 @@ def test_derived_catalogs_match_the_canonical_store() -> None:
     byte-identity tests over a hand-maintained pin of every shared (surface,
     key) place. Generation makes it hold by construction: both add-on
     flavors' ``translations/*.yaml`` and the ``FEATURE_META`` block in
-    ``settings.js`` are projections of the settings UI catalogs, so the one
-    check left is that the committed files are exactly what the generator
-    emits — same guarantee, no pin to maintain.
+    ``settings_js/05_feature_flags.js`` are projections of the settings UI
+    catalogs, so the one check left is that the committed files are exactly
+    what the generator emits — same guarantee, no pin to maintain.
     """
     assert generate_locales.check() == 0
 
@@ -886,7 +886,7 @@ def _renderable_groups_and_tools() -> tuple[frozenset[str], frozenset[str]]:
     return groups, names
 
 
-# ``settings.js`` renders a tool row's description as
+# ``settings_js/`` renders a tool row's description as
 # ``(t.description || '').split('\n')[0].slice(0, 120)``. Both cuts model the
 # same thing — the text a translator can actually see and paste.
 _DISPLAYED_DESCRIPTION_CHARS = 120
@@ -897,7 +897,7 @@ def _english_tool_texts(*, as_rendered: bool = True) -> dict[str, str]:
     """English tool titles and descriptions, keyed like a flat catalog.
 
     What a translator has on screen is what a paste is of, so that is what a
-    translated value is compared against: ``settings.js`` cuts a description
+    translated value is compared against: ``settings_js/`` cuts a description
     at the first newline and then at 120 characters, and both halves of that
     cut belong here. Leaving the second one out let a paste of the two
     descriptions that outrun 120 characters — ``ha_get_state`` at 130 and
@@ -947,7 +947,7 @@ def test_settings_ui_locales_are_discovered() -> None:
 def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
     """Both sections are keyed off the tool catalog, and nothing checked it.
 
-    ``settings.js`` resolves a group heading by ``primary_tag`` and falls
+    ``settings_js/`` resolves a group heading by ``primary_tag`` and falls
     back to English on any key it does not find, so a stale or misspelled
     entry is invisible: ``build_payload`` happily ships it and nothing reads
     it. The reverse direction is the one that actually bites — a new tool, or

@@ -52,7 +52,7 @@ name: Locale Sync
 # holds no credential beyond the rotatable API key for its free-tier Gemini
 # project; the push job runs on a fresh runner against a fresh clone, executes
 # only git (no hooks or project code), and refuses any patch touching files
-# outside the locale allowlist — data-only catalogs; settings.js is deliberately
+# outside the locale allowlist — data-only catalogs; settings_js/ is deliberately
 # not exportable (see the export step). A compromised dependency in the
 # translate job can therefore corrupt at most the locale catalogs the
 # pipeline legitimately writes — never reach the ruleset-bypassing push
@@ -151,7 +151,7 @@ jobs:
 
     - name: Export changes as a patch
       id: export
-      # settings.js is deliberately NOT staged: its generated FEATURE_META
+      # settings_js/ is deliberately NOT staged: its generated FEATURE_META
       # block derives from en.json alone, which this pipeline never touches
       # — PR CI's ungated derived-catalogs check keeps it current — so the
       # sync never legitimately changes the file, and excluding it means no

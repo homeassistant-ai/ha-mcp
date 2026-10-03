@@ -8,7 +8,8 @@ committed at the fixed paths Supervisor and the web UI read them from:
 
 - ``homeassistant-addon/translations/<code>.yaml``
 - ``homeassistant-addon-dev/translations/<code>.yaml``
-- the ``FEATURE_META`` block in ``src/ha_mcp/settings_ui/settings.js``
+- the ``FEATURE_META`` block in
+  ``src/ha_mcp/settings_ui/settings_js/05_feature_flags.js``
 
 Each add-on flavor's key list comes from its own ``config.yaml`` ``schema:``,
 so the two flavors project different subsets of the one canonical store. Per
@@ -28,7 +29,7 @@ instead of returning failure.
 
 ``FEATURE_META`` (the settings UI's English fallback for feature rows, and
 the row order) is generated from ``en.json``'s ``features.*`` keys between
-marker comments in ``settings.js``.
+marker comments in ``settings_js/05_feature_flags.js``.
 
 Usage::
 
@@ -52,7 +53,9 @@ from ha_mcp.settings_ui._locale_policy import is_best_effort_locale
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCALES_DIR = REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
-SETTINGS_JS = REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "settings.js"
+SETTINGS_JS = (
+    REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "settings_js" / "05_feature_flags.js"
+)
 ADDON_FLAVORS = {
     "stable": REPO_ROOT / "homeassistant-addon",
     "dev": REPO_ROOT / "homeassistant-addon-dev",
@@ -199,7 +202,7 @@ def addon_yaml(
 
 
 def feature_meta_block(english: dict[str, str]) -> str:
-    """The generated ``FEATURE_META`` region for ``settings.js``.
+    """The generated ``FEATURE_META`` region for the settings script.
 
     English fallback for feature rows when the i18n payload lacks a
     ``features.<field>`` key; the object's key order is the row render order
@@ -230,7 +233,7 @@ def feature_meta_block(english: dict[str, str]) -> str:
 
 
 def settings_js_with_block(block: str) -> str:
-    """``settings.js`` with the marker region replaced by ``block``."""
+    """The ``FEATURE_META`` part file with the marker region replaced by ``block``."""
     text = SETTINGS_JS.read_text(encoding="utf-8")
     begin = text.find(FEATURE_META_BEGIN)
     end = text.find(FEATURE_META_END)

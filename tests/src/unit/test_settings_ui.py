@@ -685,8 +685,8 @@ class TestAccessibilityMarkup:
 
 
 class TestSettingsJsExtraction:
-    """The client JS lives in settings.js (extracted from the Python string)
-    but is injected inline into the served HTML. These guards lock the file
+    """The client JS lives in the settings_js/ parts (extracted from the Python
+    string) but is injected inline into the served HTML. These guards lock the file
     and the rendered page together so they can never silently drift.
     """
 
@@ -753,7 +753,7 @@ class TestSettingsJsExtraction:
 class TestSettingsCssExtraction:
     """The page CSS lives in settings.css (extracted from the Python string)
     but is injected inline into the served HTML's <style> block, mirroring the
-    settings.js mechanism. These guards lock the file and the rendered page
+    settings_js/ mechanism. These guards lock the file and the rendered page
     together so they can never silently drift.
     """
 

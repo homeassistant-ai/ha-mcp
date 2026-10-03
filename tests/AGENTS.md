@@ -201,7 +201,7 @@ Other available helpers: `wait_for_entity_state()`, `wait_for_condition()`, `wai
 ## JS Behaviour Testing (`tests/js/`, `tests/src/unit/_js_harness.py`)
 
 Every rendered `<script>` body in the repo (`src/ha_mcp/settings_ui/` — page
-HTML in `settings.html`, client JS in `settings.js`;
+HTML in `settings.html`, client JS in `settings_js/`;
 `src/ha_mcp/auth/consent_form.py`; every `.astro` page under `site/src/`)
 gets parse coverage automatically via
 `tests/src/unit/test_rendered_scripts_parse.py`. The discovery walker in
