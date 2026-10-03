@@ -70,8 +70,8 @@ class TestWsEventWaiter:
         cleanup_tracker.track("input_number", entity_id)
 
         warnings = data.get("warnings") or []
-        # "not yet queryable" is the exact substring tools_config_helpers
-        # emits when the inline wait_for_entity_registered call timed out
+        # "not yet queryable" is the exact substring the helper tools
+        # (config_helpers/create.py, config_helpers/update.py) emit when the inline wait_for_entity_registered call timed out
         # (search the source for "not yet queryable" to find the emit sites).
         # Its presence here means the WS waiter timed out.
         offending = [w for w in warnings if "not yet queryable" in str(w)]

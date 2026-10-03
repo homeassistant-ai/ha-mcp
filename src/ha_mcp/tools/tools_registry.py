@@ -25,6 +25,7 @@ from .component_devices import (
     fetch_device_list_via_component,
     fetch_device_via_component,
 )
+from .config_helpers.registry import validate_registry_ids
 from .device_enrichment import (
     enrich_matter_diagnostics,
     enrich_zha_metrics,
@@ -39,7 +40,6 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
     build_pagination_metadata,

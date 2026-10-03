@@ -121,7 +121,7 @@ class TestShorthandAliasesAccepted:
 
     async def test_min_alias_accepted_on_create(self, helper_tool, mock_client):
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -144,7 +144,7 @@ class TestShorthandAliasesAccepted:
 
     async def test_max_alias_accepted_on_create(self, helper_tool, mock_client):
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -166,7 +166,7 @@ class TestShorthandAliasesAccepted:
 
     async def test_unit_alias_accepted_on_create(self, helper_tool, mock_client):
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -190,7 +190,7 @@ class TestShorthandAliasesAccepted:
     async def test_all_aliases_accepted_together(self, helper_tool, mock_client):
         """The realistic case from the bug report: min/max/unit all shorthand."""
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -215,7 +215,7 @@ class TestShorthandAliasesAccepted:
     async def test_aliases_accepted_on_update(self, helper_tool, mock_client):
         """Update path must also honour the aliases (same schema, same code)."""
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -241,7 +241,7 @@ class TestCanonicalStillWorks:
 
     async def test_canonical_names_still_accepted(self, helper_tool, mock_client):
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):

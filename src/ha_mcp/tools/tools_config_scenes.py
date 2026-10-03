@@ -37,6 +37,7 @@ from ..utils.python_sandbox import (
 )
 from .auto_backup import with_auto_backup
 from .component_config_reads import fetch_entity_lookup_via_component
+from .config_helpers.registry import validate_registry_ids
 from .entity_registration import resolve_entity_id_after_write
 from .helpers import (
     exception_to_structured_error,
@@ -47,7 +48,6 @@ from .helpers import (
 )
 from .reference_validator import validate_config_references
 from .scene_discovery import discover_scenes
-from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
     apply_entity_category,
