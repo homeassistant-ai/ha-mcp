@@ -4478,23 +4478,23 @@
   {
     "name": "ha_report_issue",
     "title": "Report Issue or Feedback",
-    "description": "Get diagnostics and a finished GitHub issue for a bug report or agent feedback.\n\nUse it when the user reports an ha-mcp error, failure or wrong result,\nor says you used the wrong tool or worked inefficiently. If it is\nunclear which, ask: \"Are you reporting a bug in ha-mcp, or providing\nfeedback on how I used the tools?\"\n\nPass the report text in the call: the server combines it with the\ndiagnostics it collects into `issue_title`, `issue_body` (the full\nreport with logs) and `issue_url` (a new-issue link with title and\nbody filled in, log sections left out to fit GitHub's URL limit;\nerror messages stay in, with secrets redacted). A call\nwithout text still returns diagnostics, with placeholders in the body.\n\nThe response is LARGE; `fields=` narrows it. Read `instructions`\nbefore showing anything to the user: it covers the missing-tool and\nknown-client pre-checks, the duplicate check, the mandatory\nanonymisation step, and how to file the issue. Check\n`missing_tool_hint` FIRST when the report is about a missing tool: a\nstale client tool list (not a bug) is the usual cause.",
+    "description": "Get diagnostics and a finished GitHub issue for a bug, agent feedback or a feature request.\n\nUse it before filing any GitHub issue about ha-mcp: a bug report\nwithout this report is closed after 24 hours. `report_type` picks\nthe kind of report; if it is unclear which, ask: \"Are you reporting a\nbug in ha-mcp, giving feedback on how I used the tools, or requesting\na feature?\"\n\nPass the report text in the call: the server combines it with the\ndiagnostics it collects into `issue_title`, `issue_body` (the full\nreport with logs) and `issue_url` (a new-issue link with title and\nbody filled in, log sections left out to fit GitHub's URL limit;\nerror messages stay in, with secrets redacted). A call\nwithout text still returns diagnostics, with placeholders in the body.\n\nThe response is LARGE; `fields=` narrows it. Read `instructions`\nbefore showing anything to the user: it covers the missing-tool and\nknown-client pre-checks, the duplicate check, the mandatory\nanonymisation step, and how to file the issue. Check\n`missing_tool_hint` FIRST when the report is about a missing tool: a\nstale client tool list (not a bug) is the usual cause.",
     "inputSchema": {
       "properties": {
         "report_type": {
-          "type": "Literal['runtime_bug', 'agent_behavior']",
+          "type": "Literal['runtime_bug', 'agent_behavior', 'feature_request']",
           "default": "runtime_bug",
-          "description": "'runtime_bug' when ha-mcp errored or behaved wrongly; 'agent_behavior' when the user says you used the wrong tool or worked inefficiently."
+          "description": "'runtime_bug' when ha-mcp errored or behaved wrongly; 'agent_behavior' when the user says you used the wrong tool or worked inefficiently; 'feature_request' when the user wants ha-mcp to do something it cannot do yet."
         },
         "title": {
           "type": "str | None",
           "default": null,
-          "description": "One-line summary of what broke, for the issue title."
+          "description": "One-line summary of what broke or what is requested, for the issue title."
         },
         "description": {
           "type": "str | None",
           "default": null,
-          "description": "What went wrong in markdown: steps to reproduce, expected and actual behavior. For agent_behavior: what you did and what you should have done."
+          "description": "What went wrong in markdown: steps to reproduce, expected and actual behavior. For agent_behavior: what you did and what you should have done. For feature_request: what ha-mcp should do, why the user needs it, and what you tried."
         },
         "user_prompt": {
           "type": "str | None",
