@@ -85,7 +85,7 @@ _backup_stub.DATA_MANAGER = "backup"
 sys.modules.setdefault("homeassistant.components.backup", _backup_stub)
 
 # Server-side scoring path the component must stay in parity with.
-from ha_mcp.tools.tools_search import _match_exact_search_entity  # noqa: E402
+from ha_mcp.tools.search.entities import _match_exact_search_entity  # noqa: E402
 from ha_mcp.utils.fuzzy_search import calculate_ratio  # noqa: E402
 
 from ._component_ws_api import COMPONENT_VERSION, wsapi  # noqa: E402

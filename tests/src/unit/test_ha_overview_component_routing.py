@@ -31,7 +31,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import tools_search
+from ha_mcp.tools.search import overview as search_overview
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.visibility import resolver
@@ -206,7 +206,7 @@ async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -239,7 +239,7 @@ async def test_pre_child_semantics_overview_capability_uses_legacy(
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -294,7 +294,7 @@ async def test_component_overview_drops_inactive_placeholder_repairs(
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         resp = await overview(detail_level="minimal")
 
     assert resp["repair_count"] == 1
@@ -317,7 +317,7 @@ async def test_caps_probed_once_across_overviews(tmp_path, monkeypatch) -> None:
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         await overview(detail_level="standard")
         await overview(detail_level="standard")
 
@@ -340,7 +340,7 @@ async def test_unknown_command_falls_back_silently(tmp_path, monkeypatch) -> Non
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -366,7 +366,7 @@ async def test_raised_command_falls_back_with_warning(tmp_path, monkeypatch) -> 
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -390,7 +390,7 @@ async def test_command_timeout_falls_back_with_warning(tmp_path, monkeypatch) ->
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -418,7 +418,7 @@ async def test_ws_establish_failure_falls_back_with_warning(
 
     with patch_ws_establish_failure(
         caps_ws,
-        tools_search,
+        search_overview,
         HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await overview(detail_level="standard")
@@ -446,7 +446,7 @@ async def test_malformed_slice_falls_back_with_warning(tmp_path, monkeypatch) ->
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -469,7 +469,7 @@ async def test_slice_errors_falls_back_with_warning(tmp_path, monkeypatch) -> No
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -494,7 +494,7 @@ async def test_capsless_client_uses_legacy(tmp_path, monkeypatch) -> None:
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         resp = await overview(detail_level="standard")
 
     assert resp["success"] is True
@@ -536,7 +536,7 @@ async def test_visibility_active_still_routes_through_component(
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         resp = await overview(detail_level="standard")
 
     # The component overview command runs even with the filter active.
@@ -580,7 +580,7 @@ async def test_component_and_legacy_parity_visibility_active(
         ),
     )
     client_legacy = OverviewRoutingClient()
-    with patch_ws(ws_legacy, tools_search):
+    with patch_ws(ws_legacy, search_overview):
         legacy = await _build_overview_tool(client_legacy)(detail_level="standard")
 
     # Component run: the same eight reads, delivered as raw slices in one call.
@@ -590,7 +590,7 @@ async def test_component_and_legacy_parity_visibility_active(
         cmd_result=_overview_slices(),
     )
     client_component = OverviewRoutingClient()
-    with patch_ws(ws_component, tools_search):
+    with patch_ws(ws_component, search_overview):
         component = await _build_overview_tool(client_component)(
             detail_level="standard"
         )
@@ -619,7 +619,7 @@ async def test_enabled_but_no_active_dimension_still_uses_component(
     client = OverviewRoutingClient()
     overview = _build_overview_tool(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_overview):
         await overview(detail_level="standard")
 
     assert any(
@@ -650,7 +650,7 @@ async def test_component_and_legacy_response_parity(tmp_path, monkeypatch) -> No
         ),
     )
     client_legacy = OverviewRoutingClient()
-    with patch_ws(ws_legacy, tools_search):
+    with patch_ws(ws_legacy, search_overview):
         legacy = await _build_overview_tool(client_legacy)(detail_level="standard")
 
     # Component run: the same eight reads, delivered as raw slices in one call.
@@ -660,7 +660,7 @@ async def test_component_and_legacy_response_parity(tmp_path, monkeypatch) -> No
         cmd_result=_overview_slices(),
     )
     client_component = OverviewRoutingClient()
-    with patch_ws(ws_component, tools_search):
+    with patch_ws(ws_component, search_overview):
         component = await _build_overview_tool(client_component)(
             detail_level="standard"
         )

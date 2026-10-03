@@ -14,7 +14,7 @@ transforms over that raw shape.
 This module owns the caps-gated fetch so the routing discipline — probe caps,
 send one frame, invalidate on ``unknown_command``, fall back to the legacy path
 on any component error — lives in one place instead of being duplicated per
-consumer (the pattern ``tools_search._fetch_states_via_component`` established
+consumer (the pattern ``search.state._fetch_states_via_component`` established
 for the ``states`` capability). Both helpers return ``None`` to mean "component
 unavailable — use the legacy path"; a component that answers authoritatively
 returns its payload (with ``device`` possibly ``None`` for "no such device").

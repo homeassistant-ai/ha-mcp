@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.tools_search import (
+from ha_mcp.tools.search.entities import (
     _add_membership_fields,
     _entity_enrichment_fields,
-    register_search_tools,
 )
+from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.tools.util_helpers import project_fields
 
 

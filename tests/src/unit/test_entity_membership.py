@@ -2,8 +2,8 @@
 
 from types import MappingProxyType
 
+from ha_mcp.tools.search.entities import _add_membership_fields
 from ha_mcp.tools.smart_search._entities import _redact_hidden_memberships
-from ha_mcp.tools.tools_search import _add_membership_fields
 from ha_mcp.utils.entity_membership import normalize_member_entity_ids
 
 

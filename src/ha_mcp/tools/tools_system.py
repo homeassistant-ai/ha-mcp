@@ -58,7 +58,7 @@ WS_SYSTEM_SNAPSHOT = "ha_mcp_tools/system_snapshot"
 class _SystemSnapshotSlices:
     """The component's ``system_snapshot`` slices, re-wrapped for the section
     helpers that already unwrap the legacy ``{success, result}`` WS envelope
-    (mirrors ``ha_get_overview``'s ``_OverviewSlices`` in ``tools_search.py``).
+    (mirrors ``ha_get_overview``'s ``_OverviewSlices`` in ``search/overview.py``).
 
     ``config_entries`` / ``repairs`` / ``registry`` are wrapped in the
     ``{success, result}`` envelope ``_fetch_zwave_network`` /
