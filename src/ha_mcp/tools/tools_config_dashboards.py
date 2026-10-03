@@ -996,7 +996,7 @@ async def _component_dashboard_config(
 
 # --- Cross-dashboard search walk (component-less legacy path) -----------------
 # Byte-for-byte port of the component's ``_search_dashboard_docs`` walk
-# (custom_components/ha_mcp_tools/websocket_api.py) so a component-less install
+# (custom_components/ha_mcp_tools/ws_dashboards.py) so a component-less install
 # gets the SAME cross-dashboard ``search`` matches, just at N+1 WS cost. The two
 # implementations are pinned equal by test_component_dashboards_contract.py.
 

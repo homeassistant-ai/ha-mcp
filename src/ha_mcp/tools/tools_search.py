@@ -1230,7 +1230,7 @@ def _merge_sort_key(record: dict[str, Any]) -> str:
 
     The component cuts its window with ``(-score, _sort_key)`` where
     ``_sort_key`` is ``str(entity_id or id or name or "")``
-    (``custom_components/ha_mcp_tools/websocket_api.py``); those fields ride
+    (``custom_components/ha_mcp_tools/ws_search.py``); those fields ride
     the wire records unchanged, so the merge reproduces the exact order that
     decided window membership. Dashboard records are outside the component
     corpus, so any deterministic key places them consistently across pages —
