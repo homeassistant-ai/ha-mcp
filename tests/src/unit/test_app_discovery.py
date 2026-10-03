@@ -75,10 +75,14 @@ async def test_posts_the_reachable_url(app, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_trailing_slash_is_dropped(app, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_custom_path_with_a_trailing_slash_is_announced_as_served(
+    app, monkeypatch: pytest.MonkeyPatch
+) -> None:
     app.write_text("/my-custom-path/")
     posts = await _announce(monkeypatch, _FakeSupervisor())
-    assert posts[0][1]["config"]["url"] == "http://local-ha-mcp-dev:9583/my-custom-path"
+    assert (
+        posts[0][1]["config"]["url"] == "http://local-ha-mcp-dev:9583/my-custom-path/"
+    )
 
 
 @pytest.mark.asyncio

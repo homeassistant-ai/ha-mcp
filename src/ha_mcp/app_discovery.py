@@ -73,9 +73,10 @@ async def announce_mcp_discovery() -> None:
                     "Supervisor reported no app hostname; MCP discovery skipped."
                 )
                 return
-            # Starlette redirects a trailing slash, and Core's client does not
-            # follow redirects.
-            url = f"http://{hostname}:{APP_PORT}{secret_path.rstrip('/')}"
+            # Exactly the route start.py serves: Starlette redirects any path
+            # that differs only by a trailing slash, and Core's client does
+            # not follow redirects.
+            url = f"http://{hostname}:{APP_PORT}{secret_path}"
             response = await client.post(
                 "/discovery", json={"service": "mcp", "config": {"url": url}}
             )
