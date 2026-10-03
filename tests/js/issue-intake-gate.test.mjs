@@ -122,7 +122,7 @@ test("answering a labeled issue clears the label and rewrites the warning", asyn
   const api = new FakeGitHub(s);
   assert.equal(await gate(api, "test/repo", 1, bot, edited, true), "clear");
   assert.deepEqual(writes(api), [
-    ["DELETE", `repos/test/repo/issues/1/labels/${gateLabel}`],
+    ["DELETE", `repos/test/repo/issues/1/labels/${encodeURIComponent(gateLabel)}`],
     ["PATCH", "repos/test/repo/issues/comments/5"],
   ]);
   assert.match(api.writes[1].data.body, /^<!-- ha-mcp-report-gate -->\nThanks/);
@@ -135,7 +135,7 @@ test("answering an issue the gate closed reopens it and clears the label", async
   assert.equal(await gate(api, "test/repo", 1, bot, edited, true), "reopen");
   assert.deepEqual(writes(api), [
     ["PATCH", "repos/test/repo/issues/1"],
-    ["DELETE", `repos/test/repo/issues/1/labels/${gateLabel}`],
+    ["DELETE", `repos/test/repo/issues/1/labels/${encodeURIComponent(gateLabel)}`],
     ["PATCH", "repos/test/repo/issues/comments/5"],
   ]);
   assert.deepEqual(api.writes[0].data, { state: "open" });

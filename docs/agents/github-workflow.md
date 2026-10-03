@@ -66,7 +66,7 @@ Triage-state labels:
 | `ready-to-implement` | Clear path with no unresolved decisions. |
 | `needs-choices` | Multiple approaches need stakeholder input. |
 | `needs-info` | Awaiting the reporter. Any label application starts reminders on days 3/5/6 and closure on day 7; a reporter reply after labeling removes it. See [issue intake](issue-intake.md). |
-| `needs-report` | A bug report with neither an `ha_report_issue` report nor a reason. The report gate applies it and closes the issue after 24 hours; adding either clears it, and a maintainer removing it waives the requirement. See [issue intake](issue-intake.md#report-gate). |
+| `missing bug report output` | A bug report with neither an `ha_report_issue` report nor a reason. The report gate applies it and closes the issue after 24 hours; adding either clears it, and a maintainer removing it waives the requirement. See [issue intake](issue-intake.md#report-gate). |
 | `priority: high/medium/low` | Relative priority. |
 | `triaged` | Historical marker from the retired triage bot. |
 | `triage-failed` | Historical failure marker from the retired triage bot. |
@@ -195,7 +195,7 @@ summary only when the pull request actually reaches that state.
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
 | `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides, after the report gate. |
-| `report-gate.yml` | Hourly or manual | Close bug reports whose `needs-report` label is 24 hours old. |
+| `report-gate.yml` | Hourly or manual | Close bug reports whose `missing bug report output` label is 24 hours old. |
 | `codex-review-issues.yml` | Manual | Write a read-only open-issue report to Actions logs. |
 | `codex-review-prs.yml` | Manual | Write a read-only open-PR report to Actions logs. |
 

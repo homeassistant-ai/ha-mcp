@@ -21,7 +21,7 @@ import {
 export const gateMarker = "<!-- ha-mcp-report-gate -->";
 // The label that starts the 24-hour clock. A maintainer removing it waives
 // the requirement for that issue.
-export const gateLabel = "needs-report";
+export const gateLabel = "missing bug report output";
 export const gateGraceHours = 24;
 // The issue forms' required report field. Anything typed there, "N/A"
 // included, counts as an answer.
@@ -224,7 +224,7 @@ async function applyGate(api, repository, number, bot, snapshot, action) {
   const unlabel = async () => {
     if (!snapshot.issue.labels.some((l) => l.name === gateLabel)) return;
     try {
-      await idempotent(`${base}/${number}/labels/${gateLabel}`, {
+      await idempotent(`${base}/${number}/labels/${encodeURIComponent(gateLabel)}`, {
         method: "DELETE",
       });
     } catch (error) {
@@ -277,7 +277,7 @@ export async function gate(api, repository, number, bot, event, write) {
 export async function expire(api, repository, bot, now, write) {
   const issues = await retrying(api, () =>
     api.request(
-      `repos/${repository}/issues?labels=${gateLabel}&state=open&per_page=100`,
+      `repos/${repository}/issues?labels=${encodeURIComponent(gateLabel)}&state=open&per_page=100`,
       { paginate: true },
     ),
   );

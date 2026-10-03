@@ -69,7 +69,7 @@ for blank and API-filed issues. Maintainers (write role or above), bots,
 `documentation` issues and feature requests (a `[FEATURE]` title or the
 `enhancement` label) are exempt.
 
-A failing issue gets the `needs-report` label and an App comment that mentions
+A failing issue gets the `missing bug report output` label and an App comment that mentions
 the reporter, says it will be closed in 24 hours, and says when it holds a
 report heading without the rest of the report. Only an opened issue, or one
 reopened by someone below the write role, is labeled, so an edit never starts

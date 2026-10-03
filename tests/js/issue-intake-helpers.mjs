@@ -83,7 +83,7 @@ export class FakeGitHub {
           });
         }
       } else if (path.includes("/labels/")) {
-        const name = path.split("/").at(-1);
+        const name = decodeURIComponent(path.split("/").at(-1));
         this.data.issue.labels = this.data.issue.labels.filter(
           (l) => l.name !== name,
         );

@@ -67,7 +67,7 @@ Keep this file short enough to load on every task:
 
 Do not create, edit, label, close, or comment on an issue or pull request without user authorization for that write. Draft the exact proposed text first when approval has not already been given.
 
-Every bug or agent-behavior issue filed here must contain the report `ha_report_issue` generates (its `issue_body`, unchanged), or a `### Why there is no ha_report_issue report` section saying why there is none (even "N/A"); feature requests should too. `issue-intake.yml` labels a new one that has neither `needs-report`, and `report-gate.yml` closes it after 24 hours unless one is added or a maintainer removes the label.
+Every bug or agent-behavior issue filed here must contain the report `ha_report_issue` generates (its `issue_body`, unchanged), or a `### Why there is no ha_report_issue report` section saying why there is none (even "N/A"); feature requests should too. `issue-intake.yml` labels a new one that has neither `missing bug report output`, and `report-gate.yml` closes it after 24 hours unless one is added or a maintainer removes the label.
 
 The detailed label taxonomy, issue-analysis query, bot behavior, review commands, CI loop, and release automation live in the [GitHub workflow reference](docs/agents/github-workflow.md).
 
