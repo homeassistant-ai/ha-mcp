@@ -23,8 +23,10 @@ from .errors import ErrorCode, create_error_response
 from .http_transport import HttpTransportFastMCP as FastMCP
 from .server_lifespan import server_lifespan
 from .server_tool_text import (
+    ISSUE_FILING_INSTRUCTIONS,
     LITE_DOCSTRING_DESTINATIONS,
     LITE_DOCSTRINGS,
+    READ_ONLY_INSTRUCTIONS,
     SEARCH_KEYWORDS,
     SEARCH_TOOL_DESCRIPTION,
     SKILL_USE_BEFORE_KEYWORDS,
@@ -129,28 +131,7 @@ class HomeAssistantSmartMCPServer:
             server_name = self.settings.mcp_server_name
             server_version = self.settings.mcp_server_version
 
-        # Build server instructions from bundled skills (if enabled)
-        instructions = self._build_skills_instructions()
-
-        # Surface Read Only Mode in the startup instructions so clients
-        # that show server instructions warn the model up front. Startup
-        # state only — live flips are covered by the structured
-        # READ_ONLY_MODE call errors and the ha_get_overview field.
-        if self.settings.read_only_mode:
-            read_only_note = (
-                "## Read Only Mode\n"
-                "This server is running in Read Only Mode: write-capable "
-                "tools are disabled and every write or destructive "
-                "operation is blocked with a READ_ONLY_MODE error. You can "
-                "search, read, and analyze freely. To allow changes, the "
-                "user must turn off Read Only Mode in the ha-mcp settings "
-                "UI (Tools tab) or the add-on configuration."
-            )
-            instructions = (
-                f"{instructions}\n\n{read_only_note}"
-                if instructions
-                else read_only_note
-            )
+        instructions = self._build_instructions()
 
         # Create FastMCP server with Home Assistant icons for client UI display
         self.mcp = FastMCP(
@@ -380,6 +361,22 @@ class HomeAssistantSmartMCPServer:
         except Exception:
             logger.debug("skill-tool visibility lookup failed", exc_info=True)
             return False
+
+    def _build_instructions(self) -> str:
+        """Compose the server instructions sent in the MCP initialize response."""
+        sections: list[str] = []
+        skills = self._build_skills_instructions()
+        if skills:
+            sections.append(skills)
+
+        # Surface Read Only Mode in the startup instructions so clients
+        # that show server instructions warn the model up front. Startup
+        # state only — live flips are covered by the structured
+        # READ_ONLY_MODE call errors and the ha_get_overview field.
+        if self.settings.read_only_mode:
+            sections.append(READ_ONLY_INSTRUCTIONS)
+        sections.append(ISSUE_FILING_INSTRUCTIONS)
+        return "\n\n".join(sections)
 
     def _build_skills_instructions(self) -> str | None:
         """Build server instructions from bundled skill frontmatter.

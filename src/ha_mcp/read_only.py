@@ -89,7 +89,7 @@ def read_only_remedy_hint() -> str:
     if get_global_settings().read_only_mode:
         return (
             "To allow changes, the user must turn off Read Only Mode in the "
-            "ha-mcp settings UI (Tools tab) or the add-on configuration."
+            "ha-mcp settings UI (Tools tab) or the app (add-on) configuration."
         )
     return "This connection is read-only. If changes are needed, ask the user."
 
@@ -135,7 +135,7 @@ def _addon_write(args: dict[str, Any]) -> str | None:
         return f"action={action!r}"
     for param in _ADDON_CONFIG_WRITE_PARAMS:
         if args.get(param) is not None:
-            return f"add-on configuration change ({param}=...)"
+            return f"app (add-on) configuration change ({param}=...)"
     if args.get("array_patch") is not None:
         return "array_patch modification"
     if args.get("websocket"):
