@@ -85,6 +85,41 @@ def test_classes_with_different_fields_are_not_copies() -> None:
     assert ratchet.find_copies({"a.py": first, "b.py": second}) == {}
 
 
+def test_class_fields_stay_apart_from_method_locals_of_the_same_name() -> None:
+    """A method's local variable must not make the class field of the same
+    name look renamed, or two classes with different fields would match."""
+    first = b"class A:\n    size = 1\n\n    def f(self):\n        size = 2\n        return size\n"
+    second = first.replace(b"A", b"B").replace(b"size", b"count")
+
+    groups = ratchet.find_copies({"a.py": first, "b.py": second})
+
+    assert list(groups.values()) == [["a.py::A.f", "b.py::B.f"]]
+
+
+def test_renamed_import_alias_and_nested_helper_are_still_copies() -> None:
+    """Both are names bound inside the function, like its variables."""
+    original = b"""
+def load(path):
+    import json as codec
+    def clean(text):
+        return text.strip()
+    return codec.loads(clean(open(path).read()))
+"""
+    renamed = original.replace(b"codec", b"decoder").replace(b"clean", b"tidy")
+
+    groups = ratchet.find_copies({"a.py": original, "b.py": renamed})
+
+    assert list(groups.values()) == [["a.py::load", "b.py::load"]]
+
+
+def test_imports_of_different_modules_are_not_copies() -> None:
+    """The imported module is what the code depends on, not a local name."""
+    first = b"def load(text):\n    import json\n    return json.loads(text)\n"
+    second = first.replace(b"json", b"yaml")
+
+    assert ratchet.find_copies({"a.py": first, "b.py": second}) == {}
+
+
 def test_one_statement_bodies_are_not_compared() -> None:
     """Stubs and one-line delegations would fill the baseline with noise."""
     stub = b"def f(x):\n    return g(x)\n"

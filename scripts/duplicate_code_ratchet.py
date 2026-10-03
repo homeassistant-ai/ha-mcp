@@ -66,27 +66,47 @@ def _without_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
 
 
 def _names_bound_in_functions(root: ast.AST) -> set[str]:
-    """Return the arguments and the names assigned inside functions.
+    """Return the names bound inside functions.
 
-    Class attributes are left out: they are the class's interface, and two
-    classes that differ only in their field names are not copies.
+    That is arguments, assigned names, exception targets, import aliases and
+    nested definitions. Class attributes and method names are left out: they
+    are the class's interface, and two classes that differ only in them are
+    not copies.
     """
     names: set[str] = set()
-    stack = [(root, isinstance(root, _FUNCTIONS))]
+    # Each node is paired with whether a function encloses it.
+    stack: list[tuple[ast.AST, bool]] = [(root, False)]
     while stack:
-        node, in_function = stack.pop()
+        node, inside = stack.pop()
         if isinstance(node, ast.arg):
             names.add(node.arg)
-        elif in_function and isinstance(node, ast.Name):
-            if not isinstance(node.ctx, ast.Load):
-                names.add(node.id)
-        elif in_function and isinstance(node, ast.ExceptHandler) and node.name:
-            names.add(node.name)
+        elif inside:
+            names.update(_bound_name(node))
         stack.extend(
-            (child, in_function or isinstance(child, _FUNCTIONS))
+            (child, inside or isinstance(node, _FUNCTIONS))
             for child in ast.iter_child_nodes(node)
         )
     return names
+
+
+def _bound_name(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+        return [node.id]
+    if isinstance(node, (ast.ExceptHandler, *_DEFS)) and node.name:
+        return [node.name]
+    if isinstance(node, ast.alias):
+        return [node.asname or node.name.partition(".")[0]]
+    return []
+
+
+def _binds(node: ast.AST, field: str) -> bool:
+    """Whether ``field`` of ``node`` is a name the node binds.
+
+    An import's ``name`` is the module, only its ``asname`` is bound.
+    """
+    if isinstance(node, ast.alias):
+        return field == "asname"
+    return field == "name" and isinstance(node, (ast.ExceptHandler, *_DEFS))
 
 
 class _Fingerprint:
@@ -132,7 +152,7 @@ class _Fingerprint:
         if isinstance(value, ast.stmt):
             self.statements += 1
         if isinstance(value, ast.Name):
-            parts.append(self._name(value.id))
+            parts.append(self._name(value.id) if in_function else value.id)
             parts.append(type(value.ctx).__name__)
             return
         if isinstance(value, ast.arg):
@@ -155,8 +175,8 @@ class _Fingerprint:
             child = getattr(node, field, None)
             if field == "body" and isinstance(node, _DEFS):
                 child = _without_docstring(node.body)
-            elif field == "name" and isinstance(node, ast.ExceptHandler) and node.name:
-                child = self._name(node.name)
+            elif in_function and child and _binds(node, field):
+                child = self._name(child)
             self._parts.append(field)
             self._dump(child, inner)
 
