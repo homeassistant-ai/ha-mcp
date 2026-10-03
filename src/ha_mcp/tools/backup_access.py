@@ -85,9 +85,11 @@ def require_backup_access(settings: "Settings", scope: str, action: str) -> None
                 },
                 suggestions=[
                     "Use scope='edits' to inspect per-edit backups.",
-                    "A human can enable snapshot actions in the Backups tab, app "
-                    "configuration, or ENABLE_SNAPSHOT_ACTIONS environment variable. "
-                    "Developer tools cannot change this control.",
+                    (
+                        "A human can enable snapshot actions in the Backups tab, app "
+                        "configuration, or ENABLE_SNAPSHOT_ACTIONS environment variable. "
+                        "Developer tools cannot change this control."
+                    ),
                 ],
             )
         )
@@ -100,11 +102,15 @@ def require_backup_access(settings: "Settings", scope: str, action: str) -> None
                 "Automatic pre-edit capture still follows enable_auto_backup.",
                 context={"scope": scope, "action": action, "backup_read_only": True},
                 suggestions=[
-                    "Use edits.list, edits.view, edits.diff, or snapshot.list "
-                    "when snapshot actions are enabled.",
-                    "A human can change Backup Read Only in the Backups tab, app "
-                    "configuration, or BACKUP_READ_ONLY environment variable. "
-                    "Developer tools cannot change this control.",
+                    (
+                        "Use edits.list, edits.view, edits.diff, or snapshot.list "
+                        "when snapshot actions are enabled."
+                    ),
+                    (
+                        "A human can change Backup Read Only in the Backups tab, app "
+                        "configuration, or BACKUP_READ_ONLY environment variable. "
+                        "Developer tools cannot change this control."
+                    ),
                 ],
             )
         )
