@@ -36,10 +36,7 @@ from ..utils.usage_logger import (
     get_recent_logs,
     get_startup_logs,
 )
-from .bug_report_config import (
-    _format_config_toggles_for_template as _format_config_toggles_for_template,
-    collect_config_toggles,
-)
+from .bug_report_config import collect_config_toggles
 from .bug_report_templates import (
     REPORT_END_MARKER,
     _build_issue_url,

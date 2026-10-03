@@ -69,10 +69,3 @@ def _tool_config_diagnostics(settings: Settings) -> dict[str, Any]:
             "ignored_disabled_tools": None,
             "tool_config_warnings": None,
         }
-
-
-def _format_config_toggles_for_template(toggles: dict[str, Any]) -> str:
-    """Render configuration and ignored-disable warnings for issue bodies."""
-    if not toggles:
-        return "_(config toggles unavailable)_"
-    return "\n".join(f"- **{key}:** `{value}`" for key, value in toggles.items())

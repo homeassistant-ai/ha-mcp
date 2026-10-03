@@ -101,6 +101,8 @@ async def test_tools_api_roundtrip_does_not_conflict_or_persist_env_entries(
 
 
 def test_report_uses_effective_config_counts_and_warns(monkeypatch) -> None:
+    from ha_mcp.tools.bug_report_templates import _format_config_toggles_for_template
+
     config = {"tools": {"ha_manage_backup": "disabled", "ha_restart": "disabled"}}
     monkeypatch.setattr(_persistence, "effective_tool_config", lambda settings: config)
     toggles = tools_bug_report._get_config_toggles(_settings())
@@ -110,7 +112,7 @@ def test_report_uses_effective_config_counts_and_warns(monkeypatch) -> None:
     assert toggles["ignored_disabled_tools"] == ["ha_manage_backup"]
     assert toggles["enable_snapshot_actions"] is False
     assert toggles["backup_read_only"] is True
-    rendered = tools_bug_report._format_config_toggles_for_template(toggles)
+    rendered = _format_config_toggles_for_template(toggles)
     assert "ha_manage_backup" in rendered
     assert "mandatory" in rendered
     assert "remains enabled" in rendered
@@ -120,6 +122,8 @@ def test_report_uses_effective_config_counts_and_warns(monkeypatch) -> None:
 def test_malformed_tool_config_keeps_known_settings_and_reports_unavailable(
     monkeypatch, tmp_path, caplog, raw_config
 ) -> None:
+    from ha_mcp.tools.bug_report_templates import _format_config_toggles_for_template
+
     path = tmp_path / "tool_config.json"
     path.write_text(json.dumps(raw_config))
     monkeypatch.setattr(_persistence, "_get_config_path", lambda: path)
@@ -133,7 +137,7 @@ def test_malformed_tool_config_keeps_known_settings_and_reports_unavailable(
     assert toggles["effective_disabled_tools_count"] is None
     assert "unavailable" in toggles["tool_config_status"]
     assert "tool configuration diagnostics" in caplog.text
-    rendered = tools_bug_report._format_config_toggles_for_template(toggles)
+    rendered = _format_config_toggles_for_template(toggles)
     assert "unavailable" in rendered
     assert "backup_read_only" in rendered
 
