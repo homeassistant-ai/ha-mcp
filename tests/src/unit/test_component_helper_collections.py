@@ -204,7 +204,8 @@ def test_invalid_errors_include_real_voluptuous(monkeypatch) -> None:
 
 
 def test_invalid_reports_every_error(monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "voluptuous", _REAL_VOL)
+    # The tuple is built at import, possibly while a sibling stubbed voluptuous.
+    monkeypatch.setattr(hc, "_INVALID_ERRORS", (ValueError, _REAL_VOL.Invalid))
     collection = FakeCollection()
     collection.invalid = _REAL_VOL.MultipleInvalid(
         [_REAL_VOL.Invalid("too low", path=["min"]),

@@ -34,6 +34,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.tools import helper_validation as hv
 from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
 from ha_mcp.tools.config_entry_flow_walker import fetch_helper_flow_info
 from ha_mcp.tools.tools_config_helpers import (
@@ -41,8 +42,6 @@ from ha_mcp.tools.tools_config_helpers import (
     SIMPLE_HELPER_TYPES,
     _extract_menu_choice_from_config,
     _flow_helper_error_context,
-    _simple_helper_error_context,
-    get_simple_helper_schema,
 )
 
 
@@ -192,7 +191,7 @@ class TestGetSimpleHelperSchema:
 
     def test_returns_schema_for_each_simple_type(self) -> None:
         for helper_type in SIMPLE_HELPER_TYPES:
-            schema = get_simple_helper_schema(helper_type)
+            schema = hv.get_simple_helper_schema(helper_type)
             assert schema is not None
             assert schema is SIMPLE_HELPER_SCHEMAS[helper_type]
 
@@ -200,10 +199,10 @@ class TestGetSimpleHelperSchema:
         # Flow helpers go through the HA flow API; the static dict has no
         # entry, and callers branch on the None to fall back.
         for helper_type in FLOW_HELPER_TYPES:
-            assert get_simple_helper_schema(helper_type) is None
+            assert hv.get_simple_helper_schema(helper_type) is None
 
     def test_returns_none_for_unknown_helper_type(self) -> None:
-        assert get_simple_helper_schema("not_a_real_helper") is None
+        assert hv.get_simple_helper_schema("not_a_real_helper") is None
 
 
 class TestSimpleHelperErrorContext:
@@ -212,12 +211,12 @@ class TestSimpleHelperErrorContext:
     attach the schema when one is registered."""
 
     def test_context_has_helper_type_and_schema(self) -> None:
-        ctx = _simple_helper_error_context("input_select")
+        ctx = hv._simple_helper_error_context("input_select")
         assert ctx["helper_type"] == "input_select"
         assert ctx["data_schema"] == SIMPLE_HELPER_SCHEMAS["input_select"]
 
     def test_extra_kwargs_are_appended(self) -> None:
-        ctx = _simple_helper_error_context(
+        ctx = hv._simple_helper_error_context(
             "input_select",
             initial="x",
             options=["a", "b"],
@@ -233,7 +232,7 @@ class TestSimpleHelperErrorContext:
         # A helper_type without a registered schema (e.g. a flow helper or
         # a typo) yields a context dict that contains only what was
         # supplied — no `data_schema` key, no exception.
-        ctx = _simple_helper_error_context("template")
+        ctx = hv._simple_helper_error_context("template")
         assert "data_schema" not in ctx
         assert ctx == {"helper_type": "template"}
 

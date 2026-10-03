@@ -18,7 +18,8 @@ from ..tools.component_helper_collections import (
 from ..tools.helper_field_schemas import (
     SIMPLE_CONFIG_KEYS_DESCRIPTION as _SIMPLE_CONFIG_KEYS_DESCRIPTION,
 )
-from ..tools.tools_config_helpers import SIMPLE_HELPER_TYPES, supported_core_fields
+from ..tools.helper_validation import supported_core_fields
+from ..tools.tools_config_helpers import SIMPLE_HELPER_TYPES
 
 if TYPE_CHECKING:
     from ha_mcp._vendor.fastmcp.server.transforms import GetToolNext
