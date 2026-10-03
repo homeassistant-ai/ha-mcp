@@ -1,6 +1,6 @@
 """Test handle that spans the ``ha_mcp_tools`` WebSocket command modules.
 
-The command code lives in ``websocket_api`` and the ``ws_*`` sibling modules. A
+The command code lives in the ``websocket_api`` package and its submodules. A
 command module imports the helpers it calls by name, so the same helper is bound
 in several modules. ``wsapi`` is one handle over all of them:
 
@@ -23,15 +23,14 @@ from custom_components.ha_mcp_tools.const import COMPONENT_VERSION
 
 __all__ = ["COMPONENT_VERSION", "wsapi"]
 
-_PACKAGE = "custom_components.ha_mcp_tools"
-
 
 def _command_modules() -> list[Any]:
-    """The ``websocket_api`` module and every loaded ``ws_*`` command module."""
+    """The ``websocket_api`` package and every loaded submodule of it."""
     return [
         module
         for name, module in sorted(sys.modules.items())
-        if name == websocket_api.__name__ or name.startswith(f"{_PACKAGE}.ws_")
+        if name == websocket_api.__name__
+        or name.startswith(f"{websocket_api.__name__}.")
     ]
 
 

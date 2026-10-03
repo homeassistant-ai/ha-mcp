@@ -8,13 +8,13 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
-from .ws_constants import CALL_SERVICE_DEFAULT_TIMEOUT
-from .ws_registry import _state_as_dict, _state_get
+from ..const import DOMAIN
+from .constants import CALL_SERVICE_DEFAULT_TIMEOUT
+from .registry import _state_as_dict, _state_get
 
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
-_LOGGER = logging.getLogger(f"{__package__}.websocket_api")
+_LOGGER = logging.getLogger(__package__)
 
 
 # =============================================================================

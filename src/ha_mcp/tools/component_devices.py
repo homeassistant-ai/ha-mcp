@@ -8,7 +8,7 @@ device registry and filter for one entry (``ha_get_device`` single lookup,
 single in-process read: ``device_get`` returns one ``DeviceEntry.dict_repr`` by
 id, ``device_list`` returns them all — each byte-identical to a
 ``config/device_registry/list`` element by construction (see
-``custom_components/ha_mcp_tools/ws_lookups.py``). Consumers keep their own
+``custom_components/ha_mcp_tools/websocket_api/lookups.py``). Consumers keep their own
 transforms over that raw shape.
 
 This module owns the caps-gated fetch so the routing discipline — probe caps,

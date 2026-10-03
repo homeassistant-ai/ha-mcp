@@ -5,7 +5,7 @@ from __future__ import annotations
 from difflib import SequenceMatcher
 from typing import Any
 
-from .ws_constants import _SPLIT_RE, FUZZY_THRESHOLD, HIDDEN_SCORE_PENALTY
+from .constants import _SPLIT_RE, FUZZY_THRESHOLD, HIDDEN_SCORE_PENALTY
 
 
 # =============================================================================

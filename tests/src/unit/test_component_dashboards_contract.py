@@ -216,7 +216,7 @@ async def test_list_icon_less_dashboard_shape_diverges() -> None:
     """An icon-less dashboard's row shape diverges by key presence, not value.
 
     The component builds each row as ``{key: meta.get(key) ...}``
-    (``ws_dashboards.py:_dashboard_list_rows``), so a dashboard whose stored
+    (``websocket_api/dashboards.py:_dashboard_list_rows``), so a dashboard whose stored
     config never set an ``icon`` still carries the key with value ``None``.
     Real HA's ``lovelace/dashboards/list`` response for the same dashboard
     omits a never-set key entirely. This pins that documented, functionally

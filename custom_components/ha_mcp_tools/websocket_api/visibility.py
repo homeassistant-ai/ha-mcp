@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, NamedTuple
 
-from .ws_registry import (
+from .registry import (
     _all_entity_entries,
     _conflicting_device_ids,
     _effective_area_for_entry,

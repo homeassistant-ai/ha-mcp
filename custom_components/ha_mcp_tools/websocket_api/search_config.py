@@ -7,15 +7,15 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .ws_constants import (
+from .constants import (
     COLLECTION_HELPER_DOMAINS,
     ENTITY_COMPONENTS_KEY,
     FLOW_HELPER_DOMAINS,
     MAX_BODY_BYTES,
     SEARCH_TYPE_SCENE,
 )
-from .ws_registry import _iter_config_entries, _iter_states, _plainify, _RegistryView
-from .ws_search_score import _config_score
+from .registry import _iter_config_entries, _iter_states, _plainify, _RegistryView
+from .search_score import _config_score
 
 
 # --- Config surfaces (automation/script/scene) -------------------------------

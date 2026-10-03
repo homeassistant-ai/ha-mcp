@@ -7,7 +7,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .ws_registry import _plainify
+from .registry import _plainify
 
 # =============================================================================
 # ha_mcp_tools/dashboards
@@ -634,7 +634,7 @@ def _walk_card_leaves(value: Any, key: str, out: list[tuple[str, str]]) -> None:
 async def _dashboard_edit_prep(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
-    from .dashboard_edit import async_edit_dashboard
+    from ..dashboard_edit import async_edit_dashboard
 
     return {"result": await async_edit_dashboard(hass, msg)}
 

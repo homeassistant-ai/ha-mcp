@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
-_LOGGER = logging.getLogger(f"{__package__}.websocket_api")
+_LOGGER = logging.getLogger(__package__)
 
 
 def _async_get_entity_settings(hass: HomeAssistant, entity_id: str) -> Any:

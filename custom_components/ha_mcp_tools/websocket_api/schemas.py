@@ -6,8 +6,8 @@ from typing import Any
 
 import voluptuous as vol
 
-from .const import CHANNEL_DEV, CHANNEL_STABLE
-from .ws_constants import (
+from ..const import CHANNEL_DEV, CHANNEL_STABLE
+from .constants import (
     ALL_SEARCH_TYPES,
     BLUEPRINT_DOMAINS,
     CALL_SERVICE_DEFAULT_TIMEOUT,

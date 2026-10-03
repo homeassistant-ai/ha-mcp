@@ -6,7 +6,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .ws_registry import (
+from .registry import (
     _all_area_entries,
     _all_floor_entries,
     _all_label_entries,

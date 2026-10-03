@@ -7,14 +7,14 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .ws_registry import (
+from .registry import (
     _enum_value,
     _iter_config_entries,
     _mapping_values,
     _plainify,
     _timestamp,
 )
-from .ws_secrets import _load_secret_scrub, _scrub_secret_values
+from .secrets import _load_secret_scrub, _scrub_secret_values
 
 
 # =============================================================================

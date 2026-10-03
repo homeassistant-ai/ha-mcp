@@ -8,12 +8,12 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .ws_overview import _overview_services
-from .ws_registry import _call_no_arg, _iter_states, _substrate_unavailable
+from .overview import _overview_services
+from .registry import _call_no_arg, _iter_states, _substrate_unavailable
 
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
-_LOGGER = logging.getLogger(f"{__package__}.websocket_api")
+_LOGGER = logging.getLogger(__package__)
 
 
 # =============================================================================

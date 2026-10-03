@@ -8,8 +8,8 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from . import template_diagnose
-from .const import (
+from .. import template_diagnose
+from ..const import (
     COMPONENT_VERSION,
     CONF_ENTRY_TYPE,
     DEFAULT_PIP_SPEC,
@@ -18,15 +18,15 @@ from .const import (
     OPT_CHANNEL,
     OPT_PIP_SPEC,
 )
-from .ws_constants import (
+from .constants import (
     CAPABILITIES,
     LIMITS,
     SCHEMA_VERSION,
     SERVER_ENTRY_UPDATE_FLUSH_DELAY_S,
     WS_API_PREFIX,
 )
-from .ws_overview import _overview_repairs
-from .ws_registry import (
+from .overview import _overview_repairs
+from .registry import (
     _all_entity_entries,
     _entity_partial_dict,
     _enum_value,
@@ -38,7 +38,7 @@ from .ws_registry import (
 
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
-_LOGGER = logging.getLogger(f"{__package__}.websocket_api")
+_LOGGER = logging.getLogger(__package__)
 
 
 async def _template_diagnose_prep(

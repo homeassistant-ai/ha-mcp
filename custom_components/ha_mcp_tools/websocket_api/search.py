@@ -7,13 +7,13 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .search_locations import (
+from ..search_locations import (
     add_location_metadata,
     add_registry_failures,
     resolve_search_location,
 )
-from .ws_assist import _assist_exposure_available, _assist_should_expose
-from .ws_constants import (
+from .assist import _assist_exposure_available, _assist_should_expose
+from .constants import (
     _SPLIT_RE,
     ALL_SEARCH_TYPES,
     CONFIG_SEARCH_TYPES,
@@ -24,7 +24,7 @@ from .ws_constants import (
     SEARCH_TYPE_SCENE,
     SEARCH_TYPE_SCRIPT,
 )
-from .ws_registry import (
+from .registry import (
     _area_name,
     _device_dict_repr,
     _effective_area_for_entry,
@@ -36,10 +36,10 @@ from .ws_registry import (
     _resolve_registries,
     _unambiguous_device_entries,
 )
-from .ws_search_config import _search_config_surface, _search_helpers
-from .ws_search_score import _apply_hidden_penalty, _text_tier, _tokenize
-from .ws_secrets import _load_secret_values
-from .ws_visibility import (
+from .search_config import _search_config_surface, _search_helpers
+from .search_score import _apply_hidden_penalty, _text_tier, _tokenize
+from .secrets import _load_secret_values
+from .visibility import (
     _visibility_hidden_set,
     _visibility_inventory,
     _visibility_warnings,

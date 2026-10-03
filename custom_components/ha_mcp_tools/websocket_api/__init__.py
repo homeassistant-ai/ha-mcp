@@ -272,15 +272,16 @@ Design notes that are load-bearing:
   match-corpus scrub — runs in the executor via the command wrapper's async
   pre-step (:func:`_search_prep`), never on the event loop.
 
-Module layout. This module holds the registration seam (``async_register_commands``,
-``_command_specs`` and ``_build_handler``). The command code lives in sibling modules:
+Module layout. This package's ``__init__`` holds the registration seam
+(``async_register_commands``, ``_command_specs`` and ``_build_handler``). The command
+code lives in the submodules:
 
-* ``ws_constants`` and ``ws_schemas``: the wire contract, capability list and request schemas.
-* ``ws_registry``, ``ws_secrets`` and ``ws_assist``: shared registry, secret-scrub and Assist exposure helpers.
-* ``ws_search``, ``ws_search_config``, ``ws_search_score`` and ``ws_visibility``: ``ha_mcp_tools/search``.
-* ``ws_overview``, ``ws_services``, ``ws_lookups``, ``ws_config_entries``, ``ws_registries`` and ``ws_dashboards``: the read commands.
-* ``ws_system``: ``info``, ``system_snapshot``, ``backup_prep``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
-* ``ws_call_service`` and ``ws_bulk``: the write commands.
+* ``constants`` and ``schemas``: the wire contract, capability list and request schemas.
+* ``registry``, ``secrets`` and ``assist``: shared registry, secret-scrub and Assist exposure helpers.
+* ``search``, ``search_config``, ``search_score`` and ``visibility``: ``ha_mcp_tools/search``.
+* ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries`` and ``dashboards``: the read commands.
+* ``system``: ``info``, ``system_snapshot``, ``backup_prep``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
+* ``call_service`` and ``bulk``: the write commands.
 
 Extension point — to add another command later: write ``_do_<name>(hass,
 params)``, append its capability to :data:`CAPABILITIES`, and add one row to
@@ -295,17 +296,17 @@ from typing import Any
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
-from .ws_bulk import _bulk_call_service_prep, _do_bulk_call_service
-from .ws_call_service import _call_service_prep, _do_call_service
-from .ws_config_entries import _config_entries_prep, _do_config_entries
-from .ws_constants import CAPABILITIES, SCHEMA_VERSION
-from .ws_dashboards import (
+from .bulk import _bulk_call_service_prep, _do_bulk_call_service
+from .call_service import _call_service_prep, _do_call_service
+from .config_entries import _config_entries_prep, _do_config_entries
+from .constants import CAPABILITIES, SCHEMA_VERSION
+from .dashboards import (
     _dashboard_edit_prep,
     _dashboards_prep,
     _do_dashboard_edit,
     _do_dashboards,
 )
-from .ws_lookups import (
+from .lookups import (
     _blueprint_get_prep,
     _do_blueprint_get,
     _do_device_get,
@@ -315,9 +316,9 @@ from .ws_lookups import (
     _do_exposure,
     _do_registry_lookup,
 )
-from .ws_overview import _do_helpers_list, _do_overview, _do_states, _helpers_list_prep
-from .ws_registries import _do_registries
-from .ws_schemas import (
+from .overview import _do_helpers_list, _do_overview, _do_states, _helpers_list_prep
+from .registries import _do_registries
+from .schemas import (
     _backup_prep_schema,
     _blueprint_get_schema,
     _bulk_call_service_schema,
@@ -344,9 +345,9 @@ from .ws_schemas import (
     _system_snapshot_schema,
     _template_diagnose_schema,
 )
-from .ws_search import _do_search, _search_prep
-from .ws_services import _do_reference_data, _do_services_list, _services_list_prep
-from .ws_system import (
+from .search import _do_search, _search_prep
+from .services import _do_reference_data, _do_services_list, _services_list_prep
+from .system import (
     _do_backup_prep,
     _do_info,
     _do_server_entry,

@@ -65,7 +65,7 @@ for _mod in (
 class _StubHomeAssistantError(Exception):
     """Stand-in for core's ``HomeAssistantError`` (raised by ``_do_backup_prep``).
 
-    ``ws_system`` imports ``homeassistant.exceptions.HomeAssistantError``
+    ``websocket_api.system`` imports ``homeassistant.exceptions.HomeAssistantError``
     function-locally when a backup read fails; the module is MagicMock-stubbed
     like the rest of ``homeassistant.*``, so pin a real exception class as its
     ``HomeAssistantError`` attribute (mirrors the ``homeassistant.components.
@@ -118,7 +118,7 @@ class FakeState:
         # Mirrors core ``State.as_dict()`` / the REST ``/api/states/<id>`` shape.
         # Timestamps are already ISO strings here — the real WS transport encodes
         # core's datetimes to the same isoformat, so the server sees plain JSON
-        # either way (see ws_overview._do_states byte-parity note).
+        # either way (see websocket_api.overview._do_states byte-parity note).
         return {
             "entity_id": self.entity_id,
             "state": self.state,

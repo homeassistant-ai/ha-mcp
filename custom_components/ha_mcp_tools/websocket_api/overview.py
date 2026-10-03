@@ -9,8 +9,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
-from .ws_constants import FLOW_HELPER_DOMAINS, HELPERS_LIST_COLLECTION_DOMAINS
-from .ws_registry import (
+from .constants import FLOW_HELPER_DOMAINS, HELPERS_LIST_COLLECTION_DOMAINS
+from .registry import (
     _all_area_entries,
     _all_device_entries,
     _all_entity_entries,
@@ -33,12 +33,12 @@ from .ws_registry import (
     _state_as_dict,
     _state_get,
 )
-from .ws_search_config import _collection_storage_index
-from .ws_secrets import _load_secret_scrub, _scrub_secret_values
+from .search_config import _collection_storage_index
+from .secrets import _load_secret_scrub, _scrub_secret_values
 
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
-_LOGGER = logging.getLogger(f"{__package__}.websocket_api")
+_LOGGER = logging.getLogger(__package__)
 
 
 # =============================================================================

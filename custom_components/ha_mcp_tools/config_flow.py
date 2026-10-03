@@ -243,14 +243,14 @@ async def _fetch_common_translations(
 ) -> dict[str, str]:
     """core ``async_get_translations(hass, language, "common")``; test seam.
 
-    Mirrors the seam in ``ws_services`` so the lookup can be replaced in
+    Mirrors the seam in ``websocket_api.services`` so the lookup can be replaced in
     tests without reaching into Home Assistant's translation machinery.
     """
     from homeassistant.helpers.translation import async_get_translations
 
     result = await async_get_translations(hass, language, "common", {DOMAIN})
     # Any Mapping, not just dict: core returns a plain dict today, but the
-    # mirrored seam in ``ws_services`` accepts a Mapping, and narrowing it
+    # mirrored seam in ``websocket_api.services`` accepts a Mapping, and narrowing it
     # here would silently discard a whole catalog on a core-internal change.
     if isinstance(result, Mapping):
         return dict(result)
@@ -297,7 +297,7 @@ async def _common_strings(hass: HomeAssistant | None) -> tuple[dict[str, str], s
         # broad ``except`` also covers an ImportError from the function-local
         # core import — a permanent defect nobody would ever notice at debug.
         # ``exc_info`` because the traceback is the only way to tell the two
-        # apart. Same level the ``ws_services`` seam this mirrors uses.
+        # apart. Same level the ``websocket_api.services`` seam this mirrors uses.
         _LOGGER.warning(
             "Could not load the %s options-form translations, falling back to "
             "English: %s",

@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
-_LOGGER = logging.getLogger(f"{__package__}.websocket_api")
+_LOGGER = logging.getLogger(__package__)
 
 
 def _load_secret_scrub(hass: HomeAssistant) -> tuple[frozenset[str], bool]:

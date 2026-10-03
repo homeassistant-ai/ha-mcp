@@ -11,8 +11,8 @@ import yaml  # type: ignore[import-untyped]
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .ws_assist import _async_get_entity_settings, _is_unknown_entity_error
-from .ws_registry import (
+from .assist import _async_get_entity_settings, _is_unknown_entity_error
+from .registry import (
     _all_device_entries,
     _all_entity_entries,
     _device_dict_repr,
@@ -27,11 +27,11 @@ from .ws_registry import (
     _substrate_unavailable,
     _unambiguous_device_entries,
 )
-from .ws_search import _registry_enrichment
+from .search import _registry_enrichment
 
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
-_LOGGER = logging.getLogger(f"{__package__}.websocket_api")
+_LOGGER = logging.getLogger(__package__)
 
 
 # =============================================================================
