@@ -2596,7 +2596,6 @@ async def _update_via_component(
     message = _build_update_message(
         helper_type, item["item_id"], item["item"], name, icon, **kw
     )
-    # Tags carry no entity-registry fields, matching the legacy tag path.
     registry = {
         key: value
         for key, value in (
@@ -2605,7 +2604,7 @@ async def _update_via_component(
             ("labels", labels),
             ("category", category),
         )
-        if value is not None and helper_type != "tag"
+        if value is not None
     }
     result = await write_helper_item(
         client,
@@ -2685,11 +2684,17 @@ async def _execute_update_simple_helper(
                     ),
                 )
             )
-        entity_id = await tag_entity_id(client, tag_update_id) or entity_id
+        tag_data = result.get("result", {})
+        tag_entity = await tag_entity_id(client, tag_update_id)
+        if tag_entity:
+            entity_id = tag_entity
+            await _apply_update_registry_and_category(
+                client, entity_id, None, area_id, labels, category, tag_data, warnings
+            )
         tag_response = _helper_response(
             "update",
             helper_type,
-            data=result.get("result", {}),
+            data=tag_data,
             entity_id=entity_id,
             message=f"Successfully updated {helper_type}: {entity_id}",
             warnings=warnings,

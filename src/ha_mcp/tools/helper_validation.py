@@ -253,7 +253,8 @@ def _validate_numeric_range(
                     ),
                 )
             )
-        if min_value == max_value:
+        # Equal lengths are an exact-length input_text, which Core accepts.
+        if min_value == max_value and helper_type != "input_text":
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,

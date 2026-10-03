@@ -250,7 +250,7 @@ async def test_tag_update_routes_through_component() -> None:
     args, kwargs = write.call_args
     assert args[3] == {"name": "T2"}
     assert kwargs["item_id"] == "abc"
-    assert kwargs["registry"] == {}  # tags carry no registry fields
+    assert kwargs["registry"] == {"area_id": "kitchen"}
 
 
 async def test_empty_category_clears_via_the_component() -> None:
@@ -364,6 +364,30 @@ async def test_websocket_tag_update_resolves_the_tag_id(helper_id: str) -> None:
     assert result["entity_id"] == "tag.front_door"
 
 
+async def test_websocket_tag_update_applies_registry_fields() -> None:
+    replies = {
+        "config/entity_registry/list": [_TAG_ENTITY],
+        "tag/update": {"id": "abc-1", "name": "Front"},
+        "config/entity_registry/update": {"entity_entry": {"area_id": "kitchen"}},
+    }
+    client = MagicMock()
+    client.send_websocket_message = AsyncMock(
+        side_effect=lambda m: {"success": True, "result": replies.get(m["type"], {})}
+    )
+    with patch.object(tch, "read_helper_item", AsyncMock(return_value=None)):
+        await tch._execute_update_simple_helper(
+            client, "tag", "tag.front_door", "tag.front_door", None, None,
+            "kitchen", None, None, False, False, **_type_kw(),
+        )  # fmt: skip
+    sent = [c.args[0] for c in client.send_websocket_message.call_args_list]
+    assert any(
+        m["type"] == "config/entity_registry/update"
+        and m.get("entity_id") == "tag.front_door"
+        and m.get("area_id") == "kitchen"
+        for m in sent
+    )
+
+
 async def test_component_tag_update_reports_the_component_entity() -> None:
     client = _ws({"success": True, "result": [_TAG_ENTITY]})
     read = AsyncMock(
@@ -406,6 +430,13 @@ async def test_update_checks_the_merged_range() -> None:
     # Untouched bounds are not re-judged: a rename keeps a stored wide step.
     odd = {"min": 0.0, "max": 1.0, "step": 5.0}
     assert tch._update_fields_input_number(odd, None, None, None, None, None, None)
+
+
+async def test_equal_bounds_allowed_only_for_input_text_length() -> None:
+    tch._validate_numeric_range("input_text", 4, 4, None)  # exact length, as Core
+    for numeric in ("input_number", "counter"):
+        with pytest.raises(ToolError, match="must differ"):
+            tch._validate_numeric_range(numeric, 4, 4, None)
 
 
 async def test_cleared_icon_is_left_out_of_the_item() -> None:

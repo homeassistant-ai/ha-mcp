@@ -379,7 +379,10 @@ async def _raise_flow_api_error(
 
     raise_tool_error(
         create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
+            # HA's 400 names fields only when the caller's input failed its schema.
+            ErrorCode.VALIDATION_INVALID_PARAMETER
+            if field_errors
+            else ErrorCode.SERVICE_CALL_FAILED,
             message,
             suggestions=suggestions,
             context=context,

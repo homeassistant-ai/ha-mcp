@@ -370,7 +370,7 @@ async def test_config_set_helper_subentry_preserves_flow_api_error_context(
         )
 
     error_data = json.loads(str(exc_info.value))
-    assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "model: invalid_model" in error_data["error"]["message"]
     assert error_data["field_errors"] == {"model": "invalid_model"}
     assert error_data["data_schema"] == [
