@@ -22,6 +22,8 @@ from unittest.mock import MagicMock
 import pytest
 
 config = pytest.importorskip("ha_mcp.config")
+config_backup = pytest.importorskip("ha_mcp.config_backup")
+config_overrides = pytest.importorskip("ha_mcp.config_overrides")
 
 
 @pytest.fixture(autouse=True)
@@ -106,7 +108,7 @@ class TestApplyBackupOverrides:
     def test_addon_short_circuits_without_reading_file(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
         reader = MagicMock(return_value={})
-        monkeypatch.setattr(config, "_read_backup_override_file", reader)
+        monkeypatch.setattr(config_backup, "_read_backup_override_file", reader)
         config._apply_backup_overrides(MagicMock())
         reader.assert_not_called()
 
@@ -114,7 +116,7 @@ class TestApplyBackupOverrides:
         monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
         monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
         reader = MagicMock(return_value={})
-        monkeypatch.setattr(config, "_read_backup_override_file", reader)
+        monkeypatch.setattr(config_backup, "_read_backup_override_file", reader)
         config._apply_backup_overrides(MagicMock())
         reader.assert_called_once()
 
@@ -129,7 +131,7 @@ class TestApplyFeatureFlagOverrides:
         monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
         monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
         monkeypatch.setattr(
-            config, "_read_feature_flag_override_file", lambda: {field: True}
+            config_overrides, "_read_feature_flag_override_file", lambda: {field: True}
         )
         settings = MagicMock()
         settings.enable_beta_features = True  # keep the master gate from clearing
@@ -141,7 +143,7 @@ class TestApplyFeatureFlagOverrides:
         monkeypatch.delenv(env_name, raising=False)
         monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")  # add-on, not embedded
         monkeypatch.setattr(
-            config, "_read_feature_flag_override_file", lambda: {field: True}
+            config_overrides, "_read_feature_flag_override_file", lambda: {field: True}
         )
         settings = MagicMock()
         settings.enable_beta_features = True
