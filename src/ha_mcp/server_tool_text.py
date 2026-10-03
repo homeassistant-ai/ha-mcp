@@ -113,10 +113,12 @@ SEARCH_KEYWORDS: dict[str, str] = {
         "counter timer input_datetime input_select"
     ),
     "ha_get_entity": ("get entity state attributes details single specific entity_id"),
-    # #2576: BM25 has no stemming, so "lights" never matched "light"
+    # #2576: BM25 has no stemming, so "lights" never matched "light". No
+    # control verbs (on/off/turn) here: they would pull "turn off lights"
+    # onto this read tool.
     "ha_get_state": (
         "get current state value single entity check status bulk multiple states "
-        "which lights are on off"
+        "which lights"
     ),
     "ha_config_set_automation": (
         "create update modify edit automation triggers conditions actions "

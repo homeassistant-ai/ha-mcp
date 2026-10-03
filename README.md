@@ -359,7 +359,7 @@ A `ha_manage_*` tool combines several operations, so it is reachable from more t
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `ENABLE_TOOL_SEARCH` | `false` | Replace full tool catalog with search-based discovery (tools deferred behind on-demand search). |
-| `TOOL_SEARCH_MAX_RESULTS` | `5` | Max results returned by `ha_search_tools` (range 2–10). |
+| `TOOL_SEARCH_MAX_RESULTS` | `5` | Max hidden tools returned per `ha_search_tools` call (range 2–10); a matching pinned tool is added as a name-only stub on top. |
 | `PINNED_TOOLS` | empty | Comma-separated tool names to keep always visible. The web settings UI is the primary way to manage this. |
 
 ### When to enable

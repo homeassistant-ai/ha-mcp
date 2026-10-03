@@ -246,9 +246,10 @@ configuration:
       still apply). Default 7.
   tool_search_max_results:
     name: Tool search max results
-    description: 'Maximum number of tools returned by ha_search_tools when tool search
-      is enabled. Lower values (2-3) save context tokens but may miss relevant tools.
-      Range: 2-10. Requires restart.'
+    description: 'Maximum number of hidden tools returned per ha_search_tools call
+      when tool search is enabled; a pinned tool that matches is added as a short
+      name-only entry on top. Lower values (2-3) save context tokens but may miss
+      relevant tools. Range: 2-10. Requires restart.'
   disabled_tools:
     name: Disabled tools (comma-separated)
     description: Tools listed here are forced off and locked in the web Settings UI

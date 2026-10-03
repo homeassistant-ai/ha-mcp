@@ -13,7 +13,7 @@ const FEATURE_META = {
   },
   tool_search_max_results: {
     label: "Tool search max results",
-    help: "Maximum number of tools returned by ha_search_tools when tool search is enabled. Lower values (2-3) save context tokens but may miss relevant tools. Range: 2-10. Requires restart.",
+    help: "Maximum number of hidden tools returned per ha_search_tools call when tool search is enabled; a pinned tool that matches is added as a short name-only entry on top. Lower values (2-3) save context tokens but may miss relevant tools. Range: 2-10. Requires restart.",
   },
   enable_tool_security_policies: {
     label: "Enable Tool Security Policies (advanced)",

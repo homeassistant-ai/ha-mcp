@@ -8,13 +8,18 @@ point at the tool list, without taking a result slot from hidden tools.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+import ha_mcp.server as server_module
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
+from ha_mcp.config import _reset_global_settings
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
 
@@ -45,7 +50,9 @@ async def _search(
 
 
 @pytest.mark.anyio
-async def test_pinned_tool_that_matches_is_returned_as_a_stub_without_its_schema():
+async def test_pinned_tool_that_matches_is_returned_as_a_stub_without_its_schema() -> (
+    None
+):
     """Searching for a pinned tool must not answer "nothing matched"; the
     stub repeats no schema because the client already lists the tool."""
     results = await _search(
@@ -67,7 +74,7 @@ async def test_pinned_tool_that_matches_is_returned_as_a_stub_without_its_schema
 
 
 @pytest.mark.anyio
-async def test_hidden_hit_keeps_its_full_definition_next_to_a_stub():
+async def test_hidden_hit_keeps_its_full_definition_next_to_a_stub() -> None:
     results = await _search(
         [
             _tool("ha_get_state", "get entity state"),
@@ -84,7 +91,7 @@ async def test_hidden_hit_keeps_its_full_definition_next_to_a_stub():
 
 
 @pytest.mark.anyio
-async def test_pinned_stub_does_not_take_a_result_slot_from_hidden_tools():
+async def test_pinned_stub_does_not_take_a_result_slot_from_hidden_tools() -> None:
     """``max_results`` counts hidden tools only; a stub rides along."""
     results = await _search(
         [
@@ -104,7 +111,7 @@ async def test_pinned_stub_does_not_take_a_result_slot_from_hidden_tools():
 
 
 @pytest.mark.anyio
-async def test_pinned_tool_ranked_below_the_page_adds_no_stub():
+async def test_pinned_tool_ranked_below_the_page_adds_no_stub() -> None:
     """A weak match on a pinned tool must not stub every page."""
     results = await _search(
         [
@@ -121,7 +128,7 @@ async def test_pinned_tool_ranked_below_the_page_adds_no_stub():
 
 
 @pytest.mark.anyio
-async def test_unmatched_query_returns_nothing_even_with_pinned_tools():
+async def test_unmatched_query_returns_nothing_even_with_pinned_tools() -> None:
     results = await _search(
         [_tool("ha_get_state", "get entity state")],
         pinned=["ha_get_state"],
@@ -131,20 +138,42 @@ async def test_unmatched_query_returns_nothing_even_with_pinned_tools():
     assert results == []
 
 
-@pytest.fixture
-def toolsearch_server(monkeypatch: pytest.MonkeyPatch):
-    """The real catalog behind the search transform, no Home Assistant."""
-    monkeypatch.setenv("HOMEASSISTANT_URL", "http://127.0.0.1:9")
-    monkeypatch.setenv("HOMEASSISTANT_TOKEN", "unused")
-    monkeypatch.setenv("ENABLE_TOOL_SEARCH", "true")
-    from ha_mcp.config import _reset_global_settings
-    from ha_mcp.server import HomeAssistantSmartMCPServer
+@asynccontextmanager
+async def _no_lifespan(_server: Any) -> AsyncIterator[dict[str, Any]]:
+    yield {}
 
+
+@pytest.fixture
+def toolsearch_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[server_module.HomeAssistantSmartMCPServer]:
+    """The real catalog behind the search transform, no Home Assistant.
+
+    The client double carries no credentials, so the component probe
+    returns without connecting, and the lifespan is replaced so the
+    admin-token check and HACS nudge never open a socket. Pins and
+    disables from the developer's environment are cleared so the ranking
+    assertions see the default catalog.
+    """
+    monkeypatch.setenv("ENABLE_TOOL_SEARCH", "true")
+    monkeypatch.setenv("PINNED_TOOLS", "")
+    monkeypatch.setenv("DISABLED_TOOLS", "")
+    monkeypatch.delenv("HOMEASSISTANT_URL", raising=False)
+    monkeypatch.delenv("HOMEASSISTANT_TOKEN", raising=False)
+    monkeypatch.setattr(server_module, "server_lifespan", _no_lifespan)
     _reset_global_settings()
     try:
-        yield HomeAssistantSmartMCPServer()
+        yield server_module.HomeAssistantSmartMCPServer(client=MagicMock(spec=[]))
     finally:
         _reset_global_settings()
+
+
+async def _hidden_hits(
+    server: server_module.HomeAssistantSmartMCPServer, query: str
+) -> list[str]:
+    async with Client(server.mcp) as client:
+        result = await client.call_tool("ha_search_tools", {"query": query})
+    return [entry["name"] for entry in result.data if not entry.get("pinned")]
 
 
 @pytest.mark.anyio
@@ -158,13 +187,22 @@ def toolsearch_server(monkeypatch: pytest.MonkeyPatch):
     ],
 )
 async def test_entity_state_queries_rank_ha_get_state_first(
-    toolsearch_server, query: str
-):
+    toolsearch_server: server_module.HomeAssistantSmartMCPServer, query: str
+) -> None:
     """The queries from #2576 must lead with ``ha_get_state``. BM25 has no
     stemming, so without its keyword boost "lights" matched the group
     tools and not the state tool."""
-    async with Client(toolsearch_server.mcp) as client:
-        result = await client.call_tool("ha_search_tools", {"query": query})
-
-    hidden = [entry["name"] for entry in result.data if not entry.get("pinned")]
+    hidden = await _hidden_hits(toolsearch_server, query)
     assert hidden[0] == "ha_get_state", hidden
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("query", ["turn off lights", "switch off all lights"])
+async def test_control_queries_do_not_lead_with_the_state_reader(
+    toolsearch_server: server_module.HomeAssistantSmartMCPServer, query: str
+) -> None:
+    """Boosting ``ha_get_state`` with control verbs made it the top hit
+    for commands that change state; a small model then reads instead of
+    acting."""
+    hidden = await _hidden_hits(toolsearch_server, query)
+    assert hidden[0] != "ha_get_state", hidden
