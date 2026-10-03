@@ -1,3 +1,15 @@
+// Each card write reads the whole policy and writes it back, so the cards
+// write one at a time. Two at once can fail with a version conflict, and
+// for one card the later write can carry its rule from before the earlier
+// write's change and undo it. A remember save sent after "Remove from
+// policy" would also put the tool's rules back.
+let policyWriteInFlight = null;
+function policyWriteOnce(write) {
+  return (policyWriteInFlight = (async () => {
+    try { return await write(); } finally { policyWriteInFlight = null; }
+  })());
+}
+
 async function savePolicyRule(toolName, ruleObj) {
   // Under an allow list a card left without conditions approves every call
   // to the tool: the loosening direction, so it is never saved silently.

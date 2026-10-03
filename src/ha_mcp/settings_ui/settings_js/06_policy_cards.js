@@ -370,9 +370,10 @@ function renderPolicyCard(toolName, rule) {
     }
     return null;
   };
+  // An alert: screen readers announce one inserted on re-render, not a note.
   const conflictWarning = (preds) => {
     const path = conflictingEqPath(preds);
-    return path === null ? '' : '<span class="policy-condition-warning" role="note">' + escapeHtml(t(
+    return path === null ? '' : '<span class="policy-condition-warning" role="alert">' + escapeHtml(t(
       'policies.card.never_matches', {path: path},
       path + ' cannot equal two different values at once, so this condition never matches.'
     )) + '</span>';
@@ -457,12 +458,12 @@ function renderPolicyCard(toolName, rule) {
   // button. Returns whether the save landed so callers skip re-rendering a
   // card that no longer reflects the server.
   let autoSaveSeq = 0;
-  const autoSave = async () => {
+  const autoSave = async (ruleToSave = rule) => {
     const status = card.querySelector('.policy-save-status');
     const mySeq = ++autoSaveSeq;
     status.textContent = t('status.saving', {}, 'Saving…');
     try {
-      await savePolicyRule(toolName, rule);
+      await savePolicyRule(toolName, ruleToSave);
       // Skip the success label if a newer save started (rapid edits)
       if (mySeq === autoSaveSeq) status.textContent = t('status.saved', {}, 'Saved.');
       return true;
@@ -491,9 +492,22 @@ function renderPolicyCard(toolName, rule) {
     card.replaceWith(replacement);
   };
 
+  // Condition edits save a changed copy and adopt it (re-rendering) only
+  // once it lands, inside the write (policyWriteOnce), so the next write
+  // sends it. A condition click while a write is pending is ignored: a
+  // double-clicked Remove could otherwise empty an AND condition, which
+  // under an allow list approves every call.
+  const saveConditions = async (conditions, remembers) => {
+    if (policyWriteInFlight) return;
+    await policyWriteOnce(async () => {
+      if (await autoSave({...rule, conditions, remembers})) { Object.assign(rule, {conditions, remembers}); rerenderCard(); }
+    });
+  };
+
   card.querySelector('.policy-rule-remove').addEventListener('click', async () => {
     if (!confirm(t('policies.card.confirm_remove', {tool: toolName}, 'Remove "' + toolName + '" from the security policy?'))) return;
-    try {
+    while (policyWriteInFlight) await policyWriteInFlight;
+    await policyWriteOnce(async () => { try {
       await removePolicyRule(toolName);
       delete policyRuleEdits[toolName];
       card.remove();
@@ -502,11 +516,11 @@ function renderPolicyCard(toolName, rule) {
       await policyLoadConfig();
     } catch (err) {
       alert(t('policies.errors.remove_rule', {message: err.message}, 'Failed to remove rule: ' + err.message));
-    }
+    } });
   });
 
-  // remember-minutes is a number input; debounce so typing "30" doesn't
-  // fire three saves (3, 30 — or rapid arrow-key presses).
+  // remember-minutes is a number input; debounce so typing "30" doesn't fire
+  // three saves (3, 30, arrow keys). None once the card is gone or rebuilt.
   let rmDebounce = null;
   card.querySelector('.policy-remember-minutes').addEventListener('input', (e) => {
     rule.remember_minutes = parseInt(e.target.value, 10) || 0;
@@ -514,7 +528,10 @@ function renderPolicyCard(toolName, rule) {
     // lifetime on save; otherwise per-condition values are preserved.
     rule.rememberDirty = true;
     if (rmDebounce) clearTimeout(rmDebounce);
-    rmDebounce = setTimeout(autoSave, 500);
+    rmDebounce = setTimeout(async () => {
+      while (policyWriteInFlight) await policyWriteInFlight;
+      if (policyRuleEdits[toolName] === rule) policyWriteOnce(autoSave);
+    }, 500);
   });
 
   const formEl = card.querySelector('.policy-predicate-form');
@@ -912,20 +929,18 @@ function renderPolicyCard(toolName, rule) {
 
   card.querySelectorAll('.policy-remove-part').forEach(btn => {
     btn.addEventListener('click', async () => {
-      rule.conditions[parseInt(btn.dataset.idx, 10)]
-        .splice(parseInt(btn.dataset.pred, 10), 1);
-      if (await autoSave()) rerenderCard();
+      const idx = parseInt(btn.dataset.idx, 10);
+      const pred = parseInt(btn.dataset.pred, 10);
+      await saveConditions(rule.conditions.map((preds, i) => (
+        i === idx ? preds.filter((_p, j) => j !== pred) : preds)), rule.remembers);
     });
   });
 
   card.querySelectorAll('.policy-remove-predicate').forEach(btn => {
     btn.addEventListener('click', async () => {
       const idx = parseInt(btn.dataset.idx, 10);
-      rule.conditions.splice(idx, 1);
-      if (rule.remembers) rule.remembers.splice(idx, 1);
-      // On failure autoSave toasts + rebuilds all cards from the server, so
-      // only re-render this (now stale) card when the save actually landed.
-      if (await autoSave()) rerenderCard();
+      await saveConditions(rule.conditions.filter((_c, i) => i !== idx),
+        rule.remembers && rule.remembers.filter((_m, i) => i !== idx));
     });
   });
 
@@ -966,18 +981,18 @@ function renderPolicyCard(toolName, rule) {
         predicate.value = parsed.value;
       }
     }
+    const conditions = rule.conditions.slice();
+    let remembers = rule.remembers;
     if (condIdx >= 0 && predIdx >= 0) {
-      rule.conditions[condIdx][predIdx] = predicate;
+      conditions[condIdx] = conditions[condIdx].map((p, j) => (j === predIdx ? predicate : p));
     } else if (condIdx >= 0) {
-      rule.conditions[condIdx].push(predicate);
+      conditions[condIdx] = conditions[condIdx].concat([predicate]);
     } else {
-      rule.conditions.push([predicate]);
+      conditions.push([predicate]);
       // A new condition takes the card's current lifetime value.
-      (rule.remembers = rule.remembers || []).push(rule.remember_minutes || 0);
+      remembers = (rule.remembers || []).concat([rule.remember_minutes || 0]);
     }
-    // On failure autoSave toasts + rebuilds all cards from the server, so
-    // only re-render this (now stale) card when the save actually landed.
-    if (await autoSave()) rerenderCard();
+    await saveConditions(conditions, remembers);
   });
 
   return card;

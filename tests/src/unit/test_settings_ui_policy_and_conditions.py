@@ -92,13 +92,20 @@ def _two_conditions(effect: str) -> dict:
     )
 
 
-def _run(settings_script: str, policy: dict, invoke: str) -> HarnessResult:
+def _run(
+    settings_script: str, policy: dict, invoke: str, *, puts: list[dict] | None = None
+) -> HarnessResult:
+    """``puts`` sequences the responses to policy saves; every save succeeds
+    without it."""
+    config = {"status": 200, "json": policy}
+    if puts is not None:
+        config = {"byMethod": {"GET": config, "PUT": {"responses": puts}}}
     result = run_script(
         settings_script,
         initial_html=_policy_panel_dom(),
         fetch_map={
             **DEFAULT_FETCHES,
-            "/api/policy/config": {"status": 200, "json": policy},
+            "/api/policy/config": config,
             "/api/policy/tool-schema": {"status": 503, "json": {"error": "none"}},
         },
         invoke="await policyLoadConfig();" + FILL_JS + invoke,
@@ -248,6 +255,338 @@ def test_removing_one_predicate_keeps_the_rest_of_the_group(
     assert _last_put(result)["rules"] == [
         {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 60},
         {"tool_name": "ha_call_service", "when": [TURN_ON], "remember_minutes": 1},
+        RESTART,
+    ]
+
+
+def _saved_rules(result: HarnessResult) -> list[list[dict]]:
+    return [
+        json.loads(f["body"])["rules"]
+        for f in result.fetches
+        if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+    ]
+
+
+# A second click on the same card before the first save lands. The same
+# Remove again would empty the group, saving ``when: []``, which under an
+# allow list approves every call without the approve-all confirmation; a
+# different edit would be built on the rule before the first removal.
+SECOND_CLICKS = {
+    "same-remove": '.policy-remove-part[data-idx="1"][data-pred="0"]',
+    "other-row": '.policy-remove-predicate[data-idx="0"]',
+}
+
+
+@pytest.mark.parametrize("effect", EFFECTS)
+@pytest.mark.parametrize("second", SECOND_CLICKS)
+def test_click_during_a_pending_save_is_ignored(
+    settings_script: str, effect: str, second: str
+) -> None:
+    result = _run(
+        settings_script,
+        _two_conditions(effect),
+        f"""
+          const card = document.querySelector('.policy-rule-card');
+          card.querySelector('.policy-remove-part[data-idx="1"][data-pred="0"]').click();
+          card.querySelector('{SECOND_CLICKS[second]}').click();
+          await sleep(300);
+          document.body.setAttribute('data-codes', Array.from(document.querySelectorAll(
+            '.policy-rule-card[data-tool="ha_call_service"] .policy-predicate-row code'
+          )).map(c => c.textContent).join('|'));
+        """,
+    )
+    assert _saved_rules(result) == [
+        [
+            {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 60},
+            {"tool_name": "ha_call_service", "when": [TURN_ON], "remember_minutes": 1},
+            RESTART,
+        ]
+    ]
+    codes = html.unescape(_probe(result, "codes") or "").split("|")
+    assert len(codes) == 2
+    assert "lock" in codes[0]
+    assert "turn_on" in codes[1]
+
+
+@pytest.mark.parametrize("effect", EFFECTS)
+def test_removing_a_row_keeps_each_lifetime_with_its_condition(
+    settings_script: str, effect: str
+) -> None:
+    """Removing a row drops its lifetime too, and the card keeps the result:
+    the group keeps its 1, not the removed row's 60, on this save and the
+    next one."""
+    result = _run(
+        settings_script,
+        _two_conditions(effect),
+        """
+          await click('.policy-remove-predicate[data-idx="0"]');
+          await sleep(200);
+          await click('.policy-remove-part[data-idx="0"][data-pred="1"]');
+          await sleep(200);
+        """,
+    )
+    assert _saved_rules(result) == [
+        [
+            {
+                "tool_name": "ha_call_service",
+                "when": [LIGHT, TURN_ON],
+                "remember_minutes": 1,
+            },
+            RESTART,
+        ],
+        [
+            {"tool_name": "ha_call_service", "when": [LIGHT], "remember_minutes": 1},
+            RESTART,
+        ],
+    ]
+
+
+@pytest.mark.parametrize("effect", EFFECTS)
+def test_remember_change_waits_for_a_pending_condition_save(
+    settings_script: str, effect: str
+) -> None:
+    """The remember-minutes save sends the whole rule. Sent while a condition
+    save is pending, it carries the old conditions, and whichever lands last
+    drops the other change. The first save is held past the debounce."""
+    result = _run(
+        settings_script,
+        _two_conditions(effect),
+        """
+          const realFetch = window.fetch;
+          let held = false;
+          window.fetch = async (url, opts) => {
+            if (opts && opts.method === 'PUT' && !held) { held = true; await sleep(2000); }
+            return realFetch(url, opts);
+          };
+          const card = document.querySelector('.policy-rule-card');
+          card.querySelector('.policy-remove-part[data-idx="1"][data-pred="0"]').click();
+          const minutes = card.querySelector('.policy-remember-minutes');
+          minutes.value = '7';
+          minutes.dispatchEvent(new Event('input'));
+          await sleep(3000);
+        """,
+    )
+    assert _last_put(result)["rules"] == [
+        {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 7},
+        {"tool_name": "ha_call_service", "when": [TURN_ON], "remember_minutes": 7},
+        RESTART,
+    ]
+
+
+@pytest.mark.parametrize("effect", EFFECTS)
+def test_condition_click_during_a_pending_remember_save_is_ignored(
+    settings_script: str, effect: str
+) -> None:
+    """The other order: a condition save sent while the remember-minutes save
+    is pending would be undone if the remember save, which carries the old
+    conditions, landed last. The remember save is held."""
+    result = _run(
+        settings_script,
+        _two_conditions(effect),
+        """
+          const realFetch = window.fetch;
+          let held = false;
+          window.fetch = async (url, opts) => {
+            if (opts && opts.method === 'PUT' && !held) { held = true; await sleep(2000); }
+            return realFetch(url, opts);
+          };
+          const card = document.querySelector('.policy-rule-card');
+          const minutes = card.querySelector('.policy-remember-minutes');
+          minutes.value = '7';
+          minutes.dispatchEvent(new Event('input'));
+          await sleep(700);
+          card.querySelector('.policy-remove-part[data-idx="1"][data-pred="0"]').click();
+          await sleep(3000);
+        """,
+    )
+    assert _saved_rules(result) == [
+        [
+            {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 7},
+            {
+                "tool_name": "ha_call_service",
+                "when": [LIGHT, TURN_ON],
+                "remember_minutes": 7,
+            },
+            RESTART,
+        ]
+    ]
+
+
+@pytest.mark.parametrize("effect", EFFECTS)
+def test_remember_changes_queued_behind_a_save_go_out_one_at_a_time(
+    settings_script: str, effect: str
+) -> None:
+    """Two remember-minutes changes that both wait for the same pending save
+    must not then save side by side: the card would allow condition edits
+    while the second one is still pending. Counts overlapping policy
+    requests; the first save is held."""
+    result = _run(
+        settings_script,
+        _two_conditions(effect),
+        """
+          const realFetch = window.fetch;
+          let held = false;
+          let active = 0;
+          let most = 0;
+          window.fetch = async (url, opts) => {
+            const counted = String(url).includes('/api/policy/config');
+            if (counted) { active += 1; most = Math.max(most, active); }
+            try {
+              if (opts && opts.method === 'PUT' && !held) { held = true; await sleep(2000); }
+              return await realFetch(url, opts);
+            } finally {
+              if (counted) active -= 1;
+            }
+          };
+          const card = document.querySelector('.policy-rule-card');
+          card.querySelector('.policy-remove-part[data-idx="1"][data-pred="0"]').click();
+          const minutes = card.querySelector('.policy-remember-minutes');
+          minutes.value = '7';
+          minutes.dispatchEvent(new Event('input'));
+          await sleep(600);
+          minutes.value = '8';
+          minutes.dispatchEvent(new Event('input'));
+          await sleep(3000);
+          document.body.setAttribute('data-most', String(most));
+        """,
+    )
+    assert _probe(result, "most") == "1"
+    assert _last_put(result)["rules"] == [
+        {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 8},
+        {"tool_name": "ha_call_service", "when": [TURN_ON], "remember_minutes": 8},
+        RESTART,
+    ]
+
+
+# Holds the policy save numbered ``hold`` (1-based) for 1.5 s.
+HOLD_PUT_JS = """
+  const realFetch = window.fetch;
+  let putCount = 0;
+  window.fetch = async (url, opts) => {
+    if (opts && opts.method === 'PUT' && ++putCount === %d) await sleep(1500);
+    return realFetch(url, opts);
+  };
+  const card = document.querySelector('.policy-rule-card');
+  const minutes = card.querySelector('.policy-remember-minutes');
+"""
+
+
+@pytest.mark.parametrize("effect", EFFECTS)
+def test_remember_save_from_a_replaced_card_still_blocks_condition_edits(
+    settings_script: str, effect: str
+) -> None:
+    """A condition save re-renders the card, but the remember save queued on
+    the card it replaced is still a pending write: a condition click on the
+    new card meanwhile is ignored. Saves 2 is the remember save, held."""
+    result = _run(
+        settings_script,
+        _two_conditions(effect),
+        HOLD_PUT_JS % 2
+        + """
+          minutes.value = '7';
+          minutes.dispatchEvent(new Event('input'));
+          card.querySelector('.policy-remove-part[data-idx="1"][data-pred="0"]').click();
+          await sleep(800);
+          document.querySelector('.policy-rule-card .policy-remove-predicate[data-idx="0"]').click();
+          await sleep(3000);
+        """,
+    )
+    after_removal = [
+        {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 7},
+        {"tool_name": "ha_call_service", "when": [TURN_ON], "remember_minutes": 7},
+        RESTART,
+    ]
+    assert _saved_rules(result) == [after_removal, after_removal]
+
+
+@pytest.mark.parametrize("effect", EFFECTS)
+def test_removing_the_card_drops_its_pending_remember_save(
+    settings_script: str, effect: str
+) -> None:
+    """A remember save still waiting to go out must not put the tool's rules
+    back after "Remove from policy"."""
+    result = _run(
+        settings_script,
+        _two_conditions(effect),
+        HOLD_PUT_JS % 0
+        + """
+          window.confirm = () => true;
+          minutes.value = '7';
+          minutes.dispatchEvent(new Event('input'));
+          card.querySelector('.policy-rule-remove').click();
+          await sleep(2000);
+        """,
+    )
+    assert _saved_rules(result) == [[RESTART]]
+
+
+@pytest.mark.parametrize("effect", EFFECTS)
+def test_removing_the_card_waits_for_a_pending_condition_save(
+    settings_script: str, effect: str
+) -> None:
+    """ "Remove from policy" during a condition save goes out after it: sent
+    alongside, the condition save could land last and put the rules back."""
+    result = _run(
+        settings_script,
+        _two_conditions(effect),
+        HOLD_PUT_JS % 1
+        + """
+          window.confirm = () => true;
+          card.querySelector('.policy-remove-part[data-idx="1"][data-pred="0"]').click();
+          card.querySelector('.policy-rule-remove').click();
+          await sleep(3000);
+        """,
+    )
+    assert _last_put(result)["rules"] == [RESTART]
+
+
+FAILED_CHANGES = {
+    "remove": """
+      await click('.policy-remove-part[data-idx="1"][data-pred="0"]');
+      await sleep(200);
+    """,
+    "add-and": """
+      await click('.policy-and-predicate[data-idx="0"]');
+      await fill('args.entity_id', '"lock.front_door"');
+    """,
+    "edit": """
+      await click('.policy-edit-predicate[data-idx="0"][data-pred="0"]');
+      await fill(null, '"garage"');
+    """,
+    "new-condition": """
+      await click('.policy-add-predicate');
+      await fill('args.domain', '"switch"');
+    """,
+    "remove-row": """
+      await click('.policy-remove-predicate[data-idx="0"]');
+      await sleep(200);
+    """,
+}
+
+
+@pytest.mark.parametrize("effect", EFFECTS)
+@pytest.mark.parametrize("change", FAILED_CHANGES)
+def test_failed_save_is_not_carried_into_the_next_one(
+    settings_script: str, effect: str, change: str
+) -> None:
+    """When a save fails and the recovery reload fails too, the card keeps
+    the rule it showed, so the next save must not include the failed change."""
+    result = _run(
+        settings_script,
+        _two_conditions(effect),
+        """
+          policyLoadConfig = async () => { throw new Error('offline'); };
+        """
+        + FAILED_CHANGES[change]
+        + """
+          await click('.policy-remove-part[data-idx="1"][data-pred="1"]');
+          await sleep(200);
+        """,
+        puts=[{"status": 500, "body": "boom"}, {"status": 200, "json": {}}],
+    )
+    assert _last_put(result)["rules"] == [
+        {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 60},
+        {"tool_name": "ha_call_service", "when": [LIGHT], "remember_minutes": 1},
         RESTART,
     ]
 
@@ -456,11 +795,15 @@ def test_condition_that_can_never_match_is_flagged(
           const w = document.querySelector(
             '.policy-rule-card[data-tool="ha_call_service"] .policy-condition-warning');
           document.body.setAttribute('data-warning', w ? w.textContent : '');
+          document.body.setAttribute('data-role', w ? w.getAttribute('role') : '');
         """,
     )
     warning = html.unescape(_probe(result, "warning") or "")
     if flagged:
         assert "cannot equal two different values" in warning
         assert "domain" in warning
+        # The warning appears when a save re-renders the card; only an alert
+        # is announced by screen readers when it is inserted.
+        assert _probe(result, "role") == "alert"
     else:
         assert warning == ""
