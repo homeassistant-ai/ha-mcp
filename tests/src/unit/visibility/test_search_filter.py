@@ -1,4 +1,4 @@
-"""Integration of the visibility filter into tools_search._exact_match_search."""
+"""Integration of the visibility filter into search_entities._exact_match_search."""
 
 import asyncio
 

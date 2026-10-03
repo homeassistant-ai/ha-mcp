@@ -396,7 +396,7 @@ class TestSystemTools:
         Test: full-only system_info fields must not leak at lower detail levels.
 
         Guards against accidental hoisting of fields out of the
-        `if detail_level == "full":` branch in tools_search.py.
+        `if detail_level == "full":` branch in search_overview.py.
         """
         logger.info("Testing minimal overview excludes full-only system_info fields")
 

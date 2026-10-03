@@ -1857,7 +1857,7 @@ async def test_search_fuzzy_mode_penalises_hidden_issue_1170(mcp_client, hidden_
     """Fuzzy mode applies the same hidden-score penalty.
 
     Default-True ``exact_match`` and the fuzzy path are SEPARATE code
-    paths in tools_search.py — substring matching vs ``smart_entity_search``
+    paths in search_modes.py — substring matching vs ``smart_entity_search``
     (BM25). Both must apply the penalty or one path silently regresses
     while the other test passes.
     """

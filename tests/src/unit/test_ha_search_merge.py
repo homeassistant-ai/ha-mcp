@@ -1299,10 +1299,8 @@ def test_entities_branch_skip_keys_strip_real_leak_set() -> None:
     them without first-wins clobbering.
     """
     # Mirrors the real emission surface verified via grep on the
-    # entities-branch (tools_search.py L1228/1517/1667 search_type;
-    # L1231/1357/1421/1617 domain_filter; L1225/1339/1413/1713 area_filter;
-    # L1233/1359/1423/1521/1674 state_filter; L1236/1646
-    # state_filter_note; L1350 area_name; L1518 note; L1259/1388/1542/1665
+    # entities-branch in search_modes.py (search_type, domain_filter,
+    # area_filter, state_filter, state_filter_note, area_name, note,
     # by_domain). Phantoms (``area_id`` is loop var, ``suggestions`` is
     # ha_get_bulk_status only) are NOT included.
     payload = {
