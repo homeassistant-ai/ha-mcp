@@ -118,6 +118,12 @@ def _floor_sort_key(floor: dict[str, Any]) -> int:
         return 0
 
 
+_AREA_PARAMS = (
+    "name, id, floor_id, icon, aliases, picture, labels, "
+    "temperature_entity_id, humidity_entity_id"
+)
+
+
 def _validate_cross_kind_params(
     kind: str,
     level: int | None,
@@ -152,8 +158,7 @@ def _validate_cross_kind_params(
                 f"Parameter(s) {cross_kind_params} are not valid for kind={kind!r}",
                 context={"kind": kind, "invalid_parameters": cross_kind_params},
                 suggestions=[
-                    "For kind='area' use: name, id, floor_id, icon, aliases, picture, "
-                    "labels, temperature_entity_id, humidity_entity_id",
+                    f"For kind='area' use: {_AREA_PARAMS}",
                     "For kind='floor' use: name, id, level, icon, aliases",
                 ],
             )
