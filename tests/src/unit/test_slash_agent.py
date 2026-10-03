@@ -42,7 +42,11 @@ def test_slash_agent_behavior() -> None:
     if node is None:
         pytest.skip("Node is unavailable for slash-agent regression tests")
     result = subprocess.run(
-        [node, "--test", str(ROOT / "tests/js/slash-agent.test.mjs")],
+        [
+            node,
+            "--test",
+            *map(str, sorted((ROOT / "tests/js").glob("slash-agent*.test.mjs"))),
+        ],
         cwd=ROOT,
         capture_output=True,
         text=True,
