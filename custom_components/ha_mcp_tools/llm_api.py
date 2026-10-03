@@ -53,7 +53,7 @@ import logging
 import math
 import sys
 from collections import Counter
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from functools import cache
@@ -73,6 +73,8 @@ from .const import (
     EXPOSURE_TOOL_SEARCH,
     OPT_LLM_API_EXPOSURE,
 )
+from .llm_tool_exposure import partition_tools
+from .llm_tool_metadata import declare_metadata, tool_hints, tool_result, tool_title
 
 if TYPE_CHECKING:
     import httpx
@@ -93,36 +95,6 @@ _LIST_TOOLS_TIMEOUT_SECONDS = 10.0
 # for the duration, so err generous rather than kill a legitimate slow tool.
 _CALL_TOOL_TIMEOUT_SECONDS = 300.0
 
-# The server-side stamp this module filters on (mirrors
-# src/ha_mcp/llm_exposure.py — keep the names in sync).
-_META_NAMESPACE = "ha_mcp"
-_META_EXPOSED_KEY = "llm_api_exposed"
-_META_PINNED_KEY = "pinned"
-
-# Fallback exposure policy for servers that predate the stamp: hide the
-# operational-hazard names and the known beta/developer tools. Imperfect by
-# construction (a newer beta tool on an old server can't be known here) but
-# strictly safer than exposing everything, and logged once per instance
-# build. The real policy lives server-side.
-_FALLBACK_DENY_PREFIXES = ("ha_dev_",)
-_FALLBACK_DENY_TOOLS = frozenset(
-    {
-        "ha_restart",
-        "ha_reload_core",
-        "ha_manage_backup",
-        # Beta-tagged tools as of the stamp's introduction (server-side the
-        # gate is tag-based and future-proof; this list is only the legacy
-        # fallback).
-        "ha_config_set_yaml",
-        "ha_manage_custom_tool",
-        "ha_get_dashboard_screenshot",
-        "ha_install_mcp_tools",
-        "ha_list_files",
-        "ha_read_file",
-        "ha_write_file",
-        "ha_delete_file",
-    }
-)
 
 # Names of the meta-tools synthesized for the tool-search mode. ha_search_tools
 # deliberately matches the server's own tool-search terminology; if the server
@@ -598,94 +570,6 @@ async def _mcp_session(
         yield session, init_result
 
 
-def _tool_meta_namespace(tool: Any) -> dict[str, Any] | None:
-    """Return the tool's ``_meta.ha_mcp`` namespace, or None when absent."""
-    meta = getattr(tool, "meta", None)
-    if not isinstance(meta, dict):
-        return None
-    namespace = meta.get(_META_NAMESPACE)
-    return namespace if isinstance(namespace, dict) else None
-
-
-def _fallback_exposed(name: str) -> bool:
-    """Legacy exposure policy for servers that predate the meta stamp."""
-    if name.startswith(_FALLBACK_DENY_PREFIXES):
-        return False
-    return name not in _FALLBACK_DENY_TOOLS
-
-
-def _partition_tools(tools: Iterable[Any]) -> tuple[list[Any], set[str], bool]:
-    """Split a raw tools/list into (exposed tools, pinned names, stamped).
-
-    ``stamped`` is False when NO tool carried the server's exposure stamp —
-    an older server package — in which case the conservative component-side
-    fallback policy was applied instead.
-    """
-    stamped = False
-    exposed: list[Any] = []
-    pinned: set[str] = set()
-    for tool in tools:
-        namespace = _tool_meta_namespace(tool)
-        if namespace is not None and _META_EXPOSED_KEY in namespace:
-            stamped = True
-            if namespace.get(_META_PINNED_KEY):
-                pinned.add(tool.name)
-            if namespace.get(_META_EXPOSED_KEY):
-                exposed.append(tool)
-        elif _fallback_exposed(tool.name):
-            exposed.append(tool)
-    if not stamped:
-        # The fallback path already filtered; recompute pinned as empty (an
-        # unstamped server gives no pinned signal — the tool-search mode then
-        # simply mirrors nothing directly).
-        pinned = set()
-    return exposed, pinned, stamped
-
-
-# MCP hint -> llm.ToolAnnotations field. Home Assistant 2026.10 added both
-# llm.ToolAnnotations and llm.ToolResult; older cores have neither.
-_HINT_FIELDS = (
-    ("readOnlyHint", "read_only"),
-    ("destructiveHint", "destructive"),
-    ("idempotentHint", "idempotent"),
-    ("openWorldHint", "open_world"),
-)
-
-
-def _declare_metadata(
-    tool: llm.Tool, *, title: str | None, hints: dict[str, Any] | None
-) -> None:
-    """Set the 2026.10 tool metadata; a hint left out keeps Core's safe default."""
-    tool.integration = DOMAIN
-    tool.title = title
-    annotations_cls = getattr(llm, "ToolAnnotations", None)
-    if annotations_cls is not None and hints:
-        tool.annotations = annotations_cls(
-            **{field: hints[hint] for hint, field in _HINT_FIELDS if hint in hints}
-        )
-
-
-def _tool_result(data: JsonObjectType, *, error: bool) -> Any:
-    """Wrap a result in ``llm.ToolResult`` where Core has it, else return it bare."""
-    result_cls = getattr(llm, "ToolResult", None)
-    return data if result_cls is None else result_cls(data=data, error=error)
-
-
-def _tool_hints(tool: Any) -> dict[str, Any] | None:
-    """The tool's MCP annotations by wire name, on either SDK line."""
-    annotations = getattr(tool, "annotations", None)
-    if annotations is None:
-        return None
-    return cast(
-        "dict[str, Any]", annotations.model_dump(by_alias=True, exclude_none=True)
-    )
-
-
-def _tool_title(tool: Any) -> str | None:
-    """The server's display title: ``title``, else ``annotations.title``."""
-    return getattr(tool, "title", None) or (_tool_hints(tool) or {}).get("title")
-
-
 class HaMcpTool(llm.Tool):
     """One ha-mcp tool, called over loopback MCP."""
 
@@ -704,7 +588,7 @@ class HaMcpTool(llm.Tool):
         self.description = description
         self.parameters = parameters
         self._server_url = server_url
-        _declare_metadata(self, title=title, hints=hints)
+        declare_metadata(self, title=title, hints=hints)
 
     async def async_call(
         self,
@@ -716,7 +600,7 @@ class HaMcpTool(llm.Tool):
         dumped = await _forward_tool_call(
             hass, self._server_url, self.name, tool_input.tool_args
         )
-        return _tool_result(dumped, error=dumped.get("isError") is True)
+        return tool_result(dumped, error=dumped.get("isError") is True)
 
 
 async def _forward_tool_call(
@@ -795,7 +679,7 @@ class HaMcpSearchTool(llm.Tool):
     def __init__(self, catalog: list[dict[str, Any]]) -> None:
         """Hold the exposed-catalog snapshot (name/description/schema dicts)."""
         self._catalog = catalog
-        _declare_metadata(
+        declare_metadata(
             self,
             title="Search HA-MCP Tools",
             hints={
@@ -826,7 +710,7 @@ class HaMcpSearchTool(llm.Tool):
         )
         results = [t for score, t in scored[:_SEARCH_RESULT_LIMIT] if score > 0]
         if not results:
-            return _tool_result(
+            return tool_result(
                 {
                     "results": [],
                     "message": (
@@ -836,7 +720,7 @@ class HaMcpSearchTool(llm.Tool):
                 },
                 error=False,
             )
-        return _tool_result({"results": results}, error=False)
+        return tool_result({"results": results}, error=False)
 
 
 class HaMcpCallTool(llm.Tool):
@@ -866,7 +750,7 @@ class HaMcpCallTool(llm.Tool):
         self._server_url = server_url
         self._exposed_names = exposed_names
         # Dispatches any exposed tool, so no hints: Core's least-safe defaults.
-        _declare_metadata(self, title="Call HA-MCP Tool", hints=None)
+        declare_metadata(self, title="Call HA-MCP Tool", hints=None)
 
     async def async_call(
         self,
@@ -878,7 +762,7 @@ class HaMcpCallTool(llm.Tool):
         name = str(tool_input.tool_args.get("name", ""))
         arguments = tool_input.tool_args.get("arguments") or {}
         if name not in self._exposed_names:
-            return _tool_result(
+            return tool_result(
                 {
                     "error": f"Unknown tool '{name}'.",
                     "suggestion": (
@@ -888,7 +772,7 @@ class HaMcpCallTool(llm.Tool):
                 error=True,
             )
         dumped = await _forward_tool_call(hass, self._server_url, name, arguments)
-        return _tool_result(dumped, error=dumped.get("isError") is True)
+        return tool_result(dumped, error=dumped.get("isError") is True)
 
 
 @dataclass(kw_only=True)
@@ -928,7 +812,7 @@ class HaMcpLlmApi(llm.API):
                 f"Could not reach the in-process HA-MCP server: {err}"
             ) from err
 
-        exposed, pinned, stamped = _partition_tools(list_result.tools)
+        exposed, pinned, stamped = partition_tools(list_result.tools)
         # Never mirror or search a server-side tool that shares a synthesized
         # meta-tool's name (the server's own tool-search mode registers an
         # ha_search_tools) — one name, one behavior.
@@ -979,8 +863,8 @@ class HaMcpLlmApi(llm.API):
             tool.description,
             parameters,
             self.server_url,
-            title=_tool_title(tool),
-            hints=_tool_hints(tool),
+            title=tool_title(tool),
+            hints=tool_hints(tool),
         )
 
     def _build_full_tools(self, exposed: list[Any]) -> list[llm.Tool]:
