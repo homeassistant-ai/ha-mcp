@@ -330,21 +330,63 @@ function renderPolicyCard(toolName, rule) {
   card.dataset.tool = toolName;
   rule.conditions = rule.conditions || [];
   // A condition = one rule's predicate list. Multiple predicates in one
-  // condition AND together (sub-parameters); separate conditions OR. Only
-  // single-predicate conditions get the edit button — the form edits one
-  // predicate; multi-predicate conditions (hand-authored) can be removed.
+  // condition AND together (sub-parameters); separate conditions OR. Each
+  // row shows its predicates joined by AND and every row after the first
+  // leads with OR, so the grouping reads off the card. The form edits one
+  // predicate at a time: "edit" targets that predicate, "+ AND" appends one
+  // to the row's condition.
+  const andJoin = t('policies.card.and_join', {}, ' AND ');
   const displayCondition = (preds) => (preds.length
-    ? preds.map(displayPredicate).join(t('policies.card.and_join', {}, ' AND '))
+    ? preds.map(displayPredicate).join(andJoin)
     : (allowList
       ? t('policies.card.always_row_allow', {}, '(always — approves every call to this tool)')
       : t('policies.card.always_row', {}, '(always — gates every call to this tool)')));
+  const predicateParts = (preds, i) => (preds.length
+    ? preds.map((p, j) => (
+      (j > 0 ? '<span class="policy-and-join">' + escapeHtml(andJoin) + '</span>' : '') +
+      '<code>' + escapeHtml(displayPredicate(p)) + '</code>' +
+      '<button class="policy-edit-predicate" data-idx="' + i + '" data-pred="' + j + '">' + escapeHtml(t('actions.edit', {}, 'edit')) + '</button>' +
+      // A lone predicate goes with its condition (the row's ×): emptying a
+      // condition would leave a rule that matches every call.
+      (preds.length > 1
+        ? '<button class="policy-remove-part" data-idx="' + i + '" data-pred="' + j + '">' + escapeHtml(t('actions.remove', {}, 'Remove')) + '</button>'
+        : '')
+    )).join('')
+    : '<code>' + escapeHtml(displayCondition(preds)) + '</code>');
+  // Two equals on one argument with different strings cannot both hold, so
+  // the condition saves fine but never matches. Flags only what never
+  // matches in either rule effect: non-strings are skipped (the evaluator
+  // compares in Python, where true equals 1), and so are wildcard paths and
+  // case-only differences, which a require-approval list can still match.
+  // The evaluator treats a leading "args." as optional, and so does this.
+  const conflictingEqPath = (preds) => {
+    const seen = new Map();
+    for (const p of preds) {
+      if (!p || p.op !== 'eq' || typeof p.value !== 'string' || !p.path || p.path.includes('*')) continue;
+      const key = p.path.replace(/^args\./, '');
+      const v = p.value.toLowerCase();
+      if (seen.has(key) && seen.get(key) !== v) return p.path;
+      seen.set(key, v);
+    }
+    return null;
+  };
+  const conflictWarning = (preds) => {
+    const path = conflictingEqPath(preds);
+    return path === null ? '' : '<span class="policy-condition-warning" role="note">' + escapeHtml(t(
+      'policies.card.never_matches', {path: path},
+      path + ' cannot equal two different values at once, so this condition never matches.'
+    )) + '</span>';
+  };
   const predicateRows = rule.conditions.map((preds, i) => (
     '<li class="policy-predicate-row" data-idx="' + i + '">' +
-      '<code>' + escapeHtml(displayCondition(preds)) + '</code>' +
-      (preds.length === 1
-        ? '<button class="policy-edit-predicate" data-idx="' + i + '">' + escapeHtml(t('actions.edit', {}, 'edit')) + '</button>'
-        : '') +
-      '<button class="policy-remove-predicate" data-idx="' + i + '" aria-label="' + escapeHtml(t('actions.remove', {}, 'Remove')) + '">×</button>' +
+      (i > 0 ? '<span class="policy-or-join">' + escapeHtml(t('policies.card.or_join', {}, 'OR')) + '</span>' : '') +
+      predicateParts(preds, i) +
+      '<button class="policy-and-predicate" data-idx="' + i + '" title="' + escapeHtml(allowList
+        ? t('policies.card.add_and_title_allow', {}, 'Add a sub-condition that must also match. This condition then approves fewer calls.')
+        : t('policies.card.add_and_title', {}, 'Add a sub-condition that must also match. This condition then matches fewer calls.')) + '">' +
+        escapeHtml(t('policies.card.add_and', {}, '+ AND')) + '</button>' +
+      '<button class="policy-remove-predicate" data-idx="' + i + '" aria-label="' + escapeHtml(t('policies.card.remove_condition', {}, 'Remove condition')) + '">×</button>' +
+      conflictWarning(preds) +
     '</li>'
   )).join('');
   const emptyHint = rule.conditions.length === 0
@@ -365,6 +407,7 @@ function renderPolicyCard(toolName, rule) {
       '<ul class="policy-predicate-list">' + emptyHint + predicateRows + '</ul>' +
       '<button class="policy-add-predicate">' + escapeHtml(t('policies.card.add_condition', {}, '+ Add condition')) + '</button>' +
       '<div class="policy-predicate-form" style="display:none;">' +
+        '<div class="policy-predicate-form-hint" style="display:none;"></div>' +
         '<div class="policy-form-row">' +
           '<label class="policy-form-label">' + escapeHtml(t('policies.card.argument', {}, 'Argument:')) + '</label>' +
           '<select name="policy:predicate-path" class="policy-predicate-path-select">' +
@@ -480,7 +523,11 @@ function renderPolicyCard(toolName, rule) {
   const pathCustomEl = formEl.querySelector('.policy-predicate-path-custom');
   const valueSlotEl = formEl.querySelector('.policy-predicate-value-slot');
   const errorEl = formEl.querySelector('.policy-predicate-form-error');
-  let editingIdx = -1;
+  const hintEl = formEl.querySelector('.policy-predicate-form-hint');
+  // What the form writes on save: a new condition (condIdx -1), a predicate
+  // appended to condition condIdx (predIdx -1), or predicate predIdx of it.
+  let condIdx = -1;
+  let predIdx = -1;
   // Tool schema is fetched lazily on first form-open and cached on
   // the card so reopening the form doesn't refetch.
   let toolSchema = null;
@@ -819,15 +866,29 @@ function renderPolicyCard(toolName, rule) {
   });
   pathCustomEl.addEventListener('input', () => renderValueControl(undefined));
 
-  const openForm = async (idx) => {
-    editingIdx = idx;
+  const openForm = async (cond, pred) => {
+    condIdx = cond;
+    predIdx = pred;
     errorEl.style.display = 'none';
     errorEl.textContent = '';
+    // Name the condition's other predicates, so the form shows which group
+    // it edits or extends.
+    const others = cond >= 0
+      ? rule.conditions[cond].filter((_p, j) => j !== pred)
+      : [];
+    if (others.length) {
+      hintEl.textContent = t('policies.card.and_hint',
+        {condition: displayCondition(others)},
+        'Must also match: ' + displayCondition(others));
+      hintEl.style.display = '';
+    } else {
+      hintEl.textContent = '';
+      hintEl.style.display = 'none';
+    }
     formEl.style.display = '';
     await fetchToolSchema();
-    if (idx >= 0) {
-      // Edit is only offered for single-predicate conditions.
-      const p = rule.conditions[idx][0];
+    if (pred >= 0) {
+      const p = rule.conditions[cond][pred];
       opEl.value = p.op || 'eq';
       populatePathSelect(p.path || '');
       await renderValueControl(p.value);
@@ -838,10 +899,23 @@ function renderPolicyCard(toolName, rule) {
     }
   };
 
-  card.querySelector('.policy-add-predicate').addEventListener('click', () => openForm(-1));
+  card.querySelector('.policy-add-predicate').addEventListener('click', () => openForm(-1, -1));
 
   card.querySelectorAll('.policy-edit-predicate').forEach(btn => {
-    btn.addEventListener('click', () => openForm(parseInt(btn.dataset.idx, 10)));
+    btn.addEventListener('click', () => openForm(
+      parseInt(btn.dataset.idx, 10), parseInt(btn.dataset.pred, 10)));
+  });
+
+  card.querySelectorAll('.policy-and-predicate').forEach(btn => {
+    btn.addEventListener('click', () => openForm(parseInt(btn.dataset.idx, 10), -1));
+  });
+
+  card.querySelectorAll('.policy-remove-part').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      rule.conditions[parseInt(btn.dataset.idx, 10)]
+        .splice(parseInt(btn.dataset.pred, 10), 1);
+      if (await autoSave()) rerenderCard();
+    });
   });
 
   card.querySelectorAll('.policy-remove-predicate').forEach(btn => {
@@ -857,7 +931,8 @@ function renderPolicyCard(toolName, rule) {
 
   formEl.querySelector('.policy-predicate-form-cancel').addEventListener('click', () => {
     formEl.style.display = 'none';
-    editingIdx = -1;
+    condIdx = -1;
+    predIdx = -1;
   });
 
   formEl.querySelector('.policy-predicate-form-save').addEventListener('click', async () => {
@@ -891,8 +966,10 @@ function renderPolicyCard(toolName, rule) {
         predicate.value = parsed.value;
       }
     }
-    if (editingIdx >= 0) {
-      rule.conditions[editingIdx] = [predicate];
+    if (condIdx >= 0 && predIdx >= 0) {
+      rule.conditions[condIdx][predIdx] = predicate;
+    } else if (condIdx >= 0) {
+      rule.conditions[condIdx].push(predicate);
     } else {
       rule.conditions.push([predicate]);
       // A new condition takes the card's current lifetime value.
