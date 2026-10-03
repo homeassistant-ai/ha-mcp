@@ -26,6 +26,7 @@ import {
   API,
   collect,
   eventTarget,
+  sessionRoot,
   snapshotDifferences,
 } from "../../.github/slash-agent/github.mjs";
 import { main, prepare, prompt } from "../../.github/slash-agent/main.mjs";
@@ -299,6 +300,99 @@ const green = (api) => {
   ];
 };
 
+const readySession = () => {
+  const api = new FakeAPI();
+  start(api);
+  green(api);
+  publish(api, prepare(api, { number: 10, automatic: true }, APP), null, APP, { runId: "43" });
+  return api;
+};
+
+test("healthy pushes wait or update readiness without buying a worker turn", () => {
+  for (const pending of [false, true]) {
+    const api = readySession();
+    const rounds = stateFrom(api.edits(api.comments), APP).rounds;
+    api.pr.head.sha = "c".repeat(40);
+    api.branches[api.pr.head.ref] = api.pr.head.sha;
+    if (pending) {
+      api.checks[0].status = "in_progress";
+      api.checks[0].conclusion = null;
+    }
+    const plan = prepare(api, { number: 10, automatic: true }, APP);
+    if (pending) assert.equal(plan, null);
+    else {
+      assert.equal(plan.decision.mode, "ready");
+      publish(api, plan, null, APP, { runId: "44" });
+      assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
+      assert.equal(stateFrom(api.edits(api.comments), APP).lastHead, api.pr.head.sha);
+    }
+    assert.equal(stateFrom(api.edits(api.comments), APP).rounds, rounds);
+  }
+});
+
+test("ordinary maintainer comments and the Codex setup notice cannot buy a turn", () => {
+  const api = readySession();
+  api.prComments.push({ id: 970, user, body: "Thanks for the update!", updated_at: "2026-10-01T19:00:00Z" });
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
+  assert.equal(eventTarget(api, { action: "created", issue: { number: 10, pull_request: {} }, comment: { id: 970 } }, "issue_comment", {}), null);
+  api.reviewThreads = [{
+    id: "setup-thread", isResolved: false, comments: [{
+      id: 971, user: { login: "chatgpt-codex-connector[bot]", type: "Bot" },
+      body: "To use Codex here, [create a Codex account and connect to github](https://chatgpt.com/codex/cloud/settings/connectors).",
+      updated_at: "2026-10-01T19:01:00Z",
+    }],
+  }];
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
+  api.reviews.push({ id: 972, user, state: "COMMENTED", body: "Please add an empty-state regression.", submitted_at: "2026-10-01T19:02:00Z" });
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP).decision.mode, "code");
+});
+
+test("approval and empty review bodies do not request coding", () => {
+  const api = readySession();
+  api.reviews.push({ id: 975, user, state: "APPROVED", body: "Looks good!", submitted_at: "2026-10-01T19:03:00Z" });
+  api.reviews.push({ id: 976, user, state: "COMMENTED", body: "", submitted_at: "2026-10-01T19:04:00Z" });
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
+});
+
+test("overlapping slash and CI events route to one root and re-admit after publication", () => {
+  const api = readySession();
+  api.reviews.push({ id: 980, user, state: "COMMENTED", body: "Please add a regression.", submitted_at: "2026-10-01T20:00:00Z" });
+  const comment = eventTarget(api, { action: "created", issue: { number: 9 }, comment: { id: 1 } }, "issue_comment", {});
+  const ci = eventTarget(api, { sha: api.pr.head.sha }, "status", {});
+  // Both are routed before the first worker publishes. The canonical lock key
+  // is independent of issue/PR number, event kind and commit SHA.
+  assert.equal(sessionRoot(api, comment, APP), 9);
+  assert.equal(sessionRoot(api, ci, APP), 9);
+  assert.equal(comment.number, 9);
+  assert.equal(ci.number, 10);
+  const calls = api.calls.length;
+  sessionRoot(api, ci, APP);
+  assert.equal(api.calls.length, calls);
+  const first = prepare(api, comment, APP);
+  assert.equal(first.decision.mode, "code");
+  const work = artifact();
+  work.changes = [];
+  work.result.outcome = "unchanged";
+  publish(api, first, work, APP, { runId: "44" });
+  // Admission is inside the called-workflow lock, not cached during routing.
+  assert.equal(prepare(api, ci, APP), null);
+  assert.equal(stateFrom(api.edits(api.comments), APP).rounds, 2);
+});
+
+test("a new failing check on a previously green head runs once per failure", () => {
+  const api = readySession();
+  api.checks[0].conclusion = "failure";
+  const first = prepare(api, { number: 10, automatic: true }, APP);
+  assert.equal(first.decision.mode, "code");
+  const work = artifact();
+  work.changes = [];
+  work.result.outcome = "unchanged";
+  publish(api, first, work, APP, { runId: "44" });
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
+  api.checks[0].id += 1;
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP).decision.mode, "code");
+});
+
 test("only anchored, nonempty slash commands select supported models", () => {
   assert.equal(command("/astra implement this").model, "gpt-6-astra");
   assert.equal(command("/sol fix it\r\nkeep scope").model, "gpt-6-sol");
@@ -425,7 +519,7 @@ test("closed or locked work cannot resume", () => {
   for (const stop of ["closed issue", "locked issue", "closed PR"]) {
     const api = new FakeAPI();
     start(api);
-    api.prComments.push({ id: 1999, user, body: "Please continue", updated_at: "2026-09-15T18:00:00Z" });
+    api.reviews.push({ id: 1999, user, state: "COMMENTED", body: "Please continue", submitted_at: "2026-09-15T18:00:00Z" });
     if (stop === "closed issue") api.issue.state = "closed";
     if (stop === "locked issue") api.issue.locked = true;
     if (stop === "closed PR") api.pr.state = "closed";
@@ -555,6 +649,7 @@ test("pause, resume, role revocation and iteration cap survive separate runs", (
   snapshot.session.rounds = 4;
   snapshot.session.commandUpdatedAt = api.command.updated_at;
   snapshot.session.status = "waiting";
+  snapshot.session.handled = "unhandled-review-feedback";
   assert.equal(decide(snapshot, { automatic: true }).mode, "limit");
 });
 
@@ -562,7 +657,7 @@ test("four published rounds exhaust the budget until a new maintainer command", 
   const api = new FakeAPI();
   start(api);
   for (let round = 2; round <= 4; round++) {
-    api.prComments.push({
+    api.reviews.push({
       id: 1000 + round,
       user,
       body: `Maintainer follow-up ${round}`,
@@ -576,7 +671,7 @@ test("four published rounds exhaust the budget until a new maintainer command", 
     const state = publish(api, plan, work, APP, { runId: String(42 + round) });
     assert.equal(state.rounds, round);
   }
-  api.prComments.push({
+  api.reviews.push({
     id: 1005,
     user,
     body: "One more request after the budget",
@@ -728,7 +823,7 @@ test("publication rejects blocked writes, mismatched outcomes and branch takeove
 
   const advanced = new FakeAPI();
   start(advanced);
-  advanced.prComments.push({ id: 1002, user, body: "Please fix another case", updated_at: "2026-09-15T15:00:00Z" });
+  advanced.reviews.push({ id: 1002, user, state: "COMMENTED", body: "Please fix another case", submitted_at: "2026-09-15T15:00:00Z" });
   const plan = prepare(advanced, { number: 10, automatic: true }, APP);
   const write = advanced.write.bind(advanced);
   advanced.write = (path, data, method) => {
@@ -1438,6 +1533,7 @@ test("workflow entrypoint wires admit, prompt, package and publish artifacts", (
     GITHUB_OUTPUT: outputPath,
     HA_MCP_APP_SLUG: APP,
     SLASH_STATE_DIR: stateDirectory,
+    SLASH_SESSION_ROOT: "9",
     OUTPUT_PATH: resultPath,
     CODEX_LOG_PATH: logPath,
     TOKEN_APP_SLUG: APP,
@@ -1446,6 +1542,10 @@ test("workflow entrypoint wires admit, prompt, package and publish artifacts", (
   };
   const createApi = () => api;
   try {
+    main("route", env, { createApi });
+    assert.match(readFileSync(outputPath, "utf8"), /root=9/);
+    assert.equal(api.calls.length, 0);
+    assert.throws(() => main("admit", { ...env, SLASH_SESSION_ROOT: "10" }, { createApi }), /Session root changed/);
     main("admit", env, { createApi });
     assert.match(readFileSync(outputPath, "utf8"), /run=true/);
     main("prompt", env, { createApi });

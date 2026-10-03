@@ -30,6 +30,16 @@ export function principal(comment) {
 export const trustedComment = (comment, roles) =>
   trustedReview(principal(comment), roles);
 
+export function reviewFeedback(comment, roles) {
+  if (!trustedComment(comment, roles) || !comment.body?.trim()) return false;
+  if (["APPROVED", "DISMISSED", "PENDING"].includes(comment.state)) return false;
+  // This connector notice asks for service setup, not a repository change.
+  if (principal(comment)?.type === "Bot" &&
+      /^To use Codex here, \[create a Codex account and connect to github\]\(https:\/\/chatgpt\.com\/codex\/cloud\/settings\/connectors\)\.?$/i.test(comment.body.trim()))
+    return false;
+  return true;
+}
+
 export function command(body) {
   const match = /^\/(astra|sol|terra)[ \t]+(\S[\s\S]*)$/.exec(
     (body ?? "").trim(),
@@ -118,7 +128,7 @@ export function feedbackHash(snapshot) {
       .filter((t) => !t.isResolved)
       .map((t) => ({
         id: t.id,
-        comments: t.comments.filter((c) => trustedComment(c, snapshot.roles)),
+        comments: t.comments.filter((c) => reviewFeedback(c, snapshot.roles)),
       }))
       .filter((t) => t.comments.length),
   });
@@ -145,6 +155,13 @@ export function checksReady(snapshot) {
         c.ok,
     ),
   );
+}
+
+export function failureHash(snapshot) {
+  const failed = snapshot.checks.filter((c) => c.complete && !c.ok)
+    .map((c) => ({ name: c.name, id: c.id, appId: c.appId }))
+    .sort((a, b) => a.name.localeCompare(b.name) || String(a.id).localeCompare(String(b.id)));
+  return failed.length ? digest(failed) : null;
 }
 
 export function decide(snapshot, trigger) {
@@ -202,19 +219,19 @@ export function decide(snapshot, trigger) {
   const task = parsed.action === "resume" ? previous?.task : parsed.text;
   if (!task) return { mode: "idle" };
   if (!changed && previous.status === "blocked") return { mode: "idle" };
-  const newFailure =
-    snapshot.checks.some((c) => c.complete && !c.ok) &&
-    previous?.checkedHead !== snapshot.head;
+  const failure = failureHash(snapshot);
+  const newFailure = failure !== null &&
+    (previous?.checkedHead !== snapshot.head || previous?.checkedFailure !== failure);
   if (
     !changed &&
     previous.status !== "publishing" &&
     !newFailure &&
-    previous.handled === feedback &&
-    previous.lastHead === snapshot.head
+    previous.handled === feedback
   ) {
     return {
       mode:
-        previous.status !== "ready" && checksReady(snapshot) ? "ready" : "idle",
+        checksReady(snapshot) && (previous.status !== "ready" || previous.lastHead !== snapshot.head)
+          ? "ready" : "idle",
       latest,
       parsed,
       feedback,
@@ -291,7 +308,7 @@ export function validateResult(result, snapshot) {
     );
     if (
       !thread ||
-      !thread.comments.some((c) => trustedComment(c, snapshot.roles))
+      !thread.comments.some((c) => reviewFeedback(c, snapshot.roles))
     )
       throw Error("Response targets an unauthorized review thread");
     seen.add(r.thread_id);

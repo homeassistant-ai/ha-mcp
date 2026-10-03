@@ -6,8 +6,8 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { decide, principal, resultSchema } from "./core.mjs";
-import { API, collect, eventTarget, snapshotGuard } from "./github.mjs";
+import { decide, principal, resultSchema, reviewFeedback } from "./core.mjs";
+import { API, collect, eventTarget, sessionRoot, snapshotGuard } from "./github.mjs";
 import { packageWork } from "./worker.mjs";
 import { publish } from "./publish.mjs";
 
@@ -44,7 +44,7 @@ export function prompt(plan) {
       },
       conversation: s.sourceComments,
       feedback: s.feedback,
-      threads: s.threads.filter((t) => !t.isResolved),
+      threads: s.threads.filter((t) => !t.isResolved && t.comments.some((c) => reviewFeedback(c, s.roles))),
       checks: s.checks,
       previousMemory: s.session?.summary ?? "",
       round: d.rounds + 1,
@@ -78,7 +78,7 @@ export function main(
     }
   };
   const json = (name) => readJson(resolve(directory, name), name);
-  if (operation === "admit") {
+  if (operation === "admit" || operation === "route") {
     const app = env.HA_MCP_APP_SLUG;
     if (!app) {
       console.log("::notice::HA_MCP_AGENT_APP_SLUG is unset; slash agent is inactive");
@@ -90,7 +90,15 @@ export function main(
     const api = createApi(env.GITHUB_REPOSITORY);
     const event = readJson(env.GITHUB_EVENT_PATH, "GitHub event");
     const trigger = eventTarget(api, event, env.GITHUB_EVENT_NAME, env);
+    if (operation === "route") {
+      const root = sessionRoot(api, trigger, app);
+      output("run", root !== null);
+      if (root !== null) output("root", root);
+      return;
+    }
     const plan = prepare(api, trigger, app);
+    if (plan && env.SLASH_SESSION_ROOT && String(plan.snapshot.root) !== env.SLASH_SESSION_ROOT)
+      throw Error("Session root changed after routing");
     output("run", !!plan);
     if (!plan) return;
     mkdirSync(directory, { recursive: true });

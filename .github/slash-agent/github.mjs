@@ -5,6 +5,7 @@ import {
   maintainer,
   ORIGIN_MARKER,
   principal,
+  reviewFeedback,
   STATE_MARKER,
   stateFrom,
   trustedComment,
@@ -227,11 +228,7 @@ export function eventTarget(api, event, eventName, env) {
       authority?.type === "User" &&
       trustedComment(current, roles) &&
       command(current.body);
-    if (
-      !isCommand &&
-      (!event.issue.pull_request || !trustedComment(current, roles))
-    )
-      return null;
+    if (!isCommand) return null;
     return {
       number: event.issue.number,
       commandId: isCommand ? current.id : null,
@@ -281,7 +278,7 @@ export function eventTarget(api, event, eventName, env) {
   return { number: prs[0].number, commandId: null, automatic: true };
 }
 
-export function collect(api, number, app, { idleIfUnowned = false } = {}) {
+function sessionSource(api, number, app, { idleIfUnowned = false } = {}) {
   let issue = api.get(`issues/${number}`);
   let pr = issue.pull_request ? api.get(`pulls/${number}`) : null;
   let root = number;
@@ -289,6 +286,7 @@ export function collect(api, number, app, { idleIfUnowned = false } = {}) {
     const origin = new RegExp(`${ORIGIN_MARKER}(\\d+) -->`).exec(pr.body ?? "");
     if (origin) root = Number(origin[1]);
   }
+  if (!Number.isSafeInteger(root) || root < 1) throw Error("Invalid session root");
   if (root !== number) issue = api.get(`issues/${root}`);
   const rawRootComments = api.pages(`issues/${root}/comments`);
   if (
@@ -318,6 +316,18 @@ export function collect(api, number, app, { idleIfUnowned = false } = {}) {
       throw Error("Session belongs to another PR");
     pr ??= api.get(`pulls/${session.pr}`);
   }
+  return { issue, pr, root, rootComments, session };
+}
+
+export function sessionRoot(api, trigger, app) {
+  if (!trigger) return null;
+  return sessionSource(api, trigger.number, app, { idleIfUnowned: trigger.automatic })?.root ?? null;
+}
+
+export function collect(api, number, app, options = {}) {
+  const source = sessionSource(api, number, app, options);
+  if (!source) return null;
+  const { issue, pr, root, rootComments, session } = source;
   const comments = rootComments.concat(
     pr && pr.number !== root
       ? api.edits(api.pages(`issues/${pr.number}/comments`))
@@ -406,13 +416,8 @@ export function collect(api, number, app, { idleIfUnowned = false } = {}) {
     }));
   // Issue-enrichment theories and bot progress/acknowledgment comments are not
   // coding instructions. Supported bots contribute formal PR reviews/threads.
-  const feedback = [
-    ...comments.filter(
-      (c) => c.user?.type === "User" && c.user.login !== "ghhamcp",
-    ),
-    ...reviews,
-  ]
-    .filter((c) => trustedComment(c, roles))
+  const feedback = reviews
+    .filter((c) => reviewFeedback(c, roles))
     .map((c) => ({
       id: c.id,
       body: c.body,

@@ -12,6 +12,31 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_session_lock_encloses_admission_worker_and_fresh_publication() -> None:
+    entry = yaml.safe_load((ROOT / ".github/workflows/slash-agent.yml").read_text())
+    session = yaml.safe_load(
+        (ROOT / ".github/workflows/slash-agent-session.yml").read_text()
+    )
+    assert "concurrency" not in entry
+    route = entry["jobs"]["route"]
+    assert "secrets." not in str(route)
+    call = entry["jobs"]["session"]
+    assert call["needs"] == "route"
+    assert call["uses"] == "./.github/workflows/slash-agent-session.yml"
+    assert call["concurrency"] == {
+        "group": "slash-agent-session-${{ github.repository }}-${{ needs.route.outputs.root }}",
+        "cancel-in-progress": False,
+        "queue": "max",
+    }
+    assert call["with"]["session_root"] == "${{ needs.route.outputs.root }}"
+    admission = session["jobs"]["admit"]
+    assert "secrets." not in str(admission)
+    plan = next(step for step in admission["steps"] if step.get("id") == "plan")
+    assert plan["env"]["SLASH_SESSION_ROOT"] == "${{ inputs.session_root }}"
+    assert session["jobs"]["code"]["needs"] == "admit"
+    assert session["jobs"]["publish"]["needs"] == ["admit", "code"]
+
+
 def test_slash_agent_behavior() -> None:
     node = shutil.which("node")
     if node is None:
@@ -30,23 +55,18 @@ def test_slash_agent_behavior() -> None:
 def test_slash_workflow_keeps_publication_and_auth_outside_generated_code() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/slash-agent.yml").read_text())
     assert all(value == "read" for value in workflow["permissions"].values())
-    assert workflow["concurrency"] == {
-        "group": (
-            "slash-agent-${{ github.repository }}-${{ "
-            "github.event.issue.number || inputs.issue_number || "
-            "github.event.workflow_run.head_sha || github.event.sha || github.run_id }}"
-        ),
-        "cancel-in-progress": False,
-        "queue": "max",
-    }
-    jobs = workflow["jobs"]
-    admission = jobs["admit"]
+    admission = workflow["jobs"]["route"]
     assert "homeassistant-ai/ha-mcp" in admission["if"]
     assert "HA_MCP_AGENT_APP_SLUG != ''" in admission["if"]
     assert "HA_MCP_AGENT_CLIENT_ID != ''" in admission["if"]
     assert "coderabbitai[bot]" in admission["if"]
     assert "chatgpt-codex-connector[bot]" in admission["if"]
-    assert "secrets." not in str(jobs["admit"])
+    assert "secrets." not in str(admission)
+    session = yaml.safe_load(
+        (ROOT / ".github/workflows/slash-agent-session.yml").read_text()
+    )
+    assert all(value == "read" for value in session["permissions"].values())
+    jobs = session["jobs"]
     code = jobs["code"]
     assert code["concurrency"] == {
         "group": "codex-auth-${{ github.repository }}",
@@ -97,7 +117,9 @@ def test_wakeup_names_and_artifacts_match_the_controller_contract() -> None:
     for path in paths:
         assert yaml.safe_load((ROOT / path).read_text())["name"] in triggers
 
-    jobs = workflow["jobs"]
+    jobs = yaml.safe_load(
+        (ROOT / ".github/workflows/slash-agent-session.yml").read_text()
+    )["jobs"]
     admit_upload = next(
         step
         for step in jobs["admit"]["steps"]
@@ -125,12 +147,14 @@ def test_wakeup_names_and_artifacts_match_the_controller_contract() -> None:
     assert all(step["with"]["path"] == "slash-state" for step in publish_downloads)
     assert (
         "SLASH_STATE_DIR: control/slash-state"
-        in (ROOT / ".github/workflows/slash-agent.yml").read_text()
+        in (ROOT / ".github/workflows/slash-agent-session.yml").read_text()
     )
 
 
 def test_worker_failure_metadata_does_not_print_model_log(tmp_path: Path) -> None:
-    workflow = yaml.safe_load((ROOT / ".github/workflows/slash-agent.yml").read_text())
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/slash-agent-session.yml").read_text()
+    )
     step = next(
         step
         for step in workflow["jobs"]["code"]["steps"]

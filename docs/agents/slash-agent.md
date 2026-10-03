@@ -30,12 +30,15 @@ auto-merge, deletes branches, or requests a reviewer.
 
 ## Execution and credentials
 
-The default-branch workflow has three jobs:
-
-Wakeups for a slash-command issue or a CI head are serialized through
-publication. Distinct CI commits use separate queues, so status bursts on
-unrelated PRs cannot fill the command queue. The coding and publication jobs
-retain their own credential and write serialization.
+The entry workflow first routes an authorized event to its canonical session
+root: the issue for an issue-originated PR, or the PR itself for an existing
+PR command. Routing is read-only and does not reserve model work. Unrelated
+automatic events stop here. All event types for that root then share one
+queued call to `slash-agent-session.yml`; the lock covers all three jobs below,
+including publication. Admission rereads the event and GitHub state after the
+lock is acquired, so a duplicate event cannot spend a turn on a cached plan.
+Distinct roots have separate queues; unrelated status bursts cannot fill a
+maintainer's command queue.
 
 1. Admission independently rereads GitHub state, verifies authority and prepares
    an immutable plan artifact. It has read-only GitHub permissions and no secrets.
@@ -60,6 +63,15 @@ continues using the narrower `ha-mcp` App and its existing `HA_MCP_APP_*`
 configuration. Product and bench retain separate App private keys, Codex OAuth
 credentials and `CODEX_AUTH_PAT` secrets.
 
+This is repository-owned automation for maintainer authorization, model
+selection and the tested issue-to-PR/review lifecycle. Workers use the one
+Codex OAuth account configured in the repository's `CODEX_AUTH`, with no
+per-maintainer account selection. Its `codex-auth` queue is also shared by
+issue intake and report workflows to avoid simultaneous OAuth refreshes.
+That limits throughput: slash jobs may wait behind these consumers, and the
+58-minute worker job timeout is a ceiling, not a measured typical duration.
+Concurrent maintainer capacity has not been load-tested.
+
 The worker may change at most 80 regular files totalling 2 MiB. Publication
 rejects traversal, symlinks/submodules, credential paths, root/scoped `AGENTS.md`
 and `CLAUDE.md`, and `.github/`, `.codex/` or `.claude/` changes. These protected
@@ -78,12 +90,18 @@ An edited checkpoint must still have the App as its last editor. Manual edits
 to checkpoint contents are rejected; use slash commands for changes instead.
 Each new worker reconstructs context from GitHub and the checkpoint. This is
 durable task persistence, not a restored Codex CLI transcript; credentials and
-raw transcripts are never uploaded. A failed coding job records only the private
+raw transcripts are never uploaded. The previous summary, test evidence and
+continuation memory are bounded to 2,000/1,000/2,000 characters and replaced
+after each model round. The worker also receives the current task, issue/PR,
+human conversation, review feedback, checks and source checkout. Repository
+decisions that must survive later rounds should be documented in the code or
+durable project documentation, rather than relying on an internal transcript.
+A failed coding job records only the private
 log's byte count and recognized event counts in Actions; the log disappears with
 the runner. Plan/result artifacts expire after one day, and later work does not
 depend on them.
 
-Maintainer comments/reviews and the existing CodeRabbit/Codex review bots can
+Substantive maintainer reviews/inline feedback and the existing CodeRabbit/Codex review bots can
 resume an authorized session. A secretless review-event workflow wakes the trusted
 controller; its completion is only a signal, not trusted instructions or an
 artifact to execute. CI workflow completions and status changes are also signals.
@@ -96,8 +114,13 @@ for supplied, unresolved threads containing maintainer or supported review-bot
 feedback, even when someone else opened the thread. Clarifications are posted
 before blocking, and review rounds receive one summary on the PR itself.
 
-Pending checks do not consume a coding turn. A new failing head or new authorized
-feedback can trigger another turn. Reporter edits and ordinary contributor text
+Pending or successful checks on a new head do not consume a coding turn,
+including after readiness. A newly observed failing check or new authorized
+review feedback can trigger another turn. Duplicate failures are remembered
+by head and failed-check identity. Readiness can update the checkpoint without
+calling the model. Ordinary PR discussion, approvals, empty reviews and the
+Codex account-setup notice do not request coding; use a new slash command for
+work requested through an ordinary comment. Reporter edits and ordinary text
 remain context but cannot spend a turn through a later CI/status event. A session
 gets at most four automatic coding turns per
 command. A new task or a matching `/astra resume`, `/sol resume` or `/terra

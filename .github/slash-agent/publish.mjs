@@ -4,6 +4,7 @@ import {
   decide,
   digest,
   feedbackHash,
+  failureHash,
   ORIGIN_MARKER,
   principal,
   trustedComment,
@@ -252,6 +253,10 @@ export function publish(
         { id: fresh.pr.node_id },
       );
     state.status = "ready";
+    state.lastHead = fresh.head;
+    state.checkedHead = fresh.head;
+    state.checkedFailure = failureHash(fresh);
+    state.handled = feedbackHash(fresh);
     save(api, state, app);
     return state;
   }
@@ -397,6 +402,7 @@ export function publish(
     ),
   });
   state.checkedHead = fresh.head;
+  state.checkedFailure = failureHash(fresh);
   // A changed result has already bound a PR above; an unchanged issue result
   // completes in its checkpoint without creating one.
   state.status = state.pr ? "waiting" : "complete";
