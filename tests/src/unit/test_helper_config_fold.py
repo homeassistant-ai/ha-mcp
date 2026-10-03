@@ -131,6 +131,8 @@ async def test_config_accepts_core_names_and_name(capture_create) -> None:
     )
     (kwargs,) = capture_create.kwargs
     assert (kwargs["min_value"], kwargs["max_value"]) == (0, 5)
+    # positional: client, helper_type, name, icon
+    assert capture_create.args[0][2:4] == ("Laps", "mdi:run")
 
 
 async def test_config_rejects_unknown_and_conflicting_keys(capture_create) -> None:

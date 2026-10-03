@@ -281,7 +281,7 @@ async def test_concurrent_creates_each_return_their_subentry_id():
 
     async def submit(flow_id, data):
         await asyncio.sleep(0)
-        ids.append(f"sub-{flow_id}")
+        ids.append(f"sub-{data['model']}")
         return {"type": "create_entry"}
 
     flows = iter(["a", "b"])
@@ -297,7 +297,7 @@ async def test_concurrent_creates_each_return_their_subentry_id():
         set_config_subentry(client, "entry-1", "conversation", {"model": "m"}),
         set_config_subentry(client, "entry-1", "conversation", {"model": "n"}),
     )
-    assert {first["subentry_id"], second["subentry_id"]} == {"sub-a", "sub-b"}
+    assert (first["subentry_id"], second["subentry_id"]) == ("sub-m", "sub-n")
 
 
 async def test_config_set_helper_walks_multistep_subentry_flow(
