@@ -47,7 +47,9 @@ from .component_api import (
     is_unknown_command,
 )
 from .component_helper_collections import (
+    collection_payload,
     fetch_helper_schemas,
+    native_result,
     read_helper_item,
     write_helper_item,
 )
@@ -62,14 +64,19 @@ from .config_entry_flow import (
 )
 from .config_entry_flow_walker import fetch_helper_flow_info
 from .helper_field_schemas import (
-    _ALL_TYPED_PARAMS,
-    _SIMPLE_CONFIG_KEYS_DESCRIPTION,
     _TYPE_TYPED_PARAMS,
     SIMPLE_HELPER_SCHEMAS,
     _HelperFieldSpec,
 )
+from .helper_field_schemas import (
+    ALL_TYPED_PARAMS as _ALL_TYPED_PARAMS,
+)
+from .helper_field_schemas import (
+    SIMPLE_CONFIG_KEYS_DESCRIPTION as _SIMPLE_CONFIG_KEYS_DESCRIPTION,
+)
 from .helpers import (
     HIDDEN_PARAM,
+    clearable_value,
     exception_to_structured_error,
     hidden_param_names,
     log_tool_usage,
@@ -1467,7 +1474,7 @@ async def _apply_registry_updates_to_entity(
     # string / empty list). A transient raise on either call is captured via
     # return_exceptions so a multi-entity flow helper can still report partial success.
     needs_registry = area_id is not None or labels is not None or icon is not None
-    needs_category = bool(category)
+    needs_category = category is not None
     if not (needs_registry or needs_category):
         return applied
 
@@ -2226,27 +2233,6 @@ async def _apply_create_category(
         warnings.extend(cat_result["warnings"])
 
 
-def _collection_payload(helper_type: str, message: dict[str, Any]) -> dict[str, Any]:
-    """A ``{type}/create|update`` WS message's item fields.
-
-    ``<type>_id`` addresses the item on update; on a tag create it is a field.
-    """
-    drop = {"type"}
-    if str(message.get("type", "")).endswith("/update"):
-        drop.add(f"{helper_type}_id")
-    return {key: value for key, value in message.items() if key not in drop}
-
-
-def _native_result(
-    helper_type: str, result: dict[str, Any]
-) -> tuple[dict[str, Any], str, list[str]]:
-    """Split a component write into (helper data, entity_id, warnings)."""
-    item = result.get("item") or {}
-    entity_id = result.get("entity_id") or f"{helper_type}.{item.get('id')}"
-    data = {**item, **(result.get("registry_applied") or {})}
-    return data, entity_id, list(result.get("warnings") or [])
-
-
 async def _create_via_component(
     client: Any,
     helper_type: str,
@@ -2264,7 +2250,7 @@ async def _create_via_component(
         for key, value in (
             ("area_id", area_id),
             ("labels", labels),
-            ("category", category or None),
+            ("category", category),
         )
         if value is not None
     }
@@ -2272,13 +2258,13 @@ async def _create_via_component(
         client,
         helper_type,
         "create",
-        _collection_payload(helper_type, message),
+        collection_payload(helper_type, message),
         registry=registry,
         error_context=_simple_helper_error_context(
             helper_type, name=message.get("name")
         ),
     )
-    return None if result is None else _native_result(helper_type, result)
+    return None if result is None else native_result(helper_type, result)
 
 
 async def _execute_create_simple_helper(
@@ -2565,8 +2551,9 @@ def _build_standard_update_message(
         "name": name if name is not None else existing.get("name"),
     }
     if helper_type not in ("person", "tag"):
+        # Core rejects an empty icon; a cleared one is left out of the item.
         icon_val = icon if icon is not None else existing.get("icon")
-        if icon_val is not None:
+        if icon_val:
             message["icon"] = icon_val
     builder = _SIMPLE_UPDATE_FIELD_BUILDERS.get(helper_type)
     if builder is not None:
@@ -2942,7 +2929,7 @@ async def _apply_update_registry_and_category(
         client, entity_id, icon, area_id, labels, updated_data, warnings
     )
 
-    if category:
+    if category is not None:
         cat_result: dict[str, Any] = {}
         await apply_entity_category(
             client, entity_id, category, "helpers", cat_result, "helper"
@@ -2990,7 +2977,7 @@ async def _execute_fallback_registry_update(
                 context=_simple_helper_error_context(helper_type, entity_id=entity_id),
             )
         )
-    if category:
+    if category is not None:
         cat_result: dict[str, Any] = {}
         await apply_entity_category(
             client, entity_id, category, "helpers", cat_result, "helper"
@@ -3036,7 +3023,7 @@ async def _update_via_component(
             ("icon", icon),
             ("area_id", area_id),
             ("labels", labels),
-            ("category", category or None),
+            ("category", category),
         )
         if value is not None and helper_type != "tag"
     }
@@ -3044,12 +3031,12 @@ async def _update_via_component(
         client,
         helper_type,
         "update",
-        _collection_payload(helper_type, message),
+        collection_payload(helper_type, message),
         item_id=item["item_id"],
         registry=registry,
         error_context=_simple_helper_error_context(helper_type, entity_id=entity_id),
     )
-    return None if result is None else _native_result(helper_type, result)
+    return None if result is None else native_result(helper_type, result)
 
 
 async def _execute_update_simple_helper(
@@ -4284,13 +4271,15 @@ class HelperConfigTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:bell', 'mdi:toggle-switch')",
+                description="Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it",
                 default=None,
             ),
         ] = None,
         area_id: Annotated[
             str | None,
-            Field(description="Area/room ID to assign the helper to", default=None),
+            Field(
+                description="Area ID for the helper; '' or ' ' clears it", default=None
+            ),
         ] = None,
         labels: Annotated[
             str | list[str] | None,
@@ -4368,7 +4357,7 @@ class HelperConfigTools:
         category: Annotated[
             str | None,
             Field(
-                description="Category ID to assign to this helper. Use ha_config_get_category(scope='helpers') to list available categories, or ha_config_set_category() to create one.",
+                description="Category ID for this helper (ha_config_get_category(scope='helpers') lists them, ha_config_set_category() creates one); '' or ' ' clears it.",
                 default=None,
             ),
         ] = None,
@@ -4464,6 +4453,15 @@ class HelperConfigTools:
         - config subentry: ha_config_set_helper(helper_type="config_subentry", entry_id="01HXYZ...", subentry_type="conversation", config={"name": "Local agent", "model": "gemma3:27b"})
         """
         try:
+            # None = not passed; '' = clear ('' or whitespace, #2617's convention).
+            area_id, icon, category = (
+                None if value is None else clearable_value(value, param) or ""
+                for value, param in (
+                    (area_id, "area_id"),
+                    (icon, "icon"),
+                    (category, "category"),
+                )
+            )
             if helper_type == "config_subentry":
                 return await _handle_set_config_subentry(
                     self._client,

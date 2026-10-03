@@ -15,7 +15,9 @@ from ..tools.component_helper_collections import (
     HELPER_CAPABILITIES,
     fetch_helper_schemas,
 )
-from ..tools.helper_field_schemas import _SIMPLE_CONFIG_KEYS_DESCRIPTION
+from ..tools.helper_field_schemas import (
+    SIMPLE_CONFIG_KEYS_DESCRIPTION as _SIMPLE_CONFIG_KEYS_DESCRIPTION,
+)
 from ..tools.tools_config_helpers import SIMPLE_HELPER_TYPES, supported_core_fields
 
 if TYPE_CHECKING:

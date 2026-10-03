@@ -207,7 +207,7 @@ def _apply_registry(
         return {}
     # An empty icon/area clears it, as Core's registry update expects None.
     applied: dict[str, Any] = {
-        key: changes[key] or None if key in ("icon", "area_id") else changes[key]
+        key: changes[key] or None if key != "labels" else changes[key]
         for key in ("icon", "area_id", "labels", "category")
         if key in changes
     }
@@ -217,7 +217,11 @@ def _apply_registry(
     if "labels" in applied:
         update["labels"] = set(applied["labels"] or ())
     if "category" in applied:
-        update["categories"] = {**entry.categories, "helpers": applied["category"]}
+        categories = dict(entry.categories)
+        categories.pop("helpers", None)
+        if applied["category"]:
+            categories["helpers"] = applied["category"]
+        update["categories"] = categories
     try:
         registry.async_update_entity(entity_id, **update)
     except Exception as err:

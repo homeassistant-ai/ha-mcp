@@ -181,3 +181,24 @@ async def write_helper_item(
         action,
         error_context or {"helper_type": helper_type},
     )
+
+
+def collection_payload(helper_type: str, message: dict[str, Any]) -> dict[str, Any]:
+    """A ``{type}/create|update`` WS message's item fields.
+
+    ``<type>_id`` addresses the item on update; on a tag create it is a field.
+    """
+    drop = {"type"}
+    if str(message.get("type", "")).endswith("/update"):
+        drop.add(f"{helper_type}_id")
+    return {key: value for key, value in message.items() if key not in drop}
+
+
+def native_result(
+    helper_type: str, result: dict[str, Any]
+) -> tuple[dict[str, Any], str, list[str]]:
+    """Split a component write into (helper data, entity_id, warnings)."""
+    item = result.get("item") or {}
+    entity_id = result.get("entity_id") or f"{helper_type}.{item.get('id')}"
+    data = {**item, **(result.get("registry_applied") or {})}
+    return data, entity_id, list(result.get("warnings") or [])

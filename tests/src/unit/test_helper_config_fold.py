@@ -12,6 +12,9 @@ from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import tools_config_helpers as tch
 from ha_mcp.tools.component_api import ComponentCaps
+from ha_mcp.tools.component_helper_collections import (
+    collection_payload as client_payload,
+)
 from ha_mcp.tools.helpers import HIDDEN_PARAM, hidden_param_names
 from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
@@ -77,9 +80,11 @@ async def test_hidden_param_names_reads_the_marker() -> None:
 
 class _Captured:
     def __init__(self) -> None:
+        self.args: list[tuple[Any, ...]] = []
         self.kwargs: list[dict[str, Any]] = []
 
     async def __call__(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        self.args.append(args)
         self.kwargs.append(kwargs)
         return {"success": True}
 
@@ -194,8 +199,8 @@ async def test_schedule_update_keeps_unpassed_days() -> None:
 async def test_collection_payload_keeps_tag_id_on_create() -> None:
     create = {"type": "tag/create", "name": "T", "tag_id": "abc"}
     update = {"type": "tag/update", "tag_id": "abc", "name": "T2"}
-    assert tch._collection_payload("tag", create) == {"name": "T", "tag_id": "abc"}
-    assert tch._collection_payload("tag", update) == {"name": "T2"}
+    assert client_payload("tag", create) == {"name": "T", "tag_id": "abc"}
+    assert client_payload("tag", update) == {"name": "T2"}
 
 
 async def test_update_routes_through_component_with_merged_payload() -> None:
@@ -248,18 +253,56 @@ async def test_tag_update_routes_through_component() -> None:
     assert kwargs["registry"] == {}  # tags carry no registry fields
 
 
-async def test_empty_category_is_not_sent_to_the_component() -> None:
+async def test_empty_category_clears_via_the_component() -> None:
     client = MagicMock()
     write = AsyncMock(
         return_value={"success": True, "item": {"id": "b"}, "entity_id": "input_boolean.b",
-                      "registry_applied": {}, "warnings": []}
+                      "registry_applied": {"category": None}, "warnings": []}
     )  # fmt: skip
     with patch.object(tch, "write_helper_item", write):
         await tch._execute_create_simple_helper(
             client, "input_boolean", "B", None, None, None, "", False, False,
             **_type_kw(),
         )  # fmt: skip
-    assert write.call_args.kwargs["registry"] == {}
+    assert write.call_args.kwargs["registry"] == {"category": ""}
+
+
+async def test_blank_clears_and_quote_only_is_rejected(capture_create) -> None:
+    mcp, _ = await _registered_tool()
+    base = {"helper_type": "input_boolean", "name": "B", "action": "create"}
+    await _call(mcp, **base, area_id="  ", icon=" ", category="")
+    # positional: client, helper_type, name, icon, area_id, labels, category
+    (args,) = capture_create.args
+    assert (args[3], args[4], args[6]) == ("", "", "")
+    with pytest.raises(ToolError, match="only quote characters"):
+        await _call(mcp, **base, category='""')
+
+
+async def test_empty_category_clears_the_scope() -> None:
+    from ha_mcp.tools.util_helpers import apply_entity_category
+
+    client = MagicMock()
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": True, "result": []}
+    )
+    result: dict[str, Any] = {}
+    await apply_entity_category(client, "input_boolean.b", "", "helpers", result)
+    sent = [call.args[0] for call in client.send_websocket_message.call_args_list]
+    assert {"type": "config/entity_registry/update", "entity_id": "input_boolean.b",
+            "categories": {"helpers": None}} in sent  # fmt: skip
+    assert result == {"category": None}
+
+
+async def test_cleared_icon_is_left_out_of_the_item() -> None:
+    existing = {"id": "b", "name": "B", "icon": "mdi:star"}
+    kept = tch._build_standard_update_message(
+        "input_boolean", "b", existing, None, None, **_type_kw()
+    )
+    cleared = tch._build_standard_update_message(
+        "input_boolean", "b", existing, None, "", **_type_kw()
+    )
+    assert kept["icon"] == "mdi:star"
+    assert "icon" not in cleared
 
 
 async def test_write_falls_back_to_websocket_when_component_unavailable() -> None:

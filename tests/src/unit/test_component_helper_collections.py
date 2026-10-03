@@ -203,6 +203,28 @@ def test_invalid_errors_include_real_voluptuous(monkeypatch) -> None:
     assert _REAL_VOL.Invalid in hc._invalid_errors()
 
 
+def test_write_clears_the_helpers_category() -> None:
+    collection = FakeCollection({"t": {"id": "t", "name": "T"}})
+    registry = FakeRegistry()
+    registry.add("input_number.t", "input_number", "t")
+    registry.entries["input_number.t"].categories = {
+        "automation": "a1",
+        "helpers": "c1",
+    }
+    msg = {
+        "helper_type": "input_number",
+        "action": "update",
+        "item_id": "t",
+        "data": {"name": "T"},
+        "registry": {"category": ""},
+    }
+    result = asyncio.run(hc.async_write_item(_hass(collection), registry, msg))
+    assert result["registry_applied"] == {"category": None}
+    assert registry.updates == [
+        ("input_number.t", {"categories": {"automation": "a1"}})
+    ]
+
+
 def test_write_reports_invalid_missing_and_unavailable() -> None:
     collection = FakeCollection()
     collection.invalid = ValueError("min must be below max")

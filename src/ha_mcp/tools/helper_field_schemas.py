@@ -14,7 +14,7 @@ _INITIAL_DISABLES_RESTORE_DESCRIPTION = (
     "value on every restart instead of restoring its last state."
 )
 # Per-type `config` keys for SIMPLE helpers, published in the `config` description.
-_SIMPLE_CONFIG_KEYS_DESCRIPTION = (
+SIMPLE_CONFIG_KEYS_DESCRIPTION = (
     "input_select: options (list, required), initial. "
     "input_number: min_value, max_value, step, unit_of_measurement, "
     "mode ('box'/'slider'), initial. "
@@ -105,7 +105,7 @@ _TYPE_TYPED_PARAMS: dict[str, frozenset[str]] = {
 
 # Set of typed params that are simple-helper-specific (used to reject when a
 # flow type was requested but a simple-helper param was passed).
-_ALL_TYPED_PARAMS: frozenset[str] = frozenset().union(*_TYPE_TYPED_PARAMS.values())
+ALL_TYPED_PARAMS: frozenset[str] = frozenset().union(*_TYPE_TYPED_PARAMS.values())
 
 
 class _HelperFieldSpecBase(TypedDict):
