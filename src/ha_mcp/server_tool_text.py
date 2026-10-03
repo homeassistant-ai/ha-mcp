@@ -495,7 +495,7 @@ READ_ONLY_INSTRUCTIONS = (
     "operation is blocked with a READ_ONLY_MODE error. You can "
     "search, read, and analyze freely. To allow changes, the "
     "user must turn off Read Only Mode in the ha-mcp settings "
-    "UI (Tools tab) or the add-on configuration."
+    "UI (Tools tab) or the app (add-on) configuration."
 )
 
 # ha_report_issue is a mandatory tool, so this always points at a tool the

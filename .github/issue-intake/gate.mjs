@@ -105,8 +105,11 @@ export function gateAction(snapshot, bot, event) {
   const author = issue.user;
   if (!isHuman(author) || gateExemptRoles.includes(roles[author.login]))
     return null;
-  if (exemptKind(issue))
-    return issue.state === "open" && hasGateLabel(issue) ? "exempt" : null;
+  if (exemptKind(issue)) {
+    if (issue.state === "open") return hasGateLabel(issue) ? "exempt" : null;
+    const closed = latestEvent(events, (e) => e.event === "closed");
+    return closed?.actor?.login === bot && hasGateLabel(issue) ? "exempt" : null;
+  }
   const done = satisfied(snapshot);
   // An issue moved in from the HACS mirror is asked once, never labeled or
   // closed: a reporter whose issue was closed would refile it on the mirror.
@@ -254,7 +257,7 @@ async function applyGate(api, repository, number, bot, snapshot, action) {
   } else if (action === "request") {
     await post();
   } else {
-    if (action === "reopen")
+    if (snapshot.issue.state === "closed")
       await idempotent(`${base}/${number}`, {
         method: "PATCH",
         data: { state: "open" },

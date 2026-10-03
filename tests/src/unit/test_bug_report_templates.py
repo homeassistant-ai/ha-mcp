@@ -4,6 +4,7 @@ from ha_mcp.tools.bug_report_templates import (
     _format_client_host_for_template,
     _format_client_info_for_template,
     _format_config_toggles_for_template,
+    _generate_search_keywords,
     _sanitize_log_text,
 )
 
@@ -265,3 +266,14 @@ class TestFormatClientHostForTemplate:
             {"mcp_transport": "http", "mcp_client_info": {"name": "mcp-remote"}}
         )
         assert "stdio bridge (mcp-remote bridge)" in line
+
+
+def test_feature_request_duplicate_search_uses_its_title() -> None:
+    """A feature request has no error to search by; falling back to "bug"
+    or to the session's last failed call would never find an earlier
+    request for the same feature."""
+    failed = [{"tool_name": "ha_call_service", "error_message": "Service not found"}]
+    assert _generate_search_keywords({}, failed, "Manage Thread datasets") == [
+        "Manage Thread datasets"
+    ]
+    assert "ha_call_service" in _generate_search_keywords({}, failed)

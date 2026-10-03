@@ -33,6 +33,7 @@ jobs:
       !github.event.issue.pull_request &&
       github.event.sender.type == 'User' && github.actor != 'ghhamcp' &&
       ((github.event_name == 'issues' && contains(fromJSON('["opened","edited","reopened"]'), github.event.action)) ||
+       (github.event_name == 'issues' && github.event.action == 'labeled' && contains(fromJSON('["enhancement","documentation"]'), github.event.label.name)) ||
        (github.event_name == 'issue_comment' && contains(fromJSON('["created","edited"]'), github.event.action)))
     runs-on: ubuntu-latest
     timeout-minutes: 4

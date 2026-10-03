@@ -48,13 +48,14 @@ from .bug_report_templates import (
     _generate_agent_behavior_template,
     _generate_feature_request_template,
     _generate_runtime_bug_template,
+    _generate_search_keywords,
     _ReportText,
     _sanitize_log_text,
+    _suggested_title,
 )
 from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION, parse_string_list_param
 from .component_api import get_component_caps
 from .helpers import (
-    extract_tool_error_message,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
@@ -1171,7 +1172,11 @@ class BugReportTools:
         )
 
         # Generate search keywords and URLs for duplicate check
-        search_keywords = _generate_search_keywords(diagnostic_info, recent_logs)
+        search_keywords = _generate_search_keywords(
+            diagnostic_info,
+            recent_logs,
+            text.title if report_type == "feature_request" else None,
+        )
         duplicate_check_urls = [
             f"https://github.com/homeassistant-ai/ha-mcp/issues?q=is%3Aissue+{quote_plus(keyword)}"
             for keyword in search_keywords[:3]  # Limit to top 3 keywords
@@ -1355,100 +1360,6 @@ def _format_startup_logs(logs: list[dict[str, Any]]) -> str:
         lines.append(line)
 
     return "\n".join(lines)
-
-
-def _generate_bug_title(
-    diagnostic_info: dict[str, Any],
-    recent_logs: list[dict[str, Any]],
-) -> str:
-    """
-    Generate a concise bug title (single line, ~60 chars max).
-
-    Strategy:
-    1. If there are error messages, use the most recent one as basis
-    2. Otherwise, use generic template based on connection status
-    3. Truncate to ~60 chars max
-    """
-    title = ""
-    # Try to get the most recent error directly from logs
-    for log in reversed(recent_logs):
-        error_msg = log.get("error_message")
-        if error_msg:
-            tool_name = log.get("tool_name", "unknown")
-            message = " ".join(
-                _sanitize_log_text(extract_tool_error_message(error_msg)).split()
-            )
-            title = f"{tool_name}: {message}"
-            break
-
-    if not title:
-        # No errors - check connection status
-        conn_status = diagnostic_info.get("connection_status", "Unknown")
-        if "Error" in conn_status or "Failed" in conn_status:
-            title = f"Connection issue: {conn_status}"
-        else:
-            title = "Issue with ha-mcp"
-
-    # Truncate to ~60 chars, trying to preserve words
-    if len(title) > 60:
-        title = title[:57] + "..."
-
-    return title
-
-
-def _suggested_title(
-    report_type: str,
-    diagnostic_info: dict[str, Any],
-    recent_logs: list[dict[str, Any]],
-) -> str:
-    """Return the fallback title; a feature request is not named after an error."""
-    if report_type == "feature_request":
-        return "Feature request"
-    return _generate_bug_title(diagnostic_info, recent_logs)
-
-
-def _generate_search_keywords(
-    diagnostic_info: dict[str, Any],
-    recent_logs: list[dict[str, Any]],
-) -> list[str]:
-    """
-    Generate search keywords for duplicate issue detection.
-
-    Returns a list of keywords to search for similar issues.
-    """
-    keywords = set()
-
-    # Find the most recent error from logs
-    last_error_log = next(
-        (log for log in reversed(recent_logs) if log.get("error_message")), None
-    )
-
-    if last_error_log:
-        tool_name = last_error_log.get("tool_name")
-        if tool_name:
-            keywords.add(tool_name)
-
-        error_msg = last_error_log.get("error_message", "").lower()
-        # Common error patterns
-        if "connection" in error_msg:
-            keywords.add("connection")
-        if "timeout" in error_msg:
-            keywords.add("timeout")
-        if "authentication" in error_msg or "auth" in error_msg:
-            keywords.add("authentication")
-        if "not found" in error_msg:
-            keywords.add("not found")
-
-    # Add connection-based keywords
-    conn_status = diagnostic_info.get("connection_status", "Unknown")
-    if "Error" in conn_status or "Failed" in conn_status:
-        keywords.add("connection")
-
-    # Default to generic search if no specific keywords
-    if not keywords:
-        keywords.add("bug")
-
-    return list(keywords)
 
 
 def _issue_title(report_type: str, text: _ReportText, suggested_title: str) -> str:
