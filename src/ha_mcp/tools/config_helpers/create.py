@@ -6,8 +6,14 @@ from typing import Any
 
 from ...errors import ErrorCode, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
+from ..component_helper_collections import (
+    collection_payload,
+    native_result,
+    tag_entity_id,
+    write_helper_item,
+)
 from ..config_write_helpers import apply_entity_category
-from ..helpers import raise_tool_error
+from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
 from .registry import _ws_error_msg
 from .schemas import (
@@ -137,9 +143,18 @@ def _create_fields_input_text(
     max_value: float | None,
     mode: str | None,
     initial: Any,
+    unit_of_measurement: str | None = None,
+    pattern: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
+    fields: dict[str, Any] = {
+        key: value
+        for key, value in (
+            ("unit_of_measurement", unit_of_measurement),
+            ("pattern", pattern),
+        )
+        if value is not None
+    }
     if min_value is not None:
         fields["min"] = int(min_value)
     if max_value is not None:
@@ -410,11 +425,27 @@ async def _execute_create_simple_helper(
         )
 
     message = _build_create_message(helper_type, name, icon, **kw)
+    native = await _create_via_component(
+        client, helper_type, message, area_id, labels, category
+    )
+    if native is not None:
+        helper_data, entity_id, warnings = native
+        create_response = _helper_response(
+            "create",
+            helper_type,
+            data=helper_data,
+            entity_id=entity_id,
+            message=f"Successfully created {helper_type}: {name}",
+            warnings=warnings,
+        )
+        _attach_helper_skill(create_response, MandatoryBPS)
+        return create_response
+
     result = await client.send_websocket_message(message)
     if not result.get("success"):
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                ws_failure_code(result),
                 f"Failed to create helper: {result.get('error', 'Unknown error')}",
                 context=_simple_helper_error_context(helper_type, name=name),
             )
@@ -422,10 +453,12 @@ async def _execute_create_simple_helper(
 
     helper_data = result.get("result", {})
     entity_id = helper_data.get("entity_id")
+    if helper_type == "tag":
+        entity_id = await tag_entity_id(client, helper_data.get("id")) or entity_id
     if not entity_id and helper_data.get("id"):
         entity_id = f"{helper_type}.{helper_data['id']}"
 
-    warnings: list[str] = []
+    warnings = []
     # Tags live in their own tag registry and never appear in /api/states/<entity_id> —
     # polling there always 404s for the full timeout (~10s per tag), burning CI time.
     if wait and entity_id and helper_type != "tag":
@@ -454,3 +487,37 @@ async def _execute_create_simple_helper(
     )
     _attach_helper_skill(create_response, MandatoryBPS)
     return create_response
+
+
+async def _create_via_component(
+    client: Any,
+    helper_type: str,
+    message: dict[str, Any],
+    area_id: str | None,
+    labels: list[str] | None,
+    category: str | None,
+) -> tuple[dict[str, Any], str, list[str]] | None:
+    """Create through Core's collection in-process; ``None`` uses the WS command.
+
+    The entity exists when Core's create returns, so no ``wait`` polling is needed.
+    """
+    registry = {
+        key: value
+        for key, value in (
+            ("area_id", area_id),
+            ("labels", labels),
+            ("category", category),
+        )
+        if value is not None
+    }
+    result = await write_helper_item(
+        client,
+        helper_type,
+        "create",
+        collection_payload(helper_type, message),
+        registry=registry,
+        error_context=_simple_helper_error_context(
+            helper_type, name=message.get("name")
+        ),
+    )
+    return None if result is None else native_result(helper_type, result)

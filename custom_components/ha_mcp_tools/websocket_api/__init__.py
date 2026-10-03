@@ -293,9 +293,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
+from .. import helper_collections
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
 from .call_service import _call_service_prep, _do_call_service
 from .config_entries import _config_entries_prep, _do_config_entries
@@ -458,6 +461,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
             _bulk_call_service_prep,
         ),
         (_template_diagnose_schema(), _do_template_diagnose, _template_diagnose_prep),
+        *helper_collections.command_specs(vol, er),
     ]
 
 

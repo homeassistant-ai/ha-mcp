@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from .. import helper_collections
+
 __all__ = [
     "ALL_SEARCH_TYPES",
     "BLUEPRINT_DOMAINS",
@@ -166,6 +168,7 @@ CAPABILITIES: list[str] = [
     # The server's ha_eval_template asks for a failed template's line only when
     # this is advertised; without it the error is returned as Core reported it.
     "template_diagnose",
+    *helper_collections.CAPABILITIES,
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates
