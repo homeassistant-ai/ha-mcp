@@ -21,7 +21,7 @@ The dev app uses the same configuration as the stable version. See the main app'
 | `enable_beta_features` *(master)* | Master gate for the beta sub-flags below. Sub-flags are ignored at runtime while this is off — even when explicitly set to true. Mirrored to the web settings UI under "Beta features (dangerous)". | `true` |
 | `enable_yaml_config_editing` *(beta)* | Enables `ha_config_set_yaml` for editing `configuration.yaml` directly. Requires `ha_mcp_tools` custom component. Gated by the master above. | `false` |
 | `enable_filesystem_tools` *(beta)* | Enables file read/write tools (`ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`). Requires `ha_mcp_tools` custom component. Gated by the master above. | `false` |
-| `tool_search_max_results` | Max results from `ha_search_tools` (range 2-10) | `5` |
+| `tool_search_max_results` | Max hidden tools returned per `ha_search_tools` call (range 2-10); a matching pinned tool is added as a name-only stub on top | `5` |
 | `disabled_tools` | Comma-separated list of tool names to disable (seed value; web UI is primary). Mandatory tools can't be disabled and are unaffected. | empty |
 | `pinned_tools` | Comma-separated list of tool names to pin when tool search is enabled (seed value; web UI is primary) | empty |
 | `verify_ssl` | Verify the HA server's TLS certificate. Disable for self-signed certs or hostname mismatches. Weakens security — leave on unless needed. | `true` |
