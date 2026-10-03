@@ -23,8 +23,10 @@ from .errors import ErrorCode, create_error_response
 from .http_transport import HttpTransportFastMCP as FastMCP
 from .server_lifespan import server_lifespan
 from .server_tool_text import (
+    ISSUE_FILING_INSTRUCTIONS,
     LITE_DOCSTRING_DESTINATIONS,
     LITE_DOCSTRINGS,
+    READ_ONLY_INSTRUCTIONS,
     SEARCH_KEYWORDS,
     SEARCH_TOOL_DESCRIPTION,
     SKILL_USE_BEFORE_KEYWORDS,
@@ -371,25 +373,8 @@ class HomeAssistantSmartMCPServer:
         # state only — live flips are covered by the structured
         # READ_ONLY_MODE call errors and the ha_get_overview field.
         if self.settings.read_only_mode:
-            sections.append(
-                "## Read Only Mode\n"
-                "This server is running in Read Only Mode: write-capable "
-                "tools are disabled and every write or destructive "
-                "operation is blocked with a READ_ONLY_MODE error. You can "
-                "search, read, and analyze freely. To allow changes, the "
-                "user must turn off Read Only Mode in the ha-mcp settings "
-                "UI (Tools tab) or the add-on configuration."
-            )
-
-        # ha_report_issue is a mandatory tool, so this always points at a
-        # tool the client has. The issue tracker closes issues without it.
-        sections.append(
-            "## Filing ha-mcp issues\n"
-            "Before filing any GitHub issue about ha-mcp, feature requests "
-            "included, run ha_report_issue and put the issue_body it returns "
-            "in the issue unchanged. Issues filed without it are closed "
-            "automatically."
-        )
+            sections.append(READ_ONLY_INSTRUCTIONS)
+        sections.append(ISSUE_FILING_INSTRUCTIONS)
         return "\n\n".join(sections)
 
     def _build_skills_instructions(self) -> str | None:

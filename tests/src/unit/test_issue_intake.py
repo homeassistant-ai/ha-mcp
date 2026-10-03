@@ -88,3 +88,19 @@ def test_report_gate_runs_trusted_code_and_mints_write_access_only_to_act() -> N
     # Admission waits for the gate but still runs when it is skipped or fails.
     assert admit["needs"] == "gate"
     assert admit["if"].startswith("!cancelled() &&")
+
+
+def test_report_gate_sweep_runs_trusted_code_and_mints_write_access_only_when_due() -> (
+    None
+):
+    root = Path(__file__).resolve().parents[3]
+    workflow = yaml.safe_load((root / ".github/workflows/report-gate.yml").read_text())
+    assert workflow["permissions"] == {"contents": "read", "issues": "read"}
+    steps = workflow["jobs"]["sweep"]["steps"]
+    assert steps[0]["with"]["persist-credentials"] is False
+    check = next(s for s in steps if s.get("id") == "check")
+    token = next(s for s in steps if s.get("id") == "app-token")
+    assert check["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert steps.index(check) < steps.index(token)
+    assert token["if"] == "steps.check.outputs.due != '0'"
+    assert steps[-1]["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"

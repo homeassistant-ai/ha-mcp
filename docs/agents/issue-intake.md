@@ -58,27 +58,37 @@ workflow/PR write permission, or ruleset bypass is needed for issue documentatio
 
 ## Report gate
 
-The `gate` job runs before admission on issue opens, edits, reopenings and new
-or edited comments, without the model. An issue passes when its reporter's body
+The `gate` job (`.github/issue-intake/gate.mjs`) runs before admission on issue
+opens, edits, reopenings and new or edited comments, without the model. An issue passes when its reporter's body
 or one of their comments carries the `ha_report_issue` report heading together
-with the report's `ha-mcp Version:` line, or a
-`### Why there is no ha_report_issue report` section of at least five words.
-The issue forms render their fallback field under that heading; blank and
-API-filed issues must write it themselves. Maintainers (write role or above),
-bots and `documentation` issues are exempt. An issue transferred in from another
-repository (the HACS mirror files against its own forms) is never closed: if it
-arrives without a report or explanation, the gate posts one notice asking for it
-and mentioning the reporter, so they continue here instead of refiling on the
-mirror.
+with the report's `ha-mcp Version:` line, or any text, even "N/A", under the
+forms' `📋 ha_report_issue Report` field or a
+`### Why there is no ha_report_issue report` heading. The forms make the report
+field required, so an issue filed through them always passes; the gate exists
+for blank and API-filed issues. Maintainers (write role or above), bots,
+`documentation` issues and feature requests (a `[FEATURE]` title or the
+`enhancement` label) are exempt.
 
-A failing issue is closed as not planned only when it is opened, or reopened by
-someone below the write role, so an edit never closes an issue that predates the
-gate. Each close posts a new App comment that mentions the reporter and, when
-the issue holds a report heading without the rest of the report or an
-explanation under five words, says which. When the report or explanation is
-added, the gate reopens an issue it closed itself and rewrites that comment; it
-never reopens an issue a human closed. Admission waits for the gate, so a closed
-issue is not documented and a reopened one is.
+A failing issue gets the `needs-report` label and an App comment that mentions
+the reporter, says it will be closed in 24 hours, and says when it holds a
+report heading without the rest of the report. Only an opened issue, or one
+reopened by someone below the write role, is labeled, so an edit never starts
+the clock on an issue that predates the gate. A reply alone does not clear the
+label; the report or a reason does, and then the gate removes the label and
+rewrites its comment. A maintainer removing the label waives the requirement:
+the gate never adds it back to that issue.
+
+`report-gate.yml` runs hourly. It closes, as not planned and with a new comment
+mentioning the reporter, an open issue whose label the App applied 24 or more
+hours earlier and that is still unanswered. When the report or reason is added
+later, the gate reopens an issue it closed itself; it never reopens an issue a
+human closed. Admission waits for the gate, so a labeled issue is still
+documented.
+
+An issue transferred in from another repository (the HACS mirror files against
+its own forms) is never labeled or closed: if it arrives without a report or a
+reason, the gate posts one notice asking for it, so the reporter continues here
+instead of refiling on the mirror.
 
 Reads and idempotent writes retry twice after a rate limit or server error. The
 gate fails open: if it still fails, its run goes red and admission documents the
@@ -105,7 +115,7 @@ whose body and human replies carry no report gets a request for
 It follows the labels present when the comment is published. Labels other
 than needs-info do not start a run, so a later label change keeps the comment
 as it is until the next run; `/triage refresh` requests one.
-The heading string is shared with `tools_bug_report.py`;
+The heading string is shared with `bug_report_templates.py`;
 `tests/js/issue-intake.test.mjs` fails when the two drift apart.
 
 Maintainers with the actual maintain/admin role can post exact commands:

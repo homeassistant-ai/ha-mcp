@@ -66,6 +66,7 @@ Triage-state labels:
 | `ready-to-implement` | Clear path with no unresolved decisions. |
 | `needs-choices` | Multiple approaches need stakeholder input. |
 | `needs-info` | Awaiting the reporter. Any label application starts reminders on days 3/5/6 and closure on day 7; a reporter reply after labeling removes it. See [issue intake](issue-intake.md). |
+| `needs-report` | A bug report with neither an `ha_report_issue` report nor a reason. The report gate applies it and closes the issue after 24 hours; adding either clears it, and a maintainer removing it waives the requirement. See [issue intake](issue-intake.md#report-gate). |
 | `priority: high/medium/low` | Relative priority. |
 | `triaged` | Historical marker from the retired triage bot. |
 | `triage-failed` | Historical failure marker from the retired triage bot. |
@@ -74,7 +75,7 @@ Triage-state labels:
 Bug and scope labels:
 Bug-class labels originate in issue-template form selection, manual triage,
 or [issue intake](issue-intake.md) for an issue filed from an `ha_report_issue`
-report (`bug` or `agent-behavior` only).
+report (`bug`, `agent-behavior`, or `enhancement` for a feature request).
 Scope labels are orthogonal: one issue may carry
 both a bug-class label and a scope label.
 
@@ -193,7 +194,8 @@ summary only when the pull request actually reaches that state.
 | `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py` | Regenerate `tools.json`, README, and app `DOCS.md`. |
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
-| `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides. |
+| `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides, after the report gate. |
+| `report-gate.yml` | Hourly or manual | Close bug reports whose `needs-report` label is 24 hours old. |
 | `codex-review-issues.yml` | Manual | Write a read-only open-issue report to Actions logs. |
 | `codex-review-prs.yml` | Manual | Write a read-only open-PR report to Actions logs. |
 

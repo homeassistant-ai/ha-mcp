@@ -81,14 +81,14 @@ body:
     attributes:
       label: "📋 ha_report_issue Report"
       description: |
-        **Required.** Ask your AI agent: *"Report this with the ha_report_issue tool."* Run it in the session where the problem happened.
-        Paste the whole report it generates here (from its Auto-Generated heading to the end), with tokens and passwords removed. It collects the versions,
-        install type, client, settings and tool calls we otherwise have to ask for.
+        **Required.** Ask your AI agent: *"Report this with the ha_report_issue tool."* Run it in
+        the session where the problem happened. Paste the whole report it generates here (from its
+        Auto-Generated heading to the end), with tokens and passwords removed. It collects the
+        versions, install type, client, settings and tool calls we otherwise have to ask for.
 
-        Only if no report can exist, because ha-mcp does not start or connect or the problem was
-        found by reading the code and never happened in a live session, write `N/A` here and
-        explain in the next field. Issues with neither are closed automatically.
-      placeholder: "Paste the full ha_report_issue output here"
+        If no report can exist, for example because ha-mcp does not start or connect or the problem
+        was found by reading the code, typing `N/A` here is acceptable; say why in the next field.
+      placeholder: "Paste the whole ha_report_issue report here, or N/A"
     validations:
       required: true
 
@@ -97,9 +97,7 @@ body:
     attributes:
       label: "Why there is no ha_report_issue report"
       description: |
-        Only if no report can exist: ha-mcp does not start or connect, or the problem was found by
-        reading the code and never happened in a live session. Say which, and why. Not wanting to
-        run the tool does not count.
+        If you typed N/A above, say why there is no report. A short reason, even "N/A", is enough.
     validations:
       required: false
 

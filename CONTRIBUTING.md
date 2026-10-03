@@ -72,7 +72,7 @@ take over the PR (push to it or supersede it) or close it.
 
 ## 🏗️ Stuck?
 
-- Open an [Issue](../../issues). Bug reports, agent-behavior reports and feature requests need the whole report the `ha_report_issue` tool generates, run in the session where the problem happened or, for a feature request, where the agent tried to do it. Without it they are closed automatically unless they explain under `### Why there is no ha_report_issue report` why none can exist: ha-mcp cannot start or connect, the problem was found by reading the code and never happened live, or a report cannot show anything relevant to a feature request.
+- Open an [Issue](../../issues). Bug and agent-behavior reports need the whole report the `ha_report_issue` tool generates, run in the session where the problem happened, or a `### Why there is no ha_report_issue report` section saying why there is none ("N/A" is accepted). Without either, the issue is labeled `needs-report` and closed after 24 hours. For a feature request, ask your agent to do what you want first and run the tool when it cannot: the report helps find gaps.
 - See **[AGENTS.md](AGENTS.md)** for additional tips.
 
 Thank you for contributing! 🎉
