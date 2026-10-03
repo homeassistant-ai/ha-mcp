@@ -134,7 +134,7 @@ class _FakeTCPConnector:
     limit: int = 100
 
 
-def _install_runtime_stubs():  # noqa: PLR0915
+def _install_runtime_stubs() -> None:  # noqa: PLR0915
     """Inject homeassistant.* and aiohttp stubs into sys.modules.
 
     The custom integration imports from these packages at module load.
