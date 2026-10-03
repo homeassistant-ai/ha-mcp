@@ -494,13 +494,13 @@ class TestCatalogTransform:
             AsyncMock(return_value=_CORE_SCHEMAS),
         )
 
-    async def test_registration_advertises_core_fields_and_drops_wait(
+    async def test_registration_advertises_core_fields_and_keeps_wait(
         self, available
     ) -> None:
         # The helper tools' registration installs the transform.
         _, tool = await _registered_tool()
         properties = tool.parameters["properties"]
-        assert "wait" not in properties
+        assert "wait" in properties  # flow helpers and fallback writes use it
         description = properties["config"]["description"]
         assert hc_schemas._SIMPLE_CONFIG_KEYS_DESCRIPTION not in description
         assert (
@@ -524,5 +524,9 @@ class TestCatalogTransform:
             in properties["config"]["description"]
         )
         rewritten = ComponentHelperSchemaTransform._rewrite(tool, _CORE_SCHEMAS)
-        assert "wait" not in rewritten.parameters["properties"]
-        assert "wait" in tool.parameters["properties"]  # a copy, original untouched
+        assert "wait" in rewritten.parameters["properties"]
+        # A copy: the original keeps the static key list.
+        assert (
+            hc_schemas._SIMPLE_CONFIG_KEYS_DESCRIPTION
+            in tool.parameters["properties"]["config"]["description"]
+        )

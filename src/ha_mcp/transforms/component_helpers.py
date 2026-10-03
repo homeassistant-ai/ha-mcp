@@ -93,10 +93,10 @@ def render_core_keys(schemas: dict[str, Any]) -> str:
 
 
 class ComponentHelperSchemaTransform(Transform):
-    """Swap the static helper key list for Core's, and drop the no-op ``wait``.
+    """Swap the static helper key list for Core's.
 
-    FunctionTool validates arguments against its function, not ``parameters``,
-    so a caller still passing ``wait`` keeps working.
+    ``wait`` stays: flow helpers and a write that falls back to Core's
+    commands still poll for the entity.
     """
 
     def __init__(self, client: Any) -> None:
@@ -120,7 +120,6 @@ class ComponentHelperSchemaTransform(Transform):
     def _rewrite(tool: Tool, schemas: dict[str, Any]) -> Tool:
         parameters = deepcopy(tool.parameters)
         properties = parameters.get("properties", {})
-        properties.pop("wait", None)
         config = properties.get("config")
         if config and _SIMPLE_CONFIG_KEYS_DESCRIPTION in config.get("description", ""):
             config["description"] = config["description"].replace(

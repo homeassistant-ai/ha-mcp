@@ -1,5 +1,6 @@
 """Unit tests for config subentries folded into existing tools."""
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -266,6 +267,37 @@ async def test_config_subentry_create_returns_the_new_subentry_id(
         config={"model": "m"},
     )
     assert result["subentry_id"] == "new"
+
+
+async def test_concurrent_creates_each_return_their_subentry_id():
+    from ha_mcp.tools.config_entry_flow import set_config_subentry
+
+    ids: list[str] = []
+    client = MagicMock()
+
+    async def listing(entry_id):
+        await asyncio.sleep(0)
+        return {"success": True, "result": [{"subentry_id": i} for i in ids]}
+
+    async def submit(flow_id, data):
+        await asyncio.sleep(0)
+        ids.append(f"sub-{flow_id}")
+        return {"type": "create_entry"}
+
+    flows = iter(["a", "b"])
+    client.list_config_subentries = AsyncMock(side_effect=listing)
+    client.start_config_subentry_flow = AsyncMock(
+        side_effect=lambda *a, **k: {
+            "flow_id": next(flows), "type": "form", "step_id": "user",
+            "data_schema": [{"name": "model"}],
+        }
+    )  # fmt: skip
+    client.submit_config_subentry_flow_step = AsyncMock(side_effect=submit)
+    first, second = await asyncio.gather(
+        set_config_subentry(client, "entry-1", "conversation", {"model": "m"}),
+        set_config_subentry(client, "entry-1", "conversation", {"model": "n"}),
+    )
+    assert {first["subentry_id"], second["subentry_id"]} == {"sub-a", "sub-b"}
 
 
 async def test_config_set_helper_walks_multistep_subentry_flow(
