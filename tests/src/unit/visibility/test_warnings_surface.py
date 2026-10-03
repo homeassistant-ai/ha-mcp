@@ -11,7 +11,7 @@ cheapest trigger: ``load_hidden_set`` fails open with a warning.
 
 import asyncio
 
-from ha_mcp.tools import search_entities
+from ha_mcp.tools.search import entities as search_entities
 from ha_mcp.tools.smart_search._overview import SystemOverviewMixin
 from ha_mcp.tools.util_helpers import merge_visibility_warnings
 from ha_mcp.visibility import resolver

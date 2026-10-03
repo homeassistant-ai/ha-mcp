@@ -36,7 +36,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import search_component
+from ha_mcp.tools.search import component as search_component
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig, VisibilityWire
 from ha_mcp.visibility.persistence import save_visibility_config

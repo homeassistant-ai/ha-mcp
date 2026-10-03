@@ -12,7 +12,7 @@ callers instead.
 
 import pytest
 
-from ha_mcp.tools.search_entities import _exact_match_search
+from ha_mcp.tools.search.entities import _exact_match_search
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.utils.fuzzy_search import (
     FuzzyEntitySearcher,

@@ -32,7 +32,7 @@ def _redact_hidden_memberships(
 ) -> list[dict[str, Any]]:
     """Mark membership whose direct IDs intersect the visibility deny-set.
 
-    search_entities._add_membership_fields consumes this private sentinel after
+    search.entities._add_membership_fields consumes this private sentinel after
     smart-search projection, preserving is_group while withholding member IDs.
     """
     if not visibility_hidden:
@@ -966,7 +966,7 @@ class EntitySearchMixin(_SearchBase):
 
         Alias data is NOT enriched here — exposing private ``_aliases`` on a
         public method would leak through any caller that round-trips this
-        response. The area+query consumer in search_modes.py fetches aliases on
+        response. The area+query consumer in search/modes.py fetches aliases on
         its own when needed. Returns (formatted_areas, total_entities).
         """
         formatted_areas: dict[str, dict[str, Any]] = {}

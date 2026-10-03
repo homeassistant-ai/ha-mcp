@@ -1567,7 +1567,7 @@ class TestComponentBucketScrub:
     async def test_component_config_buckets_scrubbed_and_totals_adjusted(
         self, set_config
     ):
-        from ha_mcp.tools.search_component import _scrub_component_config_buckets
+        from ha_mcp.tools.search.component import _scrub_component_config_buckets
 
         set_config(
             enabled=True,
@@ -1596,7 +1596,7 @@ class TestComponentBucketScrub:
         assert response["count"] == 1
 
     async def test_component_scrub_noop_when_enforce_off(self, set_config):
-        from ha_mcp.tools.search_component import _scrub_component_config_buckets
+        from ha_mcp.tools.search.component import _scrub_component_config_buckets
 
         set_config(
             enabled=True,

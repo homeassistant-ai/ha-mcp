@@ -2,7 +2,8 @@
 
 import asyncio
 
-from ha_mcp.tools import search_entities, tools_search
+from ha_mcp.tools import tools_search
+from ha_mcp.tools.search import entities as search_entities
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config

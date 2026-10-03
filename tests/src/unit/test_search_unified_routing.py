@@ -4,7 +4,8 @@ from typing import Any
 
 import pytest
 
-from ha_mcp.tools import search_component, search_response
+from ha_mcp.tools.search import component as search_component
+from ha_mcp.tools.search import response as search_response
 
 from ._component_routing_helpers import make_ws, patch_ws
 from .test_ha_search_component_routing import (

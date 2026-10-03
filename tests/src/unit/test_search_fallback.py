@@ -10,7 +10,7 @@ exceptions now propagate to callers instead.
 
 import pytest
 
-from ha_mcp.tools.search_entities import _exact_match_search
+from ha_mcp.tools.search.entities import _exact_match_search
 
 
 class MockClient:

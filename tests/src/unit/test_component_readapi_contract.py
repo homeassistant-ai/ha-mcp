@@ -27,14 +27,14 @@ from ha_mcp.tools import (
     blueprint_sources,
     component_api,
     component_devices,
-    search_component,
-    search_overview,
-    search_state,
     tools_config_helpers,
     tools_entities,
     tools_voice_assistant,
 )
 from ha_mcp.tools.radio.zigbee import _resolve_ieee
+from ha_mcp.tools.search import component as search_component
+from ha_mcp.tools.search import overview as search_overview
+from ha_mcp.tools.search import state as search_state
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools

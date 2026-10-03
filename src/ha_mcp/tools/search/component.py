@@ -11,27 +11,31 @@ from typing import Any
 
 from ha_mcp._vendor.fastmcp import Context
 
-from ..client.rest_client import (
+from ...client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
 )
-from ..client.websocket_client import get_websocket_client
-from ..visibility.model import VisibilityWire, wire_has_allowlist_dimensions
-from ..visibility.resolver import (
+from ...client.websocket_client import get_websocket_client
+from ...visibility.model import VisibilityWire, wire_has_allowlist_dimensions
+from ...visibility.resolver import (
     visibility_state_and_wire,
 )
-from .component_api import (
+from ..component_api import (
     component_supports,
     invalidate_caps,
     is_unknown_command,
 )
-from .search_entities import (
+from ..smart_search import DEFAULT_CONCURRENCY_LIMIT, DeepSearchMixin
+from ..util_helpers import (
+    merge_visibility_warnings,
+)
+from .entities import (
     _ENTITY_RECORD_KEYS,
     _requested_enrichment,
     _requested_membership,
 )
-from .search_legacy import LegacySearchMixin
-from .search_response import (
+from .legacy import LegacySearchMixin
+from .response import (
     _CONFIG_BUCKETS,
     _apply_by_domain_grouping,
     _apply_result_fields_to_response,
@@ -48,10 +52,6 @@ from .search_response import (
     _project_response_fields,
     _ResolvedSearch,
     _synthesize_combined_pagination,
-)
-from .smart_search import DEFAULT_CONCURRENCY_LIMIT, DeepSearchMixin
-from .util_helpers import (
-    merge_visibility_warnings,
 )
 
 logger = logging.getLogger(__name__)
@@ -469,7 +469,7 @@ async def _scrub_component_config_buckets(
     count — the component's corpus-side match count cannot be recomputed
     server-side. No-op unless enforce mode is active.
     """
-    from ..visibility.enforcement import active_hidden_regex, scrub_records
+    from ...visibility.enforcement import active_hidden_regex, scrub_records
 
     regex = await active_hidden_regex(client)
     if regex is None:

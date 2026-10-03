@@ -25,18 +25,15 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import search_component, tools_config_dashboards, tools_search
+from ha_mcp.tools import tools_config_dashboards, tools_search
+from ha_mcp.tools.search import component as search_component
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
-)
+from ._component_routing_helpers import make_ws, patch_ws, patch_ws_establish_failure
 
 _STATES = [
     {

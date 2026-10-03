@@ -9,12 +9,16 @@ from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..utils.fuzzy_search import apply_hidden_penalty
-from ..visibility.resolver import (
+from ...utils.fuzzy_search import apply_hidden_penalty
+from ...visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
-from .search_entities import (
+from ..util_helpers import (
+    merge_visibility_warnings,
+    public_fields,
+)
+from .entities import (
     EntityEnrichmentMixin,
     _add_membership_fields,
     _build_domain_only_by_domain,
@@ -23,15 +27,11 @@ from .search_entities import (
     _requested_membership,
     _state_matches,
 )
-from .search_response import (
+from .response import (
     _apply_by_domain_grouping,
     _apply_result_fields_to_response,
     _build_hidden_ids,
     _build_pagination_metadata,
-)
-from .util_helpers import (
-    merge_visibility_warnings,
-    public_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ class EntityModesMixin(EntityEnrichmentMixin):
             for eid, entry in (entries_map or {}).items()
         }
 
-        from ..utils.fuzzy_search import create_fuzzy_searcher
+        from ...utils.fuzzy_search import create_fuzzy_searcher
 
         fuzzy_searcher = create_fuzzy_searcher(threshold=80)
 

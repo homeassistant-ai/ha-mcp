@@ -4,7 +4,7 @@
 enrich entity / area dicts with internal fields like ``_hidden_by`` /
 ``_aliases`` so downstream branches can rank without re-querying the
 registry, and those fields must not leak through public tool returns
-(see the projection path in search_modes.py).
+(see the projection path in search/modes.py).
 
 The non-mutating half of the contract is load-bearing: at the call site
 the source dict is read again right after the copy

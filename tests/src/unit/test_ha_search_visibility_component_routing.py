@@ -42,7 +42,8 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, search_component
+from ha_mcp.tools import component_api
+from ha_mcp.tools.search import component as search_component
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import VISIBILITY_FILENAME, save_visibility_config
