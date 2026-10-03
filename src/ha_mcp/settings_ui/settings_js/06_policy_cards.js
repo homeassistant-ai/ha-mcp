@@ -494,11 +494,11 @@ function renderPolicyCard(toolName, rule) {
 
   // Condition edits save a changed copy and adopt it (re-rendering) only
   // once it lands, inside the write (policyWriteOnce), so the next write
-  // sends it. A condition click while a write is pending is ignored: a
-  // double-clicked Remove could otherwise empty an AND condition, which
-  // under an allow list approves every call.
+  // sends it. A condition click while a write is pending is refused with a
+  // toast: a double-clicked Remove could otherwise empty an AND condition,
+  // which under an allow list approves every call.
   const saveConditions = async (conditions, remembers) => {
-    if (policyWriteInFlight) return;
+    if (policyWriteInFlight) return showToast(t('policies.card.save_pending', {}, 'A change is still being saved. Try again once it is saved.'));
     await policyWriteOnce(async () => {
       if (await autoSave({...rule, conditions, remembers})) { Object.assign(rule, {conditions, remembers}); rerenderCard(); }
     });

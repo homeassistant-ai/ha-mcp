@@ -14,13 +14,14 @@ import json
 
 import pytest
 
-from ._js_harness import HarnessResult, extract_script_body, run_script
+from ._js_harness import HarnessResult, run_script
 from .test_settings_ui_js_behavior import (
     DEFAULT_FETCHES,
     _assert_clean_init,
     _policy_panel_dom,
     _probe,
 )
+from .test_settings_ui_js_behavior import settings_script as settings_script
 
 EFFECTS = ["require_approval", "allow"]
 
@@ -54,13 +55,6 @@ FILL_JS = """
     await sleep(100);
   };
 """
-
-
-@pytest.fixture(scope="module")
-def settings_script() -> str:
-    from ha_mcp.settings_ui import _SETTINGS_HTML
-
-    return extract_script_body(_SETTINGS_HTML)
 
 
 def _policy(effect: str, tool_rules: list[dict]) -> dict:
@@ -289,6 +283,8 @@ def test_click_during_a_pending_save_is_ignored(
           const card = document.querySelector('.policy-rule-card');
           card.querySelector('.policy-remove-part[data-idx="1"][data-pred="0"]').click();
           card.querySelector('{SECOND_CLICKS[second]}').click();
+          const region = document.getElementById('ha-toast-region');
+          document.body.setAttribute('data-toast', region ? region.textContent : '');
           await sleep(300);
           document.body.setAttribute('data-codes', Array.from(document.querySelectorAll(
             '.policy-rule-card[data-tool="ha_call_service"] .policy-predicate-row code'
@@ -306,6 +302,8 @@ def test_click_during_a_pending_save_is_ignored(
     assert len(codes) == 2
     assert "lock" in codes[0]
     assert "turn_on" in codes[1]
+    # The ignored click says so rather than vanishing.
+    assert "still being saved" in html.unescape(_probe(result, "toast") or "")
 
 
 @pytest.mark.parametrize("effect", EFFECTS)

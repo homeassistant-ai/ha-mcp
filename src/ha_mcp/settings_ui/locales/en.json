@@ -375,6 +375,7 @@
     "policies.card.and_hint": "Must also match: {condition}",
     "policies.card.remove_condition": "Remove condition",
     "policies.card.never_matches": "{path} cannot equal two different values at once, so this condition never matches.",
+    "policies.card.save_pending": "A change is still being saved. Try again once it is saved.",
     "policies.card.remove_title": "Remove from policy",
     "policies.card.conditions_intro": "Require approval when ANY condition matches (no conditions = always require approval):",
     "policies.card.conditions_intro_allow": "Approve without asking when ANY condition matches (no conditions = always approve):",
