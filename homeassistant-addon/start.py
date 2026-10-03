@@ -530,21 +530,21 @@ def _run_mcp_server(
 
 def _apply_backup_env(config: dict[str, Any]) -> None:
     """Export Supervisor backup options, including human-controlled AI permissions."""
-    for key, default, invalid in (
+    for key, bool_default, invalid in (
         ("enable_auto_backup", True, False),
         ("enable_snapshot_actions", True, True),
         ("backup_read_only", False, False),
         ("enable_snapshot_delete", False, False),
     ):
-        raw = config.get(key, default)
+        raw = config.get(key, bool_default)
         os.environ[key.upper()] = str(raw if isinstance(raw, bool) else invalid).lower()
-    for key, default in (
+    for key, int_default in (
         ("auto_backup_throttle_minutes", 0),
         ("auto_backup_retain_per_entity", 100),
         ("snapshot_delete_min_age_days", 7),
     ):
-        raw = config.get(key, default)
-        os.environ[key.upper()] = str(raw if isinstance(raw, int) else default)
+        raw = config.get(key, int_default)
+        os.environ[key.upper()] = str(raw if isinstance(raw, int) else int_default)
 
 
 def main() -> int:  # noqa: PLR0915
