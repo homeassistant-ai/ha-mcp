@@ -21,6 +21,8 @@ from types import ModuleType
 
 import pytest
 
+from ._ratchet_repo import make_ratchet_repo
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "module_size_ratchet.py"
 BASELINE_PATH = Path(__file__).with_name("module_size_baseline.json")
@@ -134,26 +136,7 @@ def test_last_line_without_a_newline_is_counted() -> None:
 @pytest.fixture
 def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """An empty git repository with no exclusions and an empty baseline."""
-    # Inside a git hook these point every git call at the real repository.
-    for name in (
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_PREFIX",
-        "GIT_COMMON_DIR",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    (tmp_path / "pyproject.toml").write_text(
-        "[tool.ruff]\nextend-exclude = []\n", encoding="utf-8"
-    )
-    subprocess.run(["git", "add", "pyproject.toml"], cwd=tmp_path, check=True)
-    baseline = tmp_path / ratchet.BASELINE_NAME
-    baseline.parent.mkdir(parents=True)
-    baseline.write_text("{}\n", encoding="utf-8")
-    return tmp_path
+    return make_ratchet_repo(tmp_path, monkeypatch, ratchet.BASELINE_NAME)
 
 
 def _stage(repo: Path, path: str, lines: int) -> None:
