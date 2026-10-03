@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from ha_mcp.tools.tools_bug_report import _generate_bug_title
+from ha_mcp.tools.bug_report_templates import _generate_bug_title
 
 
 def test_title_uses_structured_error_message() -> None:

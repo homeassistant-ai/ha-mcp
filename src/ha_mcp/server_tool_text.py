@@ -391,7 +391,7 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "actually contains, and the encryption key a restore needs, see "
         "ha_get_skill_guide (`references/backups.md`)."
     ),
-    # ha_report_issue: the lite value is about two thirds of the full
+    # ha_report_issue: the lite value is about four fifths of the full
     # docstring. As for ha_manage_backup, no exact pair is quoted.
     #
     # Unlike every other entry here, the deferral target is the tool's
@@ -404,10 +404,14 @@ LITE_DOCSTRINGS: dict[str, str] = {
     # outright so a compliant agent doesn't spend a call finding out.
     "ha_report_issue": (
         "Get diagnostic information plus a finished GitHub issue. Covers "
-        "two kinds of report: a runtime bug (ha-mcp errored or behaved "
-        "unexpectedly) and agent-behaviour feedback (the AI used the wrong "
-        "tool or worked inefficiently). Pass the report text in the call; "
-        "the server builds the issue title, body and a pre-filled link.\n\n"
+        "three kinds of report: a runtime bug (ha-mcp errored or behaved "
+        "unexpectedly), agent-behaviour feedback (the AI used the wrong "
+        "tool or worked inefficiently) and a feature request (ha-mcp "
+        "cannot do something yet). Pass the report text in the call; "
+        "the server builds the issue title, body and a pre-filled link. "
+        "Every GitHub issue about ha-mcp, feature requests included, should "
+        "carry this report as its body; a bug report filed without it is "
+        "closed after 24 hours.\n\n"
         "The response carries the full workflow in its `instructions` "
         "field (duplicate check, the mandatory anonymisation step, and "
         "how to file the issue), plus "
@@ -481,4 +485,25 @@ SKILL_USE_BEFORE_KEYWORDS: str = (
     "device_id to entity_id; calling ha_config_set_automation, "
     "ha_config_set_script, ha_config_set_helper, ha_config_set_dashboard, "
     "or ha_set_entity."
+)
+
+
+READ_ONLY_INSTRUCTIONS = (
+    "## Read Only Mode\n"
+    "This server is running in Read Only Mode: write-capable "
+    "tools are disabled and every write or destructive "
+    "operation is blocked with a READ_ONLY_MODE error. You can "
+    "search, read, and analyze freely. To allow changes, the "
+    "user must turn off Read Only Mode in the ha-mcp settings "
+    "UI (Tools tab) or the app (add-on) configuration."
+)
+
+# ha_report_issue is a mandatory tool, so this always points at a tool the
+# client has. The issue tracker's report gate closes bug reports without it.
+ISSUE_FILING_INSTRUCTIONS = (
+    "## Filing ha-mcp issues\n"
+    "Before filing any GitHub issue about ha-mcp, feature requests "
+    "included, run ha_report_issue and put the issue_body it returns "
+    "in the issue unchanged. A bug report filed without it is closed "
+    "automatically after 24 hours."
 )
