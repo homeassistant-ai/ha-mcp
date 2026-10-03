@@ -305,7 +305,7 @@ async def test_stringified_selector_argument_still_gates_correctly(queue):
     call_next = AsyncMock()
     # Simulates a client that stringifies the nested `selector` parameter
     # instead of sending a real JSON object, exactly as
-    # tools/util_helpers.py's JSON_STRING_COERCION comment describes.
+    # tools/coercion.py's JSON_STRING_COERCION comment describes.
     stringified_args = {
         "selector": '{"domain": "lock", "area_ids": ["entry"]}',
         "action": "lock",

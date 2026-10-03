@@ -155,7 +155,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
-        "tests/src/unit/test_ha_search_dashboard_split.py",
+        "tests/src/unit/test_ha_search_dashboard_leg_failure.py",
         "This statement has no effect",
         "await call",
         "False positive on the bare 'await call' inside pytest.raises in "

@@ -13,8 +13,9 @@ from ..component_helper_collections import (
     tag_item_id,
     write_helper_item,
 )
+from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
-from ..util_helpers import apply_entity_category, wait_for_entity_registered
+from ..ws_waiters import wait_for_entity_registered
 from .create import _SCHEDULE_DAYS, _format_schedule_days
 from .registry import _ws_error_msg
 from .schemas import (

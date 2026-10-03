@@ -672,7 +672,7 @@ class TestLifecycleWriteWarningsShape:
     only HomeAssistantConnectionError and HomeAssistantAuthError propagate
     from wait_for_entity_registered / wait_for_entity_removed to the call
     sites — TimeoutError returns False (handled separately), HomeAssistantAPIError
-    is fully swallowed by the helpers (util_helpers.py:495-499 + :537-543).
+    is fully swallowed by the helpers (ws_waiters.py).
     Tests only the two exception types that actually reach the call sites.
     """
 
@@ -1119,7 +1119,7 @@ class TestSweepWarningsShape:
     emit-site. Content-level coverage already lives in the per-tool
     unit/e2e test files cited:**
 
-    - ``tools_search.py``: ``ha_search`` fallback path. The tool
+    - ``search/legacy.py``: ``ha_search`` fallback path. The tool
       calls ``await client.<state-source>`` before the fuzzy/exact
       branch; trivial ``MagicMock()`` clients trip the
       ``"MagicMock can't be used in 'await' expression"`` error before

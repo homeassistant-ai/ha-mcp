@@ -404,11 +404,11 @@ class TestPollForAutomationEntity:
 
     Patch path: ``_poll_for_automation_entity`` does a *local* import of
     ``wait_for_automation_entity_by_unique_id`` from
-    ``ha_mcp.tools.util_helpers``. Patching that name before each call
+    ``ha_mcp.tools.ws_waiters``. Patching that name before each call
     means the local import resolves to the patched function.
     """
 
-    HELPER_PATH = "ha_mcp.tools.util_helpers.wait_for_automation_entity_by_unique_id"
+    HELPER_PATH = "ha_mcp.tools.ws_waiters.wait_for_automation_entity_by_unique_id"
 
     @pytest.fixture
     def mock_client(self):

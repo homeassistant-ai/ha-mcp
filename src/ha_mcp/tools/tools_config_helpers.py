@@ -22,6 +22,7 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..strict_bps import BestPracticeKeyParam
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -60,6 +61,10 @@ from .config_helpers.validation import (
     _validate_pre_dispatch_params,
     _validate_set_helper_action,
 )
+from .config_write_helpers import (
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+)
 from .helpers import (
     HIDDEN_PARAM,
     clear_or_keep,
@@ -67,12 +72,6 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
-)
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    augment_error_dict_with_skill_content,
-    augment_tool_error_with_skill_content,
-    parse_string_list_param,
 )
 
 logger = logging.getLogger(__name__)

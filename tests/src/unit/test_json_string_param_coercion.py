@@ -30,7 +30,7 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+from ha_mcp.tools.coercion import JSON_STRING_COERCION
 
 from .test_config_param_no_string_schema import (
     _BULK_TOOLS,

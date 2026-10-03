@@ -15,7 +15,7 @@ LLM-discoverable way to pull the relevant skill content:
 The write tools also auto-embed the matching section into the next
 response via ``referenced_files`` and accept a ``MandatoryBPS`` opt-out
 parameter. Neither is advertised in the warning suffix by design —
-see ``util_helpers._SKILL_CONTENT_OPTOUT_HINT`` for the param contract.
+see ``config_write_helpers._SKILL_CONTENT_OPTOUT_HINT`` for the param contract.
 
 The ``skill_prefix`` kwarg lets callers pass any URL prefix (e.g., a
 GitHub mirror) when ``skill://`` isn't reachable, or ``None`` to omit

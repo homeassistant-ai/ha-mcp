@@ -667,7 +667,7 @@ async def _ws_wait_for_predicate(
 ) -> Any:
     """Subscribe → sample-after-subscribe → wait-for-event pattern, test-side.
 
-    Mirrors :func:`ha_mcp.tools.util_helpers._ws_wait_for_condition` (the
+    Mirrors :func:`ha_mcp.tools.ws_waiters._ws_wait_for_condition` (the
     server-side waiter PR #1382 introduced) so the test-side wait helpers
     stop racing against entity hydration on busy CI runners.
 

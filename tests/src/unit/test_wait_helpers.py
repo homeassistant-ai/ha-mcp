@@ -1,5 +1,5 @@
 """
-Unit tests for wait utility functions in util_helpers.
+Unit tests for wait utility functions in ws_waiters.
 
 Tests the wait_for_entity_registered, wait_for_entity_removed, and
 wait_for_state_change functions (issues #381, #1152).
@@ -21,8 +21,8 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import util_helpers
-from ha_mcp.tools.util_helpers import (
+from ha_mcp.tools import ws_waiters
+from ha_mcp.tools.ws_waiters import (
     wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -40,7 +40,7 @@ def force_rest_fallback(monkeypatch):
     async def _no_ws(_client):
         return None
 
-    monkeypatch.setattr(util_helpers, "_get_waiter_ws_client", _no_ws)
+    monkeypatch.setattr(ws_waiters, "_get_waiter_ws_client", _no_ws)
 
 
 class TestWaitForEntityRegistered:
@@ -332,7 +332,7 @@ class TestWaitForStateChange:
 # These tests opt out of ``force_rest_fallback`` by installing a fake WS
 # client that records handler / subscribe / unsubscribe calls and lets the
 # test push events at will. They exercise the four guarantees from the
-# implementation comment in ``util_helpers``:
+# implementation comment in ``ws_waiters``:
 #
 #   1. Sample-after-subscribe resolves before any event arrives.
 #   2. Event arrival nudges the wait loop and resolves it on the next sample.
@@ -421,7 +421,7 @@ def ws_client(monkeypatch):
     async def _ws(_client):
         return fake
 
-    monkeypatch.setattr(util_helpers, "_get_waiter_ws_client", _ws)
+    monkeypatch.setattr(ws_waiters, "_get_waiter_ws_client", _ws)
     return fake
 
 
@@ -703,7 +703,7 @@ class TestWsPathPollingBackstop:
         """With a tight ``_POLLING_BACKSTOP_INTERVAL``, the waiter must
         resolve via the periodic REST sample even when no event nudge
         ever arrives — proves the backstop is wired, not vestigial."""
-        monkeypatch.setattr(util_helpers, "_POLLING_BACKSTOP_INTERVAL", 0.05)
+        monkeypatch.setattr(ws_waiters, "_POLLING_BACKSTOP_INTERVAL", 0.05)
         mock_client.get_entity_state.side_effect = [
             HomeAssistantAPIError("not found", status_code=404),  # post-subscribe
             HomeAssistantAPIError("not found", status_code=404),  # backstop #1
@@ -1113,7 +1113,7 @@ class TestWsPathAutomationDiscovery:
                 new_state={"attributes": {"id": "uid_dup"}},
             )
 
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.util_helpers"):
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.ws_waiters"):
             fire_task = asyncio.create_task(fire_two_matches())
             result = await wait_for_automation_entity_by_unique_id(
                 mock_client, "uid_dup", timeout=2.0
@@ -1146,7 +1146,7 @@ class TestWsPathAutomationDiscovery:
             side_effect=HomeAssistantAPIError("HA REST 503 transient")
         )
 
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.util_helpers"):
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.ws_waiters"):
             result = await wait_for_automation_entity_by_unique_id(
                 mock_client, "uid_wedged", timeout=0.2, poll_interval=0.05
             )

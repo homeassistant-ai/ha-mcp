@@ -9,7 +9,7 @@ warning in the tool response:
     "Helper created but input_number.foo not yet queryable. It may take a
     moment to become available."
 
-The fix routes ``util_helpers.wait_for_entity_registered`` (and siblings)
+The fix routes ``ws_waiters.wait_for_entity_registered`` (and siblings)
 through a WebSocket ``state_changed`` / ``entity_registry_updated``
 subscription, then re-samples REST after the event arrives. This file
 exercises the happy path against the real test HA so a regression in

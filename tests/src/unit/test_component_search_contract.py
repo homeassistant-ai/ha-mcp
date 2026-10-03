@@ -31,13 +31,12 @@ from __future__ import annotations
 
 import pytest
 
-from ha_mcp.tools.tools_search import (
+from ha_mcp.tools.search.component import (
     _COMPONENT_BODY_SEARCH_TYPES,
     _DASHBOARD_SEARCH_TYPE,
-    _VALID_SEARCH_TYPES,
-    _ResolvedSearch,
     _shape_component_search_response,
 )
+from ha_mcp.tools.search.response import _VALID_SEARCH_TYPES, _ResolvedSearch
 from ha_mcp.utils.entity_membership import normalize_member_entity_ids
 
 from .test_component_ws_search import (

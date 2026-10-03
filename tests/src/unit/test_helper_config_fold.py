@@ -288,7 +288,7 @@ async def test_blank_clears_and_quote_only_is_rejected(capture_create) -> None:
 
 
 async def test_empty_category_clears_the_scope() -> None:
-    from ha_mcp.tools.util_helpers import apply_entity_category
+    from ha_mcp.tools.config_write_helpers import apply_entity_category
 
     client = MagicMock()
     client.send_websocket_message = AsyncMock(
