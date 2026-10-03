@@ -104,6 +104,25 @@ The command lowers or drops entries and never raises or adds one, so a file
 that grew has to be split. Vendored trees, test fixtures and the stable
 webhook-proxy copy are not counted.
 
+`tests/src/unit/test_duplicate_code_ratchet.py` fails when a Python function
+or class has the same code as another one: the same after docstrings,
+decorators, type hints and names are dropped, with at least two statements.
+Import the existing definition instead of copying it. Closures are not
+compared on their own, and a file with the same bytes as another counts once,
+because that is how the server and the component share code
+(`dashboard_patch.py`); such a file needs a test that the copies match. Copies that already existed are listed in
+`tests/src/unit/duplicate_code_baseline.json`. After removing, moving or
+editing a listed copy, update the baseline:
+
+```bash
+python scripts/duplicate_code_ratchet.py
+git add tests/src/unit/duplicate_code_baseline.json
+```
+
+The lefthook pre-commit hook runs both steps against the staged content. The
+command refuses to write the baseline while a group has a new copy, so it
+cannot accept one.
+
 `BLE001` (a handler that catches `Exception` without re-raising it or logging
 its traceback) is enabled. Each handler that existed before carries
 `# noqa: BLE001`. Do not add that comment to a new handler: catch the specific
