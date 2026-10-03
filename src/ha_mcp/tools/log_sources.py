@@ -39,7 +39,8 @@ from .log_common import (
     _coerce_limit,
     _compact_logbook_entries,
 )
-from .util_helpers import add_timezone_metadata, normalize_log_level
+from .response_helpers import add_timezone_metadata
+from .util_helpers import normalize_log_level
 
 logger = logging.getLogger(__name__)
 

@@ -26,6 +26,7 @@ from .blueprint_write import (
     normalize_blueprint_path,
     write_blueprint,
 )
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -33,7 +34,6 @@ from .helpers import (
     register_tool_methods,
 )
 from .tool_hints import write_hints
-from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 

@@ -24,12 +24,14 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from .coercion import JSON_STRING_COERCION
 from .component_api import (
     component_supports,
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
 )
+from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
@@ -39,13 +41,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .tool_hints import read_only_hints, write_hints
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    fetch_integration_diagnostics,
-    filter_active_repairs,
-    parse_diagnostics_fields,
-    summarize_theme_listing,
-)
+from .util_helpers import filter_active_repairs, summarize_theme_listing
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +55,7 @@ WS_SYSTEM_SNAPSHOT = "ha_mcp_tools/system_snapshot"
 class _SystemSnapshotSlices:
     """The component's ``system_snapshot`` slices, re-wrapped for the section
     helpers that already unwrap the legacy ``{success, result}`` WS envelope
-    (mirrors ``ha_get_overview``'s ``_OverviewSlices`` in ``tools_search.py``).
+    (mirrors ``ha_get_overview``'s ``_OverviewSlices`` in ``search/overview.py``).
 
     ``config_entries`` / ``repairs`` / ``registry`` are wrapped in the
     ``{success, result}`` envelope ``_fetch_zwave_network`` /

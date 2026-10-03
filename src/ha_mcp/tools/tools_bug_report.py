@@ -39,6 +39,7 @@ from ..utils.usage_logger import (
     get_recent_logs,
     get_startup_logs,
 )
+from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION, parse_string_list_param
 from .component_api import get_component_caps
 from .helpers import (
     extract_tool_error_message,
@@ -46,13 +47,8 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .response_helpers import project_fields
 from .tool_hints import read_only_hints
-from .util_helpers import (
-    ANSI_ESCAPE_RE,
-    JSON_STRING_COERCION,
-    parse_string_list_param,
-    project_fields,
-)
 
 logger = logging.getLogger(__name__)
 

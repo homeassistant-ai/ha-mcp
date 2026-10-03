@@ -11,7 +11,7 @@ cheapest trigger: ``load_hidden_set`` fails open with a warning.
 
 import asyncio
 
-from ha_mcp.tools import tools_search
+from ha_mcp.tools.search import entities as search_entities
 from ha_mcp.tools.smart_search._overview import SystemOverviewMixin
 from ha_mcp.tools.util_helpers import merge_visibility_warnings
 from ha_mcp.visibility import resolver
@@ -86,7 +86,7 @@ def test_exact_match_search_surfaces_visibility_load_warning(tmp_path, monkeypat
     (tmp_path / "entity_visibility.json").write_text(_CORRUPT)
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
     res = asyncio.run(
-        tools_search._exact_match_search(
+        search_entities._exact_match_search(
             _SearchClient(_STATES, _REGISTRY),
             query="a",
             domain_filter=None,

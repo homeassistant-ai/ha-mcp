@@ -29,10 +29,12 @@ from ha_mcp.tools import (
     component_devices,
     tools_config_helpers,
     tools_entities,
-    tools_search,
     tools_voice_assistant,
 )
 from ha_mcp.tools.radio.zigbee import _resolve_ieee
+from ha_mcp.tools.search import component as search_component
+from ha_mcp.tools.search import overview as search_overview
+from ha_mcp.tools.search import state as search_state
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
@@ -54,9 +56,7 @@ from .test_component_ws_search import (
     make_view,
     wsapi,
 )
-from .test_config_get_component_routing import (
-    RoutingClient as GetRoutingClient,
-)
+from .test_config_get_component_routing import RoutingClient as GetRoutingClient
 from .test_ha_config_list_helpers_component_routing import (
     RoutingClient as HelpersRoutingClient,
 )
@@ -314,7 +314,7 @@ class TestOverviewSeam:
         client = OverviewRoutingClient()
         ws = _real_component_ws(hass)
         tool = _build_overview_tool(client)
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_overview):
             resp = await tool()
         assert resp["success"] is True
         # The server's existing assembly ran over the REAL raw slices: the two
@@ -347,7 +347,7 @@ class TestOverviewSeam:
         _setup_visibility_disabled(tmp_path, monkeypatch)
         client = OverviewRoutingClient()
         tool = _build_overview_tool(client)
-        with patch_ws(_real_component_ws(hass), tools_search):
+        with patch_ws(_real_component_ws(hass), search_overview):
             resp = await tool()
 
         assert resp["success"] is True
@@ -388,7 +388,7 @@ class TestSearchSeam:
             raise AssertionError(f"unexpected component command {command_type!r}")
 
         ws.send_command = AsyncMock(side_effect=_send)
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             resp = await tool(
                 query="child sensor",
                 result_fields=["entity_id", "area", "floor"],
@@ -527,7 +527,7 @@ class TestStatesSeam:
         client = StateRoutingClient()
         ws = _real_component_ws(hass)
         tool = _build_get_state(client)
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_state):
             resp = await tool(["light.lamp", "sensor.temp", "light.ghost"])
 
         data = resp["data"]
@@ -548,7 +548,7 @@ class TestStatesSeam:
         client = StateRoutingClient()
         ws = _real_component_ws(hass)
         tool = _build_get_state(client)
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_state):
             resp = await tool("light.lamp")
         assert resp["data"]["entity_id"] == "light.lamp"
         assert resp["data"]["state"] == "on"

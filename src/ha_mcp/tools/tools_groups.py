@@ -19,6 +19,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -26,13 +27,9 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    build_pagination_metadata,
-    wait_for_entity_registered,
-    wait_for_entity_removed,
-)
+from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 

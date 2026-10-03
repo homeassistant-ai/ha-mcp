@@ -54,6 +54,7 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION, parse_json_param
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -61,6 +62,11 @@ from .component_api import (
     is_unknown_command,
 )
 from .component_dashboard_edit import edit_dashboard_via_component
+from .config_write_helpers import (
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+)
 from .dashboard_edit_errors import (
     raise_dashboard_edit_error,
     raise_dashboard_edit_fetch_error,
@@ -81,13 +87,6 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .tool_hints import read_only_hints, write_hints
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    attach_skill_content,
-    augment_error_dict_with_skill_content,
-    augment_tool_error_with_skill_content,
-    parse_json_param,
-)
 
 logger = logging.getLogger(__name__)
 

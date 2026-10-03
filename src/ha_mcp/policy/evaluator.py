@@ -6,7 +6,7 @@ from collections.abc import Iterable, Iterator
 from enum import StrEnum
 from typing import Any
 
-from ..tools.util_helpers import loads_if_json_container_str
+from ..tools.coercion import loads_if_json_container_str
 from .model import Policy, Predicate, Rule
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ def normalize_stringified_containers(value: Any) -> Any:
     """Recursively parse JSON-encoded object/array strings into real containers.
 
     Some MCP client stacks (Claude Desktop stdio among them — see
-    ``tools/util_helpers.py``'s ``JSON_STRING_COERCION``) pass model-emitted
+    ``tools/coercion.py``'s ``JSON_STRING_COERCION``) pass model-emitted
     stringified objects through unrepaired, e.g. sending
     ``{"selector": "{\\"domain\\": \\"light\\"}"}`` instead of a nested
     object. Pydantic's ``JSON_STRING_COERCION`` ``BeforeValidator`` repairs

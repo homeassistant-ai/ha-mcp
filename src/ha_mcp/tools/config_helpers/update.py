@@ -5,8 +5,9 @@ from typing import Any
 
 from ...errors import ErrorCode, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
+from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error
-from ..util_helpers import apply_entity_category, wait_for_entity_registered
+from ..ws_waiters import wait_for_entity_registered
 from .create import _format_schedule_days
 from .registry import _ws_error_msg
 from .schemas import (

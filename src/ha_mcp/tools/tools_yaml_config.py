@@ -25,6 +25,11 @@ from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from ..strict_bps import BestPracticeKeyParam
 from .auto_backup import with_auto_backup
+from .config_write_helpers import (
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -39,12 +44,7 @@ from .tools_filesystem import (
     call_mcp_tools_service,
     effective_extra_yaml_write_keys,
 )
-from .util_helpers import (
-    attach_skill_content,
-    augment_error_dict_with_skill_content,
-    augment_tool_error_with_skill_content,
-    unwrap_service_response,
-)
+from .util_helpers import unwrap_service_response
 
 # YAML packages frequently include template sensors, command_line entities,
 # and mqtt templates — exactly where template misuse causes the most

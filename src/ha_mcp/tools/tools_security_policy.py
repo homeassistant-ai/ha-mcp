@@ -22,13 +22,13 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..policy.editing import PolicyCaller, get_policy, set_policy
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     register_tool_methods,
 )
 from .tool_hints import write_hints
-from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 

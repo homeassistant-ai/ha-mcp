@@ -17,6 +17,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -24,11 +25,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .tool_hints import write_hints
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    summarize_theme_listing,
-    websocket_error_message,
-)
+from .util_helpers import summarize_theme_listing, websocket_error_message
 
 logger = logging.getLogger(__name__)
 

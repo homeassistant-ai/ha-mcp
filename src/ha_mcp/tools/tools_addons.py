@@ -53,6 +53,7 @@ from ..utils.python_sandbox import (
     format_sandbox_error,
     safe_execute_expression,
 )
+from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -60,7 +61,6 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .tool_hints import read_only_hints, write_hints
-from .util_helpers import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 

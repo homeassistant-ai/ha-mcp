@@ -29,7 +29,8 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, tools_search
+from ha_mcp.tools import component_api
+from ha_mcp.tools.search import state as search_state
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import register_search_tools
 
@@ -138,7 +139,7 @@ async def test_bulk_served_by_component_with_missing_contract() -> None:
     client = RoutingClient()
     get_state = _build_get_state(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_state):
         resp = await get_state(["light.a", "sensor.b", "light.ghost"])
 
     data = resp["data"]
@@ -171,7 +172,7 @@ async def test_single_entity_served_by_component() -> None:
     client = RoutingClient()
     get_state = _build_get_state(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_state):
         resp = await get_state("light.a")
 
     assert resp["data"]["entity_id"] == "light.a"
@@ -192,7 +193,7 @@ async def test_single_missing_via_component_raises_not_found() -> None:
     client = RoutingClient()
     get_state = _build_get_state(client)
 
-    with patch_ws(ws, tools_search), pytest.raises(ToolError) as excinfo:
+    with patch_ws(ws, search_state), pytest.raises(ToolError) as excinfo:
         await get_state("light.ghost")
 
     msg = str(excinfo.value)
@@ -214,7 +215,7 @@ async def test_malformed_states_payload_falls_back_to_legacy() -> None:
     client = RoutingClient()
     get_state = _build_get_state(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_state):
         resp = await get_state("light.a")
 
     assert resp["data"]["entity_id"] == "light.a"
@@ -236,7 +237,7 @@ async def test_max_entities_enforced_regardless_of_backend() -> None:
     get_state = _build_get_state(client)
     too_many = [f"light.l{i}" for i in range(101)]
 
-    with patch_ws(ws, tools_search), pytest.raises(ToolError) as excinfo:
+    with patch_ws(ws, search_state), pytest.raises(ToolError) as excinfo:
         await get_state(too_many)
 
     assert "exceeds maximum of 100" in str(excinfo.value)
@@ -255,7 +256,7 @@ async def test_capsless_component_uses_legacy_per_id() -> None:
     client = RoutingClient()
     get_state = _build_get_state(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_state):
         resp = await get_state(["light.a", "sensor.b"])
 
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
@@ -274,7 +275,7 @@ async def test_unknown_command_falls_back_to_legacy_silently() -> None:
     client = RoutingClient()
     get_state = _build_get_state(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_state):
         resp = await get_state(["light.a"])
 
     assert resp["data"]["states"]["light.a"]["state"] == "on"
@@ -293,7 +294,7 @@ async def test_command_error_falls_back_to_legacy_silently() -> None:
     client = RoutingClient()
     get_state = _build_get_state(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_state):
         resp = await get_state(["light.a", "sensor.b"])
 
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
@@ -318,7 +319,7 @@ async def test_ws_connection_error_falls_back_to_legacy_rest() -> None:
     client = RoutingClient()
     get_state = _build_get_state(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_state):
         resp = await get_state(["light.a", "sensor.b"])
 
     # The connection error was caught → both ids served from the REST legacy path.
@@ -340,7 +341,7 @@ async def test_ws_establish_failure_falls_back_to_legacy_rest() -> None:
 
     with patch_ws_establish_failure(
         caps_ws,
-        tools_search,
+        search_state,
         HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await get_state(["light.a", "sensor.b"])
