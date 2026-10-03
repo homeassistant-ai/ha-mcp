@@ -118,7 +118,7 @@ class FakeState:
         # Mirrors core ``State.as_dict()`` / the REST ``/api/states/<id>`` shape.
         # Timestamps are already ISO strings here — the real WS transport encodes
         # core's datetimes to the same isoformat, so the server sees plain JSON
-        # either way (see websocket_api._do_states byte-parity note).
+        # either way (see ws_overview._do_states byte-parity note).
         return {
             "entity_id": self.entity_id,
             "state": self.state,
