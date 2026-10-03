@@ -124,6 +124,8 @@ def _validate_cross_kind_params(
     floor_id: str | None,
     picture: str | None,
     labels: list[str] | None = None,
+    temperature_entity_id: str | None = None,
+    humidity_entity_id: str | None = None,
 ) -> None:
     """Reject params that don't belong to *kind* before building a set message."""
     # Reject cross-kind params loudly so silent intent loss can't happen
@@ -139,6 +141,10 @@ def _validate_cross_kind_params(
             cross_kind_params.append("picture")
         if labels is not None:
             cross_kind_params.append("labels")
+        if temperature_entity_id is not None:
+            cross_kind_params.append("temperature_entity_id")
+        if humidity_entity_id is not None:
+            cross_kind_params.append("humidity_entity_id")
     if cross_kind_params:
         raise_tool_error(
             create_error_response(
@@ -146,7 +152,8 @@ def _validate_cross_kind_params(
                 f"Parameter(s) {cross_kind_params} are not valid for kind={kind!r}",
                 context={"kind": kind, "invalid_parameters": cross_kind_params},
                 suggestions=[
-                    "For kind='area' use: name, id, floor_id, icon, aliases, picture, labels",
+                    "For kind='area' use: name, id, floor_id, icon, aliases, picture, "
+                    "labels, temperature_entity_id, humidity_entity_id",
                     "For kind='floor' use: name, id, level, icon, aliases",
                 ],
             )
@@ -168,6 +175,8 @@ class AreaTools:
         parsed_aliases: list[str] | None,
         picture: str | None,
         parsed_labels: list[str] | None,
+        temperature_entity_id: str | None = None,
+        humidity_entity_id: str | None = None,
     ) -> dict[str, Any]:
         """Build a WebSocket message for updating an existing area."""
         message: dict[str, Any] = {
@@ -186,6 +195,10 @@ class AreaTools:
             message["picture"] = picture if picture else None
         if parsed_labels is not None:
             message["labels"] = parsed_labels
+        if temperature_entity_id is not None:
+            message["temperature_entity_id"] = temperature_entity_id or None
+        if humidity_entity_id is not None:
+            message["humidity_entity_id"] = humidity_entity_id or None
         return message
 
     @staticmethod
@@ -196,6 +209,8 @@ class AreaTools:
         parsed_aliases: list[str] | None,
         picture: str | None,
         parsed_labels: list[str] | None,
+        temperature_entity_id: str | None = None,
+        humidity_entity_id: str | None = None,
     ) -> dict[str, Any]:
         """Build a WebSocket message for creating a new area."""
         message: dict[str, Any] = {
@@ -212,6 +227,10 @@ class AreaTools:
             message["picture"] = picture
         if parsed_labels:
             message["labels"] = parsed_labels
+        if temperature_entity_id:
+            message["temperature_entity_id"] = temperature_entity_id
+        if humidity_entity_id:
+            message["humidity_entity_id"] = humidity_entity_id
         return message
 
     @staticmethod
@@ -488,6 +507,8 @@ class AreaTools:
         parsed_aliases: list[str] | None,
         picture: str | None,
         parsed_labels: list[str] | None,
+        temperature_entity_id: str | None = None,
+        humidity_entity_id: str | None = None,
     ) -> tuple[dict[str, Any], str, str, str, str | None]:
         """Build the WS message plus (result_key, id_key, operation, name) for a set.
 
@@ -504,6 +525,8 @@ class AreaTools:
                     parsed_aliases,
                     picture,
                     parsed_labels,
+                    temperature_entity_id,
+                    humidity_entity_id,
                 )
                 operation = "update"
             else:
@@ -523,6 +546,8 @@ class AreaTools:
                     parsed_aliases,
                     picture,
                     parsed_labels,
+                    temperature_entity_id,
+                    humidity_entity_id,
                 )
                 operation = "create"
             result_key = "area"
@@ -800,10 +825,33 @@ class AreaTools:
                 default=None,
             ),
         ] = None,
+        temperature_entity_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Sensor the area reports temperature from, when kind='area' "
+                    "(a sensor.* entity with device_class temperature; empty "
+                    "string to clear). Omit to leave unchanged."
+                ),
+                default=None,
+            ),
+        ] = None,
+        humidity_entity_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Sensor the area reports humidity from, when kind='area' "
+                    "(a sensor.* entity with device_class humidity; empty "
+                    "string to clear). Omit to leave unchanged."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Create or update a Home Assistant area or floor.
 
-        Pass kind='area' (with optional floor_id, picture, labels) or kind='floor' (with optional level).
+        Pass kind='area' (with optional floor_id, picture, labels, temperature_entity_id,
+        humidity_entity_id) or kind='floor' (with optional level).
         Provide name only to create a new entry; provide id to update an existing one.
         Cross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
 
@@ -811,6 +859,7 @@ class AreaTools:
         ha_set_area_or_floor(kind="area", name="Kitchen")
         ha_set_area_or_floor(kind="area", id="kitchen", floor_id="ground_floor")
         ha_set_area_or_floor(kind="area", id="kitchen", labels=["site_home"])
+        ha_set_area_or_floor(kind="area", id="kitchen", temperature_entity_id="sensor.kitchen_temp", humidity_entity_id="")
         ha_set_area_or_floor(kind="floor", name="Basement", level=-1)
         ha_set_area_or_floor(kind="floor", id="ground_floor", level=0)
         """
@@ -836,7 +885,15 @@ class AreaTools:
                     )
                 )
 
-            _validate_cross_kind_params(kind, level, floor_id, picture, parsed_labels)
+            _validate_cross_kind_params(
+                kind,
+                level,
+                floor_id,
+                picture,
+                parsed_labels,
+                temperature_entity_id,
+                humidity_entity_id,
+            )
 
             # ``None`` stays the documented "create-new" sentinel; explicit
             # empty/whitespace would silently route to the ``if id:`` create
@@ -863,6 +920,8 @@ class AreaTools:
                     parsed_aliases,
                     picture,
                     parsed_labels,
+                    temperature_entity_id,
+                    humidity_entity_id,
                 )
             )
 

@@ -346,7 +346,6 @@ class TestAreaLifecycle:
                         {"label_id": created_label},
                     )
 
-
     async def test_area_sensor_references(self, mcp_client, cleanup_tracker):
         """Set, replace and clear an area's temperature/humidity sensors (issue #2619).
 
@@ -389,7 +388,9 @@ class TestAreaLifecycle:
             )
             assert update_data.get("success"), f"Update failed: {update_data}"
             area = await self._read_area(mcp_client, area_id)
-            assert area.get("temperature_entity_id") == "sensor.demo_outside_temperature"
+            assert (
+                area.get("temperature_entity_id") == "sensor.demo_outside_temperature"
+            )
             assert area.get("humidity_entity_id") == "sensor.demo_humidity", area
             assert area.get("name") == area_name, area
 
@@ -412,7 +413,9 @@ class TestAreaLifecycle:
         finally:
             if area_id:
                 await safe_call_tool(
-                    mcp_client, "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
+                    mcp_client,
+                    "ha_remove_area_or_floor",
+                    {"kind": "area", "id": area_id},
                 )
 
     @staticmethod
