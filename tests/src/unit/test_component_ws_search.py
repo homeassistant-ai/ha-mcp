@@ -851,9 +851,7 @@ class TestInfo:
             "call_service",
             "bulk_call_service",
             "template_diagnose",
-            "helper_schemas",
-            "helper_item",
-            "helper_write",
+            *wsapi.helper_collections.CAPABILITIES,
         ]
         assert info["capabilities"] == wsapi.CAPABILITIES
         # config_get was withdrawn before release (raw_config freshness lags the
@@ -2016,11 +2014,7 @@ class TestRegistrationAndAdminGate:
             # Template error location (#2522); prep + admin-gate coverage lives in
             # test_component_template_diagnose.py (this set only guards drift).
             wsapi.WS_TEMPLATE_DIAGNOSE,
-            # Simple-helper collection commands (#2479); coverage lives in
-            # test_component_helper_collections.py (this set only guards drift).
-            wsapi.WS_HELPER_SCHEMAS,
-            wsapi.WS_HELPER_ITEM,
-            wsapi.WS_HELPER_WRITE,
+            *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
@@ -2606,27 +2600,6 @@ class TestBlueprintGet:
 # =============================================================================
 # config_get — withdrawn before release (raw_config freshness lag)
 # =============================================================================
-class TestConfigGetWithdrawn:
-    """``config_get`` was withdrawn before release: it served an entity's
-    ``raw_config``, whose freshness lags the config file between a write and the
-    next completed reload, so a get racing a reload returned a stale body. The
-    command, its schema, its capability, and its domain gate are all gone — the
-    get tools serve automation/script reads from the legacy REST path (which
-    reads the fresh config file). These pin that nothing component-side still
-    exposes it (issue #1813 tracks a possible file-reading redesign)."""
-
-    def test_capability_not_advertised(self):
-        assert "config_get" not in wsapi.CAPABILITIES
-
-    def test_no_command_constant_schema_or_domain_gate(self):
-        assert not hasattr(wsapi, "WS_CONFIG_GET")
-        assert not hasattr(wsapi, "_config_get_schema")
-        assert not hasattr(wsapi, "CONFIG_GET_DOMAINS")
-
-    def test_no_handler_function(self):
-        assert not hasattr(wsapi, "_do_config_get")
-
-
 # =============================================================================
 # helpers_list — collection (live attrs) + flow (options, never entry.data)
 # =============================================================================

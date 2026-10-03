@@ -15,11 +15,8 @@ from ..tools.component_helper_collections import (
     HELPER_CAPABILITIES,
     fetch_helper_schemas,
 )
-from ..tools.tools_config_helpers import (
-    _SIMPLE_CONFIG_KEYS_DESCRIPTION,
-    SIMPLE_HELPER_TYPES,
-    supported_core_fields,
-)
+from ..tools.helper_field_schemas import _SIMPLE_CONFIG_KEYS_DESCRIPTION
+from ..tools.tools_config_helpers import SIMPLE_HELPER_TYPES, supported_core_fields
 
 if TYPE_CHECKING:
     from ha_mcp._vendor.fastmcp.server.transforms import GetToolNext

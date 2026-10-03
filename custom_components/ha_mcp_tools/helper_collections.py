@@ -36,6 +36,14 @@ SIMPLE_HELPER_TYPES = (
     "tag",
 )
 
+WS_HELPER_SCHEMAS = "ha_mcp_tools/helper_schemas"
+WS_HELPER_ITEM = "ha_mcp_tools/helper_item"
+WS_HELPER_WRITE = "ha_mcp_tools/helper_write"
+COMMANDS = (WS_HELPER_SCHEMAS, WS_HELPER_ITEM, WS_HELPER_WRITE)
+# Advertised by websocket_api's info; the server routes ha_config_set_helper's
+# simple-helper writes through these and falls back to Core's WS commands.
+CAPABILITIES = ("helper_schemas", "helper_item", "helper_write")
+
 # ``websocket_api.async_register_command`` stores ``{command: (handler, schema)}``
 # under the integration's domain key.
 _WS_HANDLERS_KEY = "websocket_api"
@@ -259,3 +267,66 @@ async def async_write_item(
         "registry_applied": applied,
         "warnings": warnings,
     }
+
+
+def command_specs(vol: Any, er: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
+    """The (schema, handler, async prep) rows websocket_api registers.
+
+    Built from websocket_api's ``vol`` and ``er`` so its registration stays the
+    one place those are bound.
+    """
+    helper_type = vol.In(SIMPLE_HELPER_TYPES)
+
+    def do_schemas(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+        return describe_schemas(hass)
+
+    def do_item(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+        return read_item(
+            hass,
+            er.async_get(hass),
+            msg["helper_type"],
+            msg.get("entity_id"),
+            msg.get("item_id"),
+        )
+
+    async def write_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+        if msg["action"] == "update" and not msg.get("item_id"):
+            return {"result": _failure("invalid", "item_id is required for update")}
+        return {"result": await async_write_item(hass, er.async_get(hass), msg)}
+
+    def do_write(
+        hass: HomeAssistant, msg: dict[str, Any], *, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        return result
+
+    registry_fields = {
+        vol.Optional("icon"): vol.Any(str, None),
+        vol.Optional("area_id"): vol.Any(str, None),
+        vol.Optional("labels"): [str],
+        vol.Optional("category"): vol.Any(str, None),
+    }
+    return [
+        ({vol.Required("type"): WS_HELPER_SCHEMAS}, do_schemas, None),
+        (
+            {
+                vol.Required("type"): WS_HELPER_ITEM,
+                vol.Required("helper_type"): helper_type,
+                vol.Exclusive("entity_id", "target"): str,
+                vol.Exclusive("item_id", "target"): str,
+            },
+            do_item,
+            None,
+        ),
+        (
+            {
+                vol.Required("type"): WS_HELPER_WRITE,
+                vol.Required("helper_type"): helper_type,
+                vol.Required("action"): vol.In(("create", "update")),
+                vol.Optional("item_id"): str,
+                vol.Required("data"): dict,
+                vol.Optional("registry"): registry_fields,
+            },
+            do_write,
+            write_prep,
+        ),
+    ]

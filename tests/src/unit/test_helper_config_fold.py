@@ -69,7 +69,8 @@ async def test_schema_publishes_config_but_not_flat_fields() -> None:
 
 
 async def test_hidden_param_names_reads_the_marker() -> None:
-    def fn(a: int, b: Annotated[int | None, HIDDEN_PARAM] = None) -> None: ...
+    def fn(a: int, b: Annotated[int | None, HIDDEN_PARAM] = None) -> None:
+        """Signature only."""
 
     assert hidden_param_names(fn) == frozenset({"b"})
 
@@ -275,14 +276,12 @@ class TestCatalogTransform:
             AsyncMock(return_value=_CORE_SCHEMAS),
         )
 
-    async def test_advertises_core_fields_and_drops_wait(self, available) -> None:
-        from ha_mcp.transforms.component_helpers import ComponentHelperSchemaTransform
-
-        mcp, tool = await _registered_tool()
-        (rewritten,) = await ComponentHelperSchemaTransform(MagicMock()).list_tools(
-            [tool]
-        )
-        properties = rewritten.parameters["properties"]
+    async def test_registration_advertises_core_fields_and_drops_wait(
+        self, available
+    ) -> None:
+        # The helper tools' registration installs the transform.
+        _, tool = await _registered_tool()
+        properties = tool.parameters["properties"]
         assert "wait" not in properties
         description = properties["config"]["description"]
         assert tch._SIMPLE_CONFIG_KEYS_DESCRIPTION not in description
@@ -291,9 +290,8 @@ class TestCatalogTransform:
             "step (float, default 1), mode (box|slider)." in description
         )
         assert "pattern" not in description
-        assert "wait" in tool.parameters["properties"]  # original untouched
 
-    async def test_keeps_static_contract_without_component(self, monkeypatch):
+    async def test_static_contract_without_component(self, monkeypatch):
         from ha_mcp.transforms.component_helpers import ComponentHelperSchemaTransform
 
         monkeypatch.setattr(
@@ -301,5 +299,11 @@ class TestCatalogTransform:
             AsyncMock(return_value=None),
         )
         _, tool = await _registered_tool()
-        (same,) = await ComponentHelperSchemaTransform(MagicMock()).list_tools([tool])
-        assert same is tool
+        properties = tool.parameters["properties"]
+        assert "wait" in properties
+        assert (
+            tch._SIMPLE_CONFIG_KEYS_DESCRIPTION in properties["config"]["description"]
+        )
+        rewritten = ComponentHelperSchemaTransform._rewrite(tool, _CORE_SCHEMAS)
+        assert "wait" not in rewritten.parameters["properties"]
+        assert "wait" in tool.parameters["properties"]  # a copy, original untouched

@@ -136,6 +136,7 @@ def _write_outcome(
             context=error_context,
         )
     )
+    return None  # py/mixed-returns: unreachable, raise_tool_error raises
 
 
 async def write_helper_item(

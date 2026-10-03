@@ -225,7 +225,7 @@ def test_write_reports_invalid_missing_and_unavailable() -> None:
 
 
 def test_commands_registered_and_advertised(functional_ws) -> None:  # noqa: F811
-    commands = {wsapi.WS_HELPER_SCHEMAS, wsapi.WS_HELPER_ITEM, wsapi.WS_HELPER_WRITE}
+    commands = {hc.WS_HELPER_SCHEMAS, hc.WS_HELPER_ITEM, hc.WS_HELPER_WRITE}
     assert commands <= set(functional_ws.registered)
     assert {"helper_schemas", "helper_item", "helper_write"} <= set(wsapi.CAPABILITIES)
 
@@ -233,10 +233,10 @@ def test_commands_registered_and_advertised(functional_ws) -> None:  # noqa: F81
 @pytest.mark.parametrize(
     ("command", "extra"),
     [
-        (wsapi.WS_HELPER_SCHEMAS, {}),
-        (wsapi.WS_HELPER_ITEM, {"helper_type": "zone", "item_id": "home"}),
+        (hc.WS_HELPER_SCHEMAS, {}),
+        (hc.WS_HELPER_ITEM, {"helper_type": "zone", "item_id": "home"}),
         (
-            wsapi.WS_HELPER_WRITE,
+            hc.WS_HELPER_WRITE,
             {"helper_type": "zone", "action": "create", "data": {}},
         ),
     ],

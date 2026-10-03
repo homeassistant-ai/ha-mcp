@@ -238,11 +238,6 @@ class HomeAssistantSmartMCPServer:
         from .transforms import ComponentSearchSchemaTransform
 
         self.mcp.add_transform(ComponentSearchSchemaTransform(self.client))
-        # Imported by module path: the transforms package is imported eagerly
-        # by settings_ui, and this one pulls in the helper tool module.
-        from .transforms.component_helpers import ComponentHelperSchemaTransform
-
-        self.mcp.add_transform(ComponentHelperSchemaTransform(self.client))
 
         # Apply tool search transform (must come after all tools and
         # the skill guide tool are registered so it can wrap everything)
