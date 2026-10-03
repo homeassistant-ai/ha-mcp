@@ -1,39 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  mkdtempSync,
-  writeFileSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { execFileSync } from "node:child_process";
-import {
-  command,
-  checksReady,
-  decide,
-  digest,
-  renderState,
-  resultSchema,
-  stateFrom,
-  validateChanges,
-  validateResult,
-} from "../../.github/slash-agent/core.mjs";
-import {
-  API,
-  collect,
-  eventTarget,
-  sessionRoot,
-  snapshotDifferences,
-} from "../../.github/slash-agent/github.mjs";
-import { main, prepare, prompt } from "../../.github/slash-agent/main.mjs";
+import { command, checksReady, decide, renderState, stateFrom } from "../../.github/slash-agent/core.mjs";
+import { collect, eventTarget, sessionRoot, snapshotDifferences } from "../../.github/slash-agent/github.mjs";
+import { prepare, prompt } from "../../.github/slash-agent/main.mjs";
 import { publish } from "../../.github/slash-agent/publish.mjs";
-import { packageWork } from "../../.github/slash-agent/worker.mjs";
-
-import { A, B, APP, user, bot, response, artifact, FakeAPI, initial, start, green, readySession } from "./slash-agent-fixtures.mjs";
+import { A, B, APP, user, bot, artifact, FakeAPI, initial, start, green, readySession } from "./slash-agent-fixtures.mjs";
 
 test("healthy pushes wait or update readiness without buying a worker turn", () => {
   for (const pending of [false, true]) {

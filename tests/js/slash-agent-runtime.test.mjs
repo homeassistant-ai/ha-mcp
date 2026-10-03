@@ -1,39 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  mkdtempSync,
-  writeFileSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import {
-  command,
-  checksReady,
-  decide,
-  digest,
-  renderState,
-  resultSchema,
-  stateFrom,
-  validateChanges,
-  validateResult,
-} from "../../.github/slash-agent/core.mjs";
-import {
-  API,
-  collect,
-  eventTarget,
-  sessionRoot,
-  snapshotDifferences,
-} from "../../.github/slash-agent/github.mjs";
-import { main, prepare, prompt } from "../../.github/slash-agent/main.mjs";
-import { publish } from "../../.github/slash-agent/publish.mjs";
+import { API, eventTarget } from "../../.github/slash-agent/github.mjs";
+import { main } from "../../.github/slash-agent/main.mjs";
 import { packageWork } from "../../.github/slash-agent/worker.mjs";
-
-import { A, B, APP, user, bot, response, artifact, FakeAPI, initial, start, green, readySession } from "./slash-agent-fixtures.mjs";
+import { A, B, APP, user, response, artifact, FakeAPI, start } from "./slash-agent-fixtures.mjs";
 
 test("event admission rereads commands and rejects unauthorized rerunners and review actors", () => {
   const api = new FakeAPI();
