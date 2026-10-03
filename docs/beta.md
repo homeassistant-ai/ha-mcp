@@ -129,7 +129,7 @@ Replaces the docstrings on 15 heavy ha-mcp tools (`ha_config_get_automation`, `h
 
 Both lists above are checked against `_LITE_DOCSTRINGS` by `test_documented_tool_lists_cover_every_mapped_tool`, so a tool added to the mapping without a docs update fails CI rather than drifting silently.
 
-**Where the deferred detail lives.** Each mapped tool declares its destination in `_LITE_DOCSTRING_DESTINATIONS` (`src/ha_mcp/server.py`), in one of three forms, each with a matching test:
+**Where the deferred detail lives.** Each mapped tool declares its destination in `_LITE_DOCSTRING_DESTINATIONS` (`LITE_DOCSTRING_DESTINATIONS` in `src/ha_mcp/server_tool_text.py`), in one of three forms, each with a matching test:
 
 | Destination | Meaning | Enforced by |
 |---|---|---|
