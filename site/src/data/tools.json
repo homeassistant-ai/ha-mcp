@@ -1395,17 +1395,17 @@
         },
         "name": {
           "type": "str | None",
-          "description": "New display name for the device (sets name_by_user)",
+          "description": "New display name for the device (sets name_by_user). '' clears name_by_user and reverts to the integration-provided name. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "area_id": {
           "type": "str | None",
-          "description": "Area/room ID to assign the device to. Use empty string '' to unassign.",
+          "description": "Area/room ID to assign the device to. Use empty string '' to unassign. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "disabled_by": {
           "type": "str | None",
-          "description": "Set to 'user' to disable the device, or '' (empty string) to enable it. Omit to leave the disabled state unchanged.",
+          "description": "Set to 'user' to disable the device, or '' (empty string) to enable it. Omit to leave the disabled state unchanged. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "labels": {
@@ -1595,22 +1595,22 @@
         },
         "area_id": {
           "type": "str | None",
-          "description": "Area/room ID to assign the entity to. Use empty string '' to unassign from current area.",
+          "description": "Area/room ID to assign the entity to. Use empty string '' to unassign from current area. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "name": {
           "type": "str | None",
-          "description": "Display name for the entity. Use empty string '' to remove custom name and revert to default.",
+          "description": "Display name for the entity. Use empty string '' to remove custom name and revert to default. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "icon": {
           "type": "str | None",
-          "description": "Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon.",
+          "description": "Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "device_class": {
           "type": "str | None",
-          "description": "Override the entity's display device class — what the HA UI's 'Show As' dropdown writes. Use empty string '' to clear the override and fall back to the integration default. Examples: 'window', 'door', 'motion' for binary_sensor; 'temperature', 'humidity' for sensor.",
+          "description": "Override the entity's display device class — what the HA UI's 'Show As' dropdown writes. Use empty string '' to clear the override and fall back to the integration default. Examples: 'window', 'door', 'motion' for binary_sensor; 'temperature', 'humidity' for sensor. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "options": {
@@ -1665,7 +1665,7 @@
         },
         "new_device_name": {
           "type": "str | None",
-          "description": "New display name for the associated device. If provided, both entity and device are updated in one operation.",
+          "description": "New display name for the associated device. If provided, both entity and device are updated in one operation. Empty or whitespace-only never changes the device name: it is reported under warnings when other fields are given and is an error when it is the only update. To clear the device name use ha_set_device(name='').",
           "default": null
         }
       },
