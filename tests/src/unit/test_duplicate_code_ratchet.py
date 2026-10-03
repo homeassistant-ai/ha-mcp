@@ -274,6 +274,11 @@ def _stage(repo: Path, path: str, content: bytes) -> None:
     subprocess.run(["git", "add", path], cwd=repo, check=True)
 
 
+def _list(repo: Path, groups: dict[str, list[str]]) -> None:
+    """Write and stage a baseline that lists ``groups``."""
+    _stage(repo, ratchet.BASELINE_NAME, json.dumps(groups).encode())
+
+
 def _baseline(repo: Path) -> dict[str, list[str]]:
     return json.loads((repo / ratchet.BASELINE_NAME).read_text(encoding="utf-8"))
 
@@ -295,7 +300,7 @@ def test_failed_run_keeps_the_entry_of_a_group_that_gained_a_copy(
     _stage(temp_repo, "a.py", HELPER)
     _stage(temp_repo, "b.py", RENAMED_HELPER)
     listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
-    (temp_repo / ratchet.BASELINE_NAME).write_text(json.dumps(listed), encoding="utf-8")
+    _list(temp_repo, listed)
     _stage(temp_repo, "c.py", _pasted(HELPER))
 
     assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
@@ -307,7 +312,7 @@ def test_removed_copy_drops_its_group(temp_repo: Path) -> None:
     copy come back unnoticed."""
     _stage(temp_repo, "a.py", HELPER)
     listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
-    (temp_repo / ratchet.BASELINE_NAME).write_text(json.dumps(listed), encoding="utf-8")
+    _list(temp_repo, listed)
 
     assert ratchet.main(["--staged"], repo_root=temp_repo) == 0
     assert _baseline(temp_repo) == {}
@@ -320,11 +325,22 @@ def test_staged_run_ignores_an_unstaged_removal(temp_repo: Path) -> None:
     _stage(temp_repo, "a.py", HELPER)
     _stage(temp_repo, "b.py", RENAMED_HELPER)
     listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
-    (temp_repo / ratchet.BASELINE_NAME).write_text(json.dumps(listed), encoding="utf-8")
+    _list(temp_repo, listed)
     (temp_repo / "b.py").write_bytes(b"")
 
     assert ratchet.main(["--staged"], repo_root=temp_repo) == 0
     assert _baseline(temp_repo) == listed
+
+
+def test_staged_run_ignores_an_unstaged_baseline_edit(temp_repo: Path) -> None:
+    """A copy staged for the commit must not pass because an unstaged edit
+    to the baseline lists it: the hook would then stage that edit."""
+    _stage(temp_repo, "a.py", HELPER)
+    _stage(temp_repo, "b.py", RENAMED_HELPER)
+    listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
+    (temp_repo / ratchet.BASELINE_NAME).write_text(json.dumps(listed), encoding="utf-8")
+
+    assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
 
 
 def test_repository_matches_the_baseline() -> None:

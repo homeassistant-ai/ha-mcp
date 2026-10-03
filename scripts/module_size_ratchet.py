@@ -36,14 +36,18 @@ REPIN_COMMAND = "python scripts/module_size_ratchet.py"
 BASELINE_NAME = BASELINE_PATH.relative_to(REPO_ROOT).as_posix()
 
 
+def read_text(repo_root: Path, path: str, staged: bool = False) -> str:
+    """Return one file's text from the working tree, or with ``staged``
+    from the index."""
+    if staged:
+        return _git(repo_root, "show", f":{path}").decode("utf-8")
+    return (repo_root / path).read_text("utf-8")
+
+
 def excluded_prefixes(repo_root: Path, staged: bool = False) -> tuple[str, ...]:
     """Return the path prefixes left out: ruff's ``extend-exclude`` trees
     (vendored code and fixtures) and the stable proxy copy."""
-    if staged:
-        text = _git(repo_root, "show", ":pyproject.toml").decode("utf-8")
-    else:
-        text = (repo_root / "pyproject.toml").read_text("utf-8")
-    pyproject = tomllib.loads(text)
+    pyproject = tomllib.loads(read_text(repo_root, "pyproject.toml", staged))
     ruff_excluded = pyproject["tool"]["ruff"]["extend-exclude"]
     prefixes = [f"{entry.rstrip('/')}/" for entry in ruff_excluded if "*" not in entry]
     return (*prefixes, STABLE_PROXY_COPY)

@@ -302,7 +302,11 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
     )
     args = parser.parse_args(argv)
     baseline_path = repo_root / BASELINE_NAME
-    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    # With --staged the baseline comes from the index too, so an unstaged
+    # edit to it cannot let a staged copy through.
+    baseline = json.loads(
+        module_size_ratchet.read_text(repo_root, BASELINE_NAME, args.staged)
+    )
     groups = scan(repo_root, staged=args.staged)
     violations = find_violations(groups, baseline)
     # Rewriting on a failure would drop the entry of a group that gained a

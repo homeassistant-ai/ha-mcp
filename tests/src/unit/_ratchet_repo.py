@@ -33,8 +33,10 @@ def make_ratchet_repo(
     (tmp_path / "pyproject.toml").write_text(
         "[tool.ruff]\nextend-exclude = []\n", encoding="utf-8"
     )
-    subprocess.run(["git", "add", "pyproject.toml"], cwd=tmp_path, check=True)
     baseline = tmp_path / baseline_name
     baseline.parent.mkdir(parents=True)
     baseline.write_text("{}\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "pyproject.toml", baseline_name], cwd=tmp_path, check=True
+    )
     return tmp_path
