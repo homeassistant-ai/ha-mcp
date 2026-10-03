@@ -202,3 +202,20 @@ def native_result(
     entity_id = result.get("entity_id") or f"{helper_type}.{item.get('id')}"
     data = {**item, **(result.get("registry_applied") or {})}
     return data, entity_id, list(result.get("warnings") or [])
+
+
+async def tag_entity_id(client: Any, tag_id: str | None) -> str | None:
+    """The entity of a tag: its entity_id follows the tag's name, not its ID."""
+    if not tag_id:
+        return None
+    listed = await client.send_websocket_message(
+        {"type": "config/entity_registry/list"}
+    )
+    return next(
+        (
+            entry.get("entity_id")
+            for entry in listed.get("result") or []
+            if entry.get("platform") == "tag" and entry.get("unique_id") == tag_id
+        ),
+        None,
+    )

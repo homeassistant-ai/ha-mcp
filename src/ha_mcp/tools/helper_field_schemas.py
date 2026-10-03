@@ -18,7 +18,8 @@ SIMPLE_CONFIG_KEYS_DESCRIPTION = (
     "input_select: options (list, required), initial. "
     "input_number: min_value, max_value, step, unit_of_measurement, "
     "mode ('box'/'slider'), initial. "
-    "input_text: min_value, max_value (length), mode ('text'/'password'), initial. "
+    "input_text: min_value, max_value (length), mode ('text'/'password'), initial, "
+    "unit_of_measurement, pattern (regex the value must match). "
     "input_datetime: has_date, has_time, initial. "
     "input_boolean: initial. "
     "counter: initial (starting value), min_value, max_value, step, "
@@ -63,6 +64,8 @@ _TYPE_TYPED_PARAMS: dict[str, frozenset[str]] = {
             "max_value",
             "mode",
             "initial",
+            "unit_of_measurement",
+            "pattern",
         }
     ),
     "input_datetime": frozenset({"icon", "has_date", "has_time", "initial"}),
@@ -287,6 +290,13 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "required": False,
             "selector": {"select": {"options": ["text", "password"]}},
             "description": "Default 'text'.",
+        },
+        {"name": "unit_of_measurement", "required": False, "selector": {"text": {}}},
+        {
+            "name": "pattern",
+            "required": False,
+            "selector": {"text": {}},
+            "description": "Regex the value must match.",
         },
         {
             "name": "initial",

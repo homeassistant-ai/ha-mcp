@@ -701,6 +701,13 @@ async def safe_progress(
         logger.debug("ctx.report_progress failed (%s): %s", type(e).__name__, e)
 
 
+def ws_failure_code(result: dict[str, Any]) -> ErrorCode:
+    """Core answers a schema-invalid write with ``invalid_format``: the caller's input."""
+    if result.get("error_code") == "invalid_format":
+        return ErrorCode.VALIDATION_INVALID_PARAMETER
+    return ErrorCode.SERVICE_CALL_FAILED
+
+
 def clear_or_keep(value: str | None, param_name: str) -> str | None:
     """``clearable_value`` for params where None means "not passed": blank → ''."""
     return None if value is None else clearable_value(value, param_name) or ""

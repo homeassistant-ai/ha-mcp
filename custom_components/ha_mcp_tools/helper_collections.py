@@ -269,7 +269,10 @@ async def async_write_item(
     except _item_not_found() as err:
         return _failure("not_found", f"{helper_type} config not found: {err}")
     except _INVALID_ERRORS as err:
-        return _failure("invalid", str(err))
+        # Like Core's WS commands, report every problem, not only the first.
+        return _failure(
+            "invalid", "; ".join(map(str, getattr(err, "errors", None) or [err]))
+        )
     except _home_assistant_error() as err:
         # Core rejected it before storing (a duplicate tag_id); an error after a
         # stored change is not a rejection, so it surfaces as an unknown outcome.

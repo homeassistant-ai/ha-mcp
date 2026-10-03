@@ -295,6 +295,16 @@ async def test_empty_category_clears_the_scope() -> None:
     assert result == {"category": None}
 
 
+async def test_input_text_unit_and_pattern() -> None:
+    created = tch._create_fields_input_text(
+        None, None, None, None, unit_of_measurement="u", pattern="[a-z]+"
+    )
+    assert created == {"unit_of_measurement": "u", "pattern": "[a-z]+"}
+    existing = {"pattern": "[0-9]+", "unit_of_measurement": "u", "max": 5}
+    kept = tch._update_fields_input_text(existing, None, None, None, None)
+    assert (kept["pattern"], kept["unit_of_measurement"]) == ("[0-9]+", "u")
+
+
 async def test_cleared_icon_is_left_out_of_the_item() -> None:
     existing = {"id": "b", "name": "B", "icon": "mdi:star"}
     kept = tch._build_standard_update_message(

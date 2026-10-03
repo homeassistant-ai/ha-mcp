@@ -460,6 +460,28 @@ FLOW_HELPER_TYPES: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
+async def _subentry_ids(client: Any, entry_id: str) -> set[str] | None:
+    """IDs of the entry's subentries; None when they can't be listed."""
+    try:
+        listed = await client.list_config_subentries(entry_id)
+    except Exception:
+        return None
+    if not isinstance(listed, dict) or not listed.get("success"):
+        return None
+    return {
+        s["subentry_id"]
+        for s in listed.get("result") or []
+        if isinstance(s, dict) and s.get("subentry_id")
+    }
+
+
+async def _created_subentry_id(
+    client: Any, entry_id: str, before: set[str]
+) -> str | None:
+    created = (await _subentry_ids(client, entry_id) or before) - before
+    return created.pop() if len(created) == 1 else None
+
+
 async def set_config_subentry(
     client: Any,
     entry_id: str,
@@ -484,6 +506,8 @@ async def set_config_subentry(
     branch is unchanged on both counts.
     """
     _reject_redaction_sentinels(config_dict)
+    # Core's create result carries no subentry_id; the new one is the difference.
+    before = None if subentry_id else await _subentry_ids(client, entry_id)
     flow_result = await client.start_config_subentry_flow(
         entry_id,
         subentry_type,
@@ -536,6 +560,8 @@ async def set_config_subentry(
             await _abort_subentry_flow_best_effort(client, flow_id)
         raise
 
+    if before is not None and result["operation"] == "created":
+        subentry_id = await _created_subentry_id(client, entry_id, before)
     response = {
         "success": True,
         "entry_id": entry_id,

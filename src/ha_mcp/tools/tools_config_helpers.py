@@ -14,7 +14,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextvars import ContextVar
-from typing import Annotated, Any, Literal, NoReturn, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import (
     AliasChoices,
@@ -51,6 +51,7 @@ from .component_helper_collections import (
     fetch_helper_schemas,
     native_result,
     read_helper_item,
+    tag_entity_id,
     write_helper_item,
 )
 from .component_registry_lookup import fetch_entities_for_config_entry_via_component
@@ -74,6 +75,15 @@ from .helper_field_schemas import (
 from .helper_field_schemas import (
     SIMPLE_CONFIG_KEYS_DESCRIPTION as _SIMPLE_CONFIG_KEYS_DESCRIPTION,
 )
+from .helper_listing import (
+    _component_covers,
+    _paginate_helpers_response,
+    _raise_all_requires_component,
+    _raise_flow_requires_component,
+    _shape_collection_helper_record,
+    _shape_component_helpers_response,
+    _shape_flow_helper_record,
+)
 from .helpers import (
     HIDDEN_PARAM,
     clear_or_keep,
@@ -83,6 +93,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
+    ws_failure_code,
 )
 from .util_helpers import (
     JSON_STRING_COERCION,
@@ -90,7 +101,6 @@ from .util_helpers import (
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
-    build_pagination_metadata,
     parse_json_param,
     parse_string_list_param,
     wait_for_entity_registered,
@@ -1989,9 +1999,18 @@ def _create_fields_input_text(
     max_value: float | None,
     mode: str | None,
     initial: Any,
+    unit_of_measurement: str | None = None,
+    pattern: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
+    fields: dict[str, Any] = {
+        key: value
+        for key, value in (
+            ("unit_of_measurement", unit_of_measurement),
+            ("pattern", pattern),
+        )
+        if value is not None
+    }
     if min_value is not None:
         fields["min"] = int(min_value)
     if max_value is not None:
@@ -2316,7 +2335,7 @@ async def _execute_create_simple_helper(
     if not result.get("success"):
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                ws_failure_code(result),
                 f"Failed to create helper: {result.get('error', 'Unknown error')}",
                 context=_simple_helper_error_context(helper_type, name=name),
             )
@@ -2324,6 +2343,8 @@ async def _execute_create_simple_helper(
 
     helper_data = result.get("result", {})
     entity_id = helper_data.get("entity_id")
+    if helper_type == "tag":
+        entity_id = await tag_entity_id(client, helper_data.get("id")) or entity_id
     if not entity_id and helper_data.get("id"):
         entity_id = f"{helper_type}.{helper_data['id']}"
 
@@ -2418,9 +2439,19 @@ def _update_fields_input_text(
     max_value: float | None,
     mode: str | None,
     initial: Any,
+    unit_of_measurement: str | None = None,
+    pattern: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
+    # Full-replace update: an unpassed unit or pattern keeps its stored value.
+    fields: dict[str, Any] = {
+        key: value if value is not None else existing.get(key)
+        for key, value in (
+            ("unit_of_measurement", unit_of_measurement),
+            ("pattern", pattern),
+        )
+        if (value if value is not None else existing.get(key)) is not None
+    }
     min_val = int(min_value) if min_value is not None else existing.get("min")
     if min_val is not None:
         fields["min"] = min_val
@@ -2685,7 +2716,7 @@ async def _execute_person_config_update(
     if not result.get("success"):
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                ws_failure_code(result),
                 f"Failed to update person config: {result.get('error', 'Unknown error')}",
                 context=_simple_helper_error_context("person", entity_id=entity_id),
             )
@@ -2711,7 +2742,7 @@ async def _execute_zone_config_update(
     if not result.get("success"):
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                ws_failure_code(result),
                 f"Failed to update zone config: {result.get('error', 'Unknown error')}",
                 context=_simple_helper_error_context("zone", entity_id=entity_id),
             )
@@ -2761,7 +2792,7 @@ async def _execute_standard_helper_update(
     if not result.get("success"):
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                ws_failure_code(result),
                 f"Failed to update {helper_type} config: {result.get('error', 'Unknown error')}",
                 context=_simple_helper_error_context(helper_type, entity_id=entity_id),
             )
@@ -3079,7 +3110,7 @@ async def _execute_update_simple_helper(
         **kw,
     )
     if native is not None:
-        updated_data, _, warnings = native
+        updated_data, entity_id, warnings = native
         native_response = _helper_response(
             "update",
             helper_type,
@@ -3099,10 +3130,11 @@ async def _execute_update_simple_helper(
         )
         update_msg = _tag_update_message(tag_update_id, name, kw.get("description"))
         result = await client.send_websocket_message(update_msg)
+        entity_id = await tag_entity_id(client, tag_update_id) or entity_id
         if not result.get("success"):
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
+                    ws_failure_code(result),
                     f"Failed to update tag config: {result.get('error', 'Unknown error')}",
                     context=_simple_helper_error_context(
                         helper_type, entity_id=entity_id
@@ -3461,210 +3493,6 @@ def _validate_pre_dispatch_params(
 # ---------------------------------------------------------------------------
 # REGISTRATION
 # ---------------------------------------------------------------------------
-
-
-def _shape_collection_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
-    """Map one component collection-helper record onto the legacy list record.
-
-    The legacy ``{helper_type}/list`` record is the storage body itself
-    (``id`` = storage id, ``name`` = creation-time name, plus type-specific
-    keys). The component supplies that same body as ``config`` and, from the
-    real storage collection + entity registry, the authoritative
-    ``storage_id`` plus the current ``entity_id`` and display ``name``. Keep the
-    legacy keys with their legacy meanings and layer the current ``entity_id`` +
-    ``name`` on top — the additive form of the #1794 stale-id fix that the
-    legacy-path PR converges to.
-    """
-    config = rec.get("config")
-    out: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
-    # Prefer the record-level ``storage_id`` (the component reads it from the
-    # real storage collection). Not every collection body carries its own
-    # ``id`` — person/zone are stored keyed by id rather than embedding it — so
-    # trusting the body's ``id`` drifts for those types. Fall back to
-    # ``object_id`` only when ``storage_id`` is absent (older component).
-    storage_id = rec.get("storage_id")
-    if storage_id is None:
-        storage_id = rec.get("object_id")
-    if storage_id is not None:
-        out["id"] = storage_id
-    entity_id = rec.get("entity_id")
-    if entity_id is not None:
-        out["entity_id"] = entity_id
-    name = rec.get("name")
-    if name is not None:
-        # The storage body's ``name`` is the creation-time name (a rename
-        # updates the registry, not the body — #1794); preserve it as
-        # ``original_name`` before the current display name overrides it, so a
-        # component-served record carries the same additive shape as the legacy
-        # join (both paths promise entity_id/original_name in the docstring).
-        original_name = out.get("name")
-        if original_name is not None:
-            out["original_name"] = original_name
-        out["name"] = name
-    return out
-
-
-def _shape_flow_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
-    """Map one component flow-helper record onto a list record.
-
-    Flow helpers have no storage ``id`` and no ``{type}/list`` command; the
-    component sources them from the config entry. The record carries the
-    ``entry_id`` (config-entry id), the current ``entity_id`` + display
-    ``name``, the ``helper_type``, and the data-minimized ``options`` body
-    (``ConfigEntry.options`` only, never ``entry.data``). Mirrors the
-    collection shaper's current-fields layering.
-    """
-    out: dict[str, Any] = {"helper_type": rec.get("helper_type")}
-    entry_id = rec.get("entry_id")
-    if entry_id is not None:
-        out["entry_id"] = entry_id
-    entity_id = rec.get("entity_id")
-    if entity_id is not None:
-        out["entity_id"] = entity_id
-    name = rec.get("name")
-    if name is not None:
-        out["name"] = name
-    options = rec.get("options")
-    if isinstance(options, dict):
-        out["options"] = options
-    return out
-
-
-def _paginate_helpers_response(
-    response: dict[str, Any], offset: int, limit: int
-) -> dict[str, Any]:
-    """Slice a helper listing envelope down to one page.
-
-    The single normalization point for every ``ha_config_list_helpers`` route
-    (all-types, component, legacy): each builds the same
-    ``success``/``helper_type``/``count``/``helpers``/``message`` envelope, so
-    the slice is applied once here instead of in each builder. ``count`` becomes
-    the page size and ``total_count`` carries the full size, matching
-    ``ha_list_services``.
-    """
-    helpers = response.get("helpers")
-    if not isinstance(helpers, list):
-        # Every builder owes this function a flat list; anything else is a bug in
-        # the caller (a {type}/list shape that escaped _flatten_helper_list_result).
-        # The records are still usable, so return them unpaginated rather than
-        # raising -- but say so in warnings[], not just the log: the caller is an
-        # agent that never sees server logs, and absent metadata otherwise reads
-        # as "the collection fits on one page".
-        shape = type(helpers).__name__
-        logger.warning(
-            "Cannot paginate %r listing: expected a list of helpers, got %s; "
-            "returning the envelope unpaginated",
-            response.get("helper_type"),
-            shape,
-        )
-        warning = (
-            f"Listing could not be paginated (expected a list of helpers, got "
-            f"{shape}); returned in full, without pagination metadata."
-        )
-        existing = response.get("warnings")
-        return {
-            **response,
-            "warnings": [*existing, warning]
-            if isinstance(existing, list)
-            else [warning],
-        }
-    total_count = len(helpers)
-    page = helpers[offset : offset + limit]
-    return {
-        **response,
-        "helpers": page,
-        **build_pagination_metadata(total_count, offset, limit, len(page)),
-    }
-
-
-def _shape_component_helpers_response(
-    helper_type: str, result: dict[str, Any]
-) -> dict[str, Any]:
-    """Map an ``ha_mcp_tools/helpers_list`` result into the legacy envelope.
-
-    Emits the exact legacy top-level keys (``success``/``helper_type``/
-    ``count``/``helpers``/``message``). Records are shaped to the requested
-    universe: a flow ``helper_type`` yields flow records (``entry_id`` +
-    current ``entity_id``/``name`` + ``options``); a storage type yields the
-    storage-body records. A record of the other kind is dropped defensively.
-    ``count`` is the length of the emitted list, mirroring the legacy
-    ``count == len(helpers)`` guarantee.
-    """
-    raw = result.get("helpers")
-    records = raw if isinstance(raw, list) else []
-    want_flow = helper_type in FLOW_HELPER_TYPES
-    helpers: list[dict[str, Any]] = []
-    for rec in records:
-        if not isinstance(rec, dict):
-            continue
-        if (rec.get("kind") == "flow") != want_flow:
-            continue
-        helpers.append(
-            _shape_flow_helper_record(rec)
-            if want_flow
-            else _shape_collection_helper_record(rec)
-        )
-    return {
-        "success": True,
-        "helper_type": helper_type,
-        "count": len(helpers),
-        "helpers": helpers,
-        "message": f"Found {len(helpers)} {helper_type} helper(s)",
-    }
-
-
-def _component_covers(result: dict[str, Any], helper_type: str) -> bool:
-    """Whether a helpers_list response authoritatively enumerated ``helper_type``.
-
-    The component reports ``covered_types``: the helper types its response could
-    actually see. A type outside that list (e.g. ``tag`` — tags have no state
-    entity, so the component's from-states scan can't enumerate them) must NOT
-    be trusted as "none exist". A response with no ``covered_types`` at all (an
-    older component) is treated conservatively as covering nothing, so the
-    caller falls back rather than trusting a possibly-partial list.
-    """
-    covered = result.get("covered_types")
-    return isinstance(covered, list) and helper_type in covered
-
-
-def _raise_flow_requires_component(helper_type: str) -> NoReturn:
-    """Raise the structured error for a flow helper with no component path.
-
-    Flow-based helper types have no ``{type}/list`` WS command, so the legacy
-    listing path cannot enumerate them — only the ha_mcp_tools component's
-    ``helpers_list`` can. When the component is absent, downlevel, or its call
-    fails, this is a hard error: never a silent empty list, never a legacy
-    fallback (there is none for flow types).
-    """
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.COMPONENT_NOT_INSTALLED,
-            f"Listing '{helper_type}' (a flow-based helper) requires the "
-            "ha_mcp_tools custom component (>= 1.1.0); the built-in listing "
-            "path cannot enumerate flow helpers.",
-            context={"helper_type": helper_type},
-        )
-    )
-
-
-def _raise_all_requires_component() -> NoReturn:
-    """Raise the structured error for all-types listing with no component path.
-
-    ``helper_type="all"`` has no legacy equivalent — there is no single WS
-    command that enumerates every helper type — so, like a flow-based type, it
-    is served exclusively through the ha_mcp_tools component. When the component
-    is absent, downlevel, or its call fails, this is a hard error: never a
-    silent empty list, never a partial legacy fallback.
-    """
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.COMPONENT_NOT_INSTALLED,
-            "Listing all helper types in one call (helper_type='all') requires "
-            "the ha_mcp_tools custom component (>= 1.1.0); without it, list a "
-            "specific helper_type instead.",
-            context={"helper_type": "all"},
-        )
-    )
 
 
 class HelperConfigTools:
@@ -4355,6 +4183,7 @@ class HelperConfigTools:
         picture: Annotated[str | None, HIDDEN_PARAM] = None,
         tag_id: Annotated[str | None, HIDDEN_PARAM] = None,
         description: Annotated[str | None, HIDDEN_PARAM] = None,
+        pattern: Annotated[str | None, HIDDEN_PARAM] = None,
         category: Annotated[
             str | None,
             Field(
@@ -4454,7 +4283,6 @@ class HelperConfigTools:
         - config subentry: ha_config_set_helper(helper_type="config_subentry", entry_id="01HXYZ...", subentry_type="conversation", config={"name": "Local agent", "model": "gemma3:27b"})
         """
         try:
-            # '' or whitespace clears (#2617's convention); None = not passed.
             area_id = clear_or_keep(area_id, "area_id")
             icon = clear_or_keep(icon, "icon")
             category = clear_or_keep(category, "category")
@@ -4502,6 +4330,7 @@ class HelperConfigTools:
                     "picture": picture,
                     "tag_id": tag_id,
                     "description": description,
+                    "pattern": pattern,
                 }
                 name, icon, type_kw = _prepare_typed_params(
                     helper_type, config, name, icon, type_kw
