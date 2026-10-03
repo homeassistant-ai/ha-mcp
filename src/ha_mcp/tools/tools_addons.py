@@ -53,13 +53,13 @@ from ..utils.python_sandbox import (
     format_sandbox_error,
     safe_execute_expression,
 )
+from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     validate_identifier_not_empty,
 )
-from .util_helpers import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 

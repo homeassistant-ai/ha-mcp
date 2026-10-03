@@ -22,6 +22,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -34,10 +35,8 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
+from .response_helpers import (
     build_pagination_metadata,
-    parse_string_list_param,
     project_fields,
     result_fields_warning,
 )

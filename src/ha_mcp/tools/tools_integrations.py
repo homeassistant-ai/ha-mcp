@@ -32,6 +32,7 @@ from ..redaction import (
     sentinel_replacement,
 )
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -45,6 +46,9 @@ from .config_entry_flow import (
     update_config_entry_options,
 )
 from .config_entry_flow_form import iter_schema_fields
+from .config_helpers.registry import _get_entities_for_config_entry
+from .config_helpers.schemas import SIMPLE_HELPER_TYPES
+from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -56,19 +60,9 @@ from .integration_reconfigure import (
     ReconfigureRunner,
     reject_reconfigure_only_parameters,
 )
-from .tools_config_helpers import (
-    SIMPLE_HELPER_TYPES,
-    _get_entities_for_config_entry,
-)
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    build_pagination_metadata,
-    fetch_integration_diagnostics,
-    get_logger_levels,
-    parse_diagnostics_fields,
-    wait_for_entity_removed,
-    websocket_error_message,
-)
+from .response_helpers import build_pagination_metadata
+from .util_helpers import get_logger_levels, websocket_error_message
+from .ws_waiters import wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 

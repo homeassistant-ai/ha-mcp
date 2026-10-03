@@ -36,7 +36,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import tools_search
+from ha_mcp.tools.search import component as search_component
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig, VisibilityWire
 from ha_mcp.visibility.persistence import save_visibility_config
@@ -325,7 +325,7 @@ async def _run_component(
     ws = _real_search_ws(hass)
     client = RoutingClient()
     ha_search = _build_ha_search(client)
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(
             query=_QUERY,
             domain_filter="light",
@@ -424,7 +424,7 @@ async def _run_legacy(scenario: _Scenario) -> dict[str, Any]:
         info_exc=HomeAssistantCommandError("no info", "unknown_command"),
     )
     ha_search = _build_ha_search(client)
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(
             query=_QUERY,
             domain_filter="light",
@@ -576,7 +576,7 @@ def test_component_warning_constants_match_resolver() -> None:
     """The component's duplicated warning strings equal the server resolver's.
 
     The component ships over HACS and cannot import the server package, so its
-    degradation strings are duplicated in ``websocket_api.py``; this pins them equal
+    degradation strings are duplicated in ``websocket_api/visibility.py``; this pins them equal
     to ``visibility.resolver`` so a future edit to one side fails here instead of
     silently drifting the cross-path warning text.
     """

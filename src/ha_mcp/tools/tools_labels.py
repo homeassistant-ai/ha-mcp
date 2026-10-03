@@ -21,6 +21,7 @@ from ..config import get_global_settings
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -28,11 +29,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    parse_string_list_param,
-    websocket_error_message,
-)
+from .util_helpers import websocket_error_message
 
 logger = logging.getLogger(__name__)
 

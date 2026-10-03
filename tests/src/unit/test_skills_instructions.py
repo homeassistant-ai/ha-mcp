@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ha_mcp.tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
+from ha_mcp.tools.config_write_helpers import _HA_BEST_PRACTICES_SKILL_NAME
 
 from ._symlink_support import symlink_or_skip
 

@@ -24,6 +24,7 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION, parse_json_param, parse_string_list_param
 from .component_api import (
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     component_supports,
@@ -31,6 +32,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .config_helpers.registry import validate_registry_ids
 from .entity_update_fields import (
     build_name_visibility_fields,
     build_state_tag_fields,
@@ -45,13 +47,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .tools_config_helpers import validate_registry_ids
 from .tools_voice_assistant import KNOWN_ASSISTANTS
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    parse_json_param,
-    parse_string_list_param,
-)
 
 logger = logging.getLogger(__name__)
 

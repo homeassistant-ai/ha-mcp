@@ -8,13 +8,13 @@ device registry and filter for one entry (``ha_get_device`` single lookup,
 single in-process read: ``device_get`` returns one ``DeviceEntry.dict_repr`` by
 id, ``device_list`` returns them all — each byte-identical to a
 ``config/device_registry/list`` element by construction (see
-``custom_components/ha_mcp_tools/websocket_api.py``). Consumers keep their own
+``custom_components/ha_mcp_tools/websocket_api/lookups.py``). Consumers keep their own
 transforms over that raw shape.
 
 This module owns the caps-gated fetch so the routing discipline — probe caps,
 send one frame, invalidate on ``unknown_command``, fall back to the legacy path
 on any component error — lives in one place instead of being duplicated per
-consumer (the pattern ``tools_search._fetch_states_via_component`` established
+consumer (the pattern ``search.state._fetch_states_via_component`` established
 for the ``states`` capability). Both helpers return ``None`` to mean "component
 unavailable — use the legacy path"; a component that answers authoritatively
 returns its payload (with ``device`` possibly ``None`` for "no such device").

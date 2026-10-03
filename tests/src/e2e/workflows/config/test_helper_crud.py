@@ -1819,7 +1819,7 @@ class TestSetHelperNegativeInputs:
     async def test_create_requires_name(self, mcp_client) -> None:
         """Rejects a create call when name is empty.
 
-        Guard: tools_config_helpers.py — raises VALIDATION_INVALID_PARAMETER
+        Guard: config_helpers/create.py — raises VALIDATION_INVALID_PARAMETER
         before any WebSocket I/O when action is "create" and name is falsy.
         """
         result = await safe_call_tool(
@@ -1833,7 +1833,7 @@ class TestSetHelperNegativeInputs:
     async def test_input_number_invalid_range(self, mcp_client) -> None:
         """Rejects input_number when min_value > max_value.
 
-        Guard: tools_config_helpers.py — raises VALIDATION_INVALID_PARAMETER
+        Guard: config_helpers/validation.py — raises VALIDATION_INVALID_PARAMETER
         when min_value is greater than max_value.
         """
         result = await safe_call_tool(
@@ -1852,7 +1852,7 @@ class TestSetHelperNegativeInputs:
     async def test_input_datetime_both_date_and_time_false(self, mcp_client) -> None:
         """Rejects input_datetime when both has_date and has_time are False.
 
-        Guard: tools_config_helpers.py — raises VALIDATION_INVALID_PARAMETER
+        Guard: config_helpers/validation.py — raises VALIDATION_INVALID_PARAMETER
         when both fields are explicitly False.
         """
         result = await safe_call_tool(
@@ -1871,7 +1871,7 @@ class TestSetHelperNegativeInputs:
     async def test_input_select_requires_options(self, mcp_client) -> None:
         """Rejects input_select when options is absent.
 
-        Guard: tools_config_helpers.py — raises VALIDATION_INVALID_PARAMETER
+        Guard: config_helpers/validation.py — raises VALIDATION_INVALID_PARAMETER
         before any WebSocket I/O when helper_type is "input_select" and
         options is falsy.
         """
