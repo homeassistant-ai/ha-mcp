@@ -361,7 +361,7 @@ def _validate_placeholder_parity(catalogs: dict[str, dict[str, Any]]) -> None:
     """Reject catalog-backed translations with mismatched placeholders.
 
     Tool metadata normally comes from the runtime API rather than ``en.json``;
-    ``settings.js`` performs the corresponding parity check against those
+    ``settings_js/`` performs the corresponding parity check against those
     canonical values before displaying a translated tool field.
     """
     english_messages = catalogs[DEFAULT_LOCALE]["messages"]
@@ -399,15 +399,16 @@ def _validate_placeholder_parity(catalogs: dict[str, dict[str, Any]]) -> None:
 # Anything that looks like an HTML tag in a catalog message. A bare "<" in
 # prose (e.g. "< 5") deliberately does not match — it renders fine escaped.
 _TAG_LIKE_RE = re.compile(r"</?[a-zA-Z][^>]*>")
-# The exact tag shapes settings.js::tHtml restores after escaping. Keep in
-# sync with the restore regexes there — any other spelling (case, spacing,
-# attribute order) survives escaping and shows the user literal markup text.
+# The exact tag shapes settings_js/01_i18n_state.js::tHtml restores after
+# escaping. Keep in sync with the restore regexes there — any other spelling
+# (case, spacing, attribute order) survives escaping and shows the user
+# literal markup text.
 _ALLOWED_TAGS_RE = re.compile(
     r'</?code>|</?strong>|</a>|<a href="#" data-panel-link="[a-z][a-z-]*">'
 )
 # The tab a cross-panel link switches to. The allowlist above only accepts the
 # tag *shape*, so "outils" or "backup" passes it and then silently does
-# nothing: settings.js hands the value to activateTab, which no-ops on an
+# nothing: settings_js/ hands the value to activateTab, which no-ops on an
 # unknown panel. Read the real ids out of the page rather than restating them.
 # Matches the whole anchor, not a bare attribute: a message may legitimately
 # show `<code>data-panel-link="example"</code>` as literal help text, and that
@@ -487,9 +488,10 @@ def _validate_panel_links(
 def _validate_inline_markup(catalogs: dict[str, dict[str, Any]]) -> None:
     """Reject catalog messages whose markup ``tHtml`` cannot restore.
 
-    ``settings.js::tHtml`` escapes every translated value and restores only
-    the exact allowlisted tag shapes, so a translation written with
-    ``<CODE>`` or ``<code >`` would silently render as literal escaped text.
+    ``settings_js/01_i18n_state.js::tHtml`` escapes every translated value and
+    restores only the exact allowlisted tag shapes, so a translation written
+    with ``<CODE>`` or ``<code >`` would silently render as literal escaped
+    text.
     Fail fast at load time instead, mirroring the placeholder-parity check.
     Scoped to ``messages``: tool translations are plain text rendered through
     ``escapeHtml`` and carry no markup contract.

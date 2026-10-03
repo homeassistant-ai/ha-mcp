@@ -283,7 +283,7 @@ async def _backup_prep_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_BACKUP_PREP, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError: a pooled-WS drop or a failed
         # (re)connect. The legacy probes
         # ride a dedicated already-connected socket, so fall back rather than fail
@@ -787,7 +787,7 @@ async def create_backup(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error creating backup: {e}")
         exception_to_structured_error(
             e,
@@ -1162,7 +1162,7 @@ async def restore_backup(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error restoring backup: {e}")
         exception_to_structured_error(
             e,
@@ -1271,7 +1271,7 @@ async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[st
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error listing backups: {e}")
         exception_to_structured_error(
             e,
@@ -1396,7 +1396,7 @@ async def delete_backup(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error deleting backup: {e}")
         exception_to_structured_error(
             e,
@@ -2018,7 +2018,7 @@ async def _edits_diff(
         )
     except ToolError:
         raise
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         # Fetching the live config for diff goes through the
         # same domain handler ``restore`` uses, so the same
         # HA-side failure modes (4xx/5xx, WS errors, schema
@@ -2141,7 +2141,7 @@ async def _edits_restore(
         )
     except ToolError:
         raise
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         # ``handler.restore`` is domain-specific and can surface
         # HA-side rejections (schema-validation failures, 4xx/5xx
         # responses, WS command errors). Without this catch those

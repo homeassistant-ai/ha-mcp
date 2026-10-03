@@ -293,7 +293,7 @@ async def wait_for_state_change(
             logger.warning(f"⚠️ Could not get initial state for {entity_id}")
             return None
         initial_state = initial_data.get("data", {}).get("state")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ Error getting initial state for {entity_id}: {e}")
         return None
 

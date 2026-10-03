@@ -801,7 +801,7 @@ async def visibility_filter_active() -> bool:
     """
     try:
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())
-    except Exception:
+    except Exception:  # noqa: BLE001
         return True
     return config_has_active_hide_dimensions(config)
 
@@ -816,7 +816,7 @@ async def visibility_state_and_wire() -> tuple[bool, VisibilityWire | None]:
     """
     try:
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())
-    except Exception:
+    except Exception:  # noqa: BLE001
         return True, None
     return config_has_active_hide_dimensions(config), config.to_wire()
 
@@ -832,7 +832,7 @@ async def device_registry_needed_for_visibility() -> bool:
     """
     try:
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
     return config_needs_device_registry(config)
 

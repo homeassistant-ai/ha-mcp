@@ -327,7 +327,7 @@ def test_the_push_allowlist_covers_exactly_the_pipeline_outputs() -> None:
     only either never lands (export-only) or is dead weight (allowlist-only).
     The allowlist is compared as an exact SET, so a widened arm — admitting
     paths the export never legitimately stages — fails just like a dropped
-    one. settings.js is deliberately absent from both sides: its generated
+    one. settings_js/ is deliberately absent from both sides: its generated
     block derives from en.json alone, so the sync never changes it, and its
     absence is what keeps executable code off the patch entirely.
     """
@@ -379,8 +379,8 @@ def test_the_push_allowlist_covers_exactly_the_pipeline_outputs() -> None:
             f"the export step no longer stages {path!r} — pipeline output "
             "there would silently never land"
         )
-    assert "settings.js" not in export, (
-        "the export step stages settings.js — the one executable file the "
+    assert "settings_js" not in export, (
+        "the export step stages settings_js/ — the executable files the "
         "old allowlist carried; the sync never legitimately changes it (its "
         "generated block derives from en.json alone), and staging it "
         "reopens the code-smuggling channel"

@@ -27,7 +27,7 @@ FIXTURES = Path(__file__).with_name("fixtures")
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["patch", "python_transform"])
-async def test_reporter_dashboard_edits_and_conflicts(
+async def test_reporter_dashboard_edits_and_conflicts(  # noqa: PLR0915
     mcp_client, mode, record_property
 ):
     """Nested template edits and stale hashes work with and without the component."""

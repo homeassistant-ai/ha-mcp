@@ -208,7 +208,7 @@ class RadioTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # exception_to_structured_error owns logging (it stays quiet for
             # classified errors and logs unclassified ones with a traceback);
             # a manual log here would double-log. Let the helper own it.

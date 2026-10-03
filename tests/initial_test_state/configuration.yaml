@@ -37,7 +37,7 @@ demo:
 # Helper used by the pagination tests in test_history.py and test_logbook.py.
 # Defined here so the entity always exists at HA boot; the recorder DB ships
 # with pre-baked state-change rows for it (see scripts/bake_pagination_seed.py
-# and the timestamp-refresh hook in conftest.py).
+# and the timestamp-refresh hook in _conftest_seed.py).
 input_number:
   e2e_pagination_seed:
     name: E2E Pagination Seed

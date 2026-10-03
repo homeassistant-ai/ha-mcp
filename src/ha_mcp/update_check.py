@@ -207,7 +207,7 @@ def get_update_info() -> UpdateInfo | None:
     """
     try:
         return _resolve_update_info()
-    except Exception as err:  # pragma: no cover - contract backstop
+    except Exception as err:  # pragma: no cover - contract backstop  # noqa: BLE001
         logger.debug("ha-mcp update check skipped (unexpected error: %s)", err)
         return None
 
@@ -239,7 +239,7 @@ async def get_update_field() -> UpdateField | None:
             info = get_update_info()
         else:
             info = await asyncio.to_thread(get_update_info)
-    except Exception as err:  # pragma: no cover - defensive
+    except Exception as err:  # pragma: no cover - defensive  # noqa: BLE001
         logger.debug("ha-mcp self-update check skipped: %s", err)
         return None
     if info is None:

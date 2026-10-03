@@ -22,6 +22,18 @@ pre-commit:
               - "tests/test-env/pyproject.toml"
             run: uv lock
 
+    # Lowers baseline entries for files that shrank, before the unit tests
+    # compare the tree with the baseline. The script never raises an entry.
+    # --staged counts the index, so the staged baseline matches the commit.
+    - name: module-size-baseline
+      glob:
+        - "**/*.py"
+        - "**/*.js"
+        - "**/*.mjs"
+        - "**/*.ts"
+        - "**/*.astro"
+      run: uv run python scripts/module_size_ratchet.py --staged && git add tests/src/unit/module_size_baseline.json
+
     - group:
         parallel: true
         jobs:

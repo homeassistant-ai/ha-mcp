@@ -21,7 +21,7 @@ from .log_common import (
     _validate_log_level,
     _validate_log_slug,
 )
-from .log_sources import CoreLogSourcesMixin
+from .log_sources import _SYSTEM_LOG_MESSAGE_CAP, CoreLogSourcesMixin
 from .log_sources_fault import FaultLogSourceMixin
 from .log_sources_supervisor import SupervisorLogSourcesMixin
 
@@ -61,7 +61,7 @@ class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMix
             )
         if source == "system":
             return await self._get_system_log(
-                limit=limit, search=search, level=level, order=order
+                limit=limit, search=search, level=level, order=order, compact=compact
             )
         if source == "error_log":
             return await self._get_error_log(
@@ -234,7 +234,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             ),
         ] = "newest",
-        # Logbook-specific (ignored for other sources)
+        # Source-scoped options: each description names the sources it applies to
         hours_back: Annotated[
             int, Field(ge=1, description="Logbook only: how many hours back to read.")
         ] = 1,
@@ -261,7 +261,16 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = 0,
         compact: Annotated[
             bool,
-            Field(description="Logbook only: strip attribute dicts to save context."),
+            Field(
+                description=(
+                    f"logbook / system only: save context. Logbook strips "
+                    f"attribute dicts; system keeps the start and end of each "
+                    f"message string within {_SYSTEM_LOG_MESSAGE_CAP} characters "
+                    f"(counted in 'truncated_messages'). search still matches the "
+                    f"full message; text inside the cut is not shown. To read one "
+                    f"message whole, pass False with a narrow search and limit=1."
+                )
+            ),
         ] = True,
         # System/error_log-specific
         level: Annotated[
@@ -312,8 +321,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """Get Home Assistant logs from various sources.
 
         Prefer source='system' for triage: it returns HA's own deduplicated
-        system_log entries with counts, first_occurred and full tracebacks, and
-        its counts run since each error first occurred. error_log with
+        system_log entries with counts, first_occurred and the full exception
+        traceback, and its counts run since each error first occurred. error_log with
         structured=True counts only what is inside the fetched window (reported
         as window_start/window_end; every install reads a capped window) and
         drops tracebacks, which structured=False gets back; use it for entries

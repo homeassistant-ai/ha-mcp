@@ -86,7 +86,7 @@ async def _subscribe_entry_changes(client: Any) -> tuple[Any, Any] | None:
         sub_id, queue = await ws.subscribe_command(
             WS_CONFIG_ENTRIES_SUBSCRIBE, wait_timeout=_ENTRY_SUBSCRIBE_TIMEOUT
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # Degrade to polling rather than failing the reconfigure; the caller
         # records which mechanism actually ran.
         logger.warning(

@@ -57,7 +57,7 @@ def _config_hash(config: dict[str, Any]) -> str:
 
 
 def _resolve_dashboard(hass: HomeAssistant, url_path: str | None) -> Any:
-    from .websocket_api import _lovelace_dashboards_map
+    from .websocket_api.dashboards import _lovelace_dashboards_map
 
     dashboards = _lovelace_dashboards_map(hass)
     if dashboards is None:

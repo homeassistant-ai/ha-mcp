@@ -819,7 +819,7 @@ class ConfigSceneTools:
             # config (Hue/vendor or raw-YAML). Same CONFIG_NOT_FOUND
             # classification as get/delete (#1971), not a generic write failure.
             _raise_scene_not_storage_error(e.scene_id, e.platform)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error = exception_to_structured_error(
                 e,
                 context={"scene_id": scene_id},

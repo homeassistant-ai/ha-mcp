@@ -195,7 +195,7 @@ class ZoneTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting zone(s) (zone_id={zone_id}): {e}")
             exception_to_structured_error(
                 e,
@@ -248,7 +248,7 @@ class ZoneTools:
                 exc,
             )
             return response
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             response = _build_zone_result(await self._legacy_zone_rows(), zone_id)
             response.setdefault("warnings", []).append(
                 f"component zone listing connection error ({exc}); "
@@ -524,7 +524,7 @@ class ZoneTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(
                 f"Error in ha_set_zone ({operation}, zone_id={zone_id}, name={name}): {e}"
             )
@@ -616,7 +616,7 @@ class ZoneTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing zone (zone_id={zone_id}): {e}")
             exception_to_structured_error(
                 e,

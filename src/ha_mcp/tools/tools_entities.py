@@ -31,7 +31,13 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .entity_update_fields import (
+    build_name_visibility_fields,
+    build_state_tag_fields,
+)
 from .helpers import (
+    WHITESPACE_CLEARS_NOTE,
+    clearable_value,
     exception_to_structured_error,
     extract_tool_error_message,
     log_tool_usage,
@@ -63,6 +69,11 @@ _GET_ENTRIES_CHUNK_SIZE = 500
 # Max entity IDs accepted by the bulk-removal path of ha_remove_entity. Mirrors
 # the cap the other bulk tools use (ha_get_state's _get_bulk_entity_states).
 _MAX_BULK_REMOVE = 100
+
+_CLEAR_DEVICE_NAME_HINT = (
+    "new_device_name cannot clear the device name; use ha_set_device(name='') "
+    "instead, or name=' ' if your client cannot send an empty string"
+)
 
 
 def _format_fetched_entity(entry: dict[str, Any]) -> dict[str, Any]:
@@ -154,7 +165,7 @@ async def fetch_entity_enrichment_via_component(
         else:
             logger.warning("%s failed; skipped enrichment: %r", WS_ENTITY_ENRICH, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError / plain establish Exception → skip
         # enrichment (strictly additive; no legacy fetch dies here).
         logger.warning(
@@ -243,70 +254,6 @@ def _extract_ws_error(result: dict[str, Any]) -> str:
         return error
     logger.warning("HA WS response had no usable error detail: %r", result)
     return "no error detail returned by Home Assistant"
-
-
-def _build_name_visibility_fields(
-    message: dict[str, Any],
-    updates_made: list[str],
-    area_id: str | None,
-    name: str | None,
-    icon: str | None,
-    device_class: str | None,
-) -> None:
-    """Add basic positioning/appearance fields to the update message."""
-    if area_id is not None:
-        message["area_id"] = area_id if area_id else None
-        updates_made.append(f"area_id='{area_id}'" if area_id else "area cleared")
-    if name is not None:
-        message["name"] = name if name else None
-        updates_made.append(f"name='{name}'" if name else "name cleared")
-    if icon is not None:
-        message["icon"] = icon if icon else None
-        updates_made.append(f"icon='{icon}'" if icon else "icon cleared")
-    if device_class is not None:
-        # Treat whitespace-only as the documented "clear" sentinel so
-        # accidental spaces don't reach HA as a literal validation error.
-        normalized_device_class = device_class.strip() or None
-        message["device_class"] = normalized_device_class
-        updates_made.append(
-            f"device_class='{normalized_device_class}'"
-            if normalized_device_class
-            else "device_class cleared"
-        )
-
-
-def _build_state_tag_fields(
-    message: dict[str, Any],
-    updates_made: list[str],
-    enabled: bool | None,
-    hidden: bool | None,
-    parsed_aliases: list[str | None] | None,
-    parsed_categories: dict[str, str | None] | None,
-    final_labels: list[str] | None,
-    label_operation: str,
-    parsed_labels: list[str] | None,
-) -> None:
-    """Add enabled/hidden/alias/category/label fields to the update message."""
-    if enabled is not None:
-        message["disabled_by"] = None if enabled else "user"
-        updates_made.append("enabled" if enabled else "disabled")
-    if hidden is not None:
-        message["hidden_by"] = "user" if hidden else None
-        updates_made.append("hidden" if hidden else "visible")
-    if parsed_aliases is not None:
-        message["aliases"] = parsed_aliases
-        updates_made.append(f"aliases={parsed_aliases}")
-    if parsed_categories is not None:
-        message["categories"] = parsed_categories
-        updates_made.append(f"categories={parsed_categories}")
-    if final_labels is not None:
-        message["labels"] = final_labels
-        if label_operation == "set":
-            updates_made.append(f"labels={final_labels}")
-        elif label_operation == "add":
-            updates_made.append(f"labels added: {parsed_labels} -> {final_labels}")
-        else:  # remove
-            updates_made.append(f"labels removed: {parsed_labels} -> {final_labels}")
 
 
 def _parse_set_entity_ids(
@@ -859,11 +806,8 @@ class EntityTools:
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """Rename the associated device. Returns (device_rename_result, entity_entry).
 
-        Handle new_device_name — rename the associated device.
-        Normalize empty string to None (no-op, don't clear device name).
+        ``new_device_name`` is already normalized: None means no rename.
         """
-        if new_device_name is not None and not new_device_name.strip():
-            new_device_name = None
         device_rename_result: dict[str, Any] | None = None
         if new_device_name is None:
             return device_rename_result, entity_entry
@@ -908,7 +852,7 @@ class EntityTools:
         device_msg: dict[str, Any] = {
             "type": "config/device_registry/update",
             "device_id": device_id,
-            "name_by_user": new_device_name if new_device_name else None,
+            "name_by_user": new_device_name,
         }
         device_result = await self._client.send_websocket_message(device_msg)
         if device_result.get("success"):
@@ -1074,6 +1018,7 @@ class EntityTools:
         new_entity_id: str | None,
         exposure_result: dict[str, bool] | None,
         device_rename_result: dict[str, Any] | None,
+        device_name_warning: str | None = None,
     ) -> dict[str, Any]:
         """Build the final response dict for a single-entity update."""
         response_data: dict[str, Any] = {
@@ -1095,8 +1040,16 @@ class EntityTools:
         if exposure_result is not None:
             response_data["exposure"] = exposure_result
 
+        if device_name_warning is not None:
+            response_data.setdefault("warnings", []).append(device_name_warning)
+
         if device_rename_result is not None:
             response_data["device_rename"] = device_rename_result
+            # Return-shape contract: warnings are a top-level list as well.
+            if device_rename_result.get("warnings"):
+                response_data.setdefault("warnings", []).extend(
+                    device_rename_result["warnings"]
+                )
             # Mark partial when a device rename was requested but didn't complete
             # for an operational reason: WS-call failure (device_id present + warnings)
             # or upstream registry lookup failure (lookup_failed marker). Not partial
@@ -1130,6 +1083,12 @@ class EntityTools:
         use_entity_name_alias: bool | None = None,
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
+        # Normalized before Phase 3: a quote-only value must be rejected before the
+        # entity registry write, and a blank one must not count as deferred work.
+        device_name_blank = new_device_name is not None and not new_device_name.strip()
+        new_device_name = clearable_value(
+            new_device_name, "new_device_name", hint=_CLEAR_DEVICE_NAME_HINT
+        )
         async with registry_update_lock("entity", entity_id):
             # Phase 1: For add/remove label operations, fetch current labels first
             final_labels = await self._resolve_final_labels(
@@ -1145,10 +1104,10 @@ class EntityTools:
                 "entity_id": entity_id,
             }
             updates_made: list[str] = []
-            _build_name_visibility_fields(
+            build_name_visibility_fields(
                 message, updates_made, area_id, name, icon, device_class
             )
-            _build_state_tag_fields(
+            build_state_tag_fields(
                 message,
                 updates_made,
                 enabled,
@@ -1172,6 +1131,15 @@ class EntityTools:
                 parsed_expose_to is not None or new_device_name is not None
             )
             if not updates_made and not parsed_options and not has_deferred_work:
+                if device_name_blank:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "new_device_name is blank and no other update was given",
+                            suggestions=[_CLEAR_DEVICE_NAME_HINT],
+                            context={"entity_id": entity_id},
+                        )
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -1194,7 +1162,7 @@ class EntityTools:
             # cleanup path (label_operation="remove") must stay open.
             await validate_registry_ids(
                 self._client,
-                area_id,
+                message.get("area_id"),  # normalized by build_name_visibility_fields
                 parsed_labels if label_operation in ("set", "add") else None,
                 parsed_categories,
                 fail_closed=True,
@@ -1215,10 +1183,15 @@ class EntityTools:
         )
 
         # Phase 5: Device rename
-        device_rename_result, entity_entry = await self._apply_device_rename(
-            entity_id, entity_entry, new_device_name
-        )
-        if new_device_name is not None:
+        device_rename_result: dict[str, Any] | None = None
+        if device_name_blank:
+            device_name_warning: str | None = _CLEAR_DEVICE_NAME_HINT
+        else:
+            device_name_warning = None
+            device_rename_result, entity_entry = await self._apply_device_rename(
+                entity_id, entity_entry, new_device_name
+            )
+        if device_rename_result and device_rename_result.get("success"):
             updates_made.append(f"device_name -> {new_device_name}")
 
         # Phase 6: Expose to assistants
@@ -1242,6 +1215,7 @@ class EntityTools:
             new_entity_id,
             exposure_result,
             device_rename_result,
+            device_name_warning,
         )
 
     async def _bulk_apply_expose(
@@ -1657,21 +1631,30 @@ class EntityTools:
         area_id: Annotated[
             str | None,
             Field(
-                description="Area/room ID to assign the entity to. Use empty string '' to unassign from current area.",
+                description=(
+                    "Area/room ID to assign the entity to. Use empty string '' to "
+                    "unassign from current area. " + WHITESPACE_CLEARS_NOTE
+                ),
                 default=None,
             ),
         ] = None,
         name: Annotated[
             str | None,
             Field(
-                description="Display name for the entity. Use empty string '' to remove custom name and revert to default.",
+                description=(
+                    "Display name for the entity. Use empty string '' to remove custom "
+                    "name and revert to default. " + WHITESPACE_CLEARS_NOTE
+                ),
                 default=None,
             ),
         ] = None,
         icon: Annotated[
             str | None,
             Field(
-                description="Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon.",
+                description=(
+                    "Icon for the entity (e.g., 'mdi:thermometer'). Use empty string "
+                    "'' to remove custom icon. " + WHITESPACE_CLEARS_NOTE
+                ),
                 default=None,
             ),
         ] = None,
@@ -1682,7 +1665,8 @@ class EntityTools:
                     "Override the entity's display device class — what the HA UI's 'Show "
                     "As' dropdown writes. Use empty string '' to clear the override and "
                     "fall back to the integration default. Examples: 'window', 'door', "
-                    "'motion' for binary_sensor; 'temperature', 'humidity' for sensor."
+                    "'motion' for binary_sensor; 'temperature', 'humidity' for sensor. "
+                    + WHITESPACE_CLEARS_NOTE
                 ),
                 default=None,
             ),
@@ -1801,7 +1785,11 @@ class EntityTools:
             Field(
                 description=(
                     "New display name for the associated device. "
-                    "If provided, both entity and device are updated in one operation."
+                    "If provided, both entity and device are updated in one operation. "
+                    "Empty or whitespace-only never changes the device name: it is "
+                    "reported under warnings when other fields are given and is an "
+                    "error when it is the only update. To clear the device name use "
+                    "ha_set_device(name='')."
                 ),
                 default=None,
             ),
@@ -1955,7 +1943,7 @@ class EntityTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error updating entity: {e}")
             exception_to_structured_error(e, context={"entity_id": entity_id})
             return None  # unreachable: exception_to_structured_error always raises
@@ -2090,7 +2078,7 @@ class EntityTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting entity: {e}")
             exception_to_structured_error(
                 e,
@@ -2364,7 +2352,7 @@ class EntityTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing entity '{entity_id}': {e}")
             exception_to_structured_error(
                 e,

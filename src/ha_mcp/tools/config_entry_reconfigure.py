@@ -847,7 +847,7 @@ async def _observed_reload_state(
         )
     except asyncio.CancelledError:
         raise
-    except Exception as watch_err:
+    except Exception as watch_err:  # noqa: BLE001
         logger.warning(
             "Entry-change stream failed after commit (%r); "
             "falling back to polled verification",
@@ -966,7 +966,7 @@ async def reconfigure_config_entry(
                 await asyncio.shield(ws.unsubscribe_command(sub_id))
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to unsubscribe entry changes: %r", exc)
 
     after, verification, related_warnings = await _verify_reconfigure_result(

@@ -59,7 +59,7 @@ async def _wait_for_scene_registered(
             )
             if state_data.get("success"):
                 return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"Scene registration check failed: {e}")
 
         await asyncio.sleep(poll_interval)
@@ -81,7 +81,7 @@ async def _wait_for_scene_removed(
             # Either success=False OR an empty/missing config means it's gone.
             if not get_data.get("success") or not get_data.get("config"):
                 return True
-        except Exception:
+        except Exception:  # noqa: BLE001
             return True
         await asyncio.sleep(poll_interval)
     return False

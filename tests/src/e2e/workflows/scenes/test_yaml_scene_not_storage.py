@@ -18,7 +18,7 @@ while shipping the old error. This spans the whole chain through the real
 component. The Hue/vendor arm and the platform-named message can't run
 in-container (they need a real integration); the YAML-package arm can.
 
-Both scenes are staged pre-boot by ``conftest._seed_yaml_package_scene`` (a
+Both scenes are staged pre-boot by ``_conftest_seed._seed_yaml_package_scene`` (a
 post-boot host write to the bind-mounted config dir doesn't propagate in CI),
 which only runs on the testcontainer backends, so these tests skip elsewhere.
 """
@@ -27,7 +27,7 @@ import logging
 
 import pytest
 
-from ...conftest import (
+from ..._conftest_seed import (
     E2E_YAML_PACKAGE_SCENE_ENTITY_ID,
     E2E_YAML_PACKAGE_SCENE_IDLESS_ENTITY_ID,
 )

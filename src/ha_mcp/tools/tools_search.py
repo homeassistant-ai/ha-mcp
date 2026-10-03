@@ -1230,7 +1230,7 @@ def _merge_sort_key(record: dict[str, Any]) -> str:
 
     The component cuts its window with ``(-score, _sort_key)`` where
     ``_sort_key`` is ``str(entity_id or id or name or "")``
-    (``custom_components/ha_mcp_tools/websocket_api.py``); those fields ride
+    (``custom_components/ha_mcp_tools/websocket_api/search.py``); those fields ride
     the wire records unchanged, so the merge reproduces the exact order that
     decided window membership. Dashboard records are outside the component
     corpus, so any deterministic key places them consistently across pages —
@@ -2572,7 +2572,7 @@ class SearchTools:
             )
         try:
             raw = await self._send_component_search(req, visibility)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return await self._component_search_fallback(req, ctx, exc)
         response = _shape_component_search_response(req, raw.get("result") or {})
         await _scrub_component_config_buckets(response, self._client)
@@ -2648,7 +2648,7 @@ class SearchTools:
         dashboard_task = asyncio.ensure_future(self._search_dashboards_leg(req))
         try:
             raw = await component_task
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Settle the leg via ``asyncio.wait``, which never raises the
             # leg's own CancelledError — while a cancellation of THIS
             # coroutine delivered at that await still propagates instead of
@@ -2711,7 +2711,7 @@ class SearchTools:
                 semaphore,
                 include_config=req.include_config,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("ha_search dashboards leg failed: %r", exc)
             # ``str(asyncio.TimeoutError())`` is "" — fall back to the type name
             # so the errors[] entry never reads "dashboards: ".
@@ -3114,7 +3114,7 @@ class SearchTools:
                 )
             )
             return None  # unreachable: raise_tool_error always raises
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={
@@ -3909,7 +3909,7 @@ class SearchTools:
                 # Auth/connection/structured failures must propagate; the
                 # substring fallback below is for fuzzy-engine bugs only.
                 raise
-            except Exception as fuzzy_error:
+            except Exception as fuzzy_error:  # noqa: BLE001
                 logger.warning(
                     f"Fuzzy search failed, falling back to substring "
                     f"match: {fuzzy_error}"
@@ -4526,7 +4526,7 @@ class SearchTools:
             )
             logger.warning("ha_mcp_tools/overview failed; fell back to legacy: %r", exc)
             return legacy
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             legacy = await self._assemble_overview(inputs, None)
             legacy.setdefault("warnings", []).append(
                 f"component overview connection error ({exc}); served via legacy path"
@@ -4898,7 +4898,7 @@ class SearchTools:
             return wrapped
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id},
@@ -4976,7 +4976,7 @@ class SearchTools:
         try:
             state = await self._client.get_entity_state(eid)
             return {"success": True, "entity_id": eid, "state": state}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to fetch state for '{eid}': {e}")
             # ast-grep-ignore — batch item failure, aggregated via asyncio.gather
             return exception_to_structured_error(
@@ -5080,7 +5080,7 @@ class SearchTools:
                     "ha_mcp_tools/states failed; fell back to legacy: %r", exc
                 )
             return None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Anything the tuple above doesn't cover → legacy REST, so an
             # install whose REST API still works keeps answering.
             logger.warning(

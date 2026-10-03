@@ -83,7 +83,7 @@ async def _config_entry_rows(client: Any, **query: Any) -> list[dict[str, Any]] 
         else:
             logger.warning("%s failed: %r", WS_CONFIG_ENTRIES, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning("%s connection error: %r", WS_CONFIG_ENTRIES, exc)
         return None
     result = raw.get("result") if isinstance(raw, dict) else None
@@ -175,7 +175,7 @@ async def fetch_config_entry_unique_id(client: Any, entry_id: str) -> EntryUniqu
                 "%s failed; unique_id unavailable: %r", WS_CONFIG_ENTRIES, exc
             )
         return UNKNOWN_UNIQUE_ID
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "%s connection error; unique_id unavailable: %r", WS_CONFIG_ENTRIES, exc
         )

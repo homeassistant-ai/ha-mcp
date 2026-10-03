@@ -113,7 +113,7 @@ def _registry_rows(registry: Any, kind: str) -> tuple[dict[str, dict[str, Any]],
                 return {}, False
             entries = list(mapping.values())
         return dict(_registry_row(entry, kind) for entry in entries), True
-    except Exception:
+    except Exception:  # noqa: BLE001
         # This is a boundary around HA's evolving registry accessors. Preserve
         # the unavailable signal rather than converting an outage to no matches.
         return {}, False

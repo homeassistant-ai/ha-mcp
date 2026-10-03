@@ -265,7 +265,7 @@ def _container_miss_diagnostics(ssh_cmd: list[str], env: dict[str, str]) -> str:
                 check=False,
             )
             captured.append(f"{label}={probe.stdout.strip()!r}")
-        except Exception as probe_err:  # pragma: no cover - diagnostics best-effort
+        except Exception as probe_err:  # noqa: BLE001  # pragma: no cover - diagnostics best-effort
             captured.append(f"{label}_error={probe_err!r}")
     return " | " + " | ".join(captured)
 
@@ -481,7 +481,7 @@ def _shift_recorder_timestamps(db_local: Path, target_age_seconds: float) -> boo
     """
     import sqlite3
 
-    # Same logic as conftest._refresh_recorder_timestamps. Kept inline
+    # Same logic as _conftest_seed._refresh_recorder_timestamps. Kept inline
     # rather than importing because conftest pulls in heavy dev deps
     # (docker, testcontainers) that the HAOS-only paths don't need.
     TIMESTAMP_COLUMNS = {
@@ -553,7 +553,7 @@ def refresh_recorder_in_qcow2(
     once that exceeds the ~24h window history queries use, every history
     pagination test silently regresses. This helper extracts the DB from
     the qcow2, runs the same uniform timestamp shift the testcontainer
-    path does (``conftest._refresh_recorder_timestamps``), and copies the
+    path does (``_conftest_seed._refresh_recorder_timestamps``), and copies the
     file back in place. Done once per pytest session before QEMU boots.
 
     Uses guestfish (libguestfs) for both copy-out and copy-in; sqlite3
@@ -1660,7 +1660,7 @@ DEV_ADDON_REPO_FILES = (
 )
 
 
-def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
+def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:  # noqa: PLR0915
     """Overwrite the staged ha-mcp dev addon source with the PR's current source.
 
     The cached qcow2 ships with the addon installed + Docker image built

@@ -34,7 +34,7 @@ from tests.src.haos_runtime import (
     promote_home_assistant_http_config,
 )
 
-from ..conftest import _wait_for_embedded_webhook_ready
+from .._conftest_embedded import _wait_for_embedded_webhook_ready
 from ..utilities.assertions import MCPAssertions, safe_call_tool
 from .test_manage_addon_modes import (
     NODERED_NAME,
@@ -125,7 +125,7 @@ async def _set_front_door(
 
 @pytest.mark.haos_tls
 @pytest.mark.timeout(2400)
-async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
+async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(  # noqa: PLR0915
     ha_container_with_fresh_config: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Reproduce #2241's old mismatch, then prove both fixes on real HAOS.

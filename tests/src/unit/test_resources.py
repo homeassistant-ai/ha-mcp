@@ -154,9 +154,9 @@ class TestWheelContents:
         with the vendored code (BSD-3 for websockets)."""
         package = _REPO_ROOT / "src" / "ha_mcp"
         assets = [
-            package / "settings_ui" / name
-            for name in ("settings.html", "settings.js", "settings.css")
+            package / "settings_ui" / name for name in ("settings.html", "settings.css")
         ]
+        assets += (package / "settings_ui" / "settings_js").glob("*.js")
         assets += (package / "settings_ui" / "locales").glob("*.json")
         # Bug reports detect a PyPI install by this marker.
         assets.append(package / "_pypi_marker")

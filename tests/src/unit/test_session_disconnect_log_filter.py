@@ -46,7 +46,7 @@ async def _run_in_task_group(*coro_funcs) -> Exception:
         async with anyio.create_task_group() as tg:
             for coro_func in coro_funcs:
                 tg.start_soon(coro_func)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return exc
     raise AssertionError("task group did not raise")
 
@@ -275,7 +275,7 @@ class TestIsOnlyDisconnectTeardownErrors:
 class TestSessionDisconnectLogFilterWiring:
     """End-to-end: _setup_logging wires the filter onto real logger output."""
 
-    def test_setup_logging_wires_filter_and_demotes_output(self, monkeypatch):
+    def test_setup_logging_wires_filter_and_demotes_output(self, monkeypatch):  # noqa: PLR0915
         """Integration: ``_setup_logging`` attaches the filter to the SDK's
         session-manager logger, so a real ``ClosedResourceError``-caused
         'Stateless session crashed' entry loses its traceback and ERROR level

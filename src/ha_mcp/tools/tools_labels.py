@@ -429,7 +429,7 @@ class LabelTools:
         for area_id in unique:
             try:
                 await self._add_label_to_one_area(label_id, area_id, assigned)
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001
                 # Catch ordinary failures (transport, ToolError). Cancellation
                 # is BaseException and must propagate.
                 self._reraise_assign_failure(
@@ -673,7 +673,7 @@ class LabelTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting labels: {e}")
             exception_to_structured_error(
                 e,
@@ -774,7 +774,7 @@ class LabelTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error setting label {name!r}: {e}")
             exception_to_structured_error(
                 e,
@@ -868,7 +868,7 @@ class LabelTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing label {label_id!r}: {e}")
             exception_to_structured_error(
                 e,

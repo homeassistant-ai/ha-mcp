@@ -655,7 +655,7 @@ class EnergyTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting energy prefs: {e}")
             exception_to_structured_error(
                 e,
@@ -722,7 +722,7 @@ class EnergyTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in energy prefs dry_run: {e}")
             exception_to_structured_error(
                 e,
@@ -853,7 +853,7 @@ class EnergyTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error setting energy prefs: {e}")
             exception_to_structured_error(
                 e,
@@ -1059,7 +1059,7 @@ class EnergyTools:
                 logger.warning(
                     f"energy/validate (post-save) failed: {post_save_validate_error}"
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Post-save validate failure is non-fatal — the save itself
             # succeeded. Log and continue.
             logger.warning(f"Post-save energy/validate failed: {e}")
@@ -1527,7 +1527,7 @@ class EnergyTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in {mode} on {target_key}: {e}")
             exception_to_structured_error(
                 e,

@@ -222,7 +222,7 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # session that runs the embedded-server test (the
 # ``tests/src/e2e/haos_only/test_embedded_server_haos.py`` fixture enables it via
 # the ``config_entries/disable`` WS command). The ``pip_spec`` is a placeholder
-# here; the conftest HAOS branch overwrites it with a ``file://`` URL to a wheel
+# here; the _conftest_haos.py HAOS branch overwrites it with a ``file://`` URL to a wheel
 # built from the checkout before boot (haos_runtime.stage_embedded_server_wheel_in_qcow2).
 #
 # These constants MUST stay in sync with tests/src/haos_runtime.py's copies
@@ -238,7 +238,7 @@ HA_MCP_SERVER_WEBHOOK_ID = "mcp_e2e_ha_mcp_server_haos"
 HA_MCP_SERVER_SECRET_PATH = "/private_e2e_ha_mcp_server_haos"
 HA_MCP_SERVER_PORT = 9584
 # Placeholder file:// wheel spec — deliberately points at a nonexistent wheel so
-# that if the conftest delivery step ever fails to overwrite it, the entry's
+# that if the _conftest_haos.py delivery step ever fails to overwrite it, the entry's
 # bring-up fails cleanly (repair issue, webhook never registers) and only the
 # embedded-server test times out, rather than silently installing wrong code.
 HA_MCP_SERVER_PLACEHOLDER_PIP_SPEC = (
@@ -487,7 +487,7 @@ def stop_qemu(proc: subprocess.Popen[bytes], ws: HAWebSocket | None) -> None:
     if ws is not None:
         try:
             ws.supervisor_api("/host/shutdown", method="post", timeout=10.0)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # %r so the exception type is visible — bare %s loses it for
             # most exception subclasses and a future maintainer reading
             # this in CI logs needs to know whether it was a timeout, a
@@ -820,7 +820,7 @@ class HAWebSocket:
                     _remaining_deadline_budget(deadline, operation)
                     send_state["started"] = True
                 connection.send(message)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 send_errors.append(exc)
 
         worker = threading.Thread(target=send, name="haos-ws-send", daemon=True)
@@ -1707,7 +1707,7 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
     _install_addon_with_retry(ws, slug, timeout=900.0)
 
     # Pre-set every dev-channel flag the test suite relies on so the addon
-    # exposes the full tool surface (mirrors the env-var setup in conftest's
+    # exposes the full tool surface (mirrors the env-var setup in _conftest_haos.py's
     # external-HAOS branch). The schema in homeassistant-addon-dev/config.yaml
     # lists every flag we toggle here.
     LOG.info("Setting ha-mcp dev addon options (preset secret_path + all dev flags on)")
@@ -2420,7 +2420,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
     embedded-server E2E addresses. The entry is ``disabled_by="user"`` so the
     multi-minute server bring-up only fires when the test enables it — every
     other HAOS session boots with the entry present but inert. The ``pip_spec``
-    is a placeholder; the conftest HAOS branch rewrites it to a ``file://`` wheel
+    is a placeholder; the _conftest_haos.py HAOS branch rewrites it to a ``file://`` wheel
     built from the checkout before boot.
     """
     ce_path = staging / ".storage" / "core.config_entries"
@@ -2460,7 +2460,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
                 "minor_version": 1,
                 "modified_at": "2025-09-07T23:56:28.040747+00:00",
                 "options": {
-                    # Overwritten with the checkout wheel by the conftest HAOS
+                    # Overwritten with the checkout wheel by the _conftest_haos.py HAOS
                     # branch before boot; placeholder points at a nonexistent
                     # wheel so an un-delivered entry fails loudly rather than
                     # installing wrong code.
@@ -2485,7 +2485,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
         )
 
 
-def bake_test_state(qcow2: Path) -> None:
+def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
     """Inject tests/initial_test_state into the qcow2 via libguestfs.
 
     Runs *after* HAOS has been shut down so the qcow2 isn't in use. Uses
@@ -2515,7 +2515,7 @@ def bake_test_state(qcow2: Path) -> None:
         shutil.copytree(initial_state_path, staging)
 
         # Inject custom components matched to what the testcontainer fixture
-        # installs via _install_custom_component in tests/src/e2e/conftest.py.
+        # installs via _install_custom_component in tests/src/e2e/_conftest_seed.py.
         # Both are config_flow-only integrations, so HA won't pick them up
         # from YAML — a synthetic entry in .storage/core.config_entries is
         # how HA Core learns to set them up on boot.
@@ -2551,7 +2551,7 @@ def bake_test_state(qcow2: Path) -> None:
             LOG.info("Staged custom component %s ← %s", domain, src_rel)
 
             # Inject a config entry so HA loads the integration on boot.
-            # Shape matches the testcontainer path in conftest.py:
+            # Shape matches the testcontainer path in _conftest_seed.py:
             # _install_custom_component (entry_id, source=import, version=1).
             ce_path = staging / ".storage" / "core.config_entries"
             ce_data = json.loads(ce_path.read_text())

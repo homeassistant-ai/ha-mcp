@@ -103,7 +103,7 @@ class SceneSearchMixin(ConfigFetchMixin):
                     reg_resp,
                 )
                 return homeassistant_scene_uids, slug_to_storage_id, True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Issue #1168 R5 blocker 11: promote DEBUG -> WARNING and signal the
             # fallback so partial_reason can explain why the count looks
             # elevated. A true registry outage previously looked identical to
@@ -310,7 +310,7 @@ class SceneSearchMixin(ConfigFetchMixin):
                 f"after {INDIVIDUAL_CONFIG_TIMEOUT}s."
             )
             return (sid, None, "timeout")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if is_timeout_error(e):
                 # Client-side HTTP timeout arrived wrapped; still a
                 # timeout. See is_timeout_error in _fetch.

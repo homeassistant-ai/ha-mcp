@@ -325,7 +325,7 @@ async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | Non
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_SERVER_ENTRY, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError / plain establish Exception → legacy probe
         # (which rides the send_websocket_message bridge).
         logger.warning(
@@ -488,7 +488,7 @@ async def abort_options_flow_quietly(client: Any, flow: dict[str, Any]) -> None:
         return
     try:
         await client.abort_options_flow(flow_id)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug("Options-flow abort failed: %s", exc)
 
 
@@ -978,7 +978,7 @@ class DevTools:
             return await self._apply_set_backup_config(backup)
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"action": action, "setting": setting, "tool": tool},
@@ -1421,7 +1421,7 @@ class DevTools:
             return self._commit_gate(plan, data)
         except ToolError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             suffix = (
                 " The state/LLM-API change WAS already saved — re-run set_tool "
                 "with only gated= to finish the gate."
@@ -1935,7 +1935,7 @@ class DevTools:
             return await self._decide_approval(token, approve=action == "approve")
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"action": action, "channel": channel, "pip_spec": pip_spec},
@@ -1964,7 +1964,7 @@ class DevTools:
         try:
             ha_config = await self._client.get_config()
             data["ha_version"] = ha_config.get("version")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             warnings.append(f"Could not read HA version: {exc}")
         try:
             found = await find_server_config_entry(self._client)
@@ -1989,7 +1989,7 @@ class DevTools:
                         )
                     ),
                 }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Best-effort probe: a failure here (including the ToolError the
             # entry discovery raises on a config_entries/get failure) must
             # degrade the info report to a warning, mirroring the HA-version
@@ -2187,7 +2187,7 @@ class DevTools:
                 token=self._client.token,
                 verify_ssl=getattr(self._client, "verify_ssl", None),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "%s establishment failed; falling back to legacy: %r",
                 WS_SERVER_ENTRY_UPDATE,
@@ -2217,7 +2217,7 @@ class DevTools:
                     exc,
                 )
             return None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # HomeAssistantConnectionError (pooled-WS drop) or a plain post-send
             # transport failure. The write is idempotent, so a legacy re-apply is
             # safe (see docstring) — fall back rather than report a phantom error.

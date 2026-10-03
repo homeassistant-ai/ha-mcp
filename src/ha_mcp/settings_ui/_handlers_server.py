@@ -168,7 +168,7 @@ async def _restart_embedded(server: HomeAssistantSmartMCPServer) -> JSONResponse
 
     try:
         found = await find_server_config_entry(server.client)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # A discovery FAILURE is not "entry not found" — masking a
         # WS/connection hiccup as not-found steers users toward
         # reinstalling a running component. Also: the restart JS
@@ -362,7 +362,7 @@ async def _settings_info(
         # Executor: get_version reads package metadata from disk, and the
         # restart cycle polls this endpoint.
         version = await asyncio.to_thread(get_version)
-    except Exception:  # pragma: no cover — defensive only
+    except Exception:  # pragma: no cover — defensive only  # noqa: BLE001
         logger.warning("get_version() raised; omitting version from info")
         version = None
     # ``deployment_mode`` reuses the bug-report detector so the UI and

@@ -82,7 +82,7 @@ async def mcp_client_with_yaml_config(
             f"Out-of-process server ({backend}) is missing {TOOL_NAME}. The inaddon "
             f"addon needs enable_yaml_config_editing=true in its install-time "
             f"options (build_image.install_ha_mcp_dev_addon); the embedded backend "
-            f"needs it in feature_flags.json (conftest._EMBEDDED_FEATURE_FLAGS)."
+            f"needs it in feature_flags.json (_conftest_embedded._EMBEDDED_FEATURE_FLAGS)."
         )
         logger.debug("FastMCP client (%s, HTTP) reused for YAML tests", backend)
         # Session-scope mcp_client owns __aexit__; the per-test fixture

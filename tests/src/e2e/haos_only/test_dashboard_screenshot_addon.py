@@ -219,7 +219,7 @@ async def _engine_diagnostics(mcp_client: Any) -> str:
     try:
         detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
         parts.append(f"addon state={detail.get('state')!r}")
-    except Exception as exc:  # pragma: no cover - diagnostics are best-effort
+    except Exception as exc:  # noqa: BLE001  # pragma: no cover - diagnostics are best-effort
         parts.append(f"(could not read addon state: {exc})")
     try:
         raw = await mcp_client.call_tool(
@@ -228,7 +228,7 @@ async def _engine_diagnostics(mcp_client: Any) -> str:
         log_text = parse_mcp_result(raw).get("log", "")
         if isinstance(log_text, str) and log_text.strip():
             parts.append("engine log tail:\n" + log_text[-2000:])
-    except Exception as exc:  # pragma: no cover - diagnostics are best-effort
+    except Exception as exc:  # noqa: BLE001  # pragma: no cover - diagnostics are best-effort
         parts.append(f"(could not read engine log: {exc})")
     return " | ".join(parts)
 
@@ -305,7 +305,7 @@ async def screenshot_engine_started(
         cleanup_errors: list[str] = []
         try:
             await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, original_options)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             cleanup_errors.append(f"options restore failed: {exc!r}")
 
         restore_action = "restart" if original_state == "started" else "stop"
@@ -317,7 +317,7 @@ async def screenshot_engine_started(
                 cleanup_errors.append(
                     f"state restore action failed: {restore_result!r}"
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             cleanup_errors.append(f"state restore action failed: {exc!r}")
 
         expected_state: str | frozenset[str] = (
@@ -327,14 +327,14 @@ async def screenshot_engine_started(
             await _wait_for_state(
                 mcp_client, SCREENSHOT_ADDON_SLUG, expected_state, timeout=30.0
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             cleanup_errors.append(f"state verification failed: {exc!r}")
 
         try:
             restored_detail = await _get_addon_detail(mcp_client, SCREENSHOT_ADDON_SLUG)
             if dict(restored_detail.get("options") or {}) != original_options:
                 cleanup_errors.append("options verification failed")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             cleanup_errors.append(f"options verification failed: {exc!r}")
 
         assert not cleanup_errors, (
