@@ -1,12 +1,12 @@
-"""Response shaping for ha_config_list_helpers."""
+"""Record shaping and pagination for ha_config_list_helpers."""
 
 import logging
 from typing import Any, NoReturn
 
-from ..errors import ErrorCode, create_error_response
-from .config_entry_flow import FLOW_HELPER_TYPES
-from .helpers import raise_tool_error
-from .util_helpers import build_pagination_metadata
+from ...errors import ErrorCode, create_error_response
+from ..config_entry_flow import FLOW_HELPER_TYPES
+from ..helpers import raise_tool_error
+from ..util_helpers import build_pagination_metadata
 
 logger = logging.getLogger(__name__)
 

@@ -722,7 +722,7 @@ class TestGetHistoryNegativeInputs:
         assert entity_p1["total_count"] >= 10, (
             f"Expected >=10 seeded rows for {target}, got "
             f"{entity_p1['total_count']} - recorder seed or timestamp refresh "
-            f"may be broken; see conftest._refresh_recorder_timestamps."
+            f"may be broken; see _conftest_seed._refresh_recorder_timestamps."
         )
         assert entity_p1["has_more"] is True
         assert entity_p1["next_offset"] == 5

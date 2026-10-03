@@ -83,7 +83,7 @@ def _package_screenshot_result(
         )
     except ToolError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         error_payload = create_error_response(
             ErrorCode.IMAGE_SERIALIZATION_FAILED,
             "Rendered dashboard images could not be packaged into the MCP response.",
@@ -280,7 +280,7 @@ class DashboardScreenshotTools:
             )
         except ToolError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,

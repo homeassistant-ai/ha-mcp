@@ -111,7 +111,7 @@ class TestTemplateDeletedHelperRecovery:
     @pytest.mark.parametrize("template_type", ["sensor", "binary_sensor"])
     @pytest.mark.parametrize("collision", [False, True], ids=["renamed", "occupied"])
     @pytest.mark.parametrize("delete_route", ["entry", "alias"])
-    async def test_generic_edit_delete_and_recreate(
+    async def test_generic_edit_delete_and_recreate(  # noqa: PLR0915
         self, mcp_client, ha_client, template_type, collision, delete_route
     ):
         mcp = MCPAssertions(mcp_client)

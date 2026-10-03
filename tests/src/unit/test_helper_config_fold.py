@@ -15,6 +15,11 @@ from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.component_helper_collections import (
     collection_payload as client_payload,
 )
+from ha_mcp.tools.config_helpers import create as hc_create
+from ha_mcp.tools.config_helpers import schemas as hc_schemas
+from ha_mcp.tools.config_helpers import typed_config as hc_typed
+from ha_mcp.tools.config_helpers import update as hc_update
+from ha_mcp.tools.config_helpers import validation as hc_validation
 from ha_mcp.tools.helpers import HIDDEN_PARAM, hidden_param_names
 from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
@@ -30,7 +35,7 @@ _HIDDEN = {
 
 _CORE_SCHEMAS: dict[str, Any] = {
     t: {"create": [{"name": "name", "required": True, "type": "string"}], "update": []}
-    for t in tch.SIMPLE_HELPER_TYPES
+    for t in hc_schemas.SIMPLE_HELPER_TYPES
 }
 _CORE_SCHEMAS["input_number"] = {
     "create": [
@@ -96,7 +101,7 @@ def capture_create():
         patch.object(tch, "_execute_create_simple_helper", captured),
         patch.object(tch, "_check_name_collision", AsyncMock()),
         patch.object(tch, "validate_registry_ids", AsyncMock()),
-        patch.object(tch, "fetch_helper_schemas", AsyncMock(return_value=None)),
+        patch.object(hc_typed, "fetch_helper_schemas", AsyncMock(return_value=None)),
     ):
         yield captured
 
@@ -141,16 +146,16 @@ async def test_config_rejects_unknown_and_conflicting_keys(capture_create) -> No
 
 
 async def test_error_context_uses_core_fields_this_tool_accepts() -> None:
-    token = tch._CORE_HELPER_SCHEMAS.set((_CORE_SCHEMAS, "create"))
+    token = hc_schemas._CORE_HELPER_SCHEMAS.set((_CORE_SCHEMAS, "create"))
     try:
-        context = tch._simple_helper_error_context("input_number")
+        context = hc_schemas._simple_helper_error_context("input_number")
     finally:
-        tch._CORE_HELPER_SCHEMAS.reset(token)
+        hc_schemas._CORE_HELPER_SCHEMAS.reset(token)
     names = [field["name"] for field in context["data_schema"]]
     assert names == ["name", "min", "max", "step", "mode", "icon"]  # no pattern
     assert (
-        tch._simple_helper_error_context("input_number")["data_schema"]
-        == (tch.SIMPLE_HELPER_SCHEMAS["input_number"])
+        hc_schemas._simple_helper_error_context("input_number")["data_schema"]
+        == (hc_schemas.SIMPLE_HELPER_SCHEMAS["input_number"])
     )
 
 
@@ -166,8 +171,8 @@ async def test_create_routes_through_component() -> None:
             "warnings": [],
         }
     )
-    with patch.object(tch, "write_helper_item", write):
-        result = await tch._execute_create_simple_helper(
+    with patch.object(hc_create, "write_helper_item", write):
+        result = await hc_create._execute_create_simple_helper(
             client, "input_number", "Target", None, "kitchen", None, None, True,
             False, **_type_kw(min_value=1.0, max_value=9.0),
         )  # fmt: skip
@@ -186,7 +191,7 @@ async def test_schedule_update_keeps_unpassed_days() -> None:
         "name": "S",
         "monday": [{"from": "07:00:00", "to": "08:00:00"}],
     }
-    message = tch._build_update_message(
+    message = hc_update._build_update_message(
         "schedule", "s", existing, None, None,
         **_type_kw(tuesday=[{"from": "09:00", "to": "10:00"}]),
     )  # fmt: skip
@@ -214,10 +219,10 @@ async def test_update_routes_through_component_with_merged_payload() -> None:
                       "warnings": []}
     )  # fmt: skip
     with (
-        patch.object(tch, "read_helper_item", read),
-        patch.object(tch, "write_helper_item", write),
+        patch.object(hc_update, "read_helper_item", read),
+        patch.object(hc_update, "write_helper_item", write),
     ):
-        result = await tch._execute_update_simple_helper(
+        result = await hc_update._execute_update_simple_helper(
             client, "input_number", "input_number.t", "t", None, None, None, None,
             "cat1", True, False, **_type_kw(max_value=80.0),
         )  # fmt: skip
@@ -239,10 +244,10 @@ async def test_tag_update_routes_through_component() -> None:
                       "entity_id": "tag.t2", "registry_applied": {}, "warnings": []}
     )  # fmt: skip
     with (
-        patch.object(tch, "read_helper_item", read),
-        patch.object(tch, "write_helper_item", write),
+        patch.object(hc_update, "read_helper_item", read),
+        patch.object(hc_update, "write_helper_item", write),
     ):
-        await tch._execute_update_simple_helper(
+        await hc_update._execute_update_simple_helper(
             client, "tag", "tag.abc", "abc", "T2", None, "kitchen", None, None,
             True, False, **_type_kw(),
         )  # fmt: skip
@@ -259,8 +264,8 @@ async def test_empty_category_clears_via_the_component() -> None:
         return_value={"success": True, "item": {"id": "b"}, "entity_id": "input_boolean.b",
                       "registry_applied": {"category": None}, "warnings": []}
     )  # fmt: skip
-    with patch.object(tch, "write_helper_item", write):
-        await tch._execute_create_simple_helper(
+    with patch.object(hc_create, "write_helper_item", write):
+        await hc_create._execute_create_simple_helper(
             client, "input_boolean", "B", None, None, None, "", False, False,
             **_type_kw(),
         )  # fmt: skip
@@ -296,12 +301,12 @@ async def test_empty_category_clears_the_scope() -> None:
 
 
 async def test_input_text_unit_and_pattern() -> None:
-    created = tch._create_fields_input_text(
+    created = hc_create._create_fields_input_text(
         None, None, None, None, unit_of_measurement="u", pattern="[a-z]+"
     )
     assert created == {"unit_of_measurement": "u", "pattern": "[a-z]+"}
     existing = {"pattern": "[0-9]+", "unit_of_measurement": "u", "max": 5}
-    kept = tch._update_fields_input_text(existing, None, None, None, None)
+    kept = hc_update._update_fields_input_text(existing, None, None, None, None)
     assert (kept["pattern"], kept["unit_of_measurement"]) == ("[0-9]+", "u")
 
 
@@ -322,10 +327,10 @@ def _ws(*responses: dict[str, Any]) -> MagicMock:
 async def test_websocket_create_failure_code(error_code: str, expected: str) -> None:
     client = _ws({"success": False, "error": "bad", "error_code": error_code})
     with (
-        patch.object(tch, "write_helper_item", AsyncMock(return_value=None)),
+        patch.object(hc_create, "write_helper_item", AsyncMock(return_value=None)),
         pytest.raises(ToolError, match=expected),
     ):
-        await tch._execute_create_simple_helper(
+        await hc_create._execute_create_simple_helper(
             client, "input_boolean", "B", None, None, None, None, False, False,
             **_type_kw(),
         )  # fmt: skip
@@ -336,8 +341,8 @@ async def test_websocket_tag_create_reports_the_real_entity() -> None:
         {"success": True, "result": {"id": "abc-1", "name": "Front door"}},
         {"success": True, "result": [_TAG_ENTITY]},
     )
-    with patch.object(tch, "write_helper_item", AsyncMock(return_value=None)):
-        result = await tch._execute_create_simple_helper(
+    with patch.object(hc_create, "write_helper_item", AsyncMock(return_value=None)):
+        result = await hc_create._execute_create_simple_helper(
             client, "tag", "Front door", None, None, None, None, False, False,
             **_type_kw(tag_id="abc-1"),
         )  # fmt: skip
@@ -354,8 +359,8 @@ async def test_websocket_tag_update_resolves_the_tag_id(helper_id: str) -> None:
     client.send_websocket_message = AsyncMock(
         side_effect=lambda m: {"success": True, "result": replies.get(m["type"], {})}
     )
-    with patch.object(tch, "read_helper_item", AsyncMock(return_value=None)):
-        result = await tch._execute_update_simple_helper(
+    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+        result = await hc_update._execute_update_simple_helper(
             client, "tag", helper_id, helper_id, "Front", None, None, None, None,
             False, False, **_type_kw(),
         )  # fmt: skip
@@ -374,8 +379,8 @@ async def test_websocket_tag_update_applies_registry_fields() -> None:
     client.send_websocket_message = AsyncMock(
         side_effect=lambda m: {"success": True, "result": replies.get(m["type"], {})}
     )
-    with patch.object(tch, "read_helper_item", AsyncMock(return_value=None)):
-        await tch._execute_update_simple_helper(
+    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+        await hc_update._execute_update_simple_helper(
             client, "tag", "tag.front_door", "tag.front_door", None, None,
             "kitchen", None, None, False, False, **_type_kw(),
         )  # fmt: skip
@@ -399,10 +404,10 @@ async def test_component_tag_update_reports_the_component_entity() -> None:
                       "warnings": []}
     )  # fmt: skip
     with (
-        patch.object(tch, "read_helper_item", read),
-        patch.object(tch, "write_helper_item", write),
+        patch.object(hc_update, "read_helper_item", read),
+        patch.object(hc_update, "write_helper_item", write),
     ):
-        result = await tch._execute_update_simple_helper(
+        result = await hc_update._execute_update_simple_helper(
             client, "tag", "tag.front_door", "tag.front_door", "F", None, None,
             None, None, False, False, **_type_kw(),
         )  # fmt: skip
@@ -413,38 +418,48 @@ async def test_component_tag_update_reports_the_component_entity() -> None:
 async def test_stale_stored_initial_names_its_source() -> None:
     existing = {"options": ["a", "b"], "initial": "b"}
     with pytest.raises(ToolError) as excinfo:
-        tch._update_fields_input_select(existing, options=["a", "d"], initial=None)
+        hc_update._update_fields_input_select(
+            existing, options=["a", "d"], initial=None
+        )
     assert "the stored initial='b'" in str(excinfo.value)
     assert "Pass `initial` with the new options." in str(excinfo.value)
-    assert tch._update_fields_input_select(existing, options=["a", "d"], initial="a")
+    assert hc_update._update_fields_input_select(
+        existing, options=["a", "d"], initial="a"
+    )
 
 
 async def test_update_checks_the_merged_range() -> None:
     existing = {"min": 0.0, "max": 80.0, "step": 5.0}
     with pytest.raises(ToolError, match="cannot be greater than max_value"):
-        tch._update_fields_input_number(existing, 90, None, None, None, None, None)
+        hc_update._update_fields_input_number(
+            existing, 90, None, None, None, None, None
+        )
     with pytest.raises(ToolError, match="cannot be greater than max_value"):
-        tch._update_fields_counter({"maximum": 3}, None, 9, None, None, None)
+        hc_update._update_fields_counter({"maximum": 3}, None, 9, None, None, None)
     with pytest.raises(ToolError, match="cannot be greater than max_value"):
-        tch._update_fields_input_text({"max": 4}, 9, None, None, None)
+        hc_update._update_fields_input_text({"max": 4}, 9, None, None, None)
     # Untouched bounds are not re-judged: a rename keeps a stored wide step.
     odd = {"min": 0.0, "max": 1.0, "step": 5.0}
-    assert tch._update_fields_input_number(odd, None, None, None, None, None, None)
+    assert hc_update._update_fields_input_number(
+        odd, None, None, None, None, None, None
+    )
 
 
 async def test_equal_bounds_allowed_only_for_input_text_length() -> None:
-    tch._validate_numeric_range("input_text", 4, 4, None)  # exact length, as Core
+    hc_validation._validate_numeric_range(
+        "input_text", 4, 4, None
+    )  # exact length, as Core
     for numeric in ("input_number", "counter"):
         with pytest.raises(ToolError, match="must differ"):
-            tch._validate_numeric_range(numeric, 4, 4, None)
+            hc_validation._validate_numeric_range(numeric, 4, 4, None)
 
 
 async def test_cleared_icon_is_left_out_of_the_item() -> None:
     existing = {"id": "b", "name": "B", "icon": "mdi:star"}
-    kept = tch._build_standard_update_message(
+    kept = hc_update._build_standard_update_message(
         "input_boolean", "b", existing, None, None, **_type_kw()
     )
-    cleared = tch._build_standard_update_message(
+    cleared = hc_update._build_standard_update_message(
         "input_boolean", "b", existing, None, "", **_type_kw()
     )
     assert kept["icon"] == "mdi:star"
@@ -456,8 +471,8 @@ async def test_write_falls_back_to_websocket_when_component_unavailable() -> Non
     client.send_websocket_message = AsyncMock(
         return_value={"success": True, "result": {"id": "b", "name": "B"}}
     )
-    with patch.object(tch, "write_helper_item", AsyncMock(return_value=None)):
-        result = await tch._execute_create_simple_helper(
+    with patch.object(hc_create, "write_helper_item", AsyncMock(return_value=None)):
+        result = await hc_create._execute_create_simple_helper(
             client, "input_boolean", "B", None, None, None, None, False, False,
             **_type_kw(),
         )  # fmt: skip
@@ -487,7 +502,7 @@ class TestCatalogTransform:
         properties = tool.parameters["properties"]
         assert "wait" not in properties
         description = properties["config"]["description"]
-        assert tch._SIMPLE_CONFIG_KEYS_DESCRIPTION not in description
+        assert hc_schemas._SIMPLE_CONFIG_KEYS_DESCRIPTION not in description
         assert (
             "input_number: min (float, required), max (float, required), "
             "step (float, default 1), mode (box|slider)." in description
@@ -505,7 +520,8 @@ class TestCatalogTransform:
         properties = tool.parameters["properties"]
         assert "wait" in properties
         assert (
-            tch._SIMPLE_CONFIG_KEYS_DESCRIPTION in properties["config"]["description"]
+            hc_schemas._SIMPLE_CONFIG_KEYS_DESCRIPTION
+            in properties["config"]["description"]
         )
         rewritten = ComponentHelperSchemaTransform._rewrite(tool, _CORE_SCHEMAS)
         assert "wait" not in rewritten.parameters["properties"]

@@ -58,7 +58,7 @@ class WebSocketListenerService:
             logger.info("WebSocket listener service started successfully")
             return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to start WebSocket listener service: {e}")
             await self.stop()
             return False
@@ -188,7 +188,7 @@ class WebSocketListenerService:
                             "state_changed", self._handle_state_change
                         )
                         logger.info("WebSocket reconnected successfully")
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.error(f"WebSocket reconnection failed: {e}")
 
                 # Wait before next health check
@@ -196,7 +196,7 @@ class WebSocketListenerService:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Connection monitor error: {e}")
                 await asyncio.sleep(30)
 
@@ -210,7 +210,7 @@ class WebSocketListenerService:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Cleanup task error: {e}")
                 await asyncio.sleep(300)
 
@@ -241,7 +241,7 @@ async def get_listener_service() -> WebSocketListenerService:
             if _listener_service is not None:
                 try:
                     await _listener_service.stop()
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.debug(f"Error stopping previous listener service: {e}")
 
             _listener_service = WebSocketListenerService()

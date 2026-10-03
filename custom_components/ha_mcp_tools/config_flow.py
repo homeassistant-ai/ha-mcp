@@ -183,7 +183,7 @@ def _fill(common: dict[str, str], key: str, /, **values: str) -> str:
     """
     try:
         return common[key].format(**values)
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         # Names both causes: a catalog string this caller cannot fill, or a
         # caller passing values the template never declared. The second is our
         # bug and crashes on the English constant below, so the log line has to
@@ -243,14 +243,14 @@ async def _fetch_common_translations(
 ) -> dict[str, str]:
     """core ``async_get_translations(hass, language, "common")``; test seam.
 
-    Mirrors the seam in ``websocket_api`` so the lookup can be replaced in
+    Mirrors the seam in ``websocket_api.services`` so the lookup can be replaced in
     tests without reaching into Home Assistant's translation machinery.
     """
     from homeassistant.helpers.translation import async_get_translations
 
     result = await async_get_translations(hass, language, "common", {DOMAIN})
     # Any Mapping, not just dict: core returns a plain dict today, but the
-    # mirrored seam in ``websocket_api`` accepts a Mapping, and narrowing it
+    # mirrored seam in ``websocket_api.services`` accepts a Mapping, and narrowing it
     # here would silently discard a whole catalog on a core-internal change.
     if isinstance(result, Mapping):
         return dict(result)
@@ -297,7 +297,7 @@ async def _common_strings(hass: HomeAssistant | None) -> tuple[dict[str, str], s
         # broad ``except`` also covers an ImportError from the function-local
         # core import — a permanent defect nobody would ever notice at debug.
         # ``exc_info`` because the traceback is the only way to tell the two
-        # apart. Same level the ``websocket_api`` seam this mirrors uses.
+        # apart. Same level the ``websocket_api.services`` seam this mirrors uses.
         _LOGGER.warning(
             "Could not load the %s options-form translations, falling back to "
             "English: %s",
@@ -848,7 +848,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                         "shows the unknown-version wording",
                         DOMAIN,
                     )
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001
                 _LOGGER.warning(
                     "Could not read the component version for the options hint, "
                     "showing the unknown-version wording: %s",
@@ -864,7 +864,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 else _installed_server_version()
             )
             server_version = raw_version or common["version_not_installed"]
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             _LOGGER.warning(
                 "Could not read the server version for the options hint, showing "
                 "the not-installed wording: %s",
@@ -905,7 +905,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             loaded = any(
                 entry.state is ConfigEntryState.LOADED for entry in tools_entries
             )
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             # Warning, like the two version reads above: this drops the whole
             # tools-module paragraph from the form, which is a larger visible
             # loss than either of those fallbacks.
@@ -953,7 +953,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 if urls:
                     listed = "\n".join(f"- {u}" for u in urls)
                     return f"{common['connect_urls_label']}\n{listed}"
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001
                 # The hint is auxiliary display data: a resolution bug must not
                 # take down the whole options form, but the degradation should
                 # be visible by default - hence warning, not debug.

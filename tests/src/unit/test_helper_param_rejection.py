@@ -136,7 +136,7 @@ class TestInputBooleanRejectsInapplicableParams:
         _wire_default_ws(mock_client, "input_boolean")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -153,7 +153,7 @@ class TestInputBooleanRejectsInapplicableParams:
         _wire_default_ws(mock_client, "input_boolean")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -172,7 +172,7 @@ class TestInputNumberRejectsInapplicableParams:
         _wire_default_ws(mock_client, "input_number")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -191,7 +191,7 @@ class TestInputNumberRejectsInapplicableParams:
         _wire_default_ws(mock_client, "input_number")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -212,7 +212,7 @@ class TestInputSelectRejectsInapplicableParams:
         _wire_default_ws(mock_client, "input_select")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -230,7 +230,7 @@ class TestInputSelectRejectsInapplicableParams:
         _wire_default_ws(mock_client, "input_select")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -250,7 +250,7 @@ class TestInputTextRejectsInapplicableParams:
         _wire_default_ws(mock_client, "input_text")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -269,7 +269,7 @@ class TestInputTextRejectsInapplicableParams:
         """Core's input_text STORAGE_FIELDS carry both keys."""
         _wire_default_ws(mock_client, "input_text")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -292,7 +292,7 @@ class TestInputDatetimeRejectsInapplicableParams:
         _wire_default_ws(mock_client, "input_datetime")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -310,7 +310,7 @@ class TestInputDatetimeRejectsInapplicableParams:
         _wire_default_ws(mock_client, "input_datetime")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -330,7 +330,7 @@ class TestCounterRejectsInapplicableParams:
         _wire_default_ws(mock_client, "counter")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -347,7 +347,7 @@ class TestCounterRejectsInapplicableParams:
         _wire_default_ws(mock_client, "counter")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -366,7 +366,7 @@ class TestTimerRejectsInapplicableParams:
         _wire_default_ws(mock_client, "timer")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -384,7 +384,7 @@ class TestTimerRejectsInapplicableParams:
         _wire_default_ws(mock_client, "timer")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -404,7 +404,7 @@ class TestScheduleRejectsInapplicableParams:
         _wire_default_ws(mock_client, "schedule")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -422,7 +422,7 @@ class TestScheduleRejectsInapplicableParams:
         _wire_default_ws(mock_client, "schedule")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -442,7 +442,7 @@ class TestZoneRejectsInapplicableParams:
         _wire_default_ws(mock_client, "zone")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -461,7 +461,7 @@ class TestZoneRejectsInapplicableParams:
         _wire_default_ws(mock_client, "zone")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -482,7 +482,7 @@ class TestPersonRejectsInapplicableParams:
         _wire_default_ws(mock_client, "person")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -499,7 +499,7 @@ class TestPersonRejectsInapplicableParams:
         _wire_default_ws(mock_client, "person")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -518,7 +518,7 @@ class TestTagRejectsInapplicableParams:
         _wire_default_ws(mock_client, "tag")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -535,7 +535,7 @@ class TestTagRejectsInapplicableParams:
         _wire_default_ws(mock_client, "tag")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -561,7 +561,7 @@ class TestIconRejectionForPersonAndTag:
         _wire_default_ws(mock_client, "person")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -578,7 +578,7 @@ class TestIconRejectionForPersonAndTag:
         _wire_default_ws(mock_client, "tag")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -604,7 +604,7 @@ class TestInputButtonRejectsAllTypedParams:
         _wire_default_ws(mock_client, "input_button")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -621,7 +621,7 @@ class TestInputButtonRejectsAllTypedParams:
         _wire_default_ws(mock_client, "input_button")
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -722,7 +722,7 @@ class TestAllowedParamsControl:
     async def test_input_boolean_with_initial_only(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_boolean")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -736,7 +736,7 @@ class TestAllowedParamsControl:
     async def test_input_number_full_typed_set(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_number")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -755,7 +755,7 @@ class TestAllowedParamsControl:
     async def test_input_select_options_initial(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_select")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -771,7 +771,7 @@ class TestAllowedParamsControl:
         """input_button accepts icon (common) and the universal name/area_id/labels."""
         _wire_default_ws(mock_client, "input_button")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -785,7 +785,7 @@ class TestAllowedParamsControl:
     async def test_person_with_typed_set_no_icon(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "person")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -801,7 +801,7 @@ class TestAllowedParamsControl:
     async def test_tag_with_typed_set_no_icon(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "tag")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):

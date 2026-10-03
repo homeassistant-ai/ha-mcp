@@ -314,7 +314,7 @@ never nested in a payload key and never represented by a singular `warning`
 string. Tool-level failure raises `ToolError`; only an item inside a batch
 result may use `{"success": False, "error": {...}}`.
 For a tool that builds its response on several branches, see
-`tools_config_helpers.py::HelperResponse` / `_helper_response` and
+`config_helpers/schemas.py::HelperResponse` / `_helper_response` and
 `tests/src/unit/test_helper_response_shape.py`.
 
 ## Tool Waiting Behavior
@@ -401,7 +401,7 @@ A change is BREAKING only if it removes functionality that users depend on.
 
 ## Accessibility (web UI)
 
-Both rendered surfaces — the Astro docs site (`site/`) and the app settings UI (`src/ha_mcp/settings_ui/__init__.py` + `settings.css` / `settings.js`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
+Both rendered surfaces — the Astro docs site (`site/`) and the app settings UI (`src/ha_mcp/settings_ui/__init__.py` + `settings.css` / `settings_js/`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
 
 **Flag MEDIUM severity when a change:**
 

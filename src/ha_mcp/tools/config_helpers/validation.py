@@ -1,89 +1,17 @@
-"""Field validation and error context for ha_config_set_helper's simple types."""
+"""Input validation for ha_config_set_helper parameters."""
 
-from contextvars import ContextVar
 from typing import Any
 
-from ..errors import ErrorCode, create_error_response
-from .config_entry_flow import FLOW_HELPER_TYPES
-from .helper_field_schemas import (
+from ...errors import ErrorCode, create_error_response
+from ..config_entry_flow import FLOW_HELPER_TYPES
+from ..helpers import raise_tool_error, validate_identifier_not_empty
+from .flow import _flow_helper_error_context
+from .schemas import (
+    _ALL_TYPED_PARAMS,
     _TYPE_TYPED_PARAMS,
-    SIMPLE_HELPER_SCHEMAS,
-    _HelperFieldSpec,
+    SIMPLE_HELPER_TYPES,
+    _simple_helper_error_context,
 )
-from .helper_field_schemas import (
-    ALL_TYPED_PARAMS as _ALL_TYPED_PARAMS,
-)
-from .helpers import raise_tool_error
-
-
-def get_simple_helper_schema(helper_type: str) -> list[_HelperFieldSpec] | None:
-    """Return the simple-helper field schema, or None for non-simple types.
-
-    Callers attach the result to validation-error context as ``data_schema``
-    so the LLM sees field shape inline with a 4xx response, matching the
-    auto-attach pattern already in use for flow helpers (see
-    ``fetch_helper_flow_info`` in ``config_entry_flow_walker``).
-    Returns ``None`` for any helper_type not in ``SIMPLE_HELPER_SCHEMAS``,
-    so callers can write a single uniform ``if schema is not None: …`` branch.
-    """
-    return SIMPLE_HELPER_SCHEMAS.get(helper_type)
-
-
-def _simple_helper_error_context(
-    helper_type: str,
-    **extra: Any,
-) -> dict[str, Any]:
-    """Build a validation-error `context` dict carrying the helper's schema.
-
-    Centralises the schema-attach idiom for the simple-helper raise sites in
-    `ha_config_set_helper` so they stay one-liners. Returns a dict with
-    `helper_type`, `data_schema` (omitted if no schema is registered for the
-    type), and any caller-supplied extra fields.
-    """
-    context: dict[str, Any] = {"helper_type": helper_type}
-    schema = _core_helper_fields(helper_type) or get_simple_helper_schema(helper_type)
-    if schema is not None:
-        context["data_schema"] = schema
-    context.update(extra)
-    return context
-
-
-# Core's simple-helper field lists and the call's action, fetched from the
-# component once per ha_config_set_helper call; None falls back to
-# SIMPLE_HELPER_SCHEMAS.
-_CORE_HELPER_SCHEMAS: ContextVar[tuple[dict[str, Any], str] | None] = ContextVar(
-    "_CORE_HELPER_SCHEMAS", default=None
-)
-
-# Core's field names that differ from this tool's parameter names.
-_CORE_FIELD_ALIASES: dict[str, str] = {
-    "min": "min_value",
-    "max": "max_value",
-    "minimum": "min_value",
-    "maximum": "max_value",
-}
-
-
-def supported_core_fields(
-    helper_type: str, fields: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Core's fields for ``helper_type`` that this tool accepts in ``config``."""
-    accepted = _TYPE_TYPED_PARAMS.get(helper_type, frozenset()) | {"name"}
-    return [
-        field
-        for field in fields
-        if _CORE_FIELD_ALIASES.get(field.get("name", ""), field.get("name")) in accepted
-    ]
-
-
-def _core_helper_fields(helper_type: str) -> list[dict[str, Any]] | None:
-    current = _CORE_HELPER_SCHEMAS.get()
-    if current is None:
-        return None
-    schemas, action = current
-    fields = (schemas.get(helper_type) or {}).get(action)
-    return supported_core_fields(helper_type, fields) if fields else None
-
 
 # Bug 6 (issue #1150): valid mode values per helper type. The CREATE and
 # UPDATE branches both validate against this; an invalid value is rejected
@@ -301,14 +229,6 @@ def _validate_numeric_range(
             )
 
 
-def _validate_merged_range(
-    helper_type: str, supplied: tuple[Any, ...], low: Any, high: Any, step: Any = None
-) -> None:
-    """An update merges stored bounds: check the result when the caller moved one."""
-    if any(value is not None for value in supplied):
-        _validate_numeric_range(helper_type, low, high, step)
-
-
 def _validate_initial_in_options(
     options: Any, initial: Any, helper_type: str = "input_select", stored: bool = False
 ) -> None:
@@ -499,3 +419,110 @@ def _validate_schedule_days(
                         ),
                     )
                 )
+
+
+async def _validate_set_helper_action(
+    client: Any,
+    action: str | None,
+    helper_id: str | None,
+    helper_type: str,
+) -> str:
+    """Validate and resolve the action for ha_config_set_helper."""
+    if action is not None:
+        if action == "create" and helper_id is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"action='create' was passed together with helper_id={helper_id!r}. "
+                    "These are contradictory: create makes a new helper, while helper_id "
+                    "targets an existing one.",
+                    context=(
+                        _simple_helper_error_context(
+                            helper_type, action=action, helper_id=helper_id
+                        )
+                        if helper_type in SIMPLE_HELPER_TYPES
+                        else await _flow_helper_error_context(
+                            client, helper_type, action=action, helper_id=helper_id
+                        )
+                    ),
+                    suggestions=[
+                        "Omit helper_id to create a new helper",
+                        "Or pass action='update' to modify the existing helper at helper_id",
+                    ],
+                )
+            )
+        if action == "update" and helper_id is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "action='update' requires helper_id to identify which helper to modify.",
+                    context=(
+                        _simple_helper_error_context(helper_type, action=action)
+                        if helper_type in SIMPLE_HELPER_TYPES
+                        else await _flow_helper_error_context(
+                            client, helper_type, action=action
+                        )
+                    ),
+                    suggestions=[
+                        'Pass "helper_id": "my_helper" to identify the helper',
+                        "Or pass action='create' (or omit action) to create a new helper",
+                    ],
+                )
+            )
+        if action == "update" and helper_id is not None:
+            validate_identifier_not_empty(
+                helper_id,
+                "helper_id",
+                suggestions=[
+                    "Pass a valid helper_id to identify the helper to update",
+                    "Or omit helper_id and pass action='create' to create a new helper",
+                ],
+                context={"helper_type": helper_type, "action": action},
+            )
+        return action
+    # Implicit discriminator (back-compat).
+    if helper_id is not None:
+        validate_identifier_not_empty(
+            helper_id,
+            "helper_id",
+            suggestions=[
+                "Omit helper_id entirely to create a new helper",
+                "Pass a valid helper_id to update an existing helper",
+                "Or pass action='create' / action='update' explicitly to declare intent",
+            ],
+            context={"helper_type": helper_type},
+        )
+    return "update" if helper_id else "create"
+
+
+def _validate_pre_dispatch_params(
+    helper_type: str,
+    min_value: float | None,
+    max_value: float | None,
+    step: float | None,
+    options: list[str] | None,
+    monday: list | None,
+    tuesday: list | None,
+    wednesday: list | None,
+    thursday: list | None,
+    friday: list | None,
+    saturday: list | None,
+    sunday: list | None,
+) -> None:
+    """Run per-type schema validation before dispatching create or update."""
+    if helper_type in ("input_number", "counter", "input_text"):
+        _validate_numeric_range(helper_type, min_value, max_value, step)
+    if helper_type == "input_select":
+        _validate_input_select_options(options)
+    if helper_type == "schedule":
+        _validate_schedule_days(
+            monday, tuesday, wednesday, thursday, friday, saturday, sunday
+        )
+
+
+def _validate_merged_range(
+    helper_type: str, supplied: tuple[Any, ...], low: Any, high: Any, step: Any = None
+) -> None:
+    """An update merges stored bounds: check the result when the caller moved one."""
+    if any(value is not None for value in supplied):
+        _validate_numeric_range(helper_type, low, high, step)

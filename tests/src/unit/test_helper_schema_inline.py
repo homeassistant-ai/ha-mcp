@@ -34,14 +34,18 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import helper_validation as hv
 from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
 from ha_mcp.tools.config_entry_flow_walker import fetch_helper_flow_info
-from ha_mcp.tools.tools_config_helpers import (
-    SIMPLE_HELPER_SCHEMAS,
-    SIMPLE_HELPER_TYPES,
+from ha_mcp.tools.config_helpers.flow import (
     _extract_menu_choice_from_config,
     _flow_helper_error_context,
+    _handle_flow_helper,
+)
+from ha_mcp.tools.config_helpers.schemas import (
+    SIMPLE_HELPER_SCHEMAS,
+    SIMPLE_HELPER_TYPES,
+    _simple_helper_error_context,
+    get_simple_helper_schema,
 )
 
 
@@ -60,7 +64,7 @@ class TestSimpleHelperSchemasInvariants:
     every entry must carry the same minimum field-spec shape."""
 
     def test_every_simple_helper_type_has_a_schema(self) -> None:
-        # The module-level assert in tools_config_helpers ensures import-time
+        # The module-level assert in config_helpers/schemas.py ensures import-time
         # alignment; replicate it as a runtime test so a future code change
         # that breaks the assert fails loudly in CI.
         assert frozenset(SIMPLE_HELPER_SCHEMAS.keys()) == SIMPLE_HELPER_TYPES
@@ -127,7 +131,7 @@ class TestSimpleHelperSchemasInvariants:
         # cross-cutting allowed params (`name`/`icon`). Drift here means a
         # caller could pass a schema-listed param that the tool then
         # rejects via _validate_applicable_params.
-        from ha_mcp.tools.tools_config_helpers import _TYPE_TYPED_PARAMS
+        from ha_mcp.tools.config_helpers.schemas import _TYPE_TYPED_PARAMS
 
         cross_cutting = {"name", "icon"}
         for helper_type, schema in SIMPLE_HELPER_SCHEMAS.items():
@@ -146,10 +150,8 @@ class TestSimpleHelperSchemasInvariants:
         input_button is a deliberate exception — it has no type-specific fields beyond
         name/icon, so there is no builder for it.
         """
-        from ha_mcp.tools.tools_config_helpers import (
-            _SIMPLE_CREATE_FIELD_BUILDERS,
-            _SIMPLE_UPDATE_FIELD_BUILDERS,
-        )
+        from ha_mcp.tools.config_helpers.create import _SIMPLE_CREATE_FIELD_BUILDERS
+        from ha_mcp.tools.config_helpers.update import _SIMPLE_UPDATE_FIELD_BUILDERS
 
         # input_button has no type-specific fields; name+icon only is correct.
         no_builder_types = {"input_button"}
@@ -191,7 +193,7 @@ class TestGetSimpleHelperSchema:
 
     def test_returns_schema_for_each_simple_type(self) -> None:
         for helper_type in SIMPLE_HELPER_TYPES:
-            schema = hv.get_simple_helper_schema(helper_type)
+            schema = get_simple_helper_schema(helper_type)
             assert schema is not None
             assert schema is SIMPLE_HELPER_SCHEMAS[helper_type]
 
@@ -199,10 +201,10 @@ class TestGetSimpleHelperSchema:
         # Flow helpers go through the HA flow API; the static dict has no
         # entry, and callers branch on the None to fall back.
         for helper_type in FLOW_HELPER_TYPES:
-            assert hv.get_simple_helper_schema(helper_type) is None
+            assert get_simple_helper_schema(helper_type) is None
 
     def test_returns_none_for_unknown_helper_type(self) -> None:
-        assert hv.get_simple_helper_schema("not_a_real_helper") is None
+        assert get_simple_helper_schema("not_a_real_helper") is None
 
 
 class TestSimpleHelperErrorContext:
@@ -211,12 +213,12 @@ class TestSimpleHelperErrorContext:
     attach the schema when one is registered."""
 
     def test_context_has_helper_type_and_schema(self) -> None:
-        ctx = hv._simple_helper_error_context("input_select")
+        ctx = _simple_helper_error_context("input_select")
         assert ctx["helper_type"] == "input_select"
         assert ctx["data_schema"] == SIMPLE_HELPER_SCHEMAS["input_select"]
 
     def test_extra_kwargs_are_appended(self) -> None:
-        ctx = hv._simple_helper_error_context(
+        ctx = _simple_helper_error_context(
             "input_select",
             initial="x",
             options=["a", "b"],
@@ -232,7 +234,7 @@ class TestSimpleHelperErrorContext:
         # A helper_type without a registered schema (e.g. a flow helper or
         # a typo) yields a context dict that contains only what was
         # supplied — no `data_schema` key, no exception.
-        ctx = hv._simple_helper_error_context("template")
+        ctx = _simple_helper_error_context("template")
         assert "data_schema" not in ctx
         assert ctx == {"helper_type": "template"}
 
@@ -519,7 +521,7 @@ class TestSimpleHelperValidationAttachesSchema:
         raise NotImplementedError  # exercised via the per-test calls below
 
     def test_input_select_duplicate_options_attaches_schema(self) -> None:
-        from ha_mcp.tools.tools_config_helpers import (
+        from ha_mcp.tools.config_helpers.validation import (
             _validate_input_select_options,
         )
 
@@ -535,7 +537,7 @@ class TestSimpleHelperValidationAttachesSchema:
         assert body["duplicates"] == ["a"]
 
     def test_invalid_mode_attaches_schema(self) -> None:
-        from ha_mcp.tools.tools_config_helpers import _validate_mode
+        from ha_mcp.tools.config_helpers.validation import _validate_mode
 
         with pytest.raises(ToolError) as exc_info:
             _validate_mode("input_number", "decimal")
@@ -546,7 +548,7 @@ class TestSimpleHelperValidationAttachesSchema:
         assert body["mode"] == "decimal"
 
     def test_numeric_range_min_gt_max_attaches_schema(self) -> None:
-        from ha_mcp.tools.tools_config_helpers import _validate_numeric_range
+        from ha_mcp.tools.config_helpers.validation import _validate_numeric_range
 
         with pytest.raises(ToolError) as exc_info:
             _validate_numeric_range("input_number", 10, 5, None)
@@ -556,7 +558,7 @@ class TestSimpleHelperValidationAttachesSchema:
         assert body.get("data_schema") == SIMPLE_HELPER_SCHEMAS["input_number"]
 
     def test_input_text_length_above_255_attaches_schema(self) -> None:
-        from ha_mcp.tools.tools_config_helpers import _validate_numeric_range
+        from ha_mcp.tools.config_helpers.validation import _validate_numeric_range
 
         with pytest.raises(ToolError) as exc_info:
             _validate_numeric_range("input_text", 0, 256, None)
@@ -568,7 +570,7 @@ class TestSimpleHelperValidationAttachesSchema:
     def test_schedule_overlap_attaches_schema(self) -> None:
         # _validate_schedule_days raises on overlapping ranges; verify
         # schedule's schema is attached.
-        from ha_mcp.tools.tools_config_helpers import _validate_schedule_days
+        from ha_mcp.tools.config_helpers.validation import _validate_schedule_days
 
         overlapping = [
             {"from": "08:00", "to": "10:00"},
@@ -628,8 +630,6 @@ class TestFlowPreFlowGatesAttachSchema:
         return client
 
     async def test_name_required_for_create_attaches_data_schema(self) -> None:
-        from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
-
         intro_schema = [
             {"name": "name", "required": True, "selector": {"text": {}}},
             {"name": "entity_id", "required": True, "selector": {"entity": {}}},
@@ -660,8 +660,6 @@ class TestFlowPreFlowGatesAttachSchema:
     async def test_config_not_a_dict_attaches_data_schema(self) -> None:
         # JSON-parsable but not a dict (e.g. a list) hits the
         # ``not isinstance(parsed, dict)`` gate in ``_handle_flow_helper``.
-        from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
-
         intro_schema = [
             {"name": "entity_id", "required": True},
         ]
@@ -689,8 +687,6 @@ class TestFlowPreFlowGatesAttachSchema:
     async def test_config_wrong_type_attaches_data_schema(self) -> None:
         # Neither str nor dict nor None — hits the ``else`` branch of
         # ``_handle_flow_helper``'s config-shape validation.
-        from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
-
         intro_schema = [{"name": "entity_id", "required": True}]
         client = self._make_client_with_intro_schema(intro_schema)
 
@@ -718,8 +714,6 @@ class TestFlowPreFlowGatesAttachSchema:
         # original validation error (with helper_type only, no schema). The
         # alternative — surfacing an introspection error in place of the
         # validation error — would be worse.
-        from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
-
         client = AsyncMock()
         client.start_config_flow = AsyncMock(side_effect=RuntimeError("offline"))
         client.abort_config_flow = AsyncMock(return_value={})
@@ -843,8 +837,6 @@ class TestPreFlowGateMenuChoiceThreading:
         # name-required gate by omitting ``name``. The gate must extract
         # ``next_step_id="sensor"`` from config_dict and fetch the real
         # sensor-branch schema.
-        from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
-
         sensor_branch_schema = [
             {"name": "state", "required": True},
             {"name": "unit_of_measurement", "required": False},
@@ -876,8 +868,6 @@ class TestPreFlowGateMenuChoiceThreading:
 
     async def test_group_with_group_type_threads_menu_choice(self) -> None:
         # ``group`` is menu-rooted with the ``group_type`` selection key.
-        from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
-
         light_branch_schema = [
             {"name": "entities", "required": True},
         ]
@@ -910,8 +900,6 @@ class TestPreFlowGateMenuChoiceThreading:
         # must surface ``data_schema_unavailable_reason`` plus the legal
         # sub-types under ``menu_options`` so the caller can pick a branch
         # on the next try (issue #1186).
-        from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
-
         client = AsyncMock()
         client.start_config_flow = AsyncMock(
             return_value={
@@ -956,7 +944,7 @@ class TestPreFlowGateMenuChoiceThreading:
         # raise so the breadcrumb path is exercised.
         import logging
 
-        from ha_mcp.tools import tools_config_helpers as helpers_mod
+        from ha_mcp.tools.config_helpers import flow as helpers_mod
 
         async def _raises(*_args: Any, **_kwargs: Any) -> Any:
             raise RuntimeError("simulated fetch-helper bug")
@@ -967,7 +955,7 @@ class TestPreFlowGateMenuChoiceThreading:
             _raises,
         )
 
-        caplog.set_level(logging.DEBUG, logger="ha_mcp.tools.tools_config_helpers")
+        caplog.set_level(logging.DEBUG, logger="ha_mcp.tools.config_helpers.flow")
 
         ctx = await _flow_helper_error_context(AsyncMock(), "filter")
 
@@ -1019,7 +1007,7 @@ class TestCheckNameCollisionSchemaAttach:
     async def test_simple_helper_collision_attaches_data_schema(self) -> None:
         # ``input_select`` is in ``SIMPLE_HELPER_TYPES`` — the collision
         # error must attach ``data_schema`` via ``_simple_helper_error_context``.
-        from ha_mcp.tools.tools_config_helpers import _check_name_collision
+        from ha_mcp.tools.config_helpers.registry import _check_name_collision
 
         client = await self._existing_collision_client("My Selector")
 
@@ -1043,7 +1031,7 @@ class TestCheckNameCollisionSchemaAttach:
         # ``{helper_type, name, existing_helper_id}`` dict without a
         # schema fetch (collision detection happens at parent level
         # before the flow has been started).
-        from ha_mcp.tools.tools_config_helpers import _check_name_collision
+        from ha_mcp.tools.config_helpers.registry import _check_name_collision
 
         # ``_check_name_collision`` enumerates a list endpoint per
         # helper-type family — for flow helpers it queries

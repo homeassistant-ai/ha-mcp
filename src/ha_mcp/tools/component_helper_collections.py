@@ -62,7 +62,9 @@ async def _read(client: Any, command: str, **kwargs: Any) -> dict[str, Any] | No
     except Exception as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)
-        logger.warning("%s failed; using Core's commands: %r", command, exc)
+        logger.warning(
+            "%s failed; using Core's commands: %r", command, exc, exc_info=True
+        )
         return None
     result = raw.get("result") if isinstance(raw, dict) else None
     return result if isinstance(result, dict) else None
@@ -169,7 +171,7 @@ async def write_helper_item(
         raw = await ws.send_command(WS_HELPER_WRITE, **kwargs)
     except HomeAssistantCommandNotSent:
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - ends in a tool error
         # Cancellation propagates; only a definitive unknown_command falls back.
         if is_unknown_command(exc):
             invalidate_caps(client)

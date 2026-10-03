@@ -408,7 +408,7 @@ async def _fetch_github_release_notes(release_url: str) -> dict[str, str] | None
             )
             return None
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Failed to fetch GitHub release notes: {e}")
         return None
 
@@ -460,7 +460,7 @@ async def _fetch_core_release_notes(version: str) -> dict[str, str] | None:
 
             return None
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Failed to fetch Core release notes from GitHub: {e}")
         return None
 
@@ -648,7 +648,7 @@ class UpdateTools:
             )
             if ws_result.get("success") and ws_result.get("result"):
                 return ws_result.get("result"), "websocket"
-        except Exception as ws_error:
+        except Exception as ws_error:  # noqa: BLE001
             logger.debug(f"WebSocket release_notes failed for {entity_id}: {ws_error}")
 
         # Fallback: Try to fetch from GitHub if release_url is available
@@ -795,7 +795,7 @@ class UpdateTools:
                 # so remaining items would fail identically. Propagate to
                 # surface the root cause instead of N per-item errors.
                 raise
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 # Batch item failure — collect, don't raise.
                 results.append(
                     create_error_response(
@@ -1104,7 +1104,7 @@ class UpdateTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self._handle_update_error(e, action, entity_ids)
             return (
                 None  # exception_to_structured_error always raises; explicit for CodeQL

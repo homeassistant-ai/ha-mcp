@@ -158,7 +158,7 @@ async def detect_quantization(base_url: str, model_id: str) -> str | None:
                     if quant:
                         logger.info(f"Detected quantization: {quant}")
                     return quant
-    except Exception as e:  # best-effort enrichment, never fatal
+    except Exception as e:  # best-effort enrichment, never fatal  # noqa: BLE001
         logger.debug(f"Quantization detection skipped: {type(e).__name__}: {e}")
     return None
 
@@ -297,7 +297,7 @@ async def _dispatch_tool_calls(
             result = await mcp_client.call_tool(tool_name, tool_args)
             result_text = extract_tool_result_text(result)
             total_success += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             err_text = _strip_pydantic_url(str(e))
             result_text = f"Error: {err_text}"
             total_fail += 1

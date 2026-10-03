@@ -229,7 +229,7 @@ class HomeAssistantTestEnvironment:
                 logger.warning(f"⚠️ Tests completed with exit code: {result.returncode}")
         except KeyboardInterrupt:
             logger.info("🛑 Test run interrupted by user")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"❌ Error running tests: {e}")
 
     def print_status(self) -> None:
@@ -259,7 +259,7 @@ class HomeAssistantTestEnvironment:
                     print("✅ Ready")
                 else:
                     print(f"⚠️ Status {response.status_code}")
-            except Exception:
+            except Exception:  # noqa: BLE001
                 print("❌ Not accessible")
         else:
             print("🐳 Container Status: Not running")
@@ -350,7 +350,7 @@ def main():
 
     except KeyboardInterrupt:
         print("\n🛑 Interrupted by user")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"❌ Error: {e}")
     finally:
         # Cleanup

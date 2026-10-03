@@ -153,7 +153,7 @@ class TestTagAutoGeneratesTagId:
     ):
         _wire_default_ws(mock_client, "tag")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -173,7 +173,7 @@ class TestTagAutoGeneratesTagId:
     ):
         _wire_default_ws(mock_client, "tag")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -192,8 +192,8 @@ class TestTagAutoGeneratesTagId:
         """Tags don't have entity states — the create branch must not call
         ``wait_for_entity_registered``.
 
-        The update branch already documents this (line 2949-2981 in
-        tools_config_helpers.py): tags live in their own tag registry and
+        The update branch already documents this (``_execute_update_simple_helper`` in
+        ``config_helpers/update.py``): tags live in their own tag registry and
         never appear in ``/api/states/<entity_id>``. The create branch was
         previously calling ``wait_for_entity_registered`` against a
         synthesized ``tag.<id>`` slug, which 404s for the full timeout on
@@ -202,7 +202,7 @@ class TestTagAutoGeneratesTagId:
         """
         _wire_default_ws(mock_client, "tag")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ) as wait_mock:
@@ -225,7 +225,7 @@ class TestTagAutoGeneratesTagId:
         """
         _wire_default_ws(mock_client, "input_boolean")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ) as wait_mock:
@@ -306,7 +306,7 @@ class TestInputNumberRangeValidation:
         # Control: step exactly equal to range is allowed (slider has 2 stops).
         _wire_default_ws(mock_client, "input_number")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -325,7 +325,7 @@ class TestInputNumberRangeValidation:
         # Control: a normal range goes through unchanged.
         _wire_default_ws(mock_client, "input_number")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -403,7 +403,7 @@ class TestInputTextLengthValidation:
         """Core accepts min == max for input_text: an exact-length value."""
         _wire_default_ws(mock_client, "input_text")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -416,7 +416,7 @@ class TestInputTextLengthValidation:
     async def test_valid_lengths_pass(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_text")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -454,7 +454,7 @@ class TestInputSelectDuplicateOptions:
     async def test_unique_options_pass(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_select")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -514,7 +514,7 @@ class TestScheduleValidation:
     async def test_non_overlapping_ranges_pass(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "schedule")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -535,7 +535,7 @@ class TestScheduleValidation:
         # 07:00-12:00 and 12:00-14:00 do NOT overlap (boundary equal).
         _wire_default_ws(mock_client, "schedule")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -614,7 +614,7 @@ class TestInputSelectInitialInOptions:
     async def test_create_valid_initial_passes(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_select")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -695,7 +695,7 @@ class TestInputSelectInitialInOptions:
             {"id": "abc123", "name": "Mode", "options": ["A", "B"], "initial": "A"},
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -737,7 +737,7 @@ class TestInputDatetimeHasDateOrTime:
     async def test_create_with_only_date_passes(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_datetime")
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -800,7 +800,7 @@ class TestInputDatetimeHasDateOrTime:
             {"id": "abc123", "name": "Schedule", "has_date": True, "has_time": True},
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -826,7 +826,7 @@ class TestInputDatetimeHasDateOrTime:
             {"id": "abc123", "name": "TimeOnly", "has_date": False, "has_time": True},
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -858,30 +858,30 @@ class TestValidateInitialInOptionsShapeGuard:
     """
 
     def test_none_options_returns_silently(self):
-        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+        from ha_mcp.tools.config_helpers.validation import _validate_initial_in_options
 
         # No raise — the guard short-circuits before the membership check.
         _validate_initial_in_options(None, "anything")
 
     def test_string_options_returns_silently(self):
-        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+        from ha_mcp.tools.config_helpers.validation import _validate_initial_in_options
 
         _validate_initial_in_options("not a list", "anything")
 
     def test_dict_options_returns_silently(self):
-        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+        from ha_mcp.tools.config_helpers.validation import _validate_initial_in_options
 
         _validate_initial_in_options({"a": 1}, "a")
 
     def test_none_initial_with_list_options_returns_silently(self):
-        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+        from ha_mcp.tools.config_helpers.validation import _validate_initial_in_options
 
         # ``initial=None`` is the unset case — passes regardless of options.
         _validate_initial_in_options(["A", "B"], None)
 
     def test_helper_type_param_threads_to_error_context(self):
         """A non-default ``helper_type`` reaches the error message + context."""
-        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+        from ha_mcp.tools.config_helpers.validation import _validate_initial_in_options
 
         with pytest.raises(ToolError) as excinfo:
             _validate_initial_in_options(["A", "B"], "Z", helper_type="some_other")
@@ -896,7 +896,7 @@ class TestValidateInitialInOptionsEdges:
         """``initial=""`` is a set value (not ``None``) and must reject when
         not in ``options`` — the truthy-only ``if initial:`` shortcut the
         pre-helper inline code had would have silently dropped it."""
-        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+        from ha_mcp.tools.config_helpers.validation import _validate_initial_in_options
 
         with pytest.raises(ToolError) as excinfo:
             _validate_initial_in_options(["A", "B"], "")
@@ -906,7 +906,7 @@ class TestValidateInitialInOptionsEdges:
         """``options=[]`` means no value can be valid; an ``initial`` must
         reject. The update path can reach this if the caller passes
         ``options=[]`` explicitly or the existing config has no options."""
-        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+        from ha_mcp.tools.config_helpers.validation import _validate_initial_in_options
 
         with pytest.raises(ToolError) as excinfo:
             _validate_initial_in_options([], "A")

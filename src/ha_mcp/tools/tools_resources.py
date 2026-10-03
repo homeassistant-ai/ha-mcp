@@ -227,7 +227,7 @@ def _decode_data_uri(url: str) -> str | None:
         return None
     try:
         return base64.b64decode(url[len(prefix) :], validate=True).decode("utf-8")
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -339,7 +339,7 @@ def _decode_legacy_worker_url(url: str) -> str | None:
         # silently DISCARDS non-alphabet characters, so a junk path could
         # decode to plausible text and be masked as inline content.
         return base64.urlsafe_b64decode(_pad_b64(encoded)).decode("utf-8")
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -775,7 +775,7 @@ class ResourceTools:
             result = await self._client.send_websocket_message(
                 {"type": "lovelace/resources"}
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _unverifiable(f"listing the resources failed: {e}")
         error_msg = _check_ws_error(result)
         if error_msg:

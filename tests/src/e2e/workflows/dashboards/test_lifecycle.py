@@ -58,7 +58,7 @@ def parse_mcp_result(result) -> dict[str, Any]:
             if hasattr(result, "content")
             else str(result)
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to parse MCP result: {e}")
         return {"error": "Failed to parse result", "exception": str(e)}
 

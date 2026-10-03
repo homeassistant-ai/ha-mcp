@@ -8,7 +8,7 @@ device registry and filter for one entry (``ha_get_device`` single lookup,
 single in-process read: ``device_get`` returns one ``DeviceEntry.dict_repr`` by
 id, ``device_list`` returns them all — each byte-identical to a
 ``config/device_registry/list`` element by construction (see
-``custom_components/ha_mcp_tools/websocket_api.py``). Consumers keep their own
+``custom_components/ha_mcp_tools/websocket_api/lookups.py``). Consumers keep their own
 transforms over that raw shape.
 
 This module owns the caps-gated fetch so the routing discipline — probe caps,
@@ -110,7 +110,7 @@ async def fetch_device_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_DEVICE_GET, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError: a pooled-WS drop or a failed
         # (re)connect. The legacy paths ride the send_websocket_message bridge /
         # a dedicated capture socket, so fall back to legacy; if the transport
@@ -192,7 +192,7 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_DEVICE_LIST, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError / plain establish Exception → legacy (the
         # legacy device list rides the send_websocket_message bridge).
         logger.warning(

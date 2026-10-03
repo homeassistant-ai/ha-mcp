@@ -87,6 +87,7 @@ def _convert(schema: Any) -> list[dict[str, Any]]:
         try:
             return list(convert(schema, custom_serializer=cv.custom_serializer))
         except Exception as err:
+            _LOGGER.debug("Schema serializer failed", exc_info=True)
             errors.append(f"{type(err).__name__}: {err}")
     raise ValueError("; ".join(errors) or "no schema serializer available")
 
@@ -133,10 +134,7 @@ def _failure(code: str, message: str) -> dict[str, Any]:
 
 
 def _entity_id_for(registry: Any, helper_type: str, item_id: str) -> str | None:
-    try:
-        return registry.async_get_entity_id(helper_type, helper_type, item_id)  # type: ignore[no-any-return]
-    except Exception:
-        return None
+    return registry.async_get_entity_id(helper_type, helper_type, item_id)  # type: ignore[no-any-return]
 
 
 def read_item(
@@ -241,6 +239,7 @@ def _apply_registry(
     try:
         registry.async_update_entity(entity_id, **update)
     except Exception as err:
+        _LOGGER.warning("Registry update of %s failed", entity_id, exc_info=True)
         warnings.append(f"Entity registry update failed: {err}")
         return {}
     return applied

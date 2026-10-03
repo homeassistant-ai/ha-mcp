@@ -490,7 +490,7 @@ async def test_zone_search_discovery(mcp_client):
             else:
                 logger.info("No zone entities found via search (may be normal)")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Zone search failed: {e}")
             logger.info("This may be normal if no zones exist")
 

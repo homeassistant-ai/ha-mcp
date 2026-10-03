@@ -56,6 +56,8 @@ GATED_TOOL_MODULES: dict[str, tuple[str, str]] = {
     "ha_config_set_yaml": ("tools_yaml_config", "_YAML_SKILL_FILES"),
 }
 
+# Tools whose canonical _*_SKILL_FILES constant lives outside the tool module.
+_SKILL_FILES_MODULE: dict[str, str] = {"ha_config_set_helper": "config_helpers.schemas"}
 
 # ---------------------------------------------------------------------------
 # strict_bps_effective
@@ -547,7 +549,12 @@ def test_gated_tool_declares_key_and_maps_first_canonical_file(tool_name: str):
     module_name, const_name = GATED_TOOL_MODULES[tool_name]
     module = importlib.import_module(f"ha_mcp.tools.{module_name}")
 
-    canonical_files = getattr(module, const_name)
+    canonical_files = getattr(
+        importlib.import_module(
+            f"ha_mcp.tools.{_SKILL_FILES_MODULE.get(tool_name, module_name)}"
+        ),
+        const_name,
+    )
     assert STRICT_BPS_GATED_TOOLS[tool_name] == canonical_files[0], (
         f"{tool_name} block-error ref {STRICT_BPS_GATED_TOOLS[tool_name]!r} must "
         f"equal {const_name}[0] ({canonical_files[0]!r})"

@@ -67,7 +67,7 @@ def enhanced_parse_mcp_result(result) -> dict[str, Any]:
                 str(result.content[0]) if hasattr(result, "content") else str(result)
             )
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to parse MCP result: {e}")
         return {"error": "Failed to parse result", "exception": str(e)}
 
@@ -172,7 +172,7 @@ async def verify_script_exists_and_registered(
                     logger.info(f"✅ Script {script_entity} found via search API")
                     return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"Script registration check failed: {e}")
 
         elapsed = time.monotonic() - start_time
@@ -206,7 +206,7 @@ async def verify_script_execution_state(
                 return state_data
 
             consecutive_failures = 0  # Reset on successful API call
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             consecutive_failures += 1
             logger.debug(
                 f"State check failed ({consecutive_failures}/{max_consecutive_failures}): {e}"
@@ -268,7 +268,7 @@ async def _verify_bulk_scripts(mcp, created_scripts):
             verified_scripts.append((script_id, script_entity))
             logger.info(f"✅ Verified: {script_entity} - {config.get('alias')}")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"❌ Failed to verify {script_entity}: {e}")
     return verified_scripts
 
@@ -934,7 +934,7 @@ class TestScriptOrchestration:
 
                     logger.info(f"✅ Created: {script_entity}")
 
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"❌ Failed to create {script_id}: {e}")
                     failed_scripts.append((script_id, str(e)))
 
@@ -969,7 +969,7 @@ class TestScriptOrchestration:
                     )
                     executed_scripts.append((script_id, script_entity))
                     logger.info(f"✅ Executed: {script_entity}")
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"❌ Failed to execute {script_entity}: {e}")
 
             # Allow all executions to complete (max delay is 2s + processing)
@@ -989,7 +989,7 @@ class TestScriptOrchestration:
                     )
                     deleted_scripts.append((script_id, script_entity))
                     logger.debug(f"🗑️ Deleted: {script_entity}")
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"❌ Failed to delete {script_entity}: {e}")
                     failed_deletions.append((script_id, script_entity, str(e)))
 
@@ -1119,7 +1119,7 @@ async def test_script_search_and_discovery(mcp_client):
                         logger.info(f"    - Steps: {sequence_count}")
                         logger.info(f"    - Mode: {mode}")
 
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.info(
                             f"ℹ️ Could not retrieve config for {script_entity_id}: {str(e)} (likely YAML-defined)"
                         )
@@ -1141,7 +1141,7 @@ async def test_script_search_and_discovery(mcp_client):
             else:
                 logger.info("ℹ️ No scripts found in system for discovery test")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"⚠️ Script search failed: {e}")
             logger.info(
                 "ℹ️ This may be normal if no scripts exist in the test environment"

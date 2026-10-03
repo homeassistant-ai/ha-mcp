@@ -30,6 +30,7 @@ from .evaluator import (
 )
 from .events import emit_approval_requested
 from .model import Policy, Rule
+from .mrtr import ApprovalContinuation, supports_mrtr
 
 if TYPE_CHECKING:
     from ..client.rest_client import HomeAssistantClient
@@ -163,11 +164,29 @@ class PolicyMiddleware(Middleware):
         if _passes_ungated(name, args):
             return await call_next(context)
 
+        args_hash = compute_args_hash(args)
+        resumed = ApprovalContinuation.resume(
+            context, self._queue, name, args_hash, policy
+        )
         if evaluate(name, args, policy) != Verdict.REQUIRE_APPROVAL:
             return await call_next(context)
 
+        return await self._gate_approval(
+            context, call_next, policy, name, args, args_hash, resumed
+        )
+
+    async def _gate_approval(
+        self,
+        context: MiddlewareContext,
+        call_next: CallNext,
+        policy: Policy,
+        name: str,
+        args: dict[str, Any],
+        args_hash: str,
+        resumed: tuple[ApprovalContinuation, PendingApproval] | None,
+    ) -> Any:
+        """Wait on one approval, returning a continuation only while it is pending."""
         rule = find_matching_rule(name, args, policy)
-        args_hash = compute_args_hash(args)
         dynamic_targets = has_dynamic_selector_targets(name, args)
         remember_minutes = (
             0 if dynamic_targets else rule.remember_minutes if rule else 0
@@ -182,7 +201,11 @@ class PolicyMiddleware(Middleware):
             not dynamic_targets and policy.rule_effect == "require_approval"
         )
 
-        if reads_remembered and self._queue.is_remembered(name, args_hash):
+        if (
+            resumed is None
+            and reads_remembered
+            and self._queue.is_remembered(name, args_hash)
+        ):
             return await call_next(context)
 
         # A dynamic selector call must never consume an entry it did not
@@ -207,7 +230,7 @@ class PolicyMiddleware(Middleware):
         # The accepted cost is that a retry never silently rides an earlier
         # approval: each blocked call gets its own approval row, and only
         # approving the row for the CURRENTLY-blocked call has any effect.
-        if self._resolve_already_decided(
+        if resumed is None and self._resolve_already_decided(
             name,
             args_hash,
             dynamic_targets=dynamic_targets,
@@ -216,8 +239,19 @@ class PolicyMiddleware(Middleware):
         ):
             return await call_next(context)
 
-        pending = await self._new_pending(
-            name, args_hash, args, policy=policy, dynamic_targets=dynamic_targets
+        continuation, pending = (
+            resumed
+            if resumed is not None
+            else (
+                None,
+                await self._new_pending(
+                    name,
+                    args_hash,
+                    args,
+                    policy=policy,
+                    dynamic_targets=dynamic_targets,
+                ),
+            )
         )
         await self._announce(pending, rule, dynamic_targets=dynamic_targets)
 
@@ -226,14 +260,20 @@ class PolicyMiddleware(Middleware):
             if self._wait_override is not None
             else policy.wait_seconds
         )
-        await self._wait_for_decision(context, pending, wait)
+        if continuation is None and supports_mrtr(context) and wait > 0:
+            continuation = ApprovalContinuation.start(
+                pending, policy, wait, dynamic_targets=dynamic_targets
+            )
+        await self._wait_for_decision(
+            context, pending, continuation.wait_seconds() if continuation else wait
+        )
 
         if pending.decision == "approved":
             if self._claim_approval(
                 pending,
                 name,
                 args_hash,
-                reads_remembered=reads_remembered,
+                reads_remembered=reads_remembered and resumed is None,
                 remember_minutes=remember_minutes,
             ):
                 return await call_next(context)
@@ -251,6 +291,11 @@ class PolicyMiddleware(Middleware):
         if pending.decision == "denied":
             self._queue.remove(pending.token)
             self._raise_denied_error()
+
+        if continuation is not None:
+            result = continuation.next_result(self._queue)
+            if result is not None:
+                return result
 
         pending = self._finalize_timed_out_pending(
             pending, dynamic_targets=dynamic_targets, policy=policy, name=name
@@ -543,7 +588,7 @@ class PolicyMiddleware(Middleware):
         self,
         context: MiddlewareContext,
         pending: PendingApproval,
-        wait_seconds: int,
+        wait_seconds: float,
     ) -> None:
         deadline = anyio.current_time() + wait_seconds
         while anyio.current_time() < deadline and pending.decision == "pending":

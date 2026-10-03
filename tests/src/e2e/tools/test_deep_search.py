@@ -189,7 +189,7 @@ async def test_deep_search_script(mcp_client):
                 {"script_id": "deep_search_test_script"},
             )
             logger.info("🧹 Cleaned up test script")
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning(
                 "⚠️ Cleanup of test script failed (may not have been created)"
             )

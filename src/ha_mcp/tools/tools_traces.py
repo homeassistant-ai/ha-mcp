@@ -212,7 +212,7 @@ class TraceTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting traces for {automation_id}: {e}")
             exception_to_structured_error(
                 e,
@@ -405,7 +405,7 @@ async def _resolve_trace_item_id(
         )
         return fallback_object_id
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # On any error, fall back to object_id
         logger.warning(
             f"Failed to resolve unique_id for {entity_id}: {e}, "
@@ -472,7 +472,7 @@ async def _gather_diagnostics(
 
             diagnostics["suggestion"] = _diagnostic_suggestion(diagnostics, domain)
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Entity doesn't exist or error occurred
         logger.debug(f"Error getting entity state for diagnostics: {e}")
         diagnostics["suggestion"] = (
@@ -501,7 +501,7 @@ async def _is_trace_storage_enabled(
                 stored_traces = config.get("stored_traces")
                 if stored_traces is not None and stored_traces <= 0:
                     return False
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Could not get automation config: {e}")
     return True
 

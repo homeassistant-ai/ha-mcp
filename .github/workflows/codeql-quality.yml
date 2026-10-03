@@ -181,7 +181,12 @@ jobs:
         timeout-minutes: 8
         env:
           GH_TOKEN: ${{ github.token }}
+        # The settings_js parts run as one inline script, and CodeQL analyses
+        # each file on its own. Join them so the analysis sees one scope and
+        # follows data from one part into the next.
         run: |
+          cat src/ha_mcp/settings_ui/settings_js/*.js > src/ha_mcp/settings_ui/settings.js
+          rm -r src/ha_mcp/settings_ui/settings_js
           gh codeql database create "$RUNNER_TEMP/ha-mcp-db-javascript" \
             --language=javascript \
             --build-mode=none \

@@ -157,5 +157,5 @@ async def run_teardown_steps(mcp_client: Client, steps: list[dict]) -> None:
         logger.info(f"  [teardown] {tool_name}({args})")
         try:
             await mcp_client.call_tool(tool_name, args)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"  [teardown] {tool_name} failed (ok): {e}")

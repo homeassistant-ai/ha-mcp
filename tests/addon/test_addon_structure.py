@@ -229,7 +229,9 @@ class TestAddonStructure:
     def test_start_py_wires_ha_tool_concurrency_env(self):
         """The app option must reach the server's validated setting."""
         start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
-        config_src = (_REPO_ROOT / "src/ha_mcp/config.py").read_text(encoding="utf-8")
+        config_src = (_REPO_ROOT / "src/ha_mcp/config_settings.py").read_text(
+            encoding="utf-8"
+        )
         assert 'config.get("ha_tool_concurrency", 0)' in start_src
         assert 'os.environ["HA_TOOL_CONCURRENCY"]' in start_src
         assert 'alias="HA_TOOL_CONCURRENCY"' in config_src
@@ -250,21 +252,21 @@ class TestAddonStructure:
             "start.py must export the READ_ONLY_MODE env var the server reads"
         )
 
-        # The env name start.py writes must equal the one config.py
+        # The env name start.py writes must equal the one config_registry.py
         # registers for read_only_mode. Regex the FeatureFlagField entry
-        # from config.py source rather than importing ha_mcp (tests/addon
+        # from config_registry.py source rather than importing ha_mcp (tests/addon
         # has no src on sys.path by default).
-        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config.py").read_text(
+        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config_registry.py").read_text(
             encoding="utf-8"
         )
         m = re.search(
             r'FeatureFlagField\(\s*"read_only_mode"\s*,\s*"([^"]+)"', config_src
         )
         assert m is not None, (
-            "config.py FEATURE_FLAG_FIELDS must register a read_only_mode entry"
+            "config_registry.py FEATURE_FLAG_FIELDS must register a read_only_mode entry"
         )
         assert m.group(1) == "READ_ONLY_MODE", (
-            f"read_only_mode env name in config.py is {m.group(1)!r}, but "
+            f"read_only_mode env name in config_registry.py is {m.group(1)!r}, but "
             'start.py exports os.environ["READ_ONLY_MODE"] — they must match'
         )
 
@@ -293,7 +295,7 @@ class TestAddonStructure:
             "server reads"
         )
 
-        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config.py").read_text(
+        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config_registry.py").read_text(
             encoding="utf-8"
         )
         m = re.search(
@@ -301,11 +303,11 @@ class TestAddonStructure:
             config_src,
         )
         assert m is not None, (
-            "config.py FEATURE_FLAG_FIELDS must register an "
+            "config_registry.py FEATURE_FLAG_FIELDS must register an "
             "enable_security_policy_tool entry"
         )
         assert m.group(1) == "ENABLE_SECURITY_POLICY_TOOL", (
-            f"enable_security_policy_tool env name in config.py is "
+            f"enable_security_policy_tool env name in config_registry.py is "
             f"{m.group(1)!r}, but start.py exports "
             'os.environ["ENABLE_SECURITY_POLICY_TOOL"] — they must match'
         )
@@ -326,11 +328,11 @@ class TestAddonStructure:
             "server reads"
         )
 
-        # The env name start.py writes must equal the one config.py registers
+        # The env name start.py writes must equal the one config_registry.py registers
         # for enable_strict_mandatory_bps. Regex the FeatureFlagField entry
-        # from config.py source rather than importing ha_mcp (tests/addon has
+        # from config_registry.py source rather than importing ha_mcp (tests/addon has
         # no src on sys.path by default).
-        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config.py").read_text(
+        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config_registry.py").read_text(
             encoding="utf-8"
         )
         m = re.search(
@@ -338,11 +340,11 @@ class TestAddonStructure:
             config_src,
         )
         assert m is not None, (
-            "config.py FEATURE_FLAG_FIELDS must register an "
+            "config_registry.py FEATURE_FLAG_FIELDS must register an "
             "enable_strict_mandatory_bps entry"
         )
         assert m.group(1) == "ENABLE_STRICT_MANDATORY_BPS", (
-            f"enable_strict_mandatory_bps env name in config.py is "
+            f"enable_strict_mandatory_bps env name in config_registry.py is "
             f"{m.group(1)!r}, but start.py exports "
             'os.environ["ENABLE_STRICT_MANDATORY_BPS"] — they must match'
         )
@@ -362,17 +364,17 @@ class TestAddonStructure:
             "start.py must export the REDACT_SECRETS env var the server reads"
         )
 
-        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config.py").read_text(
+        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config_registry.py").read_text(
             encoding="utf-8"
         )
         m = re.search(
             r'FeatureFlagField\(\s*"redact_secrets"\s*,\s*"([^"]+)"', config_src
         )
         assert m is not None, (
-            "config.py FEATURE_FLAG_FIELDS must register a redact_secrets entry"
+            "config_registry.py FEATURE_FLAG_FIELDS must register a redact_secrets entry"
         )
         assert m.group(1) == "REDACT_SECRETS", (
-            f"redact_secrets env name in config.py is {m.group(1)!r}, but "
+            f"redact_secrets env name in config_registry.py is {m.group(1)!r}, but "
             'start.py exports os.environ["REDACT_SECRETS"] — they must match'
         )
 
@@ -464,7 +466,7 @@ class TestAddonStructure:
                         "`description` (Supervisor renders it as the help tooltip "
                         "under the toggle)"
                     )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 _report_translation_issues(tf, [str(exc)])
 
     def test_addon_names_are_backup_filename_safe(self):
