@@ -23,6 +23,8 @@ from ha_mcp.tools.config_helpers import validation as hc_validation
 from ha_mcp.tools.helpers import HIDDEN_PARAM, hidden_param_names
 from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
+from .test_updates_repairs import _client as _ws
+
 pytestmark = pytest.mark.asyncio
 
 _HIDDEN = {
@@ -377,12 +379,6 @@ async def test_input_text_unit_and_pattern() -> None:
 
 
 _TAG_ENTITY = {"entity_id": "tag.front_door", "platform": "tag", "unique_id": "abc-1"}
-
-
-def _ws(*responses: dict[str, Any]) -> MagicMock:
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock(side_effect=list(responses))
-    return client
 
 
 @pytest.mark.parametrize(
