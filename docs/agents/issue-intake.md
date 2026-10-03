@@ -79,8 +79,10 @@ rewrites its comment. A maintainer removing the label waives the requirement:
 the gate never adds it back to that issue.
 
 `report-gate.yml` runs hourly. It closes, as not planned and with a new comment
-mentioning the reporter, an open issue whose label the App applied 24 or more
-hours earlier and that is still unanswered. When the report or reason is added
+mentioning the reporter, an open issue that is still unanswered 24 or more
+hours after the label was last applied, whether by the gate or by a maintainer
+by hand. An issue that becomes a feature request or documentation issue while
+labeled loses the label instead, with a note that no report is needed. When the report or reason is added
 later, the gate reopens an issue it closed itself; it never reopens an issue a
 human closed. Admission waits for the gate, so a labeled issue is still
 documented.

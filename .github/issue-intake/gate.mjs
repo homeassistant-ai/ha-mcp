@@ -106,7 +106,7 @@ export function gateAction(snapshot, bot, event) {
   if (!isHuman(author) || gateExemptRoles.includes(roles[author.login]))
     return null;
   if (exemptKind(issue))
-    return issue.state === "open" && hasGateLabel(issue) ? "clear" : null;
+    return issue.state === "open" && hasGateLabel(issue) ? "exempt" : null;
   const done = satisfied(snapshot);
   // An issue moved in from the HACS mirror is asked once, never labeled or
   // closed: a reporter whose issue was closed would refile it on the mirror.
@@ -143,7 +143,8 @@ export function gateAction(snapshot, bot, event) {
 export function expireAction(snapshot, now) {
   const { issue, events } = snapshot;
   if (issue.state !== "open" || !hasGateLabel(issue)) return null;
-  if (exemptKind(issue) || satisfied(snapshot)) return "clear";
+  if (exemptKind(issue)) return "exempt";
+  if (satisfied(snapshot)) return "clear";
   // A maintainer may apply the label by hand to start the same clock.
   const applied = latestEvent(events, (e) => isLabelEvent(e, "labeled"));
   if (!applied) return null;
@@ -171,12 +172,14 @@ export function gateComment(action, login, hint = "") {
     case "reopen":
     case "clear":
       return `${gateMarker}\nThanks: the issue now includes an \`ha_report_issue\` report or a reason why there is none.\n`;
+    case "exempt":
+      return `${gateMarker}\nThis issue is not a bug report, so no \`ha_report_issue\` report is needed.\n`;
     case "close":
       return `${gateMarker}\n@${login}, this issue was closed automatically because no \`ha_report_issue\` report or reason was added within ${gateGraceHours} hours.${extra} Add one and the issue reopens automatically.\n\n${howTo}\n`;
     case "request":
       return `${gateMarker}\n@${login}, this issue was moved to this repository and does not include an \`ha_report_issue\` report. Please add it here rather than in the repository you filed it in.${extra}\n\n${howTo}\n`;
     default:
-      return `${gateMarker}\n@${login}, this issue does not include an \`ha_report_issue\` report or a reason why there is none.${extra} It will be closed automatically in ${gateGraceHours} hours unless one is added.\n\n${howTo}\n`;
+      return `${gateMarker}\n@${login}, this issue does not include an \`ha_report_issue\` report or a reason why there is none.${extra} It will be closed automatically in ${gateGraceHours} hours unless one is added. If this is a feature request, start the title with \`[FEATURE]\`.\n\n${howTo}\n`;
   }
 }
 

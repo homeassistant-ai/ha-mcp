@@ -71,6 +71,8 @@ test("a bug report with neither a report nor a reason is labeled and warned, not
   assert.deepEqual(api.writes[1].data, { labels: [gateLabel] });
   assert.match(api.writes[0].data.body, /^<!-- ha-mcp-report-gate -->\n@reporter,/);
   assert.match(api.writes[0].data.body, /closed automatically in 24 hours/);
+  // An agent's feature request filed without the prefix learns how to exempt it.
+  assert.match(api.writes[0].data.body, /start the title with `\[FEATURE\]`/);
 });
 
 test("a report, or any answer in the report field or reason section, keeps an issue unlabeled", () => {
@@ -123,9 +125,21 @@ test("a labeled issue that becomes a feature request loses the label instead of 
   const relabeled = labeled();
   relabeled.issue.labels.push({ name: "enhancement" });
   for (const s of [retitled, relabeled]) {
-    assert.equal(gateAction(s, bot, edited), "clear");
-    assert.equal(expireAction(s, at + 48 * hour), "clear");
+    assert.equal(gateAction(s, bot, edited), "exempt");
+    assert.equal(expireAction(s, at + 48 * hour), "exempt");
   }
+});
+
+test("clearing the label of an issue that became a feature request says no report is needed", async () => {
+  const s = labeled();
+  s.issue.title = "[FEATURE] Manage Thread datasets";
+  const api = new FakeGitHub(s);
+  assert.equal(await gate(api, "test/repo", 1, bot, edited, true), "exempt");
+  assert.deepEqual(writes(api), [
+    ["DELETE", `repos/test/repo/issues/1/labels/${encodeURIComponent(gateLabel)}`],
+    ["PATCH", "repos/test/repo/issues/comments/5"],
+  ]);
+  assert.match(api.writes[1].data.body, /not a bug report, so no `ha_report_issue` report is needed/);
 });
 
 test("answering a labeled issue clears the label and rewrites the warning", async () => {
