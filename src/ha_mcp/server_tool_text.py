@@ -9,14 +9,19 @@ from __future__ import annotations
 
 # Description for the unified search tool
 SEARCH_TOOL_DESCRIPTION = (
-    "Search ALL Home Assistant tools by keyword. Returns matching tools "
-    "with descriptions, parameters, and annotations (read/write/delete). "
-    "Categories: entities, states, automations, scripts, dashboards, "
-    "helpers, HACS, calendar, zones, labels, groups, areas, floors, "
-    "history, statistics, devices, integrations, services, backups, "
-    "todo, camera, blueprints, system, and more.\n\n"
+    "Search ALL Home Assistant tools by ENGLISH keyword. Returns matching "
+    "tools with descriptions, parameters, and annotations "
+    "(read/write/delete). Categories: entities, states, automations, "
+    "scripts, dashboards, helpers, HACS, calendar, zones, labels, groups, "
+    "areas, floors, history, statistics, devices, integrations, services, "
+    "backups, todo, camera, blueprints, system, and more.\n\n"
+    "Tools already in your tool list are callable directly \u2014 no search "
+    "needed. If one matches a search, it comes back as a name-only stub "
+    "(pinned: true); use the schema you already have.\n\n"
     "WORKFLOW:\n"
-    "1. ha_search_tools(query='...') \u2014 find tools (this tool)\n"
+    "1. ha_search_tools(query='...') \u2014 find tools (this tool). Query "
+    "in English keywords naming the operation ('get entity state'); "
+    "translate other languages first, keep entity/area names as-is.\n"
     "2. Execute: call the tool DIRECTLY by name (preferred), or use "
     "a proxy for permission gating:\n"
     "   - ha_call_read_tool \u2014 readOnlyHint tools (safe, no side effects)\n"
@@ -72,8 +77,10 @@ SEARCH_KEYWORDS: dict[str, str] = {
         "counter timer input_datetime input_select"
     ),
     "ha_get_entity": ("get entity state attributes details single specific entity_id"),
+    # #2576: BM25 has no stemming, so "lights" never matched "light"
     "ha_get_state": (
-        "get current state value single entity check status bulk multiple states"
+        "get current state value single entity check status bulk multiple states "
+        "which lights are on off"
     ),
     "ha_config_set_automation": (
         "create update modify edit automation triggers conditions actions "

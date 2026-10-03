@@ -347,7 +347,7 @@ Set ENABLE_TOOL_SEARCH=true (or toggle the option in the HA app). The full catal
 
 | Tool | Purpose |
 |------|---------|
-| `ha_search_tools` | BM25 keyword search across all tools. Returns name, description, parameters, and annotations (`readOnlyHint` / `destructiveHint`) so the agent can pick the right one. |
+| `ha_search_tools` | BM25 English-keyword search across all tools, pinned ones included. Hidden tools return name, description, parameters, and annotations (`readOnlyHint` / `destructiveHint`) so the agent can pick the right one; a pinned tool returns a name-only stub (`pinned: true`) pointing back at the tool list, and does not use up a result slot. |
 | `ha_call_read_tool` | Execute a `readOnlyHint` tool by name. Safe — clients can auto-approve. |
 | `ha_call_write_tool` | Execute a write tool that creates or updates data. |
 | `ha_call_delete_tool` | Execute a tool that removes / deletes data. |
