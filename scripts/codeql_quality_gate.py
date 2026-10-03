@@ -67,15 +67,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "single-pass dead-store analysis misses the next-call read at the top "
         "of install(), so the assignment looks dead.",
     ),
-    (
-        "js/missing-variable-declaration",
-        "src/ha_mcp/settings_ui/settings_js/02_tools_restart.js",
-        "Variable toolData is used like a local variable",
-        "toolData =",
-        "The settings_js parts are joined into one inline script. toolData is "
-        "declared with let in 01_i18n_state.js; CodeQL analyses each part as "
-        "its own file and does not see that declaration.",
-    ),
     # NOTE: CodeQL emits the same generic message for every instance of
     # py/ineffectual-statement, so the entries below carry a code substring:
     # the gate reads the flagged line out of the checkout and suppresses only
