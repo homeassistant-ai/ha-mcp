@@ -14,6 +14,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_api import (
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     component_supports,
@@ -24,6 +25,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .response_helpers import project_fields
 from .search.component import ComponentSearchMixin, _component_serves_search_types
 from .search.entities import _requested_membership, _validate_result_field_names
 from .search.overview import (
@@ -39,11 +41,6 @@ from .search.response import (
     _validate_search_types,
 )
 from .search.state import StateMixin
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    parse_string_list_param,
-    project_fields,
-)
 
 
 class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):

@@ -186,7 +186,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
         ],
         "return_harvest": [
             ("tools/tools_services.py", "_process_services"),
-            ("tools/util_helpers.py", "build_pagination_metadata"),
+            ("tools/response_helpers.py", "build_pagination_metadata"),
         ],
     },
     {

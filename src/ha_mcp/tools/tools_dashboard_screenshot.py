@@ -42,8 +42,8 @@ from ..dashboard_screenshot.paths import (
     resolve_dashboard_render_target,
 )
 from ..errors import ErrorCode, create_error_response
+from .coercion import JSON_STRING_COERCION
 from .helpers import log_tool_usage, raise_tool_error, register_tool_methods
-from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 

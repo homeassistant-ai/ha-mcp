@@ -708,7 +708,7 @@ def test_project_response_fields_unknown_key_appends_typo_warning() -> None:
     """A caller requesting a key not present in the response gets a typo-
     guard warning appended to ``warnings[]`` listing the unknown keys and
     what's available — provided for free by delegating to
-    ``util_helpers.project_fields``. Better UX than the previous silent
+    ``response_helpers.project_fields``. Better UX than the previous silent
     drop: an agent that mistypes ``fields=["entitis"]`` gets a clear
     signal rather than a mysteriously empty response."""
     response = _projection_response_fixture()

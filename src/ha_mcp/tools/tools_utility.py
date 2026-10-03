@@ -16,6 +16,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from .coercion import JSON_STRING_COERCION
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -23,7 +24,6 @@ from .component_api import (
     is_unknown_command,
 )
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
-from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 

@@ -179,6 +179,11 @@ src/ha_mcp/
 │   ├── tools_*.py               Domain tool modules
 │   ├── smart_search/            Search service layer
 │   ├── device_control.py        Verified device control
+│   ├── ws_waiters.py            WebSocket-event-driven wait helpers
+│   ├── config_write_helpers.py  Helpers shared by the config set tools
+│   ├── diagnostics_helpers.py   Integration diagnostics fetch and pagination
+│   ├── coercion.py              Tool parameter coercion and parsing
+│   ├── response_helpers.py      Response projection, pagination, timestamps
 │   └── util_helpers.py          Shared tool utilities
 ├── settings_ui/                 Web settings interface
 ├── transforms/                  Shared tool categorization/transforms

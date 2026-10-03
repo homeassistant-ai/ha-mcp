@@ -35,7 +35,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import build_pagination_metadata
+from .response_helpers import build_pagination_metadata
 
 logger = logging.getLogger(__name__)
 

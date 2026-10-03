@@ -164,7 +164,7 @@ def strict_bps_effective() -> bool:
 
     * A ``ValidationError`` from the settings load — a corrupt settings env
       must not brick every gated write. Mirrors the narrow degrade in
-      ``build_skill_content`` (util_helpers.py).
+      ``build_skill_content`` (config_write_helpers.py).
     * No best-practices skill the guide can serve (skills-vendor
       submodule absent, skill folder missing or symlinked, or SKILL.md
       frontmatter unparseable). The key is then unobtainable, so the gate

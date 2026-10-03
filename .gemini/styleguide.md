@@ -329,7 +329,7 @@ defaults to `True`:
   immediately.
 - Query tools return immediately and do not expose `wait`.
 
-Use the shared helpers in `src/ha_mcp/tools/util_helpers.py`:
+Use the shared helpers in `src/ha_mcp/tools/ws_waiters.py`:
 `wait_for_entity_registered()`, `wait_for_entity_removed()`, and
 `wait_for_state_change()`. For bulk work, callers may use `wait=False` and
 then batch-verify.

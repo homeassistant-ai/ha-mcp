@@ -686,7 +686,7 @@ class HomeAssistantWebSocketClient:
                     # dispatch loop keeps a single buggy handler from
                     # killing the WS, but the bug itself becomes
                     # invisible — handlers wired to ``asyncio.Event``
-                    # nudges (see ``util_helpers._ws_wait_for_condition``)
+                    # nudges (see ``ws_waiters._ws_wait_for_condition``)
                     # silently stop nudging and the calling waiter times
                     # out reporting "not found." #1395 silent-failure
                     # audit.
@@ -1020,7 +1020,7 @@ class HomeAssistantWebSocketClient:
     async def unsubscribe_events(self, subscription_id: int) -> None:
         """Release a subscription previously returned by ``subscribe_events``.
 
-        Used by short-lived waiters (``util_helpers.wait_for_*``) that need
+        Used by short-lived waiters (``ws_waiters.wait_for_*``) that need
         to drop the subscription as soon as their event arrives so the
         shared socket doesn't accumulate stale ``state_changed`` listeners.
 

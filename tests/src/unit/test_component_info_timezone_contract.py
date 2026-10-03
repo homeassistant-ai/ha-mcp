@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp.tools import component_api
-from ha_mcp.tools.util_helpers import add_timezone_metadata
+from ha_mcp.tools.response_helpers import add_timezone_metadata
 
 from .test_component_ws_search import FakeConfig, FakeHass, wsapi
 

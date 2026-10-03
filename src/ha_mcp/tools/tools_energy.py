@@ -37,6 +37,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -44,7 +45,6 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 
