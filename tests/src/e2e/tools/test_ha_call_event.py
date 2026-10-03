@@ -147,7 +147,7 @@ async def test_call_event_delivery_verified(mcp_client):
                     "ha_config_remove_automation",
                     {"identifier": automation_id},
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Cleanup failed for automation %s: %s", automation_id, exc
                 )
@@ -161,5 +161,5 @@ async def test_call_event_delivery_verified(mcp_client):
                         "confirm": True,
                     },
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Cleanup failed for helper %s: %s", boolean_id, exc)

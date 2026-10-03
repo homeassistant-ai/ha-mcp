@@ -1751,7 +1751,7 @@ async def apply_entity_category(
                     "not applied."
                 )
                 return
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Category recheck failed for {entity_id}: {e}")
 
     try:
@@ -1775,7 +1775,7 @@ async def apply_entity_category(
             result_dict.setdefault("warnings", []).append(
                 f"{entity_type.capitalize()} saved but failed to set category: {error_msg}"
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to set category for {entity_id}: {e}")
         result_dict.setdefault("warnings", []).append(
             f"{entity_type.capitalize()} saved but failed to set category: {e}"
@@ -1922,7 +1922,7 @@ async def _fetch_raw_diagnostics(
         else:
             result["error"] = f"Diagnostics fetch connection failed: {e}"
         logger.warning("Diagnostics fetch connection error: %s", e)
-    except Exception as e:  # pragma: no cover - defensive last-resort guard
+    except Exception as e:  # noqa: BLE001  # pragma: no cover - defensive last-resort guard
         logger.warning(
             "Diagnostics fetch unexpected error: %s: %s", type(e).__name__, e
         )
@@ -2245,7 +2245,7 @@ def build_skill_content(
     :func:`ha_mcp.utils.skill_loader.resolve_skill_files`.
 
     ``referenced_files`` may carry ``#anchor`` suffixes
-    (``"references/automation-patterns.md#native-conditions"``); those
+    (``"references/triggers-and-conditions.md#native-conditions"``); those
     resolve to just the matching markdown section. ``canonical_files``
     entries are bare paths and resolve to whole files.
 
@@ -2258,7 +2258,7 @@ def build_skill_content(
         MandatoryBPS: When True, attach the canonical files for this tool.
         canonical_files: Tool-specific default mapping. Paths are relative
             to the home-assistant-best-practices skill directory
-            (e.g. ``"references/automation-patterns.md"``).
+            (e.g. ``"references/triggers-and-conditions.md"``).
         referenced_files: Files (optionally with ``#anchor``) cited by
             best-practice warnings — always attached, regardless of
             ``MandatoryBPS``. Pass ``None`` for tools without

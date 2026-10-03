@@ -702,7 +702,7 @@ def _write_settings_html(directory: Path, *panels: str) -> Path:
 def test_panel_link_to_unknown_tab_is_rejected(tmp_path: Path) -> None:
     """A mistyped target passes the markup allowlist and then does nothing.
 
-    ``settings.js`` hands the value straight to ``activateTab``, which no-ops
+    ``settings_js/`` hands the value straight to ``activateTab``, which no-ops
     on an id no panel declares — so the link silently stops working in that
     one language while the visible link text still reads correctly.
     """
@@ -897,7 +897,7 @@ def _assert_catalog_words(prefix: str, values: list[str], what: str) -> None:
     A key one catalog omits still renders: ``build_payload`` merges English
     under the selected locale, so what reaches the page is English's word for
     that value, sitting inside otherwise translated copy. Only a value English
-    does not carry either reaches ``settings.js``'s own fallback and renders as
+    does not carry either reaches ``settings_js/``'s own fallback and renders as
     the raw enum. Both are English on screen, which is what this guards.
 
     ``values`` is derived from the type the backend sends, which makes
@@ -906,7 +906,7 @@ def _assert_catalog_words(prefix: str, values: list[str], what: str) -> None:
     the identical-share ceiling, so nothing else notices.
     """
     assert values, (
-        f"no {what} is defined any more — the settings.js branch these words "
+        f"no {what} is defined any more — the settings_js/ branch these words "
         "serve cannot be reached, so either the branch or this check is dead"
     )
 
@@ -953,7 +953,7 @@ def _assert_catalog_words(prefix: str, values: list[str], what: str) -> None:
 def test_every_decided_outcome_has_a_catalog_word() -> None:
     """The 409 body carries a backend enum; the sentence around it is translated.
 
-    ``settings.js`` renders ``policies.pending.already_decided`` with the
+    ``settings_js/`` renders ``policies.pending.already_decided`` with the
     ``current_decision`` value the conflict response returns. That value is a
     ``Decision`` literal, not display text, so interpolating it raw dropped an
     English word into an otherwise translated sentence — Italian read

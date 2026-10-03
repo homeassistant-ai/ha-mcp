@@ -55,7 +55,7 @@ def _emit(
         file_ref: File path relative to the ``references/`` directory of
             the home-assistant-best-practices skill, optionally with a
             ``#anchor`` suffix
-            (e.g. ``"automation-patterns.md#native-conditions"``). The
+            (e.g. ``"triggers-and-conditions.md#native-conditions"``). The
             anchor is preserved end-to-end: in the ``skill://`` URI for
             display, and in ``referenced_files`` so the auto-embed path
             ships only the matching markdown section instead of the

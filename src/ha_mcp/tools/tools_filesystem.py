@@ -625,7 +625,7 @@ class FilesystemTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_list_files", "path": path, "pattern": pattern},
@@ -744,7 +744,7 @@ class FilesystemTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_read_file", "path": path},
@@ -855,7 +855,7 @@ class FilesystemTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_write_file", "path": path},
@@ -948,7 +948,7 @@ class FilesystemTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_delete_file", "path": path},

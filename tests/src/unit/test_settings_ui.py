@@ -685,8 +685,8 @@ class TestAccessibilityMarkup:
 
 
 class TestSettingsJsExtraction:
-    """The client JS lives in settings.js (extracted from the Python string)
-    but is injected inline into the served HTML. These guards lock the file
+    """The client JS lives in the settings_js/ parts (extracted from the Python
+    string) but is injected inline into the served HTML. These guards lock the file
     and the rendered page together so they can never silently drift.
     """
 
@@ -753,7 +753,7 @@ class TestSettingsJsExtraction:
 class TestSettingsCssExtraction:
     """The page CSS lives in settings.css (extracted from the Python string)
     but is injected inline into the served HTML's <style> block, mirroring the
-    settings.js mechanism. These guards lock the file and the rendered page
+    settings_js/ mechanism. These guards lock the file and the rendered page
     together so they can never silently drift.
     """
 
@@ -3124,7 +3124,7 @@ class TestGetHandlersAddonLiveOptions:
         # resolves to "default" (env unset, override file empty), so the live
         # value must be ignored even though it appears in the payload.
         monkeypatch.delenv("FUZZY_THRESHOLD", raising=False)
-        monkeypatch.setattr("ha_mcp.config._read_feature_flag_override_file", dict)
+        monkeypatch.setattr("ha_mcp.config_overrides._read_feature_flag_override_file", dict)  # fmt: skip
         _reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
@@ -3158,7 +3158,7 @@ class TestGetHandlersAddonLiveOptions:
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         # Master beta flag: env var unset in addon mode -> origin "default".
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
-        monkeypatch.setattr("ha_mcp.config._read_feature_flag_override_file", dict)
+        monkeypatch.setattr("ha_mcp.config_overrides._read_feature_flag_override_file", dict)  # fmt: skip
         _reset_global_settings()
 
         async def fake_fetch(_verify_ssl):

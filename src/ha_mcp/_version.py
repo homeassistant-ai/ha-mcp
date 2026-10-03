@@ -42,7 +42,7 @@ def get_version() -> str:
         owners = [name for name in _CHANNEL_DISTS if _owns_ha_mcp(name)]
         if len(owners) == 1:
             return importlib.metadata.version(owners[0])
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug("distribution ownership probe failed: %s", exc)
     for pkg_name in _CHANNEL_DISTS:
         try:

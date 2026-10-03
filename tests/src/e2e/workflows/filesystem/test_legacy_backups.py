@@ -7,7 +7,7 @@ This exercises the full round-trip (`list` / `view` / `diff` / `restore`) over
 the legacy store against real artifacts staged by the fixture.
 
 The two ``.bak`` files are seeded **pre-boot** by ``ha_container_with_fresh_config``
-(see ``_seed_legacy_yaml_backups`` in conftest) — a post-boot host write to the
+(see ``_seed_legacy_yaml_backups`` in _conftest_seed) — a post-boot host write to the
 bind-mounted config dir doesn't propagate in CI, so the round-trip reads
 fixture-staged files that exist when the component boots. That staging only runs
 on the testcontainer backend (HAOS/inaddon has no host ``config_path``), so these
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # services, which register only in the "File & YAML Tools" entry (#2292).
 pytestmark = pytest.mark.requires_tools_entry
 
-# Fixed artifacts staged pre-boot by conftest._seed_legacy_yaml_backups.
+# Fixed artifacts staged pre-boot by _conftest_seed._seed_legacy_yaml_backups.
 _UNAMBIGUOUS = "legacy:themes_e2elegacy.yaml.20200101_000000.bak"
 _AMBIGUOUS = "legacy:packages_foo_bar.yaml.20200101_000000.bak"
 

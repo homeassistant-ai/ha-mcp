@@ -119,7 +119,7 @@ async def test_logbook_pagination_with_offset(mcp_client):
     first_data = get_logbook_data(first_raw)
 
     # The recorder seed ships with >5 logbook-visible events (see
-    # scripts/bake_pagination_seed.py + conftest._refresh_recorder_timestamps);
+    # scripts/bake_pagination_seed.py + _conftest_seed._refresh_recorder_timestamps);
     # assert rather than skip so a regression in the seed or refresh fails
     # loudly instead of silently passing.
     assert first_data.get("success"), f"ha_get_logs failed: {first_data!r}"

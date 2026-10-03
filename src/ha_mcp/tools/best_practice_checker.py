@@ -184,7 +184,7 @@ def check_automation_config(
     back-compat (so ``result == []`` and iteration work unchanged), and
     additionally exposes ``referenced_files`` — the set of skill file
     paths (relative to the skill root, e.g.
-    ``"references/automation-patterns.md"``) referenced by at least one
+    ``"references/triggers-and-conditions.md"``) referenced by at least one
     emitted warning. Callers use that set to fetch the bodies via
     :func:`ha_mcp.utils.skill_loader.resolve_skill_files` and embed them
     in the response under ``skill_content``.
@@ -282,7 +282,7 @@ def _check_condition_templates(
                     f"`{renamed_condition}` in HA 2026.7 and the old key no "
                     f"longer loads — use `condition: {renamed_condition}`.",
                     skill_prefix,
-                    "automation-patterns.md#native-conditions",
+                    "triggers-and-conditions.md#native-conditions",
                 )
             if cond.get("condition") == "template":
                 vt = cond.get("value_template", "")
@@ -378,7 +378,7 @@ def _check_template_comparison_patterns(
             f"(e.g., `{position}: numeric_state, entity_id: sensor.temp, above: 25`). "
             "Native conditions are validated at config load and don't bypass HA's schema.",
             skill_prefix,
-            "automation-patterns.md#native-conditions",
+            "triggers-and-conditions.md#native-conditions",
         )
     if _RE_SUN.search(template):
         _emit(
@@ -387,7 +387,7 @@ def _check_template_comparison_patterns(
             f"`sun` {position} instead "
             f"(e.g., `{position}: sun, after: sunset` or `before: sunrise`).",
             skill_prefix,
-            "automation-patterns.md#native-conditions",
+            "triggers-and-conditions.md#native-conditions",
         )
     elif _RE_IS_STATE.search(template):
         # Only flag if not already flagged as sun pattern
@@ -397,7 +397,7 @@ def _check_template_comparison_patterns(
             f"`state` {position} instead "
             f"(e.g., `{position}: state, entity_id: light.bedroom, state: 'on'`).",
             skill_prefix,
-            "automation-patterns.md#native-conditions",
+            "triggers-and-conditions.md#native-conditions",
         )
 
 
@@ -419,7 +419,7 @@ def _check_template_time_patterns(
             f"`time` {position} instead "
             f"(e.g., `{position}: time, after: '09:00:00', before: '17:00:00'`).",
             skill_prefix,
-            "automation-patterns.md#native-conditions",
+            "triggers-and-conditions.md#native-conditions",
         )
     if _RE_WEEKDAY.search(template):
         _emit(
@@ -428,7 +428,7 @@ def _check_template_time_patterns(
             f"`time` {position} with `weekday:` list instead "
             f"(e.g., `{position}: time, weekday: ['mon', 'tue', 'wed']`).",
             skill_prefix,
-            "automation-patterns.md#native-conditions",
+            "triggers-and-conditions.md#native-conditions",
         )
     if _RE_NOW_DATE.search(template):
         _emit(
@@ -439,7 +439,7 @@ def _check_template_time_patterns(
             "target date on creation day). For recurring date logic, expose a `sensor.date` via "
             f"the `time_date` integration and use a `state` {position}.",
             skill_prefix,
-            "automation-patterns.md#native-conditions",
+            "triggers-and-conditions.md#native-conditions",
         )
 
 
@@ -463,7 +463,7 @@ def _check_template_state_and_duration_patterns(
             f"`state` {position} with `state:` list instead "
             f"(e.g., `{position}: state, entity_id: climate.living_room, state: ['heat', 'cool']`).",
             skill_prefix,
-            "automation-patterns.md#native-conditions",
+            "triggers-and-conditions.md#native-conditions",
         )
     if _RE_DIRECT_STATE.search(template):
         _emit(
@@ -484,7 +484,7 @@ def _check_template_state_and_duration_patterns(
             "for: {minutes: 5}`). Native `for:` is event-driven and avoids repeated "
             "template evaluation on every state change.",
             skill_prefix,
-            "automation-patterns.md#native-conditions",
+            "triggers-and-conditions.md#native-conditions",
         )
 
 
@@ -575,7 +575,7 @@ def _check_action_tree(
                 "`wait_for_trigger` waits for a *change*, `wait_template` "
                 "passes immediately if already true).",
                 skill_prefix,
-                "automation-patterns.md#wait-actions",
+                "automation-actions.md#wait-actions",
             )
 
         # Templated service dispatch: `service:`/`action:` containing `{{ }}`
@@ -624,7 +624,7 @@ def _check_service_template(
             "hardcoded `action:` names based on state. Native dispatch validates "
             "each service name at config load.",
             skill_prefix,
-            "automation-patterns.md#ifthen-vs-choose",
+            "automation-actions.md#ifthen-vs-choose",
         )
         return
     for key in _SERVICE_KEYS:
@@ -637,7 +637,7 @@ def _check_service_template(
                 "Templates here bypass HA's service-name validation and fail "
                 "silently if the resolved string is invalid.",
                 skill_prefix,
-                "automation-patterns.md#ifthen-vs-choose",
+                "automation-actions.md#ifthen-vs-choose",
             )
             return
 
@@ -741,7 +741,7 @@ def _check_renamed_trigger_key(
             "in HA 2026.7 and the old key no longer loads — use "
             f"`trigger: {renamed_trigger}`.",
             skill_prefix,
-            "automation-patterns.md#trigger-types",
+            "triggers-and-conditions.md#trigger-types",
         )
 
 
@@ -762,7 +762,7 @@ def _check_deprecated_trigger_behavior(
             "will be removed. Valid trigger values: `each`, `first`, "
             "`all` (conditions keep `any`/`all`).",
             skill_prefix,
-            "automation-patterns.md#trigger-types",
+            "triggers-and-conditions.md#trigger-types",
         )
 
 
@@ -788,7 +788,7 @@ def _check_template_trigger(
             "use native `numeric_state` trigger instead "
             "(e.g., `platform: numeric_state, entity_id: sensor.temp, above: 30`).",
             skill_prefix,
-            "automation-patterns.md#trigger-types",
+            "triggers-and-conditions.md#trigger-types",
         )
     if _RE_IS_STATE.search(vt):
         _emit(
@@ -797,7 +797,7 @@ def _check_template_trigger(
             "native `state` trigger instead "
             "(e.g., `platform: state, entity_id: light.x, to: 'on'`).",
             skill_prefix,
-            "automation-patterns.md#trigger-types",
+            "triggers-and-conditions.md#trigger-types",
         )
     if duration_match:
         _emit(
@@ -809,7 +809,7 @@ def _check_template_trigger(
             "to: 'off', for: {minutes: 5}`). Native `for:` is event-driven "
             "and doesn't re-evaluate on every state change.",
             skill_prefix,
-            "automation-patterns.md#trigger-types",
+            "triggers-and-conditions.md#trigger-types",
         )
     # Generic fallback for unmatched template triggers.
     if len(warnings) == initial and _RE_ANY_TEMPLATE.search(vt):
@@ -820,7 +820,7 @@ def _check_template_trigger(
             "`event`), use that instead. Native triggers are event-driven; "
             "template triggers re-evaluate on every state change.",
             skill_prefix,
-            "automation-patterns.md#trigger-types",
+            "triggers-and-conditions.md#trigger-types",
         )
 
 
@@ -842,7 +842,7 @@ def _check_numeric_state_trigger(
             "to: 'off', for: {minutes: 5}`). Native `for:` is event-driven "
             "and doesn't re-evaluate on every state change.",
             skill_prefix,
-            "automation-patterns.md#trigger-types",
+            "triggers-and-conditions.md#trigger-types",
         )
 
 
@@ -878,7 +878,7 @@ def _check_mode_motion(
             "`mode: single` (default) — consider `mode: restart` so "
             "re-triggers reset the timer.",
             skill_prefix,
-            "automation-patterns.md#automation-modes",
+            "automation-actions.md#automation-modes",
         )
 
 

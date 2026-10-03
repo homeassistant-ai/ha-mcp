@@ -1102,7 +1102,7 @@ async def _run_saved_custom_tool(
         )
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         code, message, suggestions = _classify_sandbox_error(e)
         raise_tool_error(
             create_error_response(
@@ -1189,7 +1189,7 @@ async def _execute_custom_tool_code(
         )
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         err_code, err_message, err_suggestions = _classify_sandbox_error(e)
         raise_tool_error(
             create_error_response(

@@ -86,7 +86,7 @@ dependencies = [
     # in-process embedding (HA 2026.6 pins cryptography==48.0.0, 2026.7 pins
     # 48.0.1 — the floor must admit every supported core's pin; live-found on
     # the embedded e2e lane against the HA 2026.6.4 image).
-    # cryptography is a transitive dependency only — never imported in src/.
+    # Only the vendored fastmcp and mcp trees import cryptography; our own code does not.
     "cryptography>=48.0.0,<51",
     "pydantic-monty==0.0.18",
     "tzdata>=2024.1",
@@ -109,11 +109,15 @@ ha-mcp-oidc = "ha_mcp.__main__:main_oidc"
 # Explicit because publish-dev.yml renames the project to ha-mcp-dev, which
 # would otherwise make the module name ha_mcp_dev.
 module-name = "ha_mcp"
-# Every file under src/ha_mcp ships unless excluded here. The skills
-# submodule's git and CI files and the settings UI's agent guide are not
-# read at runtime.
+# Every file under src/ha_mcp ships unless excluded here. Of the skills
+# submodule only skills/ and LICENSE ship; its evals, scripts, docs, git and
+# CI files are not read at runtime, and neither is the settings UI's agent
+# guide.
 source-exclude = [
     "src/ha_mcp/resources/skills-vendor/.*",
+    "src/ha_mcp/resources/skills-vendor/*.md",
+    "src/ha_mcp/resources/skills-vendor/evals",
+    "src/ha_mcp/resources/skills-vendor/scripts",
     "src/ha_mcp/settings_ui/AGENTS.md",
     "src/ha_mcp/settings_ui/CLAUDE.md",
 ]
@@ -135,23 +139,10 @@ exclude = ['^src/ha_mcp/resources/skills-vendor/']
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
-disallow_incomplete_defs = true
 check_untyped_defs = true
-no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
-show_error_codes = true
-namespace_packages = true
 explicit_package_bases = true
-
-[[tool.mypy.overrides]]
-module = [
-    "jq",
-    "psutil",
-    "pydantic_monty",
-    "pydantic_monty.*",
-]
-ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # Vendored websockets: upstream's typing, not ours to check. follow_imports
@@ -164,25 +155,14 @@ ignore_errors = true
 [[tool.mypy.overrides]]
 module = [
     "homeassistant.*",
-    "aiohasupervisor",
-    "aiohasupervisor.*",
-    "aiohttp",
     "awesomeversion",
-    "yarl",
-    "voluptuous",
-    # Ships with HA core at runtime (helpers.llm schema conversion, #1745);
-    # not installed in this dev environment.
-    "voluptuous_openapi",
     "jsonschema",
-    "requests",
-    "requests.*",
+    "psutil",
 ]
 ignore_missing_imports = true
 
 
 [tool.ruff]
-target-version = "py313"
-line-length = 88
 # Apply the excludes below to explicit paths too: lefthook passes
 # {staged_files} and Fast Checks passes the changed files, so without this the
 # vendored trees get reformatted or fail the format gate.
@@ -223,6 +203,7 @@ select = [
     "LOG",   # logging best practices
     "SIM",   # simplify
     "PLE",   # pylint errors (real bugs: bad logging args, await outside async)
+    "BLE001", # blind except: catches Exception without re-raising or logging the traceback
     # Targeted pylint conventions/refactors/warnings. The PL family is NOT
     # selected wholesale: PLC0415 (import-outside-top-level) fights the
     # deliberate lazy-init architecture, and PLR2004 (magic values),
@@ -234,6 +215,7 @@ select = [
     "PLC0206", # dict-index-missing-items
     "PLC0207", # missing-maxsplit-arg
     "PLR0402", # manual-from-import
+    "PLR0915", # too-many-statements (default limit 50)
     "PLR1711", # useless-return
     "PLR1714", # repeated-equality-comparison
     "PLR1730", # if-stmt-min-max
@@ -263,31 +245,19 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-"tests/**/*" = ["E501", "B011"]
-# Temporary: the equivalent PLC0207/PLR5501 fixes landed in
-# homeassistant-addon-webhook-proxy-dev/ only, per the dev-first/promote-only
-# flow (allow-stable-edit is for exceptional stable-only repairs, not routine sweeps —
-# see homeassistant-addon-webhook-proxy/AGENTS.md "Dev-first, promote-only").
-# The -dev entries name where a reset-dev-from-stable run puts those same two
-# stable files (start.py stays put, mcp_proxy/ is renamed to mcp_proxy_dev/),
-# so the auto-opened reset PR lints clean. Scoped per file and per rule so
-# both rules stay live everywhere else in both trees — the -dev tree is where
-# all new webhook-proxy code is authored. Remove all four once the next
-# promote carries the fixes into stable.
-"homeassistant-addon-webhook-proxy/start.py" = ["PLR5501"]
-"homeassistant-addon-webhook-proxy/mcp_proxy/__init__.py" = ["PLC0207"]
-"homeassistant-addon-webhook-proxy-dev/start.py" = ["PLR5501"]
-"homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py" = ["PLC0207"]
+"tests/**/*" = ["B011"]
 # C901 is enforced repo-wide with no per-file exemptions (the grandfathered
 # list was fully cleared by issue #925). Do NOT add "path" = ["C901"] entries
 # here — extract helpers to bring the function below the threshold instead:
 # "some/path.py" = ["C901"]  <- never this
+# Every other blind except carries an inline noqa, which RUF100 fails once it
+# is unused. These two are exempt here because a pull request cannot edit the
+# stable tree, and an edit to the dev tree needs an app version bump.
+"homeassistant-addon-webhook-proxy/start.py" = ["BLE001"]
+"homeassistant-addon-webhook-proxy-dev/start.py" = ["BLE001"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
 # A parametrize list that resolves to nothing is a guard that silently stopped
 # running: pytest reports "got empty parameter set", and the summary counts it
 # as neither a failure nor a real skip. Make it a collection error instead.
@@ -312,7 +282,6 @@ markers = [
 
     # Test types
     "unit: unit tests (isolated, fast)",
-    "integration: integration tests requiring external services",
     "e2e: end-to-end tests with full system",
     "performance: performance and load tests",
 
@@ -406,7 +375,6 @@ dev = [
     # Floor = the aiohttp HA core 2026.6 pins (2026.7 pins 3.14.1, 2026.8.dev
     # pins 3.14.3), so the version tested here is one a supported HA runs.
     "aiohttp>=3.13.5",
-    "build>=1.2.2",
     # Test infrastructure imports the SHARED websockets directly (the HAOS
     # runtime harness, the image bake, wait_helpers) to talk to Home
     # Assistant's own WebSocket API — that is test tooling driving HA, not
@@ -419,13 +387,9 @@ dev = [
     "mcp>=1.26.0,<2",
     "mypy>=1.17.0",
     "openai>=1.0.0",
-    "jsonschema>=4.25.1",
     "pyinstaller>=6.0.0",
-    "pynacl>=1.6.0",
-    "psutil>=7.0.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",
-    "pytest-cov>=5.0.0",
     "pytest-timeout>=2.3.0",
     "pytest-rerunfailures>=15.0",
     # Real voluptuous for the config-flow tests (the component's
@@ -449,7 +413,6 @@ dev = [
     "ruff>=0.12.12",
     "testcontainers>=4.13.0",
     "ast-grep-cli>=0.42.0",
-    "pyyaml>=6.0",
     # Renders templates/CHANGELOG.md.j2 in test_changelog_template.py. Keep the
     # version equal to the action pinned in .github/workflows/semver-release.yml,
     # so the test renders with the release that writes the real notes.
@@ -468,33 +431,18 @@ build_command = """
 pip install uv && uv lock
 git add uv.lock
 """
-dist_path = "dist/"
-upload_to_PyPI = true
-upload_to_release = true
-remove_dist = false
 
 # Commit message parsing
 commit_parser = "angular"
-commit_parser_options = { major_tags = ["BREAKING", "!"], minor_tags = ["feat"], patch_tags = ["fix", "perf", "refactor"] }
+commit_parser_options = { patch_tags = ["fix", "perf", "refactor"] }
 
 # Changelog configuration
 [tool.semantic_release.changelog]
-template_dir = "templates"
 exclude_commit_patterns = [
     "^.*\\(site\\).*$",           # Commits with (site) scope
     '''chore\(addon\): [Ss]ync changelog.*''',  # Changelog sync commits
     '''chore\(addon\): [Pp]ublish dev addon version.*''',  # One per master merge
 ]
-
-[tool.semantic_release.changelog.default_templates]
-changelog_file = "CHANGELOG.md"
-
-# Version scheme
-major_on_zero = true
-allow_zero_version = false
-
-# Branch and tag configuration
-branch = "master"
 
 # Publish configuration (v10 syntax)
 [tool.semantic_release.publish]

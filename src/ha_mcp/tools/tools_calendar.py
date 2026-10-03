@@ -257,7 +257,7 @@ class CalendarTools:
 
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             logger.error(f"Failed to get calendar events for {entity_id}: {error}")
 
             # Provide helpful error messages
@@ -750,7 +750,7 @@ class CalendarTools:
 
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             action = "update" if uid is not None else "create"
             logger.error(f"Failed to {action} calendar event in {entity_id}: {error}")
 
@@ -886,7 +886,7 @@ class CalendarTools:
 
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             logger.error(f"Failed to delete calendar event from {entity_id}: {error}")
 
             exception_to_structured_error(

@@ -11,6 +11,8 @@ Build with: pyinstaller packaging/binary/ha-mcp.spec
 import os
 import sys
 import sysconfig
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_all
 
 # Get project root (spec file is in packaging/binary/)
@@ -37,15 +39,16 @@ for dir_name in stdlib_dirs:
     if os.path.exists(dir_path):
         datas.append((dir_path, dir_name))
 
-# settings_ui/__init__.py reads settings.html, settings.js and settings.css via
-# Path(__file__).parent at import, so a missing file would build a working-looking
-# but broken binary. collect_all('ha_mcp') below also picks them up from the package,
-# but add them explicitly and WITHOUT an existence guard: all three are mandatory, so
-# let the build fail loudly if any is absent rather than ship a broken binary
-# (PyInstaller dedups the duplicate datas entries).
+# settings_ui/__init__.py reads settings.html, settings.css and the settings_js/
+# parts via Path(__file__).parent at import, so a missing file would build a
+# working-looking but broken binary. collect_all('ha_mcp') below also picks them up
+# from the package, but add them explicitly and WITHOUT an existence guard: all are
+# mandatory, so let the build fail loudly if any is absent rather than ship a broken
+# binary (PyInstaller dedups the duplicate datas entries).
 _settings_ui_dir = os.path.join(PROJECT_ROOT, 'src', 'ha_mcp', 'settings_ui')
-for _asset in ('settings.html', 'settings.js', 'settings.css'):
+for _asset in ('settings.html', 'settings.css'):
     datas.append((os.path.join(_settings_ui_dir, _asset), 'ha_mcp/settings_ui'))
+datas.append((os.path.join(_settings_ui_dir, 'settings_js'), 'ha_mcp/settings_ui/settings_js'))
 datas.append((os.path.join(_settings_ui_dir, 'locales'), 'ha_mcp/settings_ui/locales'))
 
 binaries = []
@@ -86,10 +89,20 @@ def _not_mcp_cli(name):
     return not name.startswith('ha_mcp._vendor.mcp.cli')
 
 
+def _is_shipped_data(entry):
+    # Of the vendored skills submodule only skills/ and LICENSE ship; its
+    # evals, scripts and repo metadata are the skills repo's own tooling.
+    parts = Path(entry[0]).parts
+    if 'skills-vendor' not in parts:
+        return True
+    inside = parts[parts.index('skills-vendor') + 1:]
+    return inside[:1] in (('skills',), ('LICENSE',))
+
+
 for package in packages_to_collect:
     try:
         tmp_ret = collect_all(package, filter_submodules=_not_mcp_cli)
-        datas += tmp_ret[0]
+        datas += [entry for entry in tmp_ret[0] if _is_shipped_data(entry)]
         binaries += tmp_ret[1]
         hiddenimports += tmp_ret[2]
     except Exception as e:

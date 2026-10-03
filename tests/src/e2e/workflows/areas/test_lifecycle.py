@@ -233,7 +233,7 @@ class TestAreaLifecycle:
         assert delete_data.get("success"), f"Failed to delete area: {delete_data}"
         logger.info("Area cleanup completed")
 
-    async def test_area_with_labels(self, mcp_client, cleanup_tracker):
+    async def test_area_with_labels(self, mcp_client, cleanup_tracker):  # noqa: PLR0915
         """Create an area with labels and verify the set is stored (issue #2455).
 
         Covers all three transitions of a replacing write: empty to non-empty,

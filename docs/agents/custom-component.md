@@ -34,6 +34,8 @@ Apply these rules:
   push-to-master leg right after a merge and again at release time.
   In the PR gate, equal means a bump is needed to open the pending version;
   behind means a stale tree or bad merge resurrected an older version.
+- Any byte change under `custom_components/ha_mcp_tools/` counts, comments
+  included: the gate and the mirror sync compare file content, not behaviour.
 
 The mirror drift check prevents changes from being stranded under a version
 that already shipped and therefore has no new installable release. The gap it

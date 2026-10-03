@@ -154,9 +154,9 @@ class TestWheelContents:
         with the vendored code (BSD-3 for websockets)."""
         package = _REPO_ROOT / "src" / "ha_mcp"
         assets = [
-            package / "settings_ui" / name
-            for name in ("settings.html", "settings.js", "settings.css")
+            package / "settings_ui" / name for name in ("settings.html", "settings.css")
         ]
+        assets += (package / "settings_ui" / "settings_js").glob("*.js")
         assets += (package / "settings_ui" / "locales").glob("*.json")
         # Bug reports detect a PyPI install by this marker.
         assets.append(package / "_pypi_marker")
@@ -170,3 +170,21 @@ class TestWheelContents:
         assert len(expected) > 3, "found no locale or skill files to check"
 
         assert sorted(expected - wheel_files) == []
+
+    def test_the_wheel_carries_only_the_skills_from_the_skills_submodule(
+        self, wheel_files: set[str]
+    ) -> None:
+        """The skills repo's eval scripts and repo files are its own tooling.
+        Shipped, its .py files install as ha_mcp modules on every server."""
+        vendor = "ha_mcp/resources/skills-vendor/"
+        shipped = {
+            name[len(vendor) :]
+            for name in wheel_files
+            if name.startswith(vendor) and not name.endswith("/")
+        }
+        extra = {
+            name
+            for name in shipped
+            if name != "LICENSE" and not name.startswith("skills/")
+        }
+        assert sorted(extra) == []

@@ -81,7 +81,8 @@ logger = logging.getLogger(__name__)
 # warning hits regardless of MandatoryBPS. Paths are relative to the
 # home-assistant-best-practices skill directory.
 _AUTOMATION_SKILL_FILES: tuple[str, ...] = (
-    "references/automation-patterns.md",
+    "references/triggers-and-conditions.md",
+    "references/automation-actions.md",
     "references/template-guidelines.md",
 )
 
@@ -520,7 +521,7 @@ class AutomationConfigTools:
                     and state.get("attributes", {}).get("id") == identifier
                 ):
                     return str(state["entity_id"])
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(
                 f"Failed to resolve entity_id for automation {identifier}: {e}"
             )
@@ -607,7 +608,7 @@ class AutomationConfigTools:
             return await self._legacy_get_automation(identifier)
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "get"},
@@ -781,8 +782,8 @@ class AutomationConfigTools:
         positions; templates belong only in `data.*`, notification text,
         `event_data` and `variables`. The best-practice checker reports
         violations under `best_practice_warnings` — fix them before
-        re-submitting. `automation-patterns.md` and `template-guidelines.md`
-        ship under `skill_content` by default. Test any unavoidable template
+        re-submitting. `triggers-and-conditions.md`, `automation-actions.md` and
+        `template-guidelines.md` ship under `skill_content` by default. Test any unavoidable template
         with ha_eval_template first.
 
         Consider a dedicated tool first: a state snapshot with no trigger ->
@@ -966,7 +967,7 @@ class AutomationConfigTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # 404 during update only — create (identifier=None) never hits this branch.
             if (
                 identifier
@@ -1615,7 +1616,7 @@ class AutomationConfigTools:
             result = await self._client.send_websocket_message(
                 {"type": "config/entity_registry/list"}
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug("Failed to list automation entity_ids from registry: %s", e)
             return []
         entries = result.get("result", []) if isinstance(result, dict) else result
@@ -2001,7 +2002,7 @@ class AutomationConfigTools:
             }
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 await self._raise_automation_not_found(identifier)
             exception_to_structured_error(

@@ -39,7 +39,7 @@ from typing import Any
 import pytest
 from haos_runtime import HA_MCP_SERVER_WEBHOOK_ID, ssh_exec
 
-from ...conftest import _EMBEDDED_WEBHOOK_ID
+from ..._conftest_embedded import _EMBEDDED_WEBHOOK_ID
 from ...utilities.llm_api_probe import (
     LLM_API_SCHEMA_PROBE,
     PROBE_SENTINEL,

@@ -91,7 +91,7 @@ This tool exposes a sandboxed Python interpreter (`pydantic-monty`) to the AI as
 
 **Recursive self-call is blocked, but composition is not.** The sandbox refuses to invoke `ha_manage_custom_tool` from inside itself, so it can't directly recurse, but it can chain together every other tool the server registers. A buggy or adversarial prompt can still cause unexpected fan-out across destructive tools.
 
-**Resource limits are best-effort.** 30s wall-clock, 10 MB memory, recursion depth 100, and 100 API/tool calls per execution are enforced by the sandbox runtime; the per-execution call cap is enforced by ha-mcp itself. All four are configurable via the `CODE_MODE_MAX_*` env vars within the bounds defined in `src/ha_mcp/config.py`. They protect against runaway loops, not against intentionally crafted abuse — keep `ENABLE_CODE_MODE=false` in any environment where untrusted prompts can reach the server.
+**Resource limits are best-effort.** 30s wall-clock, 10 MB memory, recursion depth 100, and 100 API/tool calls per execution are enforced by the sandbox runtime; the per-execution call cap is enforced by ha-mcp itself. All four are configurable via the `CODE_MODE_MAX_*` env vars within the bounds defined in `src/ha_mcp/config_settings.py`. They protect against runaway loops, not against intentionally crafted abuse — keep `ENABLE_CODE_MODE=false` in any environment where untrusted prompts can reach the server.
 
 **Outbound HTTP is restricted to your HA instance.** `api_get` / `api_post` reject absolute URLs (`http://...`, `https://...`), protocol-relative URLs (`//host/...`), and userinfo (`user@host/...`). This stops a prompt-injected LLM from redirecting the request elsewhere and exfiltrating the HA bearer token via the still-attached `Authorization` header. Only HA-relative paths reach the underlying httpx client.
 
@@ -129,7 +129,7 @@ Replaces the docstrings on 15 heavy ha-mcp tools (`ha_config_get_automation`, `h
 
 Both lists above are checked against `_LITE_DOCSTRINGS` by `test_documented_tool_lists_cover_every_mapped_tool`, so a tool added to the mapping without a docs update fails CI rather than drifting silently.
 
-**Where the deferred detail lives.** Each mapped tool declares its destination in `_LITE_DOCSTRING_DESTINATIONS` (`src/ha_mcp/server.py`), in one of three forms, each with a matching test:
+**Where the deferred detail lives.** Each mapped tool declares its destination in `_LITE_DOCSTRING_DESTINATIONS` (`LITE_DOCSTRING_DESTINATIONS` in `src/ha_mcp/server_tool_text.py`), in one of three forms, each with a matching test:
 
 | Destination | Meaning | Enforced by |
 |---|---|---|

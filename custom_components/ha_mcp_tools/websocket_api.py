@@ -1123,7 +1123,7 @@ def _resolve_registries(hass: HomeAssistant) -> _RegistryView:
 def _safe(fn: Any, hass: HomeAssistant) -> Any:
     try:
         return fn(hass)
-    except Exception:  # pragma: no cover - defensive; core drift
+    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
         return None
 
 
@@ -1152,7 +1152,7 @@ def _substrate_unavailable(name: str) -> Exception:
     return err
 
 
-def _do_search(
+def _do_search(  # noqa: PLR0915
     hass: HomeAssistant,
     params: dict[str, Any],
     *,
@@ -1974,7 +1974,7 @@ def _too_large(config_dict: dict[str, Any]) -> bool:
     """Rough guard so a huge body never balloons a single WS frame."""
     try:
         return len(repr(config_dict)) > MAX_BODY_BYTES
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive  # noqa: BLE001
         return False
 
 
@@ -2012,7 +2012,7 @@ def _collection_storage_index(
             continue
         try:
             entity_list = list(entities)
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
             continue
         for entity in entity_list:
             entity_id = getattr(entity, "entity_id", None)
@@ -2390,7 +2390,7 @@ def _iter_states(hass: HomeAssistant) -> list[Any]:
         return []
     try:
         return list(getter())
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive  # noqa: BLE001
         return []
 
 
@@ -2405,7 +2405,7 @@ def _iter_config_entries(hass: HomeAssistant) -> list[Any]:
         return []
     try:
         return list(getter())
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive  # noqa: BLE001
         return []
 
 
@@ -2633,7 +2633,7 @@ def _call_lookup(view: _RegistryView, registry_name: str, method: str, key: str)
         return None
     try:
         return getter(key)
-    except Exception:
+    except Exception:  # noqa: BLE001
         view._access_failures.add(registry_name)
         return None
 
@@ -2647,7 +2647,7 @@ def _call_no_arg(obj: Any, method: str) -> Any:
         return None
     try:
         return fn()
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive  # noqa: BLE001
         return None
 
 
@@ -2664,7 +2664,7 @@ def _iso(value: Any) -> Any:
     if callable(iso):
         try:
             return iso()
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
             return None
     return value if isinstance(value, (str, int, float, bool)) else str(value)
 
@@ -2696,7 +2696,7 @@ def _timestamp(value: Any) -> float | None:
     if callable(ts):
         try:
             return float(ts())
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
             return None
     return float(value) if isinstance(value, (int, float)) else None
 
@@ -3099,7 +3099,7 @@ def _all_area_entries(view: _RegistryView) -> list[Any]:
     if listed is not None:
         try:
             return list(listed)
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
             return []
     return _mapping_values(getattr(reg, "areas", None))
 
@@ -3110,7 +3110,7 @@ def _mapping_values(mapping: Any) -> list[Any]:
         return []
     try:
         return list(mapping.values())
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive  # noqa: BLE001
         return []
 
 
@@ -3262,7 +3262,7 @@ def _state_get(hass: HomeAssistant, entity_id: str) -> Any:
         return None
     try:
         return getter(entity_id)
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive  # noqa: BLE001
         return None
 
 
@@ -3276,7 +3276,7 @@ def _state_as_dict(state: Any) -> Any:
     if callable(as_dict):
         try:
             return as_dict()
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
             return None
     return None
 
@@ -3508,7 +3508,7 @@ def _device_dict_repr(entry: Any) -> dict[str, Any] | None:
     """
     try:
         repr_dict = entry.dict_repr
-    except Exception:  # pragma: no cover - defensive; core drift
+    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
         return None
     return repr_dict if isinstance(repr_dict, dict) else None
 
@@ -3546,7 +3546,7 @@ def _entries_for_device(view: _RegistryView, device_id: str) -> list[Any]:
         entries = er.async_entries_for_device(
             reg, device_id, include_disabled_entities=True
         )
-    except Exception:  # pragma: no cover - defensive; core drift
+    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
         return []
     return list(entries)
 
@@ -3560,7 +3560,7 @@ def _entity_partial_dict(entry: Any) -> dict[str, Any] | None:
     """
     try:
         partial = entry.as_partial_dict
-    except Exception:  # pragma: no cover - defensive; core drift
+    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
         return None
     return partial if isinstance(partial, dict) else None
 
@@ -3759,7 +3759,7 @@ def _legacy_exposed_entity_ids(hass: HomeAssistant) -> list[str]:
 
         data = getattr(hass, "data", None)
         store = data.get(DATA_EXPOSED_ENTITIES) if isinstance(data, Mapping) else None
-    except Exception:  # pragma: no cover - defensive; core drift
+    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
         return []
     entities = getattr(store, "entities", None)
     if isinstance(entities, Mapping):
@@ -3890,7 +3890,7 @@ def _config_entry_by_id(hass: HomeAssistant, entry_id: str) -> Any:
         return None
     try:
         return getter(entry_id)
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive  # noqa: BLE001
         return None
 
 
@@ -4003,7 +4003,7 @@ def _safe_prop(obj: Any, name: str, default: Any = None) -> Any:
     """
     try:
         return getattr(obj, name, default)
-    except Exception:  # pragma: no cover - defensive; core drift
+    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
         return default
 
 
@@ -4265,7 +4265,7 @@ def _hass_data_get(hass: HomeAssistant, key: Any) -> Any:
         return None
     try:
         return data.get(key)
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive  # noqa: BLE001
         return None
 
 
@@ -4479,7 +4479,7 @@ def _list_categories(registry: Any, scope: str) -> list[Any]:
         return []
     try:
         return list(lister(scope=scope))
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive  # noqa: BLE001
         return []
 
 
@@ -4492,7 +4492,7 @@ def _all_floor_entries(view: _RegistryView) -> list[Any]:
     if listed is not None:
         try:
             return list(listed)
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
             return []
     return _mapping_values(getattr(reg, "floors", None))
 
@@ -4506,7 +4506,7 @@ def _all_label_entries(view: _RegistryView) -> list[Any]:
     if listed is not None:
         try:
             return list(listed)
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
             return []
     return _mapping_values(getattr(reg, "labels", None))
 
@@ -4638,7 +4638,7 @@ def _lovelace_dashboards_map(hass: HomeAssistant) -> Mapping[Any, Any] | None:
         from homeassistant.components.lovelace import LOVELACE_DATA
 
         key: Any = LOVELACE_DATA
-    except Exception:  # pragma: no cover - defensive; core drift / older core
+    except Exception:  # noqa: BLE001  # pragma: no cover - defensive; core drift / older core
         key = "lovelace"
     data = getattr(hass, "data", None)
     if not isinstance(data, Mapping):
@@ -4701,7 +4701,7 @@ async def _dashboard_get_config(
         return {"status": "not_found", "url_path": resolved, "config": None}
     try:
         config = await loader(False)
-    except Exception:  # any load failure degrades to not_found (fail-soft)
+    except Exception:  # noqa: BLE001  # any load failure degrades to not_found (fail-soft)
         return {"status": "not_found", "url_path": resolved, "config": None}
     if not isinstance(config, dict):
         return {"status": "not_found", "url_path": resolved, "config": None}
@@ -4736,7 +4736,7 @@ async def _dashboard_search_docs(
     """
     try:
         from homeassistant.components.lovelace.const import ConfigNotFound
-    except Exception:  # pragma: no cover - defensive; core drift
+    except Exception:  # pragma: no cover - defensive; core drift  # noqa: BLE001
         ConfigNotFound = None
 
     docs: list[dict[str, Any]] = []
@@ -4753,7 +4753,7 @@ async def _dashboard_search_docs(
             continue
         try:
             config = await loader(False)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             if ConfigNotFound is not None and isinstance(err, ConfigNotFound):
                 # Auto-generated dashboard: nothing stored, nothing to scan.
                 continue
@@ -5730,7 +5730,7 @@ def _assist_should_expose(hass: HomeAssistant, entity_id: str) -> bool:
         if not _assist_expose_new_entities(hass):
             return False
         return _assist_default_exposed(hass, entity_id)
-    except Exception:  # fail open (do not hide) on any error, mirroring the resolver
+    except Exception:  # noqa: BLE001  # fail open (do not hide) on any error, mirroring the resolver
         return True
 
 
@@ -6285,7 +6285,7 @@ def _event_state_value(state: Any) -> Any:
         if isinstance(state, Mapping):
             return state.get("state")
         return getattr(state, "state", None)
-    except Exception:  # pragma: no cover - defensive; exotic/stub shapes
+    except Exception:  # noqa: BLE001  # pragma: no cover - defensive; exotic/stub shapes
         return None
 
 
@@ -6502,7 +6502,7 @@ def _values_differ(a: Any, b: Any) -> bool:
     """
     try:
         return bool(a != b)
-    except Exception:  # array-like / exotic __ne__ whose result isn't a plain bool
+    except Exception:  # noqa: BLE001  # array-like / exotic __ne__ whose result isn't a plain bool
         return repr(a) != repr(b)
 
 
@@ -6753,7 +6753,7 @@ async def _bulk_dispatch_all(
         for op in ops:
             try:
                 await _bulk_dispatch_one(hass, op)
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001
                 op["error"] = _bulk_op_error(err)
 
 

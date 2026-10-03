@@ -331,10 +331,10 @@ def _literal_env_reads() -> dict[str, set[str]]:
     found: dict[str, set[str]] = {}
     for py in pkg_dir.rglob("*.py"):
         rel = py.relative_to(pkg_dir).as_posix()
-        if rel.startswith("_vendor/"):
-            # Vendored third-party code (websockets): its env knobs
-            # (WEBSOCKETS_*) are upstream's interface, not ha-mcp settings
-            # to surface in the Settings UI.
+        if rel.startswith(("_vendor/", "resources/skills-vendor/")):
+            # Vendored code (websockets, the skills submodule): its env
+            # knobs (WEBSOCKETS_*, the skills eval scripts') are upstream's
+            # interface, not ha-mcp settings to surface in the Settings UI.
             continue
         tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
         for name in _env_reads_in_tree(tree):
@@ -411,28 +411,29 @@ def test_scanner_detects_all_direct_read_forms() -> None:
 
 def test_every_advanced_field_has_a_settings_js_label() -> None:
     """The Advanced GET handler is data-driven over ADVANCED_SETTINGS_FIELDS,
-    but settings.js looks up each row's label/help in ``ADVANCED_FIELD_META``
+    but the settings script looks up each row's label/help in ``ADVANCED_FIELD_META``
     (falling back to the raw snake_case field name). A row added to config.py
     without a matching JS entry silently degrades the UI — guard against that
     drift (issue #1538 added three rows that initially lacked entries)."""
     import re
 
-    js = (_package_dir() / "settings_ui" / "settings.js").read_text(encoding="utf-8")
+    from ha_mcp.settings_ui import _settings_js_template as js
+
     m = re.search(r"const ADVANCED_FIELD_META = \{(.*?)\n\};", js, re.S)
-    assert m, "ADVANCED_FIELD_META object not found in settings.js"
+    assert m, "ADVANCED_FIELD_META object not found in settings_js/"
     meta_keys = set(
         re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{", m.group(1), re.M)
     )
     missing = sorted({f.field for f in ADVANCED_SETTINGS_FIELDS} - meta_keys)
     assert not missing, (
         "ADVANCED_SETTINGS_FIELDS rows missing an ADVANCED_FIELD_META entry in "
-        f"settings.js (they would render with a raw field-name label): {missing}."
+        f"settings_js/ (they would render with a raw field-name label): {missing}."
     )
 
 
 def test_every_backup_override_field_has_a_settings_js_label() -> None:
     """The Backups-tab GET handler is data-driven over BACKUP_OVERRIDE_FIELDS,
-    but settings.js looks up each row's label/help in ``BACKUP_FIELD_LABELS``
+    but the settings script looks up each row's label/help in ``BACKUP_FIELD_LABELS``
     (falling back to the raw snake_case field name). A row added to config.py
     without a matching JS entry silently degrades the UI — same drift class
     as ADVANCED_FIELD_META (issue #1538); caught here for #1861's
@@ -440,16 +441,17 @@ def test_every_backup_override_field_has_a_settings_js_label() -> None:
     initially shipped without entries."""
     import re
 
-    js = (_package_dir() / "settings_ui" / "settings.js").read_text(encoding="utf-8")
+    from ha_mcp.settings_ui import _settings_js_template as js
+
     m = re.search(r"const BACKUP_FIELD_LABELS = \{(.*?)\n\};", js, re.S)
-    assert m, "BACKUP_FIELD_LABELS object not found in settings.js"
+    assert m, "BACKUP_FIELD_LABELS object not found in settings_js/"
     label_keys = set(
         re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{", m.group(1), re.M)
     )
     missing = sorted({f.field for f in BACKUP_OVERRIDE_FIELDS} - label_keys)
     assert not missing, (
         "BACKUP_OVERRIDE_FIELDS rows missing a BACKUP_FIELD_LABELS entry in "
-        f"settings.js (they would render with a raw field-name label): {missing}."
+        f"settings_js/ (they would render with a raw field-name label): {missing}."
     )
 
 

@@ -491,7 +491,8 @@ class TestPerToolCanonicalMappings:
         from ha_mcp.tools.tools_config_automations import _AUTOMATION_SKILL_FILES
 
         assert _AUTOMATION_SKILL_FILES == (
-            "references/automation-patterns.md",
+            "references/triggers-and-conditions.md",
+            "references/automation-actions.md",
             "references/template-guidelines.md",
         )
 
@@ -499,7 +500,8 @@ class TestPerToolCanonicalMappings:
         from ha_mcp.tools.tools_config_scripts import _SCRIPT_SKILL_FILES
 
         assert _SCRIPT_SKILL_FILES == (
-            "references/automation-patterns.md",
+            "references/automation-actions.md",
+            "references/triggers-and-conditions.md",
             "references/template-guidelines.md",
         )
 

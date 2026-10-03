@@ -159,7 +159,7 @@ async def edit_dashboard_via_component(
         kwargs["patch"] = patch
     try:
         raw = await ws.send_command(WS_DASHBOARD_EDIT, **kwargs)
-    except (asyncio.CancelledError, Exception) as exc:
+    except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001
         # Pre-dispatch cancellation still propagates; after dispatch it cannot
         # establish whether Core saved unless an explicit rejection says so.
         _handle_command_failure(exc, client, url_path, action)

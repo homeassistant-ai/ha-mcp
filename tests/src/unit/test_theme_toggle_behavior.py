@@ -357,7 +357,7 @@ def test_font_size_clamp_parity(
 
     The anti-FOUC script (data-purpose="anti-fouc") and the runtime
     ``applyFontSize`` arrow function (mirrored in both Layout.astro
-    theme-toggle and src/ha_mcp/settings_ui/settings.js) both clamp
+    theme-toggle and src/ha_mcp/settings_ui/settings_js/) both clamp
     invalid/out-of-range values to empty string (clearing the inline style).
     Test that ``90``, ``130``, ``200``, and ``abc`` all produce the same
     result: anti-FOUC path sets fontSize to empty string or "20.8px" for
@@ -370,15 +370,9 @@ def test_font_size_clamp_parity(
         / "layouts"
         / "Layout.astro"
     )
-    settings_path = (
-        Path(__file__).resolve().parents[3]
-        / "src"
-        / "ha_mcp"
-        / "settings_ui"
-        / "settings.js"
-    )
     layout_source = layout_path.read_text(encoding="utf-8")
-    settings_source = settings_path.read_text(encoding="utf-8")
+    from ha_mcp.settings_ui import _settings_js_template as settings_source
+
     # Extract anti-FOUC body from Layout.astro.
     anti_fouc_match = re.search(
         r'<script[^>]*\bdata-purpose\s*=\s*["\']anti-fouc["\'][^>]*>(.*?)</script>',
@@ -397,14 +391,14 @@ def test_font_size_clamp_parity(
         "no applyFontSize function found in Layout.astro theme-toggle"
     )
     apply_font_size_layout_fn = apply_font_size_layout_match.group(0)
-    # Extract the applyFontSize arrow function from settings.js.
+    # Extract the applyFontSize arrow function from settings_js/.
     apply_font_size_settings_match = re.search(
         r"const applyFontSize = \(pct\) => \{[^}]*\};",
         settings_source,
         re.DOTALL,
     )
     assert apply_font_size_settings_match, (
-        "no applyFontSize function found in settings.js"
+        "no applyFontSize function found in settings_js/"
     )
     apply_font_size_settings_fn = apply_font_size_settings_match.group(0)
 
@@ -471,7 +465,7 @@ def test_font_size_clamp_parity(
             f"layout {pct_input}: expected {expected_style!r}, got {layout_style!r}"
         )
 
-        # (c) Runtime path from settings.js.
+        # (c) Runtime path from settings_js/.
         prelude_settings = f"""
         const root = document.documentElement;
         {apply_font_size_settings_fn}
@@ -498,7 +492,7 @@ def test_font_size_clamp_parity(
         )
 
 
-def test_reset_clears_all_and_clear_only_custom(
+def test_reset_clears_all_and_clear_only_custom(  # noqa: PLR0915
     theme_toggle_script: str, a11y_controls_html: str
 ) -> None:
     """Reset button clears all prefs to defaults; clear button only clears custom colors.

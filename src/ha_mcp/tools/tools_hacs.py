@@ -217,7 +217,7 @@ class HacsTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_get_hacs_info", "action": action},
@@ -350,7 +350,7 @@ class HacsTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_manage_hacs", "action": action},

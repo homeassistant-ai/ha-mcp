@@ -76,7 +76,7 @@ class TestErrorHandling:
                 "timed_out": True,
                 "error": f"Operation timed out after {timeout}s",
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Tool call {tool_name} failed: {e}")
             return {"success": False, "tool_error": True, "error": str(e)}
 
@@ -128,11 +128,11 @@ class TestErrorHandling:
         copied in at container prep — so a successful search on a settled
         instance always has entities. The boot poll that waits for
         light.bed_light to land in the state machine
-        (conftest._wait_for_haos_light_ready) runs only on the HAOS lanes,
+        (_conftest_haos._wait_for_haos_light_ready) runs only on the HAOS lanes,
         though, and the demo platform publishes its states after the
         integration's async_setup returns, so container / embedded lanes can
         briefly race a search that fires first (documented at
-        conftest.py:1863-1874, PR #1379). With ``require_entities`` the
+        ``_wait_for_haos_light_ready``, PR #1379). With ``require_entities`` the
         bounded poll below absorbs that lag, and only a still-empty result
         after the window is a search regression rather than an empty instance.
 
@@ -723,7 +723,7 @@ class TestErrorHandling:
                 )
             else:
                 logger.warning("  ⚠️ Missing name unexpectedly succeeded")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error_str = str(e).lower()
             if any(
                 phrase in error_str
@@ -883,7 +883,7 @@ async def _safe_tool_call_standalone(
             "timed_out": True,
             "error": f"Operation timed out after {timeout}s",
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"Tool call {tool_name} failed: {e}")
         return {"success": False, "tool_error": True, "error": str(e)}
 
@@ -926,7 +926,7 @@ async def _run_concurrent_individual_operations(mcp_client, entities):
                 },
             )
             return parse_mcp_result(result)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(
                 f"Service call failed for {entity.get('entity_id', 'unknown')}: {e}"
             )
@@ -977,7 +977,7 @@ async def _run_concurrent_bulk_operations(mcp_client, entities):
                 },
             )
             return parse_mcp_result(result)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Bulk operation failed for action {action}: {e}")
             return {"success": False, "error": str(e)}
 
@@ -1061,7 +1061,7 @@ async def _run_concurrent_helper_creation(mcp_client, cleanup_tracker):
                 if hasattr(cleanup_tracker, "track"):
                     cleanup_tracker.track("helper", entity_id)
             return data
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Helper creation failed for {helper_name}: {e}")
             return {"success": False, "error": str(e)}
 
@@ -1144,7 +1144,7 @@ async def test_system_resilience_under_load(mcp_client):
             logger.warning(
                 f"  ⚠️ System responsiveness degraded: {response_data.get('error', '')}"
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"  ⚠️ System responsiveness check failed: {e}")
 
     logger.info("✅ System resilience under load test completed")

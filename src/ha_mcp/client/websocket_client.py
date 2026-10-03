@@ -377,7 +377,7 @@ class HomeAssistantWebSocketClient:
         if verify_ssl is None:
             try:
                 verify_ssl = get_global_settings().verify_ssl
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 # A bad env var elsewhere should not silently flip TLS off:
                 # log which key tripped and fall back to the secure default.
                 logger.warning(
@@ -496,7 +496,7 @@ class HomeAssistantWebSocketClient:
             logger.info("WebSocket connected and authenticated successfully")
             return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self._last_connect_error = f"{type(e).__name__}: {e}"
             self._last_connect_exception = e
             if _is_ssl_error(e) and self.verify_ssl:
@@ -583,7 +583,7 @@ class HomeAssistantWebSocketClient:
                     await self._process_message(data)
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON received: {e}")
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"Error processing message: {e}")
         except websockets.exceptions.ConnectionClosed as e:
             # Prefer the frame we received (the peer closed on us); fall
@@ -604,7 +604,7 @@ class HomeAssistantWebSocketClient:
                 logger.warning(log_message)
             else:
                 logger.info(log_message)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             close_reason = str(e)
             logger.error(f"WebSocket message handler error: {e}")
         finally:
@@ -1110,7 +1110,7 @@ class HomeAssistantWebSocketClient:
                 await asyncio.wait_for(
                     asyncio.shield(task), timeout=CLEANUP_TIMEOUT_SECONDS
                 )
-            except (Exception, TimeoutError) as e:
+            except (Exception, TimeoutError) as e:  # noqa: BLE001
                 logger.debug("%s: cleanup did not finish cleanly: %s", what, e)
             except asyncio.CancelledError:
                 logger.debug("%s: cleanup cancelled before it finished", what)
@@ -1433,7 +1433,7 @@ class HomeAssistantWebSocketClient:
         try:
             response = await self.send_command("ping")
             return response.get("type") == "pong"
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
 
     @property
@@ -1549,7 +1549,7 @@ class WebSocketManager:
             return verify_ssl
         try:
             return bool(get_global_settings().verify_ssl)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Mirror HomeAssistantWebSocketClient.__init__: a bad env var
             # elsewhere should not crash pooling or silently flip TLS off.
             logger.warning(

@@ -42,6 +42,11 @@ tests/haconfig/
 .gitignore
 .gitattributes
 
+# Vendored skills submodule: only the skills and their licence ship
+src/ha_mcp/resources/skills-vendor/*
+!src/ha_mcp/resources/skills-vendor/skills
+!src/ha_mcp/resources/skills-vendor/LICENSE
+
 # Documentation
 docs/
 *.md

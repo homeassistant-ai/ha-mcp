@@ -634,7 +634,7 @@ async def test_group_search_discovery(mcp_client):
             else:
                 logger.info("No group entities found via search (may be normal)")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Group search failed: {e}")
             logger.info("This may be normal if no groups exist")
 

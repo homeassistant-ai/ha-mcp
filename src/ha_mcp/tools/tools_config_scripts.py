@@ -66,11 +66,12 @@ from .util_helpers import (
 logger = logging.getLogger(__name__)
 
 
-# Scripts share the automation skill mapping — both use
-# action / condition / trigger templates and benefit from the same
-# native-vs-template guidance.
+# Scripts attach the same files as automations: a script sequence uses
+# actions, conditions and ``wait_for_trigger``. The actions file comes first
+# because the strict-mode block error names the first entry.
 _SCRIPT_SKILL_FILES: tuple[str, ...] = (
-    "references/automation-patterns.md",
+    "references/automation-actions.md",
+    "references/triggers-and-conditions.md",
     "references/template-guidelines.md",
 )
 
@@ -187,7 +188,7 @@ class ConfigScriptTools:
             return await self._legacy_get_script(script_id)
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"script_id": script_id},
@@ -275,7 +276,7 @@ class ConfigScriptTools:
             result = await self._client.send_websocket_message(
                 {"type": "config/entity_registry/list"}
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug("Failed to list script entity_ids from registry: %s", e)
             return []
         entries = result.get("result", []) if isinstance(result, dict) else result
@@ -592,8 +593,8 @@ class ConfigScriptTools:
         `for:`) over templates in logic positions; templates belong only in
         `data.*`, notification text, `event_data` and `variables`. The
         best-practice checker reports violations under `best_practice_warnings`.
-        `automation-patterns.md` and `template-guidelines.md` ship under
-        `skill_content` by default.
+        `automation-actions.md`, `triggers-and-conditions.md` and
+        `template-guidelines.md` ship under `skill_content` by default.
 
         Scripts use 'sequence', NOT 'trigger' or 'action'; for trigger-based
         execution use ha_config_set_automation.
@@ -771,7 +772,7 @@ class ConfigScriptTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             suggestions = [
                 "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
                 "For blueprint scripts, use ha_manage_blueprints(action='list', domain='script') to list available blueprints",
@@ -1178,7 +1179,7 @@ class ConfigScriptTools:
             return {"success": True, "action": "delete", **result}
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 await self._raise_script_not_found(script_id)
             exception_to_structured_error(

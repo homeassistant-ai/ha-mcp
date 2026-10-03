@@ -145,7 +145,7 @@ def _docker_available() -> bool:
 
         docker_sdk.from_env().ping()
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -182,8 +182,8 @@ def _build_wheel(dest_dir: Path) -> tuple[Path, str]:
 def _manifest_requirements(config_path: Path) -> list[str]:
     """Every staged custom integration's manifest requirements, minus the pinner's.
 
-    Preinstalled by the entrypoint for the reason conftest's own
-    ``_collect_manifest_requirements`` documents: HA's runtime manifest-install
+    Preinstalled by the entrypoint for the reason
+    ``_conftest_seed._collect_manifest_requirements`` documents: HA's runtime manifest-install
     does not reliably fire for a config entry the fixture pre-injected into
     ``.storage``, and the integration then lands in ``setup_error`` with no
     bring-up at all — which would fail this module for a reason that has
