@@ -51,14 +51,13 @@ from .config_helpers.registry import (
     validate_registry_ids,
 )
 from .config_helpers.schemas import (
-    _INITIAL_PARAM_DESCRIPTION,
+    _SIMPLE_CONFIG_KEYS_DESCRIPTION,
     SIMPLE_HELPER_TYPES,
     _attach_helper_skill,
-    _simple_helper_error_context,
 )
+from .config_helpers.typed_config import _core_schema_context, _prepare_typed_params
 from .config_helpers.update import _execute_update_simple_helper
 from .config_helpers.validation import (
-    _validate_applicable_params,
     _validate_pre_dispatch_params,
     _validate_set_helper_action,
 )
@@ -67,6 +66,8 @@ from .config_write_helpers import (
     augment_tool_error_with_skill_content,
 )
 from .helpers import (
+    HIDDEN_PARAM,
+    clear_or_keep,
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
@@ -678,206 +679,94 @@ class HelperConfigTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:bell', 'mdi:toggle-switch')",
+                description="Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it",
                 default=None,
             ),
         ] = None,
         area_id: Annotated[
             str | None,
-            Field(description="Area/room ID to assign the helper to", default=None),
+            Field(
+                description="Area ID for the helper; '' or ' ' clears it", default=None
+            ),
         ] = None,
         labels: Annotated[
             str | list[str] | None,
             JSON_STRING_COERCION,
             Field(description="Labels to categorize the helper", default=None),
         ] = None,
+        # Type fields for SIMPLE helpers, also accepted inside `config`; hidden from
+        # the schema so only `config` documents them.
         min_value: Annotated[
             float | None,
+            HIDDEN_PARAM,
             Field(
-                description="Minimum value (input_number/counter) or minimum length (input_text). Also accepts shorthand 'min'.",
                 default=None,
-                validation_alias=AliasChoices("min_value", "min"),
+                validation_alias=AliasChoices("min_value", "min", "minimum"),
             ),
         ] = None,
         max_value: Annotated[
             float | None,
+            HIDDEN_PARAM,
             Field(
-                description="Maximum value (input_number/counter) or maximum length (input_text). Also accepts shorthand 'max'.",
                 default=None,
-                validation_alias=AliasChoices("max_value", "max"),
+                validation_alias=AliasChoices("max_value", "max", "maximum"),
             ),
         ] = None,
-        step: Annotated[
-            float | None,
-            Field(
-                description="Step/increment value for input_number or counter",
-                default=None,
-            ),
-        ] = None,
+        step: Annotated[float | None, HIDDEN_PARAM] = None,
         unit_of_measurement: Annotated[
             str | None,
+            HIDDEN_PARAM,
             Field(
-                description="Unit of measurement for input_number (e.g., '°C', '%', 'W'). Also accepts shorthand 'unit'.",
                 default=None,
                 validation_alias=AliasChoices("unit_of_measurement", "unit"),
             ),
         ] = None,
         options: Annotated[
-            str | list[str] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="List of options for input_select (required for input_select)",
-                default=None,
-            ),
+            str | list[str] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
-        initial: Annotated[
-            str | int | None,
-            Field(
-                description=_INITIAL_PARAM_DESCRIPTION,
-                default=None,
-            ),
-        ] = None,
-        mode: Annotated[
-            str | None,
-            Field(
-                description="Display mode: 'box'/'slider' for input_number, 'text'/'password' for input_text",
-                default=None,
-            ),
-        ] = None,
-        has_date: Annotated[
-            bool | None,
-            Field(
-                description="Include date component for input_datetime", default=None
-            ),
-        ] = None,
-        has_time: Annotated[
-            bool | None,
-            Field(
-                description="Include time component for input_datetime", default=None
-            ),
-        ] = None,
-        restore: Annotated[
-            bool | None,
-            Field(
-                description="Restore state after restart (counter, timer). Defaults to True for counter, False for timer",
-                default=None,
-            ),
-        ] = None,
-        duration: Annotated[
-            str | None,
-            Field(
-                description="Default duration for timer in format 'HH:MM:SS' or seconds (e.g., '0:05:00' for 5 minutes)",
-                default=None,
-            ),
-        ] = None,
+        initial: Annotated[str | bool | int | float | None, HIDDEN_PARAM] = None,
+        mode: Annotated[str | None, HIDDEN_PARAM] = None,
+        has_date: Annotated[bool | None, HIDDEN_PARAM] = None,
+        has_time: Annotated[bool | None, HIDDEN_PARAM] = None,
+        restore: Annotated[bool | None, HIDDEN_PARAM] = None,
+        duration: Annotated[str | int | float | None, HIDDEN_PARAM] = None,
         monday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes (e.g. {'from': '07:00', 'to': '22:00', 'data': {'mode': 'comfort'}})",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         tuesday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Tuesday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         wednesday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Wednesday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         thursday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Thursday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         friday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Friday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         saturday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Saturday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
         sunday: Annotated[
-            list[dict[str, Any]] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Schedule time ranges for Sunday; same shape as monday.",
-                default=None,
-            ),
+            list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
-        latitude: Annotated[
-            float | None,
-            Field(description="Latitude for zone (required for zone)", default=None),
-        ] = None,
-        longitude: Annotated[
-            float | None,
-            Field(description="Longitude for zone (required for zone)", default=None),
-        ] = None,
-        radius: Annotated[
-            float | None,
-            Field(description="Radius in meters for zone (default: 100)", default=None),
-        ] = None,
-        passive: Annotated[
-            bool | None,
-            Field(
-                description="Passive zone (won't trigger state changes for person entities)",
-                default=None,
-            ),
-        ] = None,
-        user_id: Annotated[
-            str | None,
-            Field(description="User ID to link to person entity", default=None),
-        ] = None,
+        latitude: Annotated[float | None, HIDDEN_PARAM] = None,
+        longitude: Annotated[float | None, HIDDEN_PARAM] = None,
+        radius: Annotated[float | None, HIDDEN_PARAM] = None,
+        passive: Annotated[bool | None, HIDDEN_PARAM] = None,
+        user_id: Annotated[str | None, HIDDEN_PARAM] = None,
         device_trackers: Annotated[
-            list[str] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="List of device_tracker entity IDs for person", default=None
-            ),
+            list[str] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
-        picture: Annotated[
-            str | None,
-            Field(description="Picture URL for person entity", default=None),
-        ] = None,
-        tag_id: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "Tag ID. On create, omit to auto-generate a uuid4 hex. On update, the "
-                    "existing tag_id is required (passed via helper_id)."
-                ),
-                default=None,
-            ),
-        ] = None,
-        description: Annotated[
-            str | None,
-            Field(description="Description for tag", default=None),
-        ] = None,
+        picture: Annotated[str | None, HIDDEN_PARAM] = None,
+        tag_id: Annotated[str | None, HIDDEN_PARAM] = None,
+        description: Annotated[str | None, HIDDEN_PARAM] = None,
+        pattern: Annotated[str | None, HIDDEN_PARAM] = None,
         category: Annotated[
             str | None,
             Field(
-                description="Category ID to assign to this helper. Use ha_config_get_category(scope='helpers') to list available categories, or ha_config_set_category() to create one.",
+                description="Category ID for this helper (ha_config_get_category(scope='helpers') lists them, ha_config_set_category() creates one); '' or ' ' clears it.",
                 default=None,
             ),
         ] = None,
@@ -886,12 +775,12 @@ class HelperConfigTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Config dict for flow-based helper types and "
-                    "helper_type='config_subentry'. "
-                    "Ignored for simple helper types. "
-                    "On update it is a patch: a field you omit keeps its "
-                    "current value, and a field set to null is cleared where "
-                    "the schema allows that field to be empty. A field two "
+                    "Type-specific fields. On update it is a patch: a field "
+                    "you omit keeps its current value. SIMPLE types take "
+                    f"these keys: {_SIMPLE_CONFIG_KEYS_DESCRIPTION} "
+                    "FLOW types and config_subentry take the flow's fields; a "
+                    "field set to null is cleared where the schema allows "
+                    "that field to be empty. A field two "
                     "steps declare gets your one value both times; pass "
                     "step_values={'<step_id>': {'<field>': <value>}} to give "
                     "a step its own value, or to leave it out of that step; a "
@@ -934,7 +823,7 @@ class HelperConfigTools:
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
         ``helper-selection.md`` ships under ``skill_content`` by default.
 
-        SIMPLE types (structured params, WebSocket API): input_boolean, input_button,
+        SIMPLE types (pass `config` dict): input_boolean, input_button,
         input_select, input_number, input_text, input_datetime, counter, timer, schedule,
         zone, person, tag. Create requires `name`; update requires `helper_id`.
 
@@ -966,12 +855,16 @@ class HelperConfigTools:
           reconfigure looping through its summary menu) take `next_step_id` as a
           LIST of successive selections, consumed one per menu encounter.
 
-        EXAMPLES (menu-based types, where the first-call payload is non-obvious):
+        EXAMPLES:
+        - input_number: ha_config_set_helper(helper_type="input_number", name="Target", config={"min_value": 0, "max_value": 100, "step": 5})
         - template sensor: ha_config_set_helper(helper_type="template", name="Room Temp", config={"next_step_id": "sensor", "state": "{{ states('sensor.x')|float }}", "unit_of_measurement": "°C"})
         - group: ha_config_set_helper(helper_type="group", name="Kitchen Lights", config={"group_type": "light", "entities": ["light.a", "light.b"]})
         - config subentry: ha_config_set_helper(helper_type="config_subentry", entry_id="01HXYZ...", subentry_type="conversation", config={"name": "Local agent", "model": "gemma3:27b"})
         """
         try:
+            area_id = clear_or_keep(area_id, "area_id")
+            icon = clear_or_keep(icon, "icon")
+            category = clear_or_keep(category, "category")
             if helper_type == "config_subentry":
                 return await _handle_set_config_subentry(
                     self._client,
@@ -987,19 +880,14 @@ class HelperConfigTools:
             action = await _validate_set_helper_action(
                 self._client, action, helper_id, helper_type
             )  # type: ignore[assignment]
-
-            # Bug 4b/7c/10/14 (issue #1150): reject typed params that don't apply
-            # to the chosen helper_type instead of silently dropping them.
-            _validate_applicable_params(
-                helper_type,
-                {
-                    "icon": icon,
+            async with _core_schema_context(self._client, helper_type, action):
+                type_kw: dict[str, Any] = {
+                    "options": options,
+                    "initial": initial,
                     "min_value": min_value,
                     "max_value": max_value,
                     "step": step,
                     "unit_of_measurement": unit_of_measurement,
-                    "options": options,
-                    "initial": initial,
                     "mode": mode,
                     "has_date": has_date,
                     "has_time": has_time,
@@ -1021,116 +909,103 @@ class HelperConfigTools:
                     "picture": picture,
                     "tag_id": tag_id,
                     "description": description,
-                },
-            )
-
-            # The `config` parameter only applies to flow-based types; reject early
-            # so the caller realizes simple types use explicit params, not `config`.
-            if helper_type not in FLOW_HELPER_TYPES and config not in (None, {}, ""):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"The 'config' parameter is only valid for flow-based helper types. "
-                        f"For '{helper_type}', use the explicit parameters (name, options, min_value, etc.).",
-                        context=_simple_helper_error_context(helper_type),
-                        suggestions=[
-                            f"Pass values for '{helper_type}' via explicit parameters (e.g. options=..., min_value=...)",
-                            "For flow-based types (template, group, utility_meter, ...), use 'config' as a dict or JSON string",
-                        ],
-                    )
+                    "pattern": pattern,
+                }
+                name, icon, type_kw = _prepare_typed_params(
+                    helper_type, config, name, icon, type_kw
                 )
 
-            # Bug 12: detect name collision before sending so the caller isn't silently given a duplicate.
-            if action == "create":
-                await _check_name_collision(self._client, helper_type, name)
+                # Bug 12: detect name collision before sending so the caller isn't silently given a duplicate.
+                if action == "create":
+                    await _check_name_collision(self._client, helper_type, name)
 
-            if helper_type in FLOW_HELPER_TYPES:
-                flow_response = await _handle_flow_helper(
+                if helper_type in FLOW_HELPER_TYPES:
+                    flow_response = await _handle_flow_helper(
+                        self._client,
+                        helper_type,
+                        name,
+                        helper_id,
+                        config,
+                        area_id,
+                        labels,
+                        category,
+                        wait,
+                        icon=icon,
+                        action=action,
+                    )
+                    _attach_helper_skill(flow_response, MandatoryBPS)
+                    return flow_response
+
+                try:
+                    labels = parse_string_list_param(labels, "labels")
+                    type_kw["options"] = parse_string_list_param(
+                        type_kw["options"], "options"
+                    )
+                except ValueError as e:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"Invalid list parameter: {e}",
+                        )
+                    )
+
+                # Bug 16 (issue #1150): validate area_id / labels / category exist.
+                await validate_registry_ids(
                     self._client,
-                    helper_type,
-                    name,
-                    helper_id,
-                    config,
                     area_id,
                     labels,
-                    category,
-                    wait,
-                    icon=icon,
-                    action=action,
+                    {"helpers": category},
+                    fail_closed=True,
                 )
-                _attach_helper_skill(flow_response, MandatoryBPS)
-                return flow_response
 
-            try:
-                labels = parse_string_list_param(labels, "labels")
-                options = parse_string_list_param(options, "options")
-            except ValueError as e:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid list parameter: {e}",
+                # Bug 13/17 (issue #1150): pre-validate per-type schema constraints.
+                _validate_pre_dispatch_params(
+                    helper_type,
+                    type_kw["min_value"],
+                    type_kw["max_value"],
+                    type_kw["step"],
+                    type_kw["options"],
+                    type_kw["monday"],
+                    type_kw["tuesday"],
+                    type_kw["wednesday"],
+                    type_kw["thursday"],
+                    type_kw["friday"],
+                    type_kw["saturday"],
+                    type_kw["sunday"],
+                )
+
+                if action == "create":
+                    return await _execute_create_simple_helper(
+                        self._client,
+                        helper_type,
+                        name,
+                        icon,
+                        area_id,
+                        labels,
+                        category,
+                        wait,
+                        MandatoryBPS,
+                        **type_kw,
                     )
+
+                if action != "update":
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.INTERNAL_ERROR,
+                            f"Unexpected action: {action}",
+                        )
+                    )
+
+                # helper_id is guaranteed non-None by _validate_set_helper_action for update
+                hid: str = helper_id  # type: ignore[assignment]
+                entity_id = (
+                    hid if hid.startswith(helper_type) else f"{helper_type}.{hid}"
                 )
-
-            # Bug 16 (issue #1150): validate area_id / labels / category exist.
-            await validate_registry_ids(
-                self._client,
-                area_id,
-                labels,
-                {"helpers": category},
-                fail_closed=True,
-            )
-
-            # Bug 13/17 (issue #1150): pre-validate per-type schema constraints.
-            _validate_pre_dispatch_params(
-                helper_type,
-                min_value,
-                max_value,
-                step,
-                options,
-                monday,
-                tuesday,
-                wednesday,
-                thursday,
-                friday,
-                saturday,
-                sunday,
-            )
-
-            type_kw: dict[str, Any] = {
-                "options": options,
-                "initial": initial,
-                "min_value": min_value,
-                "max_value": max_value,
-                "step": step,
-                "unit_of_measurement": unit_of_measurement,
-                "mode": mode,
-                "has_date": has_date,
-                "has_time": has_time,
-                "restore": restore,
-                "duration": duration,
-                "monday": monday,
-                "tuesday": tuesday,
-                "wednesday": wednesday,
-                "thursday": thursday,
-                "friday": friday,
-                "saturday": saturday,
-                "sunday": sunday,
-                "latitude": latitude,
-                "longitude": longitude,
-                "radius": radius,
-                "passive": passive,
-                "user_id": user_id,
-                "device_trackers": device_trackers,
-                "picture": picture,
-                "tag_id": tag_id,
-                "description": description,
-            }
-
-            if action == "create":
-                return await _execute_create_simple_helper(
+                return await _execute_update_simple_helper(
                     self._client,
                     helper_type,
+                    entity_id,
+                    hid,
                     name,
                     icon,
                     area_id,
@@ -1140,32 +1015,6 @@ class HelperConfigTools:
                     MandatoryBPS,
                     **type_kw,
                 )
-
-            if action != "update":
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.INTERNAL_ERROR,
-                        f"Unexpected action: {action}",
-                    )
-                )
-
-            # helper_id is guaranteed non-None by _validate_set_helper_action for update
-            hid: str = helper_id  # type: ignore[assignment]
-            entity_id = hid if hid.startswith(helper_type) else f"{helper_type}.{hid}"
-            return await _execute_update_simple_helper(
-                self._client,
-                helper_type,
-                entity_id,
-                hid,
-                name,
-                icon,
-                area_id,
-                labels,
-                category,
-                wait,
-                MandatoryBPS,
-                **type_kw,
-            )
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
@@ -1186,4 +1035,8 @@ class HelperConfigTools:
 
 def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant helper configuration tools."""
+    from ..transforms.component_helpers import ComponentHelperSchemaTransform
+
     register_tool_methods(mcp, HelperConfigTools(client))
+    # Advertises Core's helper fields when the component serves helper writes.
+    mcp.add_transform(ComponentHelperSchemaTransform(client))

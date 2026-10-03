@@ -181,7 +181,8 @@ def _validate_numeric_range(
                     ),
                 )
             )
-        if min_value == max_value:
+        # Equal lengths are an exact-length input_text, which Core accepts.
+        if min_value == max_value and helper_type != "input_text":
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -229,7 +230,7 @@ def _validate_numeric_range(
 
 
 def _validate_initial_in_options(
-    options: Any, initial: Any, helper_type: str = "input_select"
+    options: Any, initial: Any, helper_type: str = "input_select", stored: bool = False
 ) -> None:
     """Reject ``initial`` values not in ``options``.
 
@@ -245,10 +246,12 @@ def _validate_initial_in_options(
     if not isinstance(options, list) or initial is None:
         return
     if initial not in options:
+        # An update keeps the stored initial, so the caller must replace it.
+        source = "the stored initial" if stored else "initial"
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"initial={initial!r} must be one of options "
+                f"{source}={initial!r} must be one of options "
                 f"{options!r} for {helper_type}.",
                 context=_simple_helper_error_context(
                     helper_type,
@@ -257,7 +260,9 @@ def _validate_initial_in_options(
                 ),
                 suggestions=[
                     "Pick an `initial` value that's in `options`.",
-                    "Or omit `initial` to use the default or existing value.",
+                    "Pass `initial` with the new options."
+                    if stored
+                    else "Or omit `initial` to use the default or existing value.",
                 ],
             )
         )
@@ -513,3 +518,11 @@ def _validate_pre_dispatch_params(
         _validate_schedule_days(
             monday, tuesday, wednesday, thursday, friday, saturday, sunday
         )
+
+
+def _validate_merged_range(
+    helper_type: str, supplied: tuple[Any, ...], low: Any, high: Any, step: Any = None
+) -> None:
+    """An update merges stored bounds: check the result when the caller moved one."""
+    if any(value is not None for value in supplied):
+        _validate_numeric_range(helper_type, low, high, step)
