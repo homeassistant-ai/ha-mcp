@@ -332,8 +332,14 @@ async def _raise_flow_api_error(
     if schema is not None and redaction_enabled():
         schema = redact_flow_schema(schema)
 
+    # Issue #1149: the schema rides with field_errors too — what failed plus
+    # what's accepted is enough for self-correction.
+    if schema is not None:
+        context["data_schema"] = schema
     if field_errors:
         # Structured field errors — tell the caller which fields failed.
+        # HA names fields only when the caller's input failed its schema.
+        code = ErrorCode.VALIDATION_INVALID_PARAMETER
         context["field_errors"] = field_errors
         readable = ", ".join(f"{k}: {v}" for k, v in field_errors.items())
         subject = (
@@ -347,15 +353,9 @@ async def _raise_flow_api_error(
         suggestions.append(
             "Fix the field(s) listed in 'field_errors' and retry the call."
         )
-        # Issue #1149: also attach the data_schema so the LLM sees the field
-        # shape (selector, required, ...) alongside the per-field error
-        # codes — symmetric with the unstructured-error branch below.
-        # `field_errors` tells "what failed", `data_schema` tells "what's
-        # accepted"; together they're enough for self-correction.
-        if schema is not None:
-            context["data_schema"] = schema
     else:
         # Unstructured — attach the data_schema so the LLM has something to use.
+        code = ErrorCode.SERVICE_CALL_FAILED
         subject = (
             f"{helper_type} reconfigure"
             if is_reconfigure and helper_type
@@ -368,7 +368,6 @@ async def _raise_flow_api_error(
             f"({status_code}): {parsed['message']}"
         )
         if schema is not None:
-            context["data_schema"] = schema
             suggestions.append(
                 "Inspect 'data_schema' in this error to see the fields HA expects, "
                 "then retry with a corrected config."
@@ -379,10 +378,7 @@ async def _raise_flow_api_error(
 
     raise_tool_error(
         create_error_response(
-            # HA's 400 names fields only when the caller's input failed its schema.
-            ErrorCode.VALIDATION_INVALID_PARAMETER
-            if field_errors
-            else ErrorCode.SERVICE_CALL_FAILED,
+            code,
             message,
             suggestions=suggestions,
             context=context,
