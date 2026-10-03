@@ -11,11 +11,13 @@ from typing import Any
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client
+
 from ...utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
 from .test_lifecycle import _flatten_areas, generate_unique_name
 
 
-async def _read_area(mcp_client, area_id: str) -> dict[str, Any]:
+async def _read_area(mcp_client: Client, area_id: str) -> dict[str, Any]:
     list_data = parse_mcp_result(await mcp_client.call_tool("ha_list_floors_areas", {}))
     assert list_data.get("success"), f"List failed: {list_data}"
     area = next(
@@ -28,7 +30,9 @@ async def _read_area(mcp_client, area_id: str) -> dict[str, Any]:
 
 @pytest.mark.area
 class TestAreaSensorReferences:
-    async def test_set_replace_and_clear(self, mcp_client, cleanup_tracker):
+    async def test_set_replace_and_clear(
+        self, mcp_client: Client, cleanup_tracker: Any
+    ) -> None:
         """Set both references on create, replace one, then clear both.
 
         A partial update must leave the omitted reference and the name untouched;
@@ -97,7 +101,7 @@ class TestAreaSensorReferences:
                     {"kind": "area", "id": area_id},
                 )
 
-    async def test_wrong_device_class_is_rejected(self, mcp_client):
+    async def test_wrong_device_class_is_rejected(self, mcp_client: Client) -> None:
         """A temperature sensor offered as the humidity reference surfaces HA's
         rejection as a failed call that names the entity, not a success envelope."""
         mcp = MCPAssertions(mcp_client)
