@@ -1858,14 +1858,23 @@ class _Unauthorized(Exception):
 
 
 class _FakeUser:
-    def __init__(self, is_admin):
+    def __init__(self, is_admin, user_id=None):
         self.is_admin = is_admin
+        self.id = user_id
+
+
+class _FakeContext:
+    def __init__(self, user_id):
+        self.user_id = user_id
 
 
 class _FakeConnection:
-    def __init__(self, is_admin=True, has_user=True):
-        self.user = _FakeUser(is_admin) if has_user else None
+    def __init__(self, is_admin=True, has_user=True, user_id=None):
+        self.user = _FakeUser(is_admin, user_id) if has_user else None
         self.results = {}
+
+    def context(self, msg):
+        return _FakeContext(self.user.id if self.user is not None else None)
 
     def send_result(self, msg_id, result):
         self.results[msg_id] = result
