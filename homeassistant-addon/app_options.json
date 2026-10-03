@@ -1,0 +1,274 @@
+[
+  {
+    "key": "verify_ssl",
+    "env": "HA_VERIFY_SSL",
+    "type": "bool",
+    "default": true,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "ha_tool_concurrency",
+    "env": "HA_TOOL_CONCURRENCY",
+    "type": "int",
+    "default": 0,
+    "range": [
+      0,
+      32
+    ],
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "backup_hint",
+    "env": "BACKUP_HINT",
+    "type": "str",
+    "default": "normal",
+    "range": null,
+    "choices": [
+      "strong",
+      "normal",
+      "weak",
+      "auto"
+    ],
+    "always": true
+  },
+  {
+    "key": "enable_beta_features",
+    "env": "ENABLE_BETA_FEATURES",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": false
+  },
+  {
+    "key": "enable_tool_search",
+    "env": "ENABLE_TOOL_SEARCH",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "tool_search_max_results",
+    "env": "TOOL_SEARCH_MAX_RESULTS",
+    "type": "int",
+    "default": 5,
+    "range": [
+      2,
+      10
+    ],
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "enable_tool_security_policies",
+    "env": "ENABLE_TOOL_SECURITY_POLICIES",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "enable_security_policy_tool",
+    "env": "ENABLE_SECURITY_POLICY_TOOL",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "read_only_mode",
+    "env": "READ_ONLY_MODE",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "redact_secrets",
+    "env": "REDACT_SECRETS",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "enable_mandatory_bps",
+    "env": "ENABLE_MANDATORY_BPS",
+    "type": "bool",
+    "default": true,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "enable_strict_mandatory_bps",
+    "env": "ENABLE_STRICT_MANDATORY_BPS",
+    "type": "bool",
+    "default": true,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "enable_yaml_config_editing",
+    "env": "ENABLE_YAML_CONFIG_EDITING",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": false
+  },
+  {
+    "key": "enable_yaml_edit_confirm",
+    "env": "ENABLE_YAML_EDIT_CONFIRM",
+    "type": "bool",
+    "default": true,
+    "range": null,
+    "choices": null,
+    "always": false
+  },
+  {
+    "key": "enable_yaml_packages_automation",
+    "env": "ENABLE_YAML_PACKAGES_AUTOMATION",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": false
+  },
+  {
+    "key": "enable_yaml_packages_script",
+    "env": "ENABLE_YAML_PACKAGES_SCRIPT",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": false
+  },
+  {
+    "key": "enable_yaml_packages_scene",
+    "env": "ENABLE_YAML_PACKAGES_SCENE",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": false
+  },
+  {
+    "key": "enable_lite_docstrings",
+    "env": "ENABLE_LITE_DOCSTRINGS",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": false
+  },
+  {
+    "key": "enable_filesystem_tools",
+    "env": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": false
+  },
+  {
+    "key": "enable_code_mode",
+    "env": "ENABLE_CODE_MODE",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": false
+  },
+  {
+    "key": "enable_dashboard_screenshot",
+    "env": "HAMCP_ENABLE_DASHBOARD_SCREENSHOT",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": false
+  },
+  {
+    "key": "enable_auto_backup",
+    "env": "ENABLE_AUTO_BACKUP",
+    "type": "bool",
+    "default": true,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "auto_backup_throttle_minutes",
+    "env": "AUTO_BACKUP_THROTTLE_MINUTES",
+    "type": "int",
+    "default": 0,
+    "range": [
+      0,
+      1440
+    ],
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "auto_backup_retain_per_entity",
+    "env": "AUTO_BACKUP_RETAIN_PER_ENTITY",
+    "type": "int",
+    "default": 100,
+    "range": [
+      1,
+      10000
+    ],
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "enable_snapshot_delete",
+    "env": "ENABLE_SNAPSHOT_DELETE",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "snapshot_delete_min_age_days",
+    "env": "SNAPSHOT_DELETE_MIN_AGE_DAYS",
+    "type": "int",
+    "default": 7,
+    "range": [
+      0,
+      365
+    ],
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "disabled_tools",
+    "env": "DISABLED_TOOLS",
+    "type": "str",
+    "default": "",
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
+    "key": "pinned_tools",
+    "env": "PINNED_TOOLS",
+    "type": "str",
+    "default": "",
+    "range": null,
+    "choices": null,
+    "always": true
+  }
+]

@@ -3,6 +3,18 @@
 # src/ha_mcp/settings_ui/locales/tlh.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: TLS certificate yI'ol
+    description: Home Assistant turwI' TLS certificate lugh 'e' yI'ol. Supervisor
+      proxy vegh rar add-on, vaj motlh pagh choH. add-on Dacherqa'ta' 'ej HochvaD
+      poSbogh HTTPS hostname, nIteb 'ollu'bogh certificate, pagh hostname muj lo'chugh
+      neH yIchu'Ha'. chu'Ha'lu'chugh Qum Hung pujmoH — poQbe'chugh yIchu'taH. QapchoHmeH
+      add-on Dataghqa'moHnIS.
+  ha_tool_concurrency:
+    name: Home Assistant tool concurrency
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds.
   backup_hint:
     name: HA naQ snapshot chupmeH pat (LLM-vaD)
     description: 'Qobbogh mIw qaSpa'' Home Assistant tarball backup naQ chupmeH
@@ -19,12 +31,6 @@ configuration:
       vangnISbe''taHvIS snapshot chenmoHmeH, bIngDaq **choHmey
 
       auto-backup yIQotlhHa''** DuH pIm yIlo''.'
-  secret_path:
-    name: pegh He le'
-    description: 'MCP turwI''vaD HTTP He le'' wIvlaHlu''. chIm yIpol; vaj He pegh
-      chenmoH pat.
-
-      '
   enable_tool_search:
     name: janmey nejwI' yIQotlhHa'
     description: janmey naQ qa'meH nejlu'taHvIS tu'lu'bogh janmey neH 'ang. lo'be'lu'taHvIS
@@ -94,24 +100,6 @@ configuration:
       ngoq yInobqa''. chu''lu''taHvIS, ha_get_skill_guide chu''taH net poQ — lajta''ghach
       ngoq neH ''ang janvam. DungDaq "ghItlhDI'' mIw nIvmey yIchel" DuH puq ''oH,
       ''ej DuHvetlh chu''Ha''lu''chugh Qapbe''. QapchoHmeH add-on Dataghqa''moHnIS.'
-  ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
-  disabled_tools:
-    name: janmey luQotlhlu'bogh (comma-mey)
-    description: naDev lutetlhlu'bogh janmey luchu'Ha'lu' 'ej web DuHmey UI (janmey
-      jIH)Daq ngaQ — naDev DuH teqbe'lu'pa' pa' luchu'qa'laHbe'lu'. janmey lupoQlu'bogh
-      mach (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
-      luchu'Ha'laHbe'lu', 'ej naDev lutetlhlu'chugh je QaptaH. mIw QaQ tlhoy (enable_strict_mandatory_bps)
-      chu'Ha'lu'taHvIS neH ha_get_skill_guide chu'Ha'laHlu'. comma-mey lo'ta' jan
-      pongmey tIghItlh (chovnatlh ha_call_event,ha_eval_template).
-  pinned_tools:
-    name: janmey lungu'lu'bogh (comma-mey)
-    description: naDev lutetlhlu'bogh janmey luwIvlu' 'ej ngaQ — janmey jIH DungDaq
-      lu'anglu', 'ej web DuHmey UI-Daq DuHvam teqbe'lu'pa' luwIvHa'laHbe'lu'. jan
-      nej pat tlhej lo'lu'DI' lI'. comma-mey lo'ta' jan pongmey tIghItlh.
   enable_auto_backup:
     name: choHmey auto-backup yIQotlhHa'
     description: 'MCP jan ghItlh/Qaw'' Hoch qaSpa'' Dol snapshot pol (automation,
@@ -143,10 +131,22 @@ configuration:
     name: snapshot Qaw'meH ngo' veH (jaj)
     description: snapshot Qaw'laHlu'pa' ngo'nIS. veH 0–365; 0 wIvlu'chugh veH chu'Ha'
       (snapshot chu'qu' backups nablu'bogh je HungtaH). motlh 7.
-  verify_ssl:
-    name: TLS certificate yI'ol
-    description: Home Assistant turwI' TLS certificate lugh 'e' yI'ol. Supervisor
-      proxy vegh rar add-on, vaj motlh pagh choH. add-on Dacherqa'ta' 'ej HochvaD
-      poSbogh HTTPS hostname, nIteb 'ollu'bogh certificate, pagh hostname muj lo'chugh
-      neH yIchu'Ha'. chu'Ha'lu'chugh Qum Hung pujmoH — poQbe'chugh yIchu'taH. QapchoHmeH
-      add-on Dataghqa'moHnIS.
+  disabled_tools:
+    name: janmey luQotlhlu'bogh (comma-mey)
+    description: naDev lutetlhlu'bogh janmey luchu'Ha'lu' 'ej web DuHmey UI (janmey
+      jIH)Daq ngaQ — naDev DuH teqbe'lu'pa' pa' luchu'qa'laHbe'lu'. janmey lupoQlu'bogh
+      mach (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      luchu'Ha'laHbe'lu', 'ej naDev lutetlhlu'chugh je QaptaH. mIw QaQ tlhoy (enable_strict_mandatory_bps)
+      chu'Ha'lu'taHvIS neH ha_get_skill_guide chu'Ha'laHlu'. comma-mey lo'ta' jan
+      pongmey tIghItlh (chovnatlh ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: janmey lungu'lu'bogh (comma-mey)
+    description: naDev lutetlhlu'bogh janmey luwIvlu' 'ej ngaQ — janmey jIH DungDaq
+      lu'anglu', 'ej web DuHmey UI-Daq DuHvam teqbe'lu'pa' luwIvHa'laHbe'lu'. jan
+      nej pat tlhej lo'lu'DI' lI'. comma-mey lo'ta' jan pongmey tIghItlh.
+  secret_path:
+    name: pegh He le'
+    description: 'MCP turwI''vaD HTTP He le'' wIvlaHlu''. chIm yIpol; vaj He pegh
+      chenmoH pat.
+
+      '

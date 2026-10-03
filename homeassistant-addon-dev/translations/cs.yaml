@@ -3,6 +3,20 @@
 # src/ha_mcp/settings_ui/locales/cs.json (keys addon.*, features.*,
 # addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Ověřit certifikát TLS
+    description: Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk)
+      se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo
+      by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci
+      (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed
+      certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu –
+      nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.
+  ha_tool_concurrency:
+    name: Souběžnost nástrojů Home Assistant
+    description: Volitelný limit pro vnější volání nástrojů Home Assistant napříč
+      všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé
+      nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající
+      na kapacitu selže po 60 sekundách.
   backup_hint:
     name: Úroveň návrhu snímku celé HA (pro LLM)
     description: 'Upravuje znění nápovědy, kterou LLM vidí v popisu nástroje
@@ -18,12 +32,18 @@ configuration:
 
       atd. pro každou úpravu použijte samostatný přepínač **Povolit automatické zálohování
       úprav** níže.'
-  secret_path:
-    name: Přepsání tajné cesty
-    description: 'Volitelná vlastní HTTP cesta pro server MCP. Ponechte prázdné pro
-      použití automaticky generované zabezpečené cesty.
-
-      '
+  enable_beta_features:
+    name: Povolit beta funkce (hlavní)
+    description: ⚠ NEBEZPEČÍ — tyto nástroje mohou TRVALE POŠKODIT vaši instalaci
+      Home Assistant. Zapisují do vaší YAML konfigurace, vašeho souborového systému,
+      instalují vlastní komponenty, spouštějí libovolný Python v sandboxu a upravují
+      docstringy nástrojů, které AI vidí. Neexistuje žádná záruka ani garance podpory
+      — povolujete je na VLASTNÍ RIZIKO. Před zapnutím si vytvořte zálohu Home Assistant
+      a nikdy je nepovolujte v produkčním prostředí bez ní. Hlavní přepínač pro experimentální
+      pod-příznaky níže; pod-příznaky jsou za běhu ignorovány, pokud je tento hlavní
+      přepínač vypnutý, i když jsou explicitně nastaveny na true. Stejný přepínač
+      je také zobrazen v uživatelském rozhraní webového nastavení pod „Beta funkce
+      (nebezpečné)“ — obě rozhraní se po restartu vzájemně synchronizují.
   enable_tool_search:
     name: Povolit vyhledávání nástrojů
     description: 'Nahradí celý katalog nástrojů vyhledáváním. Snižuje nečinný kontext
@@ -40,6 +60,11 @@ configuration:
       jeho funkce a nenechali to zbytečně povolené. Nástroje jsou nalezeny pomocí
       ha_search_tools a spouštěny prostřednictvím kategorizovaných proxy (čtení/zápis/mazání).
       Vyžaduje restart, aby se projevilo.'
+  tool_search_max_results:
+    name: Max. výsledků vyhledávání nástrojů
+    description: 'Maximální počet nástrojů vrácených ha_search_tools, když je povoleno
+      vyhledávání nástrojů. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou
+      přehlédnout relevantní nástroje. Rozsah: 2-10. Vyžaduje restart.'
   enable_tool_security_policies:
     name: Povolit zásady zabezpečení nástrojů (pokročilé)
     description: Podmiňuje vysoce rizikové volání nástrojů (ovládání zámků/alarmů,
@@ -77,94 +102,6 @@ configuration:
       nahrazování drobných fragmentů by poškodilo nesouvisející výstup). Pole, která
       nejsou svým schématem označena jako hesla, nelze detekovat. Ve výchozím nastavení
       vypnuto.
-  enable_beta_features:
-    name: Povolit beta funkce (hlavní)
-    description: ⚠ NEBEZPEČÍ — tyto nástroje mohou TRVALE POŠKODIT vaši instalaci
-      Home Assistant. Zapisují do vaší YAML konfigurace, vašeho souborového systému,
-      instalují vlastní komponenty, spouštějí libovolný Python v sandboxu a upravují
-      docstringy nástrojů, které AI vidí. Neexistuje žádná záruka ani garance podpory
-      — povolujete je na VLASTNÍ RIZIKO. Před zapnutím si vytvořte zálohu Home Assistant
-      a nikdy je nepovolujte v produkčním prostředí bez ní. Hlavní přepínač pro experimentální
-      pod-příznaky níže; pod-příznaky jsou za běhu ignorovány, pokud je tento hlavní
-      přepínač vypnutý, i když jsou explicitně nastaveny na true. Stejný přepínač
-      je také zobrazen v uživatelském rozhraní webového nastavení pod „Beta funkce
-      (nebezpečné)“ — obě rozhraní se po restartu vzájemně synchronizují.
-  enable_yaml_config_editing:
-    name: Povolit úpravy YAML konfigurace (beta)
-    description: Beta funkce. Umožňuje AI asistentům přidávat, nahrazovat nebo odstraňovat
-      klíče nejvyšší úrovně v configuration.yaml a packages/*.yaml. Povoleny jsou
-      pouze klíče na bílé listině (např. template, sensor, command_line, mqtt, knx);
-      základní klíče jako homeassistant, http a recorder jsou blokovány. Každá úprava
-      ověřuje syntaxi YAML, spouští kontrolu konfigurace a vytváří automatickou zálohu.
-      Změny většiny klíčů vyžadují úplný restart HA, aby se projevily. Viz docs/beta.md
-      pro známá omezení. Pokud jsou k dispozici, měly by být preferovány vyhrazené
-      nástroje (automatizace, skripty, scény, pomocníci, šablonové senzory). VYŽADUJE,
-      aby byl hlavní přepínač „Povolit beta funkce“ výše (a ve webovém rozhraní) zapnutý
-      — jinak je tento podřízený příznak za běhu ignorován bez ohledu na jeho zdejší
-      hodnotu.
-  enable_yaml_packages_automation:
-    name: Povolit automatizaci v packages/*.yaml
-    description: Podpřepínač úprav konfigurace YAML. Když je zapnuto, ha_config_set_yaml
-      přijímá yaml_path='automation' uvnitř packages/*.yaml. Když je vypnuto, volání
-      je odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu
-      úložiště (ha_config_set_automation) není ovlivněn. Výchozí stav je VYPNUTO;
-      platí pouze, když je zapnuto také "Enable YAML config editing" výše.
-  enable_yaml_packages_script:
-    name: Povolit skript v packages/*.yaml
-    description: Podpřepínač úprav konfigurace YAML. Když je zapnuto, ha_config_set_yaml
-      přijímá yaml_path='script' uvnitř packages/*.yaml. Když je vypnuto, volání je
-      odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu úložiště
-      (ha_config_set_script) není ovlivněn. Výchozí stav VYPNUTO; platí pouze tehdy,
-      když je zapnuto i výše uvedené "Povolit úpravy konfigurace YAML".
-  enable_yaml_packages_scene:
-    name: Povolit scénu v packages/*.yaml
-    description: Podpřepínač úpravy konfigurace YAML. Když je zapnuto, ha_config_set_yaml
-      přijímá yaml_path='scene' uvnitř packages/*.yaml. Když je vypnuto, volání je
-      odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu úložiště
-      (ha_config_set_scene) není ovlivněn. Výchozí stav VYPNUTO; platí pouze tehdy,
-      když je také zapnuto „Povolit úpravy konfigurace YAML“ výše.
-  enable_yaml_edit_confirm:
-    name: Vyžadovat potvrzení pro úpravy YAML (náhled rozdílů)
-    description: 'Podpřepínač úprav konfigurace YAML, VE VÝCHOZÍM NASTAVENÍ ZAPNUTO
-      (doporučeno). První volání ha_config_set_yaml vrátí sjednocený rozdíl přesně
-      toho, co by se změnilo na disku, plus potvrzovací token a nic nezapíše; úprava
-      se uloží pouze tehdy, když je volání zopakováno s tímto tokenem. Existuje proto,
-      aby se nezáměrné změny mimo požadovanou úpravu zachytily dříve, než se dostanou
-      na disk (problém #1720). Vypněte pouze pro úsporu jedné zpáteční cesty na úpravu.'
-  enable_code_mode:
-    name: Povolit sandbox vlastních nástrojů (beta)
-    description: Funkce v beta verzi. Povoluje nástroj ha_manage_custom_tool, který
-      umožňuje AI asistentům vytvářet, spouštět, ukládat a mazat vlastní kód v Pythonu
-      v zabezpečeném sandboxu, když žádný vestavěný nástroj nedokáže požadavek zpracovat.
-      Kód běží v izolovaném interpretu bez přístupu k souborovému systému nebo libovolné
-      síti. Kód v sandboxu může přistupovat k REST API HA (api_get/api_post), odesílat
-      příkazy WebSocket (ws_send), volat existující nástroje MCP (call_tool) nebo
-      odstranit uložený nástroj (delete_saved_tool). Uložené nástroje se ve výchozím
-      nastavení ukládají do /data/saved_tools.json, takže přežijí restarty aplikace
-      (doplňku) a jsou viditelné pro každého klienta, který se může připojit. Známá
-      omezení naleznete v docs/beta.md. K projevům změn je vyžadován restart. VYŽADUJE,
-      aby byl výše uvedený hlavní přepínač „Enable beta features“ zapnutý (a to i
-      ve webovém rozhraní) – v opačném případě bude tento dílčí příznak za běhu ignorován
-      bez ohledu na jeho hodnotu zde.
-  enable_lite_docstrings:
-    name: Povolit zjednodušené docstringy nástrojů (beta)
-    description: 'Beta funkce. Nahrazuje dokumentační řetězce u 15 náročných nástrojů
-      ha-mcp (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
-      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
-      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
-      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) kratšími variantami,
-      které odsouvají podrobnosti schémat a příkladů na nástroj ha_get_skill_guide
-      (nebo jeho zdroj skill://). Jedna výjimka: ha_report_issue se odkazuje na pole
-      instructions ve své vlastní odpovědi. Ladění nastavení Backup-hint funguje v
-      úsporném režimu (lite mode) i nadále. VAROVÁNÍ: toto snižuje spotřebu tokenů
-      v klidovém stavu, ale může snížit výkon LLM — zkrácené popisy spoléhají na to,
-      že LLM skutečně zavolá nástroj dovedností nebo si přečte zdroj dovedností pro
-      podrobnosti, což není zaručeno (některé modely přeskočí dodatečné volání nástroje
-      a skončí s menší nápovědou než dříve). Nejlépe se používá s klientem, který
-      podporuje zdroje MCP nebo s enable_tool_search. Vyžaduje restart, aby se projevilo.
-      VYŽADUJE, aby hlavní přepínač "Povolit beta funkce" výše (a ve webovém rozhraní)
-      byl zapnutý — jinak bude tento podpříznak za běhu ignorován bez ohledu na jeho
-      hodnotu zde.'
   enable_mandatory_bps:
     name: Připojit dovednosti osvědčených postupů při zápisu
     description: 'Hlavní přepínač pro funkci doručování obsahu dovedností nástrojů
@@ -190,12 +127,67 @@ configuration:
       vydavatelem potvrzovacího klíče. Je podřízeno výše uvedené možnosti „Připojit
       dovednosti osvědčených postupů při zápisu“ a je neaktivní, pokud je tato nadřazená
       možnost vypnuta. Vyžaduje restart, aby se projevilo.'
-  ha_tool_concurrency:
-    name: Souběžnost nástrojů Home Assistant
-    description: Volitelný limit pro vnější volání nástrojů Home Assistant napříč
-      všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé
-      nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající
-      na kapacitu selže po 60 sekundách.
+  enable_yaml_config_editing:
+    name: Povolit úpravy YAML konfigurace (beta)
+    description: Beta funkce. Umožňuje AI asistentům přidávat, nahrazovat nebo odstraňovat
+      klíče nejvyšší úrovně v configuration.yaml a packages/*.yaml. Povoleny jsou
+      pouze klíče na bílé listině (např. template, sensor, command_line, mqtt, knx);
+      základní klíče jako homeassistant, http a recorder jsou blokovány. Každá úprava
+      ověřuje syntaxi YAML, spouští kontrolu konfigurace a vytváří automatickou zálohu.
+      Změny většiny klíčů vyžadují úplný restart HA, aby se projevily. Viz docs/beta.md
+      pro známá omezení. Pokud jsou k dispozici, měly by být preferovány vyhrazené
+      nástroje (automatizace, skripty, scény, pomocníci, šablonové senzory). VYŽADUJE,
+      aby byl hlavní přepínač „Povolit beta funkce“ výše (a ve webovém rozhraní) zapnutý
+      — jinak je tento podřízený příznak za běhu ignorován bez ohledu na jeho zdejší
+      hodnotu.
+  enable_yaml_edit_confirm:
+    name: Vyžadovat potvrzení pro úpravy YAML (náhled rozdílů)
+    description: 'Podpřepínač úprav konfigurace YAML, VE VÝCHOZÍM NASTAVENÍ ZAPNUTO
+      (doporučeno). První volání ha_config_set_yaml vrátí sjednocený rozdíl přesně
+      toho, co by se změnilo na disku, plus potvrzovací token a nic nezapíše; úprava
+      se uloží pouze tehdy, když je volání zopakováno s tímto tokenem. Existuje proto,
+      aby se nezáměrné změny mimo požadovanou úpravu zachytily dříve, než se dostanou
+      na disk (problém #1720). Vypněte pouze pro úsporu jedné zpáteční cesty na úpravu.'
+  enable_yaml_packages_automation:
+    name: Povolit automatizaci v packages/*.yaml
+    description: Podpřepínač úprav konfigurace YAML. Když je zapnuto, ha_config_set_yaml
+      přijímá yaml_path='automation' uvnitř packages/*.yaml. Když je vypnuto, volání
+      je odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu
+      úložiště (ha_config_set_automation) není ovlivněn. Výchozí stav je VYPNUTO;
+      platí pouze, když je zapnuto také "Enable YAML config editing" výše.
+  enable_yaml_packages_script:
+    name: Povolit skript v packages/*.yaml
+    description: Podpřepínač úprav konfigurace YAML. Když je zapnuto, ha_config_set_yaml
+      přijímá yaml_path='script' uvnitř packages/*.yaml. Když je vypnuto, volání je
+      odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu úložiště
+      (ha_config_set_script) není ovlivněn. Výchozí stav VYPNUTO; platí pouze tehdy,
+      když je zapnuto i výše uvedené "Povolit úpravy konfigurace YAML".
+  enable_yaml_packages_scene:
+    name: Povolit scénu v packages/*.yaml
+    description: Podpřepínač úpravy konfigurace YAML. Když je zapnuto, ha_config_set_yaml
+      přijímá yaml_path='scene' uvnitř packages/*.yaml. Když je vypnuto, volání je
+      odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu úložiště
+      (ha_config_set_scene) není ovlivněn. Výchozí stav VYPNUTO; platí pouze tehdy,
+      když je také zapnuto „Povolit úpravy konfigurace YAML“ výše.
+  enable_lite_docstrings:
+    name: Povolit zjednodušené docstringy nástrojů (beta)
+    description: 'Beta funkce. Nahrazuje dokumentační řetězce u 15 náročných nástrojů
+      ha-mcp (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
+      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
+      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) kratšími variantami,
+      které odsouvají podrobnosti schémat a příkladů na nástroj ha_get_skill_guide
+      (nebo jeho zdroj skill://). Jedna výjimka: ha_report_issue se odkazuje na pole
+      instructions ve své vlastní odpovědi. Ladění nastavení Backup-hint funguje v
+      úsporném režimu (lite mode) i nadále. VAROVÁNÍ: toto snižuje spotřebu tokenů
+      v klidovém stavu, ale může snížit výkon LLM — zkrácené popisy spoléhají na to,
+      že LLM skutečně zavolá nástroj dovedností nebo si přečte zdroj dovedností pro
+      podrobnosti, což není zaručeno (některé modely přeskočí dodatečné volání nástroje
+      a skončí s menší nápovědou než dříve). Nejlépe se používá s klientem, který
+      podporuje zdroje MCP nebo s enable_tool_search. Vyžaduje restart, aby se projevilo.
+      VYŽADUJE, aby hlavní přepínač "Povolit beta funkce" výše (a ve webovém rozhraní)
+      byl zapnutý — jinak bude tento podpříznak za běhu ignorován bez ohledu na jeho
+      hodnotu zde.'
   enable_filesystem_tools:
     name: Povolit nástroje souborového systému (beta)
     description: 'Nastaví HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Povoluje přímý přístup
@@ -205,6 +197,21 @@ configuration:
       restart, aby se změny projevily. VYŽADUJE, aby byl zapnut hlavní přepínač „Enable
       beta features“ výše (a ve webovém rozhraní) — jinak je tento podřízený příznak
       za běhu ignorován bez ohledu na jeho hodnotu zde.'
+  enable_code_mode:
+    name: Povolit sandbox vlastních nástrojů (beta)
+    description: Funkce v beta verzi. Povoluje nástroj ha_manage_custom_tool, který
+      umožňuje AI asistentům vytvářet, spouštět, ukládat a mazat vlastní kód v Pythonu
+      v zabezpečeném sandboxu, když žádný vestavěný nástroj nedokáže požadavek zpracovat.
+      Kód běží v izolovaném interpretu bez přístupu k souborovému systému nebo libovolné
+      síti. Kód v sandboxu může přistupovat k REST API HA (api_get/api_post), odesílat
+      příkazy WebSocket (ws_send), volat existující nástroje MCP (call_tool) nebo
+      odstranit uložený nástroj (delete_saved_tool). Uložené nástroje se ve výchozím
+      nastavení ukládají do /data/saved_tools.json, takže přežijí restarty aplikace
+      (doplňku) a jsou viditelné pro každého klienta, který se může připojit. Známá
+      omezení naleznete v docs/beta.md. K projevům změn je vyžadován restart. VYŽADUJE,
+      aby byl výše uvedený hlavní přepínač „Enable beta features“ zapnutý (a to i
+      ve webovém rozhraní) – v opačném případě bude tento dílčí příznak za běhu ignorován
+      bez ohledu na jeho hodnotu zde.
   enable_dashboard_screenshot:
     name: Povolit režim snímání obrazovky dashboardu (beta)
     description: Funkce v beta verzi – ve výchozím nastavení zakázána. Přidává nástroj
@@ -262,11 +269,6 @@ configuration:
     description: Snímek musí být alespoň takto starý, než může být smazán. Rozsah
       0–365; 0 zakáže dolní hranici (ochrany nejnovějšího snímku a plánované zálohy
       stále platí). Výchozí 7.
-  tool_search_max_results:
-    name: Max. výsledků vyhledávání nástrojů
-    description: 'Maximální počet nástrojů vrácených ha_search_tools, když je povoleno
-      vyhledávání nástrojů. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou
-      přehlédnout relevantní nástroje. Rozsah: 2-10. Vyžaduje restart.'
   disabled_tools:
     name: Zakázané nástroje (oddělené čárkami)
     description: Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém
@@ -282,11 +284,9 @@ configuration:
       horní části karty Nástroje a nelze je odepnout z webového uživatelského rozhraní
       Nastavení, aniž byste nejprve zrušili toto nastavení. Užitečné v kombinaci s
       vyhledáváním nástrojů. Názvy nástrojů oddělené čárkami.
-  verify_ssl:
-    name: Ověřit certifikát TLS
-    description: Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk)
-      se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo
-      by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci
-      (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed
-      certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu –
-      nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.
+  secret_path:
+    name: Přepsání tajné cesty
+    description: 'Volitelná vlastní HTTP cesta pro server MCP. Ponechte prázdné pro
+      použití automaticky generované zabezpečené cesty.
+
+      '

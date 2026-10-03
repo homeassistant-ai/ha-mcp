@@ -3,6 +3,20 @@
 # src/ha_mcp/settings_ui/locales/cs.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Ověřit certifikát TLS
+    description: Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk)
+      se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo
+      by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci
+      (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed
+      certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu –
+      nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.
+  ha_tool_concurrency:
+    name: Souběžnost nástrojů Home Assistant
+    description: Volitelný limit pro vnější volání nástrojů Home Assistant napříč
+      všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé
+      nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající
+      na kapacitu selže po 60 sekundách.
   backup_hint:
     name: Úroveň návrhu snímku celé HA (pro LLM)
     description: 'Upravuje znění nápovědy, kterou LLM vidí v popisu nástroje
@@ -18,12 +32,6 @@ configuration:
 
       atd. pro každou úpravu použijte samostatný přepínač **Povolit automatické zálohování
       úprav** níže.'
-  secret_path:
-    name: Přepsání tajné cesty
-    description: 'Volitelná vlastní HTTP cesta pro server MCP. Ponechte prázdné pro
-      použití automaticky generované zabezpečené cesty.
-
-      '
   enable_tool_search:
     name: Povolit vyhledávání nástrojů
     description: 'Nahradit úplný katalog nástrojů vyhledáváním. Snižuje klidový kontext
@@ -110,27 +118,6 @@ configuration:
       vydavatelem potvrzovacího klíče. Je podřízeno výše uvedené možnosti „Připojit
       dovednosti osvědčených postupů při zápisu“ a je neaktivní, pokud je tato nadřazená
       možnost vypnuta. Vyžaduje restart, aby se projevilo.'
-  ha_tool_concurrency:
-    name: Souběžnost nástrojů Home Assistant
-    description: Volitelný limit pro vnější volání nástrojů Home Assistant napříč
-      všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé
-      nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající
-      na kapacitu selže po 60 sekundách.
-  disabled_tools:
-    name: Zakázané nástroje (oddělené čárkami)
-    description: Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém
-      uživatelském rozhraní Nastavení (karta Nástroje) — nelze je tam znovu povolit,
-      aniž byste nejprve zrušili toto nastavení. Malá sada povinných nástrojů (ha_search,
-      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) nelze zakázat
-      a zůstávají spuštěny, i když jsou zde uvedeny. ha_get_skill_guide lze zakázat
-      pouze, když je vypnut režim přísných osvědčených postupů (enable_strict_mandatory_bps).
-      Názvy nástrojů oddělené čárkami (např. ha_call_event,ha_eval_template).
-  pinned_tools:
-    name: Připnuté nástroje (oddělené čárkami)
-    description: Nástroje zde uvedené jsou uzamčeny jako připnuté — zobrazují se v
-      horní části karty Nástroje a nelze je odepnout z webového uživatelského rozhraní
-      Nastavení, aniž byste nejprve zrušili toto nastavení. Užitečné v kombinaci s
-      vyhledáváním nástrojů. Názvy nástrojů oddělené čárkami.
   enable_auto_backup:
     name: Povolit automatické zálohování úprav
     description: 'Pořídí snímek pro každou entitu před každým zabaleným zápisem/destruktivním
@@ -171,11 +158,24 @@ configuration:
     description: Snímek musí být alespoň takto starý, než může být smazán. Rozsah
       0–365; 0 zakáže dolní hranici (ochrany nejnovějšího snímku a plánované zálohy
       stále platí). Výchozí 7.
-  verify_ssl:
-    name: Ověřit certifikát TLS
-    description: Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk)
-      se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo
-      by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci
-      (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed
-      certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu –
-      nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.
+  disabled_tools:
+    name: Zakázané nástroje (oddělené čárkami)
+    description: Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém
+      uživatelském rozhraní Nastavení (karta Nástroje) — nelze je tam znovu povolit,
+      aniž byste nejprve zrušili toto nastavení. Malá sada povinných nástrojů (ha_search,
+      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) nelze zakázat
+      a zůstávají spuštěny, i když jsou zde uvedeny. ha_get_skill_guide lze zakázat
+      pouze, když je vypnut režim přísných osvědčených postupů (enable_strict_mandatory_bps).
+      Názvy nástrojů oddělené čárkami (např. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Připnuté nástroje (oddělené čárkami)
+    description: Nástroje zde uvedené jsou uzamčeny jako připnuté — zobrazují se v
+      horní části karty Nástroje a nelze je odepnout z webového uživatelského rozhraní
+      Nastavení, aniž byste nejprve zrušili toto nastavení. Užitečné v kombinaci s
+      vyhledáváním nástrojů. Názvy nástrojů oddělené čárkami.
+  secret_path:
+    name: Přepsání tajné cesty
+    description: 'Volitelná vlastní HTTP cesta pro server MCP. Ponechte prázdné pro
+      použití automaticky generované zabezpečené cesty.
+
+      '

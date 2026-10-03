@@ -20,9 +20,8 @@ sys.path.insert(0, str(_REPO_ROOT / "tests" / "haos_image_build"))
 
 import build_image  # noqa: E402
 
-# Staged by their own steps: start.py moves to the context root, and src/
-# is copied as a tree.
-_STAGED_SEPARATELY = {"homeassistant-addon/start.py", "src"}
+# Copied as a tree by its own step.
+_STAGED_SEPARATELY = {"src"}
 
 
 def _repo_files_the_dockerfile_copies() -> set[str]:
@@ -37,14 +36,16 @@ def _repo_files_the_dockerfile_copies() -> set[str]:
 
 
 @pytest.mark.parametrize(
-    "staged",
-    [build_image.DEV_ADDON_REPO_FILES, haos_runtime.DEV_ADDON_REPO_FILES],
-    ids=["image bake", "per-PR refresh"],
+    "module", [build_image, haos_runtime], ids=["image bake", "per-PR refresh"]
 )
 def test_the_staged_dev_app_context_holds_every_file_the_dockerfile_copies(
-    staged: tuple[str, ...],
+    module: object,
 ) -> None:
     expected = _repo_files_the_dockerfile_copies()
     assert expected, "found no COPY sources in the dev Dockerfile"
+    staged = set(module.DEV_ADDON_REPO_FILES) | {  # type: ignore[attr-defined]
+        f"homeassistant-addon/{name}"
+        for name in module.STABLE_ADDON_FILES  # type: ignore[attr-defined]
+    }
 
-    assert sorted(expected - set(staged)) == []
+    assert sorted(expected - staged) == []

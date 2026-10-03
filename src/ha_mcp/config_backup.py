@@ -8,6 +8,7 @@ from ha_mcp._version import is_running_in_addon
 from ha_mcp.config_registry import (
     _BACKUP_OVERRIDE_FILENAME,
     BACKUP_OVERRIDE_FIELDS,
+    SETTING_BOUNDS,
     RegistryFieldType,
 )
 from ha_mcp.config_settings import Settings
@@ -125,10 +126,9 @@ def _read_backup_override_file() -> dict[str, object]:
 
 
 def _coerce_backup_int_value(field_name: str, raw: object) -> tuple[bool, Any]:
-    """Coerce + per-field range-check one int-typed BACKUP_OVERRIDE_FIELDS value.
+    """Coerce + range-check one int-typed BACKUP_OVERRIDE_FIELDS value.
 
-    Split out of ``_coerce_backup_override_value`` (mccabe complexity):
-    handles the int-parse plus the three field-specific range checks.
+    Split out of ``_coerce_backup_override_value`` (mccabe complexity).
     """
     if isinstance(raw, bool) or not isinstance(raw, int):
         logger.warning(
@@ -138,32 +138,14 @@ def _coerce_backup_int_value(field_name: str, raw: object) -> tuple[bool, Any]:
         )
         return False, None
     coerced = int(raw)
-    if field_name == "auto_backup_throttle_minutes" and not 0 <= coerced <= 1440:
+    bounds = SETTING_BOUNDS.get(field_name)
+    if bounds is not None and not bounds[0] <= coerced <= bounds[1]:
         logger.warning(
-            "backup_settings.json: auto_backup_throttle_minutes=%d out of "
-            "range 0..1440; ignoring",
+            "backup_settings.json: %s=%d out of range %g..%g; ignoring",
+            field_name,
             coerced,
-        )
-        return False, None
-    if field_name == "auto_backup_retain_per_entity" and not 1 <= coerced <= 10_000:
-        logger.warning(
-            "backup_settings.json: auto_backup_retain_per_entity=%d out of "
-            "range 1..10000; ignoring",
-            coerced,
-        )
-        return False, None
-    if field_name == "auto_backup_calendar_lookahead_days" and not 1 <= coerced <= 365:
-        logger.warning(
-            "backup_settings.json: auto_backup_calendar_lookahead_days=%d out of "
-            "range 1..365; ignoring",
-            coerced,
-        )
-        return False, None
-    if field_name == "snapshot_delete_min_age_days" and not 0 <= coerced <= 365:
-        logger.warning(
-            "backup_settings.json: snapshot_delete_min_age_days=%d out of "
-            "range 0..365; ignoring",
-            coerced,
+            bounds[0],
+            bounds[1],
         )
         return False, None
     return True, coerced

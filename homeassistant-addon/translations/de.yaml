@@ -3,6 +3,22 @@
 # src/ha_mcp/settings_ui/locales/de.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: TLS-Zertifikat verifizieren
+    description: Überprüfe das TLS-Zertifikat des Home Assistant-Servers. Die App
+      (das Add-on) verbindet sich über den Supervisor-Proxy, daher hat dies normalerweise
+      keine Auswirkungen und sollte aktiviert bleiben. Deaktiviere es nur, wenn du
+      die App (das Add-on) so rekonfiguriert hast, dass sie über einen öffentlichen
+      HTTPS-Hostnamen mit einem selbstsignierten Zertifikat oder einem Hostnamen-Mismatch
+      mit HA kommuniziert. Das Deaktivieren schwächt die Transportsicherheit — lasse
+      es eingeschaltet, es sei denn, du weißt, dass du es brauchst. Erfordert einen
+      Neustart, um wirksam zu werden.
+  ha_tool_concurrency:
+    name: Home-Assistant-Tool-Gleichzeitigkeit
+    description: Optionales Limit für äußere Home-Assistant-Tool-Aufrufe über alle
+      Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit
+      bleibt unverändert. 0 behält das unbegrenzte Verhalten bei. Ein auf Kapazität
+      wartender Aufruf schlägt nach 60 Sekunden fehl.
   backup_hint:
     name: Full-HA Snapshot-Vorschlagsebene (LLM-seitig)
     description: 'Passt die Formulierung des Hinweises an, den das LLM in der
@@ -22,12 +38,6 @@ configuration:
       Helfern / etc. nutze den separaten **Auto-Backup von Bearbeitungen aktivieren**-Schalter
 
       unten.'
-  secret_path:
-    name: Secret-Pfad Override
-    description: 'Optionaler benutzerdefinierter HTTP-Pfad für den MCP-Server. Leer
-      lassen, um den automatisch generierten sicheren Pfad zu verwenden.
-
-      '
   enable_tool_search:
     name: Tool-Suche aktivieren
     description: 'Ersetze den vollständigen Tool-Katalog durch eine suchend basierte
@@ -118,27 +128,6 @@ configuration:
       der einzige Herausgeber des Bestätigungsschlüssels. Kind der Option Best-Practice-Skills
       bei Schreibvorgängen anhängen oben und inert, während dieser Elternteil ausgeschaltet
       ist. Erfordert Neustart, um wirksam zu werden.'
-  ha_tool_concurrency:
-    name: Home-Assistant-Tool-Gleichzeitigkeit
-    description: Optionales Limit für äußere Home-Assistant-Tool-Aufrufe über alle
-      Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit
-      bleibt unverändert. 0 behält das unbegrenzte Verhalten bei. Ein auf Kapazität
-      wartender Aufruf schlägt nach 60 Sekunden fehl.
-  disabled_tools:
-    name: Deaktivierte Tools (kommagetrennt)
-    description: Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI
-      (Tools-Tab) gesperrt – sie können dort nicht wieder aktiviert werden, ohne diese
-      Option zuerst zu entfernen. Ein kleiner Satz obligatorischer Tools (ha_search,
-      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) kann nicht
-      deaktiviert werden und läuft weiter, auch wenn hier aufgelistet. ha_get_skill_guide
-      kann nur deaktiviert werden, während der strikte Best-Practices-Modus (enable_strict_mandatory_bps)
-      aus ist. Kommagetrennte Tool-Namen (z.B. ha_call_event,ha_eval_template).
-  pinned_tools:
-    name: Angeheftete Tools (kommagetrennt)
-    description: Hier aufgelistete Tools sind gesperrt angeheftet – sie erscheinen
-      oben im Tools-Tab und können nicht vom Web-Settings-UI entfernt werden, ohne
-      diese Option zuerst zu entfernen. Nützlich in Kombination mit Tool Search. Kommagetrennte
-      Tool-Namen.
   enable_auto_backup:
     name: Auto-Backup von Bearbeitungen aktivieren
     description: 'Erstellt einen Snapshot pro Entität vor jedem umschlossenen Schreib-/destruktiven
@@ -181,13 +170,24 @@ configuration:
     description: Ein Snapshot muss mindestens so alt sein, bevor er gelöscht werden
       kann. Bereich 0–365; 0 deaktiviert den Floor (die Neuester-Snapshot- und Geplante-Backup-Schutzmaßnahmen
       gelten weiterhin). Standard 7.
-  verify_ssl:
-    name: TLS-Zertifikat verifizieren
-    description: Überprüfe das TLS-Zertifikat des Home Assistant-Servers. Die App
-      (das Add-on) verbindet sich über den Supervisor-Proxy, daher hat dies normalerweise
-      keine Auswirkungen und sollte aktiviert bleiben. Deaktiviere es nur, wenn du
-      die App (das Add-on) so rekonfiguriert hast, dass sie über einen öffentlichen
-      HTTPS-Hostnamen mit einem selbstsignierten Zertifikat oder einem Hostnamen-Mismatch
-      mit HA kommuniziert. Das Deaktivieren schwächt die Transportsicherheit — lasse
-      es eingeschaltet, es sei denn, du weißt, dass du es brauchst. Erfordert einen
-      Neustart, um wirksam zu werden.
+  disabled_tools:
+    name: Deaktivierte Tools (kommagetrennt)
+    description: Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI
+      (Tools-Tab) gesperrt – sie können dort nicht wieder aktiviert werden, ohne diese
+      Option zuerst zu entfernen. Ein kleiner Satz obligatorischer Tools (ha_search,
+      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) kann nicht
+      deaktiviert werden und läuft weiter, auch wenn hier aufgelistet. ha_get_skill_guide
+      kann nur deaktiviert werden, während der strikte Best-Practices-Modus (enable_strict_mandatory_bps)
+      aus ist. Kommagetrennte Tool-Namen (z.B. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Angeheftete Tools (kommagetrennt)
+    description: Hier aufgelistete Tools sind gesperrt angeheftet – sie erscheinen
+      oben im Tools-Tab und können nicht vom Web-Settings-UI entfernt werden, ohne
+      diese Option zuerst zu entfernen. Nützlich in Kombination mit Tool Search. Kommagetrennte
+      Tool-Namen.
+  secret_path:
+    name: Secret-Pfad Override
+    description: 'Optionaler benutzerdefinierter HTTP-Pfad für den MCP-Server. Leer
+      lassen, um den automatisch generierten sicheren Pfad zu verwenden.
+
+      '

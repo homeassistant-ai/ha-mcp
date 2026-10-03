@@ -191,8 +191,9 @@ src/ha_mcp/
 ├── server.py                    FastMCP server and lifecycle
 ├── __main__.py                  CLI and transport entrypoints
 ├── config.py                    Settings singleton, embedded connection, re-exports
-├── config_settings.py           Settings model and .env loading
-├── config_registry.py           Runtime-editable setting registries and bounds
+├── config_settings.py           Settings model and .env loading; one declaration per setting
+├── config_meta.py               Setting metadata: UI surface, app option, range, restart
+├── config_registry.py           Registries and bounds derived from the metadata
 ├── config_overrides.py          Feature-flag and advanced override loader
 ├── config_backup.py             Auto-backup override loader
 ├── errors.py                    Structured error contract

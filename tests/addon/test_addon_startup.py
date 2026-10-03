@@ -301,71 +301,106 @@ def _build_addon_image():
         pytest.fail(f"Failed to build {IMAGE_TAG}:\n{result.stderr}")
 
 
-class TestResolveBoolOption:
-    """Unit tests for the resolve_bool_option helper used for verify_ssl."""
+def _valid_non_default(option):
+    """A valid value for ``option`` that differs from its default."""
+    if option["type"] == "bool":
+        return not option["default"]
+    if option["choices"] is not None:
+        return next(c for c in option["choices"] if c != option["default"])
+    if option["range"] is not None:
+        lo, hi = option["range"]
+        return hi if option["default"] != hi else lo
+    if option["type"] == "int":
+        return option["default"] + 1
+    return "tool_a,tool_b"
+
+
+class TestAppOptions:
+    """start.py exports each app option to the env var the server reads."""
 
     @pytest.fixture(autouse=True)
-    def addon(self):
+    def addon(self, monkeypatch):
         self.addon = _load_addon_start()
+        self.options = self.addon.load_app_options()
+        # export_app_options writes os.environ directly. setenv records the
+        # value before the test, so teardown restores or removes each var.
+        for option in self.options:
+            monkeypatch.setenv(option["env"], "")
+            monkeypatch.delenv(option["env"])
 
-    def test_missing_key_returns_default(self):
-        assert self.addon.resolve_bool_option({}, "verify_ssl", True) is True
-        assert self.addon.resolve_bool_option({}, "verify_ssl", False) is False
+    def test_every_app_option_reaches_the_server_setting(self):
+        """An option exported under the wrong env var or in a format the
+        server does not parse would leave the Configuration page toggle
+        with no effect."""
+        import sys
 
-    def test_explicit_false_returns_false(self):
+        sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
+        from ha_mcp.config_settings import Settings
+
+        config = {option["key"]: _valid_non_default(option) for option in self.options}
+
+        self.addon.export_app_options(config, self.options)
+
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        for key, value in config.items():
+            assert getattr(settings, key) == value, key
+
+    @pytest.mark.parametrize(
+        ("key", "raw"),
+        [
+            ("verify_ssl", "false"),
+            ("ha_tool_concurrency", True),
+            ("ha_tool_concurrency", 33),
+            ("disabled_tools", 5),
+            ("backup_hint", "loud"),
+        ],
+        ids=[
+            "bool as text",
+            "bool as int",
+            "out of range",
+            "int as text",
+            "no such choice",
+        ],
+    )
+    def test_invalid_value_warns_and_uses_the_default(self, key, raw, capsys):
+        """Supervisor validates the schema, so an invalid value means a
+        hand-edited options.json. The server must get the default, and the
+        log must say why the user's value was ignored."""
+        option = next(o for o in self.options if o["key"] == key)
+
+        exported = self.addon.export_app_options({key: raw}, [option])
+
+        assert exported[key] == option["default"]
         assert (
-            self.addon.resolve_bool_option({"verify_ssl": False}, "verify_ssl", True)
-            is False
+            f"app option {key!r} has invalid value {raw!r}" in capsys.readouterr().err
         )
 
-    def test_explicit_true_returns_true(self):
-        assert (
-            self.addon.resolve_bool_option({"verify_ssl": True}, "verify_ssl", False)
-            is True
-        )
+    def test_option_missing_from_a_flavor_is_exported_only_when_present(self):
+        """The stable flavor does not declare the beta keys. Exporting them
+        there would mark them app-managed in the web UI, and Supervisor
+        would reject the save of a key the stable schema lacks."""
+        beta = next(o for o in self.options if not o["always"])
 
-    def test_string_value_falls_back_to_default(self):
-        # HA Supervisor coerces YAML scalars to the schema type, so a string
-        # here means user-edited options.json with a bad type. The secure
-        # default must win — never accept "false" as a string.
-        assert (
-            self.addon.resolve_bool_option({"verify_ssl": "false"}, "verify_ssl", True)
-            is True
-        )
+        assert beta["key"] not in self.addon.export_app_options({}, [beta])
+        assert beta["env"] not in os.environ
+        self.addon.export_app_options({beta["key"]: True}, [beta])
+        assert os.environ[beta["env"]] == "true"
 
-    def test_int_value_falls_back_to_default(self):
-        assert (
-            self.addon.resolve_bool_option({"verify_ssl": 0}, "verify_ssl", True)
-            is True
-        )
+    def test_gated_off_warning_names_only_subflags_turned_on(self, capsys):
+        """With the beta master off, a sub-flag a user turned on will be
+        forced off at runtime; the log must name it. A sub-flag that is on
+        by default (the YAML edit confirmation) was not turned on by the
+        user and must not be named."""
+        subflags = self.addon.beta_subflags(self.options)
+        defaults = {o["key"]: o["default"] for o in self.options}
+        exported = {"enable_beta_features": False, "enable_code_mode": True}
+        exported.update({k: True for k in subflags if defaults[k]})
 
-    def test_none_value_falls_back_to_default(self):
-        assert (
-            self.addon.resolve_bool_option({"verify_ssl": None}, "verify_ssl", True)
-            is True
-        )
+        self.addon._warn_gated_off_beta_subflags(exported, subflags, defaults)
 
-
-class TestResolveHaToolConcurrency:
-    """Unit tests for add-on outer tool-call limit validation."""
-
-    @pytest.fixture(autouse=True)
-    def addon(self):
-        self.addon = _load_addon_start()
-
-    @pytest.mark.parametrize("value", [0, 1, 32])
-    def test_valid_value_is_preserved(self, value):
-        assert (
-            self.addon.resolve_ha_tool_concurrency({"ha_tool_concurrency": value})
-            == value
-        )
-
-    @pytest.mark.parametrize("value", [-1, 33, True, "1", None])
-    def test_invalid_value_warns_and_falls_back_to_unlimited(self, value, capsys):
-        assert (
-            self.addon.resolve_ha_tool_concurrency({"ha_tool_concurrency": value}) == 0
-        )
-        assert "applying 0 (unlimited)" in capsys.readouterr().err
+        out = capsys.readouterr().out
+        assert "enable_code_mode" in out
+        assert not any(k in out for k in subflags if defaults[k])
 
 
 class TestResolveEffectiveLogLevel:
@@ -813,13 +848,15 @@ class TestBetaMasterAutoEnableInDevAddon:
     @pytest.fixture(autouse=True)
     def addon(self):
         self.addon = _load_addon_start()
+        self.subflags = self.addon.beta_subflags(self.addon.load_app_options())
 
     def test_auto_enable_writes_true_when_any_beta_key_truthy(self, monkeypatch):
         """Dev-addon options with ANY beta sub-flag set to True →
         ENABLE_BETA_FEATURES=true written to env."""
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
         self.addon.maybe_auto_enable_beta_master(
-            {"backup_hint": "normal", "enable_yaml_config_editing": True}
+            {"backup_hint": "normal", "enable_yaml_config_editing": True},
+            self.subflags,
         )
         assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
 
@@ -835,7 +872,7 @@ class TestBetaMasterAutoEnableInDevAddon:
         """
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
         self.addon.maybe_auto_enable_beta_master(
-            dict.fromkeys(self._DEV_BETA_KEYS, False)
+            dict.fromkeys(self._DEV_BETA_KEYS, False), self.subflags
         )
         assert "ENABLE_BETA_FEATURES" not in os.environ
 
@@ -846,7 +883,7 @@ class TestBetaMasterAutoEnableInDevAddon:
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
         cfg: dict[str, object] = dict.fromkeys(self._DEV_BETA_KEYS, False)
         cfg["enable_code_mode"] = True
-        self.addon.maybe_auto_enable_beta_master(cfg)
+        self.addon.maybe_auto_enable_beta_master(cfg, self.subflags)
         assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
 
     def test_auto_enable_skips_non_bool_truthy_values(self, monkeypatch):
@@ -856,7 +893,9 @@ class TestBetaMasterAutoEnableInDevAddon:
         truthy string, we want the gate to stay shut rather than
         silently flip the master on."""
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
-        self.addon.maybe_auto_enable_beta_master({"enable_yaml_config_editing": "true"})
+        self.addon.maybe_auto_enable_beta_master(
+            {"enable_yaml_config_editing": "true"}, self.subflags
+        )
         assert "ENABLE_BETA_FEATURES" not in os.environ
 
     def test_auto_enable_does_not_set_var_when_no_beta_key(self, monkeypatch):
@@ -865,7 +904,7 @@ class TestBetaMasterAutoEnableInDevAddon:
         UI master toggle remains the gate."""
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
         self.addon.maybe_auto_enable_beta_master(
-            {"backup_hint": "normal", "enable_tool_search": True}
+            {"backup_hint": "normal", "enable_tool_search": True}, self.subflags
         )
         assert "ENABLE_BETA_FEATURES" not in os.environ
 
@@ -874,7 +913,7 @@ class TestBetaMasterAutoEnableInDevAddon:
         auto-enable. Defensive: silent feature regression is the
         worst possible outcome of a bad options.json."""
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
-        self.addon.maybe_auto_enable_beta_master({})
+        self.addon.maybe_auto_enable_beta_master({}, self.subflags)
         assert "ENABLE_BETA_FEATURES" not in os.environ
 
     def test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry(self):
@@ -893,86 +932,6 @@ class TestBetaMasterAutoEnableInDevAddon:
         )
         from ha_mcp.config import BETA_FEATURE_FIELDS
 
-        assert set(self.addon._DEV_ADDON_BETA_KEYS) == set(BETA_FEATURE_FIELDS), (
-            "start.py's _DEV_ADDON_BETA_KEYS drifted from config.BETA_FEATURE_FIELDS"
+        assert set(self.subflags) == set(BETA_FEATURE_FIELDS), (
+            "start.py's beta sub-flags differ from config.BETA_FEATURE_FIELDS"
         )
-
-    def test_stable_addon_still_does_not_carry_beta_keys(self):
-        """Stable addon's ``config.yaml`` must NOT list any of the
-        beta sub-flag keys (their Supervisor-options absence is what
-        makes the master gate the sole gate for stable users)."""
-        import yaml
-
-        stable_yaml = yaml.safe_load(
-            (
-                Path(__file__).parents[2] / "homeassistant-addon" / "config.yaml"
-            ).read_text()
-        )
-        for key in self._DEV_BETA_KEYS:
-            assert key not in stable_yaml.get("options", {}), (
-                f"{key} must not be in stable addon options"
-            )
-            assert key not in stable_yaml.get("schema", {}), (
-                f"{key} must not be in stable addon schema"
-            )
-
-    def test_stable_addon_does_not_declare_enable_beta_features(self):
-        """Stable's ``config.yaml`` must NOT declare the master toggle
-        either — the master is web-UI-only on stable.
-        Schema-declaring it on stable would auto-fill options.json with
-        the default on first start, locking the master to env-mode and
-        the standalone web UI master path would no longer be the gate.
-        """
-        import yaml
-
-        stable_yaml = yaml.safe_load(
-            (
-                Path(__file__).parents[2] / "homeassistant-addon" / "config.yaml"
-            ).read_text()
-        )
-        assert "enable_beta_features" not in stable_yaml.get("options", {}), (
-            "enable_beta_features must not be in stable addon options"
-        )
-        assert "enable_beta_features" not in stable_yaml.get("schema", {}), (
-            "enable_beta_features must not be in stable addon schema"
-        )
-
-    def test_dev_addon_declares_enable_beta_features_master_in_schema(self):
-        """Dev addon's ``config.yaml`` must declare ``enable_beta_features``
-        in both ``options:`` (default true) and ``schema:`` (bool?), so
-        start.py reads it and writes the env var on every boot. The web
-        UI then surfaces the master row as origin='addon' (editable)
-        and saves route through Supervisor.
-        """
-        import yaml
-
-        dev_yaml = yaml.safe_load(
-            (
-                Path(__file__).parents[2] / "homeassistant-addon-dev" / "config.yaml"
-            ).read_text()
-        )
-        assert dev_yaml.get("options", {}).get("enable_beta_features") is True, (
-            "dev addon options must default enable_beta_features=true"
-        )
-        assert "enable_beta_features" in dev_yaml.get("schema", {}), (
-            "dev addon schema must declare enable_beta_features"
-        )
-
-    def test_dev_addon_defaults_every_beta_subflag_to_false(self):
-        """Beta sub-tools default OFF on a fresh dev install — only the
-        master defaults on. Shipping them on would risk damaging fresh
-        installs out of the box.
-        """
-        import yaml
-
-        dev_yaml = yaml.safe_load(
-            (
-                Path(__file__).parents[2] / "homeassistant-addon-dev" / "config.yaml"
-            ).read_text()
-        )
-        opts = dev_yaml.get("options", {})
-        for key in self._DEV_BETA_KEYS:
-            assert key in opts, f"dev addon must declare {key} in options"
-            assert opts[key] is False, (
-                f"dev addon must default {key} to False (got {opts[key]!r})"
-            )

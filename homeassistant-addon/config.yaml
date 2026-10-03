@@ -34,44 +34,31 @@ homeassistant_api: true
 host_network: true
 # Use pre-built Docker images
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
-# Options for user configuration
-# NOTE: enable_yaml_config_editing (+ enable_yaml_packages_* and
-# enable_yaml_edit_confirm),
-# enable_filesystem_tools, enable_code_mode, enable_lite_docstrings, and
-# enable_dashboard_screenshot are intentionally NOT exposed here. They are
-# dev-channel-only beta features (kept in sync with config.BETA_FEATURE_FIELDS)
-# — see docs/beta.md. Do not re-mirror from
-# homeassistant-addon-dev/config.yaml without reading that doc first.
+# options and schema are generated from ha_mcp.config_settings by
+# scripts/generate_app_options.py. Do not edit them here.
 options:
+  verify_ssl: true
+  ha_tool_concurrency: 0
   backup_hint: "normal"
   enable_tool_search: false
   tool_search_max_results: 5
   enable_tool_security_policies: false
-  # Registers ha_manage_security_policy, which can rewrite the policies the
-  # option above enforces. Declared here (not beta) because the web UI's
-  # Policies-tab toggle routes its save through Supervisor in add-on mode,
-  # which rejects any option the schema does not declare.
   enable_security_policy_tool: false
   read_only_mode: false
   redact_secrets: false
   enable_mandatory_bps: true
   enable_strict_mandatory_bps: true
-  ha_tool_concurrency: 0
-  disabled_tools: ""
-  pinned_tools: ""
   enable_auto_backup: true
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
-  # Off by default (#1861) — an agent deleting a full HA snapshot is
-  # categorically riskier than the lightweight edits-scope auto-backups
-  # above (a snapshot may be the last recovery point after the agent
-  # itself broke something). A human opts in here, not the agent.
   enable_snapshot_delete: false
   snapshot_delete_min_age_days: 7
-  verify_ssl: true
+  disabled_tools: ""
+  pinned_tools: ""
 schema:
+  verify_ssl: bool?
+  ha_tool_concurrency: int(0,32)?
   backup_hint: list(strong|normal|weak|auto)
-  secret_path: str?
   enable_tool_search: bool?
   tool_search_max_results: int(2,10)?
   enable_tool_security_policies: bool?
@@ -80,15 +67,14 @@ schema:
   redact_secrets: bool?
   enable_mandatory_bps: bool?
   enable_strict_mandatory_bps: bool?
-  ha_tool_concurrency: int(0,32)?
-  disabled_tools: str?
-  pinned_tools: str?
   enable_auto_backup: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?
   enable_snapshot_delete: bool?
   snapshot_delete_min_age_days: int(0,365)?
-  verify_ssl: bool?
+  disabled_tools: str?
+  pinned_tools: str?
+  secret_path: str?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583

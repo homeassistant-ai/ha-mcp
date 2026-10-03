@@ -3,6 +3,21 @@
 # src/ha_mcp/settings_ui/locales/it.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Verifica il certificato TLS
+    description: 'Verifica il certificato TLS del server Home Assistant. L''app (componente
+      aggiuntivo) si connette tramite il proxy Supervisor, quindi questo normalmente
+      non ha effetto e dovrebbe rimanere abilitato. Disabilita solo se hai riconfigurato
+      l''app (componente aggiuntivo) per comunicare con HA su un nome host HTTPS pubblico
+      con un certificato autofirmato o una discrepanza del nome host. La disabilitazione
+      indebolisce la sicurezza del trasporto: lasciala attiva a meno che tu non sappia
+      di averne bisogno. Richiede il riavvio per avere effetto.'
+  ha_tool_concurrency:
+    name: Concorrenza degli strumenti di Home Assistant
+    description: Limite opzionale sulle chiamate esterne agli strumenti di Home Assistant
+      in tutte le sessioni. La concorrenza interna di REST, WebSocket e fan-out per
+      strumento rimane invariata. 0 mantiene il comportamento illimitato. Una chiamata
+      in attesa di capacità fallisce dopo 60 secondi.
   backup_hint:
     name: Livello del suggerimento di snapshot completo di HA (rivolto all'LLM)
     description: 'Regola il tono del suggerimento che l''LLM vede nella descrizione
@@ -22,12 +37,6 @@ configuration:
       helper / ecc., usa l''opzione separata **Attiva il backup automatico
 
       delle modifiche** qui sotto.'
-  secret_path:
-    name: Percorso segreto personalizzato
-    description: 'Percorso HTTP personalizzato facoltativo per il server MCP. Lascialo
-      vuoto per usare il percorso sicuro generato automaticamente.
-
-      '
   enable_tool_search:
     name: Attiva la ricerca degli strumenti
     description: 'Sostituisci il catalogo completo degli strumenti con la scoperta
@@ -125,28 +134,6 @@ configuration:
       chiave di conferma. È figlia dell''opzione «Allega le skill di buone pratiche
       alle scritture» qui sopra e resta inerte finché quella è disattivata. Richiede
       il riavvio per avere effetto.'
-  ha_tool_concurrency:
-    name: Concorrenza degli strumenti di Home Assistant
-    description: Limite opzionale sulle chiamate esterne agli strumenti di Home Assistant
-      in tutte le sessioni. La concorrenza interna di REST, WebSocket e fan-out per
-      strumento rimane invariata. 0 mantiene il comportamento illimitato. Una chiamata
-      in attesa di capacità fallisce dopo 60 secondi.
-  disabled_tools:
-    name: Strumenti disattivati (separati da virgole)
-    description: 'Gli strumenti elencati qui vengono forzatamente disattivati e bloccati
-      nell''interfaccia web delle impostazioni (scheda Strumenti): non possono essere
-      riattivati lì senza prima togliere questa opzione. Un piccolo insieme di strumenti
-      obbligatori (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
-      non può essere disattivato e continua a funzionare anche se elencato qui. ha_get_skill_guide
-      può essere disattivato solo mentre la modalità rigorosa per le buone pratiche
-      (enable_strict_mandatory_bps) è disattivata. Nomi degli strumenti separati da
-      virgole (per esempio ha_call_event,ha_eval_template).'
-  pinned_tools:
-    name: Strumenti fissati (separati da virgole)
-    description: 'Gli strumenti elencati qui restano fissati in modo bloccato: compaiono
-      in cima alla scheda Strumenti e non possono essere sganciati dall''interfaccia
-      web delle impostazioni senza prima togliere questa opzione. Utile in combinazione
-      con la ricerca degli strumenti. Nomi degli strumenti separati da virgole.'
   enable_auto_backup:
     name: Attiva il backup automatico delle modifiche
     description: 'Cattura uno snapshot per entità prima di ogni chiamata a strumenti
@@ -191,12 +178,25 @@ configuration:
       eliminato. Intervallo 0–365; 0 disattiva la soglia (restano comunque valide
       le protezioni dello snapshot più recente e dei backup pianificati). Valore predefinito
       7.
-  verify_ssl:
-    name: Verifica il certificato TLS
-    description: 'Verifica il certificato TLS del server Home Assistant. L''app (componente
-      aggiuntivo) si connette tramite il proxy Supervisor, quindi questo normalmente
-      non ha effetto e dovrebbe rimanere abilitato. Disabilita solo se hai riconfigurato
-      l''app (componente aggiuntivo) per comunicare con HA su un nome host HTTPS pubblico
-      con un certificato autofirmato o una discrepanza del nome host. La disabilitazione
-      indebolisce la sicurezza del trasporto: lasciala attiva a meno che tu non sappia
-      di averne bisogno. Richiede il riavvio per avere effetto.'
+  disabled_tools:
+    name: Strumenti disattivati (separati da virgole)
+    description: 'Gli strumenti elencati qui vengono forzatamente disattivati e bloccati
+      nell''interfaccia web delle impostazioni (scheda Strumenti): non possono essere
+      riattivati lì senza prima togliere questa opzione. Un piccolo insieme di strumenti
+      obbligatori (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      non può essere disattivato e continua a funzionare anche se elencato qui. ha_get_skill_guide
+      può essere disattivato solo mentre la modalità rigorosa per le buone pratiche
+      (enable_strict_mandatory_bps) è disattivata. Nomi degli strumenti separati da
+      virgole (per esempio ha_call_event,ha_eval_template).'
+  pinned_tools:
+    name: Strumenti fissati (separati da virgole)
+    description: 'Gli strumenti elencati qui restano fissati in modo bloccato: compaiono
+      in cima alla scheda Strumenti e non possono essere sganciati dall''interfaccia
+      web delle impostazioni senza prima togliere questa opzione. Utile in combinazione
+      con la ricerca degli strumenti. Nomi degli strumenti separati da virgole.'
+  secret_path:
+    name: Percorso segreto personalizzato
+    description: 'Percorso HTTP personalizzato facoltativo per il server MCP. Lascialo
+      vuoto per usare il percorso sicuro generato automaticamente.
+
+      '
