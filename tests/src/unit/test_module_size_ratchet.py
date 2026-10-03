@@ -21,6 +21,8 @@ from types import ModuleType
 
 import pytest
 
+from ._ratchet_repo import commit, make_ratchet_repo
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "module_size_ratchet.py"
 BASELINE_PATH = Path(__file__).with_name("module_size_baseline.json")
@@ -134,26 +136,7 @@ def test_last_line_without_a_newline_is_counted() -> None:
 @pytest.fixture
 def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """An empty git repository with no exclusions and an empty baseline."""
-    # Inside a git hook these point every git call at the real repository.
-    for name in (
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_PREFIX",
-        "GIT_COMMON_DIR",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    (tmp_path / "pyproject.toml").write_text(
-        "[tool.ruff]\nextend-exclude = []\n", encoding="utf-8"
-    )
-    subprocess.run(["git", "add", "pyproject.toml"], cwd=tmp_path, check=True)
-    baseline = tmp_path / ratchet.BASELINE_NAME
-    baseline.parent.mkdir(parents=True)
-    baseline.write_text("{}\n", encoding="utf-8")
-    return tmp_path
+    return make_ratchet_repo(tmp_path, monkeypatch, ratchet.BASELINE_NAME)
 
 
 def _stage(repo: Path, path: str, lines: int) -> None:
@@ -190,6 +173,85 @@ def test_hook_rejects_a_staged_oversized_file(temp_repo: Path) -> None:
     _stage(temp_repo, "page.astro", LIMIT + 1)
 
     assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
+
+
+def test_staged_run_ignores_an_unstaged_baseline_edit(temp_repo: Path) -> None:
+    """Growth staged for the commit must not pass because an unstaged edit
+    raises the entry: the hook would then stage that edit."""
+    _stage(temp_repo, "big.py", LIMIT + 2)
+    (temp_repo / ratchet.BASELINE_NAME).write_text(
+        json.dumps({"big.py": LIMIT + 1}), encoding="utf-8"
+    )
+    subprocess.run(["git", "add", ratchet.BASELINE_NAME], cwd=temp_repo, check=True)
+    (temp_repo / ratchet.BASELINE_NAME).write_text(
+        json.dumps({"big.py": LIMIT + 2}), encoding="utf-8"
+    )
+
+    assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
+
+
+def test_baseline_raised_or_added_over_the_base_is_rejected() -> None:
+    """The baseline is a plain file. Without this check an agent blocked by
+    the ratchet could raise its own entry and every other check would pass."""
+    growth = ratchet.find_growth(
+        {"src/big.py": 2001, "src/new.py": 1500}, {"src/big.py": 2000}
+    )
+
+    assert len(growth) == 2
+
+
+def test_baseline_lowered_or_dropped_against_the_base_passes() -> None:
+    base = {"src/big.py": 2000, "src/fixed.py": 3000}
+
+    assert ratchet.find_growth({"src/big.py": 1500}, base) == []
+
+
+def test_base_check_rejects_a_hand_raised_entry(temp_repo: Path) -> None:
+    """The CI step compares the checked-out baseline with the base branch's."""
+    (temp_repo / ratchet.BASELINE_NAME).write_text(
+        json.dumps({"big.py": LIMIT + 1}), encoding="utf-8"
+    )
+    subprocess.run(["git", "add", ratchet.BASELINE_NAME], cwd=temp_repo, check=True)
+    commit(temp_repo)
+    (temp_repo / ratchet.BASELINE_NAME).write_text(
+        json.dumps({"big.py": LIMIT + 5}), encoding="utf-8"
+    )
+
+    assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
+
+
+def test_base_check_rejects_a_nan_entry(temp_repo: Path) -> None:
+    """Every comparison with NaN is false, so a NaN entry would let its file
+    grow past the base check and the repository pin alike."""
+    (temp_repo / ratchet.BASELINE_NAME).write_text(
+        json.dumps({"big.py": LIMIT + 1}), encoding="utf-8"
+    )
+    subprocess.run(["git", "add", ratchet.BASELINE_NAME], cwd=temp_repo, check=True)
+    commit(temp_repo)
+    (temp_repo / ratchet.BASELINE_NAME).write_text('{"big.py": NaN}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="NaN"):
+        ratchet.main(["--base", "HEAD"], repo_root=temp_repo)
+
+
+def test_base_without_the_baseline_passes(temp_repo: Path) -> None:
+    """The pull request that adds a baseline has nothing to compare it with."""
+    subprocess.run(
+        ["git", "rm", "-q", "--cached", ratchet.BASELINE_NAME],
+        cwd=temp_repo,
+        check=True,
+    )
+    commit(temp_repo)
+
+    assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 0
+
+
+def test_unknown_base_is_an_error(temp_repo: Path) -> None:
+    """A mistyped ref in the workflow must fail the step, not skip the check."""
+    commit(temp_repo)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        ratchet.main(["--base", "no-such-ref"], repo_root=temp_repo)
 
 
 def test_repository_matches_the_baseline() -> None:

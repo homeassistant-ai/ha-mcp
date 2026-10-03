@@ -30,6 +30,7 @@ from .server_tool_text import (
     SEARCH_KEYWORDS,
     SEARCH_TOOL_DESCRIPTION,
     SKILL_USE_BEFORE_KEYWORDS,
+    TOOL_DISCOVERY_INSTRUCTIONS,
 )
 from .tools.helpers import raise_tool_error
 from .transforms import DEFAULT_PINNED_TOOLS
@@ -453,32 +454,8 @@ class HomeAssistantSmartMCPServer:
 
         # Append tool search instructions when enabled
         if self.settings.enable_tool_search:
-            instructions += (
-                "\n\n## Tool Discovery\n"
-                "This server uses search-based tool discovery. Most tools "
-                "are NOT listed directly \u2014 use ha_search_tools to find them.\n\n"
-                "WORKFLOW:\n"
-                '1. Call ha_search_tools(query="...") to find relevant tools\n'
-                "2. Results include name, description, parameters, and "
-                "annotations (readOnlyHint/destructiveHint)\n"
-                "3. Execute the discovered tool \u2014 two options:\n"
-                "   a) DIRECT CALL (preferred): Call the tool directly by "
-                "name. All discovered tools are callable without a proxy.\n"
-                "   b) VIA PROXY: For permission-gated execution, use the "
-                "matching proxy:\n"
-                "      - ha_call_read_tool \u2014 safe, read-only operations\n"
-                "      - ha_call_write_tool \u2014 creates or modifies data\n"
-                "      - ha_call_delete_tool \u2014 removes data permanently\n\n"
-                "Once you know a tool\u2019s name, you do NOT need to search "
-                "again \u2014 call it directly.\n\n"
-                f"A few default tools are listed directly "
-                f"({', '.join(DEFAULT_PINNED_TOOLS)}) — these are the "
-                f"starting pins, and users can unpin the non-mandatory "
-                f"ones via the Tools tab in the settings UI, so the "
-                f"actual visible set may be a subset of this list. "
-                f"Everything else must be discovered via search.\n\n"
-                "DO NOT assume a capability is unavailable because you "
-                "don't see a direct tool for it. ALWAYS search first."
+            instructions += TOOL_DISCOVERY_INSTRUCTIONS.format(
+                pinned=", ".join(DEFAULT_PINNED_TOOLS)
             )
 
         return instructions
