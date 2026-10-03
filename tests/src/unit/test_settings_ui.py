@@ -3124,7 +3124,7 @@ class TestGetHandlersAddonLiveOptions:
         # resolves to "default" (env unset, override file empty), so the live
         # value must be ignored even though it appears in the payload.
         monkeypatch.delenv("FUZZY_THRESHOLD", raising=False)
-        monkeypatch.setattr("ha_mcp.config._read_feature_flag_override_file", dict)
+        monkeypatch.setattr("ha_mcp.config_overrides._read_feature_flag_override_file", dict)  # fmt: skip
         _reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
@@ -3158,7 +3158,7 @@ class TestGetHandlersAddonLiveOptions:
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         # Master beta flag: env var unset in addon mode -> origin "default".
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
-        monkeypatch.setattr("ha_mcp.config._read_feature_flag_override_file", dict)
+        monkeypatch.setattr("ha_mcp.config_overrides._read_feature_flag_override_file", dict)  # fmt: skip
         _reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
