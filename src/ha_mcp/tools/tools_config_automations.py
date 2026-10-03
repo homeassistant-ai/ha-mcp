@@ -45,6 +45,7 @@ from .blueprint_substitute import (
     validate_write_modes,
 )
 from .component_config_reads import fetch_entity_lookup_via_component
+from .config_helpers.registry import validate_registry_ids
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -55,7 +56,6 @@ from .helpers import (
 )
 from .reference_validator import validate_config_references
 from .tool_hints import read_only_hints, write_hints
-from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
     apply_entity_category,

@@ -88,7 +88,7 @@ class TestUniformResponseShape:
             }
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -132,7 +132,7 @@ class TestUniformResponseShape:
 
         mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -209,7 +209,7 @@ class TestUniformResponseShape:
             }
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             side_effect=HomeAssistantConnectionError("network down"),
         ):
@@ -247,7 +247,7 @@ class TestUniformResponseShape:
 
         mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             side_effect=HomeAssistantConnectionError("net glitch"),
         ):
@@ -292,7 +292,7 @@ class TestUniformResponseShape:
 
         mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -317,7 +317,7 @@ class TestUniformResponseShape:
         """Successful create-path registry write echoes ``icon`` into ``data``.
 
         Locks the icon-propagation symmetry with the update branch
-        (``tools_config_helpers.py:3343``). Previously the create-side
+        (``_execute_fallback_registry_update`` in ``config_helpers/update.py``). Previously the create-side
         success branch echoed ``area_id`` and ``labels`` into
         ``helper_data`` but skipped ``icon`` — a silent asymmetry now
         closed. The WS create response intentionally omits ``icon`` so
@@ -344,7 +344,7 @@ class TestUniformResponseShape:
 
         mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -405,7 +405,7 @@ class TestUniformResponseShape:
 
         mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -461,12 +461,12 @@ class TestUniformResponseShape:
 
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "ha_mcp.tools.tools_config_helpers.apply_entity_category",
+                "ha_mcp.tools.config_helpers.create.apply_entity_category",
                 side_effect=fake_apply,
             ),
         ):
@@ -531,12 +531,12 @@ class TestUniformResponseShape:
 
         with (
             patch(
-                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "ha_mcp.tools.tools_config_helpers.apply_entity_category",
+                "ha_mcp.tools.config_helpers.update.apply_entity_category",
                 side_effect=fake_apply,
             ),
         ):
@@ -569,7 +569,7 @@ class TestUniformResponseShape:
             }
         )
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=False,  # not registered → triggers warning code path
         ):

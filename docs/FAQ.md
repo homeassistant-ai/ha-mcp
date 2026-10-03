@@ -968,6 +968,21 @@ slip past a policy that already watches that tool.
 
 ### Getting notified when a tool call is waiting for approval
 
+Clients using MCP 2026-07-28 can resume a pending approval through MRTR
+(multi round-trip requests). Each request waits up to ten seconds; a client
+that follows continuations retries automatically against the same approval.
+**You still approve or deny in the settings UI or through your configured
+Home Assistant approval automation.** A continuation never grants approval.
+
+Automatic waiting ends at the configured `wait_seconds` deadline or after
+eight continuation responses, whichever comes first. Legacy clients keep
+the existing blocking wait and approval error. Modern clients that do not
+follow continuations can still use the existing UI approval and manual
+re-call flow for static targets. Nested calls inside custom scripts keep
+the blocking flow, because retrying a script could repeat earlier actions.
+Selector-based bulk calls can resume only their own approval within the
+original wait window; a fresh call requires a fresh approval.
+
 A rule in **Tool Security Policies** holds the call and shows it in the
 settings UI, which only helps while that tab is open. Every held request is
 also announced on the Home Assistant event bus as

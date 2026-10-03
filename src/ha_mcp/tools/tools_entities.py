@@ -31,6 +31,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .config_helpers.registry import validate_registry_ids
 from .entity_update_fields import (
     build_name_visibility_fields,
     build_state_tag_fields,
@@ -46,7 +47,6 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .tool_hints import read_only_hints, write_hints
-from .tools_config_helpers import validate_registry_ids
 from .tools_voice_assistant import KNOWN_ASSISTANTS
 from .util_helpers import (
     JSON_STRING_COERCION,

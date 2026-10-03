@@ -511,7 +511,7 @@ class TestPerToolCanonicalMappings:
         assert _SCENE_SKILL_FILES == ("SKILL.md",)
 
     def test_helper_mapping(self):
-        from ha_mcp.tools.tools_config_helpers import _HELPER_SKILL_FILES
+        from ha_mcp.tools.config_helpers.schemas import _HELPER_SKILL_FILES
 
         assert _HELPER_SKILL_FILES == ("references/helper-selection.md",)
 

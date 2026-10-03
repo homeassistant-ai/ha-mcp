@@ -45,6 +45,8 @@ from .config_entry_flow import (
     update_config_entry_options,
 )
 from .config_entry_flow_form import iter_schema_fields
+from .config_helpers.registry import _get_entities_for_config_entry
+from .config_helpers.schemas import SIMPLE_HELPER_TYPES
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -57,10 +59,6 @@ from .integration_reconfigure import (
     reject_reconfigure_only_parameters,
 )
 from .tool_hints import read_only_hints, write_hints
-from .tools_config_helpers import (
-    SIMPLE_HELPER_TYPES,
-    _get_entities_for_config_entry,
-)
 from .util_helpers import (
     JSON_STRING_COERCION,
     build_pagination_metadata,
