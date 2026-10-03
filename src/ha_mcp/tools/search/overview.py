@@ -19,10 +19,7 @@ from ..component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from ..util_helpers import (
-    filter_active_repairs,
-    project_repair_fields,
-)
+from ..util_helpers import filter_active_repairs, project_repair_fields
 from .base import SearchToolsBase
 
 __all__ = [

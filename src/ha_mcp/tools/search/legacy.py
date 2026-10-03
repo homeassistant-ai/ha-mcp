@@ -14,14 +14,12 @@ from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...errors import create_validation_error
+from ..coercion import parse_string_list_param
 from ..helpers import (
     exception_to_structured_error,
     raise_tool_error,
 )
-from ..util_helpers import (
-    merge_visibility_warnings,
-    parse_string_list_param,
-)
+from ..util_helpers import merge_visibility_warnings
 from .entities import (
     _normalize_state_filter,
     _requested_membership,

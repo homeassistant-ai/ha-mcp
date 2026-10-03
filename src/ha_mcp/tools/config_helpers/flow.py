@@ -6,6 +6,7 @@ from typing import Any
 
 from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
+from ..coercion import parse_json_param, parse_string_list_param
 from ..config_entry_flow import (
     create_flow_helper,
     get_user_step_field_names,
@@ -14,7 +15,6 @@ from ..config_entry_flow import (
 )
 from ..config_entry_flow_walker import fetch_helper_flow_info
 from ..helpers import raise_tool_error, validate_identifier_not_empty
-from ..util_helpers import parse_json_param, parse_string_list_param
 from .registry import (
     _apply_registry_updates_to_entity,
     _get_entities_for_config_entry,

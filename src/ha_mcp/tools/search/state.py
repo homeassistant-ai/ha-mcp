@@ -27,12 +27,8 @@ from ..helpers import (
     exception_to_structured_error,
     raise_tool_error,
 )
-from ..util_helpers import (
-    add_timezone_metadata,
-)
-from ..util_helpers import (
-    project_entity_record as _project_entity,
-)
+from ..response_helpers import add_timezone_metadata
+from ..response_helpers import project_entity_record as _project_entity
 from .base import SearchToolsBase
 
 logger = logging.getLogger(__name__)

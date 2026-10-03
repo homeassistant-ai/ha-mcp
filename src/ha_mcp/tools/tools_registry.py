@@ -21,6 +21,7 @@ from ..utils.device_registry_semantics import (
     annotate_device_rows_with_effective_area,
 )
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_devices import (
     fetch_device_list_via_component,
     fetch_device_via_component,
@@ -40,11 +41,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    build_pagination_metadata,
-    parse_string_list_param,
-)
+from .response_helpers import build_pagination_metadata
 
 logger = logging.getLogger(__name__)
 

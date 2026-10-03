@@ -599,7 +599,7 @@ class TestBulkSelectorFailSafe:
         ``normalize_stringified_containers`` (see test_middleware.py's
         end-to-end coverage) -- a client that sends ``selector`` as a JSON
         string (Claude Desktop stdio does this; see
-        ``tools/util_helpers.py``'s ``JSON_STRING_COERCION``) makes
+        ``tools/coercion.py``'s ``JSON_STRING_COERCION``) makes
         ``args.selector.domain`` yield nothing, so a rule scoped to
         ``selector.domain == "lock"`` never matches even for a lock
         selector. This test pins that ``evaluate()`` itself has no

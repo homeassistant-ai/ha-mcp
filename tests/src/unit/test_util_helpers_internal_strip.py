@@ -1,4 +1,4 @@
-"""Unit tests for the leading-underscore strip helper in util_helpers.
+"""Unit tests for the leading-underscore strip helper in response_helpers.
 
 `public_fields` centralises the convention that ha-mcp tool layers
 enrich entity / area dicts with internal fields like ``_hidden_by`` /
@@ -14,7 +14,7 @@ the hidden-entity score penalty while the output still looked clean —
 these tests pin the contract.
 """
 
-from ha_mcp.tools.util_helpers import public_fields
+from ha_mcp.tools.response_helpers import public_fields
 
 
 class TestPublicFields:

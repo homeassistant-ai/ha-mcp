@@ -14,10 +14,8 @@ from ...visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
-from ..util_helpers import (
-    merge_visibility_warnings,
-    public_fields,
-)
+from ..response_helpers import public_fields
+from ..util_helpers import merge_visibility_warnings
 from .entities import (
     EntityEnrichmentMixin,
     _add_membership_fields,

@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from ...errors import create_validation_error
+from ..coercion import parse_string_list_param
 from ..helpers import (
     raise_tool_error,
 )
-from ..util_helpers import (
+from ..response_helpers import (
     build_pagination_metadata,
-    parse_string_list_param,
     project_records,
     result_fields_warning,
 )
@@ -196,7 +196,7 @@ def _project_response_fields(
     keys, retaining the diagnostic / pagination contract via
     ``_ALWAYS_KEEP_PROJECTION``.
 
-    Inlined rather than delegated to ``util_helpers.project_fields`` so the
+    Inlined rather than delegated to ``response_helpers.project_fields`` so the
     pre-parsed list passes through end-to-end — the orchestrator already
     parsed ``fields=`` once via ``parse_string_list_param``, and
     ``project_fields`` would re-parse the same list (idempotent but
@@ -422,7 +422,7 @@ def _build_pagination_metadata(
 
 
 # Module-level aliases so existing call sites keep their names unchanged.
-# The implementations live in util_helpers so tools_areas / tools_services
+# The implementations live in response_helpers so tools_areas / tools_services
 # can share them without a cross-module import.
 _project_records = project_records
 

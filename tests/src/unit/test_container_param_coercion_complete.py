@@ -34,7 +34,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import ha_mcp.tools as tools_pkg
-from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+from ha_mcp.tools.coercion import JSON_STRING_COERCION
 
 # (tool_name, param_name) pairs deliberately exempt from coercion, each with a
 # documented reason. These are params where `str` is a semantically distinct,
