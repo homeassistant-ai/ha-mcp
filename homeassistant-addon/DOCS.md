@@ -316,7 +316,7 @@ Requires app restart to take effect.
 
 **Default:** `5` (range 2-10)
 
-Maximum number of hidden tools returned per `ha_search_tools` call when `enable_tool_search` is on; a pinned tool that matches is added as a short name-only entry on top. Lower values (2-3) save context tokens but may miss relevant tools. Has no effect unless tool search is enabled.
+Maximum number of hidden tools returned per `ha_search_tools` call when `enable_tool_search` is on; a pinned tool that ranks inside that top count is added as a short name-only entry on top of it. Lower values (2-3) save context tokens but may miss relevant tools. Has no effect unless tool search is enabled.
 
 Requires app restart to take effect.
 

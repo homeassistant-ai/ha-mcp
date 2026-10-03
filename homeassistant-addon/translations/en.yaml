@@ -46,9 +46,9 @@ configuration:
   tool_search_max_results:
     name: Tool search max results
     description: 'Maximum number of hidden tools returned per ha_search_tools call
-      when tool search is enabled; a pinned tool that matches is added as a short
-      name-only entry on top. Lower values (2-3) save context tokens but may miss
-      relevant tools. Range: 2-10. Requires restart.'
+      when tool search is enabled; a pinned tool that ranks inside that top count
+      is added as a short name-only entry on top of it. Lower values (2-3) save context
+      tokens but may miss relevant tools. Range: 2-10. Requires restart.'
   enable_tool_security_policies:
     name: Enable Tool Security Policies (advanced)
     description: Gate high-stakes tool calls (lock/alarm control, automation writes,
