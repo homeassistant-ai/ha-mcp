@@ -24,9 +24,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import tools_config_dashboards, tools_search
+from ha_mcp.tools import search_component, search_response, tools_config_dashboards
+from ha_mcp.tools.search_component import _merge_dashboard_window
 from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.tools_search import _merge_dashboard_window, _ResolvedSearch
 
 from ._component_routing_helpers import patch_ws
 from .test_ha_search_component_routing import (
@@ -194,9 +194,9 @@ def _resolved_split(
     limit: int = 10,
     registry_eligible: bool = False,
     include_config: bool = False,
-) -> _ResolvedSearch:
+) -> search_response._ResolvedSearch:
     """A resolved mixed-surface search, for driving the merge helper directly."""
-    return _ResolvedSearch(
+    return search_response._ResolvedSearch(
         query="kitchen",
         query_text="kitchen",
         domain_filter=None,
@@ -307,7 +307,7 @@ class TestDashboardSplitRoute:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen", search_types=["automation", "dashboard"]
             )
@@ -343,7 +343,7 @@ class TestDashboardSplitRoute:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             await ha_search(
                 query="kitchen", search_types=["automation", "helper", "dashboard"]
             )
@@ -363,7 +363,7 @@ class TestDashboardSplitRoute:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(query="kitchen", search_types=["dashboard"])
 
         assert resp["success"] is True
@@ -385,7 +385,7 @@ class TestDashboardSplitRoute:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen",
                 search_types=["automation", "dashboard"],
@@ -415,7 +415,7 @@ class TestDashboardSplitRoute:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen",
                 search_types=["automation", "dashboard"],
@@ -442,7 +442,7 @@ class TestDashboardSplitRoute:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             await ha_search(
                 query="kitchen",
                 search_types=["automation", "dashboard"],
@@ -476,7 +476,7 @@ class TestDashboardSplitPagination:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen",
                 search_types=["automation", "dashboard"],
@@ -521,7 +521,7 @@ class TestDashboardSplitPagination:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen", search_types=["automation", "dashboard"], limit=1
             )
@@ -592,7 +592,7 @@ class TestDashboardSplitPagination:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen", search_types=["automation", "dashboard"], limit=5
             )
@@ -620,7 +620,7 @@ class TestDashboardSplitIncludeConfig:
         client = MatchingDashboardClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen",
                 search_types=["automation", "dashboard"],
@@ -642,7 +642,7 @@ class TestDashboardSplitIncludeConfig:
         client = MatchingDashboardClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen",
                 search_types=["automation", "dashboard"],
@@ -671,7 +671,7 @@ class TestDashboardSplitPartialSemantics:
         ha_search = _build_ha_search(client)
 
         with (
-            patch_ws(ws, tools_search),
+            patch_ws(ws, search_component),
             _patch_dashboards_ws(ws),
             patch.object(
                 SmartSearchTools,
@@ -707,7 +707,7 @@ class TestDashboardSplitPartialSemantics:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen", search_types=["automation", "dashboard"]
             )
@@ -729,7 +729,7 @@ class TestDashboardSplitPartialSemantics:
         client = FailingDashboardClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen", search_types=["automation", "dashboard"]
             )
@@ -759,7 +759,7 @@ class TestDashboardSplitComponentLegFailure:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen", search_types=["automation", "dashboard"]
             )
@@ -808,7 +808,7 @@ class TestDashboardSplitComponentLegFailure:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen", search_types=["automation", "dashboard"]
             )
@@ -856,7 +856,7 @@ class TestDashboardSplitComponentLegFailure:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             call = asyncio.ensure_future(
                 ha_search(query="kitchen", search_types=["automation", "dashboard"])
             )
@@ -911,7 +911,7 @@ class TestDashboardSplitComponentLegFailure:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             call = asyncio.ensure_future(
                 ha_search(query="kitchen", search_types=["automation", "dashboard"])
             )
@@ -975,7 +975,7 @@ class TestDashboardSplitComponentLegFailure:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             call = asyncio.ensure_future(
                 ha_search(query="kitchen", search_types=["automation", "dashboard"])
             )
@@ -1006,7 +1006,7 @@ class TestDashboardSplitComponentLegFailure:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
             resp = await ha_search(
                 query="kitchen", search_types=["automation", "dashboard"]
             )

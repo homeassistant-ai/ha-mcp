@@ -36,7 +36,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import tools_search
+from ha_mcp.tools import search_component
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig, VisibilityWire
 from ha_mcp.visibility.persistence import save_visibility_config
@@ -325,7 +325,7 @@ async def _run_component(
     ws = _real_search_ws(hass)
     client = RoutingClient()
     ha_search = _build_ha_search(client)
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(
             query=_QUERY,
             domain_filter="light",
@@ -424,7 +424,7 @@ async def _run_legacy(scenario: _Scenario) -> dict[str, Any]:
         info_exc=HomeAssistantCommandError("no info", "unknown_command"),
     )
     ha_search = _build_ha_search(client)
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(
             query=_QUERY,
             domain_filter="light",

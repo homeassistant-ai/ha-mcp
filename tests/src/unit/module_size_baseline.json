@@ -40,7 +40,6 @@
   "src/ha_mcp/tools/tools_integrations.py": 3287,
   "src/ha_mcp/tools/tools_registry.py": 1127,
   "src/ha_mcp/tools/tools_resources.py": 1182,
-  "src/ha_mcp/tools/tools_search.py": 5107,
   "src/ha_mcp/tools/tools_service.py": 2594,
   "src/ha_mcp/tools/tools_system.py": 2003,
   "src/ha_mcp/tools/tools_updates.py": 1116,

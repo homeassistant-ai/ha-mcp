@@ -13,10 +13,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import tools_search
-from ha_mcp.tools.smart_search._deep import DeepSearchMixin
-from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
-from ha_mcp.tools.tools_search import (
+from ha_mcp.tools import search_response, tools_search
+from ha_mcp.tools.search_entities import _validate_entity_search_params
+from ha_mcp.tools.search_response import (
     _ALWAYS_KEEP_PROJECTION,
     _ENTITIES_BRANCH_SKIP_KEYS,
     _INTENT_SKIP_WARNING,
@@ -27,9 +26,10 @@ from ha_mcp.tools.tools_search import (
     _mirror_partial_to_warnings,
     _project_response_fields,
     _synthesize_combined_pagination,
-    _validate_entity_search_params,
     _validate_search_types,
 )
+from ha_mcp.tools.smart_search._deep import DeepSearchMixin
+from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 
 
 def test_propagates_non_conflicting_keys() -> None:
@@ -542,9 +542,9 @@ def test_finalize_partial_state_noop_when_no_branch_raised() -> None:
     assert response["errors"] == [{"surface": "config-internal", "code": "BUDGET"}]
 
 
-def _entities_only_request() -> tools_search._ResolvedSearch:
+def _entities_only_request() -> search_response._ResolvedSearch:
     """A resolved request that fans out to the entity branch only."""
-    return tools_search._ResolvedSearch(
+    return search_response._ResolvedSearch(
         query="lamp",
         query_text="lamp",
         domain_filter=None,

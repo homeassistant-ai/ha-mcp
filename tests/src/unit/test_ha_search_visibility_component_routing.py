@@ -42,7 +42,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, tools_search
+from ha_mcp.tools import component_api, search_component
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import VISIBILITY_FILENAME, save_visibility_config
@@ -152,7 +152,7 @@ async def test_active_filter_with_capability_routes_component_with_param(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -187,7 +187,7 @@ async def test_active_filter_without_capability_uses_legacy(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     # The component search command must never run without the capability.
@@ -213,7 +213,7 @@ async def test_active_allowlist_without_authorization_capability_uses_legacy(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert not _search_calls(ws)
@@ -236,7 +236,7 @@ async def test_active_allowlist_with_authorization_capability_routes_component(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -269,7 +269,7 @@ async def test_deny_only_config_with_authorization_capability_still_sends_flag(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -301,7 +301,7 @@ async def test_inactive_filter_routes_component_without_param(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -325,7 +325,7 @@ async def test_component_error_on_visibility_path_falls_back_to_legacy(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert client.get_states_calls == 1
@@ -350,7 +350,7 @@ async def test_unknown_command_falls_back_silently_and_invalidates(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -380,7 +380,7 @@ async def test_connection_error_on_visibility_path_falls_back_to_legacy(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -405,7 +405,7 @@ async def test_ws_establish_failure_on_visibility_path_falls_back_to_legacy(
 
     with patch_ws_establish_failure(
         caps_ws,
-        tools_search,
+        search_component,
         HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await ha_search(query="kitchen")
@@ -435,7 +435,7 @@ async def test_unloadable_config_fails_closed_to_legacy(tmp_path, monkeypatch) -
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True

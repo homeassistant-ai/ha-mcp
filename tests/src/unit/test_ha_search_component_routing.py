@@ -25,7 +25,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import tools_config_dashboards, tools_search
+from ha_mcp.tools import search_component, tools_config_dashboards, tools_search
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.visibility import resolver
@@ -169,7 +169,7 @@ async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -200,7 +200,7 @@ async def test_pre_child_semantics_search_capability_uses_legacy(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -224,7 +224,7 @@ async def test_membership_request_falls_back_from_old_component(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen", result_fields=["entity_id", "is_group"])
 
     assert resp["entities"] == [
@@ -258,7 +258,7 @@ async def test_membership_capability_forwards_only_requested_fields(
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(
             query="kitchen",
             result_fields=["member_entity_ids", "entity_id", "is_group"],
@@ -293,7 +293,7 @@ async def test_unknown_command_falls_back_silently(tmp_path, monkeypatch) -> Non
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -316,7 +316,7 @@ async def test_raised_command_falls_back_with_warning(tmp_path, monkeypatch) -> 
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -336,7 +336,7 @@ async def test_caps_probed_once_across_searches(tmp_path, monkeypatch) -> None:
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         await ha_search(query="kitchen")
         await ha_search(query="kitchen")
 
@@ -358,7 +358,7 @@ async def test_command_timeout_falls_back_with_warning(tmp_path, monkeypatch) ->
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["success"] is True
@@ -382,7 +382,7 @@ async def test_ws_establish_failure_falls_back_with_warning(
 
     with patch_ws_establish_failure(
         caps_ws,
-        tools_search,
+        search_component,
         HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await ha_search(query="kitchen")
@@ -404,7 +404,7 @@ async def test_component_diagnostics_mark_partial(tmp_path, monkeypatch) -> None
     client = RoutingClient()
     ha_search = _build_ha_search(client)
 
-    with patch_ws(ws, tools_search):
+    with patch_ws(ws, search_component):
         resp = await ha_search(query="kitchen")
 
     assert resp["partial"] is True
@@ -434,7 +434,7 @@ async def test_component_and_legacy_response_shape_parity(
         cmd_result=_entity_search_result(),
     )
     client_component = RoutingClient()
-    with patch_ws(ws_component, tools_search):
+    with patch_ws(ws_component, search_component):
         component = await _build_ha_search(client_component)(
             query="kitchen", domain_filter="light"
         )
@@ -447,7 +447,7 @@ async def test_component_and_legacy_response_shape_parity(
         ),
     )
     client_legacy = RoutingClient()
-    with patch_ws(ws_legacy, tools_search):
+    with patch_ws(ws_legacy, search_component):
         legacy = await _build_ha_search(client_legacy)(
             query="kitchen", domain_filter="light"
         )
@@ -591,7 +591,7 @@ class TestResultFieldsEnrichment:
         client = RoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             resp = await ha_search(
                 query="kitchen", result_fields=["entity_id", "area", "floor"]
             )
@@ -615,7 +615,7 @@ class TestResultFieldsEnrichment:
         client = RoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             resp = await ha_search(query="kitchen")
 
         rec = resp["entities"][0]
@@ -641,7 +641,7 @@ class TestResultFieldsEnrichment:
         client = EnrichmentClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             resp = await ha_search(
                 query="kitchen",
                 result_fields=["entity_id", "area", "floor", "labels", "aliases"],
@@ -669,7 +669,7 @@ class TestResultFieldsEnrichment:
         client = EnrichmentClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             await ha_search(query="kitchen")
 
         assert client.ws_types["config/entity_registry/get_entries"] == 0
@@ -687,7 +687,7 @@ class TestResultFieldsEnrichment:
         client = RoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search), pytest.raises(ToolError) as excinfo:
+        with patch_ws(ws, search_component), pytest.raises(ToolError) as excinfo:
             await ha_search(query="kitchen", result_fields=["frobnicate"])
 
         assert "Unknown result_fields" in str(excinfo.value)
@@ -706,7 +706,7 @@ class TestOlderComponentListingModes:
         client = ListingModeClient()
         ha_search = _build_ha_search(client)
         ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             data = await ha_search(domain_filter="light")
         assert data.get("search_type") == "domain_listing", data
         assert not any(
@@ -722,7 +722,7 @@ class TestOlderComponentListingModes:
         client = ListingModeClient()
         ha_search = _build_ha_search(client)
         ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             data = await ha_search(query="   ", domain_filter="light")
         assert data.get("search_type") == "domain_listing", data
         assert not any(
@@ -738,7 +738,7 @@ class TestOlderComponentListingModes:
         client = ListingModeClient()
         ha_search = _build_ha_search(client)
         ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             data = await ha_search(area_filter="Kitchen")
         assert data.get("search_type") == "area_only", data
         assert not any(
@@ -754,7 +754,7 @@ class TestOlderComponentListingModes:
         client = ListingModeClient()
         ha_search = _build_ha_search(client)
         ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             data = await ha_search(query="kitchen", area_filter="Kitchen")
         assert data.get("search_type") == "area_filtered_query", data
         assert not any(
@@ -780,7 +780,7 @@ class TestOlderComponentListingModes:
         ha_search = _build_ha_search(client)
         ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             data = await ha_search(area_filter="Sous-sol", domain_filter="light")
 
         assert data["area_names"] == ["Cave"]
@@ -799,7 +799,7 @@ class TestOlderComponentListingModes:
         client = ListingModeClient()
         ha_search = _build_ha_search(client)
         ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             data = await ha_search(state_filter="on")
         assert data.get("search_type") == "state_listing", data
         assert not any(
@@ -841,7 +841,7 @@ class TestVisibilityFilterBypassesComponent:
             cmd_result=_entity_search_result(),
         )
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             data = await ha_search(query="kitchen")
 
         # The component search command must never run while the filter is active.
@@ -872,7 +872,7 @@ class TestVisibilityFilterBypassesComponent:
             cmd_result=_entity_search_result(),
         )
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             await ha_search(query="kitchen")
 
         assert any(
@@ -994,7 +994,7 @@ class TestDashboardSearchTypesGate:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             resp = await ha_search(query="kitchen", search_types=["dashboard"])
 
         assert resp["success"] is True
@@ -1032,7 +1032,7 @@ class TestDashboardSearchTypesGate:
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             resp = await ha_search(
                 query="kitchen", search_types=["automation", "dashboard"]
             )
@@ -1108,7 +1108,7 @@ class TestDashboardSearchTypesGate:
         ha_search = _build_ha_search(client)
 
         with (
-            patch_ws(ws, tools_search),
+            patch_ws(ws, search_component),
             patch.object(
                 tools_config_dashboards,
                 "get_websocket_client",
@@ -1144,7 +1144,7 @@ class TestDashboardSearchTypesGate:
         client = ConfigNotFoundDashboardClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             resp = await ha_search(query="kitchen", search_types=["dashboard"])
 
         assert resp["success"] is True
@@ -1181,7 +1181,7 @@ class TestDashboardSearchTypesGate:
         client = RoutingClient()
         ha_search = _build_ha_search(client)
 
-        with patch_ws(ws, tools_search):
+        with patch_ws(ws, search_component):
             resp = await ha_search(query="kitchen", search_types=["automation"])
 
         assert resp["success"] is True

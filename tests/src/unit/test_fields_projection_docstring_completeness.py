@@ -65,9 +65,9 @@ TOOL_SPECS: list[dict[str, Any]] = [
             ),
             # Keys assigned in the three fetch helpers that ha_get_overview
             # delegates to after the class-based refactor.
-            ("tools/tools_search.py", "_fetch_system_info", "result"),
-            ("tools/tools_search.py", "_fetch_notifications", "result"),
-            ("tools/tools_search.py", "_fetch_repairs", "result"),
+            ("tools/search_overview.py", "_fetch_system_info", "result"),
+            ("tools/search_overview.py", "_fetch_notifications", "result"),
+            ("tools/search_overview.py", "_fetch_repairs", "result"),
         ],
         "return_harvest": [],
     },
@@ -592,22 +592,22 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
     Adding a new key to either bucket forces the contract decision
     explicitly; landing in neither raises this test.
     """
-    from ha_mcp.tools.tools_search import _ENTITIES_BRANCH_SKIP_KEYS
+    from ha_mcp.tools.search_response import _ENTITIES_BRANCH_SKIP_KEYS
 
     markers = frozenset({"results", "total_matches"})
     # _ha_search_entities is a dispatcher; response-shaped dicts live in
     # its sub-methods.  Scan each one and union the results.
     emitted: set[str] = set()
-    for fn in (
-        "_search_regular",
-        "_search_domain_only",
-        "_search_area_with_query",
-        "_search_area_only_populated",
-        "_search_area_only",
-        "_exact_match_search",
-        "_normalize_regular_search_result",
+    for module, fn in (
+        ("tools/search_modes.py", "_search_regular"),
+        ("tools/search_modes.py", "_search_domain_only"),
+        ("tools/search_modes.py", "_search_area_with_query"),
+        ("tools/search_modes.py", "_search_area_only_populated"),
+        ("tools/search_modes.py", "_search_area_only"),
+        ("tools/search_entities.py", "_exact_match_search"),
+        ("tools/search_entities.py", "_normalize_regular_search_result"),
     ):
-        emitted |= _harvest_marker_dicts("tools/tools_search.py", fn, markers)
+        emitted |= _harvest_marker_dicts(module, fn, markers)
     assert emitted, (
         "harvested no response-shaped dicts from entity search sub-methods — "
         "the marker set ({'results', 'total_matches'}) may need updating"
@@ -638,7 +638,7 @@ def test_harvester_finds_dismissed_repair_count_in_ha_get_overview() -> None:
     case for ``ha_get_overview`` would still pass — both sides of the diff
     would shrink in lockstep. Pin the find here so regressions surface.
     """
-    keys = _harvest_var_keys("tools/tools_search.py", "_fetch_repairs", "result")
+    keys = _harvest_var_keys("tools/search_overview.py", "_fetch_repairs", "result")
     assert "dismissed_repair_count" in keys, (
         "AST harvest of `_fetch_repairs` lost `dismissed_repair_count`. "
         "The regression-catch guarantee this test file provides is broken."
@@ -653,7 +653,7 @@ def test_harvester_finds_dismissed_repair_count_in_ha_get_overview() -> None:
 
 def test_overview_routing_sets_partition_every_documented_field() -> None:
     """Every public overview key belongs to exactly one collection path."""
-    from ha_mcp.tools.tools_search import (
+    from ha_mcp.tools.search_overview import (
         _OVERVIEW_AVAILABLE_FIELDS,
         _OVERVIEW_ENTITY_FIELDS,
         _OVERVIEW_INDEPENDENT_FIELDS,
