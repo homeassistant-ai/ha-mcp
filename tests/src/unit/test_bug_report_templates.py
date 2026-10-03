@@ -277,3 +277,7 @@ def test_feature_request_duplicate_search_uses_its_title() -> None:
         "Manage Thread datasets"
     ]
     assert "ha_call_service" in _generate_search_keywords({}, failed)
+    # A blank title falls back to the usual keywords instead of an empty term.
+    assert sorted(_generate_search_keywords({}, failed, "   ")) == sorted(
+        _generate_search_keywords({}, failed)
+    )

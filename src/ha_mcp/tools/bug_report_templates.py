@@ -920,8 +920,9 @@ def _generate_search_keywords(
     Returns a list of keywords to search for similar issues. A feature
     request is searched by its title, not by the session's last error.
     """
-    if feature_title:
-        return [feature_title]
+    title = " ".join((feature_title or "").split())
+    if title:
+        return [title]
     keywords = set()
 
     # Find the most recent error from logs
