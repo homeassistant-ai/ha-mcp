@@ -402,7 +402,8 @@ export function publish(
     ),
   });
   state.checkedHead = fresh.head;
-  state.checkedFailure = failureHash(fresh);
+  // A new failure appearing during execution was not in the worker's prompt.
+  state.checkedFailure = failureHash(plan.snapshot);
   // A changed result has already bound a PR above; an unchanged issue result
   // completes in its checkpoint without creating one.
   state.status = state.pr ? "waiting" : "complete";

@@ -393,6 +393,18 @@ test("a new failing check on a previously green head runs once per failure", () 
   assert.equal(prepare(api, { number: 10, automatic: true }, APP).decision.mode, "code");
 });
 
+test("a failure appearing during the worker remains unhandled for the next wakeup", () => {
+  const api = readySession();
+  api.checks[0].conclusion = "failure";
+  const first = prepare(api, { number: 10, automatic: true }, APP);
+  api.checks[0].id += 1;
+  const work = artifact();
+  work.changes = [];
+  work.result.outcome = "unchanged";
+  publish(api, first, work, APP, { runId: "44" });
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP).decision.mode, "code");
+});
+
 test("only anchored, nonempty slash commands select supported models", () => {
   assert.equal(command("/astra implement this").model, "gpt-6-astra");
   assert.equal(command("/sol fix it\r\nkeep scope").model, "gpt-6-sol");
