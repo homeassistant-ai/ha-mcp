@@ -61,10 +61,10 @@ _ATTACH_CALL_NAMES = frozenset(
 # satisfy the check.
 _ATTACH_SIBLING_MODULES: dict[str, tuple[str, ...]] = {
     "tools_config_helpers.py": (
-        "helper_create.py",
-        "helper_flow.py",
-        "helper_schemas.py",
-        "helper_update.py",
+        "config_helpers/create.py",
+        "config_helpers/flow.py",
+        "config_helpers/schemas.py",
+        "config_helpers/update.py",
     )
 }
 

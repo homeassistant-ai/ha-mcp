@@ -16,9 +16,9 @@ from ha_mcp.backup_manager import (
     _restore_area_or_floor,
     _restore_template_entity_id,
 )
-from ha_mcp.tools.helper_create import _apply_create_entity_registry
-from ha_mcp.tools.helper_registry import _entity_registry_update_coro
-from ha_mcp.tools.helper_update import (
+from ha_mcp.tools.config_helpers.create import _apply_create_entity_registry
+from ha_mcp.tools.config_helpers.registry import _entity_registry_update_coro
+from ha_mcp.tools.config_helpers.update import (
     _apply_update_icon_area_labels,
     _execute_fallback_registry_update,
 )

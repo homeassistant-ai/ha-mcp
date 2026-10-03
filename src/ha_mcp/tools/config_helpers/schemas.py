@@ -2,7 +2,7 @@
 
 from typing import Any, TypedDict
 
-from .util_helpers import attach_skill_content
+from ..util_helpers import attach_skill_content
 
 __all__ = [
     "SIMPLE_HELPER_SCHEMAS",

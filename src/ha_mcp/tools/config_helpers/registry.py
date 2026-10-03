@@ -4,14 +4,14 @@ import asyncio
 import logging
 from typing import Any
 
-from ..client.rest_client import HomeAssistantAPIError, HomeAssistantAuthError
-from ..errors import ErrorCode, create_auth_error, create_error_response
-from ..utils.registry_update_lock import registry_update_lock
-from .component_registry_lookup import fetch_entities_for_config_entry_via_component
-from .config_entry_flow import FLOW_HELPER_TYPES
-from .helper_schemas import SIMPLE_HELPER_TYPES, _simple_helper_error_context
-from .helpers import exception_to_structured_error, raise_tool_error
-from .util_helpers import apply_entity_category
+from ...client.rest_client import HomeAssistantAPIError, HomeAssistantAuthError
+from ...errors import ErrorCode, create_auth_error, create_error_response
+from ...utils.registry_update_lock import registry_update_lock
+from ..component_registry_lookup import fetch_entities_for_config_entry_via_component
+from ..config_entry_flow import FLOW_HELPER_TYPES
+from ..helpers import exception_to_structured_error, raise_tool_error
+from ..util_helpers import apply_entity_category
+from .schemas import SIMPLE_HELPER_TYPES, _simple_helper_error_context
 
 logger = logging.getLogger(__name__)
 

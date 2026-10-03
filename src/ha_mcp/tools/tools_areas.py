@@ -19,7 +19,7 @@ from ..errors import ErrorCode, create_error_response, create_validation_error
 from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .component_registries import fetch_registries_via_component
-from .helper_registry import validate_registry_ids
+from .config_helpers.registry import validate_registry_ids
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,

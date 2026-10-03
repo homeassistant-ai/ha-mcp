@@ -94,7 +94,7 @@
   "tests/src/unit/test_ha_search_merge.py": 1420,
   "tests/src/unit/test_haos_supervisor_wait.py": 1676,
   "tests/src/unit/test_helper_response_shape.py": 1307,
-  "tests/src/unit/test_helper_schema_inline.py": 1090,
+  "tests/src/unit/test_helper_schema_inline.py": 1079,
   "tests/src/unit/test_helper_update_persistence.py": 1329,
   "tests/src/unit/test_identifier_validation_family.py": 1371,
   "tests/src/unit/test_integration_reconfigure.py": 3799,

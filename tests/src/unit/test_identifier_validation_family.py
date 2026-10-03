@@ -297,7 +297,7 @@ class TestAreasIdentifierValidation:
         assert sent["type"] == "config/floor_registry/create"
 
 
-# --- helper_flow.py, helper_create.py (partial-guard whitespace upgrade) -----------
+# --- config_helpers/flow.py, config_helpers/create.py (partial-guard whitespace upgrade) -----------
 
 
 class TestSetHelperWhitespaceUpgrade:
@@ -429,7 +429,7 @@ class TestCheckNameCollisionWhitespaceSkip:
     async def test_skips_ws_call_on_empty_or_whitespace_name(
         self, mock_ws_client, bad_name
     ):
-        from ha_mcp.tools.helper_registry import _check_name_collision
+        from ha_mcp.tools.config_helpers.registry import _check_name_collision
 
         # The early-return runs before any WS message is constructed.
         result = await _check_name_collision(mock_ws_client, "input_boolean", bad_name)
@@ -825,7 +825,7 @@ class TestFlowHelperDirectGuard:
     async def test_handle_flow_helper_implicit_action_rejects_empty_helper_id(
         self, mock_ws_client, bad
     ):
-        from ha_mcp.tools.helper_flow import _handle_flow_helper
+        from ha_mcp.tools.config_helpers.flow import _handle_flow_helper
 
         with pytest.raises(ToolError) as excinfo:
             await _handle_flow_helper(
@@ -852,7 +852,7 @@ class TestFlowHelperDirectGuard:
         # guard-message rewording; tighten to positive proof — mock the
         # validator and assert it was not invoked on the None path, which
         # is independent of any downstream behaviour.
-        from ha_mcp.tools import helper_flow
+        from ha_mcp.tools.config_helpers import flow as helper_flow
 
         validator_mock = MagicMock()
         monkeypatch.setattr(

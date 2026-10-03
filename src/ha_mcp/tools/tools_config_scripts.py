@@ -39,8 +39,8 @@ from .blueprint_substitute import (
     take_control_config,
     validate_write_modes,
 )
+from .config_helpers.registry import validate_registry_ids
 from .entity_registration import resolve_entity_id_after_write
-from .helper_registry import validate_registry_ids
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,

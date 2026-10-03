@@ -45,7 +45,7 @@ from .blueprint_substitute import (
     validate_write_modes,
 )
 from .component_config_reads import fetch_entity_lookup_via_component
-from .helper_registry import validate_registry_ids
+from .config_helpers.registry import validate_registry_ids
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,

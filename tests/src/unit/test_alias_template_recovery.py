@@ -3,7 +3,8 @@
 from copy import deepcopy
 from unittest.mock import AsyncMock
 
-from ha_mcp.tools import auto_backup, helper_registry
+from ha_mcp.tools import auto_backup
+from ha_mcp.tools.config_helpers import registry as helper_registry
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from .test_template_deleted_recovery import ENTITY, OPTIONS

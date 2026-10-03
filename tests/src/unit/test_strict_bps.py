@@ -57,7 +57,7 @@ GATED_TOOL_MODULES: dict[str, tuple[str, str]] = {
 }
 
 # Tools whose canonical _*_SKILL_FILES constant lives outside the tool module.
-_SKILL_FILES_MODULE: dict[str, str] = {"ha_config_set_helper": "helper_schemas"}
+_SKILL_FILES_MODULE: dict[str, str] = {"ha_config_set_helper": "config_helpers.schemas"}
 
 # ---------------------------------------------------------------------------
 # strict_bps_effective

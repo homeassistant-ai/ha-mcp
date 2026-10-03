@@ -25,12 +25,12 @@ from .component_devices import (
     fetch_device_list_via_component,
     fetch_device_via_component,
 )
+from .config_helpers.registry import validate_registry_ids
 from .device_enrichment import (
     enrich_matter_diagnostics,
     enrich_zha_metrics,
     enrich_zwave_status,
 )
-from .helper_registry import validate_registry_ids
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
     clearable_value,

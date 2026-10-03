@@ -32,9 +32,9 @@ from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     SUPPORTED_HELPERS,
 )
-from .helper_create import _execute_create_simple_helper
-from .helper_flow import _handle_flow_helper, _handle_set_config_subentry
-from .helper_listing import (
+from .config_helpers.create import _execute_create_simple_helper
+from .config_helpers.flow import _handle_flow_helper, _handle_set_config_subentry
+from .config_helpers.listing import (
     _component_covers,
     _paginate_helpers_response,
     _raise_all_requires_component,
@@ -43,20 +43,20 @@ from .helper_listing import (
     _shape_component_helpers_response,
     _shape_flow_helper_record,
 )
-from .helper_registry import (
+from .config_helpers.registry import (
     _check_name_collision,
     _enrich_helpers_with_current_registry,
     _flatten_helper_list_result,
     validate_registry_ids,
 )
-from .helper_schemas import (
+from .config_helpers.schemas import (
     _INITIAL_PARAM_DESCRIPTION,
     SIMPLE_HELPER_TYPES,
     _attach_helper_skill,
     _simple_helper_error_context,
 )
-from .helper_update import _execute_update_simple_helper
-from .helper_validation import (
+from .config_helpers.update import _execute_update_simple_helper
+from .config_helpers.validation import (
     _validate_applicable_params,
     _validate_pre_dispatch_params,
     _validate_set_helper_action,

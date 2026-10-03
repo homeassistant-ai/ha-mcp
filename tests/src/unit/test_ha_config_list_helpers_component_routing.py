@@ -43,10 +43,11 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, helper_registry, tools_config_helpers
+from ha_mcp.tools import component_api, tools_config_helpers
 from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
-from ha_mcp.tools.helper_listing import _shape_collection_helper_record
-from ha_mcp.tools.helper_schemas import SIMPLE_HELPER_TYPES
+from ha_mcp.tools.config_helpers import registry as helper_registry
+from ha_mcp.tools.config_helpers.listing import _shape_collection_helper_record
+from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
 from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
 from ._component_routing_helpers import (

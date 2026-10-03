@@ -45,8 +45,8 @@ from .config_entry_flow import (
     update_config_entry_options,
 )
 from .config_entry_flow_form import iter_schema_fields
-from .helper_registry import _get_entities_for_config_entry
-from .helper_schemas import SIMPLE_HELPER_TYPES
+from .config_helpers.registry import _get_entities_for_config_entry
+from .config_helpers.schemas import SIMPLE_HELPER_TYPES
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,

@@ -40,8 +40,8 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, component_registry_lookup
-from ha_mcp.tools.helper_flow import _wait_for_flow_entities
-from ha_mcp.tools.helper_registry import _get_entities_for_config_entry
+from ha_mcp.tools.config_helpers.flow import _wait_for_flow_entities
+from ha_mcp.tools.config_helpers.registry import _get_entities_for_config_entry
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._component_routing_helpers import (
@@ -507,7 +507,7 @@ async def test_set_helper_wait_resolves_via_component_no_dump_no_sleep() -> None
     with (
         patch_ws(ws, component_registry_lookup),
         patch(
-            "ha_mcp.tools.helper_flow.asyncio.sleep", new_callable=AsyncMock
+            "ha_mcp.tools.config_helpers.flow.asyncio.sleep", new_callable=AsyncMock
         ) as sleep_mock,
     ):
         entities, warnings = await _wait_for_flow_entities(
@@ -625,10 +625,10 @@ async def test_get_entities_unexpected_seam_error_converted_to_warnings() -> Non
     client = RoutingClient()
     warnings: list[str] = []
 
-    # Patch the CONSUMER module's binding (helper_registry imports the
+    # Patch the CONSUMER module's binding (config_helpers/registry.py imports the
     # function directly), not the source module's.
     with patch(
-        "ha_mcp.tools.helper_registry.fetch_entities_for_config_entry_via_component",
+        "ha_mcp.tools.config_helpers.registry.fetch_entities_for_config_entry_via_component",
         side_effect=RuntimeError("boom"),
     ):
         result = await _get_entities_for_config_entry(client, "um_entry", warnings)

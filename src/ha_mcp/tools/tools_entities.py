@@ -31,11 +31,11 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .config_helpers.registry import validate_registry_ids
 from .entity_update_fields import (
     build_name_visibility_fields,
     build_state_tag_fields,
 )
-from .helper_registry import validate_registry_ids
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
     clearable_value,
