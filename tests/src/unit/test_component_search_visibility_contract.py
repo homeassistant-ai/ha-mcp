@@ -576,7 +576,7 @@ def test_component_warning_constants_match_resolver() -> None:
     """The component's duplicated warning strings equal the server resolver's.
 
     The component ships over HACS and cannot import the server package, so its
-    degradation strings are duplicated in ``websocket_api.py``; this pins them equal
+    degradation strings are duplicated in ``websocket_api/visibility.py``; this pins them equal
     to ``visibility.resolver`` so a future edit to one side fails here instead of
     silently drifting the cross-path warning text.
     """

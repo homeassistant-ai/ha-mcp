@@ -65,7 +65,7 @@ for _mod in (
 class _StubHomeAssistantError(Exception):
     """Stand-in for core's ``HomeAssistantError`` (raised by ``_do_backup_prep``).
 
-    ``websocket_api`` imports ``homeassistant.exceptions.HomeAssistantError``
+    ``websocket_api.system`` imports ``homeassistant.exceptions.HomeAssistantError``
     function-locally when a backup read fails; the module is MagicMock-stubbed
     like the rest of ``homeassistant.*``, so pin a real exception class as its
     ``HomeAssistantError`` attribute (mirrors the ``homeassistant.components.
@@ -84,12 +84,11 @@ _backup_stub = MagicMock()
 _backup_stub.DATA_MANAGER = "backup"
 sys.modules.setdefault("homeassistant.components.backup", _backup_stub)
 
-from custom_components.ha_mcp_tools import websocket_api as wsapi  # noqa: E402
-from custom_components.ha_mcp_tools.const import COMPONENT_VERSION  # noqa: E402
-
 # Server-side scoring path the component must stay in parity with.
 from ha_mcp.tools.tools_search import _match_exact_search_entity  # noqa: E402
 from ha_mcp.utils.fuzzy_search import calculate_ratio  # noqa: E402
+
+from ._component_ws_api import COMPONENT_VERSION, wsapi  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -119,7 +118,7 @@ class FakeState:
         # Mirrors core ``State.as_dict()`` / the REST ``/api/states/<id>`` shape.
         # Timestamps are already ISO strings here — the real WS transport encodes
         # core's datetimes to the same isoformat, so the server sees plain JSON
-        # either way (see websocket_api._do_states byte-parity note).
+        # either way (see websocket_api.overview._do_states byte-parity note).
         return {
             "entity_id": self.entity_id,
             "state": self.state,
