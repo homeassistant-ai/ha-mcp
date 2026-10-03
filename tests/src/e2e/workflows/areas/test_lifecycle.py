@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -1253,8 +1253,8 @@ class TestAreaFloorReferenceNegativeInputs:
     async def test_area_sensor_reference_wrong_device_class_rejected(self, mcp_client):
         """A temperature sensor offered as the humidity reference must surface
         HA's rejection as a failed call, not a success envelope (issue #2619)."""
-        data = await safe_call_tool(
-            mcp_client,
+        mcp = MCPAssertions(mcp_client)
+        data = await mcp.call_tool_failure(
             "ha_set_area_or_floor",
             {
                 "kind": "area",
@@ -1263,8 +1263,8 @@ class TestAreaFloorReferenceNegativeInputs:
             },
         )
 
-        assert not data.get("success"), (
-            f"Expected failure for a non-humidity sensor, got success: {data}"
+        assert data["error"]["code"] == "SERVICE_CALL_FAILED", (
+            f"Expected SERVICE_CALL_FAILED, got: {data.get('error')}"
         )
         assert "sensor.demo_temperature" in json.dumps(data), (
             f"Error must name the offending entity: {data}"
