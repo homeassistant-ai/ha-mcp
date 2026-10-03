@@ -39,10 +39,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .config_entry_flow_form import (
-    _MISSING_DEFAULT,
-    _step_owned_submission_value,
-)
+from .config_entry_flow_form import _MISSING_DEFAULT, _step_owned_submission_value
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,

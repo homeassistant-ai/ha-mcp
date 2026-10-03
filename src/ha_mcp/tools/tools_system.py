@@ -18,10 +18,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
-from ..client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-)
+from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .coercion import JSON_STRING_COERCION

@@ -678,9 +678,7 @@ class EnergyTools:
             shape_errors = _shape_check(config)
 
             validate_result = await self._client.send_websocket_message(
-                {
-                    "type": "energy/validate",
-                }
+                {"type": "energy/validate"}
             )
             validate_warning: str | None = None
             if validate_result.get("success"):
@@ -1044,9 +1042,7 @@ class EnergyTools:
         post_save_validate_error: str | None = None
         try:
             validate_result = await self._client.send_websocket_message(
-                {
-                    "type": "energy/validate",
-                }
+                {"type": "energy/validate"}
             )
             if validate_result.get("success"):
                 post_save_errors = _flatten_validation_errors(
