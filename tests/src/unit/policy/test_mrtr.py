@@ -1,8 +1,9 @@
 """Approval continuations wait for the existing UI decision, never authorize it."""
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -19,8 +20,8 @@ def context(
     *,
     version: str = "2026-07-28",
     name: str = "ha_call_service",
-    arguments: dict | None = None,
-):
+    arguments: dict[str, Any] | None = None,
+) -> SimpleNamespace:
     args = arguments if arguments is not None else {"domain": "light"}
     return SimpleNamespace(
         message=SimpleNamespace(name=name, arguments=args),
@@ -36,7 +37,7 @@ def context(
 
 
 @pytest.fixture
-def gate(monkeypatch):
+def gate(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Control time and waits while retaining real queue and policy decisions."""
     from ha_mcp.policy import approval_queue, mrtr
 
@@ -44,7 +45,7 @@ def gate(monkeypatch):
 
     class ClockDateTime(datetime):
         @classmethod
-        def now(cls, tz=None):
+        def now(cls, tz: tzinfo | None = None) -> datetime:
             return datetime.fromtimestamp(clock[0], tz or UTC)
 
     monkeypatch.setattr(approval_queue, "datetime", ClockDateTime)
@@ -55,7 +56,7 @@ def gate(monkeypatch):
     monkeypatch.setattr(middleware, "_wait_for_decision", AsyncMock())
     executed = []
 
-    async def execute(ctx):
+    async def execute(ctx: SimpleNamespace) -> str:
         executed.append(ctx.message.name)
         return "saved"
 
@@ -70,7 +71,7 @@ def gate(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_denial_ends_continuation_without_dispatch(gate):
+async def test_denial_ends_continuation_without_dispatch(gate: SimpleNamespace) -> None:
     first = await gate.middleware.on_call_tool(context(), gate.execute)
     gate.queue.deny(gate.queue.list_pending()[0].token)
     with pytest.raises(ToolError, match="USER_DENIED"):
@@ -84,7 +85,9 @@ async def test_denial_ends_continuation_without_dispatch(gate):
 @pytest.mark.parametrize(
     "change", ["arguments", "tool", "policy", "removed", "expired"]
 )
-async def test_stale_or_repurposed_continuation_cannot_execute(gate, change):
+async def test_stale_or_repurposed_continuation_cannot_execute(
+    gate: SimpleNamespace, change: str
+) -> None:
     first = await gate.middleware.on_call_tool(context(), gate.execute)
     entry = gate.queue.list_pending()[0]
     gate.queue.approve(entry.token)
@@ -105,7 +108,9 @@ async def test_stale_or_repurposed_continuation_cannot_execute(gate, change):
 
 
 @pytest.mark.anyio
-async def test_round_limit_returns_existing_manual_approval_fallback(gate):
+async def test_round_limit_returns_existing_manual_approval_fallback(
+    gate: SimpleNamespace,
+) -> None:
     """A client must reach an ordinary result before its ten-round SDK limit."""
     state = None
     for _ in range(10):
@@ -125,7 +130,9 @@ async def test_round_limit_returns_existing_manual_approval_fallback(gate):
 
 
 @pytest.mark.anyio
-async def test_dynamic_selector_resumes_only_its_original_row(gate):
+async def test_dynamic_selector_resumes_only_its_original_row(
+    gate: SimpleNamespace,
+) -> None:
     args = {"selector": {"domain": "light"}, "action": "turn_off"}
     first = await gate.middleware.on_call_tool(
         context(name="ha_bulk_control", arguments=args), gate.execute
@@ -152,7 +159,9 @@ async def test_dynamic_selector_resumes_only_its_original_row(gate):
 
 
 @pytest.mark.anyio
-async def test_abandoned_dynamic_continuation_expires_at_original_wait_deadline(gate):
+async def test_abandoned_dynamic_continuation_expires_at_original_wait_deadline(
+    gate: SimpleNamespace,
+) -> None:
     await gate.middleware.on_call_tool(
         context(
             name="ha_bulk_control",
@@ -168,14 +177,16 @@ async def test_abandoned_dynamic_continuation_expires_at_original_wait_deadline(
 
 
 @pytest.mark.anyio
-async def test_concurrent_resumes_cannot_reuse_remembered_approval(gate, monkeypatch):
+async def test_concurrent_resumes_cannot_reuse_remembered_approval(
+    gate: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     gate.policy.rules[0].remember_minutes = 5
     first = await gate.middleware.on_call_tool(context(), gate.execute)
     pending = gate.queue.list_pending()[0]
     arrived = 0
     both_waiting = asyncio.Event()
 
-    async def wait_for_both(*args):
+    async def wait_for_both(*args: object) -> None:
         nonlocal arrived
         arrived += 1
         if arrived == 2:
@@ -199,7 +210,7 @@ async def test_concurrent_resumes_cannot_reuse_remembered_approval(gate, monkeyp
 
 
 @pytest.mark.anyio
-async def test_nested_script_tool_uses_blocking_fallback(gate):
+async def test_nested_script_tool_uses_blocking_fallback(gate: SimpleNamespace) -> None:
     """Continuing an outer script could replay earlier effects in that script."""
     ctx = context()
     ctx.fastmcp_context.request_context._srctx.params = {
@@ -211,7 +222,9 @@ async def test_nested_script_tool_uses_blocking_fallback(gate):
 
 
 @pytest.mark.anyio
-async def test_continuation_resumes_only_after_ui_approval(monkeypatch):
+async def test_continuation_resumes_only_after_ui_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A pending round cannot run the tool; the same approved row runs it once."""
     queue = ApprovalQueue()
     policy = Policy(rules=[Rule(tool_name="ha_call_service")])
@@ -220,7 +233,7 @@ async def test_continuation_resumes_only_after_ui_approval(monkeypatch):
     monkeypatch.setattr(middleware, "_wait_for_decision", AsyncMock())
     dispatched = []
 
-    async def execute(ctx):
+    async def execute(ctx: SimpleNamespace) -> str:
         dispatched.append(ctx.message.arguments)
         return "saved"
 
@@ -245,7 +258,9 @@ async def test_continuation_resumes_only_after_ui_approval(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_legacy_client_keeps_approval_error_and_recall(monkeypatch):
+async def test_legacy_client_keeps_approval_error_and_recall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Legacy clients never receive an unrepresentable input_required result."""
     queue = ApprovalQueue()
     middleware = PolicyMiddleware(

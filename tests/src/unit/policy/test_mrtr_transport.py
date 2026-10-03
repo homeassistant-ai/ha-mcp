@@ -5,16 +5,20 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp import Client, FastMCP
+from ha_mcp._vendor.fastmcp.server.middleware import MiddlewareContext
 from ha_mcp._vendor.mcp import MCPError
 from ha_mcp._vendor.mcp_types import InputRequiredResult
-from ha_mcp.policy.approval_queue import ApprovalQueue
+from ha_mcp.policy.approval_queue import ApprovalQueue, PendingApproval
 from ha_mcp.policy.middleware import PolicyMiddleware
 from ha_mcp.policy.model import Policy, Rule
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
 
+type ApprovalServer = tuple[FastMCP, ApprovalQueue, list[str], PolicyMiddleware]
+
+
 @pytest.fixture
-def server(monkeypatch):
+def server(monkeypatch: pytest.MonkeyPatch) -> ApprovalServer:
     mcp = FastMCP("Approval test")
     queue = ApprovalQueue()
     executed = []
@@ -35,7 +39,9 @@ def server(monkeypatch):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("proxy", [False, True])
-async def test_wire_continuation_is_bound_and_single_use(server, proxy):
+async def test_wire_continuation_is_bound_and_single_use(
+    server: ApprovalServer, proxy: bool
+) -> None:
     """Both direct and categorized calls carry sealed state, not JSON tool content."""
     mcp, queue, executed, _ = server
     name, args = "ha_test_write", {"value": "original"}
@@ -84,11 +90,15 @@ async def test_wire_continuation_is_bound_and_single_use(server, proxy):
 
 
 @pytest.mark.anyio
-async def test_sdk_automatically_resumes_pending_approval(server, monkeypatch):
+async def test_sdk_automatically_resumes_pending_approval(
+    server: ApprovalServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
     mcp, queue, executed, middleware = server
     waits = []
 
-    async def decide_on_resume(ctx, pending, wait):
+    async def decide_on_resume(
+        ctx: MiddlewareContext, pending: PendingApproval, wait: float
+    ) -> None:
         waits.append(pending.token)
         if len(waits) == 2:
             queue.approve(pending.token)
@@ -103,7 +113,9 @@ async def test_sdk_automatically_resumes_pending_approval(server, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_legacy_wire_call_uses_normal_error_and_manual_retry(server):
+async def test_legacy_wire_call_uses_normal_error_and_manual_retry(
+    server: ApprovalServer,
+) -> None:
     mcp, queue, executed, _ = server
     async with Client(mcp, mode="legacy") as client:
         result = await client.call_tool(

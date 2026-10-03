@@ -202,7 +202,10 @@ async def _install_rule(handlers, rule: dict[str, Any]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_mrtr_resumes_ui_approved_service_call(policy_enabled_mcp, monkeypatch):
+async def test_mrtr_resumes_ui_approved_service_call(
+    policy_enabled_mcp: tuple[Client, HomeAssistantSmartMCPServer, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The production server keeps the UI row across MRTR and dispatches after approval."""
     client, server, handlers = policy_enabled_mcp
     monkeypatch.setattr("ha_mcp.policy.mrtr.ROUND_WAIT_SECONDS", 0.05)
