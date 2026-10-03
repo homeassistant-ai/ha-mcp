@@ -727,12 +727,12 @@ class HelperConfigTools:
         options: Annotated[
             str | list[str] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,
-        initial: Annotated[str | int | None, HIDDEN_PARAM] = None,
+        initial: Annotated[str | bool | int | float | None, HIDDEN_PARAM] = None,
         mode: Annotated[str | None, HIDDEN_PARAM] = None,
         has_date: Annotated[bool | None, HIDDEN_PARAM] = None,
         has_time: Annotated[bool | None, HIDDEN_PARAM] = None,
         restore: Annotated[bool | None, HIDDEN_PARAM] = None,
-        duration: Annotated[str | None, HIDDEN_PARAM] = None,
+        duration: Annotated[str | int | float | None, HIDDEN_PARAM] = None,
         monday: Annotated[
             list[dict[str, Any]] | None, HIDDEN_PARAM, JSON_STRING_COERCION
         ] = None,

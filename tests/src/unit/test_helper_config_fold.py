@@ -135,6 +135,19 @@ async def test_config_accepts_core_names_and_name(capture_create) -> None:
     assert capture_create.args[0][2:4] == ("Laps", "mdi:run")
 
 
+async def test_core_value_types_pass_through(capture_create) -> None:
+    """Core takes seconds for a timer and a fractional number initial."""
+    mcp, _ = await _registered_tool()
+    base = {"action": "create", "name": "T"}
+    await _call(mcp, helper_type="timer", **base, config={"duration": 300})
+    await _call(mcp, helper_type="input_number", **base, initial=2.5,
+                min_value=0, max_value=5)  # fmt: skip
+    await _call(mcp, helper_type="input_boolean", **base, config={"initial": True})
+    timer, number, boolean = capture_create.kwargs
+    assert (timer["duration"], number["initial"]) == (300, 2.5)
+    assert boolean["initial"] is True
+
+
 async def test_config_rejects_unknown_and_conflicting_keys(capture_create) -> None:
     mcp, _ = await _registered_tool()
     base = {"helper_type": "input_number", "name": "T", "action": "create"}
