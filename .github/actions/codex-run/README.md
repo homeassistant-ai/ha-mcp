@@ -1,7 +1,7 @@
 # Generic Codex action
 
 `codex-run` executes caller instructions verbatim on Ubuntu with Codex CLI
-`0.153.4`. The caller owns the task, capabilities, expected output and publication.
+`0.157.1`. The caller owns the task, capabilities, expected output and publication.
 The action owns its OAuth credential isolation, process lifetime and diagnostics.
 It does not interpret repository roles or implement a maintainer trust list.
 
@@ -15,6 +15,7 @@ resolve inside `GITHUB_WORKSPACE`.
 | Input | Default | Meaning |
 |---|---|---|
 | `sandbox` | `read-only` | `read-only` or `workspace-write`; credential paths stay denied in both modes. |
+| `read-only-paths` | empty | Existing workspace paths, one per line, kept readable but not writable. Coding callers can protect their trusted controller checkout and source `.git` directory. |
 | `allow-shell` | `true` | Whether the model can execute commands. Use `false` for pre-collected untrusted reports. |
 | `network-access` | `false` | Outbound network for model commands; `true` allows direct network access without a domain allowlist. It does not govern the Codex client's connection to OpenAI. |
 | `web-search` | empty (CLI default) | Optional hosted web search override: `disabled`, `cached`, or `live`. Omission passes no override, preserving existing callers' CLI behavior. Set `disabled` for reports restricted to supplied context. |
@@ -22,7 +23,7 @@ resolve inside `GITHUB_WORKSPACE`.
 | `timeout-minutes` | `10` | Codex process limit, starting after setup. The caller must also cap the whole action step. |
 | `model` / `reasoning-effort` | empty | Optional explicit model and reasoning settings. |
 | `output-schema` | empty | Optional final-response JSON Schema; response usefulness and presence remain caller requirements. |
-| `codex-version` | `0.153.4` | Exact CLI version, required for reproducible permission behavior. |
+| `codex-version` | `0.157.1` | Exact CLI version, required for reproducible permission behavior. |
 
 Commands inherit the small `core` environment. Explicit grants are added through
 `shell_environment_policy.set`, so a selected `GH_TOKEN` is actually available
