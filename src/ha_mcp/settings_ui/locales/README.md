@@ -9,8 +9,8 @@ the wheel and sdist ship every file under `src/ha_mcp`, and
 UI's own strings, each catalog carries the add-on option strings under
 `addon.<key>.*` (with `features.<key>.*` for options the settings UI also
 shows, and `addon_stable.<key>.*` for flavor-specific wording). Both add-on
-flavors' `translations/*.yaml` and the `FEATURE_META` block in `settings.js`
-are generated from these catalogs by `scripts/generate_locales.py` — never
+flavors' `translations/*.yaml` and the `FEATURE_META` block in
+`settings_js/05_feature_flags.js` are generated from these catalogs by `scripts/generate_locales.py` — never
 edit those by hand. Wherever one English string reaches the reader from more
 than one surface, the translation is stored once here and projected, so
 cross-surface wording cannot drift.

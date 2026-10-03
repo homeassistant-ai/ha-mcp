@@ -82,36 +82,47 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The settings-UI client script lives in settings.js (a real file for
-# editor/JS tooling). It is a template with two sentinel tokens for the
+# The settings-UI client script lives in the numbered part files under
+# settings_js/ (real files for editor/JS tooling). The parts are one script
+# split at top-level statement boundaries; joining them in file-name order
+# gives the whole script. It is a template with two sentinel tokens for the
 # Python-injected constant lists; substitute them with the same values the
 # inline literal used so the rendered HTML is byte-identical. Injected
 # inline (not served) -- the serving model is unchanged.
 #
 # This is a module-import-time file read: importing settings_ui (done by
-# server.py / __main__.py / the sidecar) now depends on settings.js being
-# present. If packaging drops it, fail with a packaging-specific ImportError
+# server.py / __main__.py / the sidecar) now depends on the parts being
+# present. If packaging drops them, fail with a packaging-specific ImportError
 # rather than a bare FileNotFoundError so the cause is obvious.
-_SETTINGS_JS_PATH = Path(__file__).parent / "settings.js"
+_SETTINGS_JS_DIR = Path(__file__).parent / "settings_js"
 try:
-    _settings_js_template = _SETTINGS_JS_PATH.read_text(encoding="utf-8")
+    _settings_js_parts = sorted(_SETTINGS_JS_DIR.glob("*.js"))
+    _settings_js_template = "".join(
+        part.read_text(encoding="utf-8") for part in _settings_js_parts
+    )
 except OSError as exc:  # pragma: no cover - packaging guard
     raise ImportError(
-        f"settings.js missing at {_SETTINGS_JS_PATH}. It must ship in "
+        f"settings_js/ missing at {_SETTINGS_JS_DIR}. It must ship in "
         "the wheel, the sdist and the PyInstaller datas (binary) -- this is a "
         "packaging bug, not a usage error."
     ) from exc
+if not _settings_js_template:  # pragma: no cover - packaging guard
+    raise ImportError(
+        f"settings_js/ at {_SETTINGS_JS_DIR} holds no .js parts. They must "
+        "ship in the wheel, the sdist and the PyInstaller datas (binary) -- "
+        "this is a packaging bug, not a usage error."
+    )
 # str.replace() silently no-ops on an absent token, and a *renamed* sentinel
 # (e.g. PINNED_DEFAULTS) slips past both the "__HA_MCP_" not-in test and the
 # esbuild/jsdom JS harness (tests/js/harness.mjs) -- `const DEFAULT_PINNED =
 # PINNED_DEFAULTS;` is valid JS (only a runtime ReferenceError), so a drifted
-# settings.js would ship a broken page green. Assert both sentinels are present
+# settings_js/ would ship a broken page green. Assert both sentinels are present
 # before substituting.
 for _sentinel in ("__HA_MCP_DEFAULT_PINNED__", "__HA_MCP_MANDATORY__"):
     if _sentinel not in _settings_js_template:
         raise ImportError(
-            f"settings.js is out of sync: sentinel {_sentinel} not found. "
-            "The Python injection and settings.js have drifted."
+            f"settings_js/ is out of sync: sentinel {_sentinel} not found. "
+            "The Python injection and settings_js/ have drifted."
         )
 # sorted(), not list(): DEFAULT_PINNED_TOOLS / MANDATORY_TOOLS are sets, so
 # json.dumps(list(...)) is per-process-ordered -- the only reason proving the
@@ -123,10 +134,10 @@ _SETTINGS_JS = _settings_js_template.replace(
 
 
 # The settings-UI CSS lives in settings.css, extracted the same way as
-# settings.js. Unlike the JS it has no Python injection points -- a plain
+# the settings_js/ parts. Unlike the JS it has no Python injection points -- a plain
 # read, no token substitution -- and is injected inline between the same
 # <style>/</style> tags so the served page stays byte-identical. It carries
-# the same import-time packaging dependency as settings.js, so the same
+# the same import-time packaging dependency as settings_js/, so the same
 # OSError -> ImportError packaging guard applies.
 _SETTINGS_CSS_PATH = Path(__file__).parent / "settings.css"
 try:
@@ -140,18 +151,18 @@ except OSError as exc:  # pragma: no cover - packaging guard
 
 
 # The settings page HTML lives in settings.html, extracted the same way as
-# settings.js / settings.css (a real file for editor/HTML tooling). It carries
+# settings_js/ / settings.css (real files for editor/HTML tooling). It carries
 # six substitution markers — two filled once at import, four per request:
 #   __HA_MCP_CSS__         -> settings.css contents (inside <style>)
-#   __HA_MCP_JS__          -> settings.js contents (inside <script>)
+#   __HA_MCP_JS__          -> settings_js/ contents (inside <script>)
 #   __HA_MCP_THEME_PREFS__ -> per-request server-seeded theme prefs JSON,
 #                             substituted in _render_settings_html()
 #   __HA_MCP_I18N__        -> selected merged translation catalog JSON
 #   __HA_MCP_LANG__        -> selected locale code for the html lang attribute
 #   __HA_MCP_DIR__         -> selected catalog text direction (ltr / rtl)
-# Same import-time packaging dependency as settings.js/css (wheel, sdist,
+# Same import-time packaging dependency as settings_js/css (wheel, sdist,
 # PyInstaller datas) and the same OSError guard -- but this loader
-# raises RuntimeError, not the ImportError that settings.js/css raise.
+# raises RuntimeError, not the ImportError that settings_js/css raise.
 _SETTINGS_HTML_PATH = Path(__file__).parent / "settings.html"
 try:
     _settings_html_template = _SETTINGS_HTML_PATH.read_text(encoding="utf-8")
