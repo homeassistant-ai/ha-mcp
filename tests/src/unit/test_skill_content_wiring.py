@@ -56,8 +56,17 @@ _ATTACH_CALL_NAMES = frozenset(
     {"attach_skill_content", "_attach_helper_skill", "_attach_dashboard_skill"}
 )
 
-# Modules whose attach calls count toward a tool module's return paths.
-_ATTACH_SIBLING_GLOBS: dict[str, str] = {"tools_config_helpers.py": "helper_*.py"}
+# Modules split out of a tool module, whose attach calls count toward that
+# tool's return paths. Named explicitly so an unrelated new module cannot
+# satisfy the check.
+_ATTACH_SIBLING_MODULES: dict[str, tuple[str, ...]] = {
+    "tools_config_helpers.py": (
+        "helper_create.py",
+        "helper_flow.py",
+        "helper_schemas.py",
+        "helper_update.py",
+    )
+}
 
 # ---------------------------------------------------------------------------
 # Structural coverage of attach_skill_content on every success return path
@@ -245,8 +254,9 @@ def test_write_tool_attaches_skill_content_somewhere(
     # at the class-level method, others wrap inline in the @tool method,
     # and dashboards/helpers use shared wrappers. All count. The helper
     # tool's create, update and flow paths live in the helper_*.py modules.
-    sibling_glob = _ATTACH_SIBLING_GLOBS.get(module_file)
-    sibling_paths = sorted(TOOLS_DIR.glob(sibling_glob)) if sibling_glob else []
+    sibling_paths = [
+        TOOLS_DIR / name for name in _ATTACH_SIBLING_MODULES.get(module_file, ())
+    ]
     attach_tree = ast.parse(
         "\n".join(p.read_text() for p in [module_path, *sibling_paths])
     )

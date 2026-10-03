@@ -314,7 +314,7 @@ never nested in a payload key and never represented by a singular `warning`
 string. Tool-level failure raises `ToolError`; only an item inside a batch
 result may use `{"success": False, "error": {...}}`.
 For a tool that builds its response on several branches, see
-`tools_config_helpers.py::HelperResponse` / `_helper_response` and
+`helper_schemas.py::HelperResponse` / `_helper_response` and
 `tests/src/unit/test_helper_response_shape.py`.
 
 ## Tool Waiting Behavior

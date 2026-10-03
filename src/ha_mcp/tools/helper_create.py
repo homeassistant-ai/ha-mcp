@@ -63,6 +63,11 @@ def _format_schedule_days(
     return formatted_days
 
 
+# ---------------------------------------------------------------------------
+# CREATE INFRASTRUCTURE
+# ---------------------------------------------------------------------------
+
+
 _SCHEDULE_DAYS: tuple[str, ...] = (
     "monday",
     "tuesday",

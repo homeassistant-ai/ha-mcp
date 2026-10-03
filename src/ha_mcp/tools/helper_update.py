@@ -20,6 +20,10 @@ from .helper_validation import (
 from .helpers import raise_tool_error
 from .util_helpers import apply_entity_category, wait_for_entity_registered
 
+# ---------------------------------------------------------------------------
+# UPDATE INFRASTRUCTURE
+# ---------------------------------------------------------------------------
+
 
 def _update_fields_input_select(
     existing: dict[str, Any],
