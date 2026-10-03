@@ -13,7 +13,6 @@ from ha_mcp.policy.middleware import PolicyMiddleware
 from ha_mcp.policy.model import Policy, Rule
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
-
 type ApprovalServer = tuple[FastMCP, ApprovalQueue, list[str], PolicyMiddleware]
 
 
