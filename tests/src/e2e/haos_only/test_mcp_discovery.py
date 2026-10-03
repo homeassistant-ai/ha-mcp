@@ -1,6 +1,6 @@
 """Core's Model Context Protocol integration discovers the app (#2307).
 
-``start.py`` posts the server URL to the Supervisor's ``/discovery`` at boot.
+The server posts its URL to the Supervisor's ``/discovery`` when the app starts.
 On Core 2026.10+ that raises an ``mcp`` config flow; confirming it makes Core
 connect to the announced URL, list the tools and convert every input schema,
 so a loaded entry proves the hostname resolves from Core, the URL has no

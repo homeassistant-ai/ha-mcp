@@ -12,8 +12,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from supervisor_api import start_mcp_discovery, supervisor_post
-
 
 def _log_with_timestamp(level: str, message: str, stream: TextIO | None = None) -> None:
     """Log a message with a timestamp."""
@@ -150,7 +148,18 @@ def persist_addon_options(options: dict[str, Any], supervisor_token: str) -> Non
     Raises the underlying `urllib.error.HTTPError` / `URLError` / `OSError`
     on failure — callers decide how loudly to surface the problem.
     """
-    supervisor_post("/addons/self/options", supervisor_token, {"options": options})
+    payload = json.dumps({"options": options}).encode()
+    req = urllib.request.Request(
+        "http://supervisor/addons/self/options",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {supervisor_token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
 
 
 def maybe_persist_secret_path(
@@ -911,8 +920,6 @@ def main() -> int:  # noqa: PLR0915
     log_info("   💡 This path is auto-generated and persisted to /data/secret_path.txt")
     log_info("=" * 80)
     log_info("")
-
-    start_mcp_discovery(secret_path, port, supervisor_token, log_info, log_warning)
 
     # Configure logging before server start (v3 removed log_level from run())
     import logging

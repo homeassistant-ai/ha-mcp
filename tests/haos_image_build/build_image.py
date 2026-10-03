@@ -1290,9 +1290,7 @@ def _check_core_auth(base_url: str, token: str) -> None:
         ) from e
 
 
-# The app's scripts, copied from homeassistant-addon/ to the context root.
-DEV_ADDON_APP_FILES = ("start.py", "supervisor_api.py")
-# Repo files the dev addon's Dockerfile copies, besides those and src/.
+# Repo files the dev addon's Dockerfile copies, besides start.py and src/.
 # Supervisor builds with the addon dir as the context, so they are staged
 # into it. haos_runtime.DEV_ADDON_REPO_FILES must match (kept in sync by
 # hand like HA_MCP_TEST_SECRET_PATH; test_haos_dev_addon_context checks
@@ -1340,8 +1338,9 @@ def stage_dev_addon_source(qcow2: Path) -> None:
 
         # Files outside the addon dir that the Dockerfile COPYs from.
         # Mirrors the addon-repo-branch manual steps.
-        for name in DEV_ADDON_APP_FILES:
-            shutil.copy(repo_root / "homeassistant-addon" / name, staging / name)
+        shutil.copy(
+            repo_root / "homeassistant-addon" / "start.py", staging / "start.py"
+        )
         for name in DEV_ADDON_REPO_FILES:
             (staging / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(repo_root / name, staging / name)
@@ -1354,13 +1353,16 @@ def stage_dev_addon_source(qcow2: Path) -> None:
         shutil.copytree(repo_root / "src" / "ha_mcp", addon_src_dir / "ha_mcp")
 
         # Dockerfile in homeassistant-addon-dev/ uses
-        # ``COPY homeassistant-addon/<file> /`` because it's authored to
+        # ``COPY homeassistant-addon/start.py /`` because it's authored to
         # be built from the repo root context. Inside /supervisor/addons/local/ the
         # build context is the addon dir itself, so the path needs to be
-        # ``COPY <file> /``. Same patch the FORK-DEV.md flow applies.
+        # ``COPY start.py /``. Same patch the FORK-DEV.md flow applies.
         dockerfile = staging / "Dockerfile"
         original = dockerfile.read_text()
-        patched = original.replace("COPY homeassistant-addon/", "COPY ")
+        patched = original.replace(
+            "COPY homeassistant-addon/start.py /",
+            "COPY start.py /",
+        )
         if patched == original:
             # Fail fast — silently writing the unpatched Dockerfile would
             # cause an opaque addon-build failure 5+ min later during
@@ -1368,7 +1370,7 @@ def stage_dev_addon_source(qcow2: Path) -> None:
             # directly.
             raise RuntimeError(
                 f"Dockerfile patch failed: expected line "
-                f"'COPY homeassistant-addon/...' not found in "
+                f"'COPY homeassistant-addon/start.py /' not found in "
                 f"{dockerfile}. The dev addon's Dockerfile may have been "
                 f"restructured; update the patch in stage_dev_addon_source "
                 f"to match the new shape."
