@@ -32,6 +32,16 @@ from ha_mcp.errors import ErrorCode
 _BNAME = "automation.kitchen_lights.20260521_153000.yaml"
 
 
+def _backup_settings() -> Settings:
+    """Keep tool access independent of the developer's env and dotenv files."""
+    return Settings(
+        _env_file=None,
+        ENABLE_SNAPSHOT_ACTIONS=True,
+        BACKUP_READ_ONLY=False,
+        READ_ONLY_MODE=False,
+    )
+
+
 def _dispatcher() -> Any:
     """Resolve the raw ``ha_manage_backup`` closure from the ``@tool`` stack.
 
@@ -68,7 +78,9 @@ def _patched(diff_exc: BaseException) -> tuple[Any, Any]:
     mgr = MagicMock()
     mgr.diff_snapshot = AsyncMock(side_effect=diff_exc)
     return (
-        patch("ha_mcp.tools.backup.get_global_settings", return_value=Settings()),
+        patch(
+            "ha_mcp.tools.backup.get_global_settings", return_value=_backup_settings()
+        ),
         patch("ha_mcp.tools.backup.get_backup_manager", return_value=mgr),
     )
 

@@ -27,20 +27,27 @@ def test_app_exposes_backup_controls_for_supervisor_saves(flavor: str) -> None:
         ({"enable_snapshot_actions": True, "backup_read_only": False}, "true", "false"),
         (
             {"enable_snapshot_actions": "false", "backup_read_only": "true"},
-            "true",
             "false",
+            "true",
         ),
+        ("{invalid json", "true", "false"),
     ],
 )
 def test_app_startup_exports_backup_controls(
-    options: dict, snapshot_actions: str, read_only: str, tmp_path, monkeypatch
+    options: dict | str, snapshot_actions: str, read_only: str, tmp_path, monkeypatch
 ) -> None:
     import json
 
     addon = _load_addon_start()
     monkeypatch.setattr(addon.os, "environ", dict(os.environ))
     options_path = tmp_path / "options.json"
-    options_path.write_text(json.dumps(options))
+    options_path.write_text(
+        json.dumps(options) if isinstance(options, dict) else options
+    )
+    errors = []
+    monkeypatch.setattr(addon, "log_error", errors.append)
+    warnings = []
+    monkeypatch.setattr(addon, "log_warning", warnings.append)
     monkeypatch.setattr(
         addon,
         "Path",
@@ -69,6 +76,36 @@ def test_app_startup_exports_backup_controls(
     assert os.environ["ENABLE_SNAPSHOT_ACTIONS"] == snapshot_actions
     assert os.environ["BACKUP_READ_ONLY"] == read_only
     assert os.environ["ENABLE_AUTO_BACKUP"] == "true"
+    malformed = isinstance(options, dict) and isinstance(
+        options.get("enable_snapshot_actions"), str
+    )
+    assert len(warnings) == (2 if malformed else 0)
+    if isinstance(options, str):
+        message = " ".join(errors)
+        assert "decoded backup options still apply" in message
+        assert "enable_snapshot_actions=true" in message
+        assert "backup_read_only=false" in message
+
+
+@pytest.mark.parametrize("invalid", ["false", "true", 0, 1, None, [], {}])
+def test_malformed_app_backup_controls_warn_and_restrict_ai_actions(
+    invalid, monkeypatch
+) -> None:
+    addon = _load_addon_start()
+    monkeypatch.setattr(addon.os, "environ", dict(os.environ))
+    warnings = []
+    monkeypatch.setattr(addon, "log_warning", warnings.append)
+    addon._apply_backup_env(
+        {"enable_snapshot_actions": invalid, "backup_read_only": invalid}
+    )
+
+    assert os.environ["ENABLE_SNAPSHOT_ACTIONS"] == "false"
+    assert os.environ["BACKUP_READ_ONLY"] == "true"
+    assert len(warnings) == 2
+    assert "enable_snapshot_actions" in warnings[0]
+    assert "False" in warnings[0]
+    assert "backup_read_only" in warnings[1]
+    assert "True" in warnings[1]
 
 
 def test_existing_app_backup_options_survive_startup_extraction(monkeypatch) -> None:

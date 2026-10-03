@@ -21,6 +21,7 @@ from ha_mcp.config import (
     reset_global_settings,
 )
 from ha_mcp.read_only import read_only_request
+from ha_mcp.settings_ui import _handlers_backups as backup_ui
 from ha_mcp.tools import backup
 from ha_mcp.tools.auto_backup import with_auto_backup
 from ha_mcp.tools.tools_dev import DevTools
@@ -31,7 +32,12 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 def backup_world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
-    values = Settings().model_dump()
+    values = Settings(
+        _env_file=None,
+        ENABLE_SNAPSHOT_ACTIONS=True,
+        BACKUP_READ_ONLY=False,
+        READ_ONLY_MODE=False,
+    ).model_dump()
     values.update(
         enable_snapshot_actions=True,
         backup_read_only=False,
@@ -333,7 +339,7 @@ async def test_default_controls_preserve_snapshot_creation(
 ) -> None:
     for row in BACKUP_OVERRIDE_FIELDS:
         monkeypatch.delenv(row.env, raising=False)
-    defaults = Settings()
+    defaults = Settings(_env_file=None)
     monkeypatch.setattr(backup, "get_global_settings", lambda: defaults)
     create = AsyncMock(return_value={"success": True, "backup_id": "created"})
     monkeypatch.setattr(backup, "create_backup", create)
@@ -363,3 +369,37 @@ async def test_snapshot_toggle_does_not_block_explicit_edit_capture(
         backup_world.manager.read_snapshot(entries[0]["name"])["config"]["alias"]
         == "Before edit"
     )
+
+
+@pytest.mark.parametrize("action", ["restore", "delete"])
+async def test_human_backup_actions_remain_available_under_tool_restrictions(
+    backup_world: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    from starlette.requests import Request
+
+    path = await backup_world.manager.maybe_snapshot("automation", "kitchen")
+    assert path is not None
+    backup_world.settings.enable_snapshot_actions = False
+    backup_world.settings.backup_read_only = True
+    monkeypatch.setattr(backup_ui, "get_global_settings", lambda: backup_world.settings)
+    monkeypatch.setattr(
+        backup_ui, "get_backup_manager", lambda *_args: backup_world.manager
+    )
+    server = SimpleNamespace(client=backup_world.ha)
+    request = Request({"type": "http", "path_params": {"name": path.name}})
+    handler = (
+        backup_ui._restore_backup if action == "restore" else backup_ui._delete_backup
+    )
+    response = await handler(server, request)
+    body = json.loads(response.body)
+    assert response.status_code == 200
+    assert body["success"] is True
+    if action == "restore":
+        assert body["data"]["restored_from"] == path.name
+        assert body["data"]["result"]["config"]["alias"] == "Before edit"
+    else:
+        assert body["deleted"] == [path.name]
+        with pytest.raises(FileNotFoundError):
+            backup_world.manager.read_snapshot(path.name)

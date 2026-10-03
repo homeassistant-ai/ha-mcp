@@ -322,10 +322,9 @@ def _websockets_dependency_state() -> dict[str, Any]:
 def _get_config_toggles(settings: Settings | None = None) -> dict[str, Any]:
     """Read tool-surface-shaping config toggles from Settings.
 
-    Defaults to the global settings singleton; tests can pass a fake Settings
-    instance instead. Returns an empty dict on any failure (Settings
-    construction, attribute coercion, list-field split) so a misconfigured
-    environment can't break the bug report path itself.
+    Defaults to global settings; tests can pass Settings instead. Settings
+    lookup failures return an empty dict; tool-state failures preserve the
+    known settings and mark tool configuration diagnostics unavailable.
     """
     try:
         s = settings if settings is not None else get_global_settings()
@@ -1052,8 +1051,9 @@ class BugReportTools:
             "mcp_client_host": client_host,
             "http_user_agent": user_agent,
             "config_toggles": config_toggles,
-            "ignored_disabled_tools": config_toggles.get("ignored_disabled_tools", []),
-            "tool_config_warnings": config_toggles.get("tool_config_warnings", []),
+            "ignored_disabled_tools": config_toggles.get("ignored_disabled_tools"),
+            "tool_config_warnings": config_toggles.get("tool_config_warnings"),
+            "tool_config_status": config_toggles.get("tool_config_status"),
             "tool_policy": tool_policy,
             "connection_status": "Unknown",
             "home_assistant_version": "Unknown",

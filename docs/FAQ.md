@@ -747,7 +747,7 @@ The app remains a fully supported alternative on Home Assistant OS and Supervise
 | `HOMEASSISTANT_URL` | Your Home Assistant URL | - | Yes |
 | `HOMEASSISTANT_TOKEN` | Long-lived access token (or `demo` for demo env) | - | Yes |
 | `BACKUP_HINT` | Backup recommendation level | `normal` | No |
-| `ENABLE_SNAPSHOT_ACTIONS` | Allow all full HA snapshot actions through `ha_manage_backup`; `false` blocks listing too | `true` | No |
+| `ENABLE_SNAPSHOT_ACTIONS` | Allow full HA snapshot actions through `ha_manage_backup`; deletion also requires `ENABLE_SNAPSHOT_DELETE`. `false` blocks listing too | `true` | No |
 | `BACKUP_READ_ONLY` | Allow backup reads and block manual create, restore, and delete through `ha_manage_backup` | `false` | No |
 | `HA_MCP_DISABLE_SETTINGS_UI` | Set to `1` to skip the localhost settings-page sidecar that stdio installs spawn by default ([details](#how-do-i-open-the-ha-mcp-settings-page)) | - | No |
 
@@ -768,7 +768,8 @@ its actions:
 
 - **Allow full HA snapshot actions** is on by default. Turning it off blocks
   every `scope="snapshot"` action, including listing; `scope="edits"` remains
-  available.
+  available. Deletion also requires **Allow snapshot deletion** and remains
+  subject to its snapshot protections.
 - **Make backup management read-only** is off by default. Turning it on allows
   edit-backup list, view, and diff, plus snapshot list while snapshot actions
   are enabled. It blocks manual create, restore (including edit restores),

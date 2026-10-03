@@ -115,6 +115,21 @@ def _stub_gate_is_beta(tool: dict[str, Any]) -> bool:
     return bool(declared)
 
 
+def _ignored_disable_diagnostics(config: dict[str, Any]) -> dict[str, Any]:
+    """Allow the Tools page to retain its conservative BPS lock on lookup errors."""
+    from ..config import get_global_settings
+
+    try:
+        settings = get_global_settings()
+        return {
+            "ignored_disabled_tools": ignored_disabled_tools(config, settings),
+            "tool_config_warnings": tool_config_warnings(config, settings),
+        }
+    except Exception:
+        logger.exception("Failed to read settings for mandatory-disable diagnostics")
+        return {"ignored_disabled_tools": None, "tool_config_warnings": None}
+
+
 def _env_pinned_conflicts(
     states: dict[str, str], env_pinned: dict[str, str]
 ) -> list[str]:
@@ -150,9 +165,6 @@ async def _get_tools(
                 _persistence._get_tool_metadata_cache_path(),
             )
     config = _persistence.effective_tool_config()
-    from ..config import get_global_settings
-
-    settings = get_global_settings()
     states = config.get("tools", {})
     pinned = _persistence.env_pinned_tools()
     for name in DEFAULT_PINNED_TOOLS:
@@ -193,8 +205,7 @@ async def _get_tools(
             "tools": tools,
             "states": states,
             "env_pinned": pinned,
-            "ignored_disabled_tools": ignored_disabled_tools(config, settings),
-            "tool_config_warnings": tool_config_warnings(config, settings),
+            **_ignored_disable_diagnostics(config),
             "read_only_exempt": sorted(READ_ONLY_EXEMPT_TOOLS),
             "llm_api": llm_effective,
             "llm_api_overrides": llm_overrides,

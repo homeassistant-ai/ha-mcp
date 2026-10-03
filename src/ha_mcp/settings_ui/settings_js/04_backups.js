@@ -5,7 +5,7 @@ let backupConfigFields = [];
 const BACKUP_FIELD_LABELS = {
   enable_snapshot_actions: {
     label: 'Allow full HA snapshot actions',
-    help: 'Allow AI assistants to manage full Home Assistant snapshots through ha_manage_backup. Turning this off blocks every snapshot action, including listing. Edit backups and human actions in this page remain available.',
+    help: 'Allow AI assistants to manage full Home Assistant snapshots through ha_manage_backup. Turning this off blocks every snapshot action, including listing. Snapshot deletion also requires Allow snapshot deletion. Edit backups and human actions in this page remain available.',
   },
   backup_read_only: {
     label: 'Make backup management read-only',

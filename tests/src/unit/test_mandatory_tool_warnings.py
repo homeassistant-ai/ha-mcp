@@ -116,6 +116,55 @@ def test_report_uses_effective_config_counts_and_warns(monkeypatch) -> None:
     assert "remains enabled" in rendered
 
 
+@pytest.mark.parametrize("raw_config", [[], {"tools": []}, {"tools": None}])
+def test_malformed_tool_config_keeps_known_settings_and_reports_unavailable(
+    monkeypatch, tmp_path, caplog, raw_config
+) -> None:
+    path = tmp_path / "tool_config.json"
+    path.write_text(json.dumps(raw_config))
+    monkeypatch.setattr(_persistence, "_get_config_path", lambda: path)
+    with caplog.at_level(logging.ERROR):
+        toggles = tools_bug_report._get_config_toggles(_settings())
+    assert toggles["enable_snapshot_actions"] is False
+    assert toggles["backup_read_only"] is True
+    assert toggles["ignored_disabled_tools"] is None
+    assert toggles["tool_config_warnings"] is None
+    assert toggles["requested_disabled_tools_count"] is None
+    assert toggles["effective_disabled_tools_count"] is None
+    assert "unavailable" in toggles["tool_config_status"]
+    assert "tool configuration diagnostics" in caplog.text
+    rendered = tools_bug_report._format_config_toggles_for_template(toggles)
+    assert "unavailable" in rendered
+    assert "backup_read_only" in rendered
+
+
+@pytest.mark.asyncio
+async def test_tools_api_keeps_conservative_bps_lock_on_settings_lookup_failure(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        _persistence,
+        "effective_tool_config",
+        lambda: {"tools": {"ha_get_skill_guide": "disabled"}},
+    )
+    monkeypatch.setattr(_persistence, "env_pinned_tools", dict)
+    monkeypatch.setattr(
+        _persistence,
+        "load_tool_metadata_cache",
+        lambda: [{"name": "ha_get_skill_guide"}],
+    )
+    monkeypatch.setattr(
+        "ha_mcp.config.get_global_settings",
+        MagicMock(side_effect=RuntimeError("settings unavailable")),
+    )
+    response = await _handlers_tools._get_tools(None, Request({"type": "http"}))
+    data = json.loads(response.body)
+    assert data["bps_locked_tools"] == ["ha_get_skill_guide"]
+    assert data["states"]["ha_get_skill_guide"] == "disabled"
+    assert data["ignored_disabled_tools"] is None
+    assert data["tool_config_warnings"] is None
+
+
 @pytest.mark.parametrize("strict", [False, True])
 def test_report_conditional_bps_warning(monkeypatch, strict: bool) -> None:
     monkeypatch.setattr(
@@ -136,13 +185,18 @@ def test_report_conditional_bps_warning(monkeypatch, strict: bool) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("report_type", ["runtime_bug", "agent_behavior"])
+@pytest.mark.parametrize("config_available", [False, True])
 async def test_report_output_contains_ignored_disable_warning(
-    monkeypatch, report_type: str
+    monkeypatch, report_type: str, config_available: bool
 ) -> None:
     monkeypatch.setattr(
         _persistence,
         "effective_tool_config",
-        lambda settings: {"tools": {"ha_manage_backup": "disabled"}},
+        lambda settings: (
+            {"tools": {"ha_manage_backup": "disabled"}}
+            if config_available
+            else {"tools": []}
+        ),
     )
     monkeypatch.setattr(tools_bug_report, "get_global_settings", _settings)
     monkeypatch.setattr(tools_bug_report, "_detect_installation_method", lambda: "pip")
@@ -166,6 +220,13 @@ async def test_report_output_contains_ignored_disable_warning(
         monkeypatch.setattr(report, name, AsyncMock(return_value=None))
     result = await report.ha_report_issue(report_type=report_type)
     diagnostics = result["diagnostic_info"]
+    if not config_available:
+        assert diagnostics["ignored_disabled_tools"] is None
+        assert diagnostics["tool_config_warnings"] is None
+        assert "unavailable" in diagnostics["tool_config_status"]
+        assert "unavailable" in result["issue_body"]
+        assert "backup_read_only" in result["issue_body"]
+        return
     assert diagnostics["ignored_disabled_tools"] == ["ha_manage_backup"]
     warning = diagnostics["tool_config_warnings"][0]
     assert warning == (

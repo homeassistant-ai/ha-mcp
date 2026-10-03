@@ -12,11 +12,12 @@ from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM, _assert_clea
 
 
 @pytest.mark.parametrize("env_disabled", [False, True])
+@pytest.mark.parametrize("read_only", [False, True])
 @pytest.mark.parametrize(
     "name", ["ha_manage_backup", "ha_get_state", "ha_get_skill_guide"]
 )
 def test_ignored_disable_renders_enabled_and_roundtrips(
-    env_disabled: bool, name: str
+    env_disabled: bool, read_only: bool, name: str
 ) -> None:
     result = run_script(
         extract_script_body(_SETTINGS_HTML),
@@ -50,7 +51,11 @@ def test_ignored_disable_renders_enabled_and_roundtrips(
                 }
             },
         },
-        invoke="await new Promise(r => setTimeout(r, 250)); await saveConfig();",
+        invoke=(
+            "await new Promise(r => setTimeout(r, 250)); "
+            f"readOnlyState.enabled = {json.dumps(read_only)}; "
+            "render(); await saveConfig();"
+        ),
     )
     _assert_clean_init(result)
     enabled = re.search(rf'<input[^>]*name="tool:{name}:enabled"[^>]*>', result.dom)

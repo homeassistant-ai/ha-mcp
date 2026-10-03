@@ -270,9 +270,10 @@ configuration:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
       ha_manage_backup(scope='snapshot'). Turning this off blocks every snapshot action,
-      including listing, while edit backups remain available. On by default. Change
-      this option or use the web Settings UI Backups tab; requires restart in the
-      app.
+      including listing, while edit backups remain available. Snapshot deletion also
+      requires enable_snapshot_delete and its protections still apply. On by default.
+      Change this option or use the web Settings UI Backups tab; requires restart
+      in the app.
   backup_read_only:
     name: Make backup management read-only
     description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,

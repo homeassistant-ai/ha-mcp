@@ -12,9 +12,8 @@ import yaml
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.config import Settings
 
-from .test_backup_diff_error_mapping import _dispatcher
+from .test_backup_diff_error_mapping import _backup_settings, _dispatcher
 from .test_backup_restore_consumers import response_for, run_restore
 from .test_backup_restore_consumers import settings_script as settings_script
 
@@ -78,7 +77,8 @@ async def test_restore_input_failure_reports_no_write(
         monkeypatch.setattr(
             "ha_mcp.tools.backup.get_backup_manager", lambda *args: manager
         )
-        monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", Settings)
+        monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", _backup_settings)
+        monkeypatch.setattr("ha_mcp.read_only.get_global_settings", _backup_settings)
         with pytest.raises(ToolError) as caught:
             await _dispatcher()(scope="edits", action="restore", backup_name=NAME)
         payload = json.loads(str(caught.value))

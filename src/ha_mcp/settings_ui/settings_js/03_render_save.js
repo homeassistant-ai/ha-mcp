@@ -85,8 +85,7 @@ function render() {
       if (isReadOnlyForcedOff(t)) return false;
       if (toolEnvPinned[t.name]) return toolEnvPinned[t.name] !== 'disabled';
       const s = getState(t.name);
-      return MANDATORY.includes(t.name) || bpsLockedTools.has(t.name) ||
-        (!t.disabled_by && s !== 'disabled');
+      return !t.disabled_by && s !== 'disabled';
     }).length;
 
     // Master-switch checked state. Normally it mirrors "any toggleable tool

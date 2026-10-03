@@ -274,7 +274,8 @@ Settings UI **Backups** tab:
 
 - **Allow full HA snapshot actions** (`enable_snapshot_actions`, default
   `true`): turning this off blocks every full HA snapshot action, including
-  listing. Edit backups remain available.
+  listing. Edit backups remain available. Deletion also requires **Allow
+  snapshot deletion** (`enable_snapshot_delete`) and its protections still apply.
 - **Make backup management read-only** (`backup_read_only`, default `false`):
   allows edit-backup list, view, and diff, and snapshot list when snapshot
   actions are enabled. Blocks manual create, restore (including edit restores),

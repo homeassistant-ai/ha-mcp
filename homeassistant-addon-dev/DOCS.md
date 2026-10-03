@@ -13,7 +13,7 @@ The dev app uses the same configuration as the stable version. See the main app'
 | Option | Description | Default |
 |--------|-------------|---------|
 | `backup_hint` | Backup strength preference | `normal` |
-| `enable_snapshot_actions` | Allow full HA snapshot actions through `ha_manage_backup`; off blocks listing too. Save and restart to apply. | `true` |
+| `enable_snapshot_actions` | Allow full HA snapshot actions through `ha_manage_backup`; deletion also requires `enable_snapshot_delete` and its protections still apply. Off blocks listing too. Save and restart to apply. | `true` |
 | `backup_read_only` | Allow edit-backup reads and snapshot listing when snapshot actions are enabled; block manual create, restore (including edit restores), and delete. Automatic pre-edit backups continue. Save and restart to apply. | `false` |
 | `secret_path` | Custom secret path (optional) | auto-generated |
 | `enable_tool_search` | Replace full tool catalog with search-based discovery (cuts idle context by ~90%, to ~5K tokens). ⚠️ Do NOT enable in clients with built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code) — the layers conflict; use the client's built-in search instead. | `false` |

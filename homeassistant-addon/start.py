@@ -532,12 +532,18 @@ def _apply_backup_env(config: dict[str, Any]) -> None:
     """Export Supervisor backup options, including human-controlled AI permissions."""
     for key, bool_default, invalid in (
         ("enable_auto_backup", True, False),
-        ("enable_snapshot_actions", True, True),
-        ("backup_read_only", False, False),
         ("enable_snapshot_delete", False, False),
     ):
         raw = config.get(key, bool_default)
         os.environ[key.upper()] = str(raw if isinstance(raw, bool) else invalid).lower()
+    for key, absent_default, malformed_default in (
+        ("enable_snapshot_actions", True, False),
+        ("backup_read_only", False, True),
+    ):
+        fallback = malformed_default if key in config else absent_default
+        os.environ[key.upper()] = str(
+            resolve_bool_option(config, key, fallback)
+        ).lower()
     for key, int_default in (
         ("auto_backup_throttle_minutes", 0),
         ("auto_backup_retain_per_entity", 100),
@@ -747,10 +753,11 @@ def main() -> int:  # noqa: PLR0915
             # would otherwise produce a one-line error followed by a
             # working-but-defaulted addon and no other signal.
             log_error(
-                "Addon config defaulted: every option (tool_search, "
-                "auto_backup_*, beta sub-flags, etc.) reverts to its "
-                "addon-schema default this boot. Inspect /data/options.json "
-                "and fix or delete it, then restart the addon."
+                "Addon config could not be fully loaded; some options may use "
+                "startup defaults. Any decoded backup options still apply; "
+                "absent backup controls use enable_snapshot_actions=true and "
+                "backup_read_only=false. Inspect /data/options.json and fix "
+                "or delete it, then restart the addon."
             )
 
     # Validate Supervisor token (needed for both ha-mcp auth below and the
