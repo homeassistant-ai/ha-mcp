@@ -33,7 +33,7 @@
   "src/ha_mcp/tools/tools_config_scripts.py": 1197,
   "src/ha_mcp/tools/tools_dev.py": 2446,
   "src/ha_mcp/tools/tools_energy.py": 1545,
-  "src/ha_mcp/tools/tools_entities.py": 2359,
+  "src/ha_mcp/tools/tools_entities.py": 2227,
   "src/ha_mcp/tools/tools_filesystem.py": 1098,
   "src/ha_mcp/tools/tools_history.py": 1193,
   "src/ha_mcp/tools/tools_integrations.py": 3281,

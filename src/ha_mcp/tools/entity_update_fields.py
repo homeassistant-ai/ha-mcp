@@ -2,7 +2,58 @@
 
 from typing import Any
 
-from .helpers import clearable_value
+from packaging.version import InvalidVersion, Version
+
+from ..errors import ErrorCode, create_error_response
+from .helpers import clearable_value, raise_tool_error
+
+# Home Assistant release that reads an empty entity-name override as "use the
+# device name" (home-assistant/core#181576). Older Cores store "" but render
+# the default name, so the switch would silently do the opposite there.
+USE_DEVICE_NAME_MIN_CORE = (2026, 10)
+
+
+def reject_name_with_use_device_name(
+    name: str | None, use_device_name: bool | None
+) -> None:
+    """Both write the same registry field with different meanings."""
+    if name is not None and use_device_name is not None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "name and use_device_name cannot be combined: use_device_name "
+                "replaces the name override with the device name",
+                suggestions=[
+                    "Pass use_device_name=True alone to follow the device name",
+                    "Pass name alone to set a custom name ('' reverts to the default)",
+                ],
+            )
+        )
+
+
+async def ensure_use_device_name_supported(client: Any) -> None:
+    """Refuse use_device_name=True on a Core older than 2026.10."""
+    config = await client.get_config()
+    raw = str(config.get("version", ""))
+    try:
+        release = Version(raw).release[:2]
+    except InvalidVersion:
+        release = ()
+    if tuple(release) >= USE_DEVICE_NAME_MIN_CORE:
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"use_device_name needs Home Assistant 2026.10 or newer; this Core "
+            f"reports {raw or 'an unknown version'} and would show the default "
+            f"name instead",
+            context={"ha_version": raw},
+            suggestions=[
+                "Upgrade Home Assistant to 2026.10 or newer",
+                "Pass name='<device name>' to set the device's name as a fixed custom name",
+            ],
+        )
+    )
 
 
 def build_name_visibility_fields(
@@ -12,6 +63,7 @@ def build_name_visibility_fields(
     name: str | None,
     icon: str | None,
     device_class: str | None,
+    use_device_name: bool | None = None,
 ) -> None:
     """Add basic positioning/appearance fields to the update message."""
     if area_id is not None:
@@ -22,6 +74,11 @@ def build_name_visibility_fields(
         name = clearable_value(name, "name")
         message["name"] = name
         updates_made.append(f"name='{name}'" if name else "name cleared")
+    if use_device_name is not None:
+        message["name"] = "" if use_device_name else None
+        updates_made.append(
+            "name follows device" if use_device_name else "name cleared"
+        )
     if icon is not None:
         icon = clearable_value(icon, "icon")
         message["icon"] = icon
