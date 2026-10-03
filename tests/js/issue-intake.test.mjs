@@ -1,7 +1,14 @@
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
-import { runCloseWorkflow } from "./issue-intake-helpers.mjs";
+import {
+  FakeGitHub,
+  bot,
+  comment,
+  runCloseWorkflow,
+  snapshot,
+  user,
+} from "./issue-intake-helpers.mjs";
 import {
   collect,
   control,
@@ -13,9 +20,9 @@ import {
   validateResult,
   marker,
   reportMarker,
+  reportVersionLine,
 } from "../../.github/issue-intake/intake.mjs";
 
-const bot = "ha-mcp[bot]";
 
 test("needs-info issue closure never acts on pull requests returned by the issues API", async () => {
   const calls = [];
@@ -297,33 +304,6 @@ test("non-English reports require an English translation", () => {
   );
 });
 
-const user = (login) => ({ login, type: "User" });
-const comment = (id, login, body, extra = {}) => ({
-  id,
-  user: user(login),
-  body,
-  html_url: `https://github.com/test/repo/issues/1#issuecomment-${id}`,
-  created_at: `2026-09-${String(id + 10).padStart(2, "0")}T00:00:00Z`,
-  ...extra,
-});
-function snapshot() {
-  return {
-    repository: "test/repo",
-    issue: {
-      number: 1,
-      title: "Dashboard call hangs",
-      body: "Using Claude Desktop on Windows. The dashboard call hangs.",
-      html_url: "https://github.com/test/repo/issues/1",
-      user: user("reporter"),
-      state: "open",
-      locked: false,
-      labels: [],
-    },
-    comments: [],
-    events: [],
-    roles: { reporter: "read", maintainer: "maintain", writer: "write" },
-  };
-}
 function result() {
   return {
     needs_translation: false,
@@ -345,52 +325,6 @@ function result() {
     missing_fields: ["ha_mcp_version", "install_method"],
     already_requested: [],
   };
-}
-class FakeGitHub {
-  constructor(data) {
-    this.data = structuredClone(data);
-    this.writes = [];
-    this.failLabel = false;
-    this.delays = [];
-    this.delay = async (milliseconds) => this.delays.push(milliseconds);
-  }
-  request(path, options = {}) {
-    if (options.method && options.method !== "GET") {
-      this.writes.push({ path, ...options });
-      if (path.endsWith("/labels")) {
-        if (this.failLabel) throw Error("Label write failed");
-        for (const name of options.data.labels) {
-          this.data.issue.labels.push({ name });
-          this.data.events.push({
-            id: 99,
-            event: "labeled",
-            label: { name },
-            actor: { login: bot, type: "Bot" },
-            created_at: "2026-09-25T00:00:00Z",
-          });
-        }
-      } else if (path.endsWith("/labels/needs-info")) {
-        this.data.issue.labels = [];
-      } else if (path.endsWith("/comments")) {
-        this.data.comments.push(
-          comment(10, bot, options.data.body, {
-            user: { login: bot, type: "Bot" },
-          }),
-        );
-        return { id: 10 };
-      } else if (path.includes("/comments/")) {
-        this.data.comments.find(
-          (c) => c.id === Number(path.split("/").at(-1)),
-        ).body = options.data.body;
-      }
-      return {};
-    }
-    if (path.includes("/collaborators/"))
-      return { role_name: this.data.roles[path.split("/").at(-2)] || "none" };
-    if (path.includes("/comments?")) return structuredClone(this.data.comments);
-    if (path.includes("/events?")) return structuredClone(this.data.events);
-    return structuredClone(this.data.issue);
-  }
 }
 
 test("human replies and maintainer authority survive; bot theories do not enter context", () => {
@@ -675,7 +609,7 @@ test("real close workflow ages needs-info regardless of who applied it", async (
 function reportSnapshot(title) {
   const s = snapshot();
   s.issue.title = title;
-  s.issue.body = `## 🚨 ${reportMarker}\n\n${s.issue.body}`;
+  s.issue.body = `## 🚨 ${reportMarker}\n\n${s.issue.body}\n\n${reportVersionLine} 8.6.0`;
   return s;
 }
 const labelWrites = (api) =>
@@ -687,6 +621,7 @@ test("a filed ha_report_issue report gets the type label its form would have add
   for (const [title, expected] of [
     ["[BUG] Dashboard call hangs", ["bug"]],
     ["[AGENT] Searched three times", ["agent-behavior"]],
+    ["[FEATURE] Manage Thread datasets", ["enhancement"]],
   ]) {
     const s = reportSnapshot(title);
     const r = result();
@@ -759,7 +694,9 @@ test("no report request when one is present or the issue is not a bug", () => {
   const withReport = reportSnapshot("[BUG] Dashboard call hangs");
   const replied = snapshot();
   replied.issue.title = "[BUG] Dashboard call hangs";
-  replied.comments.push(comment(2, "reporter", `## 🚨 ${reportMarker}\n...`));
+  replied.comments.push(
+    comment(2, "reporter", `## 🚨 ${reportMarker}\n...\n${reportVersionLine} 8.6.0`),
+  );
   const feature = snapshot();
   feature.issue.title = "[FEATURE] Faster dashboards";
   const unclear = snapshot();
@@ -783,9 +720,12 @@ test("the report heading matches what ha_report_issue writes", () => {
   // If the two drift apart, filed reports lose their type label and are
   // asked for a report they already contain.
   const tool = readFileSync(
-    new URL("../../src/ha_mcp/tools/tools_bug_report.py", import.meta.url),
+    new URL("../../src/ha_mcp/tools/bug_report_templates.py", import.meta.url),
     "utf8",
   );
-  for (const heading of ["## 🚨 ", "## 🤖 "])
+  for (const heading of ["## 🚨 ", "## 🤖 ", "## 💡 "])
     assert.ok(tool.includes(`${heading}${reportMarker}`), heading);
+  // The gate also needs the environment block's version line; every report
+  // type carrying it is pinned on the Python side.
+  assert.ok(tool.includes(`\n${reportVersionLine} `));
 });

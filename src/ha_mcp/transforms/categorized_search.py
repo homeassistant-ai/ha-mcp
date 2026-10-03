@@ -92,6 +92,14 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
 # Tool name patterns that indicate delete/remove operations
 _DELETE_PATTERNS = ("_remove_", "_delete_")
 
+# Ranking is plain English keyword matching (BM25, no stemming, no
+# translation), so a query in another language returns nothing (#2576).
+SEARCH_QUERY_DESCRIPTION = (
+    "English keywords naming the operation, e.g. 'get entity state' or "
+    "'create automation'. Translate other languages to English first; "
+    "entity, area and device names keep their original spelling."
+)
+
 # ``manage`` names one interface that intentionally combines several
 # operations (.gemini/styleguide.md, Tool Naming Convention). Such a tool is
 # categorised by its annotations like any other, but every call proxy can
@@ -461,9 +469,12 @@ class CategorizedSearchTransform(BM25SearchTransform):
     three category-specific proxies, each carrying appropriate MCP
     annotations for client-side permission handling.
 
-    The unified ``ha_search_tools`` is inherited from BM25SearchTransform and
-    searches across ALL tools regardless of category. Search results include
-    each tool's full annotations so the LLM can determine which proxy to use.
+    The unified ``ha_search_tools`` searches across ALL tools regardless of
+    category, pinned ones included (issue #2576: a pinned tool vanishing
+    from search reads as "no such capability" to a small model). Hidden
+    hits carry their full definition and annotations so the LLM can pick a
+    proxy; pinned hits are rendered as a name-only stub pointing back at the
+    tool list, and never consume one of the ``max_results`` slots.
     """
 
     def __init__(
@@ -557,6 +568,48 @@ class CategorizedSearchTransform(BM25SearchTransform):
             self._delete_tools = delete
             self._last_catalog_hash = current_hash
 
+    def _make_search_tool(self) -> Tool:
+        """Search tool over the whole catalog (pinned tools included)."""
+        transform = self
+
+        async def search_tools(
+            query: Annotated[str, SEARCH_QUERY_DESCRIPTION],
+            ctx: Context = None,  # type: ignore[assignment]
+        ) -> list[dict[str, Any]]:
+            """Search for tools using English keywords.
+
+            Returns matching tool definitions ranked by relevance,
+            in the same format as list_tools.
+            """
+            catalog = await transform.get_tool_catalog(ctx)
+            results = await transform._search(catalog, query)
+            return await transform._render_results(results)
+
+        return Tool.from_function(fn=search_tools, name=self._search_tool_name)
+
+    async def _search(self, tools: Sequence[Tool], query: str) -> Sequence[Tool]:
+        """Rank ``tools``; pinned hits ride along without using a result slot.
+
+        A pinned tool is kept only when it ranks inside the first
+        ``max_results`` of the whole catalog, so a weak match on a stop word
+        does not add a stub to every page.
+        """
+        # The base call (re)builds the index for this catalog; its own top-k
+        # is discarded because pinned hits must not crowd out hidden ones.
+        await super()._search(tools, query)
+        pinned_count = sum(t.name in self._always_visible for t in tools)
+        indices = self._index.query(query, self._max_results + pinned_count)
+        slots = self._max_results
+        results: list[Tool] = []
+        for rank, tool in enumerate(self._indexed_tools[i] for i in indices):
+            if tool.name in self._always_visible:
+                if rank < self._max_results:
+                    results.append(tool)
+            elif slots:
+                results.append(tool)
+                slots -= 1
+        return results
+
     async def _render_results(self, tools: Sequence[Tool]) -> list[dict[str, Any]]:
         """Serialize search results with ``execute_via`` hints."""
         proxy_map: dict[Capability, str] = {
@@ -566,6 +619,22 @@ class CategorizedSearchTransform(BM25SearchTransform):
         }
         results = []
         for tool in tools:
+            if tool.name in self._always_visible:
+                # The client already holds this tool's full definition —
+                # repeating a 5-9KB schema here is what overflows small
+                # context windows (#2576).
+                results.append(
+                    {
+                        "name": tool.name,
+                        "pinned": True,
+                        "execute_via": (
+                            f"{tool.name} is already in your tool list — "
+                            "call it directly with the schema you have; "
+                            "no search or proxy needed."
+                        ),
+                    }
+                )
+                continue
             data = tool.to_mcp_tool().model_dump(
                 mode="json", exclude_none=True, by_alias=True
             )

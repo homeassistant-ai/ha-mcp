@@ -1,0 +1,57 @@
+name: Close issues still missing a report
+
+# The issue-intake gate labels a bug report that has neither an
+# ha_report_issue report nor a reason why there is none. This sweep closes it
+# once the label is 24 hours old, or clears the label if the answer arrived
+# without an event the gate saw. A maintainer removing the label stops it.
+on:
+  schedule:
+    - cron: "47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: report-gate-sweep-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    if: github.repository == 'homeassistant-ai/ha-mcp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HA_MCP_APP_SLUG: ${{ vars.HA_MCP_APP_SLUG }}
+    steps:
+      - name: Checkout trusted gate code
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        # Scheduled runs check out the default branch.
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Find labeled issues that are due
+        id: check
+        timeout-minutes: 4
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/issue-intake/gate.mjs gate-expire-check
+      - name: Create scoped publication token
+        id: app-token
+        if: steps.check.outputs.due != '0'
+        timeout-minutes: 1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ vars.HA_MCP_APP_ID }}
+          private-key: ${{ secrets.HA_MCP_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-contents: read
+      - name: Close or clear them
+        if: steps.app-token.outcome == 'success'
+        timeout-minutes: 4
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TOKEN_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: node .github/issue-intake/gate.mjs gate-expire-apply

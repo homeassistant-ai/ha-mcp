@@ -23,11 +23,14 @@ from .errors import ErrorCode, create_error_response
 from .http_transport import HttpTransportFastMCP as FastMCP
 from .server_lifespan import server_lifespan
 from .server_tool_text import (
+    ISSUE_FILING_INSTRUCTIONS,
     LITE_DOCSTRING_DESTINATIONS,
     LITE_DOCSTRINGS,
+    READ_ONLY_INSTRUCTIONS,
     SEARCH_KEYWORDS,
     SEARCH_TOOL_DESCRIPTION,
     SKILL_USE_BEFORE_KEYWORDS,
+    TOOL_DISCOVERY_INSTRUCTIONS,
 )
 from .tools.helpers import raise_tool_error
 from .tools.tool_hints import read_only_hints
@@ -129,28 +132,7 @@ class HomeAssistantSmartMCPServer:
             server_name = self.settings.mcp_server_name
             server_version = self.settings.mcp_server_version
 
-        # Build server instructions from bundled skills (if enabled)
-        instructions = self._build_skills_instructions()
-
-        # Surface Read Only Mode in the startup instructions so clients
-        # that show server instructions warn the model up front. Startup
-        # state only — live flips are covered by the structured
-        # READ_ONLY_MODE call errors and the ha_get_overview field.
-        if self.settings.read_only_mode:
-            read_only_note = (
-                "## Read Only Mode\n"
-                "This server is running in Read Only Mode: write-capable "
-                "tools are disabled and every write or destructive "
-                "operation is blocked with a READ_ONLY_MODE error. You can "
-                "search, read, and analyze freely. To allow changes, the "
-                "user must turn off Read Only Mode in the ha-mcp settings "
-                "UI (Tools tab) or the add-on configuration."
-            )
-            instructions = (
-                f"{instructions}\n\n{read_only_note}"
-                if instructions
-                else read_only_note
-            )
+        instructions = self._build_instructions()
 
         # Create FastMCP server with Home Assistant icons for client UI display
         self.mcp = FastMCP(
@@ -381,6 +363,22 @@ class HomeAssistantSmartMCPServer:
             logger.debug("skill-tool visibility lookup failed", exc_info=True)
             return False
 
+    def _build_instructions(self) -> str:
+        """Compose the server instructions sent in the MCP initialize response."""
+        sections: list[str] = []
+        skills = self._build_skills_instructions()
+        if skills:
+            sections.append(skills)
+
+        # Surface Read Only Mode in the startup instructions so clients
+        # that show server instructions warn the model up front. Startup
+        # state only — live flips are covered by the structured
+        # READ_ONLY_MODE call errors and the ha_get_overview field.
+        if self.settings.read_only_mode:
+            sections.append(READ_ONLY_INSTRUCTIONS)
+        sections.append(ISSUE_FILING_INSTRUCTIONS)
+        return "\n\n".join(sections)
+
     def _build_skills_instructions(self) -> str | None:
         """Build server instructions from bundled skill frontmatter.
 
@@ -457,32 +455,8 @@ class HomeAssistantSmartMCPServer:
 
         # Append tool search instructions when enabled
         if self.settings.enable_tool_search:
-            instructions += (
-                "\n\n## Tool Discovery\n"
-                "This server uses search-based tool discovery. Most tools "
-                "are NOT listed directly \u2014 use ha_search_tools to find them.\n\n"
-                "WORKFLOW:\n"
-                '1. Call ha_search_tools(query="...") to find relevant tools\n'
-                "2. Results include name, description, parameters, and "
-                "annotations (readOnlyHint/destructiveHint)\n"
-                "3. Execute the discovered tool \u2014 two options:\n"
-                "   a) DIRECT CALL (preferred): Call the tool directly by "
-                "name. All discovered tools are callable without a proxy.\n"
-                "   b) VIA PROXY: For permission-gated execution, use the "
-                "matching proxy:\n"
-                "      - ha_call_read_tool \u2014 safe, read-only operations\n"
-                "      - ha_call_write_tool \u2014 creates or modifies data\n"
-                "      - ha_call_delete_tool \u2014 removes data permanently\n\n"
-                "Once you know a tool\u2019s name, you do NOT need to search "
-                "again \u2014 call it directly.\n\n"
-                f"A few default tools are listed directly "
-                f"({', '.join(DEFAULT_PINNED_TOOLS)}) — these are the "
-                f"starting pins, and users can unpin the non-mandatory "
-                f"ones via the Tools tab in the settings UI, so the "
-                f"actual visible set may be a subset of this list. "
-                f"Everything else must be discovered via search.\n\n"
-                "DO NOT assume a capability is unavailable because you "
-                "don't see a direct tool for it. ALWAYS search first."
+            instructions += TOOL_DISCOVERY_INSTRUCTIONS.format(
+                pinned=", ".join(DEFAULT_PINNED_TOOLS)
             )
 
         return instructions
