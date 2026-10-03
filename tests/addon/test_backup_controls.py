@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -19,7 +20,9 @@ def test_app_exposes_backup_controls_for_supervisor_saves(flavor: str) -> None:
         assert option in manifest["options"]
 
 
-def _boot_until_server_import(options: dict | str, tmp_path, monkeypatch) -> tuple:
+def _boot_until_server_import(
+    options: dict[str, Any] | str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[list[str], list[str]]:
     import json
 
     addon = _load_addon_start()
@@ -28,9 +31,9 @@ def _boot_until_server_import(options: dict | str, tmp_path, monkeypatch) -> tup
     options_path.write_text(
         json.dumps(options) if isinstance(options, dict) else options
     )
-    errors = []
+    errors: list[str] = []
     monkeypatch.setattr(addon, "log_error", errors.append)
-    warnings = []
+    warnings: list[str] = []
     monkeypatch.setattr(addon, "log_warning", warnings.append)
     monkeypatch.setattr(
         addon,
@@ -74,7 +77,11 @@ def _boot_until_server_import(options: dict | str, tmp_path, monkeypatch) -> tup
     ],
 )
 def test_app_startup_exports_backup_controls(
-    options: dict | str, snapshot_actions: str, read_only: str, tmp_path, monkeypatch
+    options: dict[str, Any] | str,
+    snapshot_actions: str,
+    read_only: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     errors, warnings = _boot_until_server_import(options, tmp_path, monkeypatch)
 
@@ -96,12 +103,12 @@ def test_app_startup_exports_backup_controls(
 
 @pytest.mark.parametrize("failed_field", ["read_only_mode", "verify_ssl"])
 def test_app_option_error_preserves_when_backup_values_were_loaded(
-    failed_field, tmp_path, monkeypatch
+    failed_field: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     addon = _load_addon_start()
     original_resolver = addon.resolve_bool_option
 
-    def fail_selected_field(config: dict, key: str, default: bool) -> bool:
+    def fail_selected_field(config: dict[str, Any], key: str, default: bool) -> bool:
         if key == failed_field:
             raise ValueError("option read failed")
         return original_resolver(config, key, default)
@@ -133,11 +140,11 @@ def test_app_option_error_preserves_when_backup_values_were_loaded(
 
 @pytest.mark.parametrize("invalid", ["false", "true", 0, 1, None, [], {}])
 def test_malformed_app_backup_controls_warn_and_restrict_ai_actions(
-    invalid, monkeypatch
+    invalid: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     addon = _load_addon_start()
     monkeypatch.setattr(addon.os, "environ", dict(os.environ))
-    warnings = []
+    warnings: list[str] = []
     monkeypatch.setattr(addon, "log_warning", warnings.append)
     addon._apply_backup_env(
         {"enable_snapshot_actions": invalid, "backup_read_only": invalid}
@@ -152,7 +159,9 @@ def test_malformed_app_backup_controls_warn_and_restrict_ai_actions(
     assert "True" in warnings[1]
 
 
-def test_existing_app_backup_options_survive_startup_extraction(monkeypatch) -> None:
+def test_existing_app_backup_options_survive_startup_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     addon = _load_addon_start()
     monkeypatch.setattr(addon.os, "environ", dict(os.environ))
     expected = {
