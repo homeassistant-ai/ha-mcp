@@ -26,7 +26,7 @@ Two URL gotchas that cost time:
 - **The path is `/mcp/settings`, not `/settings`.** The settings routes live under the MCP path prefix (`MCP_SECRET_PATH`, default `/mcp`). A bare `/settings` returns 404.
 - **The port is `8086` by default** (`_get_http_runtime` default; override with `MCP_PORT`).
 
-Any reachable HA instance works for `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN`. For a throwaway HA with the seeded test token, run `uv run hamcp-test-env` (see [`tests/README.md`](../../../tests/README.md)). After any edit to `__init__.py`, `settings.html`, `settings.js`, or `settings.css`, **restart the process** (assets are cached at import — see Gotchas).
+Any reachable HA instance works for `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN`. For a throwaway HA with the seeded test token, run `uv run hamcp-test-env` (see [`tests/README.md`](../../../tests/README.md)). After any edit to `__init__.py`, `settings.html`, `settings_js/*.js`, or `settings.css`, **restart the process** (assets are cached at import — see Gotchas).
 
 ## Files
 
