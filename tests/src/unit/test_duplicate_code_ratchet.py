@@ -19,7 +19,7 @@ from types import ModuleType
 
 import pytest
 
-from ._ratchet_repo import make_ratchet_repo
+from ._ratchet_repo import commit, make_ratchet_repo
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "duplicate_code_ratchet.py"
@@ -349,6 +349,16 @@ def test_staged_run_ignores_an_unstaged_baseline_edit(temp_repo: Path) -> None:
     (temp_repo / ratchet.BASELINE_NAME).write_text(json.dumps(listed), encoding="utf-8")
 
     assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
+
+
+def test_base_check_rejects_a_hand_listed_group(temp_repo: Path) -> None:
+    """The CI step runs the script with --base. If the script ignored it,
+    the step would check the tree against the edited baseline and pass."""
+    commit(temp_repo)
+    listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
+    (temp_repo / ratchet.BASELINE_NAME).write_text(json.dumps(listed), encoding="utf-8")
+
+    assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
 
 
 def test_repository_matches_the_baseline() -> None:

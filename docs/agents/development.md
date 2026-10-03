@@ -105,8 +105,9 @@ that grew has to be split. Vendored trees, test fixtures and the stable
 webhook-proxy copy are not counted.
 
 Never edit a baseline by hand. The `Fast Checks` job compares each baseline
-with the base branch's (`--base origin/<base>`) and fails when an entry was
-raised or added, or a group of copies was listed that the base does not allow.
+with the one in the base commit the pull request was merged with, and fails
+when an entry was raised or added, or a group of copies was listed that the
+base does not allow.
 
 `tests/src/unit/test_duplicate_code_ratchet.py` fails when a Python function
 or class has the same code as another one: the same after docstrings,

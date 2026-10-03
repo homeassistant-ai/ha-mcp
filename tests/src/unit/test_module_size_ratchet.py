@@ -220,6 +220,20 @@ def test_base_check_rejects_a_hand_raised_entry(temp_repo: Path) -> None:
     assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
 
 
+def test_base_check_rejects_a_nan_entry(temp_repo: Path) -> None:
+    """Every comparison with NaN is false, so a NaN entry would let its file
+    grow past the base check and the repository pin alike."""
+    (temp_repo / ratchet.BASELINE_NAME).write_text(
+        json.dumps({"big.py": LIMIT + 1}), encoding="utf-8"
+    )
+    subprocess.run(["git", "add", ratchet.BASELINE_NAME], cwd=temp_repo, check=True)
+    commit(temp_repo)
+    (temp_repo / ratchet.BASELINE_NAME).write_text('{"big.py": NaN}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="NaN"):
+        ratchet.main(["--base", "HEAD"], repo_root=temp_repo)
+
+
 def test_base_without_the_baseline_passes(temp_repo: Path) -> None:
     """The pull request that adds a baseline has nothing to compare it with."""
     subprocess.run(

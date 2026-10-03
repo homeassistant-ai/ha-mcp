@@ -49,6 +49,18 @@ def read_text(repo_root: Path, path: str, staged: bool = False) -> str:
     return (repo_root / path).read_text("utf-8")
 
 
+def _reject_constant(name: str) -> None:
+    # Every comparison with NaN is false, so a NaN entry would allow any size.
+    raise ValueError(f"the baseline holds {name}, which is not a count")
+
+
+def load_baseline(text: str | bytes) -> dict[str, Any]:
+    """Parse a baseline, rejecting the NaN and Infinity literals that
+    ``json.loads`` otherwise accepts."""
+    baseline: dict[str, Any] = json.loads(text, parse_constant=_reject_constant)
+    return baseline
+
+
 def compare_with_base(
     repo_root: Path,
     ref: str,
@@ -67,8 +79,8 @@ def compare_with_base(
     except subprocess.CalledProcessError:
         print(f"{ref} has no {baseline_name}; nothing to compare")
         return 0
-    base = json.loads(_git(repo_root, "show", f"{ref}:{baseline_name}"))
-    head = json.loads(read_text(repo_root, baseline_name))
+    base = load_baseline(_git(repo_root, "show", f"{ref}:{baseline_name}"))
+    head = load_baseline(read_text(repo_root, baseline_name))
     messages = find_growth(head, base)
     for message in messages:
         print(message, file=sys.stderr)
