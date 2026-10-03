@@ -151,7 +151,7 @@ Tools are lazy-discovered from `tools_*.py`; shared business logic belongs in se
 
 - Comment only non-obvious logic. Code should be self-documenting; too many comments is an anti-pattern.
 - In Python, type-hint every function signature and use async/await consistently for I/O.
-- Keep modules focused. Around 1,000 lines (Pylint's `max-module-lines` default) signals a module spanning several concerns; split along responsibilities and update internal imports and test patch targets together, since internal module paths are not a public MCP tool contract.
+- Keep modules focused. A source file over 1,000 lines (Pylint's `max-module-lines` default) spans several concerns, and `test_module_size_ratchet.py` fails when a new file crosses that limit or a listed one grows; split along responsibilities and update internal imports and test patch targets together, since internal module paths are not a public MCP tool contract.
 - Never hand-edit the root `CHANGELOG.md` or its `homeassistant-addon/CHANGELOG.md` copy; semantic-release generates both. The webhook-proxy app changelogs are maintained by hand per their scoped `AGENTS.md`.
 
 ## Terminology: apps, not add-ons

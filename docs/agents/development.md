@@ -85,6 +85,25 @@ adding a `C901` per-file ignore. Lefthook runs `ruff --fix` on commit with
 non-`__init__` modules. Add an import and its first use in the same change or
 the hook may strip it without a separate Ruff invocation.
 
+Source files are capped at 1,000 lines by
+`tests/src/unit/test_module_size_ratchet.py`. Files that were already larger
+are listed with their exact line count in
+`tests/src/unit/module_size_baseline.json`; a listed file may shrink but not
+grow. After shrinking or deleting a listed file, lower its entry and commit
+the changed baseline:
+
+```bash
+python scripts/module_size_ratchet.py
+git add tests/src/unit/module_size_baseline.json
+```
+
+The lefthook pre-commit hook runs both steps against the staged content, so
+a shrink that is not staged does not lower its entry.
+
+The command lowers or drops entries and never raises or adds one, so a file
+that grew has to be split. Vendored trees, test fixtures and the stable
+webhook-proxy copy are not counted.
+
 ## Docker
 
 Stdio mode is local to the process and does not expose a network port:
