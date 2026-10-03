@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import re
 import stat
 import sys
 import warnings
@@ -146,6 +147,29 @@ class TestAddonStructure:
         assert not any(arch in config["arch"] for arch in unsupported_archs), (
             "32-bit platforms not supported by uv base image"
         )
+
+    @pytest.mark.parametrize(
+        ("addon_dir", "entry"),
+        [
+            ("homeassistant-addon", r"^### {key}\b"),
+            ("homeassistant-addon-dev", r"^\| `{key}`"),
+        ],
+        ids=["stable section", "dev table row"],
+    )
+    def test_docs_describe_every_app_option(self, addon_dir, entry):
+        """The Configuration page shows only a name and a short help text
+        per option; DOCS.md is where a user finds the details. The stable
+        DOCS.md has a section per option and the dev one a table row."""
+        config = yaml.safe_load((_REPO_ROOT / addon_dir / "config.yaml").read_text())
+        docs = (_REPO_ROOT / addon_dir / "DOCS.md").read_text(encoding="utf-8")
+
+        missing = [
+            key
+            for key in config["schema"]
+            if not re.search(entry.format(key=re.escape(key)), docs, re.MULTILINE)
+        ]
+
+        assert not missing, f"{addon_dir}/DOCS.md does not document {missing}"
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="Unix permissions not applicable on Windows"
