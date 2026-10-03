@@ -19,23 +19,7 @@ def test_app_exposes_backup_controls_for_supervisor_saves(flavor: str) -> None:
         assert option in manifest["options"]
 
 
-@pytest.mark.parametrize(
-    ("options", "snapshot_actions", "read_only"),
-    [
-        ({}, "true", "false"),
-        ({"enable_snapshot_actions": False, "backup_read_only": True}, "false", "true"),
-        ({"enable_snapshot_actions": True, "backup_read_only": False}, "true", "false"),
-        (
-            {"enable_snapshot_actions": "false", "backup_read_only": "true"},
-            "false",
-            "true",
-        ),
-        ("{invalid json", "true", "false"),
-    ],
-)
-def test_app_startup_exports_backup_controls(
-    options: dict | str, snapshot_actions: str, read_only: str, tmp_path, monkeypatch
-) -> None:
+def _boot_until_server_import(options: dict | str, tmp_path, monkeypatch) -> tuple:
     import json
 
     addon = _load_addon_start()
@@ -72,6 +56,27 @@ def test_app_startup_exports_backup_controls(
     monkeypatch.setattr(addon, "log_info", stop_before_server_import)
     with pytest.raises(StartupReachedServerImport):
         addon.main()
+    return errors, warnings
+
+
+@pytest.mark.parametrize(
+    ("options", "snapshot_actions", "read_only"),
+    [
+        ({}, "true", "false"),
+        ({"enable_snapshot_actions": False, "backup_read_only": True}, "false", "true"),
+        ({"enable_snapshot_actions": True, "backup_read_only": False}, "true", "false"),
+        (
+            {"enable_snapshot_actions": "false", "backup_read_only": "true"},
+            "false",
+            "true",
+        ),
+        ("{invalid json", "true", "false"),
+    ],
+)
+def test_app_startup_exports_backup_controls(
+    options: dict | str, snapshot_actions: str, read_only: str, tmp_path, monkeypatch
+) -> None:
+    errors, warnings = _boot_until_server_import(options, tmp_path, monkeypatch)
 
     assert os.environ["ENABLE_SNAPSHOT_ACTIONS"] == snapshot_actions
     assert os.environ["BACKUP_READ_ONLY"] == read_only
@@ -82,9 +87,48 @@ def test_app_startup_exports_backup_controls(
     assert len(warnings) == (2 if malformed else 0)
     if isinstance(options, str):
         message = " ".join(errors)
-        assert "decoded backup options still apply" in message
+        assert (
+            "Backup options apply only after parsing reaches their section" in message
+        )
         assert "enable_snapshot_actions=true" in message
         assert "backup_read_only=false" in message
+
+
+@pytest.mark.parametrize("failed_field", ["read_only_mode", "verify_ssl"])
+def test_app_option_error_preserves_when_backup_values_were_loaded(
+    failed_field, tmp_path, monkeypatch
+) -> None:
+    addon = _load_addon_start()
+    original_resolver = addon.resolve_bool_option
+
+    def fail_selected_field(config: dict, key: str, default: bool) -> bool:
+        if key == failed_field:
+            raise ValueError("option read failed")
+        return original_resolver(config, key, default)
+
+    monkeypatch.setattr(addon, "resolve_bool_option", fail_selected_field)
+    options = {
+        "enable_auto_backup": False,
+        "auto_backup_throttle_minutes": 12,
+        "auto_backup_retain_per_entity": 50,
+        "enable_snapshot_delete": True,
+        "snapshot_delete_min_age_days": 20,
+        "enable_snapshot_actions": False,
+        "backup_read_only": True,
+    }
+    errors, _warnings = _boot_until_server_import(options, tmp_path, monkeypatch)
+    assert any("option read failed" in message for message in errors)
+    loaded = failed_field == "verify_ssl"
+    expected = {
+        "ENABLE_AUTO_BACKUP": "false" if loaded else "true",
+        "AUTO_BACKUP_THROTTLE_MINUTES": "12" if loaded else "0",
+        "AUTO_BACKUP_RETAIN_PER_ENTITY": "50" if loaded else "100",
+        "ENABLE_SNAPSHOT_DELETE": "true" if loaded else "false",
+        "SNAPSHOT_DELETE_MIN_AGE_DAYS": "20" if loaded else "7",
+        "ENABLE_SNAPSHOT_ACTIONS": "false" if loaded else "true",
+        "BACKUP_READ_ONLY": "true" if loaded else "false",
+    }
+    assert {env: os.environ[env] for env in expected} == expected
 
 
 @pytest.mark.parametrize("invalid", ["false", "true", 0, 1, None, [], {}])

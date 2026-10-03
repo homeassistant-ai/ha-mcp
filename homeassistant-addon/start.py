@@ -608,6 +608,7 @@ def main() -> int:  # noqa: PLR0915
     # flips to True and the actual value comes from the addon options.
     beta_master_in_config = False
     enable_beta_features = False
+    backup_config: dict[str, Any] = {}
     tool_search_max_results = 5  # default
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
@@ -736,6 +737,7 @@ def main() -> int:  # noqa: PLR0915
             enable_beta_features = (
                 raw_beta_master if isinstance(raw_beta_master, bool) else False
             )
+            backup_config = config
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = (
                 raw_max_results if isinstance(raw_max_results, int) else 5
@@ -747,17 +749,12 @@ def main() -> int:  # noqa: PLR0915
             verify_ssl = resolve_bool_option(config, "verify_ssl", True)
         except Exception as e:  # noqa: BLE001
             log_error(f"Failed to read config: {e}, using defaults")
-            # Persistent "you lost your features" line so an operator
-            # who scrolled past the cryptic exception trace still sees
-            # what got silently reset. /data/options.json corruption
-            # would otherwise produce a one-line error followed by a
-            # working-but-defaulted addon and no other signal.
             log_error(
                 "Addon config could not be fully loaded; some options may use "
-                "startup defaults. Any decoded backup options still apply; "
-                "absent backup controls use enable_snapshot_actions=true and "
-                "backup_read_only=false. Inspect /data/options.json and fix "
-                "or delete it, then restart the addon."
+                "startup defaults. Backup options apply only after parsing reaches "
+                "their section; otherwise defaults apply (enable_snapshot_actions=true, "
+                "backup_read_only=false). Inspect /data/options.json and fix or delete "
+                "it, then restart the addon."
             )
 
     # Validate Supervisor token (needed for both ha-mcp auth below and the
@@ -877,7 +874,7 @@ def main() -> int:  # noqa: PLR0915
         # tools on. Keep the auto-enable as a one-cycle bridge until
         # Supervisor merges the new schema default into options.json.
         maybe_auto_enable_beta_master(config)
-    _apply_backup_env(config)
+    _apply_backup_env(backup_config)
     # Persist saved custom tools across addon restarts. /data is the
     # per-addon writable directory mapped by Supervisor and survives
     # add-on updates (but not uninstall/reinstall — users should copy
