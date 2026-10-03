@@ -23,6 +23,8 @@ from ha_mcp.tools.config_helpers import validation as hc_validation
 from ha_mcp.tools.helpers import HIDDEN_PARAM, hidden_param_names
 from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
+from ._ws_replies import scripted_ws_client
+
 pytestmark = pytest.mark.asyncio
 
 _HIDDEN = {
@@ -379,19 +381,15 @@ async def test_input_text_unit_and_pattern() -> None:
 _TAG_ENTITY = {"entity_id": "tag.front_door", "platform": "tag", "unique_id": "abc-1"}
 
 
-def _ws(*responses: dict[str, Any]) -> MagicMock:
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock(side_effect=list(responses))
-    return client
-
-
 @pytest.mark.parametrize(
     ("error_code", "expected"),
     [("invalid_format", "VALIDATION_INVALID_PARAMETER"),
      ("home_assistant_error", "SERVICE_CALL_FAILED")],
 )  # fmt: skip
 async def test_websocket_create_failure_code(error_code: str, expected: str) -> None:
-    client = _ws({"success": False, "error": "bad", "error_code": error_code})
+    client = scripted_ws_client(
+        {"success": False, "error": "bad", "error_code": error_code}
+    )
     with (
         patch.object(hc_create, "write_helper_item", AsyncMock(return_value=None)),
         pytest.raises(ToolError, match=expected),
@@ -403,7 +401,7 @@ async def test_websocket_create_failure_code(error_code: str, expected: str) -> 
 
 
 async def test_websocket_tag_create_reports_the_real_entity() -> None:
-    client = _ws(
+    client = scripted_ws_client(
         {"success": True, "result": {"id": "abc-1", "name": "Front door"}},
         {"success": True, "result": [_TAG_ENTITY]},
     )
@@ -460,7 +458,7 @@ async def test_websocket_tag_update_applies_registry_fields() -> None:
 
 
 async def test_component_tag_update_reports_the_component_entity() -> None:
-    client = _ws({"success": True, "result": [_TAG_ENTITY]})
+    client = scripted_ws_client({"success": True, "result": [_TAG_ENTITY]})
     read = AsyncMock(
         return_value={"success": True, "item_id": "abc-1", "item": {"id": "abc-1"}}
     )

@@ -2,7 +2,6 @@
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -10,16 +9,12 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS
 from ha_mcp.tools.tools_updates import UpdateTools
 
+from ._ws_replies import scripted_ws_client
+
 _LISTED = {
     "success": True,
     "result": {"issues": [{"domain": "sun", "issue_id": "abc", "ignored": False}]},
 }
-
-
-def _client(*replies: dict[str, Any]) -> MagicMock:
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock(side_effect=list(replies))
-    return client
 
 
 @pytest.mark.unit
@@ -28,7 +23,7 @@ def _client(*replies: dict[str, Any]) -> MagicMock:
 )
 async def test_sets_ignored_flag_on_listed_issue(action: str, ignore: bool) -> None:
     ok = {"success": True, "result": None}
-    client = _client(_LISTED, ok) if ignore else _client(ok)
+    client = scripted_ws_client(_LISTED, ok) if ignore else scripted_ws_client(ok)
 
     result = await UpdateTools(client).ha_manage_updates(
         action=action, repairs=[{"domain": "sun", "issue_id": "abc"}]
@@ -51,7 +46,7 @@ async def test_sets_ignored_flag_on_listed_issue(action: str, ignore: bool) -> N
 
 @pytest.mark.unit
 async def test_unknown_issue_is_reported_per_item() -> None:
-    client = _client(_LISTED, {"success": True, "result": None})
+    client = scripted_ws_client(_LISTED, {"success": True, "result": None})
 
     result = await UpdateTools(client).ha_manage_updates(
         action="ignore_repair",
@@ -70,7 +65,7 @@ async def test_unknown_issue_is_reported_per_item() -> None:
 
 @pytest.mark.unit
 async def test_home_assistant_rejection_is_reported_per_item() -> None:
-    client = _client(
+    client = scripted_ws_client(
         _LISTED,
         {
             "success": False,
@@ -90,7 +85,7 @@ async def test_home_assistant_rejection_is_reported_per_item() -> None:
 
 @pytest.mark.unit
 async def test_unreadable_issue_list_leaves_the_verdict_to_home_assistant() -> None:
-    client = _client({"success": False}, {"success": True, "result": None})
+    client = scripted_ws_client({"success": False}, {"success": True, "result": None})
 
     result = await UpdateTools(client).ha_manage_updates(
         action="ignore_repair", repairs=[{"domain": "sun", "issue_id": "abc"}]
@@ -104,7 +99,7 @@ async def test_unreadable_issue_list_leaves_the_verdict_to_home_assistant() -> N
     "repairs", [None, [], [{"domain": "sun"}], [{"domain": "sun", "issue_id": 3}]]
 )
 async def test_malformed_repairs_are_rejected(repairs: Any) -> None:
-    client = _client()
+    client = scripted_ws_client()
 
     with pytest.raises(ToolError) as exc_info:
         await UpdateTools(client).ha_manage_updates(
@@ -126,7 +121,7 @@ def test_repair_actions_are_writes_in_read_only_mode(action: str) -> None:
 @pytest.mark.unit
 async def test_unignore_reaches_issues_missing_from_the_active_list() -> None:
     """An inactive issue is absent from list_issues but still un-ignorable."""
-    client = _client({"success": True, "result": None})
+    client = scripted_ws_client({"success": True, "result": None})
 
     result = await UpdateTools(client).ha_manage_updates(
         action="unignore_repair", repairs=[{"domain": "sun", "issue_id": "inactive"}]
