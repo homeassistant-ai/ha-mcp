@@ -3,17 +3,17 @@
 The :class:`EmbeddedServerManager` owns the full lifecycle of the in-process
 ha-mcp server:
 
-* ensures the ``ha-mcp`` package is importable (runtime pip install via
-  Home Assistant's requirements manager, honoring an options-flow pip-spec
-  override for pre-release testing, and forcing a real reinstall when that spec
-  changes),
-* provisions a long-lived Home Assistant admin token the server uses to reach HA
+* ensures the ``ha-mcp`` package is importable (the manifest pin Home
+  Assistant installed, or a runtime pip install honoring an options-flow
+  pip-spec override for pre-release testing, forcing a real reinstall when that
+  spec changes),
+* hands the server the administrator's long-lived token it uses to reach HA
   core over loopback (REST + WebSocket),
 * runs the server on a dedicated thread with its own asyncio loop — uvicorn
   skips signal capture off the main thread and a heavy tool can never stall HA's
   event loop — and
-* tears the thread down cleanly, and revokes the provisioned credentials when
-  the entry is removed.
+* tears the thread down cleanly, and on entry removal deletes the account and
+  token an older release provisioned (never the administrator's own).
 
 Everything the server needs from ha-mcp is imported **inside the worker thread**,
 after the required non-secret environment variables are staged, so importing this
@@ -37,13 +37,10 @@ import subprocess
 import sys
 import threading
 from contextlib import suppress
-from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
-from homeassistant.auth.const import GROUP_ID_ADMIN
-from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.loader import async_get_integration
@@ -57,11 +54,9 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from .const import (
-    DATA_ACCESS_TOKEN,
     DATA_LAST_PIP_SPEC,
-    DATA_REFRESH_TOKEN_ID,
+    DATA_REINSTALL_REQUESTED,
     DATA_SECRET_PATH,
-    DATA_SERVER_USER_ID,
     DEFAULT_BIND_HOST,
     DEFAULT_ENABLE_LLM_API,
     DEFAULT_LOOPBACK_URL,
@@ -79,8 +74,6 @@ from .const import (
     OPT_SERVER_URL,
     SERVER_CONFIG_SUBDIR,
     SERVER_KEEPALIVE_SECONDS,
-    SERVER_TOKEN_CLIENT_NAME,
-    SERVER_USER_NAME,
 )
 from .dependency_diagnostics import (
     DependencyViolation,
@@ -92,6 +85,11 @@ from .dependency_diagnostics import (
     root_import_failure,
 )
 from .pip_compat import pip_kwargs
+from .server_credentials import (
+    CredentialNeeded,
+    async_release_credentials,
+    async_server_access_token,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -99,11 +97,6 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
-
-# Access-token longevity for the provisioned long-lived token. HA caps nothing
-# here; ten years is effectively "for the life of the install" and is refreshed
-# from the same refresh token on every start regardless.
-_ACCESS_TOKEN_TTL = timedelta(days=3650)
 
 # Readiness probe: fail the bring-up only when there is no observable startup
 # progress (no new modules landing in sys.modules, no phase advance) for this
@@ -212,14 +205,16 @@ class EmbeddedServerError(Exception):
     """Raised when the in-process ha-mcp server could not be installed or started.
 
     ``kind`` classifies the failure so the caller can file the matching repair
-    issue: ``"package"`` for a pip install / import failure, ``"start"`` for
-    everything else (token provisioning, thread crash, readiness timeout).
+    issue: ``"package"`` for a pip install / import failure, ``"token"`` when
+    there is no usable Home Assistant credential (the message is the reason's
+    translation key), ``"start"`` for everything else (thread crash,
+    readiness timeout).
     """
 
     def __init__(
-        self, message: str, *, kind: Literal["package", "start"] = "start"
+        self, message: str, *, kind: Literal["package", "start", "token"] = "start"
     ) -> None:
-        """Store the message and the failure ``kind`` (``package`` / ``start``)."""
+        """Store the message and the failure ``kind``."""
         super().__init__(message)
         self.kind = kind
 
@@ -364,7 +359,7 @@ class EmbeddedServerManager:
     # -- lifecycle ---------------------------------------------------------
 
     async def async_start(self) -> None:
-        """Install the package, provision a token, and start the server thread.
+        """Install the package, resolve the token, and start the server thread.
 
         Raises :class:`EmbeddedServerError` on any failure. The caller is
         responsible for surfacing a repair issue — a failed start must never take
@@ -383,7 +378,8 @@ class EmbeddedServerManager:
                 f"Assistant {HA_VERSION} satisfies its minimum requirement of "
                 f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION}. Install a standard Home "
                 "Assistant release before reloading this integration.",
-                kind="package",
+                # Not "package": reinstalling the server cannot fix this.
+                kind="start",
             ) from err
         if home_assistant_version < Version(MIN_EMBEDDED_HOME_ASSISTANT_VERSION):
             raise EmbeddedServerError(
@@ -391,10 +387,15 @@ class EmbeddedServerManager:
                 f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION} or newer; this instance "
                 f"is running {HA_VERSION}. Update Home Assistant before "
                 "reloading this integration.",
-                kind="package",
+                kind="start",
             )
 
         self._paired_spec = await _async_paired_server_requirement(self._hass)
+        if self._paired_spec is None and not self._pip_spec_override:
+            _LOGGER.warning(
+                "This component's manifest pins no ha-mcp server; running "
+                "whichever ha-mcp is installed. Reinstall the integration from HACS"
+            )
         self._pip_spec = self._resolve_pip_spec()
 
         # Read the importer registry BEFORE the package step too: replacing
@@ -405,7 +406,7 @@ class EmbeddedServerManager:
             defer_mutations=_prune_and_check_importing_workers()
         )
         await self._async_warn_on_dependency_conflicts()
-        access_token = await self._async_provision_token()
+        access_token = await self._async_access_token()
         await self._hass.async_add_executor_job(self._prepare_config_dir)
 
         self._maybe_purge_stale_modules(ready_version)
@@ -458,7 +459,7 @@ class EmbeddedServerManager:
 
         Never blocks Home Assistant shutdown indefinitely: if the thread does not
         exit within the timeout it is logged and left to die with the process.
-        Does NOT revoke the provisioned token — that is reserved for
+        Does NOT release credentials — that is reserved for
         :meth:`async_revoke_credentials` (entry removal) so a reload keeps
         working.
         """
@@ -495,29 +496,8 @@ class EmbeddedServerManager:
         self._running_version = None
 
     async def async_revoke_credentials(self) -> None:
-        """Revoke the provisioned refresh token and remove the server's user.
-
-        Called when the config entry is removed. Best-effort and idempotent:
-        missing ids / already-deleted objects are treated as success.
-        """
-        rt_id = self._entry.data.get(DATA_REFRESH_TOKEN_ID)
-        user_id = self._entry.data.get(DATA_SERVER_USER_ID)
-
-        if rt_id:
-            refresh_token = self._hass.auth.async_get_refresh_token(rt_id)
-            if refresh_token is not None:
-                self._hass.auth.async_remove_refresh_token(refresh_token)
-
-        if user_id:
-            user = await self._hass.auth.async_get_user(user_id)
-            if user is not None:
-                await self._hass.auth.async_remove_user(user)
-
-        remaining = {
-            k: v
-            for k, v in self._entry.data.items()
-            if k not in (DATA_SERVER_USER_ID, DATA_REFRESH_TOKEN_ID, DATA_ACCESS_TOKEN)
-        }
+        """Release the server's credential when the config entry is removed."""
+        remaining = await async_release_credentials(self._hass, self._entry.data)
         if remaining != dict(self._entry.data):
             self._hass.config_entries.async_update_entry(self._entry, data=remaining)
 
@@ -753,7 +733,10 @@ class EmbeddedServerManager:
           ``ha-mcp`` for ``ha-mcp-dev`` or back, or an override on the other
           one). It is removed first, and because both distributions own the
           same ``ha_mcp`` files, that removal deletes the target's files too,
-          so the target is then REINSTALLED rather than upgraded.
+          so the target is then REINSTALLED rather than upgraded,
+        * the package repair asked for a reinstall (``DATA_REINSTALL_REQUESTED``):
+          even a satisfied pin is reinstalled, and the flag is cleared only
+          once that install succeeds.
 
         ``defer_mutations=True`` (a previous bring-up's worker is still
         importing) downgrades any would-be uninstall/install to the
@@ -778,6 +761,7 @@ class EmbeddedServerManager:
             if target_dist is not None
             else None
         )
+        reinstall_requested = bool(self._entry.data.get(DATA_REINSTALL_REQUESTED))
         conflicting = self._conflicting_dist_name()
         conflict_present = (
             conflicting is not None
@@ -785,7 +769,8 @@ class EmbeddedServerManager:
         )
 
         satisfied = (
-            target_dist is not None
+            not reinstall_requested
+            and target_dist is not None
             and target_version is not None
             and installed_version is not None
             and not conflict_present
@@ -819,7 +804,7 @@ class EmbeddedServerManager:
                     conflicting=conflicting if conflict_present else None,
                 ),
             )
-            reinstall = False
+            reinstall = reinstall_requested
             if conflict_present and conflicting is not None:
                 _LOGGER.info(
                     "Removing %r, which shares the ha_mcp package with %r, "
@@ -838,6 +823,15 @@ class EmbeddedServerManager:
                 # installed at all.
                 await self._async_remove_replaced_source(stored_spec, installed_version)
             await self._async_force_install(reinstall=reinstall)
+            if reinstall_requested:
+                self._hass.config_entries.async_update_entry(
+                    self._entry,
+                    data={
+                        k: v
+                        for k, v in self._entry.data.items()
+                        if k != DATA_REINSTALL_REQUESTED
+                    },
+                )
 
         version: str | None = await self._hass.async_add_executor_job(
             _installed_ha_mcp_version, self._preferred_dist()
@@ -1201,69 +1195,18 @@ class EmbeddedServerManager:
         if new_data != dict(self._entry.data):
             self._hass.config_entries.async_update_entry(self._entry, data=new_data)
 
-    # -- token provisioning ------------------------------------------------
+    # -- server token ------------------------------------------------------
 
-    async def _async_provision_token(self) -> str:
-        """Return an admin access token for the server, provisioning if needed.
+    async def _async_access_token(self) -> str:
+        """Return the access token the server runs with (#2427).
 
-        Reuses the previously-created local admin user and long-lived refresh
-        token across restarts (ids persisted in ``entry.data``); a fresh access
-        token is minted from the refresh token on every start. Falls back to
-        creating a new user / refresh token when the stored ones are gone.
+        Raises ``EmbeddedServerError(kind="token")`` when there is no usable
+        credential; nothing is created to replace it.
         """
-        user_id = self._entry.data.get(DATA_SERVER_USER_ID)
-        rt_id = self._entry.data.get(DATA_REFRESH_TOKEN_ID)
-
-        user = await self._hass.auth.async_get_user(user_id) if user_id else None
-        if user is None:
-            user = await self._hass.auth.async_create_user(
-                SERVER_USER_NAME,
-                group_ids=[GROUP_ID_ADMIN],
-                local_only=True,
-            )
-            rt_id = None
-
-        refresh_token = (
-            self._hass.auth.async_get_refresh_token(rt_id) if rt_id else None
-        )
-        if refresh_token is not None and refresh_token.user.id != user.id:
-            refresh_token = None
-
-        if refresh_token is None:
-            # A long-lived token's client_name must be unique per user, so clear
-            # any stale one left behind by a partial previous provision.
-            for token in list(user.refresh_tokens.values()):
-                if (
-                    token.client_name == SERVER_TOKEN_CLIENT_NAME
-                    and token.token_type == TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
-                ):
-                    self._hass.auth.async_remove_refresh_token(token)
-            refresh_token = await self._hass.auth.async_create_refresh_token(
-                user,
-                client_name=SERVER_TOKEN_CLIENT_NAME,
-                token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN,
-                access_token_expiration=_ACCESS_TOKEN_TTL,
-            )
-
-        # hass is untyped here (homeassistant mocked in unit tier); pin str.
-        access_token = str(self._hass.auth.async_create_access_token(refresh_token))
-
-        # Persist only the ids needed to REUSE the credentials next start.
-        # The access token itself is deliberately NOT stored: it is handed to
-        # the worker in memory, nothing ever reads it back from entry.data,
-        # and a fresh JWT is minted each start - persisting it would leave an
-        # unused admin token in .storage AND rewrite the config entry on
-        # every start (each mint differs). Review finding; the revoke path
-        # still strips the legacy key from entries written by older builds.
-        new_data = {
-            **self._entry.data,
-            DATA_SERVER_USER_ID: user.id,
-            DATA_REFRESH_TOKEN_ID: refresh_token.id,
-        }
-        new_data.pop(DATA_ACCESS_TOKEN, None)
-        if new_data != dict(self._entry.data):
-            self._hass.config_entries.async_update_entry(self._entry, data=new_data)
-        return access_token
+        try:
+            return await async_server_access_token(self._hass, self._entry)
+        except CredentialNeeded as err:
+            raise EmbeddedServerError(err.reason, kind="token") from err
 
     def _prepare_config_dir(self) -> None:
         """Create the server's persistent data directory (blocking)."""
@@ -1543,7 +1486,7 @@ class EmbeddedServerManager:
         (that module runs process-global side effects — truststore SSL patching,
         signal handlers, ``asyncio.run`` — that must never happen in-process).
         """
-        # Hand ha-mcp the loopback URL + provisioned admin token in memory, before
+        # Hand ha-mcp the loopback URL + the administrator's token in memory, before
         # the server (and its settings singleton) is built. Keeping the token out
         # of os.environ is the whole point of the in-process channel.
         self._note_startup_phase("importing the server package")
@@ -1598,7 +1541,7 @@ class EmbeddedServerManager:
         _LOGGER.info(
             "Embedded connection resolved: url=%s, token=%s (requested url=%s)",
             resolved.homeassistant_url,
-            "provisioned"
+            "set"
             if resolved.homeassistant_token not in ("", OAUTH_MODE_TOKEN)
             else "SENTINEL-MISSING",
             self._server_url,

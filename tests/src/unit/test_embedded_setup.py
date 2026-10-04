@@ -202,6 +202,7 @@ class TestBringUp:
         assert cleared == {
             esetup.ISSUE_PACKAGE_FAILED,
             esetup.ISSUE_START_FAILED,
+            esetup.ISSUE_TOKEN_NEEDED,
             # A non-legacy bring-up (async_register_webhook returned
             # restart_needed=False) also clears any stale legacy-OAuth restart
             # repair from a prior legacy configuration.
@@ -288,6 +289,21 @@ class TestBringUp:
 
         await esetup.async_bring_up_server(hass, entry)
         assert esetup.ir.async_create_issue.call_args.args[2] == ISSUE_START_FAILED
+
+    async def test_a_missing_credential_asks_for_a_token_in_repairs(self, fake_manager):
+        hass = _make_hass()
+        entry = _make_entry()
+        fake_manager.async_start.side_effect = esetup.EmbeddedServerError(
+            "invalid_token", kind="token"
+        )
+
+        await esetup.async_bring_up_server(hass, entry)
+
+        call = esetup.ir.async_create_issue.call_args
+        assert call.args[2] == esetup.ISSUE_TOKEN_NEEDED
+        # The repair's form replaces the token on this entry.
+        assert call.kwargs["is_fixable"] is True
+        assert call.kwargs["data"] == {"entry_id": entry.entry_id}
 
     async def test_unexpected_error_files_start_issue(self, fake_manager):
         hass = _make_hass()
