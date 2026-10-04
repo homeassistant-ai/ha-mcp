@@ -768,14 +768,21 @@ its actions:
 
 - **Allow full HA snapshot actions** is on by default. Turning it off blocks
   every `scope="snapshot"` action, including listing; `scope="edits"` remains
-  available. Deletion also requires **Allow snapshot deletion** and remains
-  subject to its snapshot protections.
+  available. Deletion is only available through `ha_manage_backup`, also
+  requires **Allow snapshot deletion**, and remains subject to its snapshot
+  protections.
 - **Make backup management read-only** is off by default. Turning it on allows
   edit-backup list, view, and diff, plus snapshot list while snapshot actions
   are enabled. It blocks manual create, restore (including edit restores),
   and delete. Automatic pre-edit backups continue.
 
-These settings restrict AI calls to `ha_manage_backup`. Human backup actions
+These settings restrict AI calls to `ha_manage_backup` and the equivalent backup services and commands sent through `ha_call_service`
+(`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/*`
+WebSocket commands, and Supervisor `/backups` requests) or Code Mode's
+`ws_send` and `api_post`. Full snapshot deletion through those routes is
+refused; use `ha_manage_backup`. Scripts and automations that call these
+services run inside Home Assistant and are not covered.
+Human backup actions
 in the settings page remain available. App (add-on) saves require a restart;
 other installations apply saved overrides immediately. An explicitly set
 environment variable locks its setting in the UI. Disabling snapshot actions
