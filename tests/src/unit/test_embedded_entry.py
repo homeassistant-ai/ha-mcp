@@ -98,6 +98,14 @@ async def _drain_background_tasks(hass, entry) -> None:
         await asyncio.gather(*pending)
 
 
+class _FakeDeviceRegistry:
+    def __init__(self) -> None:
+        self.created: list[dict] = []
+
+    def async_get_or_create(self, **kwargs) -> None:
+        self.created.append(kwargs)
+
+
 class _FakeEntityRegistry:
     """Just enough of the entity registry for the retired-entity cleanup."""
 
@@ -138,6 +146,20 @@ def fake_collaborators(monkeypatch):
     fake_er = ModuleType("homeassistant.helpers.entity_registry")
     fake_er.async_get = MagicMock(return_value=registry)
 
+    devices = _FakeDeviceRegistry()
+    fake_dr = ModuleType("homeassistant.helpers.device_registry")
+    fake_dr.async_get = MagicMock(return_value=devices)
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.device_registry", fake_dr)
+    monkeypatch.setattr(
+        sys.modules["homeassistant.helpers"], "device_registry", fake_dr, raising=False
+    )
+    monkeypatch.setattr(
+        sys.modules["homeassistant.loader"],
+        "async_get_integration",
+        AsyncMock(return_value=SimpleNamespace(version="9.0.0")),
+        raising=False,
+    )
+
     fake_wsapi = ModuleType("custom_components.ha_mcp_tools.websocket_api")
     fake_wsapi.async_register_commands = MagicMock(name="async_register_commands")
 
@@ -158,6 +180,7 @@ def fake_collaborators(monkeypatch):
         setup=fake_setup,
         panel=fake_panel,
         registry=registry,
+        devices=devices,
         websocket_api=fake_wsapi,
     )
 
@@ -186,6 +209,20 @@ class TestSetup:
         await eentry.async_setup_server_entry(hass, entry)
 
         assert fake_collaborators.registry.removed == ["update.ha_mcp_server_update"]
+
+    async def test_server_entry_has_a_current_device(self, fake_collaborators):
+        # The retired update entity used to create the server's device; an
+        # upgraded install must not keep it at its old version, and a new one
+        # must not lack it.
+        hass = _make_hass()
+        entry = _make_entry()
+
+        await eentry.async_setup_server_entry(hass, entry)
+
+        [device] = fake_collaborators.devices.created
+        assert device["config_entry_id"] == entry.entry_id
+        assert device["identifiers"] == {(DOMAIN, entry.entry_id)}
+        assert device["sw_version"] == "9.0.0"
 
     async def test_no_retired_entity_means_nothing_removed(self, fake_collaborators):
         fake_collaborators.registry.existing.clear()
