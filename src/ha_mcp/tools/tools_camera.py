@@ -151,6 +151,9 @@ class CameraTools:
         accessible; images come back in their native format (JPEG, PNG, or GIF).
         Use width/height on high-resolution cameras to reduce token usage.
 
+        The response also includes a short text block stating the served
+        snapshot's size and retrieval time in Home Assistant local time.
+
         EXAMPLE: ha_get_camera_image(entity_id="camera.backyard", width=640, height=480)
         """
         if not entity_id or "." not in entity_id:
