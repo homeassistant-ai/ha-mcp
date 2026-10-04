@@ -351,9 +351,9 @@ PYPI_JSON_URL = "https://pypi.org/pypi/{dist}/json"
 # server update until HACS delivers the component (issues #1783/#1785).
 # Tag-timing caveat: stable ``vX.Y.Z`` tags exist before the PyPI publish
 # (semantic-release pushes the tag first), but a dev ``vX.Y.Z.devN`` tag is
-# only created when its draft GitHub release is published — AFTER the binary
-# builds, minutes after PyPI already has the version. During that dev window
-# this URL 404s and the gate deliberately fails open (the registry's
+# created by publish-dev.yml's pre-release job, which runs in parallel with
+# the PyPI publish, so it can briefly trail PyPI. During that dev window this
+# URL 404s and the gate deliberately fails open (the registry's
 # skip-on-failure is the backstop on that channel).
 COMPONENT_MANIFEST_AT_TAG_URL = (
     "https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/"
