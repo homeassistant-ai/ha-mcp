@@ -65,6 +65,8 @@ import pytest
 import requests
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN
 
+from ..._conftest_seed import is_server_requirement
+
 # ``container_only``: the scenario needs a throwaway HA Core container it can
 # corrupt, which the HAOS lanes have no cheap way to provide (and where the
 # same code is already covered by the container + embedded lanes). Deliberately
@@ -200,8 +202,10 @@ def _manifest_requirements(config_path: Path) -> list[str]:
             continue
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for entry in manifest.get("requirements", []):
+            # The checkout's wheel supplies the server (is_server_requirement).
             if isinstance(entry, str) and entry not in requirements:
-                requirements.append(entry)
+                if not is_server_requirement(entry):
+                    requirements.append(entry)
     return requirements
 
 
@@ -308,6 +312,8 @@ def _seed_config(config_path: Path, wheel_name: str, wheel_version: str) -> None
                 "entry_type": "server",
                 "webhook_id": _WEBHOOK_ID,
                 "secret_path": _SECRET_PATH,
+                # The component no longer provisions an administrator (#2427).
+                "admin_token": TEST_TOKEN,
                 # Equal to the option below: an UNCHANGED spec is half of what
                 # puts _async_ensure_package on its no-install fast path.
                 _DATA_LAST_PIP_SPEC: pip_spec,

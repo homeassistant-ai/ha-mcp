@@ -183,6 +183,8 @@ def _seed_config(config_path: Path, wheel_name: str) -> None:
                 "entry_type": "server",
                 "webhook_id": _WEBHOOK_ID,
                 "secret_path": _SECRET_PATH,
+                # The component no longer provisions an administrator (#2427).
+                "admin_token": TEST_TOKEN,
             },
             "disabled_by": None,
             "discovery_keys": {},
