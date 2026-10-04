@@ -277,14 +277,15 @@ async def test_flow_helper_removal_captures_once_and_only_when_confirmed(
         return {"success": True, "result": []}
 
     entry_backup.client.send_websocket_message.side_effect = registry_read
-    call = entry_backup.tools.ha_remove_helpers_integrations(
-        target="sensor.example", helper_type="utility_meter", confirm=confirm
-    )
+    remove = entry_backup.tools.ha_remove_helpers_integrations
     if not confirm:
         with pytest.raises(ToolError, match="not confirmed"):
-            await call
+            await remove(target="sensor.example", helper_type="utility_meter")
         assert not list(entry_backup.manager.backup_dir.glob("*.yaml"))
         return
-    await call
+    result = await remove(
+        target="sensor.example", helper_type="utility_meter", confirm=True
+    )
+    assert result["success"] is True
     snapshots = entry_backup.mutations[0]["snapshots"]
     assert [s["domain"] for s in snapshots] == ["helper_utility_meter"]
