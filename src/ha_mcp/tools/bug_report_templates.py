@@ -181,8 +181,10 @@ def _sanitize_log_text(text: str) -> str:
         flags=re.IGNORECASE,
     )
     # URL userinfo: scheme://user:password@host -> scheme://user:[REDACTED]@host
+    # Anchored on "://" rather than the scheme: matching the scheme made every
+    # character of a long unbroken word a fresh start, quadratic in its length.
     text = re.sub(
-        r"([a-zA-Z][a-zA-Z0-9+.-]*://)([^:/?#\s@]+):([^@/\s]+)@",
+        r"(://)([^:/?#\s@]+):([^@/\s]+)@",
         r"\1\2:[REDACTED]@",
         text,
     )
