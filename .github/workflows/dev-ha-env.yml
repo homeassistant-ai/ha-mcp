@@ -5,13 +5,17 @@ name: Dev HA environment
 # server standalone, embedded in the component, or as the app (HAOS). Run it
 # from your fork, never from homeassistant-ai/ha-mcp. It follows track_ref and
 # applies each new commit the way a user's update would. The tunnel URLs are
-# only in the encrypted `dev-ha-env-urls` artifact. Cancel the run when done.
+# only in the `dev-ha-env-urls` artifact, encrypted to the RSA public key the
+# run was started with. Cancel the run when done.
 # Usage: docs/dev-ha-env.md
 on:
   workflow_dispatch:
     inputs:
       track_ref:
         description: Branch of this repository to run (server, component and test config)
+        required: true
+      public_key:
+        description: "Base64 of a throwaway RSA public key (PEM); the tunnel URLs are encrypted to it. See docs/dev-ha-env.md"
         required: true
       platform:
         description: Home Assistant install type
@@ -65,12 +69,18 @@ jobs:
     steps:
       - name: Check inputs
         env:
-          PASSPHRASE: ${{ secrets.DEV_HA_ENV_PASSPHRASE }}
+          PUBLIC_KEY: ${{ inputs.public_key }}
           PLATFORM: ${{ inputs.platform }}
           SERVER: ${{ inputs.server }}
         run: |
-          if [ -z "$PASSPHRASE" ]; then
-            echo "::error::Set the DEV_HA_ENV_PASSPHRASE repository secret on your fork first."
+          KEY="$RUNNER_TEMP/url-key.pem"
+          printf '%s' "$PUBLIC_KEY" | openssl base64 -d -A > "$KEY" || true
+          # Trial-encrypt as the URLs will be, so a non-RSA or too-small key
+          # fails here rather than after HA has booted. The URL file can reach
+          # 236 bytes; 470 is a 4096-bit key's OAEP limit.
+          if ! head -c 470 /dev/zero | openssl pkeyutl -encrypt -pubin -inkey "$KEY" \
+            -pkeyopt rsa_padding_mode:oaep -out /dev/null; then
+            echo "::error::public_key must be a base64 4096-bit RSA public key. See docs/dev-ha-env.md."
             exit 1
           fi
           if [ "$PLATFORM" = docker ] && [ "$SERVER" = app ]; then
@@ -147,7 +157,8 @@ jobs:
         run: uv sync --all-extras --dev
       - name: Install cloudflared
         env:
-          # The binary runs beside the passphrase, so pin it and check its digest.
+          # The binary runs beside the instance and the job token, so pin it
+          # and check its digest.
           CLOUDFLARED_VERSION: "2026.9.3"
           CLOUDFLARED_SHA256: 77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2
         run: |
@@ -158,7 +169,6 @@ jobs:
       - name: Boot HA and open the tunnels
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PASSPHRASE: ${{ secrets.DEV_HA_ENV_PASSPHRASE }}
           PLATFORM: ${{ inputs.platform }}
           SERVER: ${{ inputs.server }}
           HA_IMAGE: ${{ inputs.ha_image }}
@@ -219,8 +229,8 @@ jobs:
           MCP_URL=$url
           printf 'HA:  %s\nMCP: %s%s\n' "$HA_URL" "$MCP_URL" "$(target mcp_path)" > urls.txt
           mkdir out
-          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:PASSPHRASE \
-            -in urls.txt -out out/dev-ha-env-urls.enc
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/url-key.pem" \
+            -pkeyopt rsa_padding_mode:oaep -in urls.txt -out out/dev-ha-env-urls.enc
           rm urls.txt targets.json
           grep STATUS env.log | tail -3
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

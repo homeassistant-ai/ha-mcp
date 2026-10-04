@@ -3,8 +3,9 @@
 Home Assistant validates each storage-helper create and update itself, so the
 tool sends the caller's fields under Core's names. These tests cover what the
 tool still adds: the merge with the stored item that Core's whole-item update
-needs, the create defaults the tool documents, the zone icon rule (#2643), and
-the three unusable configurations Core accepts.
+needs, the create defaults the tool documents, and the three unusable
+configurations Core accepts. The zone icon rule (#2643) is covered through both
+write paths in test_helper_config_fold.py.
 """
 
 from __future__ import annotations
@@ -49,44 +50,6 @@ def test_cleared_icon_is_left_out_of_the_item() -> None:
     cleared = merged_update("input_boolean", stored, None, "", {}, "input_boolean.b")
     assert kept["icon"] == "mdi:star"
     assert "icon" not in cleared
-
-
-# --- zone icon (#2643) -------------------------------------------------------
-
-_ZONE = {"id": "z", "name": "Z", "latitude": 1.0, "longitude": 2.0, "radius": 100}
-
-
-def test_new_zone_icon_reaches_an_item_that_stores_one() -> None:
-    """The zone shows the item's icon under the registry's; a changed registry
-    icon alone would be hidden again once the registry icon is cleared."""
-    stored = {**_ZONE, "icon": "mdi:home"}
-    body = merged_update("zone", stored, None, "mdi:work", {}, "zone.z")
-    assert body["icon"] == "mdi:work"
-
-
-def test_clearing_a_stored_zone_icon_is_refused() -> None:
-    """Core's zone update merges and rejects an empty icon, so the stored icon
-    could never be removed; refusing beats reporting a cleared icon that
-    shows again."""
-    stored = {**_ZONE, "icon": "mdi:home"}
-    with pytest.raises(ToolError) as exc_info:
-        merged_update("zone", stored, None, "", {}, "zone.z")
-    body = _error(exc_info)
-    assert "mdi:home" in body["error"]["message"]
-    assert body["helper_type"] == "zone"
-
-
-def test_zone_without_a_stored_icon_keeps_it_registry_only() -> None:
-    """With no item icon the registry carries the icon, and stays clearable."""
-    for icon in ("mdi:work", ""):
-        body = merged_update("zone", _ZONE, None, icon, {}, "zone.z")
-        assert "icon" not in body
-
-
-def test_zone_update_without_icon_keeps_the_stored_icon() -> None:
-    stored = {**_ZONE, "icon": "mdi:home"}
-    body = merged_update("zone", stored, "Office", None, {}, "zone.z")
-    assert body["icon"] == "mdi:home"
 
 
 # --- create defaults ---------------------------------------------------------

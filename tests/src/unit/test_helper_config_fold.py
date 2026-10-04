@@ -3,6 +3,7 @@ component-routed writes, and the component-aware catalog (issue #2479)."""
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Annotated, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -303,6 +304,125 @@ async def test_websocket_update_of_a_person_reads_its_storage_items() -> None:
     (update,) = _sent(client, "person/update")
     assert update["device_trackers"] == ["a.b"]
     assert update["name"] == "Pat"
+
+
+_STORED_ZONE = {
+    "id": "z", "name": "Z", "icon": "mdi:school", "latitude": 1.0,
+    "longitude": 2.0, "radius": 100.0, "passive": False,
+}  # fmt: skip
+_BARE_ZONE = {k: v for k, v in _STORED_ZONE.items() if k != "icon"}
+_ZONE_PATHS = ["component", "websocket"]
+
+
+def _zone_ws_client(stored: dict[str, Any], list_ok: bool = True) -> MagicMock:
+    # Another zone with an icon comes first, so the lookup must match by id.
+    listed = [{"id": "other", "icon": "mdi:map"}, stored]
+    replies = {
+        "zone/list": {"success": list_ok, "result": listed if list_ok else None},
+        "config/entity_registry/get": {"success": True, "result": {"unique_id": "z"}},
+        "zone/update": {"success": True, "result": stored},
+    }
+    client = MagicMock()
+    # A copy per reply, as a real WS reply is: the update path writes into it.
+    client.send_websocket_message = AsyncMock(
+        side_effect=lambda m: deepcopy(
+            replies.get(m["type"], {"success": True, "result": {}})
+        )
+    )
+    return client
+
+
+async def _zone_update(
+    path: str, stored: dict[str, Any], icon: str | None
+) -> dict[str, Any] | None:
+    """Run a zone update; return the item fields it wrote, or None if none."""
+    if path == "component":
+        read = AsyncMock(return_value={"success": True, "item_id": "z", "item": stored})
+        write = AsyncMock(
+            return_value={"success": True, "item": stored, "entity_id": "zone.z",
+                          "registry_applied": {}, "warnings": []}
+        )  # fmt: skip
+        with (
+            patch.object(hc_update, "read_helper_item", read),
+            patch.object(hc_update, "write_helper_item", write),
+        ):
+            await hc_update._execute_update_simple_helper(
+                MagicMock(), "zone", "zone.z", "zone.z", None, icon, None, None,
+                None, False, False, {"radius": 50.0},
+            )  # fmt: skip
+        return write.call_args.args[3] if write.called else None
+    client = _zone_ws_client(stored)
+    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+        await hc_update._execute_update_simple_helper(
+            client, "zone", "zone.z", "zone.z", None, icon, None, None, None,
+            False, False, {"radius": 50.0},
+        )  # fmt: skip
+    updates = _sent(client, "zone/update")
+    return updates[0] if updates else None
+
+
+@pytest.mark.parametrize("path", _ZONE_PATHS)
+async def test_zone_icon_change_reaches_the_stored_icon(path: str) -> None:
+    # The registry override alone would leave the stored icon to show again.
+    written = await _zone_update(path, _STORED_ZONE, "mdi:home")
+    assert written is not None and written["icon"] == "mdi:home"
+
+
+@pytest.mark.parametrize("path", _ZONE_PATHS)
+async def test_zone_icon_without_a_stored_one_stays_clearable(path: str) -> None:
+    # Written into the item, it could never be removed again.
+    written = await _zone_update(path, _BARE_ZONE, "mdi:home")
+    assert written is not None and "icon" not in written
+    cleared = await _zone_update(path, _BARE_ZONE, "")
+    assert cleared is not None and "icon" not in cleared
+
+
+@pytest.mark.parametrize("path", _ZONE_PATHS)
+async def test_zone_update_without_icon_keeps_a_stored_icon(path: str) -> None:
+    written = await _zone_update(path, _STORED_ZONE, None)
+    assert written is not None
+    # Left out, or the whole stored item written back with its icon.
+    assert written.get("icon", _STORED_ZONE["icon"]) == _STORED_ZONE["icon"]
+    assert written["radius"] == 50.0
+
+
+async def test_zone_stored_icon_clear_is_refused_via_component() -> None:
+    write = AsyncMock()
+    read = AsyncMock(
+        return_value={"success": True, "item_id": "z", "item": _STORED_ZONE}
+    )
+    with (
+        patch.object(hc_update, "read_helper_item", read),
+        patch.object(hc_update, "write_helper_item", write),
+        pytest.raises(ToolError, match=r"stored icon \(mdi:school\)"),
+    ):
+        await hc_update._execute_update_simple_helper(
+            MagicMock(), "zone", "zone.z", "zone.z", None, "", None, None, None,
+            False, False, {},
+        )  # fmt: skip
+    write.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("list_ok", "error"),
+    [(True, r"stored icon \(mdi:school\)"), (False, "Failed to fetch zone config")],
+)
+async def test_zone_icon_clear_writes_nothing_via_websocket(
+    list_ok: bool, error: str
+) -> None:
+    # Refused, or the stored icon unreadable: either way nothing may be written,
+    # or the stored icon would show again under a reported success.
+    client = _zone_ws_client(_STORED_ZONE, list_ok=list_ok)
+    with (
+        patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)),
+        pytest.raises(ToolError, match=error),
+    ):
+        await hc_update._execute_update_simple_helper(
+            client, "zone", "zone.z", "zone.z", None, "", None, None, None,
+            False, False, {},
+        )  # fmt: skip
+    assert _sent(client, "zone/update") == []
+    assert _sent(client, "config/entity_registry/update") == []
 
 
 async def test_collection_payload_keeps_tag_id_on_create() -> None:

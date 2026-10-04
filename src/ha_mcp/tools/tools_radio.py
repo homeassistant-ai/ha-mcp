@@ -136,7 +136,10 @@ class RadioTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Action-specific parameters (e.g. code, pin, channel, property, value)."
+                    "Action-specific parameters (e.g. code, pin, channel, property, value). "
+                    "Z-Wave get_config_param: property (parameter number), endpoint "
+                    "(default 0), property_key (partial-parameter bit mask), refresh "
+                    "(default False; full root parameters only)."
                 ),
                 default=None,
             ),
@@ -155,17 +158,20 @@ class RadioTools:
     ) -> dict[str, Any]:
         """Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.
 
-        For read-only inspection prefer ha_get_device / ha_get_system_health,
-        which mirror the 'diagnostics' and 'network_status' actions; use this
-        tool for writes and the active 'ping' probe (unique to this tool). Write
-        actions perform inclusion/commissioning, removal, healing,
+        For node diagnostics and network summaries prefer ha_get_device /
+        ha_get_system_health, which mirror 'diagnostics' and 'network_status'.
+        This tool also exposes active 'ping' probes and parameter reads.
+        Z-Wave 'get_config_params' lists cached configuration values/metadata;
+        'get_config_param' reads one from the cache or explicitly from the device.
+        Neither enables or creates entities. Write actions perform
+        inclusion/commissioning, removal, healing,
         reconfiguration, firmware updates and credential provisioning.
 
         Caveats: long-running actions (inclusion, rebuild routes, firmware) start the
         operation and return immediately with long_running=true; completion
         happens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-
         PIN pairing) is not scriptable — use SmartStart/QR provisioning here or
-        the HA UI.
+        the HA UI. HA administrator access is required for parameter reads.
         """
         try:
             handler = HANDLERS[radio]
