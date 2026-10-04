@@ -776,17 +776,17 @@ its actions:
   are enabled. It blocks manual create, restore (including edit restores),
   and delete. Automatic pre-edit backups continue.
 
-These settings restrict AI calls to `ha_manage_backup` and the equivalent backup services and commands sent through `ha_call_service`
-(`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/*`
-WebSocket commands, and Supervisor `/backups` requests) or Code Mode's
-`ws_send` and `api_post`. Full snapshot deletion through those routes is
-refused; use `ha_manage_backup`. Scripts and automations that call these
-services run inside Home Assistant and are not covered.
-Human backup actions
-in the settings page remain available. App (add-on) saves require a restart;
-other installations apply saved overrides immediately. An explicitly set
-environment variable locks its setting in the UI. Disabling snapshot actions
-takes precedence over read-only listing.
+These settings restrict AI calls to `ha_manage_backup` and the equivalent
+backup services and commands sent through `ha_call_service`
+(`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/` snapshot
+commands, and Supervisor `/backups` requests). Full snapshot deletion through
+`ha_call_service` is refused; use `ha_manage_backup`. Code Mode is a beta
+escape hatch and is not fully covered by these settings. Scripts and
+automations that call these services run inside Home Assistant and are not
+covered. Human backup actions in the settings page remain available. App
+(add-on) saves require a restart; other installations apply saved overrides
+immediately. An explicitly set environment variable locks its setting in the
+UI. Disabling snapshot actions takes precedence over read-only listing.
 
 ### Entity visibility filter (opt-in)
 

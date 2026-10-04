@@ -307,15 +307,16 @@ Settings UI **Backups** tab:
   actions are enabled. Blocks manual create, restore (including edit restores),
   and delete. Automatic pre-edit backups continue.
 
-These options restrict AI calls to `ha_manage_backup` and the equivalent backup services and commands sent through `ha_call_service`
-(`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/*`
-WebSocket commands, and Supervisor `/backups` requests) or Code Mode's
-`ws_send` and `api_post`. Full snapshot deletion through those routes is
-refused; use `ha_manage_backup`. Scripts and automations that call these
-services run inside Home Assistant and are not covered.
-Human backup actions in the settings page remain available. Save, then restart the app to apply
-changes. Disabling snapshot actions blocks snapshot listing even when backup
-management is read-only.
+These options restrict AI calls to `ha_manage_backup` and the equivalent
+backup services and commands sent through `ha_call_service`
+(`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/` snapshot
+commands, and Supervisor `/backups` requests). Full snapshot deletion through
+`ha_call_service` is refused; use `ha_manage_backup`. Code Mode is a beta
+escape hatch and is not fully covered by these options. Scripts and
+automations that call these services run inside Home Assistant and are not
+covered. Human backup actions in the settings page remain available. Save,
+then restart the app to apply changes. Disabling snapshot actions blocks
+snapshot listing even when backup management is read-only.
 
 ### secret_path (Advanced)
 
