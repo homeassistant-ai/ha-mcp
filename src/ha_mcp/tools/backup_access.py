@@ -1,7 +1,10 @@
 """Argument validation and access checks for explicit backup tool actions."""
 
+import json
 import posixpath
 from typing import Any
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..config import Settings, get_global_settings
 from ..errors import ErrorCode, create_error_response
@@ -69,54 +72,55 @@ def require_backup_access(settings: Settings, scope: str, action: str) -> None:
     )
     if not read_operation:
         require_write_access("ha_manage_backup")
-    error = _backup_controls_error(settings, scope, action, read_operation)
-    if error is not None:
-        raise_tool_error(error)
+    _enforce_backup_controls(settings, scope, action, read_operation)
 
 
-def _backup_controls_error(
+def _enforce_backup_controls(
     settings: Settings, scope: str, action: str, read_operation: bool
-) -> dict[str, Any] | None:
+) -> None:
     if scope == "snapshot" and not settings.enable_snapshot_actions:
-        return create_error_response(
-            ErrorCode.CONFIG_VALIDATION_FAILED,
-            "Full Home Assistant snapshot actions are disabled "
-            "(enable_snapshot_actions=false), including listing. "
-            "Per-edit backups remain available subject to backup_read_only.",
-            context={
-                "scope": scope,
-                "action": action,
-                "enable_snapshot_actions": False,
-            },
-            suggestions=[
-                "Use scope='edits' to inspect per-edit backups.",
-                (
-                    "A human can enable snapshot actions in the Backups tab, app "
-                    "configuration, or ENABLE_SNAPSHOT_ACTIONS environment variable. "
-                    "Developer tools cannot change this control."
-                ),
-            ],
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONFIG_VALIDATION_FAILED,
+                "Full Home Assistant snapshot actions are disabled "
+                "(enable_snapshot_actions=false), including listing. "
+                "Per-edit backups remain available subject to backup_read_only.",
+                context={
+                    "scope": scope,
+                    "action": action,
+                    "enable_snapshot_actions": False,
+                },
+                suggestions=[
+                    "Use scope='edits' to inspect per-edit backups.",
+                    (
+                        "A human can enable snapshot actions in the Backups tab, app "
+                        "configuration, or ENABLE_SNAPSHOT_ACTIONS environment variable. "
+                        "Developer tools cannot change this control."
+                    ),
+                ],
+            )
         )
     if settings.backup_read_only is True and not read_operation:
-        return create_error_response(
-            ErrorCode.READ_ONLY_MODE,
-            "Backup Read Only is enabled (backup_read_only=true). Explicit "
-            "backup creation, restore, and deletion are blocked in both scopes. "
-            "Automatic pre-edit capture still follows enable_auto_backup.",
-            context={"scope": scope, "action": action, "backup_read_only": True},
-            suggestions=[
-                (
-                    "Use edits.list, edits.view, edits.diff, or snapshot.list "
-                    "when snapshot actions are enabled."
-                ),
-                (
-                    "A human can change Backup Read Only in the Backups tab, app "
-                    "configuration, or BACKUP_READ_ONLY environment variable. "
-                    "Developer tools cannot change this control."
-                ),
-            ],
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.READ_ONLY_MODE,
+                "Backup Read Only is enabled (backup_read_only=true). Explicit "
+                "backup creation, restore, and deletion are blocked in both scopes. "
+                "Automatic pre-edit capture still follows enable_auto_backup.",
+                context={"scope": scope, "action": action, "backup_read_only": True},
+                suggestions=[
+                    (
+                        "Use edits.list, edits.view, edits.diff, or snapshot.list "
+                        "when snapshot actions are enabled."
+                    ),
+                    (
+                        "A human can change Backup Read Only in the Backups tab, app "
+                        "configuration, or BACKUP_READ_ONLY environment variable. "
+                        "Developer tools cannot change this control."
+                    ),
+                ],
+            )
         )
-    return None
 
 
 # Generic routes (ha_call_service and the Code Mode bridges) that perform the
@@ -140,13 +144,20 @@ _SNAPSHOT_WS_ACTIONS: dict[str, str] = {
 }
 
 
+def _normalized_path(path: str) -> str:
+    """Fold ``//``, ``.`` and ``..`` so an equivalent spelling cannot slip past.
+
+    Leading slashes are stripped first: POSIX normpath keeps exactly two.
+    """
+    stripped = path.split("?", 1)[0].strip().lower().lstrip("/")
+    return posixpath.normpath("/" + stripped)
+
+
 def _supervisor_backup_action(endpoint: Any, method: Any) -> str | None:
     """Classify a request against Supervisor's ``/backups`` API."""
     if not isinstance(endpoint, str):
         return None
-    # normpath folds ``//``, ``.`` and ``..`` so an equivalent spelling of a
-    # /backups path cannot slip past the prefix check.
-    path = posixpath.normpath("/" + endpoint.split("?", 1)[0].strip().lower())
+    path = _normalized_path(endpoint)
     if path != "/backups" and not path.startswith("/backups/"):
         return None
     verb = str(method).strip().lower()
@@ -170,7 +181,7 @@ def _snapshot_route_action(
     rest_path: str | None,
 ) -> str | None:
     if rest_path is not None:
-        parts = posixpath.normpath("/" + rest_path.split("?", 1)[0].lower()).split("/")
+        parts = _normalized_path(rest_path).split("/")
         if len(parts) == 4 and parts[1] == "services":
             return _service_action(parts[2], parts[3])
         if len(parts) > 2 and parts[1] == "hassio":
@@ -187,21 +198,23 @@ def _snapshot_route_action(
     return _SNAPSHOT_WS_ACTIONS.get(command)
 
 
-def _snapshot_route_error(action: str | None) -> dict[str, Any] | None:
+def _require_snapshot_route_access(action: str | None) -> None:
     if action is None:
-        return None
+        return
     if action == "delete":
-        return create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            "Full Home Assistant snapshot deletion is only available through "
-            "ha_manage_backup.",
-            context={"scope": "snapshot", "action": action},
-            suggestions=[
-                "Use ha_manage_backup(scope='snapshot', action='delete') so "
-                "enable_snapshot_delete and its protections apply."
-            ],
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Full Home Assistant snapshot deletion is only available through "
+                "ha_manage_backup.",
+                context={"scope": "snapshot", "action": action},
+                suggestions=[
+                    "Use ha_manage_backup(scope='snapshot', action='delete') so "
+                    "enable_snapshot_delete and its protections apply."
+                ],
+            )
         )
-    return _backup_controls_error(
+    _enforce_backup_controls(
         get_global_settings(), "snapshot", action, action == "list"
     )
 
@@ -219,11 +232,9 @@ def guard_snapshot_route(
     Deletion is always refused here: enable_snapshot_delete and the
     newest/scheduled/age protections only run inside ha_manage_backup.
     """
-    error = _snapshot_route_error(
+    _require_snapshot_route_access(
         _snapshot_route_action(domain, service, ws_command, ws_params, rest_path)
     )
-    if error is not None:
-        raise_tool_error(error)
 
 
 def snapshot_route_refusal(
@@ -233,11 +244,12 @@ def snapshot_route_refusal(
     rest_path: str | None = None,
 ) -> str | None:
     """Return the snapshot-control refusal as text for the Code Mode bridges."""
-    response = _snapshot_route_error(
-        _snapshot_route_action(None, None, ws_command, ws_params, rest_path)
-    )
-    if response is None:
-        return None
-    error = response["error"]
-    suggestions = error.get("suggestions") or [error.get("suggestion", "")]
-    return " ".join([error["message"], *suggestions]).strip()
+    try:
+        _require_snapshot_route_access(
+            _snapshot_route_action(None, None, ws_command, ws_params, rest_path)
+        )
+    except ToolError as exc:
+        error = json.loads(str(exc))["error"]
+        suggestions = error.get("suggestions") or [error.get("suggestion", "")]
+        return " ".join([error["message"], *suggestions]).strip()
+    return None
