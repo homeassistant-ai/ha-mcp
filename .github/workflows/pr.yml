@@ -41,17 +41,12 @@ jobs:
   # user-facing markdown counts as code. On non-PR events (manual dispatch)
   # always run. Consumed by e2e-validation's `if:` below — a job-level skip
   # reports Success to a required check (a workflow path-skip would not).
-  # PR-time guard for the release-cycle version invariant
-  # (docs/agents/custom-component.md § Version cycle): a component PR
-  # while the manifest version EQUALS the mirror's latest stable release would
-  # merge changes onto an already-shipped version — the mirror's stable tag
-  # step skips existing tags and v<VER>-dev.N pre-release tags sort BELOW the
-  # equal stable tag, so the changes would silently reach nobody. Level with
-  # stable means: bump once to open the pending version. The gate fires only
-  # on a provable component diff and fails open (with a warning) when the base
-  # or the mirror API cannot be read — the mirror sync's stable tag step
-  # carries the loud release-time backstop for what this check cannot see
-  # (stable shipping while the PR sits idle re-runs no PR checks).
+  # The HACS component shares the server's version and pins the server build
+  # it runs (#2427). semantic-release stamps all four places in each release
+  # commit (version_variables in pyproject.toml); this fails a PR that edits
+  # one of them by hand, which would ship a component reporting a version, or
+  # pinning a server, other than the release it is part of. The job keeps its
+  # old name so a branch rule requiring it stays satisfied.
   component-version-gate:
     name: Component Version Gate
     runs-on: ubuntu-latest
@@ -61,62 +56,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Fail component changes riding an already-released version
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          GH_TOKEN: ${{ github.token }}
+      - name: Component version and server pin match the server version
         run: |
-          if ! git fetch --depth=1 origin "$BASE_REF" \
-            || ! base_sha=$(git rev-parse "origin/$BASE_REF"); then
-            echo "::warning::could not resolve the base ref - skipping the version gate (the release-time backstop still applies)"
-            exit 0
-          fi
-          if git diff --quiet "$base_sha" HEAD -- custom_components/ha_mcp_tools; then
-            echo "no component changes - gate not applicable"
-            exit 0
-          fi
-          VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
-          # A version lower than the base branch's gives one version number to
-          # two different builds, which the server's MIN_COMPONENT_VERSION
-          # floors cannot tell apart (#1946). The released-stable comparison
-          # below misses it while the base is already ahead of stable. Skipped
-          # when the base has no readable manifest.
-          if base_ver=$(git show "$base_sha:custom_components/ha_mcp_tools/manifest.json" 2>/dev/null \
-              | python3 -c "import json, sys; print(json.load(sys.stdin)['version'])" 2>/dev/null); then
-            if [ "$VER" != "$base_ver" ] \
-              && [ "$(printf '%s\n%s\n' "$base_ver" "$VER" | sort -V | tail -1)" = "$base_ver" ]; then
-              echo "::error::This PR lowers the component version from ${base_ver} to ${VER} - a stale tree or bad merge. Restore it to at least ${base_ver} per docs/agents/custom-component.md#version-cycle."
-              exit 1
-            fi
-          fi
-          if ! latest=$(gh api repos/homeassistant-ai/ha-mcp-integration/releases/latest --jq .tag_name); then
-            echo "::warning::could not read the mirror's latest stable release - skipping the version gate (the release-time backstop still applies)"
-            exit 0
-          fi
-          stable="${latest#v}"
-          echo "component changed; manifest=${VER} released-stable=${stable}"
-          # Strict version comparison, not equality: a version BEHIND the
-          # released stable (a stale tree or bad merge resurrecting an old
-          # manifest) must fail here too, not slip through to a late
-          # release-time failure. sort -V gives semver ordering; both inputs
-          # come from our own manifest / release automation.
-          if [ "$VER" = "$stable" ]; then
-            verdict=equal
-          elif [ "$(printf '%s\n%s\n' "$stable" "$VER" | sort -V | tail -1)" = "$VER" ]; then
-            verdict=ahead
-          else
-            verdict=behind
-          fi
-          case "$verdict" in
-            ahead)
-              echo "version gate ok: pending ${VER} is strictly ahead of released ${stable}" ;;
-            equal)
-              echo "::error::This PR changes custom_components/ha_mcp_tools but keeps the component version at ${VER}, which is already released as the mirror's latest stable - merged this way the changes never ship (the stable tag step skips existing tags; dev pre-release tags sort below the equal stable). Master is level with stable: bump manifest.json + const.py once to open the next pending version, per docs/agents/custom-component.md#version-cycle."
-              exit 1 ;;
-            behind)
-              echo "::error::This PR changes custom_components/ha_mcp_tools with version ${VER}, which is BEHIND the mirror's released stable ${stable} - a stale tree or bad merge resurrected an old version. Restore the version to lead the released stable per docs/agents/custom-component.md#version-cycle."
-              exit 1 ;;
-          esac
+          python3 - <<'PY'
+          import json, re, sys, tomllib
+          server = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          manifest = json.load(open("custom_components/ha_mcp_tools/manifest.json"))
+          const = open("custom_components/ha_mcp_tools/const.py").read()
+          found = {
+              "manifest.json version": manifest["version"],
+              "manifest.json ha-mcp pin": next(
+                  (r.split("==", 1)[1] for r in manifest["requirements"]
+                   if r.startswith("ha-mcp==")), None),
+              "const.py COMPONENT_VERSION": (
+                  m.group(1) if (m := re.search(
+                      r'^COMPONENT_VERSION = "([^"]+)"', const, re.M)) else None),
+          }
+          wrong = {k: v for k, v in found.items() if v != server}
+          for key, value in wrong.items():
+              print(f"::error::{key} is {value!r}, but pyproject.toml's version is "
+                    f"{server!r}. semantic-release stamps these at release time; "
+                    "restore them (docs/agents/custom-component.md#version-cycle).")
+          sys.exit(1 if wrong else 0)
+          PY
 
   changes:
     name: Detect relevant changes
