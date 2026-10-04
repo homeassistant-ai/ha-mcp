@@ -29,7 +29,8 @@ hassio_api: true
 # via live test — `default` returns 403 for both. See #1116.
 hassio_role: manager
 # Announces this server to Home Assistant's Model Context Protocol
-# integration (Core 2026.10+); start.py posts the URL to /discovery.
+# integration (Core 2026.10+); src/ha_mcp/app_discovery.py posts the URL to
+# /discovery when the server starts.
 discovery:
   - mcp
 # Enable access to Home Assistant API
