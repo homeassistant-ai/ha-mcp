@@ -29,8 +29,6 @@
     "entity.update.server_update.name": "c1c1009d3f37ec05",
     "issues.component_outdated.description": "b64ba6c021d03ce1",
     "issues.component_outdated.title": "543270716bdfc3b4",
-    "issues.legacy_hacs_source.description": "31c0c1ba19becd5d",
-    "issues.legacy_hacs_source.title": "fbc59bb823063056",
     "issues.legacy_oauth_restart.fix_flow.step.confirm.description": "810c48ba10cb9b4e",
     "issues.legacy_oauth_restart.fix_flow.step.confirm.title": "d73cd9a64a3c3595",
     "issues.legacy_oauth_restart.title": "e8f507a4ca76b794",

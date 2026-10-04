@@ -83,7 +83,7 @@
                     "enable_webhook": "Turn off for local-only mode: the Home Assistant webhook is not registered at all, so nothing - including Nabu Casa - can reach the server through Home Assistant. The direct server port and the sidebar panel keep working.",
                     "enable_llm_api": "Offer the full toolset to Home Assistant conversation agents (OpenAI, Google, Ollama, ...): while enabled, agents can select 'HA-MCP Server' under Control Home Assistant and drive the tools from Assist chat and voice. Enabling only makes it selectable - nothing is exposed until you pick it on an agent. Usage guide: {llm_api_docs_url}",
                     "llm_api_exposure": "Shape of the toolset offered to conversation agents. Tool search (default) keeps the agent's context small: a compact API with pinned tools plus search/execute meta-tools. Full catalog lists every exposed tool directly - better for large-context models. Both registers the two side by side so each agent picks its own under Control Home Assistant. Per-tool exposure is managed in the HA-MCP settings panel; details: {llm_api_docs_url}",
-                    "enable_startup_notification": "Show a notification each time the server starts, pointing at the admin-only settings surfaces. Turn off to start silently - the connect URLs still appear in the Home Assistant log.",
+                    "enable_startup_notification": "Show a notification each time the server starts, pointing at the admin-only settings surfaces. Turn off to start silently - the connect URLs stay on this screen.",
                     "enable_sidebar_panel": "Show the HA-MCP settings panel in the sidebar (administrators only). Turn off to remove the sidebar entry - server options stay available on this screen."
                 }
             }
@@ -105,10 +105,6 @@
         "server_update_held": {
             "title": "HA-MCP server update waiting for a component update",
             "description": "ha-mcp server {latest} is available, but that release also updated the HA-MCP Custom Component (to {shipped}; you are running {running}). To avoid starting a server version the running component has never been tested with, the automatic server update is on hold until the component is updated.\n\nUpdate the component via HACS (open the HA-MCP Custom Component entry and use 'Update information' if no update is shown yet), then restart Home Assistant - the server update installs automatically afterwards. To install the server update anyway, press Install on the HA-MCP server update entity."
-        },
-        "legacy_hacs_source": {
-            "title": "Component installed from the legacy repository",
-            "description": "HACS is tracking the main ha-mcp server repository for this component, so HACS shows the server's version numbers and release notes here instead of the component's own (2.x). Updates keep working, but stay mislabeled this way. To fix: remove this repository from HACS (your integration settings and config entries are kept), add homeassistant-ai/ha-mcp-integration as a custom repository, reinstall the component from it, and restart Home Assistant."
         },
         "legacy_oauth_restart": {
             "title": "Restart Home Assistant to apply the legacy OAuth settings",
@@ -156,7 +152,7 @@
         "connect_local_lan": "Local/LAN (when Network access is \"Local network\"): {url}",
         "connect_remote_url": "Remote connect URL: {url}",
         "connect_urls_label": "Connect URL(s):",
-        "connect_urls_pending": "The connect URLs appear here (and in the Home Assistant log) once the server has started.",
+        "connect_urls_pending": "The connect URLs appear here once the server has started.",
         "connect_webhook_disabled": "Remote access via webhook is disabled (local-only mode).",
         "oauth_creds_pending": "The Client ID and Client Secret appear here once the server has started.",
         "oauth_not_serving": "Legacy OAuth is not serving these yet — restart Home Assistant when it asks you to, to activate them.",

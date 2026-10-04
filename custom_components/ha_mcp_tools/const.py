@@ -417,7 +417,7 @@ EXPOSURE_FULL = "full"
 EXPOSURE_BOTH = "both"
 DEFAULT_LLM_API_EXPOSURE = EXPOSURE_TOOL_SEARCH
 # When False, the persistent notification created on every server bring-up is
-# suppressed; the connect URLs still reach the admin-only Home Assistant log.
+# suppressed; the connect URLs stay on the entry's Configure screen.
 OPT_ENABLE_STARTUP_NOTIFICATION = "enable_startup_notification"
 # When False, the admin-only "HA-MCP" sidebar settings panel is not registered;
 # the server's options stay reachable on the entry's Configure screen.
@@ -529,24 +529,6 @@ SERVER_USER_NAME = "HA-MCP Server"
 # namespace (mirrors the webhook-proxy add-on's /api/mcp_proxy/oauth base).
 OAUTH_BASE = "/api/ha_mcp_tools/oauth"
 
-# HACS repository full_names (``owner/repo``, the key HACS's repository registry
-# uses) this component may be tracked under: the dedicated integration mirror is
-# the current install path; the main ha-mcp server repo is the legacy pre-mirror
-# path (see install_source_check). Shared by the legacy-source check and the
-# HACS refresh nudge (hacs_nudge) so a repository rename lands in one place.
-HACS_MIRROR_REPO_FULL_NAME = "homeassistant-ai/ha-mcp-integration"
-HACS_LEGACY_REPO_FULL_NAME = "homeassistant-ai/ha-mcp"
-
-# HACS "add repository" deep link for the custom component. learn_more_url for
-# the legacy-HACS-source repair (install_source_check) only, whose fix really is
-# re-adding the repository. The update-held and component-outdated issues point
-# at UPDATE_HOLD_DOCS_URL instead — for an already-installed component this deep
-# link just opens a blank "add repository" dialog.
-HACS_COMPONENT_URL = (
-    "https://my.home-assistant.io/redirect/hacs_repository/"
-    "?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration"
-)
-
 # Docs section explaining the automatic-update hold, linked as learn_more_url
 # from the update-held and component-outdated repair issues (both resolve by
 # updating an already-installed component, not by re-adding a repository). The
@@ -583,14 +565,6 @@ ISSUE_COMPONENT_OUTDATED = "component_outdated"
 # takes an HA restart) unblocks the next check, and the update entity's
 # Install button bypasses the hold entirely.
 ISSUE_UPDATE_HELD = "server_update_held"
-# Repair issue surfaced when HACS is tracking the MAIN ha-mcp server repo for
-# this component (the pre-mirror install path — issue #1760). That install
-# keeps working (HACS downloads the repo snapshot at the release tag, which
-# contains the component), but HACS shows the SERVER's version numbers and
-# release notes, not the component's own; HACS has no repository-migration
-# mechanism, so this only self-resolves if the user re-adds the dedicated
-# mirror (homeassistant-ai/ha-mcp-integration).
-ISSUE_LEGACY_HACS_SOURCE = "legacy_hacs_source"
 # Repair issue surfaced when the legacy OAuth mode's root /authorize + /token
 # views are out of sync with the CONFIGURED webhook_auth mode — either just
 # enabled (views not yet bound with the current credentials) or just disabled
