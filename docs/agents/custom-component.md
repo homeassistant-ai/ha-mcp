@@ -71,6 +71,8 @@ caller and does not know to demand the new component.
 
 A component path cannot be fully exercised by pre-merge CI. After merge,
 live-test it promptly on the development server before the next stable cut.
+Before merge, the [live dev environment](../dev-ha-env.md)
+runs a branch's component and server against a throwaway HA from a fork.
 
 ## Dependencies shared with Core
 

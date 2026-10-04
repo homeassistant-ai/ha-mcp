@@ -13,7 +13,7 @@ Thank you for your interest in contributing!
 
 ## 🧪 Testing
 
-See **[tests/README.md](tests/README.md)**.
+See **[tests/README.md](tests/README.md)**. To try a branch against a live, throwaway Home Assistant (Docker or HAOS) from your fork, see **[docs/dev-ha-env.md](docs/dev-ha-env.md)**.
 
 ## 🛠️ Development
 
