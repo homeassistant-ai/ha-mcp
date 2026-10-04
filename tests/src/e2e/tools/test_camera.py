@@ -90,19 +90,27 @@ class TestCameraToolsE2E:
             "ha_get_camera_image", {"entity_id": camera_entity}
         )
 
-        image_blocks = _blocks_of_type(result, "image")
-        text_blocks = _blocks_of_type(result, "text")
-
-        assert len(image_blocks) == 1, "Expected exactly one image block"
-        assert image_blocks[0].data, "Image data should not be empty"
-        assert image_blocks[0].mimeType.startswith("image/"), (
-            f"Expected an image MIME type, got: {image_blocks[0].mimeType}"
+        # Wire shape: the tuple return must map to exactly these content
+        # blocks, in this order, with no structuredContent — a
+        # schema-inferring annotation would add one and duplicate the
+        # (potentially large) base64 image payload in the result envelope.
+        block_types = [block.type for block in result.content]
+        assert block_types == ["text", "image"], (
+            f"Expected content blocks [text, image], got {block_types}"
+        )
+        assert result.structured_content is None, (
+            "A structured result would duplicate the image payload"
         )
 
-        assert len(text_blocks) == 1, "Expected exactly one text block"
-        info_text = text_blocks[0].text
+        info_text = result.content[0].text
         assert INFO_TEXT_RE.fullmatch(info_text), (
             f"Unexpected info text format: {info_text!r}"
+        )
+
+        image_block = result.content[1]
+        assert image_block.data, "Image data should not be empty"
+        assert image_block.mimeType.startswith("image/"), (
+            f"Expected an image MIME type, got: {image_block.mimeType}"
         )
 
     @pytest.mark.asyncio
