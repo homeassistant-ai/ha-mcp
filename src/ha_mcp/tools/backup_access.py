@@ -2,6 +2,7 @@
 
 import json
 import posixpath
+import urllib.parse
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -145,11 +146,13 @@ _SNAPSHOT_WS_ACTIONS: dict[str, str] = {
 
 
 def _normalized_path(path: str) -> str:
-    """Fold ``//``, ``.`` and ``..`` so an equivalent spelling cannot slip past.
+    """Fold percent-escapes, ``//``, ``.`` and ``..`` so an equivalent spelling
+    cannot slip past (HTTP clients decode ``%62ackups`` to ``backups``).
 
     Leading slashes are stripped first: POSIX normpath keeps exactly two.
     """
-    stripped = path.split("?", 1)[0].strip().lower().lstrip("/")
+    decoded = urllib.parse.unquote(path.split("?", 1)[0])
+    stripped = decoded.strip().lower().lstrip("/")
     return posixpath.normpath("/" + stripped)
 
 

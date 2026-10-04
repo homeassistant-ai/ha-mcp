@@ -39,6 +39,7 @@ SNAPSHOT_WRITE_WS = [
         "supervisor/api",
         {"endpoint": "//addons/../backups/new/partial", "method": "POST"},
     ),
+    ("supervisor/api", {"endpoint": "/%62ackups/new/full", "method": "post"}),
 ]
 SNAPSHOT_READ_WS = [
     ("backup/info", None),
@@ -237,7 +238,11 @@ class TestCodeModeBridges:
 
     @pytest.mark.parametrize(
         "endpoint",
-        ["/api/services/hassio/backup_full", "hassio/backups/abc12345/restore/full"],
+        [
+            "/api/services/hassio/backup_full",
+            "services/%68assio/restore_full",
+            "hassio/backups/abc12345/restore/full",
+        ],
     )
     async def test_api_post_refuses_snapshot_write_under_backup_read_only(
         self, settings: SimpleNamespace, endpoint: str
