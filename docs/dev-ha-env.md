@@ -28,29 +28,28 @@ component) and saves it to the fork's cache for later runs.
 Run it **from your fork only**. The job refuses to run in
 `homeassistant-ai/ha-mcp`, whose runners are shared CI capacity.
 
-1. Enable Actions on your fork. Then set a passphrase as a repository secret.
-   The tunnel URLs are published only encrypted with it:
+1. Enable Actions on your fork and sync its `master`, since GitHub only
+   dispatches workflows that exist on the default branch.
+2. Make a throwaway key pair for this run. The tunnel URLs are published
+   only encrypted to its public key, so nothing secret goes to GitHub and
+   any machine can start a run:
    ```bash
-   gh secret set DEV_HA_ENV_PASSPHRASE -R <you>/ha-mcp
+   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out devenv-key.pem
    ```
-2. Sync your fork's `master` first, since GitHub only dispatches workflows
-   that exist on the default branch. Then start it against any branch of your
-   fork:
+3. Start it against any branch of your fork, passing the public key:
    ```bash
    gh workflow run dev-ha-env.yml -R <you>/ha-mcp -f track_ref=<branch> \
-     -f platform=haos -f server=app
+     -f platform=haos -f server=app \
+     -f public_key="$(openssl pkey -in devenv-key.pem -pubout | openssl base64 -A)"
    ```
-3. Once the run reaches "Keep running", download and decrypt the URLs. This
-   needs OpenSSL 1.1.1+: Git Bash on Windows, any Linux, Homebrew `openssl`
-   on macOS.
+4. Once the run reaches "Keep running", download and decrypt the URLs:
    ```bash
    gh run download <run-id> -R <you>/ha-mcp -n dev-ha-env-urls
-   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in dev-ha-env-urls.enc
+   openssl pkeyutl -decrypt -inkey devenv-key.pem -pkeyopt rsa_padding_mode:oaep -in dev-ha-env-urls.enc
    ```
-   OpenSSL prompts for the passphrase. That keeps it out of your shell history.
    `HA:` is the HA UI and API. `MCP:` is your branch's server (streamable
    HTTP, path included), ready to add to an MCP client.
-4. Push to the branch to iterate. Every 20 seconds the runner picks up new
+5. Push to the branch to iterate. Every 20 seconds the runner picks up new
    commits and applies them the way a user's update would:
    - A server change restarts the standalone server. The embedded server gets
      a wheel built from the commit, as `ha_dev_manage_server(update_source)`
@@ -67,7 +66,7 @@ Run it **from your fork only**. The job refuses to run in
    apps, integrations and the component install and uninstall as usual. Docker
    HA has no update mechanism, so start the same run again with another
    `ha_image`; the new run replaces the old one.
-5. **Cancel the run when you're done.** It does not stop on its own until
+6. **Cancel the run when you're done.** It does not stop on its own until
    `minutes` runs out, and it holds a runner the whole time:
    ```bash
    gh run cancel <run-id> -R <you>/ha-mcp
