@@ -103,7 +103,7 @@ class TestHaGetCameraImage:
             "/camera_proxy/camera.front_door", params=None
         )
         assert image.data == b"\xff\xd8\xff\xe0"
-        assert image._format == "jpeg"
+        assert image.to_image_content().mime_type == "image/jpeg"
         # The 4-byte magic prefix has no parseable header, so no size.
         assert text.startswith("Camera snapshot (JPEG).")
         assert re.fullmatch(
@@ -152,7 +152,7 @@ class TestHaGetCameraImage:
         tools = CameraTools(mock_client)
         text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
 
-        assert image._format == "png"
+        assert image.to_image_content().mime_type == "image/png"
         assert text.startswith("Camera snapshot (PNG, 640x480).")
 
     @pytest.mark.asyncio
@@ -317,7 +317,7 @@ class TestHaGetCameraImage:
 
         tools = CameraTools(mock_client)
         text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
-        assert image._format == "png"
+        assert image.to_image_content().mime_type == "image/png"
         assert text.startswith("Camera snapshot (PNG).")
 
     @pytest.mark.asyncio
@@ -331,7 +331,7 @@ class TestHaGetCameraImage:
 
         tools = CameraTools(mock_client)
         text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
-        assert image._format == "gif"
+        assert image.to_image_content().mime_type == "image/gif"
         assert text.startswith("Camera snapshot (GIF).")
 
     @pytest.mark.asyncio
@@ -345,7 +345,7 @@ class TestHaGetCameraImage:
 
         tools = CameraTools(mock_client)
         text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
-        assert image._format == "jpeg"
+        assert image.to_image_content().mime_type == "image/jpeg"
         # No recognized magic bytes — the text reports the format only.
         assert text.startswith("Camera snapshot (JPEG).")
 
