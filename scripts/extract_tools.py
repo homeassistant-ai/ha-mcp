@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib.util
 import json
 import re
 import sys
@@ -37,6 +38,12 @@ DOCS_END_MARKER = "<!-- ADDON_TOOLS_END -->"
 TOOL_FILES = sorted(list(TOOLS_DIR.glob("tools_*.py")) + [TOOLS_DIR / "backup.py"])
 
 ANNOTATION_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+
+# Loaded by path: importing the package pulls in runtime dependencies.
+_spec = importlib.util.spec_from_file_location("hints", TOOLS_DIR / "tool_hints.py")
+assert _spec is not None and _spec.loader is not None
+tool_hints = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(tool_hints)
 
 PACKAGE_ROOT = REPO_ROOT / "src" / "ha_mcp"
 
@@ -599,14 +606,12 @@ def _extract_tool_metadata(dec: ast.Call) -> tuple[set[str], str, dict[str, bool
             tags = {
                 str(elt.value) for elt in kw.value.elts if isinstance(elt, ast.Constant)
             }
-        elif kw.arg == "annotations" and isinstance(kw.value, ast.Dict):
-            for k, v in zip(kw.value.keys, kw.value.values, strict=True):
-                if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
-                    key = str(k.value)
-                    if key == "title":
-                        title = str(v.value)
-                    elif key in ANNOTATION_KEYS:
-                        annotations[key] = bool(v.value)
+        elif kw.arg == "annotations":
+            for key, value in tool_hints.annotations_from_ast(kw.value).items():
+                if key == "title":
+                    title = str(value)
+                elif key in ANNOTATION_KEYS:
+                    annotations[key] = bool(value)
 
     return tags, title, annotations
 

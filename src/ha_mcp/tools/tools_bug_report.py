@@ -61,6 +61,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .response_helpers import project_fields
+from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
@@ -881,12 +882,7 @@ class BugReportTools:
     @tool(
         name="ha_report_issue",
         tags={"Utilities"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Report Issue or Feedback",
-        },
+        annotations=read_only_hints("Report Issue or Feedback", open_world=False),
     )
     @log_tool_usage
     async def ha_report_issue(

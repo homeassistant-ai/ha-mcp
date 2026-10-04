@@ -45,6 +45,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -370,12 +371,12 @@ class EnergyTools:
     @tool(
         name="ha_manage_energy_prefs",
         tags={"Energy"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "title": "Manage Energy Dashboard Preferences",
-        },
+        annotations=write_hints(
+            "Manage Energy Dashboard Preferences",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_manage_energy_prefs(
@@ -677,9 +678,7 @@ class EnergyTools:
             shape_errors = _shape_check(config)
 
             validate_result = await self._client.send_websocket_message(
-                {
-                    "type": "energy/validate",
-                }
+                {"type": "energy/validate"}
             )
             validate_warning: str | None = None
             if validate_result.get("success"):
@@ -1043,9 +1042,7 @@ class EnergyTools:
         post_save_validate_error: str | None = None
         try:
             validate_result = await self._client.send_websocket_message(
-                {
-                    "type": "energy/validate",
-                }
+                {"type": "energy/validate"}
             )
             if validate_result.get("success"):
                 post_save_errors = _flatten_validation_errors(

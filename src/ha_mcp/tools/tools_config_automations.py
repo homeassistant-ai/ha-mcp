@@ -66,6 +66,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
+from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import (
     wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
@@ -542,12 +543,7 @@ class AutomationConfigTools:
     @tool(
         name="ha_config_get_automation",
         tags={"Automations"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Automation Config",
-        },
+        annotations=read_only_hints("Get Automation Config", open_world=False),
     )
     @log_tool_usage
     async def ha_config_get_automation(
@@ -659,11 +655,12 @@ class AutomationConfigTools:
     @tool(
         name="ha_config_set_automation",
         tags={"Automations"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Automation",
-        },
+        annotations=write_hints(
+            "Create or Update Automation",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(
         domain="automation",
@@ -1920,12 +1917,9 @@ class AutomationConfigTools:
     @tool(
         name="ha_config_remove_automation",
         tags={"Automations"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Automation",
-        },
+        annotations=write_hints(
+            "Remove Automation", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="automation", id_param="identifier")
     @log_tool_usage

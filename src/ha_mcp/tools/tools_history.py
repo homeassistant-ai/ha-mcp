@@ -38,6 +38,7 @@ from .response_helpers import (
     project_fields,
     resolve_local_timezone,
 )
+from .tool_hints import read_only_hints
 from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
@@ -208,12 +209,9 @@ class HistoryTools:
     @tool(
         name="ha_get_history",
         tags={"History & Statistics"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Entity History or Statistics",
-        },
+        annotations=read_only_hints(
+            "Get Entity History or Statistics", open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_get_history(

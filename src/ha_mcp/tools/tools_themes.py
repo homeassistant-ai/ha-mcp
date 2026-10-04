@@ -24,6 +24,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import write_hints
 from .util_helpers import summarize_theme_listing, websocket_error_message
 
 logger = logging.getLogger(__name__)
@@ -187,13 +188,12 @@ class ThemesTools:
     @tool(
         name="ha_manage_theme",
         tags={"System"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": False,
-            "title": "Manage Frontend Themes",
-        },
+        annotations=write_hints(
+            "Manage Frontend Themes",
+            destructive=True,
+            idempotent=True,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_manage_theme(
