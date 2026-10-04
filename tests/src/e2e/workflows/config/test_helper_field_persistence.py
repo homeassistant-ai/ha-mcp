@@ -32,6 +32,8 @@ import logging
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client
+
 from ...utilities.assertions import (
     MCPAssertions,
     assert_mcp_success,
@@ -702,8 +704,8 @@ class TestZoneIconPersistence:
     """
 
     async def test_zone_icon_change_reaches_the_stored_icon_and_its_clear_fails(
-        self, mcp_client
-    ):
+        self, mcp_client: Client
+    ) -> None:
         """Changing the icon of a zone created with one must update the stored
         icon too, and clearing it must fail instead of letting the stored icon
         show again.

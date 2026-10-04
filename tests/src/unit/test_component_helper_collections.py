@@ -266,18 +266,18 @@ def test_core_error_is_invalid_only_when_nothing_was_stored(monkeypatch) -> None
 
 @pytest.mark.parametrize("action", ["create", "update"])
 def test_listener_error_after_store_is_not_reported_as_invalid(
-    monkeypatch, action
+    monkeypatch: pytest.MonkeyPatch, action: str
 ) -> None:
     # Core stores the item, then awaits its listeners (entity setup or update).
     monkeypatch.setattr(hc, "_INVALID_ERRORS", (ValueError, _REAL_VOL.Invalid))
     monkeypatch.setattr(hc, "_home_assistant_error", lambda: _CoreError)
 
     class StoredThenFailed(FakeCollection):
-        async def async_create_item(self, data):
+        async def async_create_item(self, data: dict[str, Any]) -> dict[str, Any]:
             self.data["t"] = {"id": "t", **data}
             raise ValueError("listener rejected the entity")
 
-        async def async_update_item(self, item_id, data):
+        async def async_update_item(self, item_id: str, data: dict[str, Any]) -> dict:
             self.data[item_id] = {"id": item_id, **data}
             raise ValueError("listener rejected the entity")
 
