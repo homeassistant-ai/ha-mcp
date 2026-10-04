@@ -140,6 +140,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
+          # renovate: datasource=github-releases depName=astral-sh/uv
           version: "0.12.17"
       - name: Install test dependencies
         working-directory: src
@@ -181,7 +182,9 @@ jobs:
           export MCP_SECRET_PATH="/$SECRET"
           cp devenv/.github/dev-ha-env/hold.py src/tests/src/e2e/test_dev_ha_env_hold.py
           cd src/tests
-          nohup uv run pytest src/e2e/test_dev_ha_env_hold.py -v -s --timeout=0 \
+          # Not an E2E lane: pytest only runs the holder, which keeps one
+          # instance up. `python -m pytest` keeps the lane-shape checks off it.
+          nohup uv run python -m pytest src/e2e/test_dev_ha_env_hold.py -v -s --timeout=0 \
             -p no:randomly > ../../env.log 2>&1 &
           echo $! > ../../hold.pid
           cd ../..
