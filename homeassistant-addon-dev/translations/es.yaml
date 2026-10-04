@@ -292,10 +292,12 @@ configuration:
       y de las copias programadas siguen aplicándose). Predeterminado 7.
   tool_search_max_results:
     name: Máximo de resultados de la búsqueda de herramientas
-    description: 'Número máximo de herramientas que devuelve ha_search_tools cuando
-      la búsqueda de herramientas está activada. Los valores bajos (2-3) ahorran tokens
-      de contexto pero pueden dejar fuera herramientas relevantes. Rango: 2-10. Requiere
-      reiniciar.'
+    description: 'Número máximo de herramientas ocultas devueltas por cada llamada
+      a ha_search_tools cuando la búsqueda de herramientas está habilitada; una herramienta
+      fijada que se encuentre dentro de ese recuento superior se añade como una entrada
+      breve de solo nombre además de este. Los valores más bajos (2-3) ahorran tokens
+      de contexto, pero pueden omitir herramientas relevantes. Rango: 2-10. Requiere
+      reinicio.'
   disabled_tools:
     name: Herramientas desactivadas (separadas por comas)
     description: 'Las herramientas indicadas aquí quedan forzadas a desactivadas y

@@ -255,9 +255,10 @@ configuration:
       schemalagd säkerhetskopiering gäller fortfarande). Standard 7.
   tool_search_max_results:
     name: Max antal resultat för verktygssökning
-    description: 'Maximalt antal verktyg som returneras av ha_search_tools när verktygssökning
-      är aktiverad. Lägre värden (2-3) sparar kontext-tokens men kan missa relevanta
-      verktyg. Omfång: 2-10. Kräver omstart.'
+    description: 'Maximalt antal dolda verktyg som returneras per ha_search_tools-anrop
+      när verktygssökning är aktiverat; ett fäst verktyg som placerar sig inom det
+      toppantalet läggs till som en kort namnpost över det. Lägre värden (2-3) sparar
+      kontexttoken men kan missa relevanta verktyg. Intervall: 2-10. Kräver omstart.'
   disabled_tools:
     name: Inaktiverade verktyg (kommaseparerade)
     description: Verktyg som listas här är tvingade att vara avstängda och låsta i
