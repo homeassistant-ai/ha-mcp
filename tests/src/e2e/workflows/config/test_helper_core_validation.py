@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, assert_mcp_success
+from ...utilities.assertions import MCPAssertions, assert_mcp_success, safe_call_tool
 
 
 async def _helper_names(mcp_client, helper_type: str) -> set[str]:
@@ -84,6 +84,52 @@ class TestHomeAssistantJudgesStorageHelperFields:
             {**params, "name": f"E2E Invalid {uuid.uuid4().hex[:6]}"},
             expected_error=None,
         )
+
+    async def test_update_left_invalid_by_its_stored_values_changes_nothing(
+        self, mcp_client
+    ) -> None:
+        """Dropping the option the stored initial points at is refused, and the
+        helper keeps its options: the stored item plus the change is judged."""
+        async with MCPAssertions(mcp_client) as mcp:
+            created = await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "input_select",
+                    "name": f"E2E Merge {uuid.uuid4().hex[:6]}",
+                    "config": {"options": ["a", "b", "c"], "initial": "a"},
+                },
+            )
+            entity_id = created["entity_id"]
+            try:
+                await _rejected(
+                    mcp_client,
+                    {
+                        "helper_type": "input_select",
+                        "helper_id": entity_id,
+                        "config": {"options": ["b", "c"]},
+                    },
+                    expected_error="initial",
+                )
+                described = await mcp.call_tool_success(
+                    "ha_config_list_helpers",
+                    {
+                        "helper_type": "input_select",
+                        "describe": True,
+                        "helper_id": entity_id,
+                    },
+                )
+                fields = {f["name"]: f for f in described["fields"]}
+                assert fields["options"]["current"] == ["a", "b", "c"]
+            finally:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {
+                        "target": entity_id,
+                        "helper_type": "input_select",
+                        "confirm": True,
+                    },
+                )
 
     async def test_step_wider_than_the_range_is_refused_by_the_tool(
         self, mcp_client

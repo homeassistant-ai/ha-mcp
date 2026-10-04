@@ -82,6 +82,26 @@ async def test_existing_storage_helper_reports_current_values_without_component(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_component")
+async def test_helper_named_by_entity_id_reports_current_values_without_component(
+    client: AsyncMock,
+) -> None:
+    """The entity_id ha_config_set_helper returns finds the stored item too."""
+    replies = {
+        "config/entity_registry/get": {"result": {"unique_id": "pool"}},
+        "input_number/list": {"result": [{"id": "pool", "name": "Pool", "max": 40}]},
+    }
+    client.send_websocket_message.side_effect = lambda msg: replies[msg["type"]]
+
+    result = await mod.describe_helper(
+        client, "input_number", helper_id="input_number.pool_temperature"
+    )
+
+    currents = {f.get("current") for f in result["fields"] if "max" in f["name"]}
+    assert currents == {40}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_component")
 async def test_existing_person_reports_current_values_without_component(
     client: AsyncMock,
 ) -> None:

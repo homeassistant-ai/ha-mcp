@@ -261,12 +261,19 @@ async def _stored_item(
     if read is not None:
         item = read.get("item", read)
         return item if isinstance(item, dict) else None
-    if by_entity:
-        return None  # the legacy list has no entity_id to match on
+    item_id: Any = helper_id
+    if by_entity:  # the legacy list is keyed by the entity's unique_id
+        entry = await client.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": helper_id}
+        )
+        registered = entry.get("result") if isinstance(entry, dict) else None
+        item_id = registered.get("unique_id") if isinstance(registered, dict) else None
+        if not item_id:
+            return None
     result = await client.send_websocket_message({"type": f"{helper_type}/list"})
     items = listed_items(result.get("result") if isinstance(result, dict) else result)
     return next(
-        (i for i in items if isinstance(i, dict) and i.get("id") == helper_id), None
+        (i for i in items if isinstance(i, dict) and i.get("id") == item_id), None
     )
 
 
