@@ -20,10 +20,14 @@ from tests.src.e2e.utilities.assertions import (
     safe_call_tool,
 )
 
-# The info text: format (plus the served dimensions when the payload header
-# parses) and the retrieval timestamp in HA local time with UTC offset.
+# The info text: format, served dimensions, and the retrieval timestamp in
+# HA local time with UTC offset. The size is MANDATORY, not optional: the
+# demo cameras always serve real image files with parseable headers, so a
+# missing size means the parser failed on genuine encoder output. This is
+# the one test that exercises the dimension parsers for real — the unit
+# fixtures are hand-built.
 INFO_TEXT_RE = re.compile(
-    r"Camera snapshot \((JPEG|PNG|GIF)(, \d+x\d+)?\)\. Retrieved: "
+    r"Camera snapshot \((JPEG|PNG|GIF), \d+x\d+\)\. Retrieved: "
     r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}"
 )
 
