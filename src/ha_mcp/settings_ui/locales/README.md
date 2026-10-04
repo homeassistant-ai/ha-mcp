@@ -2,8 +2,7 @@
 
 The settings page discovers every `*.json` catalog in this directory. No Python
 or JavaScript registration is required, and no packaging file needs editing:
-the wheel and sdist ship every file under `src/ha_mcp`, and
-`packaging/binary/ha-mcp.spec` adds this directory whole.
+the wheel and sdist ship every file under `src/ha_mcp`.
 
 **This directory is the canonical translation store.** Besides the settings
 UI's own strings, each catalog carries the add-on option strings under

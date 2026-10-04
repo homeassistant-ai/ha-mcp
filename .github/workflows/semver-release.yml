@@ -176,10 +176,10 @@ jobs:
         # Force pins the bump to patch and is rejected above when releasable
         # commits exist, so it cannot override a required minor/major bump.
         force: ${{ inputs.force && 'patch' || '' }}
-        # Don't create GitHub release here - we'll create a draft below
+        # Don't create GitHub release here - the next step creates it
         vcs_release: "false"
 
-    - name: Create draft GitHub release
+    - name: Create GitHub release
       if: steps.semantic.outputs.released == 'true'
       env:
         GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
@@ -198,13 +198,11 @@ jobs:
           echo "Release v${VERSION}" > release_notes.md
         fi
 
-        # Create draft release (build-binary.yml will add binaries and publish)
         gh release create "$TAG" \
           --title "$TAG" \
-          --notes-file release_notes.md \
-          --draft
+          --notes-file release_notes.md
 
-        echo "✓ Created draft release $TAG (waiting for binaries)"
+        echo "✓ Created release $TAG"
 
     - name: Copy changelog to addon directory
       if: steps.semantic.outputs.released == 'true'
@@ -251,17 +249,6 @@ jobs:
         git push origin stable
 
         echo "✓ 'stable' tag now points to v$VERSION"
-
-  # Build binaries and attach to release
-  build-and-release:
-    needs: semantic-release
-    if: needs.semantic-release.outputs.released == 'true'
-    uses: ./.github/workflows/_build-and-release.yml
-    with:
-      release_tag: v${{ needs.semantic-release.outputs.version }}
-      is_prerelease: false
-    permissions:
-      contents: write
 
   # Build and push addon Docker images
   build-addon:

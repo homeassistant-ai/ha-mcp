@@ -1188,7 +1188,7 @@ class HomeAssistantClient:
         on current HA Core releases (see #1116) — the direct path bypasses
         HA Core entirely and is the documented Supervisor contract.
 
-        On non-addon installs (Docker, pyinstaller, pip pointing at a normal
+        On non-addon installs (Docker, pip pointing at a normal
         HA URL), falls back to the HA Core proxy path. That path requires an
         admin LLA but works fine when not invoked from the add-on container.
 
@@ -1429,7 +1429,7 @@ class HomeAssistantClient:
         ``http://supervisor/{service}/logs`` with the Supervisor token
         (``hassio_api`` and ``hassio_role: manager`` required). On non-app
         installs (Docker
-        without Supervisor, pyinstaller, pip pointing at a normal HA URL),
+        without Supervisor, pip pointing at a normal HA URL),
         falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.
 
         All eight service slugs are whitelisted in HA Core's hassio proxy

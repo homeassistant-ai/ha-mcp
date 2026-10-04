@@ -16,7 +16,6 @@
     "footer.installation": "설치 방식: {method}",
     "footer.deployment.addon": "앱/애드온",
     "footer.deployment.docker": "컨테이너/도커",
-    "footer.deployment.pyinstaller": "단독 실행 바이너리",
     "footer.deployment.git": "소스 체크아웃",
     "footer.deployment.pypi": "파이썬 패키지",
     "footer.deployment.unknown": "알 수 없음",

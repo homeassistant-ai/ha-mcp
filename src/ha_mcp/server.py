@@ -79,8 +79,8 @@ _SKILL_GUIDE_MANDATORYBPS_HINT = (
 )
 
 
-# Server icon configuration using GitHub-hosted images
-# These icons are bundled in packaging/mcpb/ and also available via GitHub raw URLs
+# Server icons, served from master as raw GitHub files. Every released version
+# links these exact paths, so the files stay in packaging/mcpb/.
 SERVER_ICONS = [
     Icon(
         src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon.svg",
