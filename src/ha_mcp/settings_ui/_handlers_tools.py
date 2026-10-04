@@ -25,6 +25,8 @@ from ._tools_meta import (
     BPS_MANDATORY_TOOLS,
     _get_tool_metadata,
     gate_is_beta,
+    ignored_disabled_tools,
+    tool_config_warnings,
 )
 
 if TYPE_CHECKING:
@@ -87,11 +89,10 @@ def _bps_locked_tools() -> list[str]:
         if not (settings.enable_mandatory_bps and settings.enable_strict_mandatory_bps):
             return []
     except Exception:
-        logger.warning(
+        logger.exception(
             "settings lookup failed while computing BPS-locked tools; "
             "locking %s conservatively",
             ", ".join(sorted(BPS_MANDATORY_TOOLS)),
-            exc_info=True,
         )
     return sorted(BPS_MANDATORY_TOOLS)
 
@@ -112,6 +113,21 @@ def _stub_gate_is_beta(tool: dict[str, Any]) -> bool:
     if declared is None:
         return gate_is_beta(str(gate))
     return bool(declared)
+
+
+def _ignored_disable_diagnostics(config: dict[str, Any]) -> dict[str, Any]:
+    """Allow the Tools page to retain its conservative BPS lock on lookup errors."""
+    from ..config import get_global_settings
+
+    try:
+        settings = get_global_settings()
+        return {
+            "ignored_disabled_tools": ignored_disabled_tools(config, settings),
+            "tool_config_warnings": tool_config_warnings(config, settings),
+        }
+    except Exception:
+        logger.exception("Failed to read settings for mandatory-disable diagnostics")
+        return {"ignored_disabled_tools": None, "tool_config_warnings": None}
 
 
 def _env_pinned_conflicts(
@@ -189,6 +205,7 @@ async def _get_tools(
             "tools": tools,
             "states": states,
             "env_pinned": pinned,
+            **_ignored_disable_diagnostics(config),
             "read_only_exempt": sorted(READ_ONLY_EXEMPT_TOOLS),
             "llm_api": llm_effective,
             "llm_api_overrides": llm_overrides,

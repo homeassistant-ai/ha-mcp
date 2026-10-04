@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server (Dev)"
 description: "Development channel - AI assistant integration via MCP (unstable)"
-version: "8.6.0.dev2879"
+version: "8.6.0.dev2889"
 slug: "ha_mcp_dev"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 stage: experimental
@@ -18,6 +18,11 @@ hassio_api: true
 # to /addons/<slug>/logs and /<service>/logs (system service logs). Verified
 # via live test — `default` returns 403 for both. See #1116.
 hassio_role: manager
+# Announces this server to Home Assistant's Model Context Protocol
+# integration (Core 2026.10+); src/ha_mcp/app_discovery.py posts the URL to
+# /discovery when the server starts.
+discovery:
+  - mcp
 homeassistant_api: true
 host_network: true
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch}"
@@ -62,6 +67,8 @@ options:
   enable_strict_mandatory_bps: true
   ha_tool_concurrency: 0
   enable_auto_backup: true
+  enable_snapshot_actions: true
+  backup_read_only: false
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
   # Off by default (#1861) — an agent deleting a full HA snapshot is
@@ -96,6 +103,8 @@ schema:
   enable_filesystem_tools: bool?
   enable_dashboard_screenshot: bool?
   enable_auto_backup: bool?
+  enable_snapshot_actions: bool?
+  backup_read_only: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?
   enable_snapshot_delete: bool?

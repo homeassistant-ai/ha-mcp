@@ -11,9 +11,15 @@
 - [ ] 💥 Breaking change
 
 ## Testing
-- [ ] I have tested these changes with a LLM agent
+
+<!-- Describe what was exercised: the tests added or changed and what they
+     cover, plus any manual or agent checks. Do NOT list CI results, pass
+     counts, run links, or per-lane status. Reviewers see those in the PR's
+     checks, and they go stale on the next push. -->
+
+- [ ] I have tested these changes with a LLM agent (tested directly on a live HA instance, or directly on an emulated HA instance such as the live dev environment)
 - [ ] All automated tests pass (`uv run pytest`)
-- [ ] Code follows style guidelines (`uv run ruff check`)
+- [ ] Code passes lint, format, and type checks (`uv run ruff check`, `uv run ruff format --check` on changed files, `uv run mypy src/`)
 
 ## Future improvements
 

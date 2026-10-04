@@ -28,6 +28,11 @@ hassio_api: true
 # to /addons/<slug>/logs and /<service>/logs (system service logs). Verified
 # via live test — `default` returns 403 for both. See #1116.
 hassio_role: manager
+# Announces this server to Home Assistant's Model Context Protocol
+# integration (Core 2026.10+); src/ha_mcp/app_discovery.py posts the URL to
+# /discovery when the server starts.
+discovery:
+  - mcp
 # Enable access to Home Assistant API
 homeassistant_api: true
 # Enable host network mode for local network access
@@ -60,6 +65,8 @@ options:
   disabled_tools: ""
   pinned_tools: ""
   enable_auto_backup: true
+  enable_snapshot_actions: true
+  backup_read_only: false
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
   # Off by default (#1861) — an agent deleting a full HA snapshot is
@@ -84,6 +91,8 @@ schema:
   disabled_tools: str?
   pinned_tools: str?
   enable_auto_backup: bool?
+  enable_snapshot_actions: bool?
+  backup_read_only: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?
   enable_snapshot_delete: bool?

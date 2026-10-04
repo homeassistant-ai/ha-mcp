@@ -258,6 +258,23 @@ configuration:
       отключает создание снимков по принципу «максимальных усилий» и выводит из строя
       инструменты для работы с файлами и необработанным YAML. Требуется перезапуск
       для вступления в силу.'
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
+      in ha_call_service. Turning this off blocks every snapshot action, including
+      listing, while edit backups remain available. Snapshot deletion is only available
+      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
+      still apply. On by default. Change this option or use the web Settings UI Backups
+      tab; requires restart in the app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete, including the
+      equivalent backup services and commands in ha_call_service. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Интервал автоматического резервного копирования (минуты)
     description: 'Интервал ограничения для каждой сущности. Значение 0 (по умолчанию)
@@ -284,9 +301,11 @@ configuration:
       7.'
   tool_search_max_results:
     name: Максимальное количество результатов поиска инструментов
-    description: 'Максимальное количество инструментов, возвращаемых ha_search_tools
-      при включённом поиске инструментов. Меньшие значения (2–3) экономят токены контекста,
-      но могут пропустить подходящие инструменты. Диапазон: 2–10. Требуется перезапуск.'
+    description: 'Максимальное количество скрытых инструментов, возвращаемых за один
+      вызов ha_search_tools при включенном поиске инструментов; закрепленный инструмент,
+      попавший в этот топ, добавляется в виде краткой записи только с именем поверх
+      него. Меньшие значения (2-3) экономят токены контекста, но могут пропустить
+      нужные инструменты. Диапазон: 2-10. Требуется перезапуск.'
   disabled_tools:
     name: Отключённые инструменты (через запятую)
     description: 'Перечисленные здесь инструменты принудительно отключаются и блокируются

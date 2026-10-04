@@ -265,6 +265,23 @@ configuration:
       predefinita; deselezionando si rinuncia alle catture al meglio delle possibilità
       e si disattivano con esse gli strumenti per file e YAML grezzo. Richiede un
       riavvio per avere effetto.'
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
+      in ha_call_service. Turning this off blocks every snapshot action, including
+      listing, while edit backups remain available. Snapshot deletion is only available
+      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
+      still apply. On by default. Change this option or use the web Settings UI Backups
+      tab; requires restart in the app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete, including the
+      equivalent backup services and commands in ha_call_service. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Limitazione del backup automatico (minuti)
     description: Finestra di limitazione per entità. 0 (impostazione predefinita)
@@ -291,9 +308,11 @@ configuration:
       7.
   tool_search_max_results:
     name: Numero massimo di risultati della ricerca degli strumenti
-    description: 'Numero massimo di strumenti restituiti da ha_search_tools quando
-      la ricerca degli strumenti è attiva. Valori bassi (2-3) risparmiano token di
-      contesto ma possono escludere strumenti pertinenti. Intervallo: 2-10. Richiede
+    description: 'Numero massimo di strumenti nascosti restituiti per ogni chiamata
+      ha_search_tools quando la ricerca degli strumenti è abilitata; uno strumento
+      fissato che rientra in quel conteggio massimo viene aggiunto come voce breve
+      con solo il nome in cima. Valori più bassi (2-3) fanno risparmiare token di
+      contesto ma potrebbero perdere strumenti rilevanti. Intervallo: 2-10. Richiede
       il riavvio.'
   disabled_tools:
     name: Strumenti disattivati (separati da virgole)

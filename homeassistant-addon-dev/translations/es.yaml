@@ -266,6 +266,23 @@ configuration:
       desactiva las capturas de "mejor esfuerzo" y deja fuera de servicio las herramientas
       de archivo y YAML sin procesar con ellas. Requiere un reinicio para que surta
       efecto.'
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
+      in ha_call_service. Turning this off blocks every snapshot action, including
+      listing, while edit backups remain available. Snapshot deletion is only available
+      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
+      still apply. On by default. Change this option or use the web Settings UI Backups
+      tab; requires restart in the app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete, including the
+      equivalent backup services and commands in ha_call_service. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Limitación de la copia automática (minutos)
     description: Ventana de limitación por entidad. 0 (predeterminado) captura una
@@ -292,10 +309,12 @@ configuration:
       y de las copias programadas siguen aplicándose). Predeterminado 7.
   tool_search_max_results:
     name: Máximo de resultados de la búsqueda de herramientas
-    description: 'Número máximo de herramientas que devuelve ha_search_tools cuando
-      la búsqueda de herramientas está activada. Los valores bajos (2-3) ahorran tokens
-      de contexto pero pueden dejar fuera herramientas relevantes. Rango: 2-10. Requiere
-      reiniciar.'
+    description: 'Número máximo de herramientas ocultas devueltas por cada llamada
+      a ha_search_tools cuando la búsqueda de herramientas está habilitada; una herramienta
+      fijada que se encuentre dentro de ese recuento superior se añade como una entrada
+      breve de solo nombre además de este. Los valores más bajos (2-3) ahorran tokens
+      de contexto, pero pueden omitir herramientas relevantes. Rango: 2-10. Requiere
+      reinicio.'
   disabled_tools:
     name: Herramientas desactivadas (separadas por comas)
     description: 'Las herramientas indicadas aquí quedan forzadas a desactivadas y

@@ -35,8 +35,9 @@ configuration:
       불러오게 하세요. 앱(애드온)만 다시 시작해서는 클라이언트에 캐시된 도구 목록이 갱신되지 않으며, 이는 여기의 어떤 설정을 바꾸든 마찬가지입니다.'
   tool_search_max_results:
     name: 도구 검색 최대 결과 수
-    description: '도구 검색이 켜져 있을 때 ha_search_tools가 반환하는 도구의 최대 개수입니다. 값을 낮추면(2~3) 컨텍스트
-      토큰을 아낄 수 있지만 관련 도구를 놓칠 수 있습니다. 범위: 2~10. 다시 시작해야 적용됩니다.'
+    description: '도구 검색이 활성화된 경우 ha_search_tools 호출당 반환되는 숨겨진 도구의 최대 개수입니다. 해당 상위
+      개수에 포함된 고정(pinned) 도구는 그 위에 이름만 있는 짧은 항목으로 추가됩니다. 낮은 값(2-3)은 컨텍스트 토큰을 절약하지만
+      관련 도구를 누락할 수 있습니다. 범위: 2-10. 다시 시작해야 합니다.'
   enable_tool_security_policies:
     name: 도구 보안 정책 사용(고급)
     description: 위험도가 높은 도구 호출(잠금·경보 제어, 자동화 쓰기 등)에 사용자 승인을 요구합니다. 보호된 도구가 호출되면 에이전트는
@@ -101,6 +102,23 @@ configuration:
       ha_write_file, ha_delete_file, ha_config_set_yaml은 스냅숏을 전제 조건으로 취급하므로, 이 옵션이
       꺼져 있으면 해당 도구를 통한 쓰기가 거부되고 스냅숏 생성이 실패해도 쓰기가 차단됩니다. 기본값은 켜짐이며, 체크를 해제하면 최선 노력
       스냅숏을 포기하는 동시에 파일 도구와 원시 YAML 도구도 사용할 수 없게 됩니다. 적용하려면 다시 시작해야 합니다.
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
+      in ha_call_service. Turning this off blocks every snapshot action, including
+      listing, while edit backups remain available. Snapshot deletion is only available
+      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
+      still apply. On by default. Change this option or use the web Settings UI Backups
+      tab; requires restart in the app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete, including the
+      equivalent backup services and commands in ha_call_service. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: 자동 백업 제한 간격(분)
     description: 엔티티별 제한 간격입니다. 0(기본값)은 래핑된 쓰기마다 스냅숏을 남깁니다. N>0은 엔티티당 N분에 최대 한 번만

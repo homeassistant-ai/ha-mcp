@@ -236,6 +236,23 @@ configuration:
       ĝin. Defaŭlte ŝaltita; malmarkado malaktivigas la plejbone klopodajn kaptojn
       kaj malfunkciigas la dosierajn kaj krud-YAML-ilojn kun ili. Postulas restartigon
       por efektiviĝi.'
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
+      in ha_call_service. Turning this off blocks every snapshot action, including
+      listing, while edit backups remain available. Snapshot deletion is only available
+      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
+      still apply. On by default. Change this option or use the web Settings UI Backups
+      tab; requires restart in the app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete, including the
+      equivalent backup services and commands in ha_call_service. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Aŭtomata sekurkopia limigo (minutoj)
     description: Limiga fenestro por ĉiu ento. 0 (defaŭlte) kaptas momentfoton ĉe
@@ -260,9 +277,11 @@ configuration:
       kaj planitaj sekurkopioj ankoraŭ validas). Defaŭlte 7.
   tool_search_max_results:
     name: Maksimumaj rezultoj de ilo-serĉo
-    description: 'Maksimuma nombro de iloj redonitaj de ha_search_tools kiam ilo-serĉo
-      estas ebligita. Pli malaltaj valoroj (2-3) ŝparas kuntekstajn ĵetonojn sed povas
-      maltrafi gravajn ilojn. Gamo: 2-10. Postulas restartigon.'
+    description: 'Maksimuma nombro de kaŝitaj iloj redonitaj po voko de ha_search_tools
+      kiam ilserĉado estas ebligita; alpinglita ilo kiu altas en tiu pinta nombro
+      estas aldonita kiel mallonga nur-noma eniro super ĝi. Pli malaltaj valoroj (2-3)
+      ŝparas kuntekstajn signojn, sed povas maltrafi signifajn ilojn. Intervalo: 2-10.
+      Postulas restartigon.'
   disabled_tools:
     name: Malaktivigitaj iloj (disigitaj per komoj)
     description: Iloj listigitaj ĉi tie estas devige malŝaltitaj kaj ŝlositaj en la

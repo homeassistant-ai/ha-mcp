@@ -28,17 +28,16 @@ class TestDashboardReadOnlyHints:
         annotations = _annotations(
             DashboardConfigTools(MagicMock()).ha_config_get_dashboard
         )
+        # #1837 marked the tool destructiveHint=False instead of read-only.
         assert annotations.read_only_hint is True
-        # Guard against re-regression to the #1837 state, which marked the
-        # tool destructiveHint=False instead of read-only.
-        assert annotations.destructive_hint is None
+        assert annotations.destructive_hint is False
 
     def test_get_dashboard_screenshot_is_read_only(self):
         annotations = _annotations(
             DashboardScreenshotTools(MagicMock()).ha_get_dashboard_screenshot
         )
         assert annotations.read_only_hint is True
-        assert annotations.destructive_hint is None
+        assert annotations.destructive_hint is False
 
     def test_both_tools_categorize_as_read(self):
         """The categorized tool-search bucketing must classify both as read so

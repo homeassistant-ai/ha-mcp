@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "Activar la búsqueda de herramientas",
     "features.enable_tool_search.help": "Sustituye el catálogo completo de herramientas por un descubrimiento basado en búsqueda. Reduce el contexto en reposo en torno a un 90 %, hasta unos 5K tokens. ⚠️ NO actives esto en clientes con su propia búsqueda de herramientas / herramientas diferidas integrada (claude.ai, Claude Desktop, Claude Code): las dos capas de búsqueda entran en conflicto y la búsqueda integrada del cliente es allí la mejor opción; deja esto desactivado. Que las herramientas se difieran depende de la combinación de cliente y modelo: usa esto cuando tu configuración carga el catálogo completo de entrada — modelos sin herramientas diferidas nativas (p. ej. Gemini, modelos locales compatibles con OpenAI, Claude Haiku), clientes que insertan todos los esquemas de herramientas sea cual sea el modelo (p. ej. GitHub Copilot CLI) o ventanas de contexto más pequeñas. Algunos modelos Codex y ChatGPT también incluyen herramientas diferidas: comprueba directamente con tu cliente/modelo qué características tiene para no dejar esto activado innecesariamente. Las herramientas se localizan mediante ha_search_tools y se ejecutan a través de proxies por categoría (lectura/escritura/borrado). Requiere reiniciar para que surta efecto.",
     "features.tool_search_max_results.label": "Máximo de resultados de la búsqueda de herramientas",
-    "features.tool_search_max_results.help": "Número máximo de herramientas que devuelve ha_search_tools cuando la búsqueda de herramientas está activada. Los valores bajos (2-3) ahorran tokens de contexto pero pueden dejar fuera herramientas relevantes. Rango: 2-10. Requiere reiniciar.",
+    "features.tool_search_max_results.help": "Número máximo de herramientas ocultas devueltas por cada llamada a ha_search_tools cuando la búsqueda de herramientas está habilitada; una herramienta fijada que se encuentre dentro de ese recuento superior se añade como una entrada breve de solo nombre además de este. Los valores más bajos (2-3) ahorran tokens de contexto, pero pueden omitir herramientas relevantes. Rango: 2-10. Requiere reinicio.",
     "features.enable_tool_security_policies.label": "Activar las políticas de seguridad de herramientas (avanzado)",
     "features.enable_tool_security_policies.help": "Somete a aprobación del usuario las llamadas a herramientas de alto riesgo (control de cerraduras y alarmas, escritura de automatizaciones, etc.). Cuando se llama a una herramienta protegida, el agente indica al usuario que abra la pestaña Políticas de seguridad de herramientas en la interfaz web y pulse Aprobar antes de que la llamada continúe. Las reglas por herramienta, con condiciones opcionales sobre los argumentos, se configuran en esa misma pestaña. Desactivado de forma predeterminada. Requiere reiniciar para que surta efecto.",
     "features.read_only_mode.label": "Modo de solo lectura",
@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "Informar de un problema o enviar comentarios",
-      "description": "Obtén diagnósticos y un informe de errores listo para GitHub para reportar un fallo o enviar comentarios del agente."
+      "description": "Obtén diagnóstico y un issue de GitHub redactado para un error, comentarios sobre el agente o una solicitud de función."
     },
     "ha_restart": {
       "title": "Reiniciar Home Assistant",

@@ -24,6 +24,7 @@ from .component_api import (
     is_unknown_command,
 )
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
@@ -323,12 +324,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         tags={"Utilities"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Evaluate Template",
-        },
+        annotations=read_only_hints("Evaluate Template", open_world=False),
     )
     @log_tool_usage
     async def ha_eval_template(

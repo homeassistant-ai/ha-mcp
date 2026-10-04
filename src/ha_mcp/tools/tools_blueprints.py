@@ -33,6 +33,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -129,15 +130,11 @@ class BlueprintTools:
     @tool(
         name="ha_manage_blueprints",
         tags={"Blueprints"},
-        annotations={
-            "readOnlyHint": False,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            # import fetches arbitrary URLs; list/get return externally
-            # authored blueprint content from an otherwise local read.
-            "openWorldHint": True,
-            "title": "Manage Blueprints",
-        },
+        # import fetches arbitrary URLs; list/get return externally
+        # authored blueprint content from an otherwise local read.
+        annotations=write_hints(
+            "Manage Blueprints", destructive=True, idempotent=False, open_world=True
+        ),
     )
     # ``delete`` and ``save`` are the two actions that can destroy an installed
     # blueprint's contents, so both capture first. The snapshot is keyed on the

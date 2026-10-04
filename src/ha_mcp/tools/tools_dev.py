@@ -39,16 +39,14 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .config_entry_flow_form import (
-    _MISSING_DEFAULT,
-    _step_owned_submission_value,
-)
+from .config_entry_flow_form import _MISSING_DEFAULT, _step_owned_submission_value
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -816,11 +814,12 @@ class DevTools:
     @tool(
         name="ha_dev_manage_settings",
         tags={"Developer"},
-        annotations={
-            "openWorldHint": False,
-            "title": "Manage Server Settings (dev)",
-            "destructiveHint": True,
-        },
+        annotations=write_hints(
+            "Manage Server Settings (dev)",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_dev_manage_settings(
@@ -934,7 +933,8 @@ class DevTools:
 
         Drives everything the web settings UI can change: the Server
         Settings matrix, the Tools tab, the Tool Security Policies editor,
-        and the auto-backup config. Use ha_dev_manage_server for
+        and agent-editable backup config. Snapshot Actions and Backup Read
+        Only are human-only controls. Use ha_dev_manage_server for
         the live approval queue and to restart.
 
         When NOT to use: for HA entity/automation configuration use the
@@ -1608,67 +1608,23 @@ class DevTools:
 
     async def _get_backup_config(self) -> dict[str, Any]:
         """Return the auto-backup config fields (shared with the web handler)."""
-        from ..settings_ui._handlers_backups import backup_config_fields
+        from .dev_backup import dev_backup_config_fields
 
         return {
             "success": True,
             "data": {
                 "is_addon": is_running_in_addon(),
-                "fields": backup_config_fields(),
+                "fields": dev_backup_config_fields(),
             },
         }
 
     async def _apply_set_backup_config(
         self, backup: dict[str, Any] | None
     ) -> dict[str, Any]:
-        """Apply auto-backup config changes (same routing as the web UI)."""
-        from ..settings_ui._handlers_backups import (
-            _validate_backup_payload,
-            apply_backup_config,
-        )
+        """Apply backup configuration while preserving human-only controls."""
+        from .dev_backup import apply_dev_backup_config
 
-        if not isinstance(backup, dict):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "'backup' (an object of {field: value}) is required for "
-                    "action='set_backup_config'",
-                    suggestions=[
-                        "Call ha_dev_manage_settings('get_backup_config') for "
-                        "field names"
-                    ],
-                )
-            )
-        clean, err = _validate_backup_payload(backup)
-        if err is not None:
-            raise_tool_error(
-                create_error_response(ErrorCode.VALIDATION_INVALID_PARAMETER, err)
-            )
-        response = await apply_backup_config(self._server, clean)
-        # JSONResponse.body is typed bytes | memoryview; bytes() normalizes both
-        # (no-op for bytes) so json.loads accepts it.
-        body = json.loads(bytes(response.body))
-        if response.status_code >= 400:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    self._backup_error_message(body),
-                    context={"status": response.status_code, "response": body},
-                )
-            )
-        return {"success": True, "data": body}
-
-    @staticmethod
-    def _backup_error_message(body: Any) -> str:
-        """Pull a human message out of a backup-config error response body."""
-        err = body.get("error") if isinstance(body, dict) else None
-        if isinstance(err, dict):
-            return str(
-                err.get("message") or err.get("code") or "backup config update failed"
-            )
-        if isinstance(err, str):
-            return err
-        return "backup config update failed"
+        return await apply_dev_backup_config(self._server, backup)
 
     async def _apply_setting_reset(
         self, setting: str, env_name: str, origin: str
@@ -1823,11 +1779,12 @@ class DevTools:
     @tool(
         name="ha_dev_manage_server",
         tags={"Developer"},
-        annotations={
-            "openWorldHint": True,
-            "title": "Manage MCP Server (dev)",
-            "destructiveHint": True,
-        },
+        annotations=write_hints(
+            "Manage MCP Server (dev)",
+            destructive=True,
+            idempotent=False,
+            open_world=True,
+        ),
     )
     @log_tool_usage
     async def ha_dev_manage_server(

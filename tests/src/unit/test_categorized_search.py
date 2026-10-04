@@ -503,15 +503,9 @@ class TestCategorizedCallDispatch:
 
     def _get_proxy_fn(self, transform, category):
         """Get the callable fn from a proxy Tool."""
-        annotations_map = {
-            "read": ToolAnnotations(read_only_hint=True),
-            "write": ToolAnnotations(destructive_hint=True),
-            "delete": ToolAnnotations(destructive_hint=True),
-        }
         proxy = transform._make_categorized_proxy(
             proxy_name=f"ha_call_{category}_tool",
             category=category,
-            annotations=annotations_map[category],
             description=f"Test {category} proxy",
         )
         return proxy.fn
@@ -848,15 +842,9 @@ class TestDoubleUnwrap:
         return t
 
     def _get_proxy_fn(self, transform, category):
-        annotations_map = {
-            "read": ToolAnnotations(read_only_hint=True),
-            "write": ToolAnnotations(destructive_hint=True),
-            "delete": ToolAnnotations(destructive_hint=True),
-        }
         proxy = transform._make_categorized_proxy(
             proxy_name=f"ha_call_{category}_tool",
             category=category,
-            annotations=annotations_map[category],
             description=f"Test {category} proxy",
         )
         return proxy.fn
@@ -1054,15 +1042,9 @@ class TestArgumentsAsString:
         return t
 
     def _get_proxy_fn(self, transform, category):
-        annotations_map = {
-            "read": ToolAnnotations(read_only_hint=True),
-            "write": ToolAnnotations(destructive_hint=True),
-            "delete": ToolAnnotations(destructive_hint=True),
-        }
         proxy = transform._make_categorized_proxy(
             proxy_name=f"ha_call_{category}_tool",
             category=category,
-            annotations=annotations_map[category],
             description=f"Test {category} proxy",
         )
         return proxy.fn

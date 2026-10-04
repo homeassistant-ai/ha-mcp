@@ -52,9 +52,11 @@ configuration:
       na het wijzigen van een instelling hier.'
   tool_search_max_results:
     name: Max. resultaten tool-zoekfunctie
-    description: 'Maximaal aantal tools geretourneerd door ha_search_tools wanneer
-      de tool-zoekfunctie is ingeschakeld. Lagere waarden (2-3) besparen context-tokens,
-      maar kunnen relevante tools missen. Bereik: 2-10. Vereist een herstart.'
+    description: 'Maximum aantal verborgen tools dat wordt geretourneerd per ha_search_tools
+      aanroep wanneer tool zoeken is ingeschakeld; een vastgezette tool die binnen
+      die top valt, wordt hier bovenop toegevoegd als een korte vermelding met alleen
+      de naam. Lagere waarden (2-3) besparen contexttokens, maar missen mogelijk relevante
+      tools. Bereik: 2-10. Vereist een herstart.'
   enable_tool_security_policies:
     name: Schakel Tool Beveiligingsbeleid in (geavanceerd)
     description: Beveilig risicovolle tool-aanroepen (vergrendelings-/alarmbediening,
@@ -160,6 +162,23 @@ configuration:
       deze. Standaard ingeschakeld; uitschakelen annuleert de ''best-effort'' momentopnamen
       en schakelt de bestand- en ruwe-YAML-tools hiermee uit. Vereist een herstart
       om van kracht te worden.'
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
+      in ha_call_service. Turning this off blocks every snapshot action, including
+      listing, while edit backups remain available. Snapshot deletion is only available
+      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
+      still apply. On by default. Change this option or use the web Settings UI Backups
+      tab; requires restart in the app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete, including the
+      equivalent backup services and commands in ha_call_service. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Automatische back-up vertraging (minuten)
     description: Vertragingsvenster per entiteit. 0 (standaard) maakt een snapshot

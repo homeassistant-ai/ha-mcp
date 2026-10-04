@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "Włącz wyszukiwanie narzędzi",
     "features.enable_tool_search.help": "Zastępuje pełny katalog narzędzi odkrywaniem opartym na wyszukiwaniu. Zmniejsza bezczynny kontekst o około 90%, do około 5 tys. tokenów. ⚠️ NIE włączaj tej opcji w klientach z własnym wbudowanym wyszukiwaniem narzędzi / odroczonymi narzędziami (claude.ai, Claude Desktop, Claude Code) — dwie warstwy wyszukiwania kolidują ze sobą, a wbudowane wyszukiwanie narzędzi klienta jest tam lepszym wyborem; pozostaw tę opcję wyłączoną. To, czy narzędzia są odroczone, zależy od kombinacji klienta i modelu: użyj tej opcji, gdy Twoja konfiguracja ładuje pełny katalog z góry — modele bez natywnych odroczonych narzędzi (np. Gemini, lokalne modele kompatybilne z OpenAI, Claude Haiku), klienci, którzy włączają wszystkie schematy narzędzi niezależnie od modelu (np. GitHub Copilot CLI), lub mniejsze okna kontekstowe. Niektóre modele Codex i ChatGPT również zawierają odroczone narzędzia — sprawdź bezpośrednio swojego klienta/model, aby potwierdzić jego funkcje, aby nie pozostawiać tej opcji włączonej niepotrzebnie. Narzędzia są znajdowane za pomocą ha_search_tools i wykonywane za pośrednictwem skategoryzowanych proxy (odczyt/zapis/usuwanie). Wymaga ponownego uruchomienia, aby zmiany weszły w życie.",
     "features.tool_search_max_results.label": "Maksymalna liczba wyników wyszukiwania narzędzi",
-    "features.tool_search_max_results.help": "Maksymalna liczba narzędzi zwracanych przez ha_search_tools, gdy wyszukiwanie narzędzi jest włączone. Niższe wartości (2-3) oszczędzają tokeny kontekstu, ale mogą pominąć istotne narzędzia. Zakres: 2-10. Wymaga ponownego uruchomienia.",
+    "features.tool_search_max_results.help": "Maksymalna liczba ukrytych narzędzi zwracanych w jednym wywołaniu ha_search_tools, gdy wyszukiwanie narzędzi jest włączone; przypisane narzędzie, które mieści się w tym limicie, jest dodawane jako krótki wpis zawierający tylko nazwę na jego początku. Niższe wartości (2-3) oszczędzają tokeny kontekstu, ale mogą pominąć odpowiednie narzędzia. Zakres: 2-10. Wymaga ponownego uruchomienia.",
     "features.enable_tool_security_policies.label": "Włącz zasady bezpieczeństwa narzędzi (zaawansowane)",
     "features.enable_tool_security_policies.help": "Zabezpiecz wywołania narzędzi wysokiego ryzyka (kontrola zamków/alarmów, zapisy automatyzacji itp.) za zgodą użytkownika. Gdy wywoływane jest zabezpieczone narzędzie, agent informuje użytkownika, aby otworzył zakładkę „Zasady bezpieczeństwa narzędzi” w interfejsie sieciowym i kliknął „Zatwierdź”, zanim wywołanie zostanie wykonane. Reguły dla poszczególnych narzędzi z opcjonalnymi warunkami argumentów są konfigurowane w zakładce „Zasady bezpieczeństwa narzędzi”. Domyślnie wyłączone. Wymaga ponownego uruchomienia, aby zmiany weszły w życie.",
     "features.read_only_mode.label": "Tryb tylko do odczytu",
@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "Zgłoś problem lub opinię",
-      "description": "Uzyskaj dane diagnostyczne i gotowe zgłoszenie w serwisie GitHub dla raportu o błędzie lub opinii agenta."
+      "description": "Pobierz dane diagnostyczne oraz gotowe zgłoszenie w serwisie GitHub dla błędu, opinii o agencie lub prośby o nową funkcję."
     },
     "ha_restart": {
       "title": "Uruchom ponownie Home Assistant",

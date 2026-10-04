@@ -747,6 +747,8 @@ The app remains a fully supported alternative on Home Assistant OS and Supervise
 | `HOMEASSISTANT_URL` | Your Home Assistant URL | - | Yes |
 | `HOMEASSISTANT_TOKEN` | Long-lived access token (or `demo` for demo env) | - | Yes |
 | `BACKUP_HINT` | Backup recommendation level | `normal` | No |
+| `ENABLE_SNAPSHOT_ACTIONS` | Allow full HA snapshot actions through `ha_manage_backup`; deletion also requires `ENABLE_SNAPSHOT_DELETE`. `false` blocks listing too | `true` | No |
+| `BACKUP_READ_ONLY` | Allow backup reads and block manual create, restore, and delete through `ha_manage_backup` | `false` | No |
 | `HA_MCP_DISABLE_SETTINGS_UI` | Set to `1` to skip the localhost settings-page sidecar that stdio installs spawn by default ([details](#how-do-i-open-the-ha-mcp-settings-page)) | - | No |
 
 ### Backup Hint Modes
@@ -757,6 +759,34 @@ The app remains a fully supported alternative on Home Assistant OS and Supervise
 | `normal` | Suggests backup only before irreversible operations (recommended) |
 | `weak` | Rarely suggests backups |
 | `auto` | Same as normal (future: auto-detection) |
+
+### Backup permissions
+
+`ha_manage_backup` is mandatory and remains enabled when listed in
+`DISABLED_TOOLS`. Use the **Backups** tab in the web Settings UI to control
+its actions:
+
+- **Allow full HA snapshot actions** is on by default. Turning it off blocks
+  every `scope="snapshot"` action, including listing; `scope="edits"` remains
+  available. Deletion is only available through `ha_manage_backup`, also
+  requires **Allow snapshot deletion**, and remains subject to its snapshot
+  protections.
+- **Make backup management read-only** is off by default. Turning it on allows
+  edit-backup list, view, and diff, plus snapshot list while snapshot actions
+  are enabled. It blocks manual create, restore (including edit restores),
+  and delete. Automatic pre-edit backups continue.
+
+These settings restrict AI calls to `ha_manage_backup` and the equivalent
+backup services and commands sent through `ha_call_service`
+(`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/` snapshot
+commands, and Supervisor `/backups` requests). Full snapshot deletion through
+`ha_call_service` is refused; use `ha_manage_backup`. Code Mode is a beta
+escape hatch and is not fully covered by these settings. Scripts and
+automations that call these services run inside Home Assistant and are not
+covered. Human backup actions in the settings page remain available. App
+(add-on) saves require a restart; other installations apply saved overrides
+immediately. An explicitly set environment variable locks its setting in the
+UI. Disabling snapshot actions takes precedence over read-only listing.
 
 ### Entity visibility filter (opt-in)
 

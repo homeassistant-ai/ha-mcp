@@ -235,6 +235,31 @@ See [Cloudflared app documentation](https://github.com/brenner-tobias/addon-clou
 
 ---
 
+## Use from Home Assistant's own AI (Home Assistant 2026.10+)
+
+On Home Assistant 2026.10 or newer, the app announces itself to the
+**Model Context Protocol** integration. **Settings → Devices & services**
+shows it as discovered; select **Add** and confirm. Its tools then become an
+API that Home Assistant conversation agents can select under
+**Control Home Assistant**. Select **Ignore** if you do not want that.
+
+- On an older Home Assistant the app announces nothing. After updating Home
+  Assistant, restart the app to be discovered.
+- Turn on [`enable_tool_search`](#enable_tool_search) for this use. A
+  conversation agent receives every tool description with every message, and
+  the full catalog is far larger than the search tools.
+- Home Assistant stops a tool call after 10 seconds, so long operations
+  (backups, restarts, large searches) can report a timeout while they still
+  finish.
+- If you added the app's URL to the integration by hand before, that entry
+  keeps working. Home Assistant still offers the discovered one unless the
+  manual entry uses the exact URL the app announces
+  (`http://<app hostname>:9583/...`), so an entry added with the IP address
+  ends up next to a second one for the same server. Keep only one. To get an
+  API name that stays the same when the app is reinstalled, remove the manual
+  entry and add the discovered one. If it is not offered, restart Home
+  Assistant.
+
 ## Configuration Options
 
 The app has minimal configuration - most settings are automatic.
@@ -265,6 +290,33 @@ Controls when the AI assistant suggests creating backups before operations:
 - `auto`: Intelligent detection (future enhancement)
 
 **Note:** This is an advanced option. Enable "Show unused optional configuration options" in the app configuration UI to see it.
+
+### Backup permissions
+
+`ha_manage_backup` is mandatory and remains enabled when listed in
+`disabled_tools`. Control its actions with these app options or the web
+Settings UI **Backups** tab:
+
+- **Allow full HA snapshot actions** (`enable_snapshot_actions`, default
+  `true`): turning this off blocks every full HA snapshot action, including
+  listing. Edit backups remain available. Deletion is only available through
+  `ha_manage_backup`, also requires **Allow snapshot deletion**
+  (`enable_snapshot_delete`), and its protections still apply.
+- **Make backup management read-only** (`backup_read_only`, default `false`):
+  allows edit-backup list, view, and diff, and snapshot list when snapshot
+  actions are enabled. Blocks manual create, restore (including edit restores),
+  and delete. Automatic pre-edit backups continue.
+
+These options restrict AI calls to `ha_manage_backup` and the equivalent
+backup services and commands sent through `ha_call_service`
+(`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/` snapshot
+commands, and Supervisor `/backups` requests). Full snapshot deletion through
+`ha_call_service` is refused; use `ha_manage_backup`. Code Mode is a beta
+escape hatch and is not fully covered by these options. Scripts and
+automations that call these services run inside Home Assistant and are not
+covered. Human backup actions in the settings page remain available. Save,
+then restart the app to apply changes. Disabling snapshot actions blocks
+snapshot listing even when backup management is read-only.
 
 ### secret_path (Advanced)
 

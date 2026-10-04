@@ -33,9 +33,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": true
     },
     "tags": [
       "Apps (add-ons)"
@@ -166,10 +167,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": false,
-      "readOnlyHint": false
+      "openWorldHint": true
     },
     "tags": [
       "Apps (add-ons)"
@@ -195,9 +196,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Areas & Floors"
@@ -225,9 +227,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Areas & Floors"
@@ -300,8 +303,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Areas & Floors"
@@ -414,10 +419,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": false,
-      "readOnlyHint": false
+      "openWorldHint": true
     },
     "tags": [
       "Assist"
@@ -440,9 +445,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Automations"
@@ -470,9 +476,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Automations"
@@ -541,8 +548,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Automations"
@@ -646,9 +655,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Calendar"
@@ -686,9 +696,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Calendar"
@@ -756,8 +767,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Calendar"
@@ -790,9 +803,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Camera"
@@ -903,8 +917,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Dashboard",
@@ -928,8 +944,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Dashboards"
@@ -952,8 +970,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Dashboards"
@@ -1024,9 +1044,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
       "readOnlyHint": true,
-      "idempotentHint": true
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Dashboards"
@@ -1064,9 +1085,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": true
     },
     "tags": [
       "Dashboards"
@@ -1147,8 +1169,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Dashboards"
@@ -1184,8 +1208,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Dashboards"
@@ -1223,8 +1249,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": true,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
     },
     "tags": [
       "Developer"
@@ -1234,7 +1262,7 @@
   {
     "name": "ha_dev_manage_settings",
     "title": "Manage Server Settings (dev)",
-    "description": "Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).\n\nDrives everything the web settings UI can change: the Server\nSettings matrix, the Tools tab, the Tool Security Policies editor,\nand the auto-backup config. Use ha_dev_manage_server for\nthe live approval queue and to restart.\n\nWhen NOT to use: for HA entity/automation configuration use the\nha_config_* tools.\n\nCaveats: enable/disable/pin and most server settings take effect\nonly after a restart (ha_dev_manage_server action=\"restart\");\nLLM-API exposure, security gates, and policy edits apply live.\nEnv-pinned settings/tools are read-only until the env var is unset.\nThese actions can flip security-sensitive state — treat with the\nsame care as editing the web UI. The policy-override surfaces\n(set_policy, set_tool with gated=, and set/reset of\nenable_tool_security_policies) additionally require the\n'dev_tools_security_policy_access' setting, which is off by\ndefault; reads are always available. That setting itself is never\nwritable by these tools — change it in the web settings UI or via\nHAMCP_DEV_SECURITY_POLICY_ACCESS.\n\nEXAMPLES:\nha_dev_manage_settings(\"list_tools\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_write_file\", state=\"disabled\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_call_service\", gated=True)\nha_dev_manage_settings(\"get_policy\")\nha_dev_manage_settings(\"set_backup_config\", backup={\"enable_auto_backup\": False})",
+    "description": "Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).\n\nDrives everything the web settings UI can change: the Server\nSettings matrix, the Tools tab, the Tool Security Policies editor,\nand agent-editable backup config. Snapshot Actions and Backup Read\nOnly are human-only controls. Use ha_dev_manage_server for\nthe live approval queue and to restart.\n\nWhen NOT to use: for HA entity/automation configuration use the\nha_config_* tools.\n\nCaveats: enable/disable/pin and most server settings take effect\nonly after a restart (ha_dev_manage_server action=\"restart\");\nLLM-API exposure, security gates, and policy edits apply live.\nEnv-pinned settings/tools are read-only until the env var is unset.\nThese actions can flip security-sensitive state — treat with the\nsame care as editing the web UI. The policy-override surfaces\n(set_policy, set_tool with gated=, and set/reset of\nenable_tool_security_policies) additionally require the\n'dev_tools_security_policy_access' setting, which is off by\ndefault; reads are always available. That setting itself is never\nwritable by these tools — change it in the web settings UI or via\nHAMCP_DEV_SECURITY_POLICY_ACCESS.\n\nEXAMPLES:\nha_dev_manage_settings(\"list_tools\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_write_file\", state=\"disabled\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_call_service\", gated=True)\nha_dev_manage_settings(\"get_policy\")\nha_dev_manage_settings(\"set_backup_config\", backup={\"enable_auto_backup\": False})",
     "inputSchema": {
       "properties": {
         "action": {
@@ -1292,8 +1320,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Developer"
@@ -1356,9 +1386,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Device Registry",
@@ -1384,9 +1415,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Device Registry"
@@ -1429,8 +1461,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Device Registry"
@@ -1493,9 +1527,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": false
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Energy"
@@ -1531,9 +1566,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
       "readOnlyHint": true,
-      "idempotentHint": true
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Entity Registry"
@@ -1559,9 +1595,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Entity Registry"
@@ -1584,9 +1621,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Entity Registry"
@@ -1689,9 +1727,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Entity Registry"
@@ -1719,8 +1758,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Files",
@@ -1749,8 +1790,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Files",
@@ -1788,8 +1831,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Files",
@@ -1828,8 +1873,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Files",
@@ -1863,9 +1910,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Groups"
@@ -1893,9 +1941,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Groups"
@@ -1953,8 +2002,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Groups"
@@ -2014,9 +2065,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": true
     },
     "tags": [
       "HACS"
@@ -2059,8 +2111,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": true,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
     },
     "tags": [
       "HACS"
@@ -2100,9 +2154,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Helper Entities"
@@ -2310,8 +2365,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Helper Entities"
@@ -2354,9 +2411,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Helper Entities",
@@ -2422,9 +2480,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "History & Statistics"
@@ -2509,9 +2568,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "History & Statistics"
@@ -2601,9 +2661,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "History & Statistics"
@@ -2740,9 +2801,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Integrations"
@@ -2812,9 +2874,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": true
     },
     "tags": [
       "Integrations",
@@ -2890,10 +2953,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true,
       "readOnlyHint": false,
-      "idempotentHint": false
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Integrations"
@@ -2921,9 +2984,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -2944,9 +3008,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -2974,9 +3039,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -2999,9 +3065,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -3039,8 +3106,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -3088,8 +3157,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -3137,9 +3208,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": false
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Matter",
@@ -3191,9 +3263,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Scenes"
@@ -3221,9 +3294,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Scenes"
@@ -3284,8 +3358,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Scenes"
@@ -3308,9 +3384,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Scripts"
@@ -3338,9 +3415,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Scripts"
@@ -3411,8 +3489,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Scripts"
@@ -3484,9 +3564,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": true
     },
     "tags": [
       "Search & Discovery"
@@ -3519,9 +3600,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Search & Discovery"
@@ -3622,9 +3704,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Search & Discovery"
@@ -3691,8 +3774,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Service & Device Control"
@@ -3720,9 +3805,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": false
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Service & Device Control"
@@ -3789,8 +3875,9 @@
     },
     "annotations": {
       "readOnlyHint": false,
-      "openWorldHint": false,
-      "destructiveHint": true
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Service & Device Control"
@@ -3814,7 +3901,7 @@
             "allow_inf_nan": false
           },
           "description": "Seconds to wait for a pending operation to finish before returning its status. 0 returns the current status at once.",
-          "default": 10
+          "default": 8
         }
       },
       "required": [
@@ -3822,8 +3909,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Service & Device Control"
@@ -3881,9 +3970,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Service & Device Control"
@@ -3922,6 +4012,8 @@
     },
     "annotations": {
       "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
       "openWorldHint": false
     },
     "tags": [
@@ -3974,9 +4066,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": false
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "System",
@@ -4057,8 +4150,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "System"
@@ -4099,10 +4194,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": false,
-      "readOnlyHint": false
+      "openWorldHint": false
     },
     "tags": [
       "System",
@@ -4187,10 +4282,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": true,
-      "readOnlyHint": false
+      "openWorldHint": false
     },
     "tags": [
       "System"
@@ -4241,7 +4336,9 @@
       }
     },
     "annotations": {
+      "readOnlyHint": false,
       "destructiveHint": true,
+      "idempotentHint": false,
       "openWorldHint": true
     },
     "tags": [
@@ -4268,8 +4365,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "System"
@@ -4290,8 +4389,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "System"
@@ -4317,9 +4418,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Todo Lists"
@@ -4347,9 +4449,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Todo Lists"
@@ -4407,8 +4510,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Todo Lists"
@@ -4458,9 +4563,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Utilities"
@@ -4530,9 +4636,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Utilities"
@@ -4553,9 +4660,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Zones"
@@ -4578,9 +4686,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Zones"
@@ -4631,8 +4740,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Zones"

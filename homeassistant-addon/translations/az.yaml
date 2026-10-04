@@ -51,10 +51,11 @@ configuration:
       parametr dəyişdirildikdən sonra keçərlidir.'
   tool_search_max_results:
     name: Alət axtarışında maksimum nəticə sayı
-    description: 'Alət axtarışı aktiv olduqda ha_search_tools tərəfindən qaytarılan
-      alətlərin maksimum sayı. Daha aşağı dəyərlər (2-3) kontekst tokenlərinə qənaət
-      edir, lakin uyğun alətləri nəzərdən qaçıra bilər. Aralıq: 2-10. Yenidən başlatma
-      tələb olunur.'
+    description: 'Alət axtarışı aktiv olduqda hər ha_search_tools çağırışı üçün qaytarılan
+      gizli alətlərin maksimum sayı; həmin yuxarı sayda yer alan bərkidilmiş alət
+      onun üzərinə qısa yalnız ad daxiletməsi kimi əlavə edilir. Aşağı qiymətlər (2-3)
+      kontekst tokenlərinə qənaət edir, lakin uyğun alətləri qaçıra bilər. Aralıq:
+      2-10. Yenidən başladılmasını tələb edir.'
   enable_tool_security_policies:
     name: Alətlərin təhlükəsizlik siyasətlərini aktivləşdir (qabaqcıl)
     description: Ciddi nəticələr doğura bilən alət çağırışları (kilid/siqnalizasiya
@@ -161,6 +162,23 @@ configuration:
       söndürmək imkan daxilində yaradılan nüsxələrdən imtina edir və bununla birlikdə
       fayl və birbaşa YAML alətlərini də istifadədən çıxarır. Qüvvəyə minməsi üçün
       yenidən başlatmaq tələb olunur.'
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
+      in ha_call_service. Turning this off blocks every snapshot action, including
+      listing, while edit backups remain available. Snapshot deletion is only available
+      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
+      still apply. On by default. Change this option or use the web Settings UI Backups
+      tab; requires restart in the app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete, including the
+      equivalent backup services and commands in ha_call_service. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Avtomatik ehtiyat nüsxə tezliyi limiti (dəqiqə)
     description: Hər obyekt üçün tezlik məhdudiyyətinin müddəti. 0 (standart) ehtiyat

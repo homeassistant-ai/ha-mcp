@@ -192,7 +192,9 @@ summary only when the pull request actually reaches that state.
 | `build-binary.yml` | Release | Linux, macOS, and Windows binaries. |
 | `addon-publish.yml` | Release | Home Assistant app publishing. |
 | `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py` | Regenerate `tools.json`, README, and app `DOCS.md`. |
+| `sync-ratchet-baselines.yml` | Push to `master` touching counted sources or `pyproject.toml`, or manual | Lower the module-size and duplicate-code baselines, which pull requests only check. |
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
+| `dev-ha-env.yml` | Manual, forks only | Live throwaway HA (Docker or HAOS) running a branch's server standalone, embedded or as the app, behind encrypted-URL tunnels; see [`docs/dev-ha-env.md`](../dev-ha-env.md). |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
 | `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides, after the report gate. |
 | `report-gate.yml` | Hourly or manual | Close bug reports whose `missing bug report output` label is 24 hours old. |

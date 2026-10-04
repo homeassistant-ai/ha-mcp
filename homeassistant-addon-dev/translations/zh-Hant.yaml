@@ -115,6 +115,23 @@ configuration:
       — 失敗會記錄 WARNING 且寫入會繼續進行。檔案和原始 YAML 工具是特例：ha_write_file、ha_delete_file 和 ha_config_set_yaml
       將快照視為先決條件，因此在關閉此功能時透過它們進行的寫入將被拒絕，而擷取失敗也會阻止寫入。預設為開啟；取消勾選則會退出盡力而為的擷取，並同時停用檔案和原始
       YAML 工具。需要重新啟動才能生效。
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
+      in ha_call_service. Turning this off blocks every snapshot action, including
+      listing, while edit backups remain available. Snapshot deletion is only available
+      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
+      still apply. On by default. Change this option or use the web Settings UI Backups
+      tab; requires restart in the app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete, including the
+      equivalent backup services and commands in ha_call_service. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: 自動備份節流（分鐘）
     description: 每個實體的節流視窗。0（預設）在每次封裝的寫入時擷取快照。N>0 每隔 N 分鐘每個實體最多擷取一個快照。範圍 0–1440。
@@ -130,7 +147,8 @@ configuration:
     description: 快照必須達到此年齡才能被刪除。範圍 0–365；0 表示停用下限（最新快照和排程備份保護仍然適用）。預設 7。
   tool_search_max_results:
     name: 工具搜尋最大結果數
-    description: 當啟用工具搜尋時，ha_search_tools 所回傳的最大工具數量。較低的值（2-3）可節省上下文 Token，但可能會遺漏相關工具。範圍：2-10。需要重新啟動。
+    description: 啟用工具搜尋時，每次 ha_search_tools 呼叫所傳回的隱藏工具最大數量；排名在前幾名之內的釘選工具會以僅顯示名稱的簡短條目形式額外加入最上方。較低的值
+      (2-3) 可節省上下文符記，但可能會漏掉相關工具。範圍：2-10。需要重新啟動。
   disabled_tools:
     name: 停用的工具（以逗號分隔）
     description: 此處列出的工具會被強制關閉並在網頁設定 UI（「工具」分頁）中鎖定 — 若不先取消此選項，將無法在該處重新啟用。一小組強制性工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）無法停用，即使列在此處也會繼續執行。ha_get_skill_guide

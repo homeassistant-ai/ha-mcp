@@ -41,7 +41,9 @@ from ..client.rest_client import (
 )
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
+from .backup_access import snapshot_route_refusal
 from .helpers import log_tool_usage, raise_tool_error
+from .tool_hints import write_hints
 from .util_helpers import BLOCKED_WS_WRITE_COMMANDS
 
 logger = logging.getLogger(__name__)
@@ -283,7 +285,7 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
 
 def _check_api_post_blocked(normalized: str) -> str | None:
     """Return a rejection message if ``normalized`` matches the api_post
-    blocklist, or ``None`` if the call should proceed.
+    blocklist or a backup control, or ``None`` if the call should proceed.
 
     ``normalized`` is the path after ``_normalize_endpoint`` stripped any
     leading ``/`` and ``api/`` prefix, so for example
@@ -301,7 +303,7 @@ def _check_api_post_blocked(normalized: str) -> str | None:
                 "trigger user automations without the underlying real "
                 "event ever happening. Custom event types are allowed."
             )
-    return None
+    return snapshot_route_refusal(rest_path=normalized)
 
 
 # Cap on the number of saved tools to prevent runaway growth. A buggy
@@ -833,13 +835,10 @@ class _SandboxBridge:
         code is dynamic and may pass non-dict values; the runtime guard
         below converts that into an error dict.
 
-        Commands listed in ``BLOCKED_WS_WRITE_COMMANDS`` are rejected with an
-        explanatory error: those either rewrite persistent state in ways
-        that have no sandbox-appropriate use case (``config/core/update``)
-        or bypass the validation in their wrapping MCP tool
-        (``lovelace/config/save`` skips the dashboard-collision check that
-        ``ha_config_set_dashboard`` performs; registry mutations skip
-        their corresponding wrapping tools' invariant checks).
+        Commands in ``BLOCKED_WS_WRITE_COMMANDS`` are rejected: they rewrite
+        state with no sandbox use case (``config/core/update``) or skip their
+        wrapping tool's validation (dashboard collision, registry invariants).
+        Full-snapshot backup commands follow the backup controls.
         """
         if self._over_invocation_limit():
             return {
@@ -861,6 +860,8 @@ class _SandboxBridge:
                     "so validation runs."
                 )
             }
+        if refusal := snapshot_route_refusal(ws_command=msg_type, ws_params=message):
+            return {"error": refusal}
         logger.debug("sandbox.ws_send type=%r", msg_type)
         try:
             return await self.client.send_websocket_message(message)
@@ -1308,13 +1309,9 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         tags={"System", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "title": "Custom Tool",
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "readOnlyHint": False,
-        },
+        annotations=write_hints(
+            "Custom Tool", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_manage_custom_tool(

@@ -16,7 +16,7 @@ function isReadOnlyForcedOff(t) {
   const ann = t.annotations || {};
   if (ann.readOnlyHint === true) return false;
   if (READ_ONLY_EXEMPT.has(t.name)) return false;
-  if (MANDATORY.includes(t.name)) return false;
+  if (MANDATORY.includes(t.name) || bpsLockedTools.has(t.name)) return false;
   return true;
 }
 
@@ -81,11 +81,11 @@ function render() {
       !isReadOnlyForcedOff(t));
     const anyEnabled = toggleable.some(t => getState(t.name) !== 'disabled');
     const groupEnabled = tools.filter(t => {
+      if (MANDATORY.includes(t.name) || bpsLockedTools.has(t.name)) return true;
       if (isReadOnlyForcedOff(t)) return false;
       if (toolEnvPinned[t.name]) return toolEnvPinned[t.name] !== 'disabled';
       const s = getState(t.name);
-      return MANDATORY.includes(t.name) || bpsLockedTools.has(t.name) ||
-        (!t.disabled_by && s !== 'disabled');
+      return !t.disabled_by && s !== 'disabled';
     }).length;
 
     // Master-switch checked state. Normally it mirrors "any toggleable tool
@@ -168,8 +168,8 @@ function render() {
       const isFeatureGated = disabledBy !== null;
       // env_pinned: "disabled" | "pinned" | undefined — operator-level lock
       // via DISABLED_TOOLS / PINNED_TOOLS env vars. When set, all inputs are
-      // disabled and a banner names the env var. Takes precedence over
-      // isMandatory / isFeatureGated for the lock calculation.
+      // disabled and a banner names the env var. Mandatory tools stay on
+      // regardless, while the requested state remains intact for saves.
       const envPinKind = toolEnvPinned[t.name]; // "disabled" | "pinned" | undefined
       const isEnvPinned = !!envPinKind;
       const envPinVar = envPinKind === 'disabled' ? 'DISABLED_TOOLS' :
@@ -185,22 +185,18 @@ function render() {
       const roForcedOff = isReadOnlyForcedOff(t);
       const roExemptActive = readOnlyState.enabled && READ_ONLY_EXEMPT.has(t.name);
 
-      total++;
-      if (roForcedOff) disabledCount++;
-      else if (isEnvPinned) {
-        if (envPinKind === 'disabled') disabledCount++;
-        else { enabledCount++; pinnedCount++; }
-      } else if (isFeatureGated) disabledCount++;
-      else if (state === 'disabled') disabledCount++;
-      else if (state === 'pinned') { enabledCount++; pinnedCount++; }
-      else enabledCount++;
-
-      const isEnabled = roForcedOff ? false : (isEnvPinned
+      const isEnabled = isMandatory || (roForcedOff ? false : (isEnvPinned
         ? (envPinKind !== 'disabled')
-        : (isFeatureGated ? false : (isMandatory || state !== 'disabled')));
-      const isPinned = roForcedOff ? false : (isEnvPinned
+        : (isFeatureGated ? false : state !== 'disabled')));
+      const isPinned = isMandatory ? (DEFAULT_PINNED.includes(t.name) || state === 'pinned' || envPinKind === 'pinned') : (roForcedOff ? false : (isEnvPinned
         ? (envPinKind === 'pinned')
-        : (isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name))));
+        : (isFeatureGated ? false : (state === 'pinned' || DEFAULT_PINNED.includes(t.name)))));
+      total++;
+      if (!isEnabled) disabledCount++;
+      else {
+        enabledCount++;
+        if (isPinned) pinnedCount++;
+      }
       const lockEnabled = roForcedOff || isEnvPinned || isMandatory || isFeatureGated;
       const lockPinned = roForcedOff || isEnvPinned || isMandatory || isFeatureGated || !isEnabled;
       // The security gate is a policy RULE keyed by tool name, so it can be
@@ -250,7 +246,16 @@ function render() {
                 )
           }</div>`
         : '';
-      const envPinnedNote = isEnvPinned
+      const ignoredDisable = isMandatory && (ignoredDisabledTools.has(t.name) ||
+        state === 'disabled' || envPinKind === 'disabled');
+      const ignoredDisableNote = ignoredDisable
+        ? `<div class="feature-locked-note">${escapeHtml(tr(
+            'tools.notes.mandatory_disabled_ignored',
+            {},
+            'Disable request ignored: this tool is mandatory and remains enabled.'
+          ))}</div>`
+        : '';
+      const envPinnedNote = isEnvPinned && !ignoredDisable
         ? `<div class="feature-locked-note">${tHtml(
             'tools.notes.env_pinned',
             {variable: `<code>${escapeHtml(envPinVar)}</code>`},
@@ -297,6 +302,7 @@ function render() {
         (desc ? `<div class="tool-desc">${escapeHtml(desc)}</div>` : '') +
         gatedNote +
         envPinnedNote +
+        ignoredDisableNote +
         bpsLockedNote +
         readOnlyNote +
         `</div>` +
@@ -581,4 +587,3 @@ function applyToolSearch() {
 document.getElementById('search').addEventListener('input', applyToolSearch);
 
 document.getElementById('restartBtn').addEventListener('click', restartAddon);
-

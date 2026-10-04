@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "도구 검색 사용",
     "features.enable_tool_search.help": "전체 도구 카탈로그 대신 검색 기반 탐색을 사용합니다. 대기 상태 컨텍스트를 약 90% 줄여 약 5K 토큰 수준으로 낮춥니다. ⚠️ 자체 도구 검색이나 지연 로딩 도구 기능을 갖춘 클라이언트(claude.ai, Claude Desktop, Claude Code)에서는 켜지 마세요. 두 검색 계층이 충돌하며, 그런 환경에서는 클라이언트 내장 도구 검색이 더 낫습니다. 도구가 지연 로딩되는지는 클라이언트와 모델 조합에 따라 다릅니다. 전체 카탈로그를 처음부터 모두 불러오는 환경(네이티브 지연 로딩 도구가 없는 모델(예: Gemini, OpenAI 호환 로컬 모델, Claude Haiku), 모델과 무관하게 모든 도구 스키마를 인라인으로 넣는 클라이언트(예: GitHub Copilot CLI), 컨텍스트 창이 작은 경우)에서 사용하세요. 일부 Codex 모델과 ChatGPT도 지연 로딩 도구를 지원하므로, 불필요하게 켜 두지 않도록 사용 중인 클라이언트/모델의 기능을 직접 확인하세요. 도구는 ha_search_tools로 찾고 범주별 프록시(읽기/쓰기/삭제)를 통해 실행됩니다. 적용하려면 다시 시작해야 합니다.",
     "features.tool_search_max_results.label": "도구 검색 최대 결과 수",
-    "features.tool_search_max_results.help": "도구 검색이 켜져 있을 때 ha_search_tools가 반환하는 도구의 최대 개수입니다. 값을 낮추면(2~3) 컨텍스트 토큰을 아낄 수 있지만 관련 도구를 놓칠 수 있습니다. 범위: 2~10. 다시 시작해야 적용됩니다.",
+    "features.tool_search_max_results.help": "도구 검색이 활성화된 경우 ha_search_tools 호출당 반환되는 숨겨진 도구의 최대 개수입니다. 해당 상위 개수에 포함된 고정(pinned) 도구는 그 위에 이름만 있는 짧은 항목으로 추가됩니다. 낮은 값(2-3)은 컨텍스트 토큰을 절약하지만 관련 도구를 누락할 수 있습니다. 범위: 2-10. 다시 시작해야 합니다.",
     "features.enable_tool_security_policies.label": "도구 보안 정책 사용(고급)",
     "features.enable_tool_security_policies.help": "위험도가 높은 도구 호출(잠금·경보 제어, 자동화 쓰기 등)에 사용자 승인을 요구합니다. 보호된 도구가 호출되면 에이전트는 사용자에게 웹 UI의 도구 보안 정책 탭을 열고 승인을 누르라고 안내하며, 그 후에야 호출이 진행됩니다. 인수 조건을 선택적으로 붙일 수 있는 도구별 규칙은 도구 보안 정책 탭에서 설정합니다. 기본값은 꺼짐입니다. 적용하려면 다시 시작해야 합니다.",
     "features.read_only_mode.label": "읽기 전용 모드",
@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "이슈 또는 피드백 보고",
-      "description": "버그 리포트 또는 에이전트 피드백을 위한 진단 정보와 작성된 GitHub 이슈를 가져옵니다."
+      "description": "버그, 에이전트 피드백 또는 기능 요청에 대한 진단 정보와 작성된 GitHub 이슈를 가져옵니다."
     },
     "ha_restart": {
       "title": "Home Assistant 다시 시작",

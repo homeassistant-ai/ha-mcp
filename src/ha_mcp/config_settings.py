@@ -425,6 +425,11 @@ class Settings(BaseSettings):
         7, ge=1, le=365, alias="HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS"
     )
 
+    # Human-managed controls for explicit backup tool operations. Automatic
+    # pre-edit capture follows enable_auto_backup independently.
+    enable_snapshot_actions: bool = Field(True, alias="ENABLE_SNAPSHOT_ACTIONS")
+    backup_read_only: bool = Field(False, alias="BACKUP_READ_ONLY")
+
     # Snapshot-tarball deletion gate (#1861). Off by default: an agent
     # deleting a full HA snapshot is categorically riskier than the
     # lightweight `edits`-scope auto-backups (which already delete freely),
