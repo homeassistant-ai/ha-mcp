@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from collections.abc import Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 
@@ -35,6 +36,7 @@ from .const import (
     OPT_ENABLE_WEBHOOK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_OAUTH_REGENERATE,
     OPT_REGENERATE_SECRETS,
     OPT_SECRET_PATH_OVERRIDE,
@@ -169,15 +171,27 @@ async def async_remove_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     await async_revoke_credentials_on_remove(hass, entry)
 
 
+_LIVE_OPTIONS = frozenset({OPT_OAUTH_REDIRECT_ALLOWLIST})
+
+
+def _reload_relevant(options: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if options is None:
+        return None
+    return {k: v for k, v in options.items() if k not in _LIVE_OPTIONS}
+
+
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload the entry when its OPTIONS change (port / auth / pip spec / URL).
 
     Ignores the ``entry.data`` writes the background bring-up performs (webhook
     id, secret path, provisioned token ids, last pip spec): those fire the same
-    update listener but must not reload the entry.
+    update listener but must not reload the entry. Options read live on every
+    request (the callback allowlist) need no reload either.
     """
     domain_data = hass.data.get(DOMAIN, {})
-    if domain_data.get(DATA_LAST_OPTIONS) == dict(entry.options):
+    if _reload_relevant(domain_data.get(DATA_LAST_OPTIONS)) == _reload_relevant(
+        entry.options
+    ):
         return
     await hass.config_entries.async_reload(entry.entry_id)
 

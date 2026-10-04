@@ -58,6 +58,7 @@ from .const import (
     DEFAULT_ENABLE_LLM_API,
     DEFAULT_LLM_API_EXPOSURE,
     DEFAULT_LOOPBACK_URL,
+    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
     DIST_NAME_DEV,
@@ -79,6 +80,7 @@ from .const import (
     OPT_LLM_API_EXPOSURE,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_OAUTH_REGENERATE,
     OPT_PIP_SPEC,
     OPT_REGENERATE_SECRETS,
@@ -92,6 +94,7 @@ from .const import (
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
 )
+from .oauth_redirect_allowlist import effective_allowlist, normalize_allowlist
 
 # Title shown for the server entry in the integration tile's entry list; the
 # tools entry's title lives in const.py (setup migration in __init__ needs it).
@@ -600,10 +603,21 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             errors = self._connect_path_override_errors(user_input)
+            entries, invalid = normalize_allowlist(
+                user_input.get(OPT_OAUTH_REDIRECT_ALLOWLIST) or []
+            )
+            if invalid:
+                errors[OPT_OAUTH_REDIRECT_ALLOWLIST] = "invalid_oauth_callback"
             if not errors:
-                return self.async_create_entry(
-                    title="", data=self._normalize(user_input)
-                )
+                data = self._normalize(user_input)
+                data.pop(OPT_OAUTH_REDIRECT_ALLOWLIST, None)
+                # An entry still following the shipped default keeps following
+                # it, so a later release's additions reach it.
+                if OPT_OAUTH_REDIRECT_ALLOWLIST in opts or entries != list(
+                    DEFAULT_OAUTH_REDIRECT_ALLOWLIST
+                ):
+                    data[OPT_OAUTH_REDIRECT_ALLOWLIST] = entries
+                return self.async_create_entry(title="", data=data)
 
         # A validation failure must re-render the values the user just entered.
         # Required fields fall back to their stored/default values only when a
@@ -750,6 +764,19 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     OPT_OAUTH_REGENERATE,
                     default=False,
                 ): bool,
+                # suggested_value, not default: an emptied list must save as
+                # empty rather than fall back (see the OPT_PIP_SPEC note).
+                vol.Optional(
+                    OPT_OAUTH_REDIRECT_ALLOWLIST,
+                    description={
+                        "suggested_value": suggested_values.get(
+                            OPT_OAUTH_REDIRECT_ALLOWLIST,
+                            effective_allowlist(opts),
+                        )
+                    },
+                ): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.URL, multiple=True)
+                ),
             }
         )
         # The sidebar-panel sentence in the description is only truthful while

@@ -33,21 +33,20 @@ or none-mode provider (and 404 when no remote OAuth mode is live), mirroring the
 discovery views so mode switches need no restart. The none-mode PKCE code store
 and redirect-URI floor are reused from :mod:`oauth_legacy` rather than copied.
 
-**Open-redirect policy.** In none mode THE SECRET WEBHOOK URL IS THE MAIN AND
-ONLY FORM OF SECURITY. The OAuth surface exists purely for client compatibility;
-its tokens grant nothing. ``/authorize`` therefore serves every provider and
-302-redirects to any spec-valid ``redirect_uri``; malformed targets still hard
-400 under :func:`oauth_legacy._is_valid_redirect_uri`. This makes the Home
-Assistant origin usable as a crafted-link redirector, an accepted risk in the
-secret-URL trust model. An exact-match callback allowlist shipped in PR #1976
-in July 2026; it was retired on 2026-08-14 by maintainer decision to serve every
-provider.
+**Open-redirect policy.** In none mode the secret webhook URL is the
+credential and the tokens this flow issues grant nothing, but ``/authorize`` is
+anonymous: redirecting to any ``redirect_uri`` would make the Home Assistant
+origin an open redirector. It therefore redirects only to a callback on the
+administrator's allowlist (:mod:`oauth_redirect_allowlist`, #2427) and answers
+anything else with a page explaining how to add a legitimate callback.
 """
 
 from __future__ import annotations
 
+import html
 import logging
 import secrets
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode, urlparse
 
@@ -55,17 +54,22 @@ import aiohttp
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
-from .const import DATA_WEBHOOK, DOMAIN, OAUTH_BASE
+from .const import (
+    DATA_WEBHOOK,
+    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
+    DOMAIN,
+    OAUTH_BASE,
+)
 from .oauth_legacy import (
     _PKCE_CHALLENGE_RE,
     _TOKEN_RESPONSE_HEADERS,
     ACCESS_TOKEN_TTL,
     PKCE_S256_CHALLENGE_LEN,
     PKCECodeStore,
-    _is_valid_redirect_uri,
     _issuer_for,
     read_form,
 )
+from .oauth_redirect_allowlist import _is_valid_redirect_uri, is_redirect_allowed
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -125,18 +129,65 @@ def _redirect_with(redirect_uri: str, **params: str) -> web.Response:
     return web.Response(status=302, headers={"Location": str(url)})
 
 
+_UNLISTED_CALLBACK_PAGE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HA-MCP: sign-in callback not allowed</title></head>
+<body style="font-family:sans-serif;max-width:40em;margin:2em auto;padding:0 1em">
+<h1>Sign-in callback not allowed</h1>
+<p>HA-MCP did not send this sign-in back to <code>{callback}</code> because that
+address is not on its list of allowed callback URLs.</p>
+<p>If you trust the app you are connecting, a Home Assistant administrator can
+add this exact address under <b>Settings &rarr; Devices &amp; services &rarr;
+HA-MCP &rarr; HA-MCP Server &rarr; Configure &rarr; Allowed OAuth callback
+URLs</b>, or in the <b>HA-MCP</b> sidebar panel under <b>Server Settings</b>.
+Then start connecting again.</p>
+<p>Clients that connect with the webhook URL alone do not need an entry.</p>
+</body></html>
+"""
+
+
+def _unlisted_callback_response(redirect_uri: str) -> web.Response:
+    """400 page for a callback the allowlist refuses — never a redirect.
+
+    RFC 6749 §4.1.2.1: with an untrusted ``redirect_uri`` the server must not
+    redirect and should tell the resource owner instead.
+    """
+    return web.Response(
+        status=400,
+        text=_UNLISTED_CALLBACK_PAGE.format(callback=html.escape(redirect_uri)),
+        content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+        },
+    )
+
+
 class AutoApproveProvider:
     """None-mode auto-approve authorization-server state.
 
-    Holds only the PKCE code store shared with :mod:`oauth_legacy`; it owns no
-    signing key and no client credentials (the token it issues is cosmetic).
-    Constructed per registration and stored in ``cfg`` — the views resolve it
-    from ``hass.data`` per request, so a reload minting a fresh provider is
-    transparent (no bound view captures the old one, unlike legacy mode).
+    Holds the PKCE code store shared with :mod:`oauth_legacy` and a reader for
+    the callback allowlist; it owns no signing key and no client credentials
+    (the token it issues is cosmetic). Constructed per registration and stored
+    in ``cfg`` — the views resolve it from ``hass.data`` per request, so a
+    reload minting a fresh provider is transparent (no bound view captures the
+    old one, unlike legacy mode). The allowlist is read per request so an
+    administrator's edit applies without a reload.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        allowlist: Callable[[], Iterable[str]] = lambda: (
+            DEFAULT_OAUTH_REDIRECT_ALLOWLIST
+        ),
+    ) -> None:
         self._code_store = PKCECodeStore()
+        self._allowlist = allowlist
+
+    def allows_redirect(self, redirect_uri: str) -> bool:
+        """True when ``redirect_uri`` is on the live callback allowlist."""
+        return is_redirect_allowed(redirect_uri, self._allowlist())
 
     def issue_code(self, redirect_uri: str, code_challenge: str) -> str | None:
         """Issue a one-shot PKCE-bound authorization code (see PKCECodeStore)."""
@@ -169,14 +220,9 @@ def _webhook_cfg(hass: HomeAssistant) -> dict[str, Any] | None:
 def _validate_autoapprove_authorize(params: Any) -> web.Response | None:
     """Validate the none-mode /authorize query; a 400 Response, or None if OK.
 
-    Maintainer decision 2026-08-14 (supersedes the #1969-era exact-match
-    allowlist): none mode's ONLY credential is the secret webhook URL, so the
-    auto-approve flow completes invisibly for ANY spec-valid redirect — the
-    token it yields is cosmetic and grants nothing. The HA origin being usable
-    as a crafted-link redirector via this anonymous endpoint is an accepted
-    trade within that trust model. The spec floor (_is_valid_redirect_uri:
-    https or RFC 8252 loopback, valid port, no fragment) still hard-400s
-    malformed targets without redirecting.
+    The spec floor (_is_valid_redirect_uri: https or RFC 8252 loopback, valid
+    port, no fragment) hard-400s malformed targets without redirecting; the
+    callback allowlist is checked after this, against the live provider.
     """
     if params.get("response_type", "") != "code":
         return _json_error("unsupported_response_type", 400)
@@ -246,6 +292,8 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         err = _validate_autoapprove_authorize(params)
         if err is not None:
             return err
+        if not provider.allows_redirect(redirect_uri):
+            return _unlisted_callback_response(redirect_uri)
 
         # RFC 9207: every authorization response — success or error — names the
         # issuer that produced it, so a client registered with several

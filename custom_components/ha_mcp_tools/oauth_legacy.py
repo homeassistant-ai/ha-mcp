@@ -33,7 +33,6 @@ import base64
 import binascii
 import hashlib
 import hmac
-import ipaddress
 import json
 import logging
 import re
@@ -42,13 +41,14 @@ import time
 from collections.abc import Callable
 from html import escape
 from typing import TYPE_CHECKING, Any, TypedDict
-from urllib.parse import unquote_plus, urlparse
+from urllib.parse import unquote_plus
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from multidict import MultiDictProxy
 
 from .const import WEBHOOK_AUTH_LEGACY
+from .oauth_redirect_allowlist import _is_valid_redirect_uri
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -78,10 +78,6 @@ TOKEN_KIND_REFRESH = "refresh"
 # so it MUST NOT be cached by any intermediary (reverse proxy, Nabu Casa, etc.).
 _TOKEN_RESPONSE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
-# RFC 8252 §7.3: native/CLI OAuth clients (e.g. GitHub Copilot CLI) receive the
-# authorization code on a loopback redirect, for which the spec explicitly
-# permits a plain http scheme. Every non-loopback redirect must still be https.
-_LOOPBACK_HOSTNAMES = frozenset({"localhost"})
 
 # RFC 7636 §4.1: code_verifier is 43-128 chars from the unreserved URL set.
 PKCE_VERIFIER_MIN = 43
@@ -355,59 +351,6 @@ def _b64url_encode(raw: bytes) -> str:
 def _b64url_decode(s: str) -> bytes:
     pad = "=" * (-len(s) % 4)
     return base64.urlsafe_b64decode(s + pad)
-
-
-def _is_loopback_host(hostname: str) -> bool:
-    """True for the loopback hosts RFC 8252 §7.3/§8.3 allows over plain http."""
-    if hostname in _LOOPBACK_HOSTNAMES:
-        return True
-    try:
-        # Covers all of 127.0.0.0/8 and ::1, not just the literal 127.0.0.1.
-        return ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
-
-
-# RFC 3986 §3.2 authority charset (unreserved / pct-encoded / sub-delims /
-# ':' '@' and IPv6 brackets). Anything outside it (a backslash, a space, raw
-# unicode) is an illegal authority that downstream URL builders reject.
-_AUTHORITY_CHARS_RE = re.compile(r"[A-Za-z0-9._~%!$&'()*+,;=:@\[\]-]*")
-
-
-def _is_valid_redirect_uri(redirect_uri: str) -> bool:
-    """Spec-floor validation for OAuth redirect_uri: an https:// URL — or an
-    http:// loopback URL (RFC 8252 §7.3, for native/CLI clients) — with a
-    non-empty host, a valid port, and no fragment. Single-tenant — no per-client
-    allowlist, but reject the obvious bad shapes that would let an attacker
-    direct the flow to an empty/malformed URL."""
-    if not redirect_uri:
-        return False
-    try:
-        parsed = urlparse(redirect_uri)
-        # Accessing .port validates it: urlparse defers the range/format check
-        # until access, so a crafted ':999999' or ':abc' port raises ValueError
-        # HERE (→ clean 400) instead of later in yarl inside _redirect_with,
-        # where it would escape as an uncaught 500 on an unauthenticated view.
-        _ = parsed.port
-    except ValueError:
-        return False
-    if not parsed.hostname:
-        return False
-    if not _AUTHORITY_CHARS_RE.fullmatch(parsed.netloc):
-        # Same contract as the .port access above: urlparse and yarl split
-        # authorities differently (a backslash before '@', a zero-width
-        # character in the host), so an RFC 3986-illegal authority must fail
-        # HERE rather than escape as a 500 out of _redirect_with
-        # (#2219 codex review).
-        return False
-    if parsed.scheme == "http":
-        # Plain http only for loopback callbacks (native-client flow).
-        if not _is_loopback_host(parsed.hostname):
-            return False
-    elif parsed.scheme != "https":
-        return False
-    # Fragments are not allowed in OAuth redirect URIs (RFC 6749 §3.1.2).
-    return not parsed.fragment
 
 
 def _text_error(

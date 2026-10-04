@@ -357,6 +357,13 @@ OPT_ENABLE_STARTUP_NOTIFICATION = "enable_startup_notification"
 # When False, the admin-only "HA-MCP" sidebar settings panel is not registered;
 # the server's options stay reachable on the entry's Configure screen.
 OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
+# The callback URLs the none-mode auto-approve /authorize may redirect to
+# (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
+# empty one, replaces it. Read per request, so a change needs no reload.
+OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
+DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
+    "https://claude.ai/api/mcp/auth_callback",
+)
 
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"

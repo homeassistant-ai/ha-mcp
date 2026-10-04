@@ -37,6 +37,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DOMAIN,
     ENTRY_TYPE_SERVER,
     ENTRY_TYPE_TOOLS,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
 
 
@@ -241,6 +242,18 @@ class TestOptionsUpdatedListener:
         # firing the same listener — it must NOT reload.
         hass = _make_hass()
         entry = _make_entry(options={"server_port": 9584})
+        hass.data[DOMAIN] = {DATA_LAST_OPTIONS: {"server_port": 9584}}
+
+        await pkg._async_options_updated(hass, entry)
+        hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_callback_allowlist_edit_applies_without_a_reload(self):
+        # The settings panel saves the list through the running server; a
+        # reload would tear that server down mid-request (#2427).
+        hass = _make_hass()
+        entry = _make_entry(
+            options={"server_port": 9584, OPT_OAUTH_REDIRECT_ALLOWLIST: []}
+        )
         hass.data[DOMAIN] = {DATA_LAST_OPTIONS: {"server_port": 9584}}
 
         await pkg._async_options_updated(hass, entry)

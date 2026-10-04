@@ -36,12 +36,8 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .const import DATA_WEBHOOK, DOMAIN, OAUTH_BASE
-from .oauth_legacy import (
-    _b64url_decode,
-    _b64url_encode,
-    _is_loopback_host,
-    _is_valid_redirect_uri,
-)
+from .oauth_legacy import _b64url_decode, _b64url_encode
+from .oauth_redirect_allowlist import _is_loopback_host, _is_valid_redirect_uri
 
 # cfg (hass.data[DOMAIN][DATA_WEBHOOK]) key holding the DCR HMAC key as bytes.
 # Present only for none/ha_auth registrations — its presence is the per-request

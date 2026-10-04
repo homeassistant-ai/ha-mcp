@@ -96,6 +96,7 @@ class _TextSelector(_SelectSelector):
 
 class _TextSelectorType:
     TEXT = "text"
+    URL = "url"
 
 
 _sel = MagicMock()
@@ -799,6 +800,7 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE: "/custom_path",
             const.OPT_OAUTH_CLIENT_ID: "hamcp-deadbeef",
             const.OPT_OAUTH_CLIENT_SECRET: "super-secret-value",
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST: ["https://chatgpt.example/cb"],
         }
         flow = _make_options_flow(
             data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=saved
@@ -816,6 +818,7 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE,
             const.OPT_OAUTH_CLIENT_ID,
             const.OPT_OAUTH_CLIENT_SECRET,
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST,
         )
         for key in text_fields:
             assert markers[key].description["suggested_value"] == saved[key]
@@ -856,7 +859,7 @@ class TestServerOptionsFlow:
         assert result["title"] == ""
         # A genuine override is stored verbatim; the channel rides along.
         # _normalize adds the (empty) URL/secret management fields when the
-        # submission omits them.
+        # submission omits them; an omitted callback list is an emptied one.
         assert result["data"] == {
             **user_input,
             const.OPT_EXTERNAL_URL: "",
@@ -864,6 +867,7 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE: "",
             const.OPT_OAUTH_CLIENT_ID: "",
             const.OPT_OAUTH_CLIENT_SECRET: "",
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST: [],
         }
 
     def test_default_pip_spec_normalized_to_empty(self):
@@ -1214,6 +1218,68 @@ class TestServerOptionsFlow:
         assert hint.startswith("Remote access via webhook is disabled")
         assert "http://127.0.0.1:9584/private_x" in hint  # DEFAULT_SERVER_PORT
         assert "/api/webhook/" not in hint
+
+
+class TestOAuthCallbackAllowlistOption:
+    """The Configure screen edits the none-mode callback allowlist (#2427)."""
+
+    CALLBACK = "https://chatgpt.example/cb"
+
+    def _suggested(self, form):
+        marker = next(
+            m
+            for m in form["data_schema"].schema
+            if m.schema == const.OPT_OAUTH_REDIRECT_ALLOWLIST
+        )
+        return marker.description["suggested_value"]
+
+    def test_an_unedited_entry_shows_the_default_list(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        assert self._suggested(form) == list(const.DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
+
+    def test_saves_the_entered_callbacks(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        result = asyncio.run(
+            flow.async_step_init(
+                {const.OPT_OAUTH_REDIRECT_ALLOWLIST: [f" {self.CALLBACK} "]}
+            )
+        )
+        assert result["data"][const.OPT_OAUTH_REDIRECT_ALLOWLIST] == [self.CALLBACK]
+
+    def test_an_unusable_callback_blocks_the_save(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        result = asyncio.run(
+            flow.async_step_init(
+                {const.OPT_OAUTH_REDIRECT_ALLOWLIST: ["http://not-loopback/cb"]}
+            )
+        )
+        assert result["errors"] == {
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST: "invalid_oauth_callback"
+        }
+
+    def test_saving_the_untouched_default_keeps_following_it(self):
+        # Pinning the default would hide callbacks a later release adds to it.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    const.OPT_OAUTH_REDIRECT_ALLOWLIST: list(
+                        const.DEFAULT_OAUTH_REDIRECT_ALLOWLIST
+                    )
+                }
+            )
+        )
+        assert const.OPT_OAUTH_REDIRECT_ALLOWLIST not in result["data"]
+
+    def test_removing_every_callback_sticks(self):
+        # Home Assistant's frontend omits an emptied optional field.
+        flow = _make_options_flow(
+            options={const.OPT_OAUTH_REDIRECT_ALLOWLIST: [self.CALLBACK]},
+            data={const.DATA_WEBHOOK_ID: "mcp_abc"},
+        )
+        result = asyncio.run(flow.async_step_init({}))
+        assert result["data"][const.OPT_OAUTH_REDIRECT_ALLOWLIST] == []
 
 
 class TestOptionsFormTranslations:
