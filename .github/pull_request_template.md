@@ -11,9 +11,15 @@
 - [ ] 💥 Breaking change
 
 ## Testing
+
+<!-- Describe what was exercised: the tests added or changed and what they
+     cover, plus any manual or agent checks. Do NOT list CI results, pass
+     counts, run links, or per-lane status. Reviewers see those in the PR's
+     checks, and they go stale on the next push. -->
+
 - [ ] I have tested these changes with a LLM agent
 - [ ] All automated tests pass (`uv run pytest`)
-- [ ] Code follows style guidelines (`uv run ruff check`)
+- [ ] Code passes lint, format, and type checks (`uv run ruff check`, `uv run ruff format`, `uv run mypy src/`)
 
 ## Future improvements
 
