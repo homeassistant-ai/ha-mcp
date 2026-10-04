@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server (Dev)"
 description: "Development channel - AI assistant integration via MCP (unstable)"
-version: "8.6.0.dev2881"
+version: "8.6.0.dev2883"
 slug: "ha_mcp_dev"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 stage: experimental
@@ -18,6 +18,11 @@ hassio_api: true
 # to /addons/<slug>/logs and /<service>/logs (system service logs). Verified
 # via live test — `default` returns 403 for both. See #1116.
 hassio_role: manager
+# Announces this server to Home Assistant's Model Context Protocol
+# integration (Core 2026.10+); src/ha_mcp/app_discovery.py posts the URL to
+# /discovery when the server starts.
+discovery:
+  - mcp
 homeassistant_api: true
 host_network: true
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch}"

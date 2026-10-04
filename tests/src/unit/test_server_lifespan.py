@@ -65,19 +65,21 @@ async def test_startup_check_never_raises(fake_client):
 
 
 @pytest.mark.asyncio
-async def test_lifespan_runs_the_hacs_nudge_and_cancels_the_check():
-    started = asyncio.Event()
-    cancelled = False
+async def test_lifespan_runs_the_hacs_nudge_and_cancels_the_startup_tasks():
+    started = {"admin check": asyncio.Event(), "discovery": asyncio.Event()}
+    cancelled: set[str] = set()
     hacs_entered = False
 
-    async def never_finishes():
-        nonlocal cancelled
-        started.set()
-        try:
-            await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            cancelled = True
-            raise
+    def never_finishes(name: str):
+        async def run():
+            started[name].set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.add(name)
+                raise
+
+        return run
 
     @asynccontextmanager
     async def fake_hacs_lifespan(_server):
@@ -86,11 +88,19 @@ async def test_lifespan_runs_the_hacs_nudge_and_cancels_the_check():
         yield {}
 
     with (
-        patch.object(server_lifespan, "warn_if_non_admin_token", new=never_finishes),
+        patch.object(
+            server_lifespan,
+            "warn_if_non_admin_token",
+            new=never_finishes("admin check"),
+        ),
+        patch.object(
+            server_lifespan, "announce_mcp_discovery", new=never_finishes("discovery")
+        ),
         patch.object(server_lifespan, "hacs_refresh_lifespan", new=fake_hacs_lifespan),
     ):
         async with server_lifespan.server_lifespan(object()):
-            await started.wait()
+            for event in started.values():
+                await event.wait()
 
     assert hacs_entered
-    assert cancelled, "exiting the lifespan must cancel a pending admin check"
+    assert cancelled == set(started), "exiting the lifespan must cancel both tasks"

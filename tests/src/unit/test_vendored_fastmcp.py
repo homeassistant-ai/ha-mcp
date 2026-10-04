@@ -32,6 +32,7 @@ _NOT_DECLARED = {"websockets"}
 # These drive the component's LLM-API client, which uses HA's shared SDK.
 _SHARED_SDK_USERS = {
     "tests/src/unit/test_llm_api.py",
+    "tests/src/unit/test_llm_tool_metadata.py",
     "tests/src/e2e/workflows/embedded/test_embedded_server.py",
 }
 
