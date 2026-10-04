@@ -1914,6 +1914,9 @@ class TestRegistrationAndAdminGate:
             # Template error location (#2522); prep + admin-gate coverage lives in
             # test_component_template_diagnose.py (this set only guards drift).
             wsapi.WS_TEMPLATE_DIAGNOSE,
+            # OAuth callback allowlist (#2427); test_component_oauth_callbacks_ws.py.
+            wsapi.WS_OAUTH_CALLBACKS,
+            wsapi.WS_OAUTH_CALLBACKS_UPDATE,
             *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py
             wsapi.core_contract.COMMAND,
             "ha_mcp_tools/statistics_units",
