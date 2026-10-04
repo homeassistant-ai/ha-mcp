@@ -300,8 +300,10 @@ remains enabled when listed in `disabled_tools`; this option and
 `backup_read_only` control its actions, here or in the web Settings UI
 **Backups** tab.
 
-Turning this off blocks every full HA snapshot action, including listing.
-Edit backups remain available. Deletion is only available through
+Turning this off blocks full HA snapshot actions through `ha_manage_backup`
+and the guarded backup routes in `ha_call_service`, including listing. It does
+not block scripts or automations that call these services inside Home
+Assistant. Edit backups remain available. Deletion is only available through
 `ha_manage_backup`, also requires **Allow snapshot deletion**
 (`enable_snapshot_delete`), and its protections still apply.
 
