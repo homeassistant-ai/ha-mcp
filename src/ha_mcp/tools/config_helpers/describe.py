@@ -20,7 +20,7 @@ from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import FLOW_HELPER_TYPES
-from ..config_entry_flow_introspect import fetch_helper_flow_info
+from ..config_entry_flow_introspect import fetch_helper_flow_info, menu_choices
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .schemas import SIMPLE_HELPER_SCHEMAS
 
@@ -226,9 +226,12 @@ async def _describe_flow(
         result = await client.start_options_flow(entry_id)
         flow_id = result.get("flow_id")
         if result.get("type") == "menu":
+            choices = menu_choices(result)
             return {
                 "source": "options_flow",
-                "menu_options": result.get("menu_options"),
+                **({"menu_options": choices} if choices else {}),
+                "note": "This helper's options flow opens with a menu; its forms "
+                "are not described.",
             }
         return {
             "source": "options_flow",

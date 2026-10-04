@@ -151,6 +151,26 @@ async def test_existing_flow_helper_with_a_later_options_form_says_so(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("menu", "expected"),
+    [(["a", 1, None], ["a"]), (None, None), ([2], None)],
+)
+async def test_options_flow_menu_lists_only_string_choices(client, menu, expected):
+    """A malformed options-flow menu reports nothing rather than a None list."""
+    client.start_options_flow.return_value = {
+        "type": "menu",
+        "flow_id": "f1",
+        "menu_options": menu,
+    }
+
+    result = await mod.describe_helper(client, "group", helper_id="entry1")
+
+    assert result.get("menu_options") == expected
+    assert result["note"]
+    client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
 async def test_existing_flow_helper_reads_current_values_and_aborts_options_flow(
     client,
 ):

@@ -60,12 +60,17 @@ async def _process_menu_flow_result(
             return info
         return _form_info(step)
 
-    options = flow_result.get("menu_options")
-    if isinstance(options, list):
-        filtered = [opt for opt in options if isinstance(opt, str)]
-        if filtered:
-            info["menu_options"] = filtered
+    if choices := menu_choices(flow_result):
+        info["menu_options"] = choices
     return info
+
+
+def menu_choices(step: dict[str, Any]) -> list[str]:
+    """A MENU step's options that name a branch (strings); malformed ones drop."""
+    options = step.get("menu_options")
+    if not isinstance(options, list):
+        return []
+    return [opt for opt in options if isinstance(opt, str)]
 
 
 async def fetch_helper_flow_info(
