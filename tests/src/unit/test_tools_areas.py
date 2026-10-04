@@ -779,3 +779,98 @@ class TestSetAreaSensorReferences:
         assert "temperature_entity_id" in error_data["error"]["message"]
         assert "humidity_entity_id" in error_data["error"]["message"]
         tools._client.send_websocket_message.assert_not_called()
+
+    async def test_explicit_none_clears_reference(self, tools):
+        """JSON null clears too: some MCP clients drop an empty-string argument
+        in transit, so '' alone left those clients with no clear path."""
+        await tools.ha_set_area_or_floor(
+            kind="area",
+            id="kitchen",
+            temperature_entity_id=None,
+            humidity_entity_id=None,
+        )
+        sent = self._sent(tools)
+        assert sent["temperature_entity_id"] is None
+        assert sent["humidity_entity_id"] is None
+
+    async def test_explicit_none_clears_floor_icon_picture(self, tools):
+        await tools.ha_set_area_or_floor(
+            kind="area", id="kitchen", floor_id=None, icon=None, picture=None
+        )
+        sent = self._sent(tools)
+        assert sent["floor_id"] is None
+        assert sent["icon"] is None
+        assert sent["picture"] is None
+
+    async def test_explicit_none_sensor_reference_rejected_for_floor(self, tools):
+        """An explicit clear is still intent, so kind='floor' rejects it."""
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_area_or_floor(
+                kind="floor", id="ground", temperature_entity_id=None
+            )
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        tools._client.send_websocket_message.assert_not_called()
+
+
+class TestClearableParamsThroughMcp:
+    """The null-vs-omitted distinction only exists at the FastMCP boundary, so
+    these drive the registered tool the way a client does."""
+
+    @pytest.fixture
+    async def tool(self):
+        from ha_mcp._vendor.fastmcp import FastMCP
+        from ha_mcp.tools.tools_areas import register_area_tools
+
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {"area_id": "kitchen", "name": "Kitchen"},
+            }
+        )
+        mcp = FastMCP("test")
+        register_area_tools(mcp, client)
+        tool = await mcp.get_tool("ha_set_area_or_floor")
+        return tool, client
+
+    _CLEARABLE = (
+        "floor_id",
+        "icon",
+        "picture",
+        "temperature_entity_id",
+        "humidity_entity_id",
+    )
+
+    async def test_schema_advertises_null_and_omission_without_a_default(self, tool):
+        tool, _ = tool
+        props = tool.parameters["properties"]
+        for name in self._CLEARABLE:
+            assert "default" not in props[name], name
+            assert {"type": "null"} in props[name]["anyOf"], name
+            assert name not in tool.parameters.get("required", []), name
+
+    async def test_omitted_params_are_absent_from_the_write(self, tool):
+        tool, client = tool
+        await tool.run({"kind": "area", "id": "kitchen", "name": "K2"})
+        sent = client.send_websocket_message.call_args.args[0]
+        assert sent == {
+            "type": "config/area_registry/update",
+            "area_id": "kitchen",
+            "name": "K2",
+        }
+
+    async def test_explicit_null_clears_every_clearable_param(self, tool):
+        tool, client = tool
+        await tool.run(
+            {"kind": "area", "id": "kitchen", **dict.fromkeys(self._CLEARABLE)}
+        )
+        sent = client.send_websocket_message.call_args.args[0]
+        for name in self._CLEARABLE:
+            assert name in sent and sent[name] is None, name
+
+    async def test_empty_string_still_clears(self, tool):
+        tool, client = tool
+        await tool.run({"kind": "area", "id": "kitchen", "temperature_entity_id": ""})
+        sent = client.send_websocket_message.call_args.args[0]
+        assert sent["temperature_entity_id"] is None
