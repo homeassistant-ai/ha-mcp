@@ -418,14 +418,14 @@ async def _cleanup_snapshot_creation(
             )
         except Exception as err:  # noqa: BLE001
             logger.warning(
-                "Template recreation flow %s cleanup failed (reason=%s, error_type=%s)",
+                "Helper recreation flow %s cleanup failed (reason=%s, error_type=%s)",
                 progress.flow_id,
                 failure.reason,
                 type(err).__name__,
             )
     else:
         logger.warning(
-            "Template recreation flow %s was not aborted "
+            "Helper recreation flow %s was not aborted "
             "(apply_status=%s, reason=%s); reconcile Home Assistant before retrying",
             progress.flow_id,
             failure.apply_status,
