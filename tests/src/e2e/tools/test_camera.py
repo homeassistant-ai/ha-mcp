@@ -102,8 +102,8 @@ class TestCameraToolsE2E:
 
         image_block = result.content[1]
         assert image_block.data, "Image data should not be empty"
-        assert image_block.mimeType.startswith("image/"), (
-            f"Expected an image MIME type, got: {image_block.mimeType}"
+        assert image_block.mime_type.startswith("image/"), (
+            f"Expected an image MIME type, got: {image_block.mime_type}"
         )
 
     @pytest.mark.asyncio
