@@ -7,10 +7,10 @@ name: Sync Integration Mirror
 # - stable: after "SemVer Release", the release tag's component (stamped by
 #   semantic-release with the release version and its ha-mcp== pin) is tagged
 #   vX.Y.Z once PyPI serves that ha-mcp build.
-# - dev: after "Publish Dev Channel", the master snapshot is stamped with the
-#   next release number and the ha-mcp==<next>.devN build just published, and
-#   tagged vX.Y.Z-dev.N. Server-only changes therefore reach pre-release users
-#   too, not just component changes.
+# - dev: after "Publish Dev Channel", the snapshot of the commit it built is
+#   stamped with the next release number and pinned to the exact build it
+#   uploaded (ha-mcp-dev==<next>.devN), and tagged vX.Y.Z-dev.N. Server-only
+#   changes therefore reach pre-release users too, not just component changes.
 #
 # HACS keys on the GitHub prerelease flag, so stable users never see dev
 # builds; users who enable the repository's HACS "Pre-release" switch entity
@@ -66,8 +66,8 @@ jobs:
   # overall conclusion skipped the mirror tag whenever any UNRELATED leg
   # failed (v7.12.2: an app image cache flake failed the release run and HACS
   # never got the component tag), so each leg keys on the one job it needs:
-  # "Semantic Release" for stable, the ha-mcp dev publish for dev (the pin
-  # must exist on PyPI). Both legs are idempotent, so the stable leg fails
+  # "Semantic Release" for stable, the ha-mcp-dev PyPI publish for dev (the
+  # pin must exist on PyPI). Both legs are idempotent, so the stable leg fails
   # OPEN on an unreadable job list: a spurious run re-confirms the existing
   # tag, while a suppressed one strands HACS on the previous release.
   gate:
@@ -76,6 +76,7 @@ jobs:
       actions: read
     outputs:
       channel: ${{ steps.decide.outputs.channel }}
+      dev_run: ${{ steps.decide.outputs.dev_run }}
     steps:
       - name: Pick the leg from the trigger
         id: decide
@@ -89,7 +90,22 @@ jobs:
         run: |
           case "$EVENT" in
             push) echo "channel=none" >> "$GITHUB_OUTPUT"; exit 0 ;;
-            workflow_dispatch) echo "channel=$DISPATCH_CHANNEL" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            workflow_dispatch)
+              if [ "$DISPATCH_CHANNEL" = stable ]; then
+                echo "channel=stable" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              # A dev dispatch pins the build Publish Dev Channel made of this
+              # very commit; there is none for a docs-only commit it skipped.
+              TRIGGER_RUN_ID=$(gh api \
+                "repos/${{ github.repository }}/actions/workflows/publish-dev.yml/runs?head_sha=${GITHUB_SHA}&per_page=1" \
+                --jq '.workflow_runs[0].id // empty')
+              if [ -z "$TRIGGER_RUN_ID" ]; then
+                echo "::error::Publish Dev Channel never built ${GITHUB_SHA}; nothing to pin."
+                exit 1
+              fi
+              TRIGGER_WORKFLOW="Publish Dev Channel"
+              ;;
           esac
           if [ "$TRIGGER_CONCLUSION" = "skipped" ]; then
             echo "Triggering run was skipped in its entirety - nothing to sync."
@@ -99,7 +115,7 @@ jobs:
           if [ "$TRIGGER_WORKFLOW" = "SemVer Release" ]; then
             job="Semantic Release"; leg=stable
           else
-            job="Publish PyPI (dev build of ha-mcp)"; leg=dev
+            job="Publish PyPI (dev channel)"; leg=dev
           fi
           if ! conclusion=$(gh api \
             "repos/${{ github.repository }}/actions/runs/${TRIGGER_RUN_ID}/jobs?per_page=100" \
@@ -116,6 +132,7 @@ jobs:
           echo "'$job' conclusion: ${conclusion:-<job absent>}"
           if [ "$conclusion" = success ] || { [ "$leg" = stable ] && [ -z "$conclusion" ]; }; then
             echo "channel=$leg" >> "$GITHUB_OUTPUT"
+            echo "dev_run=$TRIGGER_RUN_ID" >> "$GITHUB_OUTPUT"
           else
             echo "channel=skip" >> "$GITHUB_OUTPUT"
           fi
@@ -126,27 +143,29 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read  # the dev build's version artifact
     env:
       CHANNEL: ${{ needs.gate.outputs.channel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          # The dev version counts master's history and asks semantic-release
-          # for the next release; the stable leg checks out the release tag and
-          # the notes script compares stable tags. All need full history + tags.
+          # The stable leg checks out the release tag and the notes script
+          # compares stable tags; both need full history + tags.
           fetch-depth: 0
           fetch-tags: true
           # The dev leg snapshots the commit whose build was just published,
           # not whatever master has moved on to since.
           ref: ${{ github.event.workflow_run.name == 'Publish Dev Channel' && github.event.workflow_run.head_sha || '' }}
 
-      - name: Install uv
+      - name: Fetch the dev build's version
         if: env.CHANNEL == 'dev'
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.17"
+          name: dev-version
+          path: ${{ runner.temp }}/dev-version
+          run-id: ${{ needs.gate.outputs.dev_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Resolve the release this run publishes
         id: release
@@ -161,20 +180,29 @@ jobs:
               git checkout --quiet "v${VER}"
               PIN="$VER"
               TAG="v${VER}"
+              DIST=ha-mcp
               ;;
             dev)
-              PIN=$(scripts/dev_version.sh)
+              # Publish Dev Channel uploaded this commit as ha-mcp-dev; pin the
+              # version it uploaded, not a recomputed one.
+              PIN=$(cat "$RUNNER_TEMP/dev-version/dev-version.txt")
+              if ! [[ "$PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.dev[0-9]+$ ]]; then
+                echo "::error::The dev build reported '${PIN}', not a dev version."
+                exit 1
+              fi
               VER="${PIN%.dev*}"
               TAG="v${VER}-dev.${PIN##*.dev}"
+              DIST=ha-mcp-dev
               ;;
             *)
               exit 0
               ;;
           esac
-          echo "Component ${VER}, ha-mcp==${PIN}, tag ${TAG}"
+          echo "Component ${VER}, ${DIST}==${PIN}, tag ${TAG}"
           {
             echo "version=$VER"
             echo "pin=$PIN"
+            echo "dist=$DIST"
             echo "tag=$TAG"
           } >> "$GITHUB_OUTPUT"
 
@@ -197,6 +225,7 @@ jobs:
         env:
           VER: ${{ steps.release.outputs.version }}
           PIN: ${{ steps.release.outputs.pin }}
+          DIST: ${{ steps.release.outputs.dist }}
         run: |
           if [ "$CHANNEL" = none ]; then
             # A docs-only push refreshes the README and repo files; the
@@ -209,7 +238,7 @@ jobs:
             rm -rf /tmp/mirror/custom_components/ha_mcp_tools/__pycache__
             python3 scripts/stamp_component_version.py \
               --component-dir /tmp/mirror/custom_components/ha_mcp_tools \
-              --version "$VER" --pin "$PIN"
+              --version "$VER" --pin "$PIN" --dist "$DIST"
           fi
           cp hacs.json LICENSE /tmp/mirror/
           python3 scripts/build_mirror_readme.py \
@@ -240,22 +269,23 @@ jobs:
             git push origin main
           fi
 
-      - name: Wait for the pinned ha-mcp build on PyPI
+      - name: Wait for the pinned server build on PyPI
         # The tag is what HACS installs, and Home Assistant installs the pin
         # from PyPI on the next restart: a tag ahead of its PyPI build would
         # fail every install that picks it up in between.
         if: env.CHANNEL == 'stable' || env.CHANNEL == 'dev'
         env:
           PIN: ${{ steps.release.outputs.pin }}
+          DIST: ${{ steps.release.outputs.dist }}
         run: |
           for _ in $(seq 1 60); do
-            if curl -fsS -o /dev/null "https://pypi.org/pypi/ha-mcp/${PIN}/json"; then
-              echo "PyPI serves ha-mcp ${PIN}"
+            if curl -fsS -o /dev/null "https://pypi.org/pypi/${DIST}/${PIN}/json"; then
+              echo "PyPI serves ${DIST} ${PIN}"
               exit 0
             fi
             sleep 30
           done
-          echo "::error::PyPI never served ha-mcp ${PIN}; not tagging a component that pins it."
+          echo "::error::PyPI never served ${DIST} ${PIN}; not tagging a component that pins it."
           exit 1
 
       - name: Tag the mirror
@@ -280,7 +310,6 @@ jobs:
             # --cleanup=verbatim keeps the markdown headings `git tag -F`
             # would otherwise strip as comments.
             python3 scripts/build_mirror_release_notes.py \
-              --component-version "$VER" \
               --out /tmp/mirror_notes.md
           else
             stable_exists=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
@@ -293,8 +322,8 @@ jobs:
               echo
               echo "Snapshot of the custom component and its ha-mcp server from" \
                 "${GITHUB_REPOSITORY}@${{ github.event.workflow_run.head_sha || github.sha }}," \
-                "ahead of the ${VER} stable release. Installs ha-mcp" \
-                "${{ steps.release.outputs.pin }}."
+                "ahead of the ${VER} stable release. Installs" \
+                "${{ steps.release.outputs.dist }}==${{ steps.release.outputs.pin }}."
               echo
               echo "You receive these builds because the HACS **Pre-release**" \
                 "switch is enabled for this repository; turn it off to return" \

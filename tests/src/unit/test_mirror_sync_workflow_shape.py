@@ -55,17 +55,40 @@ class TestMirrorSyncShape:
             if "name" in job
         }
         assert "Semantic Release" in jobs
-        assert "Publish PyPI (dev build of ha-mcp)" in jobs
+        assert "Publish PyPI (dev channel)" in jobs
         assert 'job="Semantic Release"' in gate
-        assert 'job="Publish PyPI (dev build of ha-mcp)"' in gate
+        assert 'job="Publish PyPI (dev channel)"' in gate
+
+    def test_dev_leg_pins_the_version_the_dev_build_uploaded(self) -> None:
+        # Recomputing the number in the mirror could name a build PyPI never
+        # got, or one built from a different commit.
+        publish = _workflow(_WORKFLOWS / "publish-dev.yml")["jobs"]["prepare"]
+        uploads = [
+            step["with"]["name"]
+            for step in publish["steps"]
+            if "upload-artifact" in step.get("uses", "")
+        ]
+        mirror = _workflow(_MIRROR)["jobs"]["sync"]["steps"]
+        downloads = [
+            step["with"]["name"]
+            for step in mirror
+            if "download-artifact" in step.get("uses", "")
+        ]
+        assert uploads == downloads == ["dev-version"]
+        resolve = next(
+            s
+            for s in mirror
+            if s.get("name") == "Resolve the release this run publishes"
+        )
+        assert "dev_version.sh" not in resolve["run"]
 
     def test_tags_only_after_pypi_serves_the_pin(self) -> None:
         names = _sync_step_names()
         assert names.index("Stage snapshot") < names.index("Commit and push")
         assert names.index("Commit and push") < names.index(
-            "Wait for the pinned ha-mcp build on PyPI"
+            "Wait for the pinned server build on PyPI"
         )
-        assert names.index("Wait for the pinned ha-mcp build on PyPI") < names.index(
+        assert names.index("Wait for the pinned server build on PyPI") < names.index(
             "Tag the mirror"
         )
 
@@ -97,6 +120,57 @@ class TestDevVersionScript:
             _WORKFLOWS / workflow
         ).read_text(encoding="utf-8")
 
+    @pytest.mark.parametrize(
+        ("event", "expected"),
+        [("push", "9.0.0.dev2"), ("workflow_dispatch", "9.0.0.dev3")],
+    )
+    def test_counts_the_built_commit_on_push(
+        self, tmp_path: Path, event: str, expected: str
+    ) -> None:
+        # A push build whose checkout finds master already advanced must not
+        # take the next push's number: PyPI keeps the first upload, so the
+        # newer build would be dropped while the HACS pre-release pinned it.
+        repo = tmp_path / "repo"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake_uvx = bin_dir / "uvx"
+        fake_uvx.write_text("#!/bin/sh\necho 9.0.0\n")
+        fake_uvx.chmod(0o755)
+
+        def git(*args: str) -> None:
+            subprocess.run(
+                ["git", "-C", str(repo), *args], check=True, capture_output=True
+            )
+
+        repo.mkdir()
+        git("init", "-q", "-b", "master")
+        for n in range(3):
+            git(
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                str(n),
+            )
+        git("update-ref", "refs/remotes/origin/master", "HEAD")
+        git("reset", "-q", "--hard", "HEAD~1")
+
+        result = subprocess.run(
+            ["bash", str(_DEV_VERSION)],
+            cwd=repo,
+            env={"PATH": f"{bin_dir}:/usr/bin:/bin", "GITHUB_EVENT_NAME": event},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected
+
 
 class TestReleaseStamping:
     def test_semantic_release_stamps_the_component(self) -> None:
@@ -118,7 +192,9 @@ def component(tmp_path: Path) -> Path:
     return target
 
 
-def _stamp(component: Path, version: str, pin: str) -> subprocess.CompletedProcess:
+def _stamp(
+    component: Path, version: str, pin: str, dist: str = "ha-mcp"
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             sys.executable,
@@ -129,6 +205,8 @@ def _stamp(component: Path, version: str, pin: str) -> subprocess.CompletedProce
             version,
             "--pin",
             pin,
+            "--dist",
+            dist,
         ],
         capture_output=True,
         text=True,
@@ -138,14 +216,26 @@ def _stamp(component: Path, version: str, pin: str) -> subprocess.CompletedProce
 
 class TestStampComponentVersion:
     def test_stamps_a_dev_pre_release(self, component: Path) -> None:
-        result = _stamp(component, "9.0.0", "9.0.0.dev2901")
+        result = _stamp(component, "9.0.0", "9.0.0.dev2901", dist="ha-mcp-dev")
 
         assert result.returncode == 0, result.stderr
         manifest = json.loads((component / "manifest.json").read_text())
         assert manifest["version"] == "9.0.0"
-        assert "ha-mcp==9.0.0.dev2901" in manifest["requirements"]
-        assert sum(r.startswith("ha-mcp") for r in manifest["requirements"]) == 1
+        # One server requirement: two would install both distributions over
+        # the same ha_mcp package.
+        assert [r for r in manifest["requirements"] if r.startswith("ha-mcp")] == [
+            "ha-mcp-dev==9.0.0.dev2901"
+        ]
         assert 'COMPONENT_VERSION = "9.0.0"' in (component / "const.py").read_text()
+
+    def test_restamps_a_dev_snapshot(self, component: Path) -> None:
+        _stamp(component, "9.0.0", "9.0.0.dev1", dist="ha-mcp-dev")
+
+        result = _stamp(component, "9.0.0", "9.0.0.dev2", dist="ha-mcp-dev")
+
+        assert result.returncode == 0, result.stderr
+        manifest = json.loads((component / "manifest.json").read_text())
+        assert "ha-mcp-dev==9.0.0.dev2" in manifest["requirements"]
 
     def test_keeps_the_other_requirements(self, component: Path) -> None:
         before = json.loads((component / "manifest.json").read_text())["requirements"]

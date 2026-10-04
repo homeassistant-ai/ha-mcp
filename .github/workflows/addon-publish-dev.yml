@@ -77,8 +77,8 @@ jobs:
           # version as the PyPI/Docker/HACS builds of this commit.
           DEV_VERSION=$(scripts/dev_version.sh)
 
-          echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
-          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "dev_version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "Dev add-on version: $DEV_VERSION (sha: $SHORT_SHA)"
 
   build-addon-dev:

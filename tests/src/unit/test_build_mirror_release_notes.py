@@ -18,34 +18,35 @@ CHANGELOG_URL = "https://github.com/homeassistant-ai/ha-mcp/releases"
 
 def test_format_release_notes_lists_subjects_as_bullets() -> None:
     notes = build.format_release_notes(
-        "0.15.0",
         "v7.9.0",
         "v7.10.0",
         ["feat: add foo tool (#100)", "fix: bar crash (#101)"],
     )
-    assert "0.15.0" in notes
     assert "- feat: add foo tool (#100)" in notes
     assert "- fix: bar crash (#101)" in notes
     assert "Component changes since v7.9.0:" in notes
     assert CHANGELOG_URL in notes
 
 
-def test_format_release_notes_version_appears_in_lead() -> None:
-    notes = build.format_release_notes("0.15.0", "v7.9.0", "v7.10.0", [])
-    assert notes.startswith("## ha-mcp-tools 0.15.0")
+def test_format_release_notes_names_the_server_the_release_installs() -> None:
+    # The component and its server share a version, so HACS users read which
+    # server an update brings in the release they are offered.
+    notes = build.format_release_notes("v7.9.0", "v7.10.0", [])
+    assert notes.startswith("## HA-MCP Custom Component 7.10.0")
+    assert "ha-mcp 7.10.0" in notes
 
 
 def test_format_release_notes_empty_subjects_is_honest_not_blank() -> None:
-    notes = build.format_release_notes("0.15.0", "v7.9.0", "v7.10.0", [])
+    notes = build.format_release_notes("v7.9.0", "v7.10.0", [])
     assert not any(line.startswith("- ") for line in notes.splitlines())
-    assert "no changes to" in notes
+    assert "No changes to" in notes
     assert "custom_components/ha_mcp_tools/" in notes
     assert CHANGELOG_URL in notes
 
 
 def test_format_release_notes_prev_none_is_initial_release() -> None:
     notes = build.format_release_notes(
-        "0.1.0", None, "v7.1.0", ["feat: first cut of the component"]
+        None, "v7.1.0", ["feat: first cut of the component"]
     )
     assert "Initial component release." in notes
     assert "- feat: first cut of the component" in notes
@@ -55,7 +56,6 @@ def test_format_release_notes_prev_none_is_initial_release() -> None:
 
 def test_format_release_notes_filters_noise_subjects() -> None:
     notes = build.format_release_notes(
-        "0.15.0",
         "v7.9.0",
         "v7.10.0",
         [

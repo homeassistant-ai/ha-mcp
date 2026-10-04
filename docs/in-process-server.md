@@ -239,8 +239,9 @@ server on its own.
 
 **Development builds** follow the main branch. Turn on the HACS **Pre-release**
 switch for the HA-MCP Custom Component repository to receive them; each
-pre-release pins the development build of the server it was cut with. Turn the
-switch off to return to stable releases with the next stable update.
+pre-release pins the exact `ha-mcp-dev` build published from the same commit.
+Turn the switch off to return to stable releases with the next stable update.
+Moving between the two swaps `ha-mcp-dev` and `ha-mcp` as described below.
 
 **Testing a specific build** is what the **ha-mcp package (advanced)** option is
 for. Set it to a pip requirement — a version pin, a pull-request tarball such
@@ -252,9 +253,10 @@ paired server back each time it starts, so with an override set, every Home
 Assistant restart installs the override again afterwards (this needs network
 access at startup).
 
-`ha-mcp` and `ha-mcp-dev` share the same import package. When an override
-installs one of them while the other is present, the other is uninstalled and
-the requested one reinstalled, so only one is ever installed at a time.
+`ha-mcp` and `ha-mcp-dev` share the same import package. When the pin or an
+override installs one of them while the other is present, the other is
+uninstalled and the requested one reinstalled, so only one is ever installed at
+a time.
 
 If a server installed through the override needs a newer version of the custom
 component than the one you have, a repair issue titled **Update the HA-MCP Custom
