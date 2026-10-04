@@ -159,7 +159,7 @@ The calling agent receives a compact summary. It leaves out the raw JSON to save
 - `total_tool_calls` - Total MCP tool invocations
 - `total_tool_success` / `total_tool_fail` - Success/failure counts
 
-Every phase summary includes `output`, plus `tool_trace` when tool calls were logged. A failed phase also includes `stderr` when it is not empty:
+Every phase summary includes `output`, plus `tool_trace` when tool calls were logged. With the OpenAI agent, each `ha_search_tools` call is followed by a `[tool] ha_search_tools returned: [...]` line listing the tool names the search returned, in rank order. A failed phase also includes `stderr` when it is not empty:
 
 ```json
 {
