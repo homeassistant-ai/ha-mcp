@@ -22,6 +22,7 @@ from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
 from .core_payload import check_core_gaps, merged_update
+from .listing import listed_items
 from .registry import _ws_error_msg
 from .schemas import (
     _attach_helper_skill,
@@ -44,8 +45,7 @@ async def _stored_item(
                 context=_simple_helper_error_context(helper_type, entity_id=entity_id),
             )
         )
-    listed = list_result.get("result") or []
-    items = listed.get("storage", []) if isinstance(listed, dict) else listed
+    items = listed_items(list_result.get("result"))
     existing = next(
         (i for i in items if isinstance(i, dict) and i.get("id") == unique_id), None
     )

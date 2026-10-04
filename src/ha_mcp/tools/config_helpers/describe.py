@@ -22,6 +22,7 @@ from ..component_helper_collections import fetch_helper_schemas, read_helper_ite
 from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..config_entry_flow_introspect import fetch_helper_flow_info, menu_choices
 from ..helpers import exception_to_structured_error, raise_tool_error
+from .listing import listed_items
 from .schemas import SIMPLE_HELPER_SCHEMAS
 
 logger = logging.getLogger(__name__)
@@ -262,10 +263,9 @@ async def _stored_item(
     if by_entity:
         return None  # the legacy list has no entity_id to match on
     result = await client.send_websocket_message({"type": f"{helper_type}/list"})
-    items = result.get("result") if isinstance(result, dict) else result
+    items = listed_items(result.get("result") if isinstance(result, dict) else result)
     return next(
-        (i for i in items or [] if isinstance(i, dict) and i.get("id") == helper_id),
-        None,
+        (i for i in items if isinstance(i, dict) and i.get("id") == helper_id), None
     )
 
 

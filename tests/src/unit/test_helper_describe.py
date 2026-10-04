@@ -32,8 +32,8 @@ def no_component(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_storage_helper_fields_come_from_core_when_component_present(
-    client, monkeypatch
-):
+    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """With the component, the field list is Core's, typed where Core is opaque."""
     monkeypatch.setattr(
         mod,
@@ -52,7 +52,9 @@ async def test_storage_helper_fields_come_from_core_when_component_present(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_component")
-async def test_storage_helper_without_component_falls_back_to_static_table(client):
+async def test_storage_helper_without_component_falls_back_to_static_table(
+    client: AsyncMock,
+) -> None:
     """A no-component install still gets a usable field list."""
     result = await mod.describe_helper(client, "input_number")
 
@@ -63,8 +65,8 @@ async def test_storage_helper_without_component_falls_back_to_static_table(clien
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_component")
 async def test_existing_storage_helper_reports_current_values_without_component(
-    client,
-):
+    client: AsyncMock,
+) -> None:
     """Editing an existing helper starts from its stored values."""
     client.send_websocket_message.return_value = {
         "result": [{"id": "pool", "name": "Pool", "min": 0, "max": 40}]
@@ -79,7 +81,28 @@ async def test_existing_storage_helper_reports_current_values_without_component(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_component")
-async def test_unknown_storage_helper_says_current_values_are_missing(client):
+async def test_existing_person_reports_current_values_without_component(
+    client: AsyncMock,
+) -> None:
+    """person/list nests the editable persons under "storage"."""
+    client.send_websocket_message.return_value = {
+        "result": {
+            "storage": [{"id": "pat", "name": "Pat", "device_trackers": ["a.b"]}],
+            "config": [],
+        }
+    }
+
+    result = await mod.describe_helper(client, "person", helper_id="pat")
+
+    assert "current_unavailable" not in result
+    assert _fields(result)["device_trackers"]["current"] == ["a.b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_component")
+async def test_unknown_storage_helper_says_current_values_are_missing(
+    client: AsyncMock,
+) -> None:
     client.send_websocket_message.return_value = {"result": []}
 
     result = await mod.describe_helper(client, "input_number", helper_id="gone")
@@ -89,8 +112,8 @@ async def test_unknown_storage_helper_says_current_values_are_missing(client):
 
 @pytest.mark.asyncio
 async def test_flow_helper_menu_lists_sub_types_until_one_is_chosen(
-    client, monkeypatch
-):
+    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A menu-rooted helper names its sub-types instead of failing."""
     monkeypatch.setattr(
         mod,
@@ -110,8 +133,11 @@ async def test_flow_helper_menu_lists_sub_types_until_one_is_chosen(
     [(False, "yes"), (None, "depends_on_answers"), (True, None)],
 )
 async def test_flow_helper_says_when_more_forms_follow(
-    client, monkeypatch, last_step, more_forms
-):
+    client: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+    last_step: bool | None,
+    more_forms: str | None,
+) -> None:
     """A statistics helper asks for its characteristic on a second form; the
     agent learns that instead of taking the first form for all of it."""
     monkeypatch.setattr(
@@ -135,7 +161,9 @@ async def test_flow_helper_says_when_more_forms_follow(
 
 
 @pytest.mark.asyncio
-async def test_existing_flow_helper_with_a_later_options_form_says_so(client):
+async def test_existing_flow_helper_with_a_later_options_form_says_so(
+    client: AsyncMock,
+) -> None:
     client.start_options_flow.return_value = {
         "type": "form",
         "flow_id": "f1",
@@ -155,7 +183,9 @@ async def test_existing_flow_helper_with_a_later_options_form_says_so(client):
     ("menu", "expected"),
     [(["a", 1, None], ["a"]), (None, None), ([2], None)],
 )
-async def test_options_flow_menu_lists_only_string_choices(client, menu, expected):
+async def test_options_flow_menu_lists_only_string_choices(
+    client: AsyncMock, menu: Any, expected: list[str] | None
+) -> None:
     """A malformed options-flow menu reports nothing rather than a None list."""
     client.start_options_flow.return_value = {
         "type": "menu",
@@ -172,8 +202,8 @@ async def test_options_flow_menu_lists_only_string_choices(client, menu, expecte
 
 @pytest.mark.asyncio
 async def test_existing_flow_helper_reads_current_values_and_aborts_options_flow(
-    client,
-):
+    client: AsyncMock,
+) -> None:
     """An options flow opened only to read values is never left open."""
     client.start_options_flow.return_value = {
         "type": "form",
@@ -194,7 +224,7 @@ async def test_existing_flow_helper_reads_current_values_and_aborts_options_flow
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
-def test_long_select_lists_are_truncated_but_say_how_many_remain():
+def test_long_select_lists_are_truncated_but_say_how_many_remain() -> None:
     """A 175-unit dropdown must not flood a small model's context."""
     field = {
         "name": "unit_of_measurement",
@@ -207,7 +237,7 @@ def test_long_select_lists_are_truncated_but_say_how_many_remain():
     assert str(175 - mod.MAX_OPTIONS) in options[-1]
 
 
-def test_collapsed_sections_are_described_inline():
+def test_collapsed_sections_are_described_inline() -> None:
     """Fields hidden in an expandable section (e.g. availability) stay visible."""
     field = {
         "type": "expandable",
@@ -222,8 +252,8 @@ def test_collapsed_sections_are_described_inline():
 
 @pytest.mark.asyncio
 async def test_flow_fields_carry_ha_own_help_text_including_sections(
-    client, monkeypatch
-):
+    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The model sees the same per-field help the HA UI shows, with no doc to maintain."""
     monkeypatch.setattr(
         mod,
@@ -268,8 +298,8 @@ async def test_flow_fields_carry_ha_own_help_text_including_sections(
     ids=["call-fails", "result-not-a-dict", "resources-not-a-dict"],
 )
 async def test_flow_fields_still_described_when_translations_fail(
-    client, monkeypatch, reply
-):
+    client: AsyncMock, monkeypatch: pytest.MonkeyPatch, reply: Any
+) -> None:
     """Help text is best-effort: a failed or malformed reply leaves it out."""
     monkeypatch.setattr(
         mod,
@@ -287,7 +317,9 @@ async def test_flow_fields_still_described_when_translations_fail(
 
 
 @pytest.mark.asyncio
-async def test_flow_field_without_help_text_gets_its_ui_label(client, monkeypatch):
+async def test_flow_field_without_help_text_gets_its_ui_label(
+    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A field HA documents only by its label still says what it is."""
     monkeypatch.setattr(
         mod,
@@ -306,7 +338,9 @@ async def test_flow_field_without_help_text_gets_its_ui_label(client, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_core_fields_follow_a_stable_order_with_hints_first(client, monkeypatch):
+async def test_core_fields_follow_a_stable_order_with_hints_first(
+    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Core returns weekdays shuffled; the hinted first day must lead."""
     shuffled = [
         {"name": "sunday", "required": False},

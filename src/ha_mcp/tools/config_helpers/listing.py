@@ -13,6 +13,17 @@ from .schemas import SIMPLE_HELPER_TYPES
 logger = logging.getLogger(__name__)
 
 
+def listed_items(listed: Any) -> list[Any]:
+    """The editable items of a ``<type>/list`` result.
+
+    person/list nests them under "storage" (its "config" persons come from
+    YAML); every other storage collection returns the list itself.
+    """
+    if isinstance(listed, dict):
+        listed = listed.get("storage")
+    return listed if isinstance(listed, list) else []
+
+
 def _shape_collection_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
     """Map one component collection-helper record onto the legacy list record.
 
