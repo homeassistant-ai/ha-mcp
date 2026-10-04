@@ -76,10 +76,11 @@ jobs:
           KEY="$RUNNER_TEMP/url-key.pem"
           printf '%s' "$PUBLIC_KEY" | openssl base64 -d -A > "$KEY" || true
           # Trial-encrypt as the URLs will be, so a non-RSA or too-small key
-          # fails here rather than after HA has booted.
-          if ! head -c 200 /dev/zero | openssl pkeyutl -encrypt -pubin -inkey "$KEY" \
+          # fails here rather than after HA has booted. The URL file can reach
+          # 236 bytes; 470 is a 4096-bit key's OAEP limit.
+          if ! head -c 470 /dev/zero | openssl pkeyutl -encrypt -pubin -inkey "$KEY" \
             -pkeyopt rsa_padding_mode:oaep -out /dev/null; then
-            echo "::error::public_key must be a base64 RSA public key of at least 2048 bits. See docs/dev-ha-env.md."
+            echo "::error::public_key must be a base64 4096-bit RSA public key. See docs/dev-ha-env.md."
             exit 1
           fi
           if [ "$PLATFORM" = docker ] && [ "$SERVER" = app ]; then
