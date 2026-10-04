@@ -22,7 +22,8 @@
     "requirements": [
         "mcp>=1.24.0",
         "ruamel.yaml>=0.18.0",
-        "voluptuous-openapi>=0.4.1"
+        "voluptuous-openapi>=0.4.1",
+        "ha-mcp==8.6.0"
     ],
-    "version": "2.2.2"
+    "version": "8.6.0"
 }

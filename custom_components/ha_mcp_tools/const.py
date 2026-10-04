@@ -17,14 +17,13 @@ import re
 
 DOMAIN = "ha_mcp_tools"
 
-# Component version, kept in lockstep with ``manifest.json``'s ``version``.
-# ``ha_mcp_tools/info`` reports this so the server can display/debug the running
-# component build; ``TestInfo::test_manifest_version_parity`` pins the two
-# together so a manifest bump that forgets this constant (or vice-versa) fails
-# in CI. The
-# capability negotiation — not this version — gates each WS command (see
+# Component version: the server version this release shares, stamped together
+# with ``manifest.json``'s ``version`` and its ``ha-mcp`` pin by semantic-release
+# (``version_variables`` in pyproject.toml). ``ha_mcp_tools/info`` reports it so
+# the server can display/debug the running component build. Capability
+# negotiation — not this version — gates each WS command (see
 # ``websocket_api.constants.CAPABILITIES``).
-COMPONENT_VERSION = "2.2.2"
+COMPONENT_VERSION = "8.6.0"
 
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the

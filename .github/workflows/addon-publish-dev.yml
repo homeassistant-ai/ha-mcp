@@ -63,20 +63,19 @@ jobs:
           # Full history: the dev version number is the commit count.
           fetch-depth: 0
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # renovate: datasource=github-releases depName=astral-sh/uv
+          version: "0.12.17"
+
       - name: Generate dev version
         id: version
         run: |
-          BASE_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          # dev N = commit count on master: the same commit produces the SAME
-          # number in every workflow (PyPI/Docker in publish-dev, the dev
-          # add-on here), so all surfaces report one dev version. run_number
-          # was per-workflow, which is how the add-on drifted ~300 builds
-          # behind the PyPI counter and made version reports incomparable.
-          # Count origin/master (not HEAD): a workflow_dispatch on an older
-          # ref would otherwise mint a LOWER number that collides with an
-          # existing dev release and clobbers it.
-          DEV_VERSION="${BASE_VERSION}.dev$(git rev-list --count origin/master)"
+          # Same script as publish-dev.yml, so the dev app reports the same
+          # version as the PyPI/Docker/HACS builds of this commit.
+          DEV_VERSION=$(scripts/dev_version.sh)
 
           echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT

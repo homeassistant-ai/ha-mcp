@@ -1,15 +1,14 @@
-"""Guard the post-merge stranded-component gate in the mirror sync workflow.
+"""Guard the paired component/server release automation (#2427).
 
-The gate runs only on a push to master that the mirror sync picks up, so PR
-CI never executes it. These tests pin its shape from the workflow file and run
-its script against a local stand-in for the mirror through every outcome
-(PR #2375; Codex asked for committed coverage).
+The mirror sync and the dev-version script only run after a merge, so PR CI
+never executes them. These tests pin the workflow's ordering and run the
+stamping script against a scratch copy of the component.
 """
 
 from __future__ import annotations
 
 import json
-import os
+import re
 import shutil
 import subprocess
 import sys
@@ -20,165 +19,159 @@ import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "sync-integration-mirror.yml"
-_GATE = "Fail a merge that changed the component under an already-released version"
+_WORKFLOWS = _REPO_ROOT / ".github" / "workflows"
+_MIRROR = _WORKFLOWS / "sync-integration-mirror.yml"
+_COMPONENT = _REPO_ROOT / "custom_components" / "ha_mcp_tools"
+_STAMP = _REPO_ROOT / "scripts" / "stamp_component_version.py"
+_DEV_VERSION = _REPO_ROOT / "scripts" / "dev_version.sh"
 
 
-def _sync_steps() -> list[dict[str, Any]]:
-    data = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
-    return list(data["jobs"]["sync"]["steps"])
+def _workflow(path: Path) -> dict[Any, Any]:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def _gate_step() -> dict[str, Any]:
-    return next(s for s in _sync_steps() if s.get("name") == _GATE)
+def _sync_step_names() -> list[str]:
+    return [step.get("name") for step in _workflow(_MIRROR)["jobs"]["sync"]["steps"]]
 
 
-class TestShape:
-    def test_runs_after_the_snapshot_push_and_before_any_tag(self) -> None:
-        names = [s.get("name") for s in _sync_steps()]
-        i = names.index(_GATE)
-        assert names[i - 1] == "Commit and push"
-        assert names[i + 1] == "Tag mirror for stable release"
-        assert names.index("Tag mirror dev pre-release") > i
+class TestMirrorSyncShape:
+    def test_both_tagging_legs_follow_their_publishing_workflow(self) -> None:
+        # yaml reads the bare `on` key as True.
+        triggers = _workflow(_MIRROR)[True]
+        assert triggers["workflow_run"]["workflows"] == [
+            "SemVer Release",
+            "Publish Dev Channel",
+        ]
 
-    def test_runs_on_every_push_regardless_of_the_cached_diff(self) -> None:
-        """Gating on ``component_changed`` opened a rerun hole: a failed first
-        attempt has already pushed the offending snapshot, so a rerun sees no
-        diff, skips the gate and turns the stranded commit green (Codex)."""
-        cond = _gate_step()["if"]
-        assert "github.event_name == 'push'" in cond
-        assert "component_changed" not in cond
-        assert "workflow_run" not in cond
+    def test_gate_keys_on_the_jobs_that_publish_the_pin(self) -> None:
+        gate = _workflow(_MIRROR)["jobs"]["gate"]["steps"][0]["run"]
+        jobs = {
+            job["name"]
+            for path in (
+                _WORKFLOWS / "publish-dev.yml",
+                _WORKFLOWS / "semver-release.yml",
+            )
+            for job in _workflow(path)["jobs"].values()
+            if "name" in job
+        }
+        assert "Semantic Release" in jobs
+        assert "Publish PyPI (dev build of ha-mcp)" in jobs
+        assert 'job="Semantic Release"' in gate
+        assert 'job="Publish PyPI (dev build of ha-mcp)"' in gate
 
-    def test_a_failure_stops_the_tag_steps(self) -> None:
-        gate = _gate_step()
-        assert "continue-on-error" not in gate
-        for step in _sync_steps():
-            if step.get("name", "").startswith("Tag mirror"):
-                assert "always()" not in str(step.get("if", ""))
-                assert "failure()" not in str(step.get("if", ""))
+    def test_tags_only_after_pypi_serves_the_pin(self) -> None:
+        names = _sync_step_names()
+        assert names.index("Stage snapshot") < names.index("Commit and push")
+        assert names.index("Commit and push") < names.index(
+            "Wait for the pinned ha-mcp build on PyPI"
+        )
+        assert names.index("Wait for the pinned ha-mcp build on PyPI") < names.index(
+            "Tag the mirror"
+        )
 
-
-# ------------------------------------------------------------------ behaviour
-
-
-def _isolated_env(**extra: str) -> dict[str, str]:
-    """The environment without Git's repository variables or caller config.
-
-    A pre-commit hook in a linked worktree exports ``GIT_DIR``; inherited, it
-    points every ``git`` below at the repository being committed instead of
-    the temporary repositories this module builds, so ``init --bare`` and
-    ``commit`` rewrite the real one. The caller's global and system config
-    (hooks path, commit signing) are shut out for the same reason.
-    """
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
-    env.update(extra)
-    return env
-
-
-def _git(cwd: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
-        cwd=cwd,
-        env=_isolated_env(),
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+    def test_snapshot_is_stamped(self) -> None:
+        stage = next(
+            step
+            for step in _workflow(_MIRROR)["jobs"]["sync"]["steps"]
+            if step.get("name") == "Stage snapshot"
+        )
+        assert "scripts/stamp_component_version.py" in stage["run"]
 
 
-def _write_component(root: Path, version: str, body: str) -> None:
-    comp = root / "custom_components" / "ha_mcp_tools"
-    comp.mkdir(parents=True, exist_ok=True)
-    (comp / "manifest.json").write_text(
-        json.dumps({"domain": "ha_mcp_tools", "version": version}), encoding="utf-8"
-    )
-    (comp / "__init__.py").write_text(body, encoding="utf-8")
+class TestDevVersionScript:
+    def test_uses_the_semantic_release_version_the_release_runs(self) -> None:
+        # The dev builds' base must be what the real release would cut, so the
+        # script's pinned CLI must match the release workflow's action pin.
+        script = _DEV_VERSION.read_text(encoding="utf-8")
+        release = (_WORKFLOWS / "semver-release.yml").read_text(encoding="utf-8")
+        script_version = re.search(r'PSR_VERSION="([\d.]+)"', script)
+        action_version = re.search(
+            r"python-semantic-release/python-semantic-release@\S+ # v([\d.]+)", release
+        )
+        assert script_version and action_version
+        assert script_version.group(1) == action_version.group(1)
+
+    @pytest.mark.parametrize("workflow", ["publish-dev.yml", "addon-publish-dev.yml"])
+    def test_every_dev_surface_uses_the_script(self, workflow: str) -> None:
+        assert "DEV_VERSION=$(scripts/dev_version.sh)" in (
+            _WORKFLOWS / workflow
+        ).read_text(encoding="utf-8")
+
+
+class TestReleaseStamping:
+    def test_semantic_release_stamps_the_component(self) -> None:
+        pyproject = (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        for variable in (
+            "custom_components/ha_mcp_tools/manifest.json:version",
+            "custom_components/ha_mcp_tools/manifest.json:ha-mcp",
+            "custom_components/ha_mcp_tools/const.py:COMPONENT_VERSION",
+        ):
+            assert f'"{variable}"' in pyproject
 
 
 @pytest.fixture
-def mirror_world(tmp_path: Path) -> dict[str, Path]:
-    """A bare 'mirror' origin whose v2.1.3 tag holds one component snapshot, a
-    clone of it (what the sync job works in), and a repo checkout to stage."""
-    origin = tmp_path / "origin.git"
-    seed = tmp_path / "seed"
-    mirror = tmp_path / "mirror"
-    checkout = tmp_path / "checkout"
-    _git(tmp_path, "init", "--bare", "-b", "main", str(origin))
-    seed.mkdir()
-    _git(seed, "init", "-b", "main")
-    _write_component(seed, "2.1.3", "RELEASED = True\n")
-    _git(seed, "add", "-A")
-    _git(seed, "commit", "-q", "-m", "v2.1.3 snapshot")
-    _git(seed, "tag", "v2.1.3")
-    _git(seed, "remote", "add", "origin", str(origin))
-    _git(seed, "push", "-q", "origin", "main", "v2.1.3")
-    _git(tmp_path, "clone", "-q", str(origin), str(mirror))
-    checkout.mkdir()
-    return {"mirror": mirror, "checkout": checkout}
+def component(tmp_path: Path) -> Path:
+    target = tmp_path / "ha_mcp_tools"
+    target.mkdir()
+    for name in ("manifest.json", "const.py"):
+        shutil.copy(_COMPONENT / name, target / name)
+    return target
 
 
-def _stage(world: dict[str, Path]) -> None:
-    """What 'Stage snapshot' + 'Commit and push' leave in the mirror clone."""
-    dest = world["mirror"] / "custom_components"
-    shutil.rmtree(dest, ignore_errors=True)
-    shutil.copytree(world["checkout"] / "custom_components", dest)
-    _git(world["mirror"], "add", "-A")
-    _git(world["mirror"], "commit", "-q", "--allow-empty", "-m", "snapshot")
-
-
-def _run_gate(world: dict[str, Path]) -> subprocess.CompletedProcess[str]:
-    script = _gate_step()["run"]
+def _stamp(component: Path, version: str, pin: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["bash", "-eo", "pipefail", "-c", script],
-        cwd=world["checkout"],
-        env=_isolated_env(MIRROR_DIR=str(world["mirror"])),
+        [
+            sys.executable,
+            str(_STAMP),
+            "--component-dir",
+            str(component),
+            "--version",
+            version,
+            "--pin",
+            pin,
+        ],
         capture_output=True,
         text=True,
         check=False,
     )
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32" or shutil.which("bash") is None,
-    reason="runs the workflow's bash script; CI's ubuntu runner has bash",
-)
-class TestBehaviour:
-    def test_pending_version_with_no_stable_tag_passes(self, mirror_world) -> None:
-        _write_component(mirror_world["checkout"], "2.1.4", "NEW = True\n")
-        _stage(mirror_world)
-        done = _run_gate(mirror_world)
-        assert done.returncode == 0, done.stdout + done.stderr
-        assert "no stable tag v2.1.4" in done.stdout
+class TestStampComponentVersion:
+    def test_stamps_a_dev_pre_release(self, component: Path) -> None:
+        result = _stamp(component, "9.0.0", "9.0.0.dev2901")
 
-    def test_identical_content_under_the_released_version_passes(
-        self, mirror_world
-    ) -> None:
-        _write_component(mirror_world["checkout"], "2.1.3", "RELEASED = True\n")
-        _stage(mirror_world)
-        done = _run_gate(mirror_world)
-        assert done.returncode == 0, done.stdout + done.stderr
-        assert "identical" in done.stdout
+        assert result.returncode == 0, result.stderr
+        manifest = json.loads((component / "manifest.json").read_text())
+        assert manifest["version"] == "9.0.0"
+        assert "ha-mcp==9.0.0.dev2901" in manifest["requirements"]
+        assert sum(r.startswith("ha-mcp") for r in manifest["requirements"]) == 1
+        assert 'COMPONENT_VERSION = "9.0.0"' in (component / "const.py").read_text()
 
-    def test_changed_content_under_the_released_version_fails(
-        self, mirror_world
-    ) -> None:
-        _write_component(mirror_world["checkout"], "2.1.3", "CHANGED = True\n")
-        _stage(mirror_world)
-        done = _run_gate(mirror_world)
-        assert done.returncode == 1, done.stdout + done.stderr
-        assert "::error::" in done.stdout
-        assert "v2.1.3" in done.stdout and "Bump manifest.json" in done.stdout
+    def test_keeps_the_other_requirements(self, component: Path) -> None:
+        before = json.loads((component / "manifest.json").read_text())["requirements"]
 
-    def test_rerun_after_the_snapshot_already_landed_still_fails(
-        self, mirror_world
-    ) -> None:
-        """A rerun clones a mirror that already holds the offending snapshot, so
-        nothing is staged; the gate still compares against the tag and fails."""
-        _write_component(mirror_world["checkout"], "2.1.3", "CHANGED = True\n")
-        _stage(mirror_world)
-        assert _run_gate(mirror_world).returncode == 1
-        # Second attempt: same checkout, mirror unchanged, no new commit.
-        done = _run_gate(mirror_world)
-        assert done.returncode == 1, done.stdout + done.stderr
+        _stamp(component, "9.0.0", "9.0.0.dev1")
+
+        after = json.loads((component / "manifest.json").read_text())["requirements"]
+        assert [r for r in after if not r.startswith("ha-mcp")] == [
+            r for r in before if not r.startswith("ha-mcp")
+        ]
+
+    def test_refuses_a_suffixed_component_version(self, component: Path) -> None:
+        # Released servers parse the component version as integers.
+        result = _stamp(component, "9.0.0.dev2901", "9.0.0.dev2901")
+
+        assert result.returncode == 1
+        assert "X.Y.Z" in result.stderr
+
+    def test_refuses_a_manifest_without_the_server_pin(self, component: Path) -> None:
+        manifest = json.loads((component / "manifest.json").read_text())
+        manifest["requirements"] = [
+            r for r in manifest["requirements"] if not r.startswith("ha-mcp")
+        ]
+        (component / "manifest.json").write_text(json.dumps(manifest))
+
+        result = _stamp(component, "9.0.0", "9.0.0.dev1")
+
+        assert result.returncode == 1
+        assert "exactly one ha-mcp requirement" in result.stderr
