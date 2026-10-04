@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
+
+from ha_mcp._vendor.fastmcp import Client
 
 from ...utilities.assertions import MCPAssertions, assert_mcp_success, safe_call_tool
 from ...utilities.topology import component_surface_available
@@ -21,7 +25,7 @@ from .test_capture_and_restore import (
 )
 
 
-async def _restore(mcp, backup_name: str) -> dict:
+async def _restore(mcp: MCPAssertions, backup_name: str) -> dict:
     restored = await mcp.call_tool_success(
         "ha_manage_backup",
         {"scope": "edits", "action": "restore", "backup_name": backup_name},
@@ -32,7 +36,7 @@ async def _restore(mcp, backup_name: str) -> dict:
 
 @pytest.mark.helper
 @pytest.mark.cleanup
-async def test_utility_meter_edit_is_backed_up_and_restored(mcp_client) -> None:
+async def test_utility_meter_edit_is_backed_up_and_restored(mcp_client: Client) -> None:
     async with MCPAssertions(mcp_client) as mcp:
         if not component_surface_available():
             # The options are read through the component; without it the
@@ -94,7 +98,7 @@ async def test_utility_meter_edit_is_backed_up_and_restored(mcp_client) -> None:
 
 @pytest.mark.helper
 @pytest.mark.cleanup
-async def test_zone_edit_is_backed_up_and_restored(mcp_client) -> None:
+async def test_zone_edit_is_backed_up_and_restored(mcp_client: Client) -> None:
     name = f"e2e_zone_{uuid.uuid4().hex[:8]}"
     async with MCPAssertions(mcp_client) as mcp:
         created = await mcp.call_tool_success(
@@ -132,14 +136,16 @@ async def test_zone_edit_is_backed_up_and_restored(mcp_client) -> None:
             )
 
 
-async def _plane_titles(mcp, entry_id: str) -> dict[str, str]:
+async def _plane_titles(mcp: MCPAssertions, entry_id: str) -> dict[str, str]:
     listed = await mcp.call_tool_success(
         "ha_get_integration", {"entry_id": entry_id, "include_subentries": True}
     )
     return {s["subentry_id"]: s["title"] for s in listed["subentries"]}
 
 
-async def _subentry_backup(mcp_client, entry_id: str, subentry_id: str) -> str | None:
+async def _subentry_backup(
+    mcp_client: Client, entry_id: str, subentry_id: str
+) -> str | None:
     """The write's backup, or None where no component can read subentry data.
 
     Core lists subentries without their data, so without the component the
@@ -159,7 +165,9 @@ async def _subentry_backup(mcp_client, entry_id: str, subentry_id: str) -> str |
 
 
 @pytest.fixture
-async def solar_plane(mcp_client, ha_client):
+async def solar_plane(
+    mcp_client: Client, ha_client: Any
+) -> AsyncIterator[tuple[str, str]]:
     """A Forecast.Solar entry with one plane subentry (in-tree, no network)."""
     flow = await ha_client.start_config_flow("forecast_solar")
     done = await ha_client.submit_config_flow_step(
@@ -187,7 +195,9 @@ async def solar_plane(mcp_client, ha_client):
 
 @pytest.mark.helper
 @pytest.mark.cleanup
-async def test_subentry_edit_is_backed_up_and_restored(mcp_client, solar_plane) -> None:
+async def test_subentry_edit_is_backed_up_and_restored(
+    mcp_client: Client, solar_plane: tuple[str, str]
+) -> None:
     entry_id, subentry_id = solar_plane
     async with MCPAssertions(mcp_client) as mcp:
         await mcp.call_tool_success(
@@ -210,7 +220,7 @@ async def test_subentry_edit_is_backed_up_and_restored(mcp_client, solar_plane) 
 @pytest.mark.helper
 @pytest.mark.cleanup
 async def test_deleted_subentry_is_backed_up_and_created_again(
-    mcp_client, solar_plane
+    mcp_client: Client, solar_plane: tuple[str, str]
 ) -> None:
     entry_id, subentry_id = solar_plane
     async with MCPAssertions(mcp_client) as mcp:
