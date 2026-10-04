@@ -707,7 +707,6 @@ class TestVersionFooter:
             ("sidecar", "sidecar"),
             ("addon", "app/add-on"),
             ("docker", "container/docker"),
-            ("pyinstaller", "standalone binary"),
             ("git", "source checkout"),
             ("pypi", "python package"),
             ("unknown", "unknown"),

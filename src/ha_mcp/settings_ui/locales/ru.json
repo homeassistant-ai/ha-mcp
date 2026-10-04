@@ -16,7 +16,6 @@
     "footer.installation": "установка: {method}",
     "footer.deployment.addon": "аддон/приложение",
     "footer.deployment.docker": "контейнер/docker",
-    "footer.deployment.pyinstaller": "автономный бинарный файл",
     "footer.deployment.git": "клонирование исходного кода",
     "footer.deployment.pypi": "пакет python",
     "footer.deployment.unknown": "неизвестен",

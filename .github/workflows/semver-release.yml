@@ -198,13 +198,13 @@ jobs:
           echo "Release v${VERSION}" > release_notes.md
         fi
 
-        # Create draft release (build-binary.yml will add binaries and publish)
+        # A draft until the last step of this job publishes it.
         gh release create "$TAG" \
           --title "$TAG" \
           --notes-file release_notes.md \
           --draft
 
-        echo "✓ Created draft release $TAG (waiting for binaries)"
+        echo "✓ Created draft release $TAG"
 
     - name: Copy changelog to addon directory
       if: steps.semantic.outputs.released == 'true'
@@ -252,16 +252,14 @@ jobs:
 
         echo "✓ 'stable' tag now points to v$VERSION"
 
-  # Build binaries and attach to release
-  build-and-release:
-    needs: semantic-release
-    if: needs.semantic-release.outputs.released == 'true'
-    uses: ./.github/workflows/_build-and-release.yml
-    with:
-      release_tag: v${{ needs.semantic-release.outputs.version }}
-      is_prerelease: false
-    permissions:
-      contents: write
+    - name: Publish GitHub release
+      if: steps.semantic.outputs.released == 'true'
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      run: |
+        # Last, so a failed changelog push or stable-tag update leaves a draft
+        # instead of a public release with no PyPI or Docker publish behind it.
+        gh release edit "v${{ steps.semantic.outputs.version }}" --draft=false
 
   # Build and push addon Docker images
   build-addon:
