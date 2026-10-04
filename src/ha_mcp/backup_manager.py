@@ -2671,6 +2671,9 @@ _HELPER_LIST_TYPES = {
     "counter",
     "timer",
     "schedule",
+    "zone",
+    "person",
+    "tag",
 }
 
 
@@ -2694,9 +2697,10 @@ async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
             helper_type,
         )
         return None
-    items = _require_list(
-        await _ws_send(client, {"type": f"{helper_type}/list"}), f"{helper_type}/list"
-    )
+    listed = await _ws_send(client, {"type": f"{helper_type}/list"})
+    if helper_type == "person" and isinstance(listed, dict):
+        listed = listed.get("storage")  # YAML-defined persons are not editable
+    items = _require_list(listed, f"{helper_type}/list")
     object_id = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
     for item in items:
         if item.get("id") == object_id or item.get("id") == entity_id:
