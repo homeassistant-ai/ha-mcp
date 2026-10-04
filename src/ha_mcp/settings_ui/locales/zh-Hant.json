@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "啟用工具搜尋",
     "features.enable_tool_search.help": "以基於搜尋的探索取代完整的工具目錄。可將閒置上下文減少約 90%，降至約 5K 個 Token。⚠️ 請勿在具有內建工具搜尋／延遲工具功能的用戶端（claude.ai、Claude Desktop、Claude Code）中啟用此功能 — 這兩個搜尋層會發生衝突，且在此情況下用戶端的內建工具搜尋是更好的選擇；請保持關閉。工具是否延遲取決於您的用戶端與模型組合：當您的設定在前端載入完整目錄時請使用此功能 — 不具備原生延遲工具的模型（例如 Gemini、相容 OpenAI 的本機模型、Claude Haiku）、不論模型為何均內嵌所有工具結構定義的用戶端（例如 GitHub Copilot CLI），或是較小的上下文視窗。某些 Codex 模型和 ChatGPT 也包含延遲工具 — 請直接檢查您的用戶端／模型以確認其功能，以免不必要地保持啟用。工具可透過 ha_search_tools 尋找，並透過已分類的代理程式（讀取／寫入／刪除）執行。需要重新啟動才能生效。",
     "features.tool_search_max_results.label": "工具搜尋最大結果數",
-    "features.tool_search_max_results.help": "當啟用工具搜尋時，ha_search_tools 所回傳的最大工具數量。較低的值（2-3）可節省上下文 Token，但可能會遺漏相關工具。範圍：2-10。需要重新啟動。",
+    "features.tool_search_max_results.help": "啟用工具搜尋時，每次 ha_search_tools 呼叫所傳回的隱藏工具最大數量；排名在前幾名之內的釘選工具會以僅顯示名稱的簡短條目形式額外加入最上方。較低的值 (2-3) 可節省上下文符記，但可能會漏掉相關工具。範圍：2-10。需要重新啟動。",
     "features.enable_tool_security_policies.label": "啟用工具安全性策略（進階）",
     "features.enable_tool_security_policies.help": "將高風險工具呼叫（鎖定／警報控制、自動化寫入等）限制在使用者核准之後。當呼叫受保護的工具時，代理程式會指示使用者在網頁 UI 中開啟「工具安全性策略」分頁並點擊「核准」，然後呼叫才會繼續。具備選用引數條件的個別工具規則可在「工具安全性策略」分頁中進行設定。預設為關閉。需要重新啟動才能生效。",
     "features.read_only_mode.label": "唯讀模式",
@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "回報問題或意見回饋",
-      "description": "取得用於錯誤報告或代理程式回饋的診斷資料與完整的 GitHub 問題。"
+      "description": "取得針對錯誤、代理回饋或功能要求的診斷資料以及準備好的 GitHub Issue。"
     },
     "ha_restart": {
       "title": "重新啟動 Home Assistant",

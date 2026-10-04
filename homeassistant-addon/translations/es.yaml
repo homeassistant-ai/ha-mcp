@@ -62,10 +62,12 @@ configuration:
       aquí.'
   tool_search_max_results:
     name: Máximo de resultados de la búsqueda de herramientas
-    description: 'Número máximo de herramientas que devuelve ha_search_tools cuando
-      la búsqueda de herramientas está activada. Los valores bajos (2-3) ahorran tokens
-      de contexto pero pueden dejar fuera herramientas relevantes. Rango: 2-10. Requiere
-      reiniciar.'
+    description: 'Número máximo de herramientas ocultas devueltas por cada llamada
+      a ha_search_tools cuando la búsqueda de herramientas está habilitada; una herramienta
+      fijada que se encuentre dentro de ese recuento superior se añade como una entrada
+      breve de solo nombre además de este. Los valores más bajos (2-3) ahorran tokens
+      de contexto, pero pueden omitir herramientas relevantes. Rango: 2-10. Requiere
+      reinicio.'
   enable_tool_security_policies:
     name: Activar las políticas de seguridad de herramientas (avanzado)
     description: Somete a aprobación del usuario las llamadas a herramientas de alto

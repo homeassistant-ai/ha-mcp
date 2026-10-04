@@ -6,7 +6,6 @@ via the Home Assistant entity registry API.
 """
 
 import asyncio
-import json
 import logging
 import re
 from typing import Annotated, Any, Literal
@@ -24,7 +23,7 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
-from .coercion import JSON_STRING_COERCION, parse_json_param, parse_string_list_param
+from .coercion import JSON_STRING_COERCION
 from .component_api import (
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     component_supports,
@@ -33,9 +32,19 @@ from .component_api import (
     is_unknown_command,
 )
 from .config_helpers.registry import validate_registry_ids
+from .entity_param_parsing import (
+    _parse_aliases_param,
+    _parse_categories_param,
+    _parse_expose_to_param,
+    _parse_options_param,
+    _parse_string_list_field,
+)
 from .entity_update_fields import (
     build_name_visibility_fields,
     build_state_tag_fields,
+    ensure_use_device_name_allowed,
+    reject_name_with_use_device_name,
+    uses_device_name,
 )
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
@@ -47,7 +56,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .tools_voice_assistant import KNOWN_ASSISTANTS
+from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +90,7 @@ def _format_fetched_entity(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "entity_id": entry.get("entity_id"),
         "name": entry.get("name"),
+        "uses_device_name": uses_device_name(entry),
         "original_name": entry.get("original_name"),
         "icon": entry.get("icon"),
         "area_id": entry.get("area_id"),
@@ -377,170 +387,6 @@ def _validate_enabled_constraint(
                     suggestions=suggestions,
                 )
             )
-
-
-def _parse_string_list_field(
-    value: str | list[str] | None,
-    field_name: str,
-) -> list[str] | None:
-    """Parse and validate a string-list field (aliases, labels, etc.)."""
-    if value is not None:
-        try:
-            return parse_string_list_param(value, field_name)
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid {field_name} parameter: {e}",
-                )
-            )
-    return None
-
-
-def _parse_aliases_param(
-    aliases: str | list[str | None] | None,
-) -> list[str | None] | None:
-    """Parse aliases, keeping ``null`` entries.
-
-    HA stores the entity's own (computed) name as a ``null`` entry in
-    ``aliases`` (issue #2495); it must survive the round trip.
-    """
-    if aliases is None:
-        return None
-    parsed: Any = aliases
-    if isinstance(aliases, str):
-        try:
-            parsed = json.loads(aliases)
-        except (json.JSONDecodeError, RecursionError) as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid aliases parameter: Invalid JSON in aliases: {e}",
-                )
-            )
-    if not isinstance(parsed, list) or not all(
-        item is None or isinstance(item, str) for item in parsed
-    ):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Invalid aliases parameter: aliases must be a JSON array of "
-                "strings (null entries stand for the entity's own name)",
-            )
-        )
-    return parsed
-
-
-def _parse_categories_param(
-    categories: dict[str, str | None] | None,
-) -> dict[str, str | None] | None:
-    """Parse and validate the categories parameter."""
-    if categories is not None:
-        try:
-            parsed_cats = parse_json_param(categories, "categories")
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid categories parameter: {e}",
-                )
-            )
-        if not isinstance(parsed_cats, dict):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "categories must be a dict mapping scope to category_id, "
-                    'e.g. {"automation": "my_category_id"}',
-                )
-            )
-        return parsed_cats
-    return None
-
-
-def _parse_options_param(
-    options: dict[str, dict[str, Any]] | None,
-) -> dict[str, dict[str, Any]] | None:
-    """Parse and validate the options parameter."""
-    if options is not None:
-        try:
-            parsed_opts = parse_json_param(options, "options")
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid options parameter: {e}",
-                )
-            )
-        if not isinstance(parsed_opts, dict):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"options must be a dict mapping domain to a sub-dict "
-                    f"(got {type(parsed_opts).__name__}), "
-                    'e.g. {"sensor": {"display_precision": 2}}',
-                )
-            )
-        if not parsed_opts:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "options cannot be an empty dict — pass at least one "
-                    'domain entry, e.g. {"sensor": {"display_precision": 2}}, '
-                    "or omit the parameter entirely.",
-                )
-            )
-        bad_subs = [
-            f"{k!r}: {type(v).__name__}"
-            for k, v in parsed_opts.items()
-            if not isinstance(v, dict)
-        ]
-        if bad_subs:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "options sub-values must be dicts, got non-dict for: "
-                    f"{', '.join(bad_subs)}",
-                )
-            )
-        return parsed_opts
-    return None
-
-
-def _parse_expose_to_param(
-    expose_to: dict[str, bool] | None,
-) -> dict[str, bool] | None:
-    """Parse and validate the expose_to parameter."""
-    if expose_to is not None:
-        try:
-            parsed = parse_json_param(expose_to, "expose_to")
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                )
-            )
-        if not isinstance(parsed, dict):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "expose_to must be a dict mapping assistant IDs to booleans, "
-                    'e.g. {"conversation": true, "cloud.alexa": false}',
-                )
-            )
-        # Validate assistant names
-        invalid_assistants = [a for a in parsed if a not in KNOWN_ASSISTANTS]
-        if invalid_assistants:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid assistant(s) in expose_to: {invalid_assistants}. "
-                    f"Valid: {KNOWN_ASSISTANTS}",
-                )
-            )
-        # Values are already bool (enforced by the dict[str, bool] annotation)
-        return parsed
-    return None
 
 
 class EntityTools:
@@ -1077,8 +923,13 @@ class EntityTools:
         device_class: str | None = None,
         parsed_options: dict[str, dict[str, Any]] | None = None,
         use_entity_name_alias: bool | None = None,
+        use_device_name: bool | None = None,
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
+        reject_name_with_use_device_name(name, use_device_name)
+        await ensure_use_device_name_allowed(
+            use_device_name, self._client, entity_id, self._fetch_entity
+        )
         # Normalized before Phase 3: a quote-only value must be rejected before the
         # entity registry write, and a blank one must not count as deferred work.
         device_name_blank = new_device_name is not None and not new_device_name.strip()
@@ -1101,7 +952,13 @@ class EntityTools:
             }
             updates_made: list[str] = []
             build_name_visibility_fields(
-                message, updates_made, area_id, name, icon, device_class
+                message,
+                updates_made,
+                area_id,
+                name,
+                icon,
+                device_class,
+                use_device_name,
             )
             build_state_tag_fields(
                 message,
@@ -1141,7 +998,7 @@ class EntityTools:
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         "No updates specified",
                         suggestions=[
-                            "Provide at least one of: area_id, name, icon, device_class, enabled, hidden, aliases, use_entity_name_alias, categories, labels, options, expose_to, new_entity_id, or new_device_name"
+                            "Provide at least one of: area_id, name, use_device_name, icon, device_class, enabled, hidden, aliases, use_entity_name_alias, categories, labels, options, expose_to, new_entity_id, or new_device_name"
                         ],
                     )
                 )
@@ -1596,12 +1453,9 @@ class EntityTools:
     @tool(
         name="ha_set_entity",
         tags={"Entity Registry"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Set Entity",
-        },
+        annotations=write_hints(
+            "Set Entity", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(
         domain="entity",
@@ -1639,6 +1493,18 @@ class EntityTools:
                 description=(
                     "Display name for the entity. Use empty string '' to remove custom "
                     "name and revert to default. " + WHITESPACE_CLEARS_NOTE
+                ),
+                default=None,
+            ),
+        ] = None,
+        use_device_name: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "HA 2026.10's 'Use device name' switch. True names the entity "
+                    "after its device and follows device renames; False restores "
+                    "the integration's default name. Omit to leave it as is; not "
+                    "combinable with name."
                 ),
                 default=None,
             ),
@@ -1799,7 +1665,7 @@ class EntityTools:
 
         BULK OPERATIONS:
         When entity_id is a list, only labels, expose_to, and categories parameters are supported.
-        Other parameters (area_id, name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.
+        Other parameters (area_id, name, use_device_name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.
 
         SHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload
         needed.
@@ -1860,6 +1726,7 @@ class EntityTools:
             single_entity_params = {
                 "area_id": area_id,
                 "name": name,
+                "use_device_name": use_device_name,
                 "icon": icon,
                 "device_class": device_class,
                 "options": options,
@@ -1880,7 +1747,7 @@ class EntityTools:
                         f"Bulk operations (multiple entity_ids) only support categories, labels, and expose_to. "
                         f"Single-entity parameters provided: {non_null_single_params}",
                         suggestions=[
-                            "Use a single entity_id for area_id, name, icon, device_class, options, enabled, hidden, aliases, or use_entity_name_alias",
+                            "Use a single entity_id for area_id, name, use_device_name, icon, device_class, options, enabled, hidden, aliases, or use_entity_name_alias",
                             "Or remove single-entity parameters to use bulk categories/labels/expose_to",
                         ],
                     )
@@ -1925,6 +1792,7 @@ class EntityTools:
                     device_class=device_class,
                     parsed_options=parsed_options,
                     use_entity_name_alias=use_entity_name_alias,
+                    use_device_name=use_device_name,
                 )
 
             # Bulk case
@@ -1946,12 +1814,7 @@ class EntityTools:
     @tool(
         name="ha_get_entity",
         tags={"Entity Registry"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "idempotentHint": True,
-            "title": "Get Entity",
-        },
+        annotations=read_only_hints("Get Entity", open_world=False),
     )
     @log_tool_usage
     async def ha_get_entity(
@@ -2247,12 +2110,9 @@ class EntityTools:
     @tool(
         name="ha_remove_entity",
         tags={"Entity Registry"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Entity",
-        },
+        annotations=write_hints(
+            "Remove Entity", destructive=True, idempotent=True, open_world=False
+        ),
     )
     # Single-entity removal is snapshotted via id_param. A bulk (list) call
     # stringifies to a non-matching target, so its pre-write snapshot is a

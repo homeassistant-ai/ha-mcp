@@ -70,9 +70,11 @@ configuration:
       (read/write/delete). Richiede un riavvio per avere effetto.'
   tool_search_max_results:
     name: Numero massimo di risultati della ricerca degli strumenti
-    description: 'Numero massimo di strumenti restituiti da ha_search_tools quando
-      la ricerca degli strumenti è attiva. Valori bassi (2-3) risparmiano token di
-      contesto ma possono escludere strumenti pertinenti. Intervallo: 2-10. Richiede
+    description: 'Numero massimo di strumenti nascosti restituiti per ogni chiamata
+      ha_search_tools quando la ricerca degli strumenti è abilitata; uno strumento
+      fissato che rientra in quel conteggio massimo viene aggiunto come voce breve
+      con solo il nome in cima. Valori più bassi (2-3) fanno risparmiare token di
+      contesto ma potrebbero perdere strumenti rilevanti. Intervallo: 2-10. Richiede
       il riavvio.'
   enable_tool_security_policies:
     name: Attiva i criteri di sicurezza degli strumenti (avanzato)

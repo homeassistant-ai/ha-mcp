@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "Aktivera verktygssökning",
     "features.enable_tool_search.help": "Ersätter hela verktygskatalogen med sökbaserad upptäckt. Minskar inaktiv kontext med ungefär 90%, till cirka 5K tokens. ⚠️ Aktivera INTE detta i klienter med egen inbyggd verktygssökning / fördröjda verktyg (claude.ai, Claude Desktop, Claude Code) — de två söklagren kolliderar, och klientens inbyggda verktygssökning är det bättre valet där; lämna detta avstängt. Om verktyg är fördröjda beror på din klient- och modellkombination: använd detta när din installation laddar hela katalogen direkt — modeller utan inbyggda fördröjda verktyg (t.ex. Gemini, OpenAI-kompatibla lokala modeller, Claude Haiku), klienter som infogar alla verktygsscheman oavsett modell (t.ex. GitHub Copilot CLI), eller mindre kontextfönster. Vissa Codex-modeller och ChatGPT inkluderar också fördröjda verktyg — kontrollera din klient/modell direkt för att bekräfta dess funktioner så att du inte lämnar detta aktiverat i onödan. Verktyg hittas via ha_search_tools och exekveras via kategoriserade proxys (läs/skriv/radera). Kräver omstart för att träda i kraft.",
     "features.tool_search_max_results.label": "Max antal resultat för verktygssökning",
-    "features.tool_search_max_results.help": "Maximalt antal verktyg som returneras av ha_search_tools när verktygssökning är aktiverad. Lägre värden (2-3) sparar kontext-tokens men kan missa relevanta verktyg. Omfång: 2-10. Kräver omstart.",
+    "features.tool_search_max_results.help": "Maximalt antal dolda verktyg som returneras per ha_search_tools-anrop när verktygssökning är aktiverat; ett fäst verktyg som placerar sig inom det toppantalet läggs till som en kort namnpost över det. Lägre värden (2-3) sparar kontexttoken men kan missa relevanta verktyg. Intervall: 2-10. Kräver omstart.",
     "features.enable_tool_security_policies.label": "Aktivera verktygssäkerhetspolicyer (avancerat)",
     "features.enable_tool_security_policies.help": "Spärra verktygsanrop med hög risk (lås-/larmkontroll, automatiseringsskrivningar, etc.) bakom användargodkännande. När ett skyddat verktyg anropas, ber agenten användaren att öppna fliken Verktygssäkerhetspolicyer i webbgränssnittet och klicka på Godkänn innan anropet fortsätter. Regler per verktyg med valfria argumentvillkor konfigureras i fliken Verktygssäkerhetspolicyer. Avstängt som standard. Kräver omstart för att träda i kraft.",
     "features.read_only_mode.label": "Skrivskyddat läge",
@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "Rapportera problem eller feedback",
-      "description": "Hämta diagnostik och ett färdigt GitHub-ärende för felrapportering eller agentfeedback."
+      "description": "Hämta diagnostik och ett färdigt GitHub-ärende för en bugg, agentfeedback eller en funktionsbegäran."
     },
     "ha_restart": {
       "title": "Starta om Home Assistant",

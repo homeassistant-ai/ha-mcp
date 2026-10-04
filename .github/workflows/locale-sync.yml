@@ -349,8 +349,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Shared group for every workflow that pushes to master (semver-release,
-    # addon-publish-dev, sync-tool-docs): a bot push landing
-    # while semantic-release is mid-run aborts the release un-retryably
+    # addon-publish-dev, sync-tool-docs, sync-ratchet-baselines): a bot push
+    # landing while semantic-release is mid-run aborts the release un-retryably
     # ("Upstream branch ... has changed"), so master writers must not
     # overlap. On this short job only — the translate leg never writes to
     # master and must not hold the slot. cancel-in-progress must be false:

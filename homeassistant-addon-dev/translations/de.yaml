@@ -70,9 +70,11 @@ configuration:
       um wirksam zu werden.'
   tool_search_max_results:
     name: Max. Tool-Suchergebnisse
-    description: 'Maximale Anzahl von Tools, die von ha_search_tools zurückgegeben
-      werden, wenn die Tool-Suche aktiviert ist. Niedrigere Werte (2-3) sparen Kontext-Tokens,
-      können aber relevante Tools übersehen. Bereich: 2-10. Erfordert Neustart.'
+    description: 'Maximale Anzahl versteckter Tools, die pro ha_search_tools-Aufruf
+      zurückgegeben werden, wenn die Tool-Suche aktiviert ist; ein angepinntes Tool,
+      das in diesen oberen Bereich fällt, wird zusätzlich als kurzer Eintrag mit nur
+      dem Namen oben hinzugefügt. Niedrigere Werte (2-3) sparen Kontexte-Tokens, können
+      aber relevante Tools verfehlen. Bereich: 2-10. Erfordert einen Neustart.'
   enable_tool_security_policies:
     name: Tool-Sicherheitsrichtlinien aktivieren (erweitert)
     description: Gating kritischer Tool-Aufrufe (Schloss-/Alarmsteuerung, Automatisierungsschreibvorgänge

@@ -36,6 +36,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import write_hints
 from .tools_config_dashboards import fetch_dashboards_list
 from .tools_filesystem import (
     _assert_mcp_tools_available,
@@ -299,12 +300,9 @@ class YamlConfigTools:
     @tool(
         name="ha_config_set_yaml",
         tags={"System", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "title": "Raw YAML Config Edit",
-        },
+        annotations=write_hints(
+            "Raw YAML Config Edit", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @with_auto_backup(
         domain="yaml",

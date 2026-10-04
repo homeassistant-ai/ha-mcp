@@ -44,6 +44,7 @@ from ..dashboard_screenshot.paths import (
 from ..errors import ErrorCode, create_error_response
 from .coercion import JSON_STRING_COERCION
 from .helpers import log_tool_usage, raise_tool_error, register_tool_methods
+from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
@@ -109,11 +110,7 @@ class DashboardScreenshotTools:
     @tool(
         name="ha_get_dashboard_screenshot",
         tags={"Dashboard", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "title": "Get Dashboard Screenshot",
-        },
+        annotations=read_only_hints("Get Dashboard Screenshot", open_world=False),
     )
     @log_tool_usage
     async def ha_get_dashboard_screenshot(

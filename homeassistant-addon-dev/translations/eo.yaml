@@ -65,9 +65,11 @@ configuration:
       (legi/skribi/forigi). Postulas restartigon por ekvalidi.'
   tool_search_max_results:
     name: Maksimumaj rezultoj de ilo-serĉo
-    description: 'Maksimuma nombro de iloj redonitaj de ha_search_tools kiam ilo-serĉo
-      estas ebligita. Pli malaltaj valoroj (2-3) ŝparas kuntekstajn ĵetonojn sed povas
-      maltrafi gravajn ilojn. Gamo: 2-10. Postulas restartigon.'
+    description: 'Maksimuma nombro de kaŝitaj iloj redonitaj po voko de ha_search_tools
+      kiam ilserĉado estas ebligita; alpinglita ilo kiu altas en tiu pinta nombro
+      estas aldonita kiel mallonga nur-noma eniro super ĝi. Pli malaltaj valoroj (2-3)
+      ŝparas kuntekstajn signojn, sed povas maltrafi signifajn ilojn. Intervalo: 2-10.
+      Postulas restartigon.'
   enable_tool_security_policies:
     name: Ebligi Ilo-Sekurecajn Politikojn (altnivela)
     description: Gardu alt-riskajn ilo-vokojn (seruro/alarmo-kontrolo, aŭtomatigo-skriboj,

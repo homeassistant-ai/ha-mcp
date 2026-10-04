@@ -71,10 +71,11 @@ configuration:
       pour prendre effet.'
   tool_search_max_results:
     name: Résultats max. de la recherche d'outils
-    description: 'Nombre maximum d''outils renvoyés par ha_search_tools lorsque la
-      recherche d''outils est activée. Des valeurs plus basses (2-3) économisent des
-      tokens de contexte mais peuvent manquer des outils pertinents. Plage : 2-10.
-      Nécessite un redémarrage.'
+    description: 'Nombre maximal d''outils cachés renvoyés par appel ha_search_tools
+      lorsque la recherche d''outils est activée ; un outil épinglé qui se classe
+      dans ce nombre maximal est ajouté en tant qu''entrée courte avec uniquement
+      le nom en plus. Des valeurs plus faibles (2-3) économisent des jetons de contexte
+      mais peuvent manquer des outils pertinents. Plage : 2-10. Nécessite un redémarrage.'
   enable_tool_security_policies:
     name: Activer les politiques de sécurité des outils (avancé)
     description: Contrôle les appels d'outils à enjeux élevés (contrôle des serrures/alarmes,

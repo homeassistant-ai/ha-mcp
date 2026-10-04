@@ -71,9 +71,11 @@ configuration:
       om van kracht te worden.'
   tool_search_max_results:
     name: Max. resultaten tool-zoekfunctie
-    description: 'Maximaal aantal tools geretourneerd door ha_search_tools wanneer
-      de tool-zoekfunctie is ingeschakeld. Lagere waarden (2-3) besparen context-tokens,
-      maar kunnen relevante tools missen. Bereik: 2-10. Vereist een herstart.'
+    description: 'Maximum aantal verborgen tools dat wordt geretourneerd per ha_search_tools
+      aanroep wanneer tool zoeken is ingeschakeld; een vastgezette tool die binnen
+      die top valt, wordt hier bovenop toegevoegd als een korte vermelding met alleen
+      de naam. Lagere waarden (2-3) besparen contexttokens, maar missen mogelijk relevante
+      tools. Bereik: 2-10. Vereist een herstart.'
   enable_tool_security_policies:
     name: Schakel Tool Beveiligingsbeleid in (geavanceerd)
     description: Beveilig risicovolle tool-aanroepen (vergrendelings-/alarmbediening,

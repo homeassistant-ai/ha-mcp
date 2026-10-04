@@ -54,10 +54,11 @@ configuration:
       tutaj.'
   tool_search_max_results:
     name: Maksymalna liczba wyników wyszukiwania narzędzi
-    description: 'Maksymalna liczba narzędzi zwracanych przez ha_search_tools, gdy
-      wyszukiwanie narzędzi jest włączone. Niższe wartości (2-3) oszczędzają tokeny
-      kontekstu, ale mogą pominąć istotne narzędzia. Zakres: 2-10. Wymaga ponownego
-      uruchomienia.'
+    description: 'Maksymalna liczba ukrytych narzędzi zwracanych w jednym wywołaniu
+      ha_search_tools, gdy wyszukiwanie narzędzi jest włączone; przypisane narzędzie,
+      które mieści się w tym limicie, jest dodawane jako krótki wpis zawierający tylko
+      nazwę na jego początku. Niższe wartości (2-3) oszczędzają tokeny kontekstu,
+      ale mogą pominąć odpowiednie narzędzia. Zakres: 2-10. Wymaga ponownego uruchomienia.'
   enable_tool_security_policies:
     name: Włącz zasady bezpieczeństwa narzędzi (zaawansowane)
     description: Zabezpiecz wywołania narzędzi wysokiego ryzyka (kontrola zamków/alarmów,

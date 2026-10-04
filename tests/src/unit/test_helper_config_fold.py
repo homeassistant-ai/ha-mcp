@@ -24,7 +24,7 @@ from ha_mcp.tools.config_helpers import validation as hc_validation
 from ha_mcp.tools.helpers import HIDDEN_PARAM, hidden_param_names
 from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
-from ._scripted_client import scripted_ws_client as _ws
+from .test_updates_repairs import _client as _ws
 
 pytestmark = pytest.mark.asyncio
 

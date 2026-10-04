@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "Tool-Suche aktivieren",
     "features.enable_tool_search.help": "Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung. Reduziert den Leerlauf-Kontext um rund 90 % auf etwa 5K Tokens. ⚠️ Aktiviere dies NICHT in Clients mit eigener integrierter Tool-Suche / aufgeschobenen Tools (claude.ai, Claude Desktop, Claude Code) – die beiden Suchebenen kollidieren, und die integrierte Tool-Suche des Clients ist dort die bessere Wahl; lasse dies ausgeschaltet. Ob Tools aufgeschoben werden, hängt von der Kombination aus Client und Modell ab: Verwende dies, wenn dein Setup den vollständigen Katalog von Anfang an lädt – Modelle ohne native aufgeschobene Tools (z. B. Gemini, lokale OpenAI-kompatible Modelle, Claude Haiku), Clients, die alle Tool-Schemata unabhängig vom Modell direkt einbetten (z. B. GitHub Copilot CLI), oder kleinere Kontextfenster. Auch einige Codex-Modelle und ChatGPT haben aufgeschobene Tools – prüfe direkt bei deinem Client/Modell, welche Features er hat, damit du dies nicht unnötig aktiviert lässt. Tools werden über ha_search_tools gefunden und über kategorisierte Proxys (read/write/delete) ausgeführt. Erfordert Neustart, um wirksam zu werden.",
     "features.tool_search_max_results.label": "Max. Tool-Suchergebnisse",
-    "features.tool_search_max_results.help": "Maximale Anzahl von Tools, die von ha_search_tools zurückgegeben werden, wenn die Tool-Suche aktiviert ist. Niedrigere Werte (2-3) sparen Kontext-Tokens, können aber relevante Tools übersehen. Bereich: 2-10. Erfordert Neustart.",
+    "features.tool_search_max_results.help": "Maximale Anzahl versteckter Tools, die pro ha_search_tools-Aufruf zurückgegeben werden, wenn die Tool-Suche aktiviert ist; ein angepinntes Tool, das in diesen oberen Bereich fällt, wird zusätzlich als kurzer Eintrag mit nur dem Namen oben hinzugefügt. Niedrigere Werte (2-3) sparen Kontexte-Tokens, können aber relevante Tools verfehlen. Bereich: 2-10. Erfordert einen Neustart.",
     "features.enable_tool_security_policies.label": "Tool-Sicherheitsrichtlinien aktivieren (erweitert)",
     "features.enable_tool_security_policies.help": "Gating kritischer Tool-Aufrufe (Schloss-/Alarmsteuerung, Automatisierungsschreibvorgänge usw.) hinter Benutzergenehmigung. Wenn ein geschütztes Tool aufgerufen wird, weist der Agent den Benutzer an, den Tab Tool-Sicherheitsrichtlinien in der Web-UI zu öffnen und auf Genehmigen zu klicken, bevor der Aufruf fortgesetzt wird. Tool-bezogene Regeln mit optionalen Argumentbedingungen werden im Tab Tool-Sicherheitsrichtlinien konfiguriert. Standardmäßig ausgeschaltet. Erfordert Neustart, um wirksam zu werden.",
     "features.read_only_mode.label": "Nur-Lese-Modus",
@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "Problem melden oder Feedback geben",
-      "description": "Erhalte Diagnosen und ein fertiges GitHub-Issue für einen Bug-Report oder Agenten-Feedback."
+      "description": "Erhalte Diagnosedaten und ein fertiges GitHub-Issue für einen Bug, Agenten-Feedback oder einen Feature-Wunsch."
     },
     "ha_restart": {
       "title": "Home Assistant neu starten",

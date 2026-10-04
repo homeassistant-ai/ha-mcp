@@ -2,6 +2,7 @@
 
 import json
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -9,12 +10,16 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS
 from ha_mcp.tools.tools_updates import UpdateTools
 
-from ._scripted_client import scripted_ws_client as _client
-
 _LISTED = {
     "success": True,
     "result": {"issues": [{"domain": "sun", "issue_id": "abc", "ignored": False}]},
 }
+
+
+def _client(*replies: dict[str, Any]) -> MagicMock:
+    client = MagicMock()
+    client.send_websocket_message = AsyncMock(side_effect=list(replies))
+    return client
 
 
 @pytest.mark.unit
