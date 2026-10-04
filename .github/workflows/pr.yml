@@ -439,13 +439,15 @@ jobs:
 
     # The ratchet scripts only lower their baselines, but the baselines are
     # plain files: a hand edit could raise an entry or list a new copy and
-    # every other check would pass. A pull request is checked out as the
-    # merge commit GitHub built for the event; its first parent is the base
-    # that was merged. The branch tip can move on before a job or a re-run
-    # starts, and comparing with it would report entries it lowered since.
-    # The shallow checkout hides the parents from rev-parse, but the commit
-    # object still names them.
-    - name: Check the ratchet baselines did not grow
+    # every other check would pass. --base also checks the files against the
+    # baselines sync-ratchet-baselines.yml would write from the base, since a
+    # pull request does not lower them itself. A pull request is checked out
+    # as the merge commit GitHub built for the event; its first parent is the
+    # base that was merged. The branch tip can move on before a job or a
+    # re-run starts, and comparing with it would report entries it lowered
+    # since. The shallow checkout hides the parents from rev-parse, but the
+    # commit object still names them.
+    - name: Check the ratchet baselines and files against the base
       if: success() || failure()
       env:
         BASE_REF: ${{ github.base_ref }}
