@@ -125,6 +125,9 @@ CAPABILITIES: list[str] = [
     "entity_enrich",
     "exposure",
     "config_entries",
+    # A flag on config_entries: gates its opt-in ``include_subentry_data``, the
+    # scrubbed subentry ``data`` the server's config_subentry backups capture.
+    "config_entries_subentry_data",
     "registry_lookup",
     "system_snapshot",
     "entity_lookup",

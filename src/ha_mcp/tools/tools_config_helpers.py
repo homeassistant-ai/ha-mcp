@@ -29,6 +29,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .config_entry_backup import helper_backup_id
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     SUPPORTED_HELPERS,
@@ -525,9 +526,7 @@ class HelperConfigTools:
     )
     @with_auto_backup(
         domain_fn=lambda kw: f"helper_{kw.get('helper_type', 'unknown')}",
-        id_fn=lambda kw: str(
-            kw.get("helper_id") or kw.get("entry_id") or kw.get("subentry_id") or ""
-        ),
+        id_fn=helper_backup_id,
     )
     @log_tool_usage
     async def ha_config_set_helper(

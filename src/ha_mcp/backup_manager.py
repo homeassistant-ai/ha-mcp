@@ -57,7 +57,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from functools import cached_property
+from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
 
@@ -3277,25 +3277,69 @@ def _snapshot_configs_match(expected: Any, current: Any) -> bool:
     return not patch
 
 
-async def _verify_flow_restore(
-    client: Any, entry_id: str, expected: Any, helper_type: str
+async def _verify_readback(
+    read: Callable[[], Awaitable[Any]], expected: Any, keys: tuple[str, ...]
 ) -> Literal["matched", "mismatched", "unavailable"]:
     """Bound readback after a dispatched apply, including uncertain replies."""
     try:
         async with asyncio.timeout(5):
-            restored = await _fetch_flow_helper(client, entry_id, helper_type)
+            restored = await read()
     except _CAPTURE_TRANSIENT_ERRORS as err:
-        _log_flow_helper_failure("options_readback", err)
+        _log_flow_helper_failure("readback", err)
         return "unavailable"
-    actual = (
-        {"entry_id": restored["entry_id"], "options": restored["options"]}
-        if restored is not None
-        else None
-    )
+    actual = {key: restored[key] for key in keys} if restored is not None else None
     if _snapshot_configs_match(expected, actual):
         return "matched"
-    logger.warning("Flow helper restore step=options_readback reason=options_mismatch")
+    logger.warning("Flow helper restore step=readback reason=mismatch")
     return "mismatched"
+
+
+async def _apply_and_verify(
+    label: str,
+    apply: Callable[[], Awaitable[Any]],
+    verify: Callable[[], Awaitable[Literal["matched", "mismatched", "unavailable"]]],
+) -> Any:
+    """Run a flow-driven restore, then confirm it by reading the result back."""
+    from .tools.config_entry_flow import OptionsFlowError
+
+    try:
+        result = await apply()
+    except OptionsFlowError as err:
+        logger.warning(
+            "Flow helper restore step=flow failed: %s apply_status=%s reason=%s fields=%s",
+            type(err).__name__,
+            err.apply_status,
+            err.reason,
+            list(err.fields),
+        )
+        if err.apply_status == "not_applied":
+            raise BackupRestoreError(
+                str(err)
+                if err.reason
+                else f"{label} flow refused the restore; nothing was applied",
+                reason=err.reason,
+                fields=list(err.fields),
+            ) from err
+        raise BackupRestoreError(
+            f"{label} restore did not complete normally; inspect it before retrying",
+            apply_status=err.apply_status,
+            verification_status=await verify(),
+            reason=err.reason,
+            fields=list(err.fields),
+        ) from err
+    verification = await verify()
+    if verification != "matched":
+        outcome = (
+            "verification is unavailable"
+            if verification == "unavailable"
+            else "verification did not match the snapshot"
+        )
+        raise BackupRestoreError(
+            f"{label} restore was applied but {outcome}; inspect it before retrying",
+            apply_status="applied",
+            verification_status=verification,
+        )
+    return result
 
 
 async def _restore_flow_helper(
@@ -3307,7 +3351,7 @@ async def _restore_flow_helper(
     none of its forms offers (fixed at creation, like a template's type) must
     still match the stored one, or the restore is refused unapplied.
     """
-    from .tools.config_entry_flow import OptionsFlowError, update_config_entry_options
+    from .tools.config_entry_flow import update_config_entry_options
 
     label = _flow_label(helper_type)
     snapshot = _flow_snapshot_for_restore(entity_id, config, helper_type)
@@ -3325,9 +3369,10 @@ async def _restore_flow_helper(
             f"{label} helper could not be checked; restore was not attempted"
         ) from err
     options = _flow_options(snapshot.get("options"), helper_type)
-    expected = {"entry_id": entry_id, "options": options}
-    try:
-        result = await update_config_entry_options(
+    return await _apply_and_verify(
+        f"{label} helper",
+        partial(
+            update_config_entry_options,
             client,
             entry_id,
             options,
@@ -3335,47 +3380,14 @@ async def _restore_flow_helper(
             noun="helper",
             keep_current_values=False,
             fixed_options=current["options"],
-        )
-    except OptionsFlowError as err:
-        logger.warning(
-            "Flow helper restore step=options_flow failed: %s apply_status=%s reason=%s fields=%s",
-            type(err).__name__,
-            err.apply_status,
-            err.reason,
-            list(err.fields),
-        )
-        if err.apply_status == "not_applied":
-            raise BackupRestoreError(
-                str(err)
-                if err.reason
-                else f"{label} helper options flow refused the restore; no options were applied",
-                reason=err.reason,
-                fields=list(err.fields),
-            ) from err
-        verification = await _verify_flow_restore(
-            client, entry_id, expected, helper_type
-        )
-        raise BackupRestoreError(
-            f"{label} helper restore did not complete normally; inspect current options before retrying",
-            apply_status=err.apply_status,
-            verification_status=verification,
-            reason=err.reason,
-            fields=list(err.fields),
-        ) from err
-    verification = await _verify_flow_restore(client, entry_id, expected, helper_type)
-    if verification == "unavailable":
-        raise BackupRestoreError(
-            f"{label} helper restore was applied but verification is unavailable; inspect current options before retrying",
-            apply_status="applied",
-            verification_status=verification,
-        )
-    if verification != "matched":
-        raise BackupRestoreError(
-            f"{label} helper restore was applied but verification did not match the snapshot; inspect current options before retrying",
-            apply_status="applied",
-            verification_status=verification,
-        )
-    return result
+        ),
+        partial(
+            _verify_readback,
+            partial(_fetch_flow_helper, client, entry_id, helper_type),
+            {"entry_id": entry_id, "options": options},
+            ("entry_id", "options"),
+        ),
+    )
 
 
 def _flow_recreated_outcome(result: Any, original_entry_id: str) -> dict[str, Any]:
@@ -3636,8 +3648,10 @@ async def _recreate_flow_helper(
     expected = {"entry_id": new_entry_id, "options": snapshot["options"]}
     mapping: list[dict[str, str]] = []
     try:
-        verification = await _verify_flow_restore(
-            client, new_entry_id, expected, helper_type
+        verification = await _verify_readback(
+            partial(_fetch_flow_helper, client, new_entry_id, helper_type),
+            expected,
+            ("entry_id", "options"),
         )
         if verification != "matched":
             raise BackupRestoreError(
@@ -3668,6 +3682,174 @@ async def _recreate_flow_helper(
             "This snapshot has no entity mapping; the recreated helper may have a new entity ID."
         ]
     return response
+
+
+def _subentry_target(entity_id: str) -> tuple[str, str]:
+    """``<entry_id>/<subentry_id>``, the id a config_subentry backup is keyed by."""
+    entry_id, _, subentry_id = entity_id.partition("/")
+    if not entry_id or not subentry_id:
+        raise _FlowHelperReadError(
+            "Config subentry backups are keyed by <entry_id>/<subentry_id>",
+            "invalid_target",
+        )
+    return entry_id, subentry_id
+
+
+def _subentry_data(data: Any) -> dict[str, Any]:
+    from .redaction import sentinel_option_keys
+
+    if not isinstance(data, dict):
+        raise _FlowHelperReadError(
+            "Config subentry data must be an object", "invalid_data"
+        )
+    if sentinel_option_keys(data) or _contains_redacted_leaf(data):
+        raise _FlowHelperReadError(
+            "Config subentry data contains redacted values; capture is incomplete",
+            "redacted_data",
+        )
+    return data
+
+
+async def _fetch_config_subentry(client: Any, entity_id: str) -> Any:
+    """Read a config subentry's data through the component.
+
+    Core lists subentries without their data, so an older component that
+    cannot return it is an error, never a partial snapshot.
+    """
+    from .tools.component_api import component_supports, get_component_caps
+
+    entry_id, subentry_id = _subentry_target(entity_id)
+    caps = await get_component_caps(client)
+    if not component_supports(caps, "config_entries_subentry_data"):
+        raise _FlowHelperReadError(
+            "Backing up subentry edits needs an ha_mcp_tools component that can "
+            "read subentry data",
+            "config_subentry_read_unsupported",
+        )
+    result = _require_dict(
+        await _ws_send(
+            client,
+            {
+                "type": "ha_mcp_tools/config_entries",
+                "entry_id": entry_id,
+                "include_subentry_data": True,
+            },
+        ),
+        "ha_mcp_tools/config_entries",
+    )
+    if result.get("secret_scrub_degraded"):
+        raise _FlowHelperReadError(
+            "Config subentry secret scrub is degraded; capture is unsafe",
+            "secret_scrub_degraded",
+        )
+    matches = [
+        sub
+        for entry in _require_list(result.get("entries"), "config_entries.entries")
+        for sub in _require_list(
+            _require_dict(entry, "config entry").get("subentries") or [],
+            "config_entries.subentries",
+        )
+        if isinstance(sub, dict) and sub.get("subentry_id") == subentry_id
+    ]
+    if not matches:
+        return None
+    return {
+        "entry_id": entry_id,
+        "subentry_id": subentry_id,
+        "subentry_type": matches[0].get("subentry_type"),
+        "title": matches[0].get("title"),
+        "data": _subentry_data(matches[0].get("data")),
+    }
+
+
+async def _restore_config_subentry(client: Any, entity_id: str, config: Any) -> Any:
+    """Restore a subentry's data through its reconfigure flow.
+
+    A snapshot field none of the reconfigure forms offers must still match the
+    stored one, or the restore is refused unapplied.
+    """
+    from .tools.config_subentry_restore import restore_config_subentry
+
+    try:
+        entry_id, subentry_id = _subentry_target(entity_id)
+        snapshot = _require_dict(config, "config subentry snapshot")
+        if (snapshot.get("entry_id"), snapshot.get("subentry_id")) != (
+            entry_id,
+            subentry_id,
+        ) or not isinstance(snapshot.get("subentry_type"), str):
+            raise _FlowHelperReadError(
+                "snapshot does not match its target", "target_mismatch"
+            )
+        data = _subentry_data(snapshot.get("data"))
+    except HomeAssistantError as err:
+        _log_flow_helper_failure("snapshot_validation", err)
+        raise BackupRestoreError(
+            f"Config subentry snapshot is invalid: {err}", reason="invalid_snapshot"
+        ) from err
+    try:
+        current = await _fetch_config_subentry(client, entity_id)
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        _log_flow_helper_failure("subentry_preflight", err)
+        raise BackupRestoreError(
+            "Config subentry could not be checked; restore was not attempted"
+        ) from err
+    if current is None:
+        return await _recreate_config_subentry(client, entity_id, snapshot, data)
+    return await _apply_and_verify(
+        "Config subentry",
+        partial(
+            restore_config_subentry,
+            client,
+            entry_id,
+            subentry_id,
+            snapshot["subentry_type"],
+            data,
+            current["data"],
+        ),
+        partial(
+            _verify_readback,
+            partial(_fetch_config_subentry, client, entity_id),
+            {"data": data},
+            ("data",),
+        ),
+    )
+
+
+async def _recreate_config_subentry(
+    client: Any, entity_id: str, snapshot: dict[str, Any], data: dict[str, Any]
+) -> dict[str, Any]:
+    """Create a deleted subentry again from its snapshot; it gets a new id."""
+    from .tools.config_entry_flow import OptionsFlowError
+    from .tools.config_subentry_restore import recreate_config_subentry
+
+    entry_id, subentry_id = _subentry_target(entity_id)
+    try:
+        result = await recreate_config_subentry(
+            client, entry_id, snapshot["subentry_type"], data
+        )
+    except OptionsFlowError as err:
+        _log_flow_helper_failure("subentry_recreation", err)
+        raise BackupRestoreError(
+            str(err)
+            if err.reason or err.apply_status == "not_applied"
+            else "Config subentry recreation did not complete normally; inspect "
+            "the entry's subentries before retrying",
+            apply_status=err.apply_status,
+            reason=err.reason,
+            fields=list(err.fields),
+        ) from err
+    target = f"{entry_id}/{result['subentry_id']}"
+    verification = await _verify_readback(
+        partial(_fetch_config_subentry, client, target), {"data": data}, ("data",)
+    )
+    if verification != "matched":
+        raise BackupRestoreError(
+            f"Config subentry was recreated as {target} but could not be verified",
+            apply_status="applied",
+            verification_status=verification,
+            entity_id=target,
+        )
+    return {**result, "original_subentry_id": subentry_id, "entity_id": target}
 
 
 def _make_flow_helper_handler(helper_type: str) -> DomainHandler:
@@ -3736,3 +3918,8 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
         mgr.register(_make_helper_handler(helper_type))
     for helper_type in sorted(_flow_helper_types()):
         mgr.register(_make_flow_helper_handler(helper_type))
+    mgr.register(
+        DomainHandler(
+            "helper_config_subentry", _fetch_config_subentry, _restore_config_subentry
+        )
+    )

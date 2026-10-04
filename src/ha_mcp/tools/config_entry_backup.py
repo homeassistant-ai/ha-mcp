@@ -10,6 +10,25 @@ from typing import Any
 from ..backup_manager import _is_flow_helper_domain
 
 
+def helper_backup_id(kwargs: dict[str, Any]) -> str:
+    """The id ha_config_set_helper snapshots; empty for a create.
+
+    A config subentry is keyed by its parent entry and its own id. Creating
+    one (no ``subentry_id``) leaves nothing to snapshot.
+    """
+    if kwargs.get("helper_type") == "config_subentry":
+        entry_id, subentry_id = kwargs.get("entry_id"), kwargs.get("subentry_id")
+        return f"{entry_id}/{subentry_id}" if entry_id and subentry_id else ""
+    return str(kwargs.get("helper_id") or kwargs.get("entry_id") or "")
+
+
+def removal_backup_id(kwargs: dict[str, Any]) -> str:
+    """The id ha_remove_helpers_integrations snapshots before deleting."""
+    if kwargs.get("helper_type") == "config_subentry":
+        return helper_backup_id({**kwargs, "entry_id": kwargs.get("target")})
+    return str(kwargs.get("target") or "")
+
+
 def flow_helper_backup_domain(kwargs: dict[str, Any]) -> str:
     return f"helper_{kwargs.get('helper_type')}"
 

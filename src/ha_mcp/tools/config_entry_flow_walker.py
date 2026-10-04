@@ -791,12 +791,13 @@ async def _handle_flow_steps(
             )
 
         if result_type == _FlowType.ABORT:
+            # A snapshot's submit_fn has already settled the keys no form took.
             return _handle_abort_step(
                 flow_id,
                 current_step,
                 is_reconfigure=is_reconfigure,
-                ignored_config_keys=ignored_config_keys,
-                remaining_config=remaining_config,
+                ignored_config_keys=set() if complete_snapshot else ignored_config_keys,
+                remaining_config={} if complete_snapshot else remaining_config,
                 reuse_state=reuse_state,
             )
 

@@ -42,6 +42,7 @@ from .component_api import (
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_backup import (
     flow_helper_backup_domain,
+    removal_backup_id,
     resolve_config_entry_backup_domain,
     skip_unless_flow_helper,
 )
@@ -2180,7 +2181,7 @@ class IntegrationTools:
         domain_fn=lambda kw: (
             f"helper_{kw['helper_type']}" if kw.get("helper_type") else "integration"
         ),
-        id_param="target",
+        id_fn=removal_backup_id,
         domain_resolver=resolve_config_entry_backup_domain,
         # Explicit Template removal validates and resolves its target through
         # Core before the inner decorator captures the authoritative entry.

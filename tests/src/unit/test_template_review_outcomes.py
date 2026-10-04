@@ -2,6 +2,7 @@
 
 import logging
 from copy import deepcopy
+from functools import partial
 from unittest.mock import AsyncMock
 
 import pytest
@@ -157,9 +158,13 @@ async def test_unavailable_verification_logs_safe_local_cause(
 ):
     monkeypatch.setattr(bm, "_ws_send", AsyncMock(return_value=response))
     with caplog.at_level(logging.WARNING):
-        result = await bm._verify_flow_restore(object(), "old-entry", {}, "template")
+        result = await bm._verify_readback(
+            partial(bm._fetch_flow_helper, object(), "old-entry", "template"),
+            {},
+            ("entry_id", "options"),
+        )
     assert result == "unavailable"
-    assert "options_readback" in caplog.text
+    assert "step=readback" in caplog.text
     assert reason in caplog.text
 
 
