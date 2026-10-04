@@ -4,8 +4,8 @@ Covers ``custom_components/ha_mcp_tools/oauth_autoapprove.py``: the invisible
 ``/authorize`` (issues a PKCE code + 302, no UI) and ``/token`` (public-client
 PKCE exchange, cosmetic opaque token) views, the ``AutoApproveProvider`` code
 lifecycle, and — most importantly — the open-redirect gate layered on top of
-:func:`oauth_legacy._is_valid_redirect_uri` (every spec-valid provider callback
-is accepted; malformed targets are rejected in place).
+:func:`oauth_legacy._is_valid_redirect_uri` (only callbacks on the
+administrator's allowlist are redirected to; anything else is refused in place).
 
 Home Assistant / aiohttp are stubbed via ``_embedded_stubs``. ``yarl`` (an
 aiohttp dependency also absent here) is stubbed with the tiny
@@ -195,6 +195,7 @@ def _mode_cfg(
     session: object | None = None,
     cimd_session: object | None = None,
     dcr_key: bytes | None = None,
+    allowlist: list[str] | None = None,
 ) -> dict[str, object | None]:
     """Webhook cfg dict seeding exactly one live-mode marker (mirrors
     active_auth_mode's provider-presence checks)."""
@@ -215,7 +216,15 @@ def _mode_cfg(
             oauth_dcr.CFG_DCR_SIGNING_KEY: dcr_key,
         }
     if mode == "none":
-        return {aa.CFG_AUTOAPPROVE_PROVIDER: aa.AutoApproveProvider()}
+        provider = (
+            aa.AutoApproveProvider()
+            if allowlist is None
+            else aa.AutoApproveProvider(lambda: allowlist)
+        )
+        return {
+            aa.CFG_AUTOAPPROVE_PROVIDER: provider,
+            oauth_dcr.CFG_DCR_SIGNING_KEY: dcr_key,
+        }
     raise ValueError(f"unknown test mode: {mode}")
 
 
@@ -258,12 +267,14 @@ async def unified_view_client_factory():
             session: object | None = None,
             cimd_session: object | None = None,
             dcr_key: bytes | None = None,
+            allowlist: list[str] | None = None,
         ):
             cfg = _mode_cfg(
                 mode,
                 session=session,
                 cimd_session=cimd_session,
                 dcr_key=dcr_key,
+                allowlist=allowlist,
             )
 
             app = aiohttp_web.Application()
@@ -1019,12 +1030,10 @@ AUTH_QS = (
 )
 
 
-async def test_none_mode_any_valid_https_redirect_autoapproves(
+async def test_none_mode_refuses_an_unlisted_callback_without_redirecting(
     unified_view_client_factory,
 ):
-    """Maintainer decision 2026-08-14: none mode is secret-URL-only trust —
-    ChatGPT, Spark, and any other provider auto-approve invisibly, same as
-    claude.ai."""
+    """An anonymous /authorize must not bounce a visitor to any URL (#2427)."""
     client = await unified_view_client_factory(mode="none")
     resp = await client.get(
         "/api/ha_mcp_tools/oauth/authorize"
@@ -1032,9 +1041,59 @@ async def test_none_mode_any_valid_https_redirect_autoapproves(
         + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb",
         allow_redirects=False,
     )
-    assert resp.status == 302
-    assert "code=" in resp.headers["Location"]
-    assert "state=s1" in resp.headers["Location"]
+    assert resp.status == 400
+    assert "Location" not in resp.headers
+
+
+async def test_none_mode_refusal_page_escapes_the_callback(
+    unified_view_client_factory,
+):
+    """The refusal page shows the callback to the user, so it must not run it."""
+    client = await unified_view_client_factory(mode="none")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        + AUTH_QS
+        + "&redirect_uri=https%3A%2F%2Fevil.example%2F%3Cscript%3Ex%3C%2Fscript%3E",
+        allow_redirects=False,
+    )
+    body = await resp.text()
+    assert "<script>x" not in body
+    assert "&lt;script&gt;x" in body
+
+
+async def test_none_mode_follows_allowlist_edits_without_a_reload(
+    unified_view_client_factory,
+):
+    """An administrator's edit applies to the next sign-in, no restart."""
+    allowlist: list[str] = []
+    client = await unified_view_client_factory(mode="none", allowlist=allowlist)
+    url = (
+        "/api/ha_mcp_tools/oauth/authorize"
+        + AUTH_QS
+        + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb"
+    )
+    assert (await client.get(url, allow_redirects=False)).status == 400
+
+    allowlist.append("https://chatgpt.example/connector/cb")
+
+    assert (await client.get(url, allow_redirects=False)).status == 302
+
+
+async def test_none_mode_dynamic_registration_cannot_add_a_callback(
+    unified_view_client_factory,
+):
+    """A client registering its own callback must not get past the allowlist."""
+    key = b"k" * 32
+    callback = "https://evil.example/cb"
+    client_id = oauth_dcr.mint_client_id(key, [callback])
+    client = await unified_view_client_factory(mode="none", dcr_key=key)
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        "?response_type=code&code_challenge=" + "a" * 43 + "&code_challenge_method=S256"
+        f"&client_id={client_id}&redirect_uri=https%3A%2F%2Fevil.example%2Fcb",
+        allow_redirects=False,
+    )
+    assert resp.status == 400
 
 
 async def test_none_mode_token_undecodable_body_returns_400(
@@ -1073,9 +1132,13 @@ async def test_ha_auth_token_undecodable_body_returns_400(
     assert (await resp.json())["error"] == "invalid_request"
 
 
-async def test_none_mode_loopback_redirect_autoapproves(unified_view_client_factory):
-    """Native/CLI loopback callbacks (RFC 8252) complete invisibly too."""
-    client = await unified_view_client_factory(mode="none")
+async def test_none_mode_listed_loopback_callback_autoapproves_on_any_port(
+    unified_view_client_factory,
+):
+    """Native/CLI loopback callbacks (RFC 8252) pick a fresh port per sign-in."""
+    client = await unified_view_client_factory(
+        mode="none", allowlist=["http://localhost/callback"]
+    )
     resp = await client.get(
         "/api/ha_mcp_tools/oauth/authorize"
         + AUTH_QS
