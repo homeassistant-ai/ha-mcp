@@ -7,6 +7,7 @@ validation, required-param + destructive-confirm gates, entity resolution) and
 the Matter handler + enricher end to end against a mocked WebSocket client.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -511,6 +512,38 @@ def _permissive_client():
 
 
 class TestRadioDispatcherContract:
+    @pytest.mark.parametrize(
+        "ha_code,expected_code,suggestion",
+        [
+            ("unauthorized", "AUTH_INSUFFICIENT_PERMISSIONS", "administrator"),
+            ("not_found", "RESOURCE_NOT_FOUND", "device"),
+            ("not_loaded", "SERVICE_CALL_FAILED", "integration"),
+            ("unknown_command", "SERVICE_CALL_FAILED", "supports"),
+        ],
+    )
+    async def test_ha_failure_codes_offer_the_relevant_next_step(
+        self, ha_code, expected_code, suggestion
+    ):
+        """Radio failures retain HA's verdict and give an actionable remedy."""
+        client = _client(
+            {
+                "matter/node_diagnostics": {
+                    "success": False,
+                    "error": "Command failed",
+                    "error_code": ha_code,
+                }
+            }
+        )
+        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
+        with pytest.raises(ToolError) as exc:
+            await radio(radio="matter", action="diagnostics", device_id="m1")
+        body = json.loads(str(exc.value))
+        assert body["error"]["code"] == expected_code
+        assert body["ha_error_code"] == ha_code
+        assert body["device_id"] == "m1"
+        assert body["ws_type"] == "matter/node_diagnostics"
+        assert suggestion in body["error"]["suggestion"].lower()
+
     @pytest.mark.asyncio
     async def test_ws_call_failure_surfaces_tool_error(self):
         # A primary WS command reporting success=False must surface as a

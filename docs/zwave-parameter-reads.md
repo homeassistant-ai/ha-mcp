@@ -14,8 +14,9 @@ nodes across multiple Z-Wave controllers.
 ## Examples
 
 List all cached parameters across endpoints, retaining HA's value IDs and
-metadata (label, description, min/max, default, unit, states/options, and
-readable/writeable flags when supplied):
+metadata (including its type, plus label, description, min/max, default, unit,
+states and readable/writeable flags when supplied), and each parameter's
+`configuration_value_type`:
 
 ```python
 ha_manage_radio(radio="zwave", action="get_config_params", device_id="example_device_id")
@@ -68,16 +69,10 @@ ha_manage_radio(radio="zwave", action="get_config_param",
   request returning no value raises an error without substituting cached data.
 - Permission failures, missing/unloaded integrations or nodes, unknown commands
   on unsupported HA versions, and device/transport timeouts propagate as tool
-  errors. A refresh can wait for a sleeping node or fail; wake it before retrying.
+  errors with recovery suggestions. A refresh timeout means the command did not
+  answer before the wait expired; its Get may still be queued until the node
+  wakes. Wake/check the node and allow that queued request to finish before
+  retrying. An HA `unknown_error` on the raw read also produces no value: verify
+  parameter support and node availability, and inspect HA logs if it persists.
+  The error code alone does not establish the cause.
   There is no entity-enabling or broader node-refresh fallback.
-
-## API verification
-
-The schemas were checked against [HA Core 2026.8.3](https://github.com/home-assistant/core/blob/2026.8.3/homeassistant/components/zwave_js/api.py),
-[2026.9.4](https://github.com/home-assistant/core/blob/2026.9.4/homeassistant/components/zwave_js/api.py),
-and the development source on 2026-10-02. HA 2026.9.4 pins
-`zwave-js-server-python==0.73.1`: its node raw read delegates to endpoint 0,
-and the endpoint method awaits `get_raw_config_parameter_value`. The
-[server implementation](https://github.com/zwave-js/zwave-js-server/blob/master/src/lib/common.ts)
-invokes Configuration CC `get`; this is distinct from HA's cached list API.
-No HA Core or HA-MCP companion component change is required.

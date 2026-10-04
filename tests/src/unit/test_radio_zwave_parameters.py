@@ -1,11 +1,17 @@
 """Parameter reads must work independently of Home Assistant entities."""
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.tools_radio import RadioTools
 
 
@@ -92,6 +98,7 @@ async def test_disabled_entity_is_only_an_optional_device_resolver() -> None:
     )
     assert result["parameter"]["value"] == 0
     assert result["device_id"] == "node-device"
+    assert "warnings" not in result
     assert [
         call.args[0]["type"] for call in client.send_websocket_message.call_args_list
     ] == ["config/entity_registry/get", "zwave_js/get_config_parameters"]
@@ -108,6 +115,7 @@ async def test_refresh_reads_raw_value_without_substituting_cached_partial() -> 
     assert result["parameter"]["value"] == 12
     assert result["parameter"]["property_key"] is None
     assert result["parameter"]["metadata"] is None
+    assert "metadata_source" not in result
     assert result["source"] == "device_request"
     assert result["refresh_requested"] is True
     assert [call.args[0] for call in client.send_websocket_message.call_args_list] == [
@@ -160,24 +168,13 @@ async def test_missing_cached_parameter_does_not_implicitly_poll() -> None:
     assert client.send_websocket_message.await_count == 1
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        "unknown_command",
-        "unauthorized",
-        "not_loaded",
-        "not_found",
-        "Node is asleep",
-        "Timeout",
-    ],
-)
-async def test_ha_errors_are_preserved_without_cache_fallback(error: str) -> None:
+async def test_ha_failure_never_substitutes_a_cached_value() -> None:
     client = client_with_parameters({"root": parameter(8)})
     client.send_websocket_message.side_effect = [
         {"success": True, "result": {"root": parameter(8)}},
-        {"success": False, "error": error},
+        {"success": False, "error": "Command failed", "error_code": "not_found"},
     ]
-    with pytest.raises(ToolError, match=error):
+    with pytest.raises(ToolError):
         await RadioTools(client).ha_manage_radio(
             radio="zwave",
             action="get_config_param",
@@ -187,18 +184,30 @@ async def test_ha_errors_are_preserved_without_cache_fallback(error: str) -> Non
 
 
 async def test_device_read_with_no_value_is_not_reported_as_fresh() -> None:
+    """An empty raw result becomes HA's unknown_error, not a null value."""
     client = client_with_parameters({"root": parameter(8)})
     client.send_websocket_message.side_effect = [
         {"success": True, "result": {"root": parameter(8)}},
-        {"success": True, "result": {"value": None}},
+        {
+            "success": False,
+            "error": "Command failed: Unknown error",
+            "error_code": "unknown_error",
+        },
     ]
-    with pytest.raises(ToolError, match="no value"):
+    with pytest.raises(ToolError, match="no value") as exc:
         await RadioTools(client).ha_manage_radio(
             radio="zwave",
             action="get_config_param",
             device_id="node-device",
             params={"property": 3, "refresh": True},
         )
+    body = json.loads(str(exc.value))
+    assert body["ha_error_code"] == "unknown_error"
+    assert body["device_id"] == "node-device"
+    assert body["property"] == 3
+    assert "no cached fallback" in body["error"]["message"]
+    assert "parameter" in body["error"]["suggestion"].lower()
+    assert client.send_websocket_message.await_count == 2
 
 
 async def test_unknown_cached_value_remains_unknown() -> None:
@@ -236,7 +245,7 @@ async def test_refresh_preserves_zero_and_marks_cached_metadata() -> None:
         radio="zwave",
         action="get_config_param",
         device_id="node-device",
-        params={"property": 3, "refresh": True},
+        params={"property": 3, "endpoint": 0, "property_key": None, "refresh": True},
     )
     assert result["parameter"]["value"] == 0
     assert result["parameter"]["metadata"] == original["metadata"]
@@ -244,17 +253,59 @@ async def test_refresh_preserves_zero_and_marks_cached_metadata() -> None:
     assert original["value"] == 8
 
 
-async def test_transport_timeout_is_a_tool_error() -> None:
-    client = client_with_parameters({})
-    client.send_websocket_message.side_effect = TimeoutError(
-        "parameter request timed out"
+async def test_refresh_timeout_explains_the_possible_wakeup_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the real bridge's command-timeout to connection-error wrapper."""
+    ws = MagicMock()
+    ws.send_command = AsyncMock(
+        side_effect=[
+            {"success": True, "result": {"root": parameter(8)}},
+            HomeAssistantCommandTimeout("Command timeout"),
+        ]
     )
-    with pytest.raises(ToolError, match="timed out"):
+    monkeypatch.setattr(
+        "ha_mcp.client.websocket_client.get_websocket_client",
+        AsyncMock(return_value=ws),
+    )
+    client = HomeAssistantClient(base_url="http://ha.test:8123", token="test-token")
+    with pytest.raises(ToolError) as exc:
         await RadioTools(client).ha_manage_radio(
             radio="zwave",
-            action="get_config_params",
+            action="get_config_param",
             device_id="node-device",
+            params={"property": 3, "refresh": True},
         )
+    body = json.loads(str(exc.value))
+    assert body["error"]["code"] == "TIMEOUT_WEBSOCKET"
+    assert "no cached fallback" in body["error"]["message"]
+    assert "queued" in body["error"]["message"]
+    assert "wake" in body["error"]["suggestion"].lower()
+    assert body["device_id"] == "node-device"
+    assert body["property"] == 3
+    assert body["refresh_requested"] is True
+    assert body["ws_type"] == "zwave_js/get_raw_config_parameter"
+    assert ws.send_command.await_count == 2
+
+
+async def test_refresh_connection_loss_does_not_claim_a_sleeping_node() -> None:
+    """A disconnected socket is distinct from a command deadline expiring."""
+    client = client_with_parameters({"root": parameter(8)})
+    client.send_websocket_message.side_effect = [
+        {"success": True, "result": {"root": parameter(8)}},
+        HomeAssistantConnectionError("WebSocket disconnected"),
+    ]
+    with pytest.raises(ToolError) as exc:
+        await RadioTools(client).ha_manage_radio(
+            radio="zwave",
+            action="get_config_param",
+            device_id="node-device",
+            params={"property": 3, "refresh": True},
+        )
+    body = json.loads(str(exc.value))
+    assert body["error"]["code"] == "CONNECTION_FAILED"
+    assert "queued" not in body["error"]["message"]
+    assert body["device_id"] == "node-device"
 
 
 async def test_partial_parameters_are_not_mistaken_for_a_full_cached_value() -> None:

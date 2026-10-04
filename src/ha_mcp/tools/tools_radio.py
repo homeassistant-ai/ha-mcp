@@ -157,22 +157,20 @@ class RadioTools:
     ) -> dict[str, Any]:
         """Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.
 
-        For read-only inspection prefer ha_get_device / ha_get_system_health,
-        which mirror the 'diagnostics' and 'network_status' actions; use this
-        tool for writes and the active 'ping' probe (unique to this tool).
+        For node diagnostics and network summaries prefer ha_get_device /
+        ha_get_system_health, which mirror 'diagnostics' and 'network_status'.
+        This tool also exposes active 'ping' probes and parameter reads.
         Z-Wave 'get_config_params' lists cached configuration values/metadata;
-        'get_config_param' reads one, without enabling or creating entities.
-        params.refresh=True requests a device read of a full root parameter;
-        cached reads support endpoints and property_key bit masks. HA admin
-        access is required for parameter reads. Write
-        actions perform inclusion/commissioning, removal, healing,
+        'get_config_param' reads one from the cache or explicitly from the device.
+        Neither enables or creates entities. Write actions perform
+        inclusion/commissioning, removal, healing,
         reconfiguration, firmware updates and credential provisioning.
 
         Caveats: long-running actions (inclusion, rebuild routes, firmware) start the
         operation and return immediately with long_running=true; completion
         happens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-
         PIN pairing) is not scriptable — use SmartStart/QR provisioning here or
-        the HA UI.
+        the HA UI. HA administrator access is required for parameter reads.
         """
         try:
             handler = HANDLERS[radio]

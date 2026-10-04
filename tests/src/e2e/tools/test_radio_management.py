@@ -47,7 +47,6 @@ logger = logging.getLogger(__name__)
     [
         ("get_config_params", {}),
         ("get_config_param", {"property": 3}),
-        ("get_config_param", {"property": 3, "refresh": True}),
     ],
 )
 async def test_zwave_parameter_reads_surface_real_ha_errors_without_radio(

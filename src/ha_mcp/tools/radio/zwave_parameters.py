@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from typing import Any, NoReturn
 
+from ...client.rest_client import (
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ...errors import ErrorCode, create_error_response
-from ..helpers import raise_tool_error
+from ..helpers import exception_to_structured_error, raise_tool_error
 from .base import ok, ws_call
 
 
@@ -22,7 +26,7 @@ def _integer(args: dict[str, Any], name: str, minimum: int, maximum: int) -> Non
 
 
 def _validate(action: str, args: dict[str, Any]) -> bool:
-    """Reject unsupported refresh targets before any network traffic."""
+    """Validate read arguments before traffic; return whether refresh was requested."""
     device_id = args["device_id"]
     if not isinstance(device_id, str) or not device_id.strip():
         _invalid("device_id must be a non-empty Home Assistant device ID")
@@ -47,6 +51,70 @@ def _validate(action: str, args: dict[str, Any]) -> bool:
             )
 
     return refresh
+
+
+def _no_raw_value(context: dict[str, Any], details: str | None = None) -> NoReturn:
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "Device parameter read returned no value; no cached fallback was used",
+            details=details,
+            context=context,
+            suggestions=[
+                "Verify that the parameter number is supported by this device",
+                "Check node availability or wake a sleeping device before retrying",
+                "Inspect Home Assistant logs if the failure persists; unknown_error does not identify the cause",
+            ],
+        )
+    )
+
+
+def _raw_read_error(reply: dict[str, Any], context: dict[str, Any]) -> None:
+    # HA reports unknown_error when the raw client asserts on an empty result;
+    # the code can also mean another upstream failure, so preserve its details.
+    if reply.get("error_code") == "unknown_error":
+        _no_raw_value(context, reply.get("error"))
+
+
+async def _read_raw(client: Any, device_id: str, property_: int) -> Any:
+    context: dict[str, Any] = {
+        "radio": "zwave",
+        "action": "get_config_param",
+        "ws_type": "zwave_js/get_raw_config_parameter",
+        "device_id": device_id,
+        "property": property_,
+        "refresh_requested": True,
+    }
+    try:
+        raw = await ws_call(
+            client,
+            context["ws_type"],
+            device_id=device_id,
+            property=property_,
+            context=context,
+            on_error=_raw_read_error,
+        )
+    except (HomeAssistantCommandTimeout, HomeAssistantConnectionError) as error:
+        # The REST bridge wraps its command deadline in a connection error.
+        # A socket failure without that cause must remain a transport failure.
+        if isinstance(error, HomeAssistantCommandTimeout) or isinstance(
+            error.__cause__, HomeAssistantCommandTimeout
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.TIMEOUT_WEBSOCKET,
+                    "Device parameter read did not answer before the command timeout; "
+                    "no cached fallback was used. The Get may still be queued until the node wakes",
+                    context=context,
+                    suggestions=[
+                        "Wake/check the device and allow any queued Get to finish before retrying"
+                    ],
+                )
+            )
+        exception_to_structured_error(error, context=context)
+    if not isinstance(raw, dict) or raw.get("value") is None:
+        _no_raw_value(context)
+    return raw["value"]
 
 
 async def read(client: Any, action: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -125,33 +193,10 @@ async def read(client: Any, action: str, args: dict[str, Any]) -> dict[str, Any]
         }
     )
     if refresh:
-        raw = await ws_call(
-            client,
-            "zwave_js/get_raw_config_parameter",
-            device_id=device_id,
-            property=property_,
-            context={
-                "device_id": device_id,
-                "property": property_,
-                "refresh_requested": True,
-            },
-        )
-        if not isinstance(raw, dict) or raw.get("value") is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Device parameter read returned no value; no cached fallback was used",
-                    context={
-                        "device_id": device_id,
-                        "property": property_,
-                        "refresh_requested": True,
-                    },
-                    suggestions=[
-                        "Check node availability or wake a sleeping device before retrying"
-                    ],
-                )
-            )
-        parameter = {**parameter, "value": raw["value"]}
+        parameter = {
+            **parameter,
+            "value": await _read_raw(client, device_id, property_),
+        }
 
     result = ok(
         "zwave",

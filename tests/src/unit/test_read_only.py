@@ -256,6 +256,19 @@ class TestExemptionRules:
         [
             ({"radio": "matter", "action": "diagnostics", "device_id": "d1"}, True),
             ({"radio": "zwave", "action": "network_status"}, True),
+            (
+                {"radio": "zwave", "action": "get_config_params", "device_id": "d1"},
+                True,
+            ),
+            (
+                {
+                    "radio": "zwave",
+                    "action": "get_config_param",
+                    "device_id": "d1",
+                    "params": {"property": 3, "refresh": True},
+                },
+                True,
+            ),
             ({"radio": "matter", "action": "ping", "device_id": "d1"}, True),
             ({"radio": "zigbee", "action": "cluster_read", "device_id": "d1"}, True),
             ({"radio": "thread", "action": "list_datasets"}, True),
