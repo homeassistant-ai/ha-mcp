@@ -105,7 +105,6 @@ class TestHaGetCameraImage:
         assert image.data == b"\xff\xd8\xff\xe0"
         assert image.to_image_content().mime_type == "image/jpeg"
         # The 4-byte magic prefix has no parseable header, so no size.
-        assert text.startswith("Camera snapshot (JPEG).")
         assert re.fullmatch(
             r"Camera snapshot \(JPEG\)\. Retrieved: \d{4}-\d{2}-\d{2} "
             r"\d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}",
