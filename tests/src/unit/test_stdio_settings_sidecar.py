@@ -116,6 +116,9 @@ class TestBuildSettingsHandlers:
             # Custom filesystem directories (issue #1567).
             "get_fs_custom_paths",
             "save_fs_custom_paths",
+            # Embedded server's OAuth callback allowlist (#2427).
+            "get_oauth_callbacks",
+            "save_oauth_callbacks",
             # Entity visibility filter (#1728).
             "visibility_get_config",
             "visibility_put_config",
