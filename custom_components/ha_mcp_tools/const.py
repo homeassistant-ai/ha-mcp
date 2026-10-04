@@ -37,6 +37,7 @@ ENTRY_TYPE_SERVER = "server"
 # carrying the legacy default (a user-customized title is left alone).
 TOOLS_ENTRY_TITLE = "HA-MCP File & YAML Tools"
 TOOLS_ENTRY_LEGACY_TITLE = "HA MCP Tools"
+SERVER_ENTRY_TITLE = "HA-MCP Server"
 # Kept level with the HACS floor in hacs.json: from component 2.1.3 the manifest
 # declares voluptuous-openapi, which Core releases before 2026.7 pin to an older
 # version so the requirement cannot resolve there, and
@@ -292,9 +293,9 @@ DIST_NAME_DEV = "ha-mcp-dev"
 KNOWN_SERVER_DISTS = (DIST_NAME_STABLE, DIST_NAME_DEV)
 
 # The server requirement when the component manifest carries no ``ha-mcp``
-# pin (a source checkout; every HACS release pins the server it was built
-# with, see scripts/pin_component_server.py). Typing it into the options
-# flow's pip-spec field means "no override".
+# pin, which only a hand-edited manifest lacks: semantic-release stamps every
+# release's pin and scripts/stamp_component_version.py every pre-release's.
+# Typing it into the options flow's pip-spec field means "no override".
 DEFAULT_PIP_SPEC = DIST_NAME_STABLE
 
 # Release channels the server used to be selected by (``channel`` option).

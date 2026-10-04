@@ -40,12 +40,14 @@ from .const import (
     OPT_SECRET_PATH_OVERRIDE,
     OPT_WEBHOOK_AUTH,
     OPT_WEBHOOK_ID_OVERRIDE,
+    SERVER_ENTRY_TITLE,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
 )
+from .entry_device import async_register_entry_device
 
-# NOTE: embedded_setup / coordinator (and their embedded_server / mcp_webhook
+# NOTE: embedded_setup (and its embedded_server / mcp_webhook
 # chain), plus websocket_api, are imported lazily inside the entry lifecycle
 # functions below, not at module top level. They pull in aiohttp, yaml and
 # several homeassistant.* submodules (auth, requirements, util.package,
@@ -111,6 +113,9 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # (the manifest pins it), so the server update entity, its PyPI poll and
     # the automatic reinstall are gone. Drop the entity they left behind.
     _remove_retired_update_entity(hass, entry)
+    await async_register_entry_device(
+        hass, entry, name=SERVER_ENTRY_TITLE, model="ha-mcp (in-process server)"
+    )
 
     task = entry.async_create_background_task(
         hass, async_bring_up_server(hass, entry), f"{DOMAIN}_bring_up"

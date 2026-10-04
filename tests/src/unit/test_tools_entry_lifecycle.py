@@ -137,12 +137,7 @@ def tools_env(monkeypatch, store_backing):
     register_commands = MagicMock(name="async_register_commands")
     monkeypatch.setattr(comp, "Store", _FakeStore)
     monkeypatch.setattr(comp, "async_register_commands", register_commands)
-    monkeypatch.setattr(comp, "dr", MagicMock(name="device_registry"))
-    monkeypatch.setattr(
-        comp,
-        "async_get_integration",
-        AsyncMock(return_value=SimpleNamespace(version="2.1.0")),
-    )
+    monkeypatch.setattr(comp, "async_register_entry_device", AsyncMock())
     return SimpleNamespace(
         register_commands=register_commands,
         storage=store_backing,
