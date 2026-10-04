@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "Povolit vyhledávání nástrojů",
     "features.enable_tool_search.help": "Nahradí celý katalog nástrojů vyhledáváním. Snižuje nečinný kontext přibližně o 90 %, na zhruba 5K tokenů. ⚠️ NEPOVOLUJTE toto v klientech s vlastním vestavěným vyhledáváním nástrojů / odloženými nástroji (claude.ai, Claude Desktop, Claude Code) — dvě vrstvy vyhledávání se střetávají a vestavěné vyhledávání nástrojů klienta je tam lepší volbou; nechte to vypnuté. Zda jsou nástroje odložené, závisí na kombinaci vašeho klienta a modelu: použijte toto, když vaše nastavení načítá celý katalog předem — modely bez nativních odložených nástrojů (např. Gemini, lokální modely kompatibilní s OpenAI, Claude Haiku), klienti, kteří vkládají všechna schémata nástrojů bez ohledu na model (např. GitHub Copilot CLI), nebo menší kontextová okna. Některé modely Codex a ChatGPT také zahrnují odložené nástroje — zkontrolujte přímo svého klienta/model, abyste potvrdili jeho funkce a nenechali to zbytečně povolené. Nástroje jsou nalezeny pomocí ha_search_tools a spouštěny prostřednictvím kategorizovaných proxy (čtení/zápis/mazání). Vyžaduje restart, aby se projevilo.",
     "features.tool_search_max_results.label": "Max. výsledků vyhledávání nástrojů",
-    "features.tool_search_max_results.help": "Maximální počet nástrojů vrácených ha_search_tools, když je povoleno vyhledávání nástrojů. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou přehlédnout relevantní nástroje. Rozsah: 2-10. Vyžaduje restart.",
+    "features.tool_search_max_results.help": "Maximální počet skrytých nástrojů vrácených na jedno volání ha_search_tools, když je vyhledávání nástrojů povolené; připnutý nástroj, který se umisťuje v rámci tohoto horního počtu, je přidán jako krátká položka obsahující pouze název navrch. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou minout relevantní nástroje. Rozsah: 2-10. Vyžaduje restart.",
     "features.enable_tool_security_policies.label": "Povolit zásady zabezpečení nástrojů (pokročilé)",
     "features.enable_tool_security_policies.help": "Podmiňuje vysoce rizikové volání nástrojů (ovládání zámků/alarmů, zápisy automatizací atd.) schválením uživatelem. Když je volán chráněný nástroj, agent řekne uživateli, aby otevřel záložku Zásady zabezpečení nástrojů ve webovém rozhraní a klikl na Schválit, než volání pokračuje. Pravidla pro jednotlivé nástroje s volitelnými podmínkami argumentů se konfigurují na záložce Zásady zabezpečení nástrojů. Ve výchozím nastavení vypnuto. Vyžaduje restart, aby se projevilo.",
     "features.read_only_mode.label": "Režim pouze pro čtení",
@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "Nahlásit problém nebo zpětnou vazbu",
-      "description": "Získat diagnostiku a hotový GitHub issue pro hllášení chyby nebo zpětnou vazbu agenta."
+      "description": "Získejte diagnostiku a hotový GitHub problém pro chybu, zpětnou vazbu k agentovi nebo požadavek na novou funkci."
     },
     "ha_restart": {
       "title": "Restartovat Home Assistant",

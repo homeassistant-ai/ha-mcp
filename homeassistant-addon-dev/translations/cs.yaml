@@ -264,9 +264,11 @@ configuration:
       stále platí). Výchozí 7.
   tool_search_max_results:
     name: Max. výsledků vyhledávání nástrojů
-    description: 'Maximální počet nástrojů vrácených ha_search_tools, když je povoleno
-      vyhledávání nástrojů. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou
-      přehlédnout relevantní nástroje. Rozsah: 2-10. Vyžaduje restart.'
+    description: 'Maximální počet skrytých nástrojů vrácených na jedno volání ha_search_tools,
+      když je vyhledávání nástrojů povolené; připnutý nástroj, který se umisťuje v
+      rámci tohoto horního počtu, je přidán jako krátká položka obsahující pouze název
+      navrch. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou minout relevantní
+      nástroje. Rozsah: 2-10. Vyžaduje restart.'
   disabled_tools:
     name: Zakázané nástroje (oddělené čárkami)
     description: Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém

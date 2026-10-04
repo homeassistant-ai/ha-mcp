@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "Ebligi ilo-serĉon",
     "features.enable_tool_search.help": "Anstataŭigi la plenan ilo-katalogon per serĉ-bazita malkovro. Reduktas neaktivan kuntekston je proksimume 90%, al ĉirkaŭ 5K ĵetonoj. ⚠️ NE ebligu ĉi tion en klientoj kun sia propra enkonstruita ilo-serĉo / prokrastitaj iloj (claude.ai, Claude Desktop, Claude Code) — la du serĉtavoloj konfliktas, kaj la enkonstruita ilo-serĉo de la kliento estas la pli bona elekto tie; lasu ĉi tion malŝaltita. Ĉu iloj estas prokrastitaj dependas de via kliento kaj modelo-kombino: uzu ĉi tion kiam via agordo ŝarĝas la plenan katalogon antaŭe — modeloj sen denaskaj prokrastitaj iloj (ekz. Gemini, OpenAI-kongruaj lokaj modeloj, Claude Haiku), klientoj kiuj enlinigas ĉiujn ilo-skemojn sendepende de modelo (ekz. GitHub Copilot CLI), aŭ pli malgrandaj kuntekstaj fenestroj. Iuj Codex-modeloj kaj ChatGPT ankaŭ inkluzivas prokrastitajn ilojn — kontrolu vian klienton/modelon rekte por konfirmi ĝiajn funkciojn, por ke vi ne lasu ĉi tion ebligita senbezone. Iloj estas trovitaj per ha_search_tools kaj ekzekutitaj per kategoriigitaj prokuriloj (legi/skribi/forigi). Postulas restartigon por ekvalidi.",
     "features.tool_search_max_results.label": "Maksimumaj rezultoj de ilo-serĉo",
-    "features.tool_search_max_results.help": "Maksimuma nombro de iloj redonitaj de ha_search_tools kiam ilo-serĉo estas ebligita. Pli malaltaj valoroj (2-3) ŝparas kuntekstajn ĵetonojn sed povas maltrafi gravajn ilojn. Gamo: 2-10. Postulas restartigon.",
+    "features.tool_search_max_results.help": "Maksimuma nombro de kaŝitaj iloj redonitaj po voko de ha_search_tools kiam ilserĉado estas ebligita; alpinglita ilo kiu altas en tiu pinta nombro estas aldonita kiel mallonga nur-noma eniro super ĝi. Pli malaltaj valoroj (2-3) ŝparas kuntekstajn signojn, sed povas maltrafi signifajn ilojn. Intervalo: 2-10. Postulas restartigon.",
     "features.enable_tool_security_policies.label": "Ebligi Ilo-Sekurecajn Politikojn (altnivela)",
     "features.enable_tool_security_policies.help": "Gardu alt-riskajn ilo-vokojn (seruro/alarmo-kontrolo, aŭtomatigo-skriboj, ktp.) malantaŭ uzant-aprobo. Kiam gardita ilo estas vokita, la agento diras al la uzanto malfermi la langeton Ilo-Sekurecaj Politikoj en la TTT-UI kaj klaki Aprobi antaŭ ol la voko daŭras. Reguloj por ĉiu ilo kun laŭvolaj argumentaj kondiĉoj estas agorditaj en la langeto Ilo-Sekurecaj Politikoj. Malŝaltita defaŭlte. Postulas restartigon por ekvalidi.",
     "features.read_only_mode.label": "Nur-lega Reĝimo",
@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "Raporti Problemom aŭ Reagon",
-      "description": "Akiri diagnozon kaj pretan GitHub-problemon por raporto pri cimo aŭ retrosciigo de agento."
+      "description": "Akiri diagnozon kaj pretan GitHub-problemon por cimoj, agenta opinio aŭ peto pri funkcio."
     },
     "ha_restart": {
       "title": "Restartigi Home Assistant",

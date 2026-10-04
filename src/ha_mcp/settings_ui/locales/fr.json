@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "Activer la recherche d'outils",
     "features.enable_tool_search.help": "Remplace le catalogue complet d'outils par une découverte basée sur la recherche. Réduit le contexte inactif d'environ 90 %, à près de 5K tokens. ⚠️ N'activez PAS ceci dans les clients qui ont leur propre recherche d'outils intégrée / outils différés (claude.ai, Claude Desktop, Claude Code) — les deux couches de recherche entrent en conflit, et la recherche d'outils intégrée du client y est le meilleur choix ; laissez ceci désactivé. Le report des outils dépend de la combinaison client/modèle : utilisez ceci lorsque votre configuration charge le catalogue complet d'emblée — modèles sans outils différés natifs (p. ex. Gemini, modèles locaux compatibles OpenAI, Claude Haiku), clients qui intègrent tous les schémas d'outils quel que soit le modèle (p. ex. GitHub Copilot CLI), ou fenêtres de contexte plus petites. Certains modèles Codex et ChatGPT incluent aussi des outils différés — vérifiez directement auprès de votre client/modèle quelles fonctionnalités il possède pour ne pas laisser ceci activé inutilement. Les outils sont trouvés via ha_search_tools et exécutés via des proxys catégorisés (lecture/écriture/suppression). Nécessite un redémarrage pour prendre effet.",
     "features.tool_search_max_results.label": "Résultats max. de la recherche d'outils",
-    "features.tool_search_max_results.help": "Nombre maximum d'outils renvoyés par ha_search_tools lorsque la recherche d'outils est activée. Des valeurs plus basses (2-3) économisent des tokens de contexte mais peuvent manquer des outils pertinents. Plage : 2-10. Nécessite un redémarrage.",
+    "features.tool_search_max_results.help": "Nombre maximal d'outils cachés renvoyés par appel ha_search_tools lorsque la recherche d'outils est activée ; un outil épinglé qui se classe dans ce nombre maximal est ajouté en tant qu'entrée courte avec uniquement le nom en plus. Des valeurs plus faibles (2-3) économisent des jetons de contexte mais peuvent manquer des outils pertinents. Plage : 2-10. Nécessite un redémarrage.",
     "features.enable_tool_security_policies.label": "Activer les politiques de sécurité des outils (avancé)",
     "features.enable_tool_security_policies.help": "Contrôle les appels d'outils à enjeux élevés (contrôle des serrures/alarmes, écritures d'automatisations, etc.) derrière une approbation utilisateur. Lorsqu'un outil protégé est appelé, l'agent dit à l'utilisateur d'ouvrir l'onglet Politiques de sécurité des outils dans l'interface Web et de cliquer sur Approuver avant que l'appel ne continue. Les règles par outil avec conditions d'argument optionnelles sont configurées dans l'onglet Politiques de sécurité des outils. Désactivé par défaut. Nécessite un redémarrage pour prendre effet.",
     "features.read_only_mode.label": "Mode lecture seule",
@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "Signaler un problème ou envoyer un retour",
-      "description": "Obtenez des diagnostics et une issue GitHub prête à l'emploi pour un rapport de bogue ou un retour d'agent."
+      "description": "Obtenez des diagnostics et un problème GitHub prêt à l'emploi pour un bug, un retour d'agent ou une demande de fonctionnalité."
     },
     "ha_restart": {
       "title": "Redémarrer Home Assistant",
