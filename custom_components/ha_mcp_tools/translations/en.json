@@ -129,7 +129,7 @@
         },
         "server_webhook_auth": {
             "options": {
-                "none": "Secret webhook URL (default)",
+                "none": "Secret webhook URL",
                 "ha_auth": "Sign in with Home Assistant (OAuth)",
                 "legacy": "Legacy OAuth (this integration issues a Client ID/Secret to paste)"
             }
