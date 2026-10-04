@@ -45,11 +45,13 @@ async def _entry(mcp_client: Client) -> dict[str, Any]:
 
 
 async def _friendly_name(mcp_client: Client) -> str | None:
+    # ha_get_state answers with the record under "data" and no success key.
     data = parse_mcp_result(
         await mcp_client.call_tool("ha_get_state", {"entity_id": ENTITY})
     )
-    assert data.get("success"), data
-    return data["data"]["attributes"].get("friendly_name")
+    record = data.get("data") or data
+    assert "attributes" in record, data
+    return record["attributes"].get("friendly_name")
 
 
 @pytest.mark.registry
