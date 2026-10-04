@@ -260,6 +260,9 @@ async def async_write_item(
     collection = owner.storage_collection
     data = dict(msg["data"])
     before = dict(collection.data)
+    # Core stores the item before it awaits its listeners (entity setup or
+    # update), so an error once the data changed is not a rejection: it
+    # propagates and the server reports an unknown outcome.
     try:
         if msg["action"] == "create":
             item = await collection.async_create_item(data)
@@ -268,13 +271,19 @@ async def async_write_item(
     except _item_not_found() as err:
         return _failure("not_found", f"{helper_type} config not found: {err}")
     except _INVALID_ERRORS as err:
+        if collection.data != before:
+            # A HomeAssistantError keeps the message on the wire; Core answers
+            # the others with "Unknown error" or, for a schema Invalid, with
+            # the code it uses for a rejected command.
+            raise _home_assistant_error()(
+                f"the {helper_type} was stored, then a listener failed: {err}"
+            ) from err
         # Like Core's WS commands, report every problem, not only the first.
         return _failure(
             "invalid", "; ".join(map(str, getattr(err, "errors", None) or [err]))
         )
     except _home_assistant_error() as err:
-        # Core rejected it before storing (a duplicate tag_id); an error after a
-        # stored change is not a rejection, so it surfaces as an unknown outcome.
+        # A rejection here is e.g. a duplicate tag_id.
         if collection.data != before:
             raise
         return _failure("invalid", str(err))
