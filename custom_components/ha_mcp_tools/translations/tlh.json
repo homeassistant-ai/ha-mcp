@@ -129,7 +129,7 @@
         "tools_module_installed": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'pu'",
         "tools_module_not_installed": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'be' — navvamDaq \"De' 'ay' chel\" yI'uy, 'ej bobcho'vam DachelmeH \"HA-MCP File & YAML Tools\" yIwIv",
         "tools_module_not_loaded": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'pu' 'ach QaptaHbe' — navvamDaq \"HA-MCP File & YAML Tools\" De' 'ay' yIQotlhHa' pagh yItaghqa'moH",
-        "version_line": "component {component_version} - ha-mcp turwI' {server_version} ({source} Dotlh He)",
+        "version_line": "component {component_version} - ha-mcp turwI' {server_version} ({channel} Dotlh He)",
         "version_not_installed": "wej jomlu'",
         "version_unknown": "Sovbe'lu'"
     }

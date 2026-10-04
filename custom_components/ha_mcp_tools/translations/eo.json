@@ -140,7 +140,7 @@
     "tools_module_installed": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Instalita",
     "tools_module_not_installed": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Ne instalita — premu \"Aldoni eniron\" sur la paĝo de ĉi tiu integriĝo kaj elektu \"HA-MCP File & YAML Tools\" por aldoni ĝin",
     "tools_module_not_loaded": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Instalita sed ne ŝargita — ebligu aŭ reŝarĝu la eniron \"HA-MCP File & YAML Tools\" sur la paĝo de ĉi tiu integriĝo",
-    "version_line": "Komponanto {component_version} - Servilo ha-mcp {server_version} ({source} kanalo)",
+    "version_line": "Komponanto {component_version} - Servilo ha-mcp {server_version} ({channel} kanalo)",
     "version_not_installed": "ankoraŭ ne instalita",
     "version_unknown": "nekonata"
   }

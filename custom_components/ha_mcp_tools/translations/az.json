@@ -140,7 +140,7 @@
     "tools_module_installed": "Beta/qabaqcıl fayl və YAML alətləri modulu (istəyə bağlı): Quraşdırılıb",
     "tools_module_not_installed": "Beta/qabaqcıl fayl və YAML alətləri modulu (istəyə bağlı): Quraşdırılmayıb — əlavə etmək üçün bu inteqrasiyanın səhifəsində \"Add entry\" düyməsinə basın və \"HA-MCP File & YAML Tools\" seçin",
     "tools_module_not_loaded": "Beta/qabaqcıl fayl və YAML alətləri modulu (istəyə bağlı): Quraşdırılıb, lakin yüklənməyib — bu inteqrasiyanın səhifəsində \"HA-MCP File & YAML Tools\" qeydini aktivləşdirin və ya yenidən yükləyin",
-    "version_line": "Komponent {component_version} - ha-mcp serveri {server_version} ({source} kanalı)",
+    "version_line": "Komponent {component_version} - ha-mcp serveri {server_version} ({channel} kanalı)",
     "version_not_installed": "hələ quraşdırılmayıb",
     "version_unknown": "naməlum"
   }

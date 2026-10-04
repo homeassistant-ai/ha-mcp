@@ -140,7 +140,7 @@
     "tools_module_installed": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Installerad",
     "tools_module_not_installed": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Ej installerad — tryck på \"Lägg till post\" på denna integrationssida och välj \"HA-MCP File & YAML Tools\" för att lägga till den",
     "tools_module_not_loaded": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Installerad men inte laddad — aktivera eller ladda om posten \"HA-MCP File & YAML Tools\" på denna integrationssida",
-    "version_line": "Komponent {component_version} - Server ha-mcp {server_version} ({source}-kanal)",
+    "version_line": "Komponent {component_version} - Server ha-mcp {server_version} ({channel}-kanal)",
     "version_not_installed": "inte installerad ännu",
     "version_unknown": "okänd"
   }

@@ -140,7 +140,7 @@
     "tools_module_installed": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Zainstalowany",
     "tools_module_not_installed": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Niezainstalowany — naciśnij „Dodaj wpis” na stronie tej integracji i wybierz „HA-MCP File & YAML Tools”, aby go dodać",
     "tools_module_not_loaded": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Zainstalowany, ale niezaładowany — włącz lub przeładuj wpis „HA-MCP File & YAML Tools” na stronie tej integracji",
-    "version_line": "Komponent {component_version} - Serwer ha-mcp {server_version} (kanał {source})",
+    "version_line": "Komponent {component_version} - Serwer ha-mcp {server_version} (kanał {channel})",
     "version_not_installed": "jeszcze niezainstalowany",
     "version_unknown": "nieznany"
   }

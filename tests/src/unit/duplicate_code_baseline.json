@@ -1034,6 +1034,10 @@
     "tests/src/unit/test_ha_dev_manage_server_component_routing.py::UpdateClient.abort_options_flow",
     "tests/src/unit/test_ha_dev_server_entry_component_routing.py::RoutingClient.abort_options_flow"
   ],
+  "f78cd7058419": [
+    "tests/src/unit/test_hacs_nudge.py::_make_hass",
+    "tests/src/unit/test_oauth_autoapprove.py::_make_hass"
+  ],
   "f7fb67a64cd9": [
     "tests/addon/test_webhook_proxy.py::_FakeClientTimeout",
     "tests/src/unit/_embedded_stubs.py::ClientTimeout"

@@ -140,7 +140,7 @@
     "tools_module_installed": "Modulo beta/avanzato di strumenti per file e YAML (facoltativo): Installato",
     "tools_module_not_installed": "Modulo beta/avanzato di strumenti per file e YAML (facoltativo): Non installato — premi «Aggiungi voce» nella pagina di questa integrazione e scegli «HA-MCP File & YAML Tools»",
     "tools_module_not_loaded": "Modulo beta/avanzato di strumenti per file e YAML (facoltativo): Installato ma non caricato — attiva o ricarica la voce «HA-MCP File & YAML Tools» nella pagina di questa integrazione",
-    "version_line": "Componente {component_version} - Server ha-mcp {server_version} (canale {source})",
+    "version_line": "Componente {component_version} - Server ha-mcp {server_version} (canale {channel})",
     "version_not_installed": "non ancora installato",
     "version_unknown": "sconosciuto"
   }
