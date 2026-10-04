@@ -60,15 +60,25 @@ jobs:
         id: version
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          # <next release>.dev<commit count on origin/master>: the same commit
-          # produces the SAME number in every workflow (PyPI/Docker here, the
-          # dev app, the HACS pre-release), so all surfaces report one dev
-          # version. See the script for why the base is the NEXT release.
+          # <next release>.dev<commit count>: the same commit produces the
+          # SAME number in every workflow (PyPI/Docker here, the dev app), so
+          # all surfaces report one dev version. See the script for why the
+          # base is the NEXT release and which commit it counts.
           DEV_VERSION=$(scripts/dev_version.sh)
 
-          echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
-          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "dev_version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "Dev version: $DEV_VERSION (sha: $SHORT_SHA)"
+          echo "$DEV_VERSION" > dev-version.txt
+
+      # The mirror sync pins the HACS pre-release to exactly this build, so it
+      # reads the number from here rather than recomputing it.
+      - name: Hand the dev version to the mirror sync
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dev-version
+          path: dev-version.txt
+          retention-days: 7
 
   publish-pypi-dev:
     name: Publish PyPI (dev channel)
@@ -107,51 +117,6 @@ jobs:
           grep -E '^(name|version) = ' pyproject.toml
           echo "Entry points:"
           grep -A5 '^\[project.scripts\]' pyproject.toml
-
-      - name: Build distribution
-        run: uv build
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
-        with:
-          packages-dir: dist
-          skip-existing: true
-
-  publish-pypi-dev-main:
-    # The same build under the main ha-mcp name, as a PEP 440 dev release:
-    # the HACS pre-release component pins ha-mcp==<this version>, so its
-    # users stay on one distribution whichever HACS channel they follow
-    # (#2427). pip/uv never select a dev release unless it is pinned, so
-    # standalone, Docker and app installs keep resolving the stable build.
-    # Trusted publishing: the ha-mcp PyPI project must list this workflow
-    # with the pypi environment as a publisher.
-    name: Publish PyPI (dev build of ha-mcp)
-    needs: prepare
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/ha-mcp
-    permissions:
-      contents: read
-      id-token: write  # Required for PyPI trusted publishing
-    env:
-      DEV_VERSION: ${{ needs.prepare.outputs.dev_version }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-          submodules: true
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.17"
-
-      - name: Set the dev version
-        run: |
-          sed -i 's/^version = .*/version = "'"$DEV_VERSION"'"/' pyproject.toml
-          grep -E '^(name|version) = ' pyproject.toml
 
       - name: Build distribution
         run: uv build
