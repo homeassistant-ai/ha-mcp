@@ -56,6 +56,8 @@ options:
   enable_auto_backup: true
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
+  enable_snapshot_actions: true
+  backup_read_only: false
   enable_snapshot_delete: false
   snapshot_delete_min_age_days: 7
   disabled_tools: ""
@@ -75,6 +77,8 @@ schema:
   enable_auto_backup: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?
+  enable_snapshot_actions: bool?
+  backup_read_only: bool?
   enable_snapshot_delete: bool?
   snapshot_delete_min_age_days: int(0,365)?
   disabled_tools: str?

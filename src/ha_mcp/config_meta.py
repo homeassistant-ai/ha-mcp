@@ -57,6 +57,9 @@ class AppOption:
     dev_default: bool | None = None
     # Supervisor requires the option; every other option is optional ("?").
     required: bool = False
+    # What start.py uses when options.json holds an invalid value for a bool
+    # option, if not the default: a safety control fails closed.
+    invalid_value: bool | None = None
 
 
 @dataclass(frozen=True)

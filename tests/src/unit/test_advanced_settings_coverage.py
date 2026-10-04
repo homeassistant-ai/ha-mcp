@@ -97,6 +97,7 @@ def test_every_env_aliased_setting_is_surfaced_or_allowlisted() -> None:
             "a dev-only app option that is not a beta flag",
         ),
         (float, Setting(app=AppOption()), "an app option of a type"),
+        (int, Setting(app=AppOption(invalid_value=True)), "an invalid-value fallback"),
         (list, Setting(surface="backup"), "a web UI surface on a type"),
     ],
 )

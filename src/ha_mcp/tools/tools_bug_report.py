@@ -36,6 +36,7 @@ from ..utils.usage_logger import (
     get_recent_logs,
     get_startup_logs,
 )
+from .bug_report_config import collect_config_toggles
 from .bug_report_templates import (
     REPORT_END_MARKER,
     _build_issue_url,
@@ -316,62 +317,17 @@ def _websockets_dependency_state() -> dict[str, Any]:
     return state
 
 
-# Tool-surface-shaping toggles surfaced in bug reports. The set is small on
-# purpose: only settings that change which tools the agent sees or whether a
-# call runs, since the same bug report behaves very differently depending on
-# these. New settings of that kind should be added here so triage doesn't
-# have to ask.
-#
-# ``enable_beta_features`` leads the list because it is the master gate: when
-# off it force-disables every beta sub-flag (filesystem tools, code mode, YAML
-# editing, ...) regardless of the sub-flag's own value, so a "missing tool"
-# report is meaningless without it. ``enable_filesystem_tools`` is a beta-gated
-# tool family from issue #1804 — surfacing it lets triage see at a glance whether
-# the tool the user couldn't find was even enabled server-side.
-# ``read_only_mode`` removes the write tools, and tool security policies can
-# hold or refuse a call, so a "write did nothing" report depends on both.
-_CONFIG_TOGGLE_FIELDS: tuple[str, ...] = (
-    "enable_beta_features",
-    "read_only_mode",
-    "enable_tool_security_policies",
-    "enable_websocket",
-    "enable_dashboard_partial_tools",
-    "enable_tool_search",
-    "tool_search_max_results",
-    "enable_yaml_config_editing",
-    "enable_filesystem_tools",
-    "enable_code_mode",
-    "enabled_tool_modules",
-)
-
-
 def _get_config_toggles(settings: Settings | None = None) -> dict[str, Any]:
     """Read tool-surface-shaping config toggles from Settings.
 
-    Defaults to the global settings singleton; tests can pass a fake Settings
-    instance instead. Returns an empty dict on any failure (Settings
-    construction, attribute coercion, list-field split) so a misconfigured
-    environment can't break the bug report path itself.
+    Defaults to global settings; tests can pass Settings instead. Settings
+    lookup failures return an empty dict; tool-state failures preserve the
+    known settings and mark tool configuration diagnostics unavailable.
     """
     try:
         s = settings if settings is not None else get_global_settings()
 
-        toggles: dict[str, Any] = {}
-        for field in _CONFIG_TOGGLE_FIELDS:
-            value = getattr(s, field, None)
-            if value is None:
-                continue
-            toggles[field] = value
-
-        # Summarize list-shaped seeds as counts rather than dumping the full
-        # strings — they can be very long, and listing the exact tools the
-        # user disabled isn't useful for triage.
-        for list_field in ("disabled_tools", "pinned_tools"):
-            raw = getattr(s, list_field, "") or ""
-            count = len([item for item in raw.split(",") if item.strip()])
-            toggles[f"{list_field}_count"] = count
-
-        return toggles
+        return collect_config_toggles(s)
     except Exception as e:  # noqa: BLE001
         logger.warning(
             "Failed to read settings for bug report toggles: %s (%s)",
@@ -1088,6 +1044,9 @@ class BugReportTools:
             "mcp_client_host": client_host,
             "http_user_agent": user_agent,
             "config_toggles": config_toggles,
+            "ignored_disabled_tools": config_toggles.get("ignored_disabled_tools"),
+            "tool_config_warnings": config_toggles.get("tool_config_warnings"),
+            "tool_config_status": config_toggles.get("tool_config_status"),
             "tool_policy": tool_policy,
             "connection_status": "Unknown",
             "home_assistant_version": "Unknown",

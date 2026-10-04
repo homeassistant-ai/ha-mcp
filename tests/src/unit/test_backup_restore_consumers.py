@@ -21,7 +21,7 @@ from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.settings_ui import _handlers_backups as ui
 
 from ._js_harness import extract_script_body, run_script
-from .test_backup_diff_error_mapping import _dispatcher
+from .test_backup_diff_error_mapping import _backup_settings, _dispatcher
 from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM, _assert_clean_init
 
 NAME = "helper_template.sensor.example.20260909_000000.yaml"
@@ -74,7 +74,8 @@ async def test_mcp_restore_promotes_warnings_without_mutating_manager_result(
     original = deepcopy(result)
     manager = SimpleNamespace(restore_snapshot=AsyncMock(return_value=result))
     monkeypatch.setattr("ha_mcp.tools.backup.get_backup_manager", lambda *args: manager)
-    monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", SimpleNamespace)
+    monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", _backup_settings)
+    monkeypatch.setattr("ha_mcp.read_only.get_global_settings", _backup_settings)
 
     response = await _dispatcher()(scope="edits", action="restore", backup_name=NAME)
 
@@ -123,7 +124,8 @@ async def test_typed_restore_outcome_survives_consumer(
         monkeypatch.setattr(
             "ha_mcp.tools.backup.get_backup_manager", lambda *args: manager
         )
-        monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", SimpleNamespace)
+        monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", _backup_settings)
+        monkeypatch.setattr("ha_mcp.read_only.get_global_settings", _backup_settings)
         with pytest.raises(ToolError) as caught:
             await _dispatcher()(scope="edits", action="restore", backup_name=NAME)
         payload = json.loads(str(caught.value))
@@ -527,7 +529,8 @@ async def test_settings_and_mcp_preview_only_restore_effects(
     monkeypatch.setattr(
         "ha_mcp.tools.backup.get_backup_manager", lambda *args: runtime.manager
     )
-    monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", SimpleNamespace)
+    monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", _backup_settings)
+    monkeypatch.setattr("ha_mcp.read_only.get_global_settings", _backup_settings)
     mcp_diff = await _dispatcher()(
         scope="edits", action="diff", backup_name=snapshot.name
     )
@@ -572,7 +575,8 @@ async def test_restore_refusal_retains_actionable_reason(
         monkeypatch.setattr(
             "ha_mcp.tools.backup.get_backup_manager", lambda *args: runtime.manager
         )
-        monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", SimpleNamespace)
+        monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", _backup_settings)
+        monkeypatch.setattr("ha_mcp.read_only.get_global_settings", _backup_settings)
         with pytest.raises(ToolError) as caught:
             await _dispatcher()(
                 scope="edits", action="restore", backup_name=snapshot.name

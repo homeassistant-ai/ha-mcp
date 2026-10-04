@@ -173,6 +173,23 @@ configuration:
     name: 자동 백업 보관 개수(엔티티당)
     description: 엔티티당 보관하는 최대 스냅숏 수입니다. 이 상한을 넘는 오래된 스냅숏은 새로 저장할 때마다 밀려납니다. 기본값 100,
       범위 1~10000.
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
+      in ha_call_service. Turning this off blocks every snapshot action, including
+      listing, while edit backups remain available. Snapshot deletion is only available
+      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
+      still apply. On by default. Change this option or use the web Settings UI Backups
+      tab; requires restart in the app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete, including the
+      equivalent backup services and commands in ha_call_service. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   enable_snapshot_delete:
     name: 스냅숏 삭제 허용
     description: ha_manage_backup이 HA 전체 스냅숏 tarball을 삭제할 수 있게 합니다(scope='snapshot',
