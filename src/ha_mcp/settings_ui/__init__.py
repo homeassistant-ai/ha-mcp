@@ -26,6 +26,7 @@ from ..utils.data_paths import get_data_dir
 from ._handlers_advanced import build_advanced_handlers
 from ._handlers_backups import build_backups_handlers
 from ._handlers_fs import build_fs_handlers
+from ._handlers_oauth_callbacks import build_oauth_callback_handlers
 from ._handlers_server import (
     _PROCESS_INSTANCE_ID,
     _PROCESS_STARTED_AT,
@@ -496,6 +497,7 @@ def build_settings_handlers(
     handlers.update(build_backups_handlers(server))
     handlers.update(build_server_handlers(server, is_sidecar=is_sidecar))
     handlers.update(build_advanced_handlers(server))
+    handlers.update(build_oauth_callback_handlers(server))
 
     return handlers
 
@@ -707,6 +709,9 @@ def register_settings_routes(
         # Custom filesystem directories (issue #1567) — component-owned list
         ("/api/settings/fs-custom-paths", ["GET"], "get_fs_custom_paths"),
         ("/api/settings/fs-custom-paths", ["POST"], "save_fs_custom_paths"),
+        # None-mode OAuth callback allowlist (#2427) — component-owned list
+        ("/api/settings/oauth-callbacks", ["GET"], "get_oauth_callbacks"),
+        ("/api/settings/oauth-callbacks", ["POST"], "save_oauth_callbacks"),
         # Tool security policies endpoints
         ("/api/policy/config", ["GET"], "policy_get_config"),
         ("/api/policy/config", ["PUT"], "policy_put_config"),
