@@ -43,6 +43,7 @@ from .const import (
     ISSUE_LEGACY_OAUTH_RESTART,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
+    ISSUE_TOKEN_NEEDED,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
     OPT_ENABLE_SIDEBAR_PANEL,
@@ -66,7 +67,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 _NOTIFICATION_ID = "ha_mcp_tools_server_connect"
-_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED)
+_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED, ISSUE_TOKEN_NEEDED)
 
 
 async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -165,13 +166,24 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         await async_teardown_server(hass)
         raise
     except EmbeddedServerError as err:
-        _LOGGER.error("HA-MCP in-process server failed to start: %s", err)
+        if err.kind == "token":
+            _LOGGER.error(
+                "HA-MCP in-process server has no usable Home Assistant token "
+                "(%s). Enter an administrator's long-lived access token under "
+                "Settings - System - Repairs",
+                err,
+            )
+        else:
+            _LOGGER.error("HA-MCP in-process server failed to start: %s", err)
         # suppress: filing the repair issue must be UNCONDITIONAL (review
         # finding) - a raising teardown would otherwise leave the entry
         # looking healthy with the failure visible only in the log.
         with suppress(Exception):
             await async_teardown_server(hass)
-        _create_issue(hass, err.kind, str(err))
+        if err.kind == "token":
+            _create_token_issue(hass, entry)
+        else:
+            _create_issue(hass, err.kind, str(err))
     except Exception as err:
         _LOGGER.exception("HA-MCP in-process server: bring-up failed")
         with suppress(Exception):
@@ -494,6 +506,19 @@ def _create_issue(hass: HomeAssistant, kind: str, detail: str) -> None:
         severity=ir.IssueSeverity.ERROR,
         translation_key=issue_id,
         translation_placeholders={"detail": detail},
+    )
+
+
+def _create_token_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Ask for a replacement administrator token; its fix flow takes one."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        ISSUE_TOKEN_NEEDED,
+        is_fixable=True,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key=ISSUE_TOKEN_NEEDED,
+        data={"entry_id": entry.entry_id},
     )
 
 

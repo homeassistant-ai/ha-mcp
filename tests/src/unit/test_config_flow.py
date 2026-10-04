@@ -97,6 +97,7 @@ class _TextSelector(_SelectSelector):
 class _TextSelectorType:
     TEXT = "text"
     URL = "url"
+    PASSWORD = "password"
 
 
 _sel = MagicMock()
@@ -133,13 +134,16 @@ for _name in [
 sys.modules.pop("custom_components.ha_mcp_tools.config_flow", None)
 
 from custom_components.ha_mcp_tools import config_flow as cf  # noqa: E402
-from custom_components.ha_mcp_tools import config_flow_text as cft  # noqa: E402
+from custom_components.ha_mcp_tools import (  # noqa: E402
+    config_flow_text as cft,
+)
 from custom_components.ha_mcp_tools import const  # noqa: E402
 
 
 def _make_flow() -> cf.HaMcpToolsConfigFlow:
     """Build a flow with the HA framework methods stubbed to return markers."""
     flow = cf.HaMcpToolsConfigFlow()
+    flow.hass = MagicMock(name="hass")
     flow.async_set_unique_id = AsyncMock(return_value=None)
     flow._abort_if_unique_id_configured = MagicMock(return_value=None)
     flow.async_show_menu = MagicMock(side_effect=lambda **kw: {"type": "menu", **kw})
@@ -711,8 +715,11 @@ class TestServerOptionsFlow:
         for key in text_fields:
             assert markers[key].description["suggested_value"] == saved[key]
 
+        # The administrator token is never pre-filled from anything saved.
         defaults = {
-            key: m.default() for key, m in markers.items() if key not in text_fields
+            key: m.default()
+            for key, m in markers.items()
+            if key not in (*text_fields, const.OPT_ADMIN_TOKEN_REPLACEMENT)
         }
         # regenerate_secrets is a one-shot action, never pre-filled True;
         # enable_webhook / enable_startup_notification / enable_sidebar_panel
@@ -755,6 +762,7 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE: "",
             const.OPT_OAUTH_CLIENT_ID: "",
             const.OPT_OAUTH_CLIENT_SECRET: "",
+            const.OPT_ADMIN_TOKEN_REPLACEMENT: "",
             const.OPT_OAUTH_REDIRECT_ALLOWLIST: [],
         }
 

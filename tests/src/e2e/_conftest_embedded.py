@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from test_constants import TEST_TOKEN
 from urllib3.exceptions import InsecureRequestWarning
 
 from .utilities.streamable_http import parse_mcp_response
@@ -198,6 +199,9 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
                     "entry_type": "server",
                     "webhook_id": _EMBEDDED_WEBHOOK_ID,
                     "secret_path": _EMBEDDED_SECRET_PATH,
+                    # The component no longer provisions an administrator
+                    # (#2427); the server runs with the test admin's token.
+                    "admin_token": TEST_TOKEN,
                 },
                 "disabled_by": None,
                 "discovery_keys": {},
