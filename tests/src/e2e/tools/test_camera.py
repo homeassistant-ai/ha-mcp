@@ -14,11 +14,7 @@ import re
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import (
-    assert_mcp_failure,
-    assert_search_results,
-    safe_call_tool,
-)
+from ..utilities.assertions import MCPAssertions, assert_search_results
 
 # The info text: format, served dimensions, and the retrieval timestamp in
 # HA local time with UTC offset. The size is MANDATORY, not optional: the
@@ -37,6 +33,13 @@ def _blocks_of_type(result, block_type: str) -> list:
     return [block for block in result.content if block.type == block_type]
 
 
+async def _first_camera_entity(mcp: MCPAssertions) -> str:
+    """Pick one live camera entity, asserting the search succeeds."""
+    search_data = await mcp.call_tool_success("ha_search", {"domain_filter": "camera"})
+    assert_search_results(search_data, min_results=1, domain_filter="camera")
+    return search_data["entities"][0]["entity_id"]
+
+
 class TestCameraToolsE2E:
     """E2E tests for camera tools (require running Home Assistant)."""
 
@@ -53,17 +56,12 @@ class TestCameraToolsE2E:
     @pytest.mark.asyncio
     async def test_non_camera_entity_rejected(self, mcp_client):
         """Non-camera entities should be rejected with a clear error."""
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_get_camera_image",
-            {"entity_id": "light.kitchen"},
-        )
-
-        assert_mcp_failure(
-            data,
-            "ha_get_camera_image (non-camera entity)",
-            expected_error="not a camera entity",
-        )
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_get_camera_image",
+                {"entity_id": "light.kitchen"},
+                expected_error="not a camera entity",
+            )
 
     @pytest.mark.asyncio
     async def test_get_camera_image_returns_image_and_info(self, mcp_client):
@@ -73,22 +71,17 @@ class TestCameraToolsE2E:
         the info text must name the format, the served dimensions, and the
         retrieval time.
         """
-        search_data = await safe_call_tool(
-            mcp_client,
-            "ha_search",
-            {"domain_filter": "camera"},
-        )
-        assert_search_results(search_data, min_results=1, domain_filter="camera")
-        camera_entity = search_data["entities"][0]["entity_id"]
+        async with MCPAssertions(mcp_client) as mcp:
+            camera_entity = await _first_camera_entity(mcp)
 
-        # The info text is plain (non-JSON) text, so the shared parsing
-        # helper can only surface it as ``raw_response`` — and the image
-        # block cannot be surfaced through it at all. Verify both blocks on
-        # the raw CallToolResult instead (as the other direct-call e2e
-        # tests do).
-        result = await mcp_client.call_tool(
-            "ha_get_camera_image", {"entity_id": camera_entity}
-        )
+            # The info text is plain (non-JSON) text, so the shared parsing
+            # helper can only surface it as ``raw_response`` — and the image
+            # block cannot be surfaced through it at all. Verify both blocks
+            # on the raw CallToolResult instead (as the other direct-call
+            # e2e tests do).
+            result = await mcp_client.call_tool(
+                "ha_get_camera_image", {"entity_id": camera_entity}
+            )
 
         # Wire shape: the tuple return must map to exactly these content
         # blocks, in this order, with no structuredContent — a
@@ -117,18 +110,13 @@ class TestCameraToolsE2E:
     async def test_get_camera_image_with_resize(self, mcp_client):
         """A resize request should return both blocks; the size reflects the
         image as actually served (Home Assistant may or may not rescale)."""
-        search_data = await safe_call_tool(
-            mcp_client,
-            "ha_search",
-            {"domain_filter": "camera"},
-        )
-        assert_search_results(search_data, min_results=1, domain_filter="camera")
-        camera_entity = search_data["entities"][0]["entity_id"]
+        async with MCPAssertions(mcp_client) as mcp:
+            camera_entity = await _first_camera_entity(mcp)
 
-        result = await mcp_client.call_tool(
-            "ha_get_camera_image",
-            {"entity_id": camera_entity, "width": 640, "height": 480},
-        )
+            result = await mcp_client.call_tool(
+                "ha_get_camera_image",
+                {"entity_id": camera_entity, "width": 640, "height": 480},
+            )
 
         image_blocks = _blocks_of_type(result, "image")
         text_blocks = _blocks_of_type(result, "text")
