@@ -347,10 +347,10 @@ revoked or expired, or its account is no longer an active administrator, the
 server does not start and the repair **HA-MCP needs an administrator access
 token** asks for a new one. You can also switch tokens at any time with
 **Replace the administrator access token** in the entry's options. Switching
-revokes the token an older release created but leaves its **HA-MCP Server**
-account in place; delete that account under **Settings → People → Users** if
-you no longer need it. Removing the entry deletes only an account an older
-release created; it never touches the account your token belongs to.
+revokes the token an older release created; its **HA-MCP Server** account stays
+until you remove the entry, or until you delete it yourself under **Settings →
+People → Users**. Removing the entry deletes only an account an older release
+created; it never touches the account your token belongs to.
 
 See [SECURITY.md](../SECURITY.md) for the full threat model.
 
@@ -379,12 +379,19 @@ because the package is already installed.
 **The server won't start.** If the server fails to come up — for example because
 the port is already in use — a repair issue titled
 **The HA-MCP in-process server failed to start** appears under **Settings →
-Repairs**, carrying the specific reason. If the `ha-mcp` package itself can't be
-installed, the repair issue is titled **The HA-MCP in-process server package
-could not be installed** instead. Fix the cause — check the Home Assistant log and
-your network connectivity for an install failure, or set a different **Server
-port** for a port conflict — then reload the entry (save the options, or use
-**⋮ → Reload**) to retry.
+Repairs**, carrying the specific reason. If a build set in **ha-mcp package
+(advanced)** can't be installed, the repair issue is titled **The HA-MCP
+in-process server package could not be installed** instead. Fix the cause —
+check the Home Assistant log and your network connectivity for an install
+failure, or set a different **Server port** for a port conflict — then reload
+the entry (save the options, or use **⋮ → Reload**) to retry.
+
+**The integration does not load at all.** Home Assistant installs the server
+build each component release pins before it loads the integration. If that
+install fails (no network at startup, or a conflict with a package Home
+Assistant itself needs), neither entry loads, no repair issue is filed, and the
+log reads `Requirements for ha_mcp_tools not found`. Fix the cause the log
+names above that line, then restart Home Assistant.
 
 **Nothing happens after updating the component.** Home Assistant loads custom
 integration code at startup, so after HACS (or a manual copy) delivers a new

@@ -1,7 +1,7 @@
 """Bring the in-process ha-mcp server up and down for the config entry (#1527).
 
-Orchestration between :mod:`embedded_server` (the server thread + token
-provisioning) and :mod:`mcp_webhook` (the ingress webhook): the bring-up sequence,
+Orchestration between :mod:`embedded_server` (the server thread + its token)
+and :mod:`mcp_webhook` (the ingress webhook): the bring-up sequence,
 repair issues on failure, connect-URL surfacing, and teardown. Kept out of
 ``__init__.py`` so the entry-point wiring stays thin and this logic is
 independently testable.
@@ -195,7 +195,7 @@ async def async_teardown_server(hass: HomeAssistant) -> None:
     """Unregister the LLM API + webhook and stop the server thread (reload-safe,
     idempotent).
 
-    Does NOT revoke the provisioned token — a reload must keep it. The ha_auth
+    Does NOT release credentials — a reload must keep them. The ha_auth
     discovery views stay bound (aiohttp can't unregister them until HA restarts);
     they 404 while the entry is not live.
     """
@@ -209,7 +209,7 @@ async def async_teardown_server(hass: HomeAssistant) -> None:
 async def async_revoke_credentials_on_remove(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """Revoke the provisioned credentials when the config entry is removed."""
+    """Release the credentials an older release provisioned when the entry is removed."""
     await EmbeddedServerManager(hass, entry).async_revoke_credentials()
     _clear_issues(hass)
     ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)

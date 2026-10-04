@@ -3,17 +3,17 @@
 The :class:`EmbeddedServerManager` owns the full lifecycle of the in-process
 ha-mcp server:
 
-* ensures the ``ha-mcp`` package is importable (runtime pip install via
-  Home Assistant's requirements manager, honoring an options-flow pip-spec
-  override for pre-release testing, and forcing a real reinstall when that spec
-  changes),
-* provisions a long-lived Home Assistant admin token the server uses to reach HA
+* ensures the ``ha-mcp`` package is importable (the manifest pin Home
+  Assistant installed, or a runtime pip install honoring an options-flow
+  pip-spec override for pre-release testing, forcing a real reinstall when that
+  spec changes),
+* hands the server the administrator's long-lived token it uses to reach HA
   core over loopback (REST + WebSocket),
 * runs the server on a dedicated thread with its own asyncio loop — uvicorn
   skips signal capture off the main thread and a heavy tool can never stall HA's
   event loop — and
-* tears the thread down cleanly, and revokes the provisioned credentials when
-  the entry is removed.
+* tears the thread down cleanly, and on entry removal deletes the account and
+  token an older release provisioned (never the administrator's own).
 
 Everything the server needs from ha-mcp is imported **inside the worker thread**,
 after the required non-secret environment variables are staged, so importing this
@@ -357,7 +357,7 @@ class EmbeddedServerManager:
     # -- lifecycle ---------------------------------------------------------
 
     async def async_start(self) -> None:
-        """Install the package, provision a token, and start the server thread.
+        """Install the package, resolve the token, and start the server thread.
 
         Raises :class:`EmbeddedServerError` on any failure. The caller is
         responsible for surfacing a repair issue — a failed start must never take
@@ -398,7 +398,7 @@ class EmbeddedServerManager:
             defer_mutations=_prune_and_check_importing_workers()
         )
         await self._async_warn_on_dependency_conflicts()
-        access_token = await self._async_provision_token()
+        access_token = await self._async_access_token()
         await self._hass.async_add_executor_job(self._prepare_config_dir)
 
         self._maybe_purge_stale_modules(ready_version)
@@ -451,7 +451,7 @@ class EmbeddedServerManager:
 
         Never blocks Home Assistant shutdown indefinitely: if the thread does not
         exit within the timeout it is logged and left to die with the process.
-        Does NOT revoke the provisioned token — that is reserved for
+        Does NOT release credentials — that is reserved for
         :meth:`async_revoke_credentials` (entry removal) so a reload keeps
         working.
         """
@@ -502,8 +502,8 @@ class EmbeddedServerManager:
         a GitHub tarball URL, a ``file://`` wheel — for PR or pre-release
         testing). Otherwise the requirement this component release pins in its
         manifest, so the server that runs is the one HACS delivered with the
-        component. A manifest without a pin (a source checkout) falls back to
-        the bare ``ha-mcp`` distribution.
+        component. A hand-edited manifest without a pin falls back to the bare
+        ``ha-mcp`` distribution.
         """
         if self._pip_spec_override:
             return self._pip_spec_override
@@ -992,10 +992,10 @@ class EmbeddedServerManager:
         every restart), when the new spec is a direct URL (always installs
         for real), when the named distribution is not installed (e.g. a
         conflicting-dist removal already took it), when the stored spec is
-        an index requirement on the SAME distribution (a repin — e.g.
-        toggling auto-update rewrites bare ``ha-mcp`` to ``ha-mcp==X`` —
-        draws from the same index either way, so version resolution is
-        faithful and uninstalling a healthy install on a preference toggle
+        an index requirement on the SAME distribution (a repin — e.g. a
+        component 2.x install stored bare ``ha-mcp`` and the pin is
+        ``ha-mcp==X`` — draws from the same index either way, so version
+        resolution is faithful and uninstalling a healthy install on a repin
         would only add an offline-breakage window), or when the new spec is
         an exact pin on a version provably different from the installed one
         (the install cannot no-op, so the working build stays in place as
@@ -1160,9 +1160,9 @@ class EmbeddedServerManager:
         if new_data != dict(self._entry.data):
             self._hass.config_entries.async_update_entry(self._entry, data=new_data)
 
-    # -- token provisioning ------------------------------------------------
+    # -- server token ------------------------------------------------------
 
-    async def _async_provision_token(self) -> str:
+    async def _async_access_token(self) -> str:
         """Return the access token the server runs with (#2427).
 
         Raises ``EmbeddedServerError(kind="token")`` when there is no usable
@@ -1451,7 +1451,7 @@ class EmbeddedServerManager:
         (that module runs process-global side effects — truststore SSL patching,
         signal handlers, ``asyncio.run`` — that must never happen in-process).
         """
-        # Hand ha-mcp the loopback URL + provisioned admin token in memory, before
+        # Hand ha-mcp the loopback URL + the administrator's token in memory, before
         # the server (and its settings singleton) is built. Keeping the token out
         # of os.environ is the whole point of the in-process channel.
         self._note_startup_phase("importing the server package")
@@ -2072,9 +2072,8 @@ def _installed_dist_version(dist_name: str) -> str | None:
 
     Invalidates the import caches first so a just-completed (un)install is seen.
     Unlike :func:`_installed_ha_mcp_version` (which reports whichever of the two
-    channel distributions is present) this pins the given distribution name, so
-    the auto-update check compares the newest PyPI build against the version of
-    the channel actually installed.
+    server distributions is present) this pins the given distribution name, so
+    the target's version is never read from the other distribution's metadata.
     """
     _safe_invalidate_caches()
     try:
@@ -2434,10 +2433,10 @@ def _spec_satisfied_by(spec: str, installed_version: str) -> bool:
 async def _async_paired_server_requirement(hass: HomeAssistant) -> str | None:
     """Return the server requirement this component release pins, or None.
 
-    Every component release HACS delivers pins the ``ha-mcp`` build it was
-    released with in ``manifest.json``'s ``requirements``, which Home
-    Assistant installs before setting the integration up. A source checkout
-    carries no pin.
+    Every component release HACS delivers pins the ``ha-mcp`` (pre-release:
+    ``ha-mcp-dev``) build it was released with in ``manifest.json``'s ``requirements``, which Home
+    Assistant installs before setting the integration up. A copy taken from
+    master pins the last release; only a hand-edited manifest carries none.
     """
     known = {canonicalize_name(name) for name in KNOWN_SERVER_DISTS}
     integration = await async_get_integration(hass, DOMAIN)

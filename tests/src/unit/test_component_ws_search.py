@@ -894,9 +894,8 @@ class TestInfo:
     def test_manifest_version_parity(self):
         """A bump that touches manifest.json but not COMPONENT_VERSION (or the
         reverse) makes ``ha_mcp_tools/info`` report a version HACS did not
-        install. A version lower than the base branch's or behind the
-        released stable is the Component Version Gate's job in pr.yml; WHEN
-        to bump is docs/agents/custom-component.md's version-cycle rule.
+        install. That both equal the server version is the Component Version
+        Gate's job in pr.yml (docs/agents/custom-component.md, Version cycle).
         """
         manifest = json.loads(
             (

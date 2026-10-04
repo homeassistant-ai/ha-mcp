@@ -194,7 +194,7 @@ class TestConstruction:
         # secret path is the credential, same as the add-on's port).
         assert mgr._bind_host == "0.0.0.0"
         assert mgr._server_url == "http://127.0.0.1:8123"
-        # Stable is unpinned now: the bare distribution name (auto-updates).
+        # Provisional until async_start reads the manifest pin.
         assert mgr._pip_spec == "ha-mcp"
         assert mgr.is_running is False
 
@@ -931,9 +931,9 @@ class TestInstalledVersion:
 
 
 class TestInstalledDistVersion:
-    """``_installed_dist_version`` pins a SINGLE distribution name (the channel's),
-    unlike ``_installed_ha_mcp_version`` which reports whichever is present — the
-    auto-update check must compare against the version of the channel installed.
+    """``_installed_dist_version`` pins a SINGLE distribution name, unlike
+    ``_installed_ha_mcp_version`` which reports whichever is present — the target's
+    version must never be read from the other distribution's metadata.
     """
 
     def test_returns_version_of_named_dist(self, monkeypatch):
@@ -1355,7 +1355,7 @@ class TestTokenProvisioning:
         mgr, hass, _entry = _manager(tmp_path, data={DATA_SECRET_PATH: "/p"})
 
         with pytest.raises(es.EmbeddedServerError) as err:
-            await mgr._async_provision_token()
+            await mgr._async_access_token()
 
         assert err.value.kind == "token"
         hass.auth.async_create_user.assert_not_awaited()
@@ -2139,7 +2139,7 @@ class TestLifecycle:
         )
         monkeypatch.setattr(
             mgr,
-            "_async_provision_token",
+            "_async_access_token",
             AsyncMock(side_effect=lambda: (calls.append("token"), "tok")[1]),
         )
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: calls.append("dir"))
@@ -2315,9 +2315,7 @@ class TestRunningVersionStalenessWarning:
             tmp_path, options={OPT_PIP_SPEC: "ha-mcp-dev==7.13.0.dev1"}
         )
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
@@ -2346,9 +2344,7 @@ class TestRunningVersionStalenessWarning:
     ):
         mgr, _hass, _entry = _manager(tmp_path)
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         # Stub the module purge: letting it run for real would drop every
         # live ha_mcp module and poison later tests in this process.
@@ -2380,9 +2376,7 @@ class TestRunningVersionStalenessWarning:
     async def test_start_quiet_when_versions_match(self, tmp_path, monkeypatch, caplog):
         mgr, _hass, _entry = _manager(tmp_path)
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         # Stub the module purge: letting it run for real would drop every
         # live ha_mcp module and poison later tests in this process.
@@ -2425,9 +2419,7 @@ class TestPurgeSkippedWhileOrphanAlive:
         purges: list[bool],
     ) -> None:
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
@@ -2647,7 +2639,7 @@ class TestImportingWorkerRegistry:
                 mgr_b, "_async_ensure_package", AsyncMock(return_value="1.2.3")
             )
             monkeypatch.setattr(
-                mgr_b, "_async_provision_token", AsyncMock(return_value="tok")
+                mgr_b, "_async_access_token", AsyncMock(return_value="tok")
             )
             monkeypatch.setattr(mgr_b, "_prepare_config_dir", lambda: None)
             monkeypatch.setattr(mgr_b, "_async_wait_until_ready", AsyncMock())
@@ -2935,9 +2927,7 @@ class TestImporterAwareBringUp:
 
     def _stub_bring_up(self, mgr, monkeypatch, ensure: AsyncMock) -> None:
         monkeypatch.setattr(mgr, "_async_ensure_package", ensure)
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
@@ -3137,9 +3127,7 @@ class TestPurgeSkippedOnWarmCache:
         monkeypatch.setattr(
             mgr, "_async_ensure_package", AsyncMock(return_value=ready_version)
         )
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)

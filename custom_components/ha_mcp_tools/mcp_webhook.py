@@ -96,7 +96,7 @@ _WEBHOOK_NAME = "HA-MCP in-process server"
 
 # Hop-by-hop / sensitive request headers never forwarded upstream (identical set
 # to mcp_proxy). ``authorization`` is stripped because the server authenticates
-# to HA with its own provisioned token, not the caller's bearer.
+# to HA with its own administrator token, not the caller's bearer.
 _STRIPPED_REQUEST_HEADERS = frozenset(
     {
         "host",
@@ -239,7 +239,7 @@ class ResourceServer:
         if result is None:
             return False
         # ADMIN-ONLY: the server performs every Home Assistant operation with
-        # its own provisioned ADMIN token, so accepting any valid login would
+        # its own ADMIN token, so accepting any valid login would
         # grant every household member admin-equivalent control. Require an
         # active, human, administrator account (mirrors the settings panel).
         user = getattr(result, "user", None)

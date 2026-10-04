@@ -1,11 +1,11 @@
 """Unit tests for ToolsRegistry registration resilience (issues #1783/#1785).
 
 A single tool module whose import or register function fails must not take the
-whole server down: the in-process server auto-updates the ha-mcp package inside
-a running Home Assistant, and a mixed old/new module set (or a module that
-genuinely needs a newer custom component) previously crashed the entire server
-via the registry's fail-fast re-raise. The registry now skips the failing
-module, logs it loudly, and keeps every other module's tools available — but a
+whole server down: the in-process server can swap the ha-mcp package inside a
+running Home Assistant (a pip-spec override), and a mixed old/new module set (or
+a module that genuinely needs a newer custom component) previously crashed the
+entire server via the registry's fail-fast re-raise. The registry now skips the
+failing module, logs it loudly, and keeps every other module's tools available — but a
 TOTAL failure (zero modules registered) still raises, because a tool-less
 server silently "running" would be worse than a visible start failure.
 """

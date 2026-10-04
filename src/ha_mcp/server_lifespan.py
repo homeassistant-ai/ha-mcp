@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 async def warn_if_non_admin_token() -> None:
     """Ask Home Assistant about the configured token so a non-admin one is logged at startup (#2546)."""
     try:
-        # The embedded server provisions its own admin token; OAuth mode has
-        # no server-level token to ask about.
+        # The embedded component validated its token as an administrator's
+        # when it was entered; OAuth mode has no server-level token to ask about.
         settings = get_global_settings()
         if is_embedded() or settings.homeassistant_token == OAUTH_MODE_TOKEN:
             return

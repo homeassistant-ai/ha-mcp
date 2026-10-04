@@ -105,7 +105,7 @@ _settings: Settings | None = None
 
 # In-process (embedded) HA connection, set only when ha-mcp runs inside Home
 # Assistant core via the ha_mcp_tools custom component's in-process server entry.
-# The component hands the loopback URL + a provisioned admin token to ha-mcp
+# The component hands the loopback URL + the administrator's token to ha-mcp
 # THROUGH THIS DICT — never
 # via os.environ — so the admin token can't be read from the shared HA process
 # environment. Applied onto the Settings singleton in ``get_global_settings``.
