@@ -200,7 +200,8 @@ def _prebind_oauth_views(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """
     if not bool(entry.options.get(OPT_ENABLE_WEBHOOK, True)):
         return
-    auth_mode = str(entry.options.get(OPT_WEBHOOK_AUTH, ""))
+    # Same default bring-up applies (embedded_setup.async_bring_up_server).
+    auth_mode = str(entry.options.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE))
     if auth_mode not in (
         WEBHOOK_AUTH_NONE,
         WEBHOOK_AUTH_HA,

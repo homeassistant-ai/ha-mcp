@@ -308,6 +308,19 @@ class TestPrebindOAuthViews:
         # route.
         assert hass.http.register_view.call_count == 10
 
+    def test_unsaved_options_prebind_the_secret_url_surface(self):
+        # An entry that never saved its options runs in the secret-URL mode
+        # bring-up defaults to (embedded_setup), so its OAuth routes must be
+        # bound at boot too, or they never go live until a restart.
+        hass = _make_hass()
+        hass.http = MagicMock()
+        entry = _make_entry()
+        entry.options = {}
+
+        eentry._prebind_oauth_views(hass, entry)
+
+        assert hass.http.register_view.call_count == 10
+
     def test_webhook_disabled_binds_nothing(self):
         hass = _make_hass()
         hass.http = MagicMock()

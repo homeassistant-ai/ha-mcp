@@ -188,10 +188,13 @@ The consent form explains this revocation path. Reports about token opacity
 The `ha_mcp_tools` component's **in-process MCP server** config entry can run the
 ha-mcp server in-process inside Home Assistant and expose it through a Home
 Assistant webhook (see [docs/in-process-server.md](docs/in-process-server.md)).
-It offers three authentication postures, selected by the **Authentication
-mode** option in the entry options:
+A new entry starts with the webhook disabled and the server port bound to
+loopback; the setup form and the entry options let an administrator enable
+remote access with one of three authentication postures (**Authentication
+mode**), or LAN access to the port. Entries created before setup offered that
+choice keep the webhook on in `none` mode with LAN binding.
 
-- **Secret webhook URL (default, `none`).** The webhook id is a high-entropy
+- **Secret webhook URL (`none`).** The webhook id is a high-entropy
   random string and *is* the credential — the same secret-URL trust model as
   standard mode above, except the URL is designed to be reached remotely through
   Home Assistant's own remote access (Nabu Casa or a TLS-terminating reverse

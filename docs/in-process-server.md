@@ -74,8 +74,13 @@ run current `ha-mcp` servers.
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.
 2. **Add the in-process server entry.** Go to **Settings → Devices & Services →
    Add Integration**, search for **HA-MCP Custom Component**, and — on the menu
-   that appears — choose **HA-MCP Server**, then submit the confirmation.
-   Creating the entry starts the server with the defaults. (If you already have
+   that appears — choose **HA-MCP Server**. The setup form asks how MCP
+   clients may reach the server: **Remote access through Home Assistant**
+   (disabled by default; choose Home Assistant sign-in, legacy OAuth or the
+   secret URL to let clients connect through a webhook) and **Network access**
+   (this machine only by default; choose local network to let devices on your
+   network use the direct port). Submitting creates the entry and starts the
+   server. (If you already have
    the **HA-MCP File & YAML Tools** entry, use the same **Add Integration** flow;
    the two entries appear together under the one integration tile.)
 3. **Copy your connect URL.** As soon as the server starts, a notification titled
@@ -205,11 +210,11 @@ Configure there just reports that.)
 | Option | Default | What it does |
 |--------|---------|--------------|
 | **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the app's `9583` so an existing app install does not conflict. |
-| **Network access** | `0.0.0.0` | The default matches the app: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
-| **Authentication mode** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. `legacy`: self-hosted OAuth with a static Client ID + Secret, for clients that need a credential to paste. See [Security](#security). |
+| **Network access** | this machine only (`127.0.0.1`) for new installs | `127.0.0.1` restricts direct access to the Home Assistant machine. Local network (`0.0.0.0`) makes the port reachable on your LAN with the secret path as the credential, like the app. The webhook and panel work either way. Entries created before setup asked for it keep local network unless you change it. |
+| **Authentication mode** | as chosen at setup (`ha_auth` when remote access was left disabled) | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. `legacy`: self-hosted OAuth with a static Client ID + Secret, for clients that need a credential to paste. See [Security](#security). |
 | **ha-mcp package (advanced)** | empty (the server this component release installed) | Leave it empty unless you are testing a specific build — it accepts any pip requirement string, including a version pin, a pull-request tarball or a wheel URL. Saving it reinstalls the server and restarts it in place, without restarting Home Assistant; clearing it returns to the paired server. See [Server updates](#server-updates). |
 | **Home Assistant URL for the server (advanced)** | empty (derived from your HA's http config) | How the in-process server reaches Home Assistant. Empty derives the loopback URL from your instance's real port and SSL setting (an SSL-enabled HA is reached over `https://127.0.0.1` with certificate verification off — the certificate never matches a loopback address). Only set a value when the server must take a different route entirely. |
-| **Remote access via webhook** | on | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
+| **Remote access via webhook** | off for new installs (as chosen at setup) | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
 | **Conversation-agent LLM API** | on | Offers the toolset to Home Assistant conversation agents — see [Chat with the toolset](#chat-with-the-toolset-from-home-assistant-conversation-agents--voice). Enabling only makes it selectable per agent; turn off to remove it from every agent's selector. |
 | **Conversation-agent tool exposure** | `tool_search` | Shape of the toolset agents get: compact tool-search API (default), the full catalog, or both side by side (choose per agent). See [Exposure modes](#exposure-modes). |
 | **External URL (optional)** | empty | Shown as the primary connect URL - for your own domain / reverse proxy (e.g. `https://ha.example.com`). Opening it should reach your HA login page, and must not contain a port like `:8123` (any port breaks remote MCP clients). Empty = Nabu Casa / local automatically. |

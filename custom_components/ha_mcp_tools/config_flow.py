@@ -101,6 +101,13 @@ _SERVER_ENTRY_TITLE = "HA-MCP Server"
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
 _SERVER_UNIQUE_ID = f"{DOMAIN}-server"
 
+# Setup-form field for the server entry: whether Home Assistant forwards
+# remote MCP traffic through a webhook, and how clients authenticate there.
+# One choice instead of the options form's checkbox + mode, so the step that
+# decides exposure states it in one place.
+SETUP_REMOTE_ACCESS = "remote_access"
+REMOTE_ACCESS_DISABLED = "disabled"
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -368,6 +375,25 @@ def _installed_server_version() -> str | None:
     return None
 
 
+def _bind_host_selector() -> SelectSelector:
+    """Network-access dropdown shared by the setup step and the options form.
+
+    Inline labels: hassfest forbids dots in translation keys, so the
+    IP-valued options cannot use strings.json selector translations.
+    """
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=[
+                SelectOptionDict(
+                    value=BIND_HOST_LOOPBACK, label="This machine only (loopback)"
+                ),
+                SelectOptionDict(value=BIND_HOST_ALL, label="Local network"),
+            ],
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
 class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     """Handle the config flow for the HA-MCP custom component (both entry types)."""
 
@@ -428,11 +454,14 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     async def async_step_server(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Confirm and create the single in-process server entry.
+        """Choose remote and network access, then create the server entry.
 
-        Creating the entry starts the in-process server with the defaults (port
-        9584, LAN-reachable like the add-on, secret-URL auth); everything is
-        tunable afterward in the integration options.
+        A new install starts with the webhook off and the server port bound to
+        loopback (#2427): nothing beyond the Home Assistant machine can reach
+        the server until the administrator chooses a remote-access mode or LAN
+        access here or later in the options. The choice is saved explicitly,
+        so entries created before these defaults keep the behaviour they
+        inherit.
         """
         try:
             supported = Version(HA_VERSION) >= Version(
@@ -453,12 +482,43 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         self._abort_if_unique_id_configured()
 
         if user_input is not None:
+            remote = user_input.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED)
+            enabled = remote != REMOTE_ACCESS_DISABLED
             return self.async_create_entry(
                 title=_SERVER_ENTRY_TITLE,
                 data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER},
-                options={},
+                options={
+                    OPT_ENABLE_WEBHOOK: enabled,
+                    # Disabled keeps Home Assistant sign-in queued, so enabling
+                    # the webhook later never lands on the secret-URL mode.
+                    OPT_WEBHOOK_AUTH: remote if enabled else WEBHOOK_AUTH_HA,
+                    OPT_BIND_HOST: user_input.get(OPT_BIND_HOST, BIND_HOST_LOOPBACK),
+                },
             )
-        return self.async_show_form(step_id="server")
+        return self.async_show_form(
+            step_id="server",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        SETUP_REMOTE_ACCESS, default=REMOTE_ACCESS_DISABLED
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                REMOTE_ACCESS_DISABLED,
+                                WEBHOOK_AUTH_HA,
+                                WEBHOOK_AUTH_LEGACY,
+                                WEBHOOK_AUTH_NONE,
+                            ],
+                            translation_key="server_remote_access",
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    ),
+                    vol.Required(OPT_BIND_HOST, default=BIND_HOST_LOOPBACK): (
+                        _bind_host_selector()
+                    ),
+                }
+            ),
+        )
 
 
 class HaMcpToolsInfoOptionsFlow(OptionsFlow):
@@ -578,24 +638,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 vol.Required(
                     OPT_BIND_HOST,
                     default=form_values.get(OPT_BIND_HOST, DEFAULT_BIND_HOST),
-                ): SelectSelector(
-                    # Inline labels: hassfest forbids dots in translation
-                    # keys, so the IP-valued options cannot use strings.json
-                    # selector translations.
-                    SelectSelectorConfig(
-                        options=[
-                            SelectOptionDict(
-                                value=BIND_HOST_ALL,
-                                label="Local network (default)",
-                            ),
-                            SelectOptionDict(
-                                value=BIND_HOST_LOOPBACK,
-                                label="This machine only (loopback)",
-                            ),
-                        ],
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
-                ),
+                ): _bind_host_selector(),
                 vol.Optional(
                     OPT_PIP_SPEC,
                     # Pre-fill via suggested_value, NOT a schema default: a
