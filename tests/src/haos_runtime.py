@@ -956,15 +956,11 @@ def _build_embedded_server_wheel(dest_dir: Path) -> Path:
 def _set_embedded_server_pip_spec(
     config_entries_doc: dict[str, Any], pip_spec: str, admin_token: str
 ) -> bool:
-    """Point the baked server entry at ``pip_spec`` and give it ``admin_token``.
+    """Point the baked server entry at ``pip_spec`` and its token (#2427).
 
-    The component no longer provisions its own administrator (#2427), so the
-    entry needs a user-supplied long-lived token to start. Mutates
-    ``config_entries_doc`` (a parsed ``.storage/core.config_entries``) in
-    place. Matches by entry_id, not domain: the domain (ha_mcp_tools) is
-    shared with the tools services entry, so only the entry_id uniquely
-    identifies the in-process server entry. Returns True if it was found and
-    patched, False if the document has none (doc left untouched).
+    Mutates ``config_entries_doc`` (a parsed ``.storage/core.config_entries``)
+    in place, matching by entry_id because the tools entry shares the domain.
+    Returns True if it was found and patched, False if the document has none.
     """
     for entry in config_entries_doc.get("data", {}).get("entries", []):
         if entry.get("entry_id") == HA_MCP_SERVER_ENTRY_ID:

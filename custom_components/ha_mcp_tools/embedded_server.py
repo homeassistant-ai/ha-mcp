@@ -1506,7 +1506,7 @@ class EmbeddedServerManager:
         _LOGGER.info(
             "Embedded connection resolved: url=%s, token=%s (requested url=%s)",
             resolved.homeassistant_url,
-            "provisioned"
+            "set"
             if resolved.homeassistant_token not in ("", OAUTH_MODE_TOKEN)
             else "SENTINEL-MISSING",
             self._server_url,

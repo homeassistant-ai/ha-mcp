@@ -2001,20 +2001,14 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_SERVICES_LIST,
             wsapi.WS_REFERENCE_DATA,
             wsapi.WS_SERVER_ENTRY,
-            # Phase 3 server-entry WRITE capability; its prep + admin-gate coverage
-            # lives in test_component_server_entry_update_contract.py (this set only
-            # guards drift).
+            # This set only guards drift. Prep + admin-gate coverage lives in
+            # test_component_server_entry_update_contract.py (server_entry_update),
+            # test_component_ws_phase2_async.py ((bulk_)call_service), and
+            # test_component_template_diagnose.py / _oauth_callbacks_ws.py.
             wsapi.WS_SERVER_ENTRY_UPDATE,
-            # Phase 3 write capability; its prep + admin-gate coverage lives in
-            # test_component_ws_phase2_async.py (this set only guards drift).
             wsapi.WS_CALL_SERVICE,
-            # Phase 3 batch write capability (D5a); same as above — prep +
-            # admin-gate coverage lives in test_component_ws_phase2_async.py.
             wsapi.WS_BULK_CALL_SERVICE,
-            # Template error location (#2522); prep + admin-gate coverage lives in
-            # test_component_template_diagnose.py (this set only guards drift).
             wsapi.WS_TEMPLATE_DIAGNOSE,
-            # OAuth callback allowlist (#2427); test_component_oauth_callbacks_ws.py.
             wsapi.WS_OAUTH_CALLBACKS,
             wsapi.WS_OAUTH_CALLBACKS_UPDATE,
             *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py

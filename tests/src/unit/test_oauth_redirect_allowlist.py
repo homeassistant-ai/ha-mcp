@@ -22,6 +22,21 @@ from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (  # noqa: E
     normalize_allowlist,
 )
 
+from . import test_oauth_autoapprove as aa_tests  # noqa: E402
+from .test_mcp_webhook import (  # noqa: E402
+    DATA_WEBHOOK,
+    DOMAIN,
+    WEBHOOK_AUTH_NONE,
+    FakeSession,
+    _entry,
+    _register_hass,
+    mw,
+)
+from .test_oauth_autoapprove import AUTH_QS, oauth_dcr  # noqa: E402
+
+# The real-aiohttp /authorize harness, shared with the auto-approve suite.
+unified_view_client_factory = aa_tests.unified_view_client_factory
+
 CLAUDE = "https://claude.ai/api/mcp/auth_callback"
 LOOPBACK = "http://127.0.0.1/callback"
 
@@ -84,3 +99,113 @@ class TestNormalizeAllowlist:
     )
     def test_reports_entries_no_request_could_use(self, bad: str) -> None:
         assert normalize_allowlist([CLAUDE, bad]) == ([CLAUDE], [bad])
+
+
+# ---------------------------------------------------------------------------
+# Through the none-mode /authorize view
+# ---------------------------------------------------------------------------
+
+
+async def test_none_mode_refuses_an_unlisted_callback_without_redirecting(
+    unified_view_client_factory,
+):
+    """An anonymous /authorize must not bounce a visitor to any URL (#2427)."""
+    client = await unified_view_client_factory(mode="none")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        + AUTH_QS
+        + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb",
+        allow_redirects=False,
+    )
+    assert resp.status == 400
+    assert "Location" not in resp.headers
+
+
+async def test_none_mode_refusal_page_escapes_the_callback(
+    unified_view_client_factory,
+):
+    """The refusal page shows the callback to the user, so it must not run it."""
+    client = await unified_view_client_factory(mode="none")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        + AUTH_QS
+        + "&redirect_uri=https%3A%2F%2Fevil.example%2F%3Cscript%3Ex%3C%2Fscript%3E",
+        allow_redirects=False,
+    )
+    body = await resp.text()
+    assert "<script>x" not in body
+    assert "&lt;script&gt;x" in body
+
+
+async def test_none_mode_follows_allowlist_edits_without_a_reload(
+    unified_view_client_factory,
+):
+    """An administrator's edit applies to the next sign-in, no restart."""
+    allowlist: list[str] = []
+    client = await unified_view_client_factory(mode="none", allowlist=allowlist)
+    url = (
+        "/api/ha_mcp_tools/oauth/authorize"
+        + AUTH_QS
+        + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb"
+    )
+    assert (await client.get(url, allow_redirects=False)).status == 400
+
+    allowlist.append("https://chatgpt.example/connector/cb")
+
+    assert (await client.get(url, allow_redirects=False)).status == 302
+
+
+async def test_none_mode_dynamic_registration_cannot_add_a_callback(
+    unified_view_client_factory,
+):
+    """A client registering its own callback must not get past the allowlist."""
+    key = b"k" * 32
+    callback = "https://evil.example/cb"
+    client_id = oauth_dcr.mint_client_id(key, [callback])
+    client = await unified_view_client_factory(mode="none", dcr_key=key)
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        "?response_type=code&code_challenge=" + "a" * 43 + "&code_challenge_method=S256"
+        f"&client_id={client_id}&redirect_uri=https%3A%2F%2Fevil.example%2Fcb",
+        allow_redirects=False,
+    )
+    assert resp.status == 400
+
+
+async def test_none_mode_listed_loopback_callback_autoapproves_on_any_port(
+    unified_view_client_factory,
+):
+    """Native/CLI loopback callbacks (RFC 8252) pick a fresh port per sign-in."""
+    client = await unified_view_client_factory(
+        mode="none", allowlist=["http://localhost/callback"]
+    )
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        + AUTH_QS
+        + "&redirect_uri=http%3A%2F%2Flocalhost%3A61264%2Fcallback",
+        allow_redirects=False,
+    )
+    assert resp.status == 302
+    assert "code=" in resp.headers["Location"]
+
+
+async def test_the_registered_provider_follows_the_entry_allowlist(monkeypatch):
+    """An options edit to the callback list applies with no re-registration."""
+    hass = _register_hass()
+    monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+    entry = _entry()
+    entry.options = {OPT_OAUTH_REDIRECT_ALLOWLIST: []}
+    await mw.async_register_webhook(
+        hass,
+        entry,
+        port=9584,
+        secret_path="/private_x",
+        auth_mode=WEBHOOK_AUTH_NONE,
+    )
+    provider = hass.data[DOMAIN][DATA_WEBHOOK][mw.CFG_AUTOAPPROVE_PROVIDER]
+    callback = "https://chatgpt.example/cb"
+    assert not provider.allows_redirect(callback)
+
+    entry.options = {OPT_OAUTH_REDIRECT_ALLOWLIST: [callback]}
+
+    assert provider.allows_redirect(callback)

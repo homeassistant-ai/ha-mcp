@@ -34,7 +34,6 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK_ID,
     DOMAIN,
     OAUTH_BASE,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
@@ -1049,27 +1048,6 @@ class TestRegisterWebhook:
             assert cfg[mw.CFG_DCR_SIGNING_KEY] == bytes.fromhex("ab" * 32)
         else:
             assert cfg[mw.CFG_DCR_SIGNING_KEY] is None
-
-    async def test_none_auth_provider_follows_the_entry_allowlist(self, monkeypatch):
-        """An options edit to the callback list applies with no re-registration."""
-        hass = _register_hass()
-        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
-        entry = _entry()
-        entry.options = {OPT_OAUTH_REDIRECT_ALLOWLIST: []}
-        await mw.async_register_webhook(
-            hass,
-            entry,
-            port=9584,
-            secret_path="/private_x",
-            auth_mode=WEBHOOK_AUTH_NONE,
-        )
-        provider = hass.data[DOMAIN][DATA_WEBHOOK][mw.CFG_AUTOAPPROVE_PROVIDER]
-        callback = "https://chatgpt.example/cb"
-        assert not provider.allows_redirect(callback)
-
-        entry.options = {OPT_OAUTH_REDIRECT_ALLOWLIST: [callback]}
-
-        assert provider.allows_redirect(callback)
 
     async def test_none_auth_binds_discovery_and_autoapprove_views(self, monkeypatch):
         # #1969: none mode now serves our corrected discovery + the auto-approve
