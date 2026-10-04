@@ -111,6 +111,21 @@ class TestSetEntityUseDeviceName:
         assert "2026.10" in error["message"]
         client.send_websocket_message.assert_not_called()
 
+    async def test_unparseable_version_named_as_such(self, tools) -> None:
+        """A Core version string that cannot be parsed is refused, and the
+        error says so rather than claiming the Core is too old."""
+        registered, client = tools
+        client.get_config = AsyncMock(return_value={"version": "custom-build"})
+        with pytest.raises(ToolError) as exc_info:
+            await registered["ha_set_entity"](
+                entity_id="sensor.sun_next_dawn", use_device_name=True
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "could not be parsed" in error["message"]
+        assert "custom-build" in error["message"]
+        client.send_websocket_message.assert_not_called()
+
     async def test_true_refused_without_device(self, tools) -> None:
         """Core would render an empty name: nothing to follow."""
         registered, client = tools
