@@ -83,8 +83,9 @@ pre-commit:
             # git exports GIT_DIR to hooks in a linked worktree and then takes
             # the current directory as the tree root, so the search runs from
             # the repository root. An empty list would make pytest collect
-            # all of tests/.
-            run: cd tests && uv run pytest $(git -C .. grep -l _js_harness -- tests/src/unit | sed 's|^tests/||') -n auto -q
+            # all of tests/, and a non-Python match (the duplicate-code
+            # baseline names these files) makes it collect nothing.
+            run: cd tests && uv run pytest $(git -C .. grep -l _js_harness -- 'tests/src/unit/*.py' | sed 's|^tests/||') -n auto -q
           - name: unit-tests
             glob:
               - "**/*.py"
