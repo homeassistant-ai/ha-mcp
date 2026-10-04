@@ -12,6 +12,29 @@ from typing import Any
 from ..errors import ErrorCode, create_config_error, create_error_response
 from .helpers import raise_tool_error
 
+# One-line guidance reused wherever the runtime-only ``enabled`` key folds
+# into another rejection (issue #2649).
+ENABLED_MISPLACED_GUIDANCE = (
+    "'enabled' is a runtime-only tool parameter, not a valid automation "
+    "config key — pass it to ha_config_set_automation as enabled=True/False "
+    "instead of putting it in config."
+)
+
+
+def config_has_enabled(config: Any) -> bool:
+    """Whether a config body carries the runtime-only ``enabled`` key."""
+    return isinstance(config, dict) and "enabled" in config
+
+
+def _missing_fields_shape(is_blueprint: bool) -> str:
+    """One-line expected config shape with copy-pasteable quoted keys."""
+    if is_blueprint:
+        return (
+            "config={'alias': 'My Automation', 'use_blueprint': "
+            "{'path': 'light.yaml', 'input': {...}}}"
+        )
+    return "config={'alias': 'My Automation', 'triggers': [...], 'actions': [...]}"
+
 
 def reject_invalid_config_inputs(
     config_dict: dict[str, Any],
@@ -25,17 +48,17 @@ def reject_invalid_config_inputs(
     missing required fields surfaces in ONE rejection instead of one round
     trip each (issue #2649). Returns silently when the inputs are valid.
     """
-    enabled_in_config = isinstance(config_dict, dict) and "enabled" in config_dict
+    enabled_in_config = config_has_enabled(config_dict)
     if not missing_fields and not enabled_in_config:
         return
+    shape = _missing_fields_shape("use_blueprint" in config_dict)
     if missing_fields:
         if enabled_in_config:
             raise_tool_error(
                 create_config_error(
                     f"Missing required fields: {', '.join(missing_fields)}. "
-                    "'enabled' is a runtime-only tool parameter, not a valid "
-                    "automation config key — pass it to ha_config_set_automation "
-                    "as enabled=True/False instead of putting it in config.",
+                    f"{ENABLED_MISPLACED_GUIDANCE} Required automation fields "
+                    f"go inside `config`, e.g. {shape}.",
                     identifier=identifier,
                     missing_fields=missing_fields,
                 )
@@ -44,8 +67,7 @@ def reject_invalid_config_inputs(
             create_config_error(
                 f"Missing required fields: {', '.join(missing_fields)}. "
                 "Required automation fields go inside `config`, e.g. "
-                "config={`alias`: 'My Automation', `triggers`: [...], "
-                "`actions`: [...]}.",
+                f"{shape}.",
                 identifier=identifier,
                 missing_fields=missing_fields,
             )

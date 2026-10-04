@@ -420,7 +420,7 @@ def _make_config_set_like_mcp() -> FastMCP:
 
 
 @pytest.mark.asyncio
-async def test_misplaced_automation_config_key_says_it_belongs_in_config():
+async def test_misplaced_automation_config_key_says_it_belongs_in_config() -> None:
     """A config root key passed as a top-level argument says it belongs inside
     `config` instead of only listing valid parameters (issue #2649 section 1)."""
     mcp = _make_config_set_like_mcp()
@@ -434,7 +434,7 @@ async def test_misplaced_automation_config_key_says_it_belongs_in_config():
 
 
 @pytest.mark.asyncio
-async def test_misplaced_script_config_key_says_it_belongs_in_config():
+async def test_misplaced_script_config_key_says_it_belongs_in_config() -> None:
     """Same as above for ha_config_set_script (issue #2649 section 1)."""
     mcp = _make_config_set_like_mcp()
     with pytest.raises(ToolError) as exc_info:
@@ -449,7 +449,7 @@ async def test_misplaced_script_config_key_says_it_belongs_in_config():
 
 
 @pytest.mark.asyncio
-async def test_non_config_key_on_config_tool_still_gets_did_you_mean():
+async def test_non_config_key_on_config_tool_still_gets_did_you_mean() -> None:
     """Unknown arguments that are NOT config keys keep the did-you-mean hint."""
     mcp = _make_config_set_like_mcp()
     with pytest.raises(ToolError) as exc_info:

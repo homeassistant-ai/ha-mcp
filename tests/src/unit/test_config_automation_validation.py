@@ -111,11 +111,23 @@ class TestValidateRequiredFields:
         error = _error_from_tool_error(exc_info.value)
         assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
         assert "`config`" in error["message"]
-        assert "`alias`" in error["message"]
-        # Expected shape in one line: alias inside config alongside
-        # triggers/actions.
-        assert "triggers" in error["message"]
-        assert "actions" in error["message"]
+        # Expected shape in one line with copy-pasteable quoted keys.
+        assert "'alias'" in error["message"]
+        assert "'triggers'" in error["message"]
+        assert "'actions'" in error["message"]
+
+    def test_missing_alias_on_blueprint_shows_blueprint_shape(self) -> None:
+        """A blueprint config missing 'alias' shows the blueprint shape, not
+        triggers/actions (which the blueprint branch strips)."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"use_blueprint": {"path": "light.yaml", "input": {}}},
+                identifier=None,
+            )
+        error = _error_from_tool_error(exc_info.value)
+        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
+        assert "use_blueprint" in error["message"]
+        assert "'triggers'" not in error["message"]
 
     def test_enabled_in_config_and_missing_alias_report_together(self) -> None:
         """Issue #2649 section 3: independent input-rule violations surface in
@@ -129,6 +141,22 @@ class TestValidateRequiredFields:
         all_text = json.dumps(error)
         assert "runtime-only" in all_text
         assert "alias" in all_text
+        # The combined rejection also says where alias goes.
+        assert "`config`" in error["message"]
+        assert "'alias'" in error["message"]
+
+    def test_sequence_and_enabled_report_together(self) -> None:
+        """A script-shaped config that also misplaces 'enabled' reports both
+        violations in one rejection."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"sequence": [{"action": "light.turn_on"}], "enabled": True},
+                identifier=None,
+            )
+        error = _error_from_tool_error(exc_info.value)
+        all_text = json.dumps(error)
+        assert "ha_config_set_script" in all_text
+        assert "runtime-only" in all_text
 
     def test_enabled_in_config_alone_still_rejected(self) -> None:
         """The standalone runtime-only rejection is unchanged when it is the
