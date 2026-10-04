@@ -42,8 +42,9 @@ from .entity_param_parsing import (
 from .entity_update_fields import (
     build_name_visibility_fields,
     build_state_tag_fields,
-    ensure_use_device_name_supported,
+    ensure_use_device_name_allowed,
     reject_name_with_use_device_name,
+    uses_device_name,
 )
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
@@ -88,7 +89,7 @@ def _format_fetched_entity(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "entity_id": entry.get("entity_id"),
         "name": entry.get("name"),
-        "uses_device_name": entry.get("name") == "",
+        "uses_device_name": uses_device_name(entry),
         "original_name": entry.get("original_name"),
         "icon": entry.get("icon"),
         "area_id": entry.get("area_id"),
@@ -925,8 +926,9 @@ class EntityTools:
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
         reject_name_with_use_device_name(name, use_device_name)
-        if use_device_name:
-            await ensure_use_device_name_supported(self._client)
+        await ensure_use_device_name_allowed(
+            use_device_name, self._client, entity_id, self._fetch_entity
+        )
         # Normalized before Phase 3: a quote-only value must be rejected before the
         # entity registry write, and a blank one must not count as deferred work.
         device_name_blank = new_device_name is not None and not new_device_name.strip()

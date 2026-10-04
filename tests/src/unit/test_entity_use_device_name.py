@@ -26,6 +26,10 @@ def _ws_ok() -> dict:
     return {"success": True, "result": {"entity_entry": dict(ENTRY)}}
 
 
+def _ws_get(entry: dict | None = None) -> dict:
+    return {"success": True, "result": dict(ENTRY if entry is None else entry)}
+
+
 class TestBuildNameField:
     def test_true_sends_empty_name(self) -> None:
         message: dict = {}
@@ -67,7 +71,8 @@ class TestSetEntityUseDeviceName:
 
         mcp.add_tool = capture
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(return_value=_ws_ok())
+        # use_device_name=True reads the entry (device check) before it writes.
+        client.send_websocket_message = AsyncMock(side_effect=[_ws_get(), _ws_ok()])
         client.get_config = AsyncMock(return_value={"version": "2026.10.0"})
         register_entity_tools(mcp, client)
         return registered, client
@@ -84,6 +89,7 @@ class TestSetEntityUseDeviceName:
 
     async def test_false_writes_null_name(self, tools) -> None:
         registered, client = tools
+        client.send_websocket_message = AsyncMock(return_value=_ws_ok())
         await registered["ha_set_entity"](
             entity_id="sensor.sun_next_dawn", use_device_name=False
         )
@@ -105,8 +111,27 @@ class TestSetEntityUseDeviceName:
         assert "2026.10" in error["message"]
         client.send_websocket_message.assert_not_called()
 
+    async def test_true_refused_without_device(self, tools) -> None:
+        """Core would render an empty name: nothing to follow."""
+        registered, client = tools
+        client.send_websocket_message = AsyncMock(
+            return_value=_ws_get(dict(ENTRY, device_id=None))
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await registered["ha_set_entity"](
+                entity_id="sensor.sun_next_dawn", use_device_name=True
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "device" in error["message"]
+        assert all(
+            c.args[0]["type"] != "config/entity_registry/update"
+            for c in client.send_websocket_message.call_args_list
+        )
+
     async def test_false_is_not_version_gated(self, tools) -> None:
         registered, client = tools
+        client.send_websocket_message = AsyncMock(return_value=_ws_ok())
         client.get_config = AsyncMock(return_value={"version": "2026.9.4"})
         await registered["ha_set_entity"](
             entity_id="sensor.sun_next_dawn", use_device_name=False
@@ -151,11 +176,19 @@ class TestGetEntityReportsSwitch:
         return registered, client
 
     @pytest.mark.parametrize(
-        ("name", "expected"), [("", True), (None, False), ("Custom", False)]
+        ("name", "device_id", "expected"),
+        [
+            ("", "dev1", True),
+            ("", None, False),
+            (None, "dev1", False),
+            ("Custom", "dev1", False),
+        ],
     )
-    async def test_uses_device_name_flag(self, tools, name, expected) -> None:
+    async def test_uses_device_name_flag(
+        self, tools, name, device_id, expected
+    ) -> None:
         registered, client = tools
-        entry = dict(ENTRY, name=name)
+        entry = dict(ENTRY, name=name, device_id=device_id)
         client.send_websocket_message = AsyncMock(
             return_value={"success": True, "result": entry}
         )

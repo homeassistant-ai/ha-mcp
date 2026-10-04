@@ -1,5 +1,6 @@
 """Builders for the config/entity_registry/update message of ha_set_entity."""
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from packaging.version import InvalidVersion, Version
@@ -29,6 +30,51 @@ def reject_name_with_use_device_name(
                 ],
             )
         )
+
+
+def uses_device_name(entry: dict[str, Any]) -> bool:
+    """An empty name override follows the device name; without a device there is nothing to follow."""
+    return entry.get("name") == "" and bool(entry.get("device_id"))
+
+
+def reject_use_device_name_without_device(
+    entity_id: str, entry: dict[str, Any]
+) -> None:
+    """A device-less entity has no device name; Core would render an empty name."""
+    if entry.get("device_id"):
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"{entity_id} has no device, so there is no device name to follow",
+            context={"entity_id": entity_id},
+            suggestions=["Pass name='<text>' to give the entity a custom name"],
+        )
+    )
+
+
+async def ensure_use_device_name_allowed(
+    use_device_name: bool | None,
+    client: Any,
+    entity_id: str,
+    fetch_entity: Callable[[str], Awaitable[dict[str, Any]]],
+) -> None:
+    """use_device_name=True needs a 2026.10 Core and an entity with a device."""
+    if not use_device_name:
+        return
+    await ensure_use_device_name_supported(client)
+    try:
+        current = await fetch_entity(entity_id)
+    except ValueError as e:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Entity not found: {e}",
+                context={"entity_id": entity_id},
+                suggestions=["Use ha_search() to find valid entity IDs"],
+            )
+        )
+    reject_use_device_name_without_device(entity_id, current)
 
 
 async def ensure_use_device_name_supported(client: Any) -> None:
