@@ -4,7 +4,6 @@ Camera tools for Home Assistant MCP server.
 This module provides camera-related tools including snapshot retrieval
 that returns images directly to the LLM for visual analysis, alongside a
 short text block stating the served snapshot's size and retrieval time.
-The text block never contains Home Assistant entity data.
 """
 
 import logging
@@ -65,12 +64,19 @@ def _snapshot_info_text(
     when the snapshot was retrieved, in Home Assistant local time with
     UTC offset. When the timezone lookup fell back to UTC, the text says
     so, so the label cannot be mistaken for a genuine UTC install.
+
+    The block deliberately describes only the bytes that were served —
+    never the entity's name or state. Home Assistant can mark an entity
+    ``llm_exposure: hidden``, asking the LLM to know nothing about that
+    entity; that setting does not un-expose this tool, so entity data in
+    the text would keep reporting on the camera despite the setting.
     """
+    prefix = f"Camera snapshot ({image_format.upper()}"
     if image_size is None:
-        detail = f"Camera snapshot ({image_format.upper()})"
+        detail = f"{prefix})"
     else:
         width, height = image_size
-        detail = f"Camera snapshot ({image_format.upper()}, {width}x{height})"
+        detail = f"{prefix}, {width}x{height})"
     note = (
         " (UTC — could not determine the Home Assistant timezone)"
         if timezone_fallback
@@ -137,22 +143,36 @@ class CameraTools:
             str, Field(description="Camera entity ID (e.g., 'camera.front_door')")
         ],
         width: Annotated[
-            int | None, Field(description="Width to resize the image to")
+            int | None,
+            Field(
+                description="Width for the resized image. Home Assistant "
+                "rescales only when both width and height are given and "
+                "the camera serves JPEG."
+            ),
         ] = None,
         height: Annotated[
-            int | None, Field(description="Height to resize the image to")
+            int | None,
+            Field(
+                description="Height for the resized image. Home Assistant "
+                "rescales only when both width and height are given and "
+                "the camera serves JPEG."
+            ),
         ] = None,
     ) -> tuple[str, Image]:
         """Get a snapshot image from a Home Assistant camera entity.
 
-        Fetches the current camera image and returns it directly for visual
-        analysis (security checks, delivery verification, confirming a garage
-        door actually closed). Only cameras exposed to Home Assistant are
-        accessible; images come back in their native format (JPEG, PNG, or GIF).
-        Use width/height on high-resolution cameras to reduce token usage.
+        Fetches the current camera image and returns it directly for
+        visual analysis (security checks, delivery verification,
+        confirming a garage door actually closed), in the format Home
+        Assistant serves (JPEG, PNG, or GIF), alongside a short text
+        block stating the served snapshot's size and retrieval time in
+        Home Assistant local time.
 
-        The response also includes a short text block stating the served
-        snapshot's size and retrieval time in Home Assistant local time.
+        Do not use it to inspect the camera's state or attributes — use
+        ha_search or ha_get_state for those; it returns an image, not
+        state. Use it when you need to see the current scene, and on
+        high-resolution cameras pass width and height to reduce token
+        usage.
 
         EXAMPLE: ha_get_camera_image(entity_id="camera.backyard", width=640, height=480)
         """
@@ -191,6 +211,10 @@ class CameraTools:
                 endpoint, params=params or None
             )
             self._check_response(response, entity_id)
+            # Sample the clock the moment HA handed us the bytes; the zone
+            # is resolved separately so a slow timezone lookup only delays
+            # the label, never the timestamp.
+            retrieved_at = datetime.now(UTC)
 
             content_type = response.headers.get("content-type", "image/jpeg")
             # Cameras can mislabel their payload, so resolve the format
@@ -199,10 +223,6 @@ class CameraTools:
             image_format, image_size = resolve_image_info(
                 response.content, _detect_image_format(content_type)
             )
-            # Sample the clock the moment HA handed us the bytes; the zone
-            # is resolved separately so a slow timezone lookup only delays
-            # the label, never the timestamp.
-            retrieved_at = datetime.now(UTC)
             ha_timezone, fetch_failed = await fetch_ha_timezone(self._client)
             local_tz, resolved_timezone = resolve_local_timezone(ha_timezone)
             # A failed fetch, or a zone name tzdata cannot resolve, both
