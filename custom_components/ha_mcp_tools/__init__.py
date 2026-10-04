@@ -34,7 +34,6 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 from homeassistant.loader import async_get_integration
 from ruamel.yaml import YAMLError
@@ -61,6 +60,7 @@ from .const import (
     YAML_KEY_DENYLIST,
     YAML_KEY_POST_ACTIONS,
 )
+from .entry_device import async_register_entry_device
 from .websocket_api import async_register_commands
 from .yaml_rt import (
     apply_seq_indent,
@@ -2697,8 +2697,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle config-entry removal, dispatching on its entry type.
 
-    The server entry revokes the credentials it provisioned; the tools entry has
-    nothing to clean up beyond what unload already did.
+    The server entry releases the credentials an older release provisioned; the
+    tools entry has nothing to clean up beyond what unload already did.
     """
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SERVER:
         from .embedded_entry import async_remove_server_entry
@@ -3572,8 +3572,8 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
 
     # Entry-level finalization: pick up the #1853 rename on existing installs and
     # give the tools entry a device. Both are cosmetic to the integration's core
-    # value; the one fallible step (the manifest version read below) degrades to
-    # the compiled-in fallback rather than blocking setup.
+    # value; the device's manifest version read degrades rather than blocking
+    # setup.
     # Retitle an entry still carrying the pre-rename default; a user-customized
     # title is left untouched (only the exact old default migrates). The tools
     # entry registers no update listener, so this async_update_entry cannot
@@ -3582,34 +3582,8 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     if entry.title == TOOLS_ENTRY_LEGACY_TITLE:
         hass.config_entries.async_update_entry(entry, title=TOOLS_ENTRY_TITLE)
 
-    # Register a device (parity with the server entry, which gets one via
-    # update.py's DeviceInfo). Tied to the config entry, so HA removes it with
-    # the entry — no unload cleanup needed. The component version comes from the
-    # manifest like the options-form version hint, degrading to the compiled-in
-    # COMPONENT_VERSION if that read fails so a manifest hiccup never breaks setup.
-    component_version = COMPONENT_VERSION
-    try:
-        integration = await async_get_integration(hass, DOMAIN)
-        if integration.version is None:
-            # A manifest without a version reads as None rather than raising,
-            # and ``str()`` would put the literal "None" on the device.
-            raise ValueError("the manifest carries no version")
-        component_version = str(integration.version)
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.debug(
-            "Could not read the component version for the tools device, using "
-            "the compiled-in %s: %s",
-            COMPONENT_VERSION,
-            err,
-        )
-    dr.async_get(hass).async_get_or_create(
-        config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, entry.entry_id)},
-        name=TOOLS_ENTRY_TITLE,
-        manufacturer="homeassistant-ai",
-        model="File & YAML editing services",
-        sw_version=component_version,
-        configuration_url="https://github.com/homeassistant-ai/ha-mcp",
+    await async_register_entry_device(
+        hass, entry, name=TOOLS_ENTRY_TITLE, model="File & YAML editing services"
     )
 
     _LOGGER.info("HA-MCP File & YAML Tools initialized with file management services")

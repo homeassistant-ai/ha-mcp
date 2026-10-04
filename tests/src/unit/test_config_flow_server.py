@@ -51,7 +51,7 @@ class TestServerBranch:
         entry = asyncio.run(flow.async_step_server(defaults))
 
         assert entry["type"] == "entry"
-        assert entry["title"] == cf._SERVER_ENTRY_TITLE
+        assert entry["title"] == cf.SERVER_ENTRY_TITLE
         assert entry["data"][const.CONF_ENTRY_TYPE] == const.ENTRY_TYPE_SERVER
         assert entry["options"][const.OPT_ENABLE_WEBHOOK] is False
         assert entry["options"][const.OPT_BIND_HOST] == const.BIND_HOST_LOOPBACK

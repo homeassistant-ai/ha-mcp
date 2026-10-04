@@ -37,6 +37,7 @@ ENTRY_TYPE_SERVER = "server"
 # carrying the legacy default (a user-customized title is left alone).
 TOOLS_ENTRY_TITLE = "HA-MCP File & YAML Tools"
 TOOLS_ENTRY_LEGACY_TITLE = "HA MCP Tools"
+SERVER_ENTRY_TITLE = "HA-MCP Server"
 # Kept level with the HACS floor in hacs.json: from component 2.1.3 the manifest
 # declares voluptuous-openapi, which Core releases before 2026.7 pin to an older
 # version so the requirement cannot resolve there, and
@@ -292,9 +293,9 @@ DIST_NAME_DEV = "ha-mcp-dev"
 KNOWN_SERVER_DISTS = (DIST_NAME_STABLE, DIST_NAME_DEV)
 
 # The server requirement when the component manifest carries no ``ha-mcp``
-# pin (a source checkout; every HACS release pins the server it was built
-# with, see scripts/pin_component_server.py). Typing it into the options
-# flow's pip-spec field means "no override".
+# pin, which only a hand-edited manifest lacks: semantic-release stamps every
+# release's pin and scripts/stamp_component_version.py every pre-release's.
+# Typing it into the options flow's pip-spec field means "no override".
 DEFAULT_PIP_SPEC = DIST_NAME_STABLE
 
 # Release channels the server used to be selected by (``channel`` option).
@@ -357,13 +358,13 @@ OPT_ENABLE_STARTUP_NOTIFICATION = "enable_startup_notification"
 # When False, the admin-only "HA-MCP" sidebar settings panel is not registered;
 # the server's options stay reachable on the entry's Configure screen.
 OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
-# The callback URLs the none-mode auto-approve /authorize may redirect to
-# (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
-# empty one, replaces it. Read per request, so a change needs no reload.
 # One-shot: an administrator's long-lived access token to switch the server
 # to (#2427). Validated by the options flow, moved into entry.data on the next
 # setup (embedded_entry._ensure_secrets) and cleared; never shown back.
 OPT_ADMIN_TOKEN_REPLACEMENT = "admin_token_replacement"
+# The callback URLs the none-mode auto-approve /authorize may redirect to
+# (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
+# empty one, replaces it. Read per request, so a change needs no reload.
 OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
 DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
     "https://claude.ai/api/mcp/auth_callback",

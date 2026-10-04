@@ -129,7 +129,7 @@ class TestEnsureSecrets:
         pkg._ensure_secrets(hass, entry)
 
         assert entry.data[DATA_ADMIN_TOKEN] == "new-token"
-        assert DATA_SERVER_USER_ID not in entry.data
+        assert DATA_REFRESH_TOKEN_ID not in entry.data
         assert entry.options[OPT_ADMIN_TOKEN_REPLACEMENT] == ""
 
     def test_webhook_override_replaces_stored_id(self):
@@ -356,7 +356,8 @@ class TestToolsEntrySetupFinalization:
     caller-token Store, the legacy-backup migration, ~10 service registrations,
     and the WebSocket registry), so — like the existing security-regression guard
     on the same function — these assert the wiring at the source level: the
-    rename migration and the tools-entry device registration must stay present.
+    rename migration and the tools-entry device registration must stay present
+    (the device itself is tested in ``test_entry_device.py``).
     A behavioral retitle/preserve test needs the full setup scaffolding no unit
     harness provides.
     """
@@ -375,24 +376,5 @@ class TestToolsEntrySetupFinalization:
         import inspect
 
         src = inspect.getsource(component._async_setup_tools_entry)
-        assert "async_get_or_create" in src
-        assert "config_entry_id=entry.entry_id" in src
+        assert "async_register_entry_device(" in src
         assert "File & YAML editing services" in src
-        assert "homeassistant-ai" in src
-
-    def test_setup_refuses_a_version_less_manifest_for_the_device(self):
-        """The device's ``sw_version`` must never read the literal "None".
-
-        The loader returns ``None`` for a manifest that carries no version
-        rather than raising, so ``str()`` alone would stamp "None" onto the
-        device and the compiled-in fallback beside it would never be reached.
-        Only the explicit guard sends that case down the existing degrade
-        path. Asserted at source level for the reason this class's docstring
-        gives — and it is the guard's *condition* that is asserted, so
-        deleting the guard fails here.
-        """
-        import inspect
-
-        src = inspect.getsource(component._async_setup_tools_entry)
-        assert "integration.version is None" in src
-        assert "component_version = COMPONENT_VERSION" in src

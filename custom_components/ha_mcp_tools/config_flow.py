@@ -98,6 +98,7 @@ from .const import (
     OPT_SERVER_URL,
     OPT_WEBHOOK_AUTH,
     OPT_WEBHOOK_ID_OVERRIDE,
+    SERVER_ENTRY_TITLE,
     TOOLS_ENTRY_TITLE,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_LEGACY,
@@ -107,7 +108,6 @@ from .oauth_redirect_allowlist import effective_allowlist, normalize_allowlist
 
 # Title shown for the server entry in the integration tile's entry list; the
 # tools entry's title lives in const.py (setup migration in __init__ needs it).
-_SERVER_ENTRY_TITLE = "HA-MCP Server"
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
@@ -286,7 +286,7 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
                 remote = user_input.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED)
                 enabled = remote != REMOTE_ACCESS_DISABLED
                 return self.async_create_entry(
-                    title=_SERVER_ENTRY_TITLE,
+                    title=SERVER_ENTRY_TITLE,
                     data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER, DATA_ADMIN_TOKEN: token},
                     options={
                         OPT_ENABLE_WEBHOOK: enabled,
