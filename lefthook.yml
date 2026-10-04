@@ -22,9 +22,10 @@ pre-commit:
               - "tests/test-env/pyproject.toml"
             run: uv lock
 
-    # Lowers baseline entries for files that shrank, before the unit tests
-    # compare the tree with the baseline. The script never raises an entry.
-    # --staged counts the index, so the staged baseline matches the commit.
+    # Fails when a listed file grows or a new one crosses the limit. --check
+    # never writes the baseline: sync-ratchet-baselines.yml lowers it on
+    # master after a merge, so pull requests do not conflict over it.
+    # --staged counts the index, so the check judges what the commit holds.
     - name: module-size-baseline
       glob:
         - "**/*.py"
@@ -32,14 +33,12 @@ pre-commit:
         - "**/*.mjs"
         - "**/*.ts"
         - "**/*.astro"
-      run: uv run python scripts/module_size_ratchet.py --staged && git add tests/src/unit/module_size_baseline.json
+      run: uv run python scripts/module_size_ratchet.py --staged --check
 
-    # Fails on a new copy of a function or class. Otherwise rewrites the
-    # baseline to the current copies, so a removed, moved or renamed copy
-    # updates it. --staged reads the index, like the job above.
+    # Fails on a new copy of a function or class, like the job above.
     - name: duplicate-code-baseline
       glob: "**/*.py"
-      run: uv run python scripts/duplicate_code_ratchet.py --staged && git add tests/src/unit/duplicate_code_baseline.json
+      run: uv run python scripts/duplicate_code_ratchet.py --staged --check
 
     - group:
         parallel: true

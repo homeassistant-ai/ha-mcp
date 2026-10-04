@@ -1,10 +1,11 @@
 """Module-size ratchet: a source file over the line limit may not grow.
 
 ``AGENTS.md`` asks for modules of about 1,000 lines. ``module_size_baseline.json``
-lists every tracked source file above that limit with its exact line count. A
-listed file must match its count, and no other file may cross the limit. When a
-listed file shrinks, ``python scripts/module_size_ratchet.py`` lowers its entry;
-that command can lower or drop an entry but never raise or add one.
+lists every tracked source file above that limit with its line count. A listed
+file may not grow past its count, and no other file may cross the limit. A
+listed file that shrank passes; after the merge,
+``python scripts/module_size_ratchet.py`` lowers its entry on master. That
+command can lower or drop an entry but never raise or add one.
 
 The repository pin at the bottom passes on arrival and fails only when a file
 grows. The tests above it drive the rules with made-up sizes.
@@ -59,22 +60,17 @@ def test_listed_file_that_grew_is_rejected() -> None:
     assert "src/big.py" in violations[0]
 
 
-def test_listed_file_that_shrank_must_lower_its_entry() -> None:
-    """A stale high entry would let the file grow back to its old size."""
-    violations = ratchet.find_violations(
-        {"src/big.py": 1500}, {"src/big.py": 2000}, LIMIT
-    )
+def test_listed_file_that_shrank_passes() -> None:
+    """A pull request that shrinks a file must not have to edit the shared
+    baseline: two such edits conflict. The post-merge run lowers the entry."""
+    sizes = {"src/big.py": 1500}
 
-    assert len(violations) == 1
-    assert "scripts/module_size_ratchet.py" in violations[0]
+    assert ratchet.find_violations(sizes, {"src/big.py": 2000}, LIMIT) == []
 
 
-def test_entry_for_a_file_that_is_gone_is_rejected() -> None:
-    """A leftover entry would let a new file reuse the path at the old size."""
-    violations = ratchet.find_violations({}, {"src/deleted.py": 2000}, LIMIT)
-
-    assert len(violations) == 1
-    assert "src/deleted.py" in violations[0]
+def test_entry_for_a_file_that_is_gone_passes() -> None:
+    """Splitting a listed module deletes it; the post-merge run drops it."""
+    assert ratchet.find_violations({}, {"src/deleted.py": 2000}, LIMIT) == []
 
 
 def test_matching_baseline_and_small_files_pass() -> None:
@@ -146,10 +142,14 @@ def _stage(repo: Path, path: str, lines: int) -> None:
     subprocess.run(["git", "add", path], cwd=repo, check=True)
 
 
+def _stage_baseline(repo: Path, text: str) -> None:
+    (repo / ratchet.BASELINE_NAME).write_text(text, encoding="utf-8")
+    subprocess.run(["git", "add", ratchet.BASELINE_NAME], cwd=repo, check=True)
+
+
 def test_staged_measurement_ignores_an_unstaged_shrink(temp_repo: Path) -> None:
-    """The commit hook stages a baseline lowered to the measured sizes. If it
-    measured the working tree, a shrink left out of the commit would lower the
-    entry, and the committed file would no longer match it in CI."""
+    """The commit hook judges what the commit holds. Measuring the working
+    tree would let an unstaged shrink hide growth the commit stages."""
     _stage(temp_repo, "big.py", LIMIT + 2)
     (temp_repo / "big.py").write_text("x = 1\n" * (LIMIT + 1), encoding="utf-8")
 
@@ -172,12 +172,12 @@ def test_hook_rejects_a_staged_oversized_file(temp_repo: Path) -> None:
     the hook command itself must fail on a new file over the limit."""
     _stage(temp_repo, "page.astro", LIMIT + 1)
 
-    assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
+    assert ratchet.main(["--staged", "--check"], repo_root=temp_repo) == 1
 
 
 def test_staged_run_ignores_an_unstaged_baseline_edit(temp_repo: Path) -> None:
     """Growth staged for the commit must not pass because an unstaged edit
-    raises the entry: the hook would then stage that edit."""
+    raises the entry."""
     _stage(temp_repo, "big.py", LIMIT + 2)
     (temp_repo / ratchet.BASELINE_NAME).write_text(
         json.dumps({"big.py": LIMIT + 1}), encoding="utf-8"
@@ -187,7 +187,31 @@ def test_staged_run_ignores_an_unstaged_baseline_edit(temp_repo: Path) -> None:
         json.dumps({"big.py": LIMIT + 2}), encoding="utf-8"
     )
 
-    assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
+    assert ratchet.main(["--staged", "--check"], repo_root=temp_repo) == 1
+
+
+def test_hook_never_writes_the_baseline(temp_repo: Path) -> None:
+    """The hook runs on every commit. If it lowered the baseline, every pull
+    request touching a listed file would carry an edit to the one shared file,
+    and those edits conflict with each other."""
+    _stage(temp_repo, "big.py", LIMIT + 1)
+    listed = json.dumps({"big.py": LIMIT + 5})
+    _stage_baseline(temp_repo, listed)
+
+    assert ratchet.main(["--staged", "--check"], repo_root=temp_repo) == 0
+    assert (temp_repo / ratchet.BASELINE_NAME).read_text(encoding="utf-8") == listed
+
+
+def test_post_merge_run_lowers_the_baseline(temp_repo: Path) -> None:
+    """The sync workflow's run is what keeps an entry from staying high
+    enough to let its file grow back."""
+    _stage(temp_repo, "big.py", LIMIT + 1)
+    _stage_baseline(temp_repo, json.dumps({"big.py": LIMIT + 5, "gone.py": 2000}))
+
+    assert ratchet.main([], repo_root=temp_repo) == 0
+    assert json.loads((temp_repo / ratchet.BASELINE_NAME).read_text()) == {
+        "big.py": LIMIT + 1
+    }
 
 
 def test_baseline_raised_or_added_over_the_base_is_rejected() -> None:
@@ -255,7 +279,7 @@ def test_unknown_base_is_an_error(temp_repo: Path) -> None:
 
 
 def test_repository_matches_the_baseline() -> None:
-    """Fails when a source file crosses the limit or a listed file changes size."""
+    """Fails when a source file crosses the limit or a listed file grows."""
     baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
 
     violations = ratchet.find_violations(

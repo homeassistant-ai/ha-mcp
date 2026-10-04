@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 # Serialize with every other workflow that pushes to master (sync-tool-docs,
-# addon-publish-dev, locale-sync). semantic-release's internal push aborts
+# sync-ratchet-baselines, addon-publish-dev, locale-sync). semantic-release's internal push aborts
 # hard when origin/master moves mid-run ("Upstream branch ... has changed") and
 # that abort is not retryable from inside the action, so the only safe fix is
 # to keep master writers from overlapping. cancel-in-progress stays false: a

@@ -297,7 +297,7 @@ def test_hook_rejects_a_staged_copy(temp_repo: Path) -> None:
     _stage(temp_repo, "a.py", HELPER)
     _stage(temp_repo, "b.py", RENAMED_HELPER)
 
-    assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
+    assert ratchet.main(["--staged", "--check"], repo_root=temp_repo) == 1
 
 
 def test_failed_run_keeps_the_entry_of_a_group_that_gained_a_copy(
@@ -326,29 +326,37 @@ def test_removed_copy_drops_its_group(temp_repo: Path) -> None:
     assert _baseline(temp_repo) == {}
 
 
-def test_staged_run_ignores_an_unstaged_removal(temp_repo: Path) -> None:
-    """The hook stages the baseline it writes. If it read the working tree,
-    a removal left out of the commit would drop the group, and the committed
-    files would no longer match the baseline in CI."""
+def test_hook_judges_the_staged_copy_not_the_working_tree(temp_repo: Path) -> None:
+    """A copy the commit holds must fail even when an unstaged edit removed
+    it from the working tree."""
     _stage(temp_repo, "a.py", HELPER)
     _stage(temp_repo, "b.py", RENAMED_HELPER)
-    listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
-    _list(temp_repo, listed)
     (temp_repo / "b.py").write_bytes(b"")
 
-    assert ratchet.main(["--staged"], repo_root=temp_repo) == 0
+    assert ratchet.main(["--staged", "--check"], repo_root=temp_repo) == 1
+
+
+def test_hook_never_writes_the_baseline(temp_repo: Path) -> None:
+    """The hook runs on every commit. If it rewrote the baseline, every pull
+    request touching a listed copy would carry an edit to the one shared
+    file, and those edits conflict with each other."""
+    _stage(temp_repo, "a.py", HELPER)
+    listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
+    _list(temp_repo, listed)
+
+    assert ratchet.main(["--staged", "--check"], repo_root=temp_repo) == 0
     assert _baseline(temp_repo) == listed
 
 
 def test_staged_run_ignores_an_unstaged_baseline_edit(temp_repo: Path) -> None:
     """A copy staged for the commit must not pass because an unstaged edit
-    to the baseline lists it: the hook would then stage that edit."""
+    to the baseline lists it."""
     _stage(temp_repo, "a.py", HELPER)
     _stage(temp_repo, "b.py", RENAMED_HELPER)
     listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
     (temp_repo / ratchet.BASELINE_NAME).write_text(json.dumps(listed), encoding="utf-8")
 
-    assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
+    assert ratchet.main(["--staged", "--check"], repo_root=temp_repo) == 1
 
 
 def test_base_check_rejects_a_hand_listed_group(temp_repo: Path) -> None:
@@ -362,15 +370,10 @@ def test_base_check_rejects_a_hand_listed_group(temp_repo: Path) -> None:
 
 
 def test_repository_matches_the_baseline() -> None:
-    """Fails when a function or class is copied, or when the baseline lists
-    copies that are gone."""
+    """Fails when a function or class is copied. A listed copy that is gone
+    or was edited passes; the post-merge run rewrites the baseline."""
     baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    groups = ratchet.scan(REPO_ROOT)
 
-    violations = ratchet.find_violations(groups, baseline)
+    violations = ratchet.find_violations(ratchet.scan(REPO_ROOT), baseline)
 
     assert not violations, "\n" + "\n".join(violations)
-    assert groups == baseline, (
-        f"The baseline is out of date. Run `{ratchet.REPIN_COMMAND}` "
-        f"and commit {ratchet.BASELINE_NAME}."
-    )

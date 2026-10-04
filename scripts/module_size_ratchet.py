@@ -1,18 +1,19 @@
-"""Lower the module-size baseline after a listed file shrank.
+"""Lower the module-size baseline to the files' current sizes.
 
 ``tests/src/unit/test_module_size_ratchet.py`` fails when a tracked source file
-crosses ``LINE_LIMIT`` or when a file listed in the baseline changes size. Run
-this after shrinking or deleting a listed file:
+crosses ``LINE_LIMIT`` or when a file listed in the baseline grows past its
+entry. A file that shrank or was deleted passes: pull requests never edit the
+baseline, so two of them cannot conflict over it. After a merge,
+``.github/workflows/sync-ratchet-baselines.yml`` runs
 
     python scripts/module_size_ratchet.py
 
-and commit the changed baseline. The lefthook pre-commit hook does both. It
-passes ``--staged`` to measure the staged content, so the baseline it stages
-matches the files in the commit and ignores unstaged changes.
+on master and commits the lowered baseline. The command lowers or drops
+entries. It never raises an entry and never adds a file, so it cannot accept
+growth: split the file instead.
 
-The command lowers or drops entries. It never raises an entry and never adds a
-file, so it cannot accept growth: split the file instead.
-
+``--check`` reports growth without writing the baseline; the lefthook
+pre-commit hook runs it with ``--staged`` to measure the staged content.
 The baseline is a plain file, so CI also runs ``--base <ref>``: it fails when
 the baseline raises or adds an entry compared with that commit's baseline.
 """
@@ -177,7 +178,11 @@ def measure(repo_root: Path, staged: bool = False) -> dict[str, int]:
 def find_violations(
     sizes: dict[str, int], baseline: dict[str, int], limit: int
 ) -> list[str]:
-    """Return one message per file that breaks the ratchet."""
+    """Return one message per file that breaks the ratchet.
+
+    A listed file below its entry, or gone, passes: the post-merge workflow
+    lowers or drops the entry, so a pull request does not have to.
+    """
     violations: list[str] = []
     for path, lines in sorted(sizes.items()):
         allowed = baseline.get(path)
@@ -192,16 +197,6 @@ def find_violations(
                 f"{path}: grew from {allowed} to {lines} lines and is already "
                 f"over the {limit}-line limit. Move code out of it."
             )
-        elif lines < allowed:
-            violations.append(
-                f"{path}: shrank from {allowed} to {lines} lines. "
-                f"Run `{REPIN_COMMAND}` and commit {BASELINE_NAME}."
-            )
-    violations.extend(
-        f"{path}: listed in the baseline but not a tracked source file. "
-        f"Run `{REPIN_COMMAND}` and commit {BASELINE_NAME}."
-        for path in sorted(baseline.keys() - sizes.keys())
-    )
     return violations
 
 
@@ -246,11 +241,17 @@ def parse_args(argv: list[str] | None, description: str) -> argparse.Namespace:
         metavar="REF",
         help="only check that the baseline did not grow compared with REF",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="report violations without writing the baseline",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
-    """Lower the baseline, then return 1 if a file is still over its limit."""
+    """Lower the baseline, or with ``--check`` leave it, then return 1 if a
+    file is over its limit."""
     args = parse_args(argv, __doc__.splitlines()[0])
     if args.base:
         return compare_with_base(repo_root, args.base, BASELINE_NAME, find_growth)
@@ -259,14 +260,19 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
     # edit to it cannot hide growth in a staged file.
     baseline = json.loads(read_text(repo_root, BASELINE_NAME, args.staged))
     sizes = measure(repo_root, staged=args.staged)
+    if args.check:
+        # A commit that stages no Python file runs no unit tests, so the hook's
+        # run of this command is the only check on it.
+        return _report(find_violations(sizes, baseline, LINE_LIMIT))
     lowered = lowered_baseline(sizes, baseline, LINE_LIMIT)
     baseline_path.write_text(
         json.dumps(lowered, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(f"{len(baseline) - len(lowered)} entries dropped, {len(lowered)} remain")
-    # A commit that stages no Python file runs no unit tests, so this command
-    # is the only check on it.
-    violations = find_violations(sizes, lowered, LINE_LIMIT)
+    return _report(find_violations(sizes, lowered, LINE_LIMIT))
+
+
+def _report(violations: list[str]) -> int:
     for violation in violations:
         print(violation, file=sys.stderr)
     return 1 if violations else 0

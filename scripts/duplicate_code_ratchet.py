@@ -12,18 +12,17 @@ same code with at least as many copies, or a group that holds all of its
 places. Moving or renaming a copy, removing one, or editing every copy the
 same way passes; adding a copy fails.
 
-Run this after removing, moving or editing a copy:
+Pull requests never edit the baseline, so two of them cannot conflict over
+it. After a merge, ``.github/workflows/sync-ratchet-baselines.yml`` runs
 
     python scripts/duplicate_code_ratchet.py
 
-and commit the changed baseline. The lefthook pre-commit hook does both. It
-passes ``--staged`` to read the staged content, so the baseline it stages
-matches the files in the commit.
-
-The command writes the baseline only when every group passes, so it cannot
-accept a new copy: import the existing function instead. CI also runs
-``--base <ref>``, which fails when the baseline lists a group that the
-baseline at that commit does not allow.
+on master and commits the rewritten baseline. The command writes the baseline
+only when every group passes, so it cannot accept a new copy: import the
+existing function instead. ``--check`` reports new copies without writing the
+baseline; the lefthook pre-commit hook runs it with ``--staged`` to read the
+staged content. CI also runs ``--base <ref>``, which fails when the baseline
+lists a group that the baseline at that commit does not allow.
 """
 
 from __future__ import annotations
@@ -309,7 +308,8 @@ def find_added_groups(
 
 
 def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
-    """Fail on a new copy; otherwise rewrite the baseline to the current groups."""
+    """Fail on a new copy; otherwise, unless ``--check``, rewrite the baseline
+    to the current groups."""
     args = module_size_ratchet.parse_args(argv, __doc__.splitlines()[0])
     if args.base:
         status: int = module_size_ratchet.compare_with_base(
@@ -330,6 +330,8 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
         for violation in violations:
             print(violation, file=sys.stderr)
         return 1
+    if args.check:
+        return 0
     baseline_path.write_text(
         json.dumps(groups, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
