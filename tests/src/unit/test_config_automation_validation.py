@@ -97,6 +97,51 @@ class TestValidateRequiredFields:
         error = _error_from_tool_error(exc_info.value)
         assert "ha_config_set_script" in error.get("suggestion", "")
 
+    def test_missing_alias_says_it_belongs_inside_config(self) -> None:
+        """Missing 'alias' names the config body and shows the expected shape
+        in one line (issue #2649 section 2)."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {
+                    "triggers": [{"trigger": "state"}],
+                    "actions": [{"action": "light.turn_on"}],
+                },
+                identifier=None,
+            )
+        error = _error_from_tool_error(exc_info.value)
+        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
+        assert "`config`" in error["message"]
+        assert "`alias`" in error["message"]
+        # Expected shape in one line: alias inside config alongside
+        # triggers/actions.
+        assert "triggers" in error["message"]
+        assert "actions" in error["message"]
+
+    def test_enabled_in_config_and_missing_alias_report_together(self) -> None:
+        """Issue #2649 section 3: independent input-rule violations surface in
+        ONE rejection instead of one round trip each."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"enabled": False, "triggers": [], "actions": []},
+                identifier=None,
+            )
+        error = _error_from_tool_error(exc_info.value)
+        all_text = json.dumps(error)
+        assert "runtime-only" in all_text
+        assert "alias" in all_text
+
+    def test_enabled_in_config_alone_still_rejected(self) -> None:
+        """The standalone runtime-only rejection is unchanged when it is the
+        only problem."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"alias": "x", "triggers": [], "actions": [], "enabled": True},
+                identifier=None,
+            )
+        error = _error_from_tool_error(exc_info.value)
+        assert "runtime-only" in error["message"]
+        assert "Missing required fields" not in error["message"]
+
 
 class TestValidateConditionBlocks:
     """Pre-validation of condition blocks for platform vs condition confusion.

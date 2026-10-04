@@ -395,6 +395,71 @@ def test_shared_word_outranks_closer_spelling():
     assert _closest_parameter("force", ["forced", "force_reload"]) == "force_reload"
 
 
+def _make_config_set_like_mcp() -> FastMCP:
+    """Tools shaped like ha_config_set_automation/_script for the config-key hint."""
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_config_set_automation(
+        config: dict | None = None,
+        identifier: str | None = None,
+        python_transform: str | None = None,
+    ) -> dict:
+        return {"ok": True}
+
+    @mcp.tool()
+    async def ha_config_set_script(
+        script_id: str,
+        config: dict | None = None,
+        python_transform: str | None = None,
+    ) -> dict:
+        return {"ok": True}
+
+    return mcp
+
+
+@pytest.mark.asyncio
+async def test_misplaced_automation_config_key_says_it_belongs_in_config():
+    """A config root key passed as a top-level argument says it belongs inside
+    `config` instead of only listing valid parameters (issue #2649 section 1)."""
+    mcp = _make_config_set_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_config_set_automation", {"alias": "Goodnight"})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`alias`: unknown parameter" in msg
+    assert "inside `config`" in msg
+    assert msg.endswith("Valid parameters: config, identifier, python_transform.")
+
+
+@pytest.mark.asyncio
+async def test_misplaced_script_config_key_says_it_belongs_in_config():
+    """Same as above for ha_config_set_script (issue #2649 section 1)."""
+    mcp = _make_config_set_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_config_set_script",
+            {"script_id": "blink", "sequence": [{"action": "x"}]},
+        )
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`sequence`: unknown parameter" in msg
+    assert "inside `config`" in msg
+
+
+@pytest.mark.asyncio
+async def test_non_config_key_on_config_tool_still_gets_did_you_mean():
+    """Unknown arguments that are NOT config keys keep the did-you-mean hint."""
+    mcp = _make_config_set_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_config_set_automation", {"configg": {"alias": "x"}})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`configg`: unknown parameter, did you mean `config`?" in msg
+    assert "inside `config`" not in msg
+
+
 def test_trailing_declared_name_outranks_closer_spelling():
     """A prefixed name points at the parameter it ends with: the renamed
     screenshot argument ``dashboard_url_path`` means ``url_path``, not the

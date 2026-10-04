@@ -48,6 +48,43 @@ _TYPE_HINTS: dict[str, str] = {
 
 _UNKNOWN_ARGUMENT = "unexpected_keyword_argument"
 
+# Config root keys that models habitually pass as top-level tool arguments on
+# the config-writing tools. When one arrives top-level, the rejection says the
+# key belongs inside `config` instead of only listing the valid tool
+# parameters (issue #2649 section 1).
+#
+# Scoped to these two tools on purpose: only they were measured (BAT runs),
+# and the hint must not fire for a declared tool parameter of the same name
+# (e.g. `variables` is a real parameter of ha_config_set_script).
+_CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
+    "ha_config_set_automation": {
+        "alias",
+        "description",
+        "triggers",
+        "trigger",
+        "actions",
+        "action",
+        "conditions",
+        "condition",
+        "mode",
+        "max",
+        "max_exceeded",
+        "variables",
+        "use_blueprint",
+    },
+    "ha_config_set_script": {
+        "alias",
+        "description",
+        "mode",
+        "sequence",
+        "max",
+        "max_exceeded",
+        "fields",
+        "icon",
+        "use_blueprint",
+    },
+}
+
 
 async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] | None:
     """Return the called tool's declared parameter names, or None if unavailable."""
@@ -103,8 +140,22 @@ def _closest_parameter(unknown: str, candidates: Sequence[str]) -> str | None:
     return best[3] if best else None
 
 
-def _unknown_argument_hint(param: str, unclaimed: Sequence[str]) -> str:
-    """Name an undeclared argument, suggesting the parameter it likely meant."""
+def _unknown_argument_hint(
+    param: str,
+    unclaimed: Sequence[str],
+    config_keys: set[str] | None = None,
+) -> str:
+    """Name an undeclared argument, suggesting the parameter it likely meant.
+
+    A config root key passed at the top level of a config-writing tool is told
+    to move inside ``config`` (issue #2649); everything else keeps the
+    did-you-mean behaviour.
+    """
+    if config_keys is not None and param in config_keys:
+        return (
+            f"unknown parameter; `{param}` is a config key, not a tool parameter "
+            "— move it inside `config`"
+        )
     match = _closest_parameter(param, unclaimed)
     return (
         f"unknown parameter, did you mean `{match}`?" if match else "unknown parameter"
@@ -161,12 +212,19 @@ class ValidationErrorMiddleware(Middleware):
                 else None
             )
             unclaimed: list[str] = []
+            config_keys: set[str] | None = None
             if valid_parameters is not None:
                 # Skip parameters the call already supplied: a second, invented
                 # argument almost never means one of them.
                 message_obj = getattr(context, "message", None)
                 supplied = getattr(message_obj, "arguments", None) or {}
                 unclaimed = [p for p in valid_parameters if p not in supplied]
+                # Issue #2649 section 1: a config root key at the top level of a
+                # config-writing tool is told where it belongs.
+                tool_name = getattr(message_obj, "name", None)
+                config_keys = (
+                    _CONFIG_ROOT_KEYS_BY_TOOL.get(tool_name) if tool_name else None
+                )
 
             parts: list[str] = []
             for param, errs in grouped.items():
@@ -174,7 +232,7 @@ class ValidationErrorMiddleware(Middleware):
                     valid_parameters is not None
                     and errs[0]["type"] == _UNKNOWN_ARGUMENT
                 ):
-                    hint = _unknown_argument_hint(param, unclaimed)
+                    hint = _unknown_argument_hint(param, unclaimed, config_keys)
                 else:
                     hint = _type_hint(errs)
                 parts.append(f"`{param}`: {hint}" if param else hint)
