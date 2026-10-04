@@ -33,6 +33,7 @@ from .server_tool_text import (
     TOOL_DISCOVERY_INSTRUCTIONS,
 )
 from .tools.helpers import raise_tool_error
+from .tools.tool_hints import read_only_hints
 from .transforms import DEFAULT_PINNED_TOOLS
 from .utils.skill_loader import (
     BEST_PRACTICES_SKILL_NAME,
@@ -1201,12 +1202,9 @@ class HomeAssistantSmartMCPServer:
         self.mcp.tool(
             name=SKILL_TOOL_NAME,
             description=tool_description,
-            annotations={
-                "openWorldHint": False,
-                "readOnlyHint": True,
-                "idempotentHint": True,
-                "title": "Get Home Assistant Best Practices Skill Guide",
-            },
+            annotations=read_only_hints(
+                "Get Home Assistant Best Practices Skill Guide", open_world=False
+            ),
             tags={"System"},
         )(ha_get_skill_guide)
         logger.info(

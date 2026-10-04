@@ -12,18 +12,19 @@ same code with at least as many copies, or a group that holds all of its
 places. Moving or renaming a copy, removing one, or editing every copy the
 same way passes; adding a copy fails.
 
-Run this after removing, moving or editing a copy:
+So a pull request need not edit the baseline, and two of them do not
+conflict over it. After a merge,
+``.github/workflows/sync-ratchet-baselines.yml`` runs
 
     python scripts/duplicate_code_ratchet.py
 
-and commit the changed baseline. The lefthook pre-commit hook does both. It
-passes ``--staged`` to read the staged content, so the baseline it stages
-matches the files in the commit.
-
-The command writes the baseline only when every group passes, so it cannot
-accept a new copy: import the existing function instead. CI also runs
-``--base <ref>``, which fails when the baseline lists a group that the
-baseline at that commit does not allow.
+on master and commits the rewritten baseline. The command writes the baseline
+only when every group passes, so it cannot accept a new copy: import the
+existing function instead. ``--check`` reports new copies without writing the
+baseline; the lefthook pre-commit hook runs it with ``--staged`` to read the
+staged content. CI also runs ``--base <ref>``, which fails when the baseline
+lists a group that the baseline at that commit does not allow, or when the
+files hold a copy that commit's own copies do not allow.
 """
 
 from __future__ import annotations
@@ -244,9 +245,11 @@ def find_copies(sources: dict[str, bytes]) -> dict[str, list[str]]:
     return {code: sorted(group) for code, group in places.items() if len(group) > 1}
 
 
-def scan(repo_root: Path, staged: bool = False) -> dict[str, list[str]]:
+def scan(
+    repo_root: Path, staged: bool = False, ref: str | None = None
+) -> dict[str, list[str]]:
     """Return the groups of copies in the tracked Python files in scope."""
-    sources = module_size_ratchet.read_sources(repo_root, staged)
+    sources = module_size_ratchet.read_sources(repo_root, staged, ref)
     return find_copies(
         {path: content for path, content in sources.items() if path.endswith(".py")}
     )
@@ -308,12 +311,26 @@ def find_added_groups(
     ]
 
 
+def find_copies_since(repo_root: Path, ref: str) -> list[str]:
+    """Return one message per group of copies that the baseline the sync
+    would write from ``ref`` does not allow.
+
+    Until the sync runs, ``ref``'s baseline can still list a copy ``ref``
+    removed. Checking against it would let a new copy take that place:
+    accepted silently if the sync runs after the merge, or failing master's
+    own check if the sync dropped the old copy first.
+    """
+    return find_violations(scan(repo_root), scan(repo_root, ref=ref))
+
+
 def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
-    """Fail on a new copy; otherwise rewrite the baseline to the current groups."""
+    """With ``--base``, compare the baseline and the files with that commit.
+    Otherwise fail on a new copy, and unless ``--check`` rewrite the baseline
+    to the current groups."""
     args = module_size_ratchet.parse_args(argv, __doc__.splitlines()[0])
     if args.base:
         status: int = module_size_ratchet.compare_with_base(
-            repo_root, args.base, BASELINE_NAME, find_added_groups
+            repo_root, args.base, BASELINE_NAME, find_added_groups, find_copies_since
         )
         return status
     baseline_path = repo_root / BASELINE_NAME
@@ -327,9 +344,10 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
     # Rewriting on a failure would drop the entry of a group that gained a
     # copy, so removing the new copy would then fail as well.
     if violations:
-        for violation in violations:
-            print(violation, file=sys.stderr)
-        return 1
+        status = module_size_ratchet.report(violations)
+        return status
+    if args.check:
+        return 0
     baseline_path.write_text(
         json.dumps(groups, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

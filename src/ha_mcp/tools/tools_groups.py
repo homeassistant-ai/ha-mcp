@@ -28,6 +28,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .response_helpers import build_pagination_metadata
+from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
@@ -134,12 +135,7 @@ class GroupTools:
     @tool(
         name="ha_config_list_groups",
         tags={"Groups"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Groups",
-        },
+        annotations=read_only_hints("List Groups", open_world=False),
     )
     @log_tool_usage
     async def ha_config_list_groups(
@@ -231,11 +227,12 @@ class GroupTools:
     @tool(
         name="ha_config_set_group",
         tags={"Groups"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Group",
-        },
+        annotations=write_hints(
+            "Create or Update Group",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage
@@ -409,12 +406,9 @@ class GroupTools:
     @tool(
         name="ha_config_remove_group",
         tags={"Groups"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Group",
-        },
+        annotations=write_hints(
+            "Remove Group", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage

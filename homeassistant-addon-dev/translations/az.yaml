@@ -299,10 +299,11 @@ configuration:
       7.
   tool_search_max_results:
     name: Alət axtarışında maksimum nəticə sayı
-    description: 'Alət axtarışı aktiv olduqda ha_search_tools tərəfindən qaytarılan
-      alətlərin maksimum sayı. Daha aşağı dəyərlər (2-3) kontekst tokenlərinə qənaət
-      edir, lakin uyğun alətləri nəzərdən qaçıra bilər. Aralıq: 2-10. Yenidən başlatma
-      tələb olunur.'
+    description: 'Alət axtarışı aktiv olduqda hər ha_search_tools çağırışı üçün qaytarılan
+      gizli alətlərin maksimum sayı; həmin yuxarı sayda yer alan bərkidilmiş alət
+      onun üzərinə qısa yalnız ad daxiletməsi kimi əlavə edilir. Aşağı qiymətlər (2-3)
+      kontekst tokenlərinə qənaət edir, lakin uyğun alətləri qaçıra bilər. Aralıq:
+      2-10. Yenidən başladılmasını tələb edir.'
   disabled_tools:
     name: Deaktiv alətlər (vergüllə ayrılmış)
     description: Burada sadalanan alətlər məcburi söndürülür və veb Parametrlər interfeysində

@@ -41,9 +41,10 @@ configuration:
       gäller efter att du har ändrat någon inställning här.'
   tool_search_max_results:
     name: Max antal resultat för verktygssökning
-    description: 'Maximalt antal verktyg som returneras av ha_search_tools när verktygssökning
-      är aktiverad. Lägre värden (2-3) sparar kontext-tokens men kan missa relevanta
-      verktyg. Omfång: 2-10. Kräver omstart.'
+    description: 'Maximalt antal dolda verktyg som returneras per ha_search_tools-anrop
+      när verktygssökning är aktiverat; ett fäst verktyg som placerar sig inom det
+      toppantalet läggs till som en kort namnpost över det. Lägre värden (2-3) sparar
+      kontexttoken men kan missa relevanta verktyg. Intervall: 2-10. Kräver omstart.'
   enable_tool_security_policies:
     name: Aktivera verktygssäkerhetspolicyer (avancerat)
     description: Spärra verktygsanrop med hög risk (lås-/larmkontroll, automatiseringsskrivningar,

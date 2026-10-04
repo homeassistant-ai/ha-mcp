@@ -42,6 +42,7 @@ from ..client.rest_client import (
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage, raise_tool_error
+from .tool_hints import write_hints
 from .util_helpers import BLOCKED_WS_WRITE_COMMANDS
 
 logger = logging.getLogger(__name__)
@@ -1308,13 +1309,9 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         tags={"System", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "title": "Custom Tool",
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "readOnlyHint": False,
-        },
+        annotations=write_hints(
+            "Custom Tool", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_manage_custom_tool(

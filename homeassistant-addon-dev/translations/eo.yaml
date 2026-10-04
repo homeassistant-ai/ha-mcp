@@ -275,9 +275,11 @@ configuration:
       kaj planitaj sekurkopioj ankoraŭ validas). Defaŭlte 7.
   tool_search_max_results:
     name: Maksimumaj rezultoj de ilo-serĉo
-    description: 'Maksimuma nombro de iloj redonitaj de ha_search_tools kiam ilo-serĉo
-      estas ebligita. Pli malaltaj valoroj (2-3) ŝparas kuntekstajn ĵetonojn sed povas
-      maltrafi gravajn ilojn. Gamo: 2-10. Postulas restartigon.'
+    description: 'Maksimuma nombro de kaŝitaj iloj redonitaj po voko de ha_search_tools
+      kiam ilserĉado estas ebligita; alpinglita ilo kiu altas en tiu pinta nombro
+      estas aldonita kiel mallonga nur-noma eniro super ĝi. Pli malaltaj valoroj (2-3)
+      ŝparas kuntekstajn signojn, sed povas maltrafi signifajn ilojn. Intervalo: 2-10.
+      Postulas restartigon.'
   disabled_tools:
     name: Malaktivigitaj iloj (disigitaj per komoj)
     description: Iloj listigitaj ĉi tie estas devige malŝaltitaj kaj ŝlositaj en la

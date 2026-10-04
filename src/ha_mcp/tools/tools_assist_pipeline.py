@@ -22,6 +22,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import write_hints
 from .util_helpers import websocket_error_message
 
 logger = logging.getLogger(__name__)
@@ -526,16 +527,15 @@ class AssistPipelineTools:
     @tool(
         name="ha_manage_pipeline",
         tags={"Assist"},
-        annotations={
-            # action='process' answers with whatever the conversation agent
-            # says, and that agent can be a cloud LLM, so the tool carries
-            # externally-authored content back to the client.
-            "openWorldHint": True,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "readOnlyHint": False,
-            "title": "Manage Assist Pipeline",
-        },
+        # action='process' answers with whatever the conversation agent
+        # says, and that agent can be a cloud LLM, so the tool carries
+        # externally-authored content back to the client.
+        annotations=write_hints(
+            "Manage Assist Pipeline",
+            destructive=True,
+            idempotent=False,
+            open_world=True,
+        ),
     )
     @log_tool_usage
     async def ha_manage_pipeline(

@@ -77,11 +77,6 @@
     "tests/src/unit/test_embedded_server.py::TestServeLogFilters._isolate_env",
     "tests/src/unit/test_embedded_server.py::TestServeRunningVersionCapture._isolate_env"
   ],
-  "174fabbfcee4": [
-    "tests/src/unit/test_categorized_search.py::TestArgumentsAsString._get_proxy_fn",
-    "tests/src/unit/test_categorized_search.py::TestCategorizedCallDispatch._get_proxy_fn",
-    "tests/src/unit/test_categorized_search.py::TestDoubleUnwrap._get_proxy_fn"
-  ],
   "17acad1bbaea": [
     "tests/src/unit/test_config.py::isolated_data_dir",
     "tests/src/unit/test_individual_fetch_settings.py::isolated_data_dir",
@@ -244,6 +239,11 @@
     "tests/src/unit/test_component_info_timezone_contract.py::RoutingClient.get_config",
     "tests/src/unit/test_ha_search_request_count.py::CountingClient.get_config",
     "tests/src/unit/test_ha_timezone_component_routing.py::RoutingClient.get_config"
+  ],
+  "3d3400bfc911": [
+    "tests/src/unit/test_categorized_search.py::TestArgumentsAsString._get_proxy_fn",
+    "tests/src/unit/test_categorized_search.py::TestCategorizedCallDispatch._get_proxy_fn",
+    "tests/src/unit/test_categorized_search.py::TestDoubleUnwrap._get_proxy_fn"
   ],
   "3de4cb4258ba": [
     "tests/src/e2e/workflows/embedded/test_embedded_dependency_conflict.py::_docker_available",

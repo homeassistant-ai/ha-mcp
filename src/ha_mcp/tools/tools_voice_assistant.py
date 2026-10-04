@@ -37,6 +37,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
@@ -199,12 +200,7 @@ class VoiceAssistantTools:
     @tool(
         name="ha_get_entity_exposure",
         tags={"Entity Registry"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Entity Exposure",
-        },
+        annotations=read_only_hints("Get Entity Exposure", open_world=False),
     )
     @log_tool_usage
     async def ha_get_entity_exposure(

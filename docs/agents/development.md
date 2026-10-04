@@ -87,27 +87,30 @@ the hook may strip it without a separate Ruff invocation.
 
 Source files are capped at 1,000 lines by
 `tests/src/unit/test_module_size_ratchet.py`. Files that were already larger
-are listed with their exact line count in
+are listed with their line count in
 `tests/src/unit/module_size_baseline.json`; a listed file may shrink but not
-grow. After shrinking or deleting a listed file, lower its entry and commit
-the changed baseline:
+grow, so a file that grew has to be split. Vendored trees, test fixtures and
+the stable webhook-proxy copy are not counted.
 
-```bash
-python scripts/module_size_ratchet.py
-git add tests/src/unit/module_size_baseline.json
-```
+Do not edit either ratchet baseline in a pull request: nearly every change to
+a listed file would rewrite the same shared file, and those edits conflict
+with each other. A shrunk or deleted file, or an edited copy, passes the
+checks as it is; after the merge, `sync-ratchet-baselines.yml` updates the
+baselines on `master` with `python scripts/module_size_ratchet.py`, which only
+lowers or drops entries, and `python scripts/duplicate_code_ratchet.py`, which
+rewrites its baseline only when no group gained a copy. Neither accepts
+growth. Lowering an entry by hand remains possible as a maintainer escape
+hatch; the checks below reject only a raised entry or a new copy. The lefthook
+pre-commit hook runs both commands with `--staged --check`, which reports
+violations in the staged content without writing a baseline.
 
-The lefthook pre-commit hook runs both steps against the staged content, so
-a shrink that is not staged does not lower its entry.
-
-The command lowers or drops entries and never raises or adds one, so a file
-that grew has to be split. Vendored trees, test fixtures and the stable
-webhook-proxy copy are not counted.
-
-Never edit a baseline by hand. The `Fast Checks` job compares each baseline
-with the one in the base commit the pull request was merged with, and fails
-when an entry was raised or added, or a group of copies was listed that the
-base does not allow.
+Never raise or add a baseline entry by hand. The `Fast Checks` job compares
+each baseline with the one in the base commit the pull request was merged
+with, and fails when an entry was raised or added, or a group of copies was
+listed that the base does not allow. It also checks the files against the
+baselines the sync would write from that base, so an entry the sync has not
+lowered yet cannot let its file grow back, and a removed copy's group cannot
+take a new one.
 
 `tests/src/unit/test_duplicate_code_ratchet.py` fails when a Python function
 or class has the same code as another one: the same after docstrings,
@@ -115,18 +118,12 @@ decorators, type hints and names are dropped, with at least two statements.
 Import the existing definition instead of copying it. Closures are not
 compared on their own, and a file with the same bytes as another counts once,
 because that is how the server and the component share code
-(`dashboard_patch.py`); such a file needs a test that the copies match. Copies that already existed are listed in
-`tests/src/unit/duplicate_code_baseline.json`. After removing, moving or
-editing a listed copy, update the baseline:
-
-```bash
-python scripts/duplicate_code_ratchet.py
-git add tests/src/unit/duplicate_code_baseline.json
-```
-
-The lefthook pre-commit hook runs both steps against the staged content. The
-command refuses to write the baseline while a group has a new copy, so it
-cannot accept one.
+(`dashboard_patch.py`); such a file needs a test that the copies match.
+Copies that already existed are listed in
+`tests/src/unit/duplicate_code_baseline.json`. Removing, moving or editing a
+listed copy passes without a baseline edit; the post-merge sync rewrites it.
+`python scripts/duplicate_code_ratchet.py` refuses to write the baseline while
+a group has a new copy, so it cannot accept one.
 
 `BLE001` (a handler that catches `Exception` without re-raising it or logging
 its traceback) is enabled. Each handler that existed before carries

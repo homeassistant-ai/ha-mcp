@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "Alət axtarışını aktivləşdir",
     "features.enable_tool_search.help": "Tam alət kataloqunu axtarış əsasında alət tapma ilə əvəz edir. Başlanğıc kontekst həcmini təxminən 90% azaldaraq təqribən 5K tokenə endirir. ⚠️ Öz daxili alət axtarışı / sonradan yüklənən alətləri olan müştərilərdə (claude.ai, Claude Desktop, Claude Code) bunu AKTİVLƏŞDİRMƏYİN — iki axtarış qatı ziddiyyət yaradır və həmin müştərinin daxili alət axtarışı daha yaxşı seçimdir; bunu deaktiv saxlayın. Alətlərin sonradan yüklənməsi müştəri və model birləşməsindən asılıdır: quruluşunuz tam kataloqu əvvəlcədən yükləyirsə, bundan istifadə edin — sonradan yüklənən alətlər üçün daxili dəstəyi olmayan modellərdə (məsələn, Gemini, OpenAI ilə uyğun lokal modellər, Claude Haiku), modeldən asılı olmayaraq bütün alət sxemlərini birbaşa kontekstə daxil edən müştərilərdə (məsələn, GitHub Copilot CLI) və ya daha kiçik kontekst pəncərələrində. Bəzi Codex modellərində və ChatGPT-də də sonradan yüklənən alətlər var — bu seçimi ehtiyac olmadan aktiv saxlamamaq üçün müştərinizin/modelinizin imkanlarını birbaşa yoxlayın. Alətlər ha_search_tools vasitəsilə tapılır və kateqoriyalara ayrılmış proksilər vasitəsilə icra olunur (oxuma/yazma/silmə). Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.",
     "features.tool_search_max_results.label": "Alət axtarışında maksimum nəticə sayı",
-    "features.tool_search_max_results.help": "Alət axtarışı aktiv olduqda ha_search_tools tərəfindən qaytarılan alətlərin maksimum sayı. Daha aşağı dəyərlər (2-3) kontekst tokenlərinə qənaət edir, lakin uyğun alətləri nəzərdən qaçıra bilər. Aralıq: 2-10. Yenidən başlatma tələb olunur.",
+    "features.tool_search_max_results.help": "Alət axtarışı aktiv olduqda hər ha_search_tools çağırışı üçün qaytarılan gizli alətlərin maksimum sayı; həmin yuxarı sayda yer alan bərkidilmiş alət onun üzərinə qısa yalnız ad daxiletməsi kimi əlavə edilir. Aşağı qiymətlər (2-3) kontekst tokenlərinə qənaət edir, lakin uyğun alətləri qaçıra bilər. Aralıq: 2-10. Yenidən başladılmasını tələb edir.",
     "features.enable_tool_security_policies.label": "Alətlərin təhlükəsizlik siyasətlərini aktivləşdir (qabaqcıl)",
     "features.enable_tool_security_policies.help": "Ciddi nəticələr doğura bilən alət çağırışları (kilid/siqnalizasiya idarəetməsi, avtomatlaşdırmaların yazılması və s.) üçün istifadəçi təsdiqi tələb edir. Qorunan alət çağırıldıqda agent istifadəçidən veb interfeysdə Alətlərin təhlükəsizlik siyasətləri bölməsini açmağı və çağırışın davam etməsi üçün Təsdiqlə düyməsinə basmağı istəyir. Hər alət üçün qaydalar və istəyə bağlı arqument şərtləri Alətlərin təhlükəsizlik siyasətləri bölməsində konfiqurasiya olunur. Standart olaraq deaktivdir. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.",
     "features.read_only_mode.label": "Yalnız oxuma rejimi",
@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "Problem və ya rəy bildir",
-      "description": "Diaqnostika və səhv hesabatı və ya agent rəyi üçün hazır GitHub məsələsi əldə edin."
+      "description": "Xəta, agent rəyi və ya yeni funksiyalar üçün diaqnostikanı və hazırcavab GitHub məsələsini əldə edin."
     },
     "ha_restart": {
       "title": "Home Assistant-ı yenidən başlat",

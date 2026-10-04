@@ -145,7 +145,8 @@ configuration:
     description: 快照必須達到此年齡才能被刪除。範圍 0–365；0 表示停用下限（最新快照和排程備份保護仍然適用）。預設 7。
   tool_search_max_results:
     name: 工具搜尋最大結果數
-    description: 當啟用工具搜尋時，ha_search_tools 所回傳的最大工具數量。較低的值（2-3）可節省上下文 Token，但可能會遺漏相關工具。範圍：2-10。需要重新啟動。
+    description: 啟用工具搜尋時，每次 ha_search_tools 呼叫所傳回的隱藏工具最大數量；排名在前幾名之內的釘選工具會以僅顯示名稱的簡短條目形式額外加入最上方。較低的值
+      (2-3) 可節省上下文符記，但可能會漏掉相關工具。範圍：2-10。需要重新啟動。
   disabled_tools:
     name: 停用的工具（以逗號分隔）
     description: 此處列出的工具會被強制關閉並在網頁設定 UI（「工具」分頁）中鎖定 — 若不先取消此選項，將無法在該處重新啟用。一小組強制性工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）無法停用，即使列在此處也會繼續執行。ha_get_skill_guide
