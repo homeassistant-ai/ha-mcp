@@ -91,8 +91,7 @@
       "description": "La en-proceza servilo de HA-MCP ne povis esti startigita ene de Home Assistant:\n\n{detail}\n\nKontrolu la protokolojn de Home Assistant, poste reŝarĝu la integradon (aŭ riparu la suban problemon kaj reŝarĝu) por reprovi."
     },
     "server_package_install_failed": {
-      "title": "La pakaĵo de la en-proceza servilo de HA-MCP ne povis esti instalita",
-      "description": "Instalado de la pakaĵo ha-mcp por la en-proceza servilo malsukcesis:\n\n{detail}\n\nSolvu la kongruecan aŭ instalan problemon priskribitan supre, poste reŝarĝu la integradon por reprovi."
+      "title": "La pakaĵo de la en-proceza servilo de HA-MCP ne povis esti instalita"
     },
     "component_outdated": {
       "title": "Ĝisdatigu la Personan Komponanton de HA-MCP per HACS",
