@@ -627,6 +627,76 @@ def test_editing_a_value_keeps_the_operator_and_the_position(
     ]
 
 
+def test_overlapping_edit_openings_fill_the_form_for_the_last_click(
+    settings_script: str,
+) -> None:
+    """Two edit clicks before the first tool-schema fetch returns: the later
+    click is the save target, so the form must show its predicate even when
+    the earlier fetch lands last. The first fetch is held past the second.
+    Opening the form does not depend on the rule effect, so this runs one
+    effect rather than both."""
+    result = _run(
+        settings_script,
+        _two_conditions("require_approval"),
+        """
+          const realFetch = window.fetch;
+          let held = false;
+          window.fetch = async (url, opts) => {
+            if (String(url).includes('tool-schema') && !held) { held = true; await sleep(2000); }
+            return realFetch(url, opts);
+          };
+          const card = document.querySelector('.policy-rule-card');
+          card.querySelector('.policy-edit-predicate[data-idx="1"][data-pred="0"]').click();
+          card.querySelector('.policy-edit-predicate[data-idx="1"][data-pred="1"]').click();
+          await sleep(3000);
+          document.body.setAttribute('data-held', String(held));
+          await fill(null, '"turn_off"');
+        """,
+    )
+    # The race needs the two openings to overlap on the schema fetch.
+    assert _probe(result, "held") == "true"
+    assert _last_put(result)["rules"] == [
+        {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 60},
+        {
+            "tool_name": "ha_call_service",
+            "when": [LIGHT, {**TURN_ON, "value": "turn_off"}],
+            "remember_minutes": 1,
+        },
+        RESTART,
+    ]
+
+
+def test_predicate_buttons_name_their_predicate(settings_script: str) -> None:
+    """In a group every edit and Remove button shows the same label, so a
+    screen reader or voice control could not tell which predicate one acts
+    on. Each name carries its predicate, after the visible label."""
+    result = _run(
+        settings_script,
+        _two_conditions("require_approval"),
+        """
+          const buttons = document.querySelectorAll(
+            '.policy-rule-card .policy-edit-predicate[data-idx="1"],' +
+            ' .policy-rule-card .policy-remove-part[data-idx="1"]');
+          document.body.setAttribute('data-names', JSON.stringify(Array.from(buttons).map(b => ({
+            pred: b.dataset.pred,
+            name: b.textContent,
+            visible: Array.from(b.childNodes)
+              .filter(n => !(n.classList && n.classList.contains('visually-hidden')))
+              .map(n => n.textContent).join(''),
+          }))));
+        """,
+    )
+    buttons = json.loads(html.unescape(_probe(result, "names") or "[]"))
+    assert len(buttons) == 4
+    for b in buttons:
+        own, other = (LIGHT, TURN_ON) if b["pred"] == "0" else (TURN_ON, LIGHT)
+        assert b["visible"].strip()
+        assert b["name"].startswith(b["visible"])
+        assert own["value"] in b["name"]
+        assert other["value"] not in b["name"]
+        assert own["value"] not in b["visible"]
+
+
 def test_new_condition_form_drops_the_previous_group_hint(
     settings_script: str,
 ) -> None:
