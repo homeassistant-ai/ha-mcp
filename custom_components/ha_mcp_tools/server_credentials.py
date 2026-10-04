@@ -88,16 +88,27 @@ def adopt_admin_token(
     """Return ``data`` switched to ``token``.
 
     The token an older release provisioned is revoked so no unused
-    administrator token is left behind; its account stays for the user to
-    remove.
+    administrator token is left behind. Its account stays, and so does its id,
+    so removing the entry still deletes it.
     """
     rt_id = data.get(DATA_REFRESH_TOKEN_ID)
     refresh_token = hass.auth.async_get_refresh_token(rt_id) if rt_id else None
     if refresh_token is not None:
         hass.auth.async_remove_refresh_token(refresh_token)
-    new = {k: v for k, v in data.items() if k not in _PROVISIONED_KEYS}
+    new = {
+        k: v
+        for k, v in data.items()
+        if k not in (DATA_REFRESH_TOKEN_ID, DATA_ACCESS_TOKEN)
+    }
     new[DATA_ADMIN_TOKEN] = token
     return new
+
+
+def _token_owner_id(hass: HomeAssistant, token: Any) -> str | None:
+    if not token:
+        return None
+    refresh_token = hass.auth.async_validate_access_token(str(token))
+    return refresh_token.user.id if refresh_token is not None else None
 
 
 async def async_release_credentials(
@@ -106,13 +117,18 @@ async def async_release_credentials(
     """Drop the credential when the entry is deleted; return the rest of ``data``.
 
     A supplied token belongs to the user, who revokes it in their profile.
-    Only the account an older release created for itself is removed.
+    Only the account an older release created for itself is removed, and not
+    even that one once the supplied token belongs to it.
     """
     rt_id = data.get(DATA_REFRESH_TOKEN_ID)
     if rt_id and (refresh_token := hass.auth.async_get_refresh_token(rt_id)):
         hass.auth.async_remove_refresh_token(refresh_token)
     user_id = data.get(DATA_SERVER_USER_ID)
-    if user_id and (user := await hass.auth.async_get_user(user_id)):
+    if (
+        user_id
+        and user_id != _token_owner_id(hass, data.get(DATA_ADMIN_TOKEN))
+        and (user := await hass.auth.async_get_user(user_id))
+    ):
         await hass.auth.async_remove_user(user)
     return {
         k: v for k, v in data.items() if k not in (*_PROVISIONED_KEYS, DATA_ADMIN_TOKEN)
