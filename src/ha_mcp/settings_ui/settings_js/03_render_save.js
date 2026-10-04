@@ -350,7 +350,7 @@ function render() {
             };
             setBare(nowGated !== (policyState.toolsEffect === 'allow'));
             try {
-              await syncPolicyRule(t.name, nowGated);
+              await policyWriteOnce(() => syncPolicyRule(t.name, nowGated));
             } catch (err) {
               // Restore the rule set itself: under a bare `*` rule the
               // switch's old position does not say whether this tool had one.
