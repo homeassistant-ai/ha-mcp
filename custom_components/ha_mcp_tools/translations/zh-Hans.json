@@ -106,10 +106,6 @@
       "title": "HA-MCP 服务器更新正在等待组件更新",
       "description": "ha-mcp 服务器 {latest} 已可用，但该发行版同时更新了 HA-MCP 自定义组件（更新至 {shipped}；您正在运行 {running}）。为避免启动一个当前组件从未测试过的服务器版本，服务器自动更新将暂缓，直到组件完成更新。\n\n请通过 HACS 更新组件（打开 HA-MCP 自定义组件条目；如果尚未显示更新，请使用“Update information”），然后重启 Home Assistant——之后服务器更新会自动安装。若仍要立即安装服务器更新，请在 HA-MCP 服务器更新实体上点击“安装”。"
     },
-    "legacy_hacs_source": {
-      "title": "组件安装自旧版仓库",
-      "description": "HACS 正在跟踪此组件的主 ha-mcp 服务器仓库，因此 HACS 在此处显示的是服务器的版本号和发布说明，而非组件自身的 (2.x)。更新仍可正常工作，但会一直显示错误的标签。修复方法：从 HACS 中移除此仓库（您的集成设置和配置条目将保留），将 homeassistant-ai/ha-mcp-integration 添加为自定义仓库，从中重新安装组件，然后重启 Home Assistant。"
-    },
     "legacy_oauth_restart": {
       "title": "重启 Home Assistant 以应用旧版 OAuth 设置",
       "fix_flow": {

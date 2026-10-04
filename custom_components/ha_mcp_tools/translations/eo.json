@@ -106,10 +106,6 @@
       "title": "Ĝisdatigo de servilo HA-MCP atendas ĝisdatigon de komponanto",
       "description": "Servilo ha-mcp {latest} estas disponebla, sed tiu eldono ankaŭ ĝisdatigis la Personan Komponanton de HA-MCP (al {shipped}; vi uzas {running}). Por eviti startigi servilan version, kun kiu la nuna komponanto neniam estis testita, la aŭtomata servila ĝisdatigo estas prokrastita ĝis la komponanto estos ĝisdatigita.\n\nĜisdatigu la komponanton per HACS (malfermu la eniron de la Persona Komponanto de HA-MCP kaj uzu 'Ĝisdatigi informojn' se neniu ĝisdatigo ankoraŭ montriĝas), poste rekomencu Home Assistant — la servila ĝisdatigo instaliĝos aŭtomate poste. Por instali la servilan ĝisdatigon ĉiukaze, premu Instali ĉe la ĝisdatiga ento de la servilo HA-MCP."
     },
-    "legacy_hacs_source": {
-      "title": "Komponanto instalita el la hereda deponejo",
-      "description": "HACS spuras la ĉefan deponejon de la ha-mcp-servilo por ĉi tiu komponanto, do HACS montras la versinumerojn kaj eldondetalojn de la servilo ĉi tie anstataŭ tiujn de la komponanto mem (2.x). Ĝisdatigoj daŭre funkcias, sed restas misetikeditaj tiel. Por ripari: forigu ĉi tiun deponejon el HACS (viaj integriĝaj agordoj kaj agordaj enskriboj estas konservitaj), aldonu homeassistant-ai/ha-mcp-integration kiel propran deponejon, reinstalu la komponanton el ĝi, kaj rekomencu Home Assistant."
-    },
     "legacy_oauth_restart": {
       "title": "Rekomencu Home Assistant por apliki la heredajn OAuth-agordojn",
       "fix_flow": {

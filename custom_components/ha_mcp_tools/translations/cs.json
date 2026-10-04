@@ -106,10 +106,6 @@
       "title": "Aktualizace serveru HA-MCP čeká na aktualizaci komponenty",
       "description": "Server ha-mcp {latest} je k dispozici, ale tato verze také aktualizovala vlastní komponentu HA-MCP (na {shipped}; vy používáte {running}). Aby se zabránilo spuštění verze serveru, se kterou spuštěná komponenta nikdy nebyla testována, je automatická aktualizace serveru pozastavena, dokud nebude komponenta aktualizována.\n\nAktualizujte komponentu přes HACS (otevřete položku „HA-MCP Custom Component“ a použijte „Update information“, pokud se ještě nezobrazuje žádná aktualizace), poté restartujte Home Assistanta – aktualizace serveru se poté nainstaluje automaticky. Chcete-li aktualizaci serveru nainstalovat i tak, stiskněte „Install“ na entitě aktualizace serveru HA-MCP."
     },
-    "legacy_hacs_source": {
-      "title": "Komponenta nainstalovaná z původního repozitáře",
-      "description": "HACS sleduje hlavní repozitář serveru ha-mcp pro tuto komponentu, takže HACS zde zobrazuje čísla verzí a poznámky k vydání serveru namísto vlastních (2.x) komponenty. Aktualizace stále fungují, ale zůstávají takto chybně označeny. Pro opravu: odeberte tento repozitář z HACS (nastavení vaší integrace a konfigurační záznamy zůstanou zachovány), přidejte homeassistant-ai/ha-mcp-integration jako vlastní repozitář, přeinstalujte z něj komponentu a restartujte Home Assistanta."
-    },
     "legacy_oauth_restart": {
       "title": "Restartujte Home Assistanta pro použití nastavení legacy OAuth",
       "fix_flow": {

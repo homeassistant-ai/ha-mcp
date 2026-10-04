@@ -136,24 +136,12 @@ class TestNudgeDue:
         assert hacs_auto_refresh._nudge_due("1.0.0", None, marker) is False
 
 
-def test_candidate_names_match_the_component_constants():
-    # CANDIDATE_REPO_FULL_NAMES duplicates the component's constants (the
-    # server package cannot import the component at runtime); this pins the
-    # two sources together so a rename cannot silently strand the server
-    # refresh on stale repository names. The component package pulls
-    # homeassistant on import, so stub it first (same as test_hacs_nudge).
-    from ._embedded_stubs import install
-
-    install()
-
-    from custom_components.ha_mcp_tools.const import (
-        HACS_LEGACY_REPO_FULL_NAME,
-        HACS_MIRROR_REPO_FULL_NAME,
-    )
-
+def test_candidate_names_are_the_mirror_then_the_legacy_repo():
+    # The non-embedded refresh helper looks the component up under the
+    # dedicated HACS mirror first and the legacy main-repo path second.
     assert hacs_auto_refresh.CANDIDATE_REPO_FULL_NAMES == (
-        HACS_MIRROR_REPO_FULL_NAME,
-        HACS_LEGACY_REPO_FULL_NAME,
+        "homeassistant-ai/ha-mcp-integration",
+        "homeassistant-ai/ha-mcp",
     )
 
 
@@ -199,8 +187,8 @@ class TestMarkerFile:
 
 class TestMaybeRefreshHacsAfterUpdate:
     async def test_embedded_server_is_a_no_op(self, data_dir):
-        # The component's own hacs_nudge covers the embedded server; running
-        # both would double HACS's GitHub fetches.
+        # The embedded server arrives with the component release HACS
+        # delivers, so there is no separate server update to surface.
         with (
             _server(_ws(), info=_info(), embedded=True) as mocks,
             patch("ha_mcp.hacs_auto_refresh._read_marker") as read_marker,

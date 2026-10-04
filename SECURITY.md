@@ -271,8 +271,9 @@ mode** option in the entry options:
     which invalidates every outstanding token — but only once Home Assistant
     restarts, because the root `/authorize`/`/token` views cannot be rebound
     without a restart (a repair issue prompts for it). Until that restart the
-    previous credential keeps working; the startup log withholds the rotated
-    credential during that window so a still-valid old token cannot read it.
+    previous credential keeps working. The credentials are shown only on the
+    entry's Configure screen, never in the startup log, so a still-valid old
+    token cannot read the rotated credential through the server's log tools.
   - **The consent endpoint is unauthenticated** (no HA session) — it is a
     plain human-approval page. This is safe because the authorization code is
     inert without the `client_secret` at the token endpoint (the client is

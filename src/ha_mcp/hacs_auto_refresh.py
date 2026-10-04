@@ -3,10 +3,10 @@
 HACS refreshes a *custom* repository's release data from GitHub only about
 every 48 hours, and the ha_mcp_tools component ships in lockstep with each
 server release — so a freshly updated server can sit for two days next to a
-component update HACS has not noticed yet. The component's own nudge
-(``custom_components/ha_mcp_tools/hacs_nudge.py``) closes that gap only for the
-embedded server, which is where it runs; add-on, Docker, pip and stdio installs
-had no trigger at all. This module is that trigger, server-side.
+component update HACS has not noticed yet. This module closes that gap for
+add-on, Docker, pip and stdio installs. The embedded server is skipped: it
+arrives with the component release HACS delivers, so there is no separate
+server update for HACS to catch up with.
 
 On startup, when the server version changed since the last recorded nudge (the
 just-updated case) or a newer release is pending, it sends HACS's "Update
@@ -44,9 +44,7 @@ from .utils.data_paths import get_data_dir
 logger = logging.getLogger(__name__)
 
 # The repository full_names HACS may track the ha_mcp_tools component under —
-# the dedicated mirror first, the legacy main-repo path second. Values are
-# duplicated from custom_components/ha_mcp_tools/const.py (HACS_MIRROR_ /
-# HACS_LEGACY_REPO_FULL_NAME): the server package cannot import the component.
+# the dedicated mirror first, the legacy main-repo path second.
 CANDIDATE_REPO_FULL_NAMES = (
     "homeassistant-ai/ha-mcp-integration",
     "homeassistant-ai/ha-mcp",
@@ -205,8 +203,8 @@ async def maybe_refresh_hacs_after_update() -> None:
     """Nudge HACS once per startup when the update picture changed."""
     try:
         if is_embedded():
-            # The component's own hacs_nudge already covers embedded installs;
-            # running both would double HACS's GitHub fetches.
+            # Embedded installs receive the server with the component release
+            # HACS delivers, so there is nothing to refresh HACS for.
             return
         if is_update_check_disabled():
             return

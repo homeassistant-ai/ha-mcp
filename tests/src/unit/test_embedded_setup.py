@@ -67,10 +67,8 @@ def _make_hass() -> MagicMock:
     hass.config_entries.async_update_entry = MagicMock(side_effect=_update_entry)
 
     def _create_task(coro, *args, **kwargs):
-        # The update-check paths schedule the HACS nudge fire-and-forget; these
-        # tests assert the scheduling decision, not the nudge's own behavior
-        # (covered in test_hacs_nudge) — close the real coroutine so it is never
-        # left un-awaited.
+        # These tests assert scheduling decisions, not the scheduled work —
+        # close the real coroutine so it is never left un-awaited.
         if asyncio.iscoroutine(coro):
             coro.close()
 
@@ -184,16 +182,7 @@ class TestBringUp:
             is True
         )
 
-    async def test_success_starts_registers_and_surfaces(
-        self, fake_manager, monkeypatch
-    ):
-        # The enumerated adapter hosts must be forwarded into the connect-URL
-        # surfacing, or the startup log (the feature's primary surface) silently
-        # loses the per-interface URLs while every other test stays green
-        # (#1862). Mirrors the config-flow forwarding assertion.
-        monkeypatch.setattr(
-            esetup, "async_get_lan_hosts", AsyncMock(return_value=["10.0.1.3"])
-        )
+    async def test_success_starts_registers_and_surfaces(self, fake_manager):
         hass = _make_hass()
         entry = _make_entry()
 
@@ -202,9 +191,6 @@ class TestBringUp:
         fake_manager.async_start.assert_awaited_once()
         esetup.async_register_webhook.assert_awaited_once()
         esetup._surface_connect_urls.assert_called_once()
-        assert esetup._surface_connect_urls.call_args.kwargs["extra_hosts"] == [
-            "10.0.1.3"
-        ]
         assert isinstance(hass.data[DOMAIN][DATA_MANAGER], fake_manager)
         esetup.ir.async_create_issue.assert_not_called()
         # Conversation-agent LLM API (#1745): registered with the running
@@ -488,56 +474,56 @@ class TestSurfaceConnectUrls:
             self.notif.call_args.kwargs.get("message") or self.notif.call_args.args[1]
         )
 
-    def test_notification_carries_no_secrets_urls_go_to_log(self, caplog):
-        # Review finding (Patch76): persistent notifications are visible to
-        # every authenticated user, so the message must carry NO connect URL
-        # or secret path - those go to the admin-only log; the notification
-        # points at the admin-only surfaces.
+    @staticmethod
+    def _urls(hass, entry, **kwargs) -> list[str]:
+        # The Configure screen's source of truth for the connect URLs.
+        return esetup.build_connect_urls(hass, entry, **kwargs)
+
+    def test_neither_log_nor_notification_carries_urls_or_secrets(self, caplog):
+        # #2427 / HACS review: in the default (none) mode the connect URL IS
+        # the credential, and the log reaches more than the administrator
+        # (the server's own log tools, pasted bug reports). Both surfaces
+        # point at the admin-only Configure screen instead.
         import logging
 
         _install_network_cloud(
             cloud_url="https://abc.ui.nabu.casa", local_url="http://192.168.1.5:8123"
         )
         hass = _make_hass()
-        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/private_x"},
+            options={esetup.OPT_BIND_HOST: esetup.BIND_HOST_ALL},
+        )
         with caplog.at_level(logging.INFO):
             esetup._surface_connect_urls(hass, entry, "none")
         self.notif.assert_called_once()
         message = self._message()
-        assert "mcp_id" not in message
-        assert "/p " not in message
+        for surface in (caplog.text, message):
+            assert "mcp_id" not in surface
+            assert "/private_x" not in surface
+            assert "/api/webhook/" not in surface
+            assert "Configure" in surface
+        assert "HA-MCP in-process server is running" in caplog.text
         assert "[HA-MCP settings panel](/ha-mcp)" in message
-        assert "Configure" in message
-        assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in caplog.text
-        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in caplog.text
+        # The URLs still resolve for the Configure screen.
+        urls = self._urls(hass, entry)
+        assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in urls
+        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in urls
 
-    def test_notification_excludes_multi_interface_urls(self, caplog):
-        # #1862: the per-interface expansion multiplies the secret-bearing
-        # direct-access lines; none of the extra hosts (or the secret path) may
-        # leak into the all-users persistent notification - they belong to the
-        # admin-only log only.
-        import logging
-
+    def test_configure_urls_cover_every_interface(self):
+        # #1862: one webhook and one direct-access URL per LAN interface.
         _install_network_cloud(cloud_url=None, local_url="http://10.0.2.3:8123")
         hass = _make_hass()
         entry = _make_entry(
             data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/private_x"},
             options={esetup.OPT_BIND_HOST: esetup.BIND_HOST_ALL},
         )
-        with caplog.at_level(logging.INFO):
-            esetup._surface_connect_urls(
-                hass, entry, "none", extra_hosts=["10.0.2.3", "10.0.1.3"]
-            )
-        message = self._message()
-        assert "10.0.1.3" not in message
-        assert "10.0.2.3" not in message
-        assert "/private_x" not in message
-        # Both interfaces' URLs DID reach the admin-only log.
-        assert "http://10.0.2.3:8123/api/webhook/mcp_id" in caplog.text
-        assert "http://10.0.1.3:8123/api/webhook/mcp_id" in caplog.text
-        assert "http://10.0.1.3:9584/private_x" in caplog.text
+        urls = self._urls(hass, entry, extra_hosts=["10.0.2.3", "10.0.1.3"])
+        assert "http://10.0.2.3:8123/api/webhook/mcp_id" in urls
+        assert "http://10.0.1.3:8123/api/webhook/mcp_id" in urls
+        assert "http://10.0.1.3:9584/private_x (direct access)" in urls
 
-    def test_external_url_option_leads_the_list(self, caplog):
+    def test_external_url_option_leads_the_list(self):
         # Owner request (webhook-proxy app parity): a configured external URL
         # is shown FIRST, ahead of Nabu Casa and the local address.
         _install_network_cloud(
@@ -548,79 +534,55 @@ class TestSurfaceConnectUrls:
             data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"},
             options={esetup.OPT_EXTERNAL_URL: "https://ha.example.com/"},
         )
-        import logging
+        urls = self._urls(hass, entry)
+        assert urls[0] == "https://ha.example.com/api/webhook/mcp_id"
+        assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in urls
 
-        with caplog.at_level(logging.INFO):
-            esetup._surface_connect_urls(hass, entry, "none")
-        first = next(
-            line for line in caplog.text.splitlines() if "/api/webhook/" in line
-        )
-        assert "https://ha.example.com/api/webhook/mcp_id" in first
-        assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in caplog.text
+    def test_notification_links_panel_and_carries_title(self):
         # The rename commit's discoverability contract: the running
         # notification links the sidebar settings panel and carries the
         # HA-MCP Server title (the only path from "it is running" to the UI).
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
+        esetup._surface_connect_urls(hass, entry, "none")
         assert "[HA-MCP settings panel](/ha-mcp)" in self._message()
         assert self.notif.call_args.kwargs.get("title") == "HA-MCP Server"
 
-    def test_falls_back_to_relative_url_when_none_available(self, caplog):
-        import logging
-
+    def test_falls_back_to_relative_url_when_none_available(self):
         _install_network_cloud(cloud_url=None, local_url=None)
         hass = _make_hass()
         entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
-        with caplog.at_level(logging.INFO):
-            esetup._surface_connect_urls(hass, entry, "ha_auth")
-        self.notif.assert_called_once()
-        assert "/api/webhook/mcp_id" in caplog.text
-        assert "mcp_id" not in self._message()
+        urls = self._urls(hass, entry)
+        assert any("/api/webhook/mcp_id" in url for url in urls)
 
-    def test_lan_bind_logs_direct_access_with_configured_port(self, caplog):
-        # Explicit 0.0.0.0 + custom port: the direct URL (with that port)
-        # appears in the admin-only log.
-        import logging
-
+    def test_lan_bind_lists_direct_access_with_configured_port(self):
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
         hass = _make_hass()
         entry = _make_entry(
             data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
             options={esetup.OPT_BIND_HOST: "0.0.0.0", esetup.OPT_SERVER_PORT: 9999},
         )
-        with caplog.at_level(logging.INFO):
-            esetup._surface_connect_urls(hass, entry, "none")
-        # Strengthened: the direct line names the resolved host, not just the port.
-        assert "http://192.168.1.5:9999/priv (direct access)" in caplog.text
+        assert "http://192.168.1.5:9999/priv (direct access)" in self._urls(hass, entry)
 
-    def test_default_bind_logs_direct_access_line(self, caplog):
-        # LAN default (add-on parity): no explicit bind option -> the direct
-        # URL is part of the admin-only LOG output (never the notification).
-        import logging
-
+    def test_default_bind_lists_direct_access_line(self):
+        # An entry that never saved bind_host inherits the LAN default, so
+        # the Configure screen lists the direct URL.
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
         hass = _make_hass()
         entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"})
-        with caplog.at_level(logging.INFO):
-            esetup._surface_connect_urls(hass, entry, "none")
-        # Strengthened: the resolved host rides the default-port direct line.
-        assert "http://192.168.1.5:9584/priv (direct access)" in caplog.text
-        assert "/priv" not in self._message()
+        assert "http://192.168.1.5:9584/priv (direct access)" in self._urls(hass, entry)
 
-    def test_loopback_bind_omits_direct_access_line(self, caplog):
-        import logging
-
+    def test_loopback_bind_omits_direct_access_line(self):
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
         hass = _make_hass()
         entry = _make_entry(
             data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
             options={esetup.OPT_BIND_HOST: "127.0.0.1"},
         )
-        with caplog.at_level(logging.INFO):
-            esetup._surface_connect_urls(hass, entry, "none")
-        assert "(direct access)" not in caplog.text
+        assert not any("(direct access)" in url for url in self._urls(hass, entry))
 
-    def test_local_only_surface_has_no_webhook_urls(self, caplog):
-        import logging
-
+    def test_local_only_lists_no_webhook_urls(self):
         _install_network_cloud(
             cloud_url="https://abc.ui.nabu.casa", local_url="http://192.168.1.5:8123"
         )
@@ -629,39 +591,41 @@ class TestSurfaceConnectUrls:
             data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
             options={esetup.OPT_EXTERNAL_URL: "https://ha.example.com"},
         )
-        with caplog.at_level(logging.INFO):
-            esetup._surface_connect_urls(hass, entry, "none", webhook_enabled=False)
-        assert "/api/webhook/" not in caplog.text
-        # Strengthened: even in local-only mode the direct line names the host.
-        assert "http://192.168.1.5:9584/priv (direct access)" in caplog.text
+        urls = self._urls(hass, entry, webhook_enabled=False)
+        assert not any("/api/webhook/" in url for url in urls)
+        assert "http://192.168.1.5:9584/priv (direct access)" in urls
+        esetup._surface_connect_urls(hass, entry, "none", webhook_enabled=False)
         assert "disabled" in self._message()
 
-    def test_legacy_active_creds_go_to_log_never_notification(self, caplog):
+    def test_legacy_creds_never_reach_log_or_notification(self, caplog):
+        # #2427 / HACS review: the legacy client secret used to be logged in
+        # cleartext. The Configure screen shows it; the log says where.
         import logging
 
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
         hass = _make_hass()
-        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
+        entry = _make_entry(
+            data={
+                DATA_WEBHOOK_ID: "mcp_id",
+                DATA_SECRET_PATH: "/p",
+                esetup.DATA_OAUTH_CLIENT_ID: "cid-abc123",
+                esetup.DATA_OAUTH_CLIENT_SECRET: "sec-xyz789",
+            }
+        )
         with caplog.at_level(logging.INFO):
-            esetup._surface_connect_urls(
-                hass,
-                entry,
-                esetup.WEBHOOK_AUTH_LEGACY,
-                oauth_client_id="cid-abc123",
-                oauth_client_secret="sec-xyz789",
-            )
-        assert "cid-abc123" in caplog.text
-        assert "sec-xyz789" in caplog.text
-        assert "cid-abc123" not in self._message()
-        assert "sec-xyz789" not in self._message()
+            esetup._surface_connect_urls(hass, entry, esetup.WEBHOOK_AUTH_LEGACY)
+        for surface in (caplog.text, self._message()):
+            assert "cid-abc123" not in surface
+            assert "sec-xyz789" not in surface
+        assert "Client Secret" in caplog.text
+        assert "Configure" in caplog.text
         # Live views (no pending restart): no not-live caveat.
         assert "not live until the restart" not in caplog.text
 
-    def test_legacy_first_enable_logs_creds_with_not_live_caveat(self, caplog):
+    def test_legacy_first_enable_logs_not_live_caveat(self, caplog):
         # Review finding on #1880: first-enable mid-session late-binds the
-        # views, so the credentials ARE the bound identity (logged in full)
-        # but /authorize is not live until the restart the repair asks for --
-        # the log must say so, matching the options hint and regenerate text.
+        # views, so /authorize is not live until the restart the repair asks
+        # for -- the log must say so, matching the options hint.
         import logging
 
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
@@ -672,22 +636,12 @@ class TestSurfaceConnectUrls:
                 hass,
                 entry,
                 esetup.WEBHOOK_AUTH_LEGACY,
-                oauth_client_id="cid-abc123",
-                oauth_client_secret="sec-xyz789",
                 oauth_creds_active=True,
                 oauth_restart_pending=True,
             )
-        # Credentials still shown (they are the ones that will be served)...
-        assert "cid-abc123" in caplog.text
-        assert "sec-xyz789" in caplog.text
-        # ...with the not-live-until-restart caveat.
         assert "not live until the restart" in caplog.text
 
-    def test_legacy_pending_rotation_withholds_creds_from_log(self, caplog):
-        # Review finding on #1880: while a rotation is pending the restart,
-        # the bound views still serve the OLD identity, so an outstanding
-        # token stays valid and can read this log through the server's own
-        # log tools. The NEW credentials must not appear anywhere in it.
+    def test_legacy_pending_rotation_says_previous_creds_stay_active(self, caplog):
         import logging
 
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
@@ -695,21 +649,12 @@ class TestSurfaceConnectUrls:
         entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
         with caplog.at_level(logging.INFO):
             esetup._surface_connect_urls(
-                hass,
-                entry,
-                esetup.WEBHOOK_AUTH_LEGACY,
-                oauth_client_id="cid-abc123",
-                oauth_client_secret="sec-xyz789",
-                oauth_creds_active=False,
+                hass, entry, esetup.WEBHOOK_AUTH_LEGACY, oauth_creds_active=False
             )
-        assert "cid-abc123" not in caplog.text
-        assert "sec-xyz789" not in caplog.text
-        assert "cid-abc123" not in self._message()
-        assert "sec-xyz789" not in self._message()
-        # The log still tells the admin where the new credentials live.
+        assert "previous credentials remain active" in caplog.text
         assert "Configure" in caplog.text
 
-    def test_cloud_import_error_falls_back_to_local_url(self, monkeypatch, caplog):
+    def test_cloud_import_error_falls_back_to_local_url(self, monkeypatch):
         # Review gap: plain HA Core has no cloud integration at all - the
         # ImportError branch must degrade to the local URL, not raise.
         import builtins
@@ -725,11 +670,7 @@ class TestSurfaceConnectUrls:
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
         hass = _make_hass()
         entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
-        import logging
-
-        with caplog.at_level(logging.INFO):
-            esetup._surface_connect_urls(hass, entry, "none")
-        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in caplog.text
+        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in self._urls(hass, entry)
 
     def test_default_options_create_notification_with_panel_line(
         self, monkeypatch, caplog
@@ -790,9 +731,8 @@ class TestSurfaceConnectUrls:
         )
         assert dismissed_id == esetup._NOTIFICATION_ID == "ha_mcp_tools_server_connect"
         assert dismiss.call_args.args[0] is hass
-        # The INFO connect-URL log still happens.
+        # The INFO running line still happens.
         assert "HA-MCP in-process server is running" in caplog.text
-        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in caplog.text
 
     def test_sidebar_panel_off_omits_panel_line_from_notification(
         self, monkeypatch, caplog
@@ -1334,33 +1274,6 @@ class TestAutoUpdateComponentGate:
         fetch.assert_not_awaited()
         hass.config_entries.async_reload.assert_not_awaited()
 
-    async def test_hold_schedules_hacs_nudge_for_shipped_version(self, monkeypatch):
-        # When the hold fires, the component asks HACS to refresh so the newer
-        # component becomes visible promptly (#1783/#1785 follow-up). The nudge
-        # targets the shipped component version and is fire-and-forget.
-        hass = _make_async_hass()
-        entry = _make_entry()
-        self._stub_gate(monkeypatch, shipped="1.0.9", running="1.0.2")
-        nudge = MagicMock()
-        monkeypatch.setattr(esetup, "async_schedule_hacs_nudge", nudge)
-
-        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
-
-        nudge.assert_called_once_with(hass, "1.0.9")
-
-    async def test_no_hold_does_not_schedule_hacs_nudge(self, monkeypatch):
-        # When the component is current, the update proceeds and no HACS refresh
-        # is requested.
-        hass = _make_async_hass()
-        entry = _make_entry()
-        self._stub_gate(monkeypatch, shipped="1.0.2", running="1.0.2")
-        nudge = MagicMock()
-        monkeypatch.setattr(esetup, "async_schedule_hacs_nudge", nudge)
-
-        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
-
-        nudge.assert_not_called()
-
 
 class TestFetchShippedComponentVersion:
     """The raw-manifest fetch behind the gate: resolves the component version
@@ -1656,42 +1569,6 @@ class TestComponentCompat:
         esetup.ir.async_delete_issue.assert_called_once_with(
             hass, DOMAIN, ISSUE_COMPONENT_OUTDATED
         )
-
-    async def test_outdated_component_schedules_hacs_nudge_for_required(
-        self, monkeypatch
-    ):
-        # The component-outdated repair also asks HACS to refresh, targeting the
-        # required (server-declared) component version — fire-and-forget.
-        hass = _make_async_hass()
-        entry = _make_entry()
-        monkeypatch.setattr(esetup, "_read_min_component_version", lambda: "0.15.0")
-        monkeypatch.setattr(
-            esetup,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="0.14.0")),
-        )
-        nudge = MagicMock()
-        monkeypatch.setattr(esetup, "async_schedule_hacs_nudge", nudge)
-
-        await esetup._async_check_component_compat(hass, entry)
-
-        nudge.assert_called_once_with(hass, "0.15.0")
-
-    async def test_satisfied_component_does_not_schedule_hacs_nudge(self, monkeypatch):
-        hass = _make_async_hass()
-        entry = _make_entry()
-        monkeypatch.setattr(esetup, "_read_min_component_version", lambda: "0.11.0")
-        monkeypatch.setattr(
-            esetup,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="0.14.0")),
-        )
-        nudge = MagicMock()
-        monkeypatch.setattr(esetup, "async_schedule_hacs_nudge", nudge)
-
-        await esetup._async_check_component_compat(hass, entry)
-
-        nudge.assert_not_called()
 
     async def test_missing_min_version_skips(self, monkeypatch):
         # An older/newer server without MIN_COMPONENT_VERSION ⇒ nothing to

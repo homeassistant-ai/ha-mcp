@@ -45,7 +45,7 @@ The recommended way to run ha-mcp is the **HA-MCP Custom Component**. It install
 1. Install the **HA-MCP Custom Component** from HACS — click the badge above, or in HACS open **Integrations → ⋮ → Custom repositories**, add `https://github.com/homeassistant-ai/ha-mcp-integration` (category: **Integration**), then **Download**.
 2. **Restart Home Assistant.**
 3. Go to **Settings → Devices & Services → Add Integration**, search for **HA-MCP Custom Component**, choose **HA-MCP Server**, and click **Submit**. Creating the entry starts the server.
-4. Copy the connect URL from the entry's **Configure** screen (**Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**) — it is also printed in the Home Assistant log. A notification confirms the server started and points you there.
+4. Copy the connect URL from the entry's **Configure** screen (**Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**). A notification confirms the server started and points you there.
 5. Paste that URL into your AI client — done.
 
 **Connect URL.** The Configure screen gives you a Home Assistant webhook URL for remote clients — `https://<your-ha-domain>/api/webhook/<webhook-id>` through Nabu Casa or any reverse proxy already pointed at Home Assistant (locally, `http://<ha-host>:8123/api/webhook/<webhook-id>`). For clients on the same network, the server is also reachable directly at `http://<ha-ip>:9584/private_<random>`.

@@ -106,10 +106,6 @@
       "title": "HA-MCP Server-Update wartet auf ein Component-Update",
       "description": "ha-mcp Server {latest} ist verfügbar, aber dieses Release hat auch das HA-MCP Custom Component aktualisiert (auf {shipped}; du nutzt {running}). Um zu vermeiden, dass eine Server-Version gestartet wird, die nie mit dem laufenden Component getestet wurde, ist das automatische Server-Update ausgesetzt, bis das Component aktualisiert ist.\n\nAktualisiere das Component über HACS (öffne den HA-MCP Custom Component-Eintrag und nutze 'Update information', falls noch kein Update angezeigt wird), starte dann Home Assistant neu – das Server-Update wird danach automatisch installiert. Um das Server-Update trotzdem zu installieren, drücke Install bei der HA-MCP Server Update-Entität."
     },
-    "legacy_hacs_source": {
-      "title": "Component aus dem Legacy-Repository installiert",
-      "description": "HACS verfolgt das Haupt-Repository des ha-mcp-Servers für diese Komponente, daher zeigt HACS hier die Versionsnummern und Release Notes des Servers anstelle der eigenen der Komponente (2.x). Updates funktionieren weiterhin, bleiben aber auf diese Weise falsch beschriftet. Zur Behebung: Entferne dieses Repository aus HACS (deine Integrationseinstellungen und Konfigurationseinträge bleiben erhalten), füge homeassistant-ai/ha-mcp-integration als benutzerdefiniertes Repository hinzu, installiere die Komponente daraus neu und starte Home Assistant neu."
-    },
     "legacy_oauth_restart": {
       "title": "Starte Home Assistant neu, um die Legacy OAuth-Einstellungen anzuwenden",
       "fix_flow": {

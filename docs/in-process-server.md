@@ -80,10 +80,11 @@ run current `ha-mcp` servers.
 3. **Copy your connect URL.** As soon as the server starts, a notification titled
    **HA-MCP Server** confirms it is running and points you to the URL. The
    connect URL itself is on the entry's **Configure** screen (**Settings →
-   Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**)
-   and in the Home Assistant log — both admin-only surfaces, because the URL is
-   the credential. The notification deliberately carries no URL: notifications
-   are visible to every signed-in user.
+   Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**),
+   which only administrators can open, because the URL is the credential. The
+   notification and the Home Assistant log deliberately carry no URL:
+   notifications are visible to every signed-in user, and the log reaches
+   connected MCP clients through the server's own log tools.
 4. **Connect your MCP client** to that URL.
 
 To pause the server, **disable** its config entry (**Settings → Devices &
@@ -110,7 +111,7 @@ as the app), bypassing the webhook, at the secret path (which looks like
 Set **Network access** to `127.0.0.1` to turn direct access off and keep only
 the webhook and panel paths. All connect URLs — the webhook forms and, whenever
 direct access is on, the direct URL — are listed on the entry's Configure
-screen and in the Home Assistant log.
+screen.
 
 ## Chat with the toolset from Home Assistant (conversation agents / voice)
 

@@ -148,8 +148,7 @@ _COMMON_FALLBACKS: dict[str, str] = {
         '"HA-MCP File & YAML Tools" to add it'
     ),
     "connect_urls_pending": (
-        "The connect URLs appear here (and in the Home Assistant log) "
-        "once the server has started."
+        "The connect URLs appear here once the server has started."
     ),
     "connect_urls_label": "Connect URL(s):",
     "connect_webhook_disabled": (
