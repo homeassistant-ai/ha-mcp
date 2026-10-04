@@ -15,7 +15,8 @@ growth: split the file instead.
 ``--check`` reports growth without writing the baseline; the lefthook
 pre-commit hook runs it with ``--staged`` to measure the staged content.
 The baseline is a plain file, so CI also runs ``--base <ref>``: it fails when
-the baseline raises or adds an entry compared with that commit's baseline.
+the baseline raises or adds an entry compared with that commit's baseline, or
+when a file grew past the baseline the sync would write from that commit.
 """
 
 from __future__ import annotations
@@ -42,11 +43,13 @@ REPIN_COMMAND = "python scripts/module_size_ratchet.py"
 BASELINE_NAME = BASELINE_PATH.relative_to(REPO_ROOT).as_posix()
 
 
-def read_text(repo_root: Path, path: str, staged: bool = False) -> str:
-    """Return one file's text from the working tree, or with ``staged``
-    from the index."""
-    if staged:
-        return _git(repo_root, "show", f":{path}").decode("utf-8")
+def read_text(
+    repo_root: Path, path: str, staged: bool = False, ref: str | None = None
+) -> str:
+    """Return one file's text from the working tree, with ``staged`` from
+    the index, or with ``ref`` from that commit."""
+    if staged or ref:
+        return _git(repo_root, "show", f"{ref or ''}:{path}").decode("utf-8")
     return (repo_root / path).read_text("utf-8")
 
 
@@ -75,9 +78,7 @@ def compare_with_base(
     nothing to compare it with.
     """
     _git(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
-    try:
-        _git(repo_root, "cat-file", "-e", f"{ref}:{baseline_name}")
-    except subprocess.CalledProcessError:
+    if not has_baseline(repo_root, ref, baseline_name):
         print(f"{ref} has no {baseline_name}; nothing to compare")
         return 0
     base = load_baseline(_git(repo_root, "show", f"{ref}:{baseline_name}"))
@@ -88,10 +89,12 @@ def compare_with_base(
     return 1 if messages else 0
 
 
-def excluded_prefixes(repo_root: Path, staged: bool = False) -> tuple[str, ...]:
+def excluded_prefixes(
+    repo_root: Path, staged: bool = False, ref: str | None = None
+) -> tuple[str, ...]:
     """Return the path prefixes left out: ruff's ``extend-exclude`` trees
     (vendored code and fixtures) and the stable proxy copy."""
-    pyproject = tomllib.loads(read_text(repo_root, "pyproject.toml", staged))
+    pyproject = tomllib.loads(read_text(repo_root, "pyproject.toml", staged, ref))
     ruff_excluded = pyproject["tool"]["ruff"]["extend-exclude"]
     prefixes = [f"{entry.rstrip('/')}/" for entry in ruff_excluded if "*" not in entry]
     return (*prefixes, STABLE_PROXY_COPY)
@@ -141,6 +144,25 @@ def _staged_contents(repo_root: Path, excluded: tuple[str, ...]) -> dict[str, by
         # Regular files only: a submodule or a symlink has another mode.
         if in_scope(path, excluded) and meta.startswith("100"):
             blobs[path] = meta.split()[1]
+    return _read_blobs(repo_root, blobs)
+
+
+def _ref_contents(
+    repo_root: Path, ref: str, excluded: tuple[str, ...]
+) -> dict[str, bytes]:
+    blobs: dict[str, str] = {}
+    for entry in (
+        _git(repo_root, "ls-tree", "-r", "-z", ref).decode("utf-8").split("\0")
+    ):
+        # Each entry is "<mode> blob <object>\t<path>".
+        meta, _, path = entry.partition("\t")
+        if in_scope(path, excluded) and meta.startswith("100"):
+            blobs[path] = meta.split()[2]
+    return _read_blobs(repo_root, blobs)
+
+
+def _read_blobs(repo_root: Path, blobs: dict[str, str]) -> dict[str, bytes]:
+    """Return each path's blob content. ``blobs`` maps paths to object ids."""
     # One git process for every blob. Each reply is a "<object> blob <size>"
     # line, then that many bytes, then a newline.
     replies = _git(
@@ -156,22 +178,29 @@ def _staged_contents(repo_root: Path, excluded: tuple[str, ...]) -> dict[str, by
     return contents
 
 
-def read_sources(repo_root: Path, staged: bool = False) -> dict[str, bytes]:
+def read_sources(
+    repo_root: Path, staged: bool = False, ref: str | None = None
+) -> dict[str, bytes]:
     """Return the content of every tracked source file in scope.
 
-    Reads the working tree, or with ``staged`` the index: the content the
-    next commit holds, which differs when a change is left unstaged.
+    Reads the working tree, with ``staged`` the index (the content the next
+    commit holds, which differs when a change is left unstaged), or with
+    ``ref`` that commit.
     """
-    excluded = excluded_prefixes(repo_root, staged)
+    excluded = excluded_prefixes(repo_root, staged, ref)
+    if ref:
+        return _ref_contents(repo_root, ref, excluded)
     read = _staged_contents if staged else _working_tree_contents
     return read(repo_root, excluded)
 
 
-def measure(repo_root: Path, staged: bool = False) -> dict[str, int]:
+def measure(
+    repo_root: Path, staged: bool = False, ref: str | None = None
+) -> dict[str, int]:
     """Return the line count of every tracked source file in scope."""
     return {
         path: count_lines(content)
-        for path, content in read_sources(repo_root, staged).items()
+        for path, content in read_sources(repo_root, staged, ref).items()
     }
 
 
@@ -227,6 +256,20 @@ def find_growth(baseline: dict[str, int], base: dict[str, int]) -> list[str]:
     return messages
 
 
+def find_growth_since(repo_root: Path, ref: str) -> list[str]:
+    """Return one message per file that grew past the baseline the sync
+    would write from ``ref``.
+
+    Until the sync runs after a merge, ``ref``'s baseline can still hold an
+    entry above its file. Checking against that entry would let a pull
+    request grow the file back, and the sync, which never raises an entry,
+    would then leave master failing its own check.
+    """
+    base_baseline = load_baseline(_git(repo_root, "show", f"{ref}:{BASELINE_NAME}"))
+    synced = lowered_baseline(measure(repo_root, ref=ref), base_baseline, LINE_LIMIT)
+    return find_violations(measure(repo_root), synced, LINE_LIMIT)
+
+
 def parse_args(argv: list[str] | None, description: str) -> argparse.Namespace:
     """Parse the options both ratchet scripts take."""
     parser = argparse.ArgumentParser(description=description)
@@ -239,7 +282,7 @@ def parse_args(argv: list[str] | None, description: str) -> argparse.Namespace:
     mode.add_argument(
         "--base",
         metavar="REF",
-        help="only check that the baseline did not grow compared with REF",
+        help="check the baseline and the files against the base commit REF",
     )
     parser.add_argument(
         "--check",
@@ -254,7 +297,10 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
     file is over its limit."""
     args = parse_args(argv, __doc__.splitlines()[0])
     if args.base:
-        return compare_with_base(repo_root, args.base, BASELINE_NAME, find_growth)
+        status = compare_with_base(repo_root, args.base, BASELINE_NAME, find_growth)
+        if status == 0 and has_baseline(repo_root, args.base):
+            status = report(find_growth_since(repo_root, args.base))
+        return status
     baseline_path = repo_root / BASELINE_NAME
     # With --staged the baseline comes from the index too, so an unstaged
     # edit to it cannot hide growth in a staged file.
@@ -263,16 +309,26 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
     if args.check:
         # A commit that stages no Python file runs no unit tests, so the hook's
         # run of this command is the only check on it.
-        return _report(find_violations(sizes, baseline, LINE_LIMIT))
+        return report(find_violations(sizes, baseline, LINE_LIMIT))
     lowered = lowered_baseline(sizes, baseline, LINE_LIMIT)
     baseline_path.write_text(
         json.dumps(lowered, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(f"{len(baseline) - len(lowered)} entries dropped, {len(lowered)} remain")
-    return _report(find_violations(sizes, lowered, LINE_LIMIT))
+    return report(find_violations(sizes, lowered, LINE_LIMIT))
 
 
-def _report(violations: list[str]) -> int:
+def has_baseline(repo_root: Path, ref: str, name: str = BASELINE_NAME) -> bool:
+    """Whether commit ``ref`` has the baseline file ``name``."""
+    try:
+        _git(repo_root, "cat-file", "-e", f"{ref}:{name}")
+    except subprocess.CalledProcessError:
+        return False
+    return True
+
+
+def report(violations: list[str]) -> int:
+    """Print each violation to stderr; return the exit status."""
     for violation in violations:
         print(violation, file=sys.stderr)
     return 1 if violations else 0

@@ -244,6 +244,18 @@ def test_base_check_rejects_a_hand_raised_entry(temp_repo: Path) -> None:
     assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
 
 
+def test_base_check_rejects_growth_under_a_stale_entry(temp_repo: Path) -> None:
+    """Until the sync runs, the base's entry can sit above its file. Growing
+    the file back under that entry must fail: the sync would lower the entry
+    from the base and leave master over it."""
+    _stage(temp_repo, "big.py", LIMIT + 1)
+    _stage_baseline(temp_repo, json.dumps({"big.py": LIMIT + 5}))
+    commit(temp_repo)
+    (temp_repo / "big.py").write_text("x = 1\n" * (LIMIT + 3), encoding="utf-8")
+
+    assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
+
+
 def test_base_check_rejects_a_nan_entry(temp_repo: Path) -> None:
     """Every comparison with NaN is false, so a NaN entry would let its file
     grow past the base check and the repository pin alike."""

@@ -22,7 +22,8 @@ only when every group passes, so it cannot accept a new copy: import the
 existing function instead. ``--check`` reports new copies without writing the
 baseline; the lefthook pre-commit hook runs it with ``--staged`` to read the
 staged content. CI also runs ``--base <ref>``, which fails when the baseline
-lists a group that the baseline at that commit does not allow.
+lists a group that the baseline at that commit does not allow, or when the
+files hold a copy that commit's own copies do not allow.
 """
 
 from __future__ import annotations
@@ -243,9 +244,11 @@ def find_copies(sources: dict[str, bytes]) -> dict[str, list[str]]:
     return {code: sorted(group) for code, group in places.items() if len(group) > 1}
 
 
-def scan(repo_root: Path, staged: bool = False) -> dict[str, list[str]]:
+def scan(
+    repo_root: Path, staged: bool = False, ref: str | None = None
+) -> dict[str, list[str]]:
     """Return the groups of copies in the tracked Python files in scope."""
-    sources = module_size_ratchet.read_sources(repo_root, staged)
+    sources = module_size_ratchet.read_sources(repo_root, staged, ref)
     return find_copies(
         {path: content for path, content in sources.items() if path.endswith(".py")}
     )
@@ -315,6 +318,16 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
         status: int = module_size_ratchet.compare_with_base(
             repo_root, args.base, BASELINE_NAME, find_added_groups
         )
+        # The sync rewrites the baseline to ``ref``'s groups, so checking
+        # against those keeps a copy removed there, but still listed until
+        # the sync runs, from being replaced by a new one.
+        if status == 0 and module_size_ratchet.has_baseline(
+            repo_root, args.base, BASELINE_NAME
+        ):
+            violations = find_violations(
+                scan(repo_root), scan(repo_root, ref=args.base)
+            )
+            status = module_size_ratchet.report(violations)
         return status
     baseline_path = repo_root / BASELINE_NAME
     # With --staged the baseline comes from the index too, so an unstaged

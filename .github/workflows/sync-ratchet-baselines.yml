@@ -62,45 +62,37 @@ jobs:
       with:
         python-version: '3.13'
 
-    # Both scripts use only the standard library. Each fails, after writing
-    # what it can, when master itself breaks its ratchet.
-    - name: Lower the baselines
-      run: |
-        status=0
-        python scripts/module_size_ratchet.py || status=1
-        python scripts/duplicate_code_ratchet.py || status=1
-        exit "$status"
-
-    - name: Commit and push if changed
+    # Both scripts use only the standard library. A rejected push means
+    # another merge landed since this checkout: its files can be larger than
+    # the entries computed here while staying under the entries it merged
+    # against, and the sync never raises an entry. So each attempt starts from
+    # the latest master and recomputes both baselines from its own files,
+    # rather than rebasing values computed from an older tree.
+    - name: Lower the baselines, commit and push
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git add tests/src/unit/module_size_baseline.json tests/src/unit/duplicate_code_baseline.json
-        if git diff --staged --quiet; then
-          echo "No baseline changes to sync."
-          exit 0
-        fi
-        git commit -m "chore(internal): sync ratchet baselines after merge [skip ci]"
-        # master can advance between this job's checkout and its push whenever
-        # any unrelated PR merges in the same window, which rejects a bare push
-        # as a non-fast-forward (the master-write concurrency group only
-        # serialises the workflows in the group, not ordinary merges). Rebase
-        # onto the latest master and retry before giving up. Pull requests do
-        # not edit the baselines, so the rebase has nothing to conflict with.
         for attempt in 1 2 3 4 5; do
+          status=0
+          python scripts/module_size_ratchet.py || status=1
+          python scripts/duplicate_code_ratchet.py || status=1
+          if [ "$status" -ne 0 ]; then
+            echo "::error::master breaks a ratchet; nothing synced."
+            exit 1
+          fi
+          git add tests/src/unit/module_size_baseline.json tests/src/unit/duplicate_code_baseline.json
+          if git diff --staged --quiet; then
+            echo "No baseline changes to sync."
+            exit 0
+          fi
+          git commit -m "chore(internal): sync ratchet baselines after merge [skip ci]"
           if git push; then
             echo "Synced ratchet baselines (attempt ${attempt})."
             exit 0
           fi
-          echo "Push rejected on attempt ${attempt}; rebasing onto origin/master and retrying."
-          # A conflicted/failed rebase leaves rebase-in-progress state and the
-          # remaining attempts would fail for a misleading reason — abort and
-          # surface the real error instead.
-          git pull --rebase origin master || {
-            git rebase --abort 2>/dev/null || true
-            echo "::error::Rebase onto origin/master failed; aborting retries."
-            exit 1
-          }
+          echo "Push rejected on attempt ${attempt}; recomputing on the latest master."
+          git fetch origin master
+          git reset --hard origin/master
         done
         echo "::error::Could not push the ratchet baseline sync after 5 attempts."
         exit 1

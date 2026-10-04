@@ -369,6 +369,24 @@ def test_base_check_rejects_a_hand_listed_group(temp_repo: Path) -> None:
     assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
 
 
+def test_base_check_rejects_a_copy_in_a_removed_copys_place(temp_repo: Path) -> None:
+    """Until the sync runs, the base's baseline still lists a copy the base
+    removed. A new copy in its place must fail: the sync would drop the old
+    one from the baseline and leave master with a copy it does not allow."""
+    _stage(temp_repo, "a.py", HELPER)
+    _stage(temp_repo, "b.py", RENAMED_HELPER)
+    _list(
+        temp_repo,
+        ratchet.find_copies(
+            {"a.py": HELPER, "b.py": RENAMED_HELPER, "c.py": _pasted(HELPER)}
+        ),
+    )
+    commit(temp_repo)
+    _stage(temp_repo, "d.py", _pasted(HELPER))
+
+    assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
+
+
 def test_repository_matches_the_baseline() -> None:
     """Fails when a function or class is copied. A listed copy that is gone
     or was edited passes; the post-merge run rewrites the baseline."""
