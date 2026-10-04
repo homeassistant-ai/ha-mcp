@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from ._version import is_embedded
+from .app_discovery import announce_mcp_discovery
 from .client.rest_client import HomeAssistantClient
 from .config import OAUTH_MODE_TOKEN, get_global_settings
 from .hacs_auto_refresh import hacs_refresh_lifespan
@@ -37,16 +38,20 @@ async def warn_if_non_admin_token() -> None:
 
 @asynccontextmanager
 async def server_lifespan(server: Any) -> AsyncIterator[dict[str, Any]]:
-    """Run the HACS startup nudge and the admin-token check for the server's lifetime.
+    """Run the HACS nudge, admin-token check and app discovery for the server's lifetime.
 
     Attached as the FastMCP ``lifespan`` so it runs on every launcher, including
     the app's ``start.py``, which calls ``mcp.run()`` directly.
     """
     async with hacs_refresh_lifespan(server) as state:
-        task = asyncio.create_task(warn_if_non_admin_token())
+        tasks = [
+            asyncio.create_task(warn_if_non_admin_token()),
+            asyncio.create_task(announce_mcp_discovery()),
+        ]
         try:
             yield state
         finally:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+            for task in tasks:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task

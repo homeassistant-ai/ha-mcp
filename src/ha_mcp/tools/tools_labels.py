@@ -29,6 +29,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import websocket_error_message
 
 logger = logging.getLogger(__name__)
@@ -585,12 +586,7 @@ class LabelTools:
     @tool(
         name="ha_config_get_label",
         tags={"Labels & Categories"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Label",
-        },
+        annotations=read_only_hints("Get Label", open_world=False),
     )
     @log_tool_usage
     async def ha_config_get_label(
@@ -685,11 +681,12 @@ class LabelTools:
     @tool(
         name="ha_config_set_label",
         tags={"Labels & Categories"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Label",
-        },
+        annotations=write_hints(
+            "Create or Update Label",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(domain="label", id_param="label_id")
     @log_tool_usage
@@ -785,12 +782,9 @@ class LabelTools:
     @tool(
         name="ha_config_remove_label",
         tags={"Labels & Categories"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Label",
-        },
+        annotations=write_hints(
+            "Remove Label", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="label", id_param="label_id")
     @log_tool_usage

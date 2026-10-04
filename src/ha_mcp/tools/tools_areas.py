@@ -36,6 +36,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .response_helpers import project_fields, project_records, result_fields_warning
+from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -134,12 +135,7 @@ class AreaTools:
     @tool(
         name="ha_list_floors_areas",
         tags={"Areas & Floors"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Floors and Areas",
-        },
+        annotations=read_only_hints("List Floors and Areas", open_world=False),
     )
     @log_tool_usage
     async def ha_list_floors_areas(
@@ -590,11 +586,12 @@ class AreaTools:
     @tool(
         name="ha_set_area_or_floor",
         tags={"Areas & Floors"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Area or Floor",
-        },
+        annotations=write_hints(
+            "Create or Update Area or Floor",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(
         domain="area_or_floor",
@@ -853,12 +850,9 @@ class AreaTools:
     @tool(
         name="ha_remove_area_or_floor",
         tags={"Areas & Floors"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Area or Floor",
-        },
+        annotations=write_hints(
+            "Remove Area or Floor", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(
         domain="area_or_floor",

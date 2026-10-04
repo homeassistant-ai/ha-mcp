@@ -59,6 +59,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
+from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
@@ -111,12 +112,7 @@ class ConfigScriptTools:
     @tool(
         name="ha_config_get_script",
         tags={"Scripts"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Script Config",
-        },
+        annotations=read_only_hints("Get Script Config", open_world=False),
     )
     @log_tool_usage
     async def ha_config_get_script(
@@ -475,11 +471,12 @@ class ConfigScriptTools:
     @tool(
         name="ha_config_set_script",
         tags={"Scripts"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Script",
-        },
+        annotations=write_hints(
+            "Create or Update Script",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(
         domain="script", id_param="script_id", skip_fn=_skip_script_run_backup
@@ -1104,12 +1101,9 @@ class ConfigScriptTools:
     @tool(
         name="ha_config_remove_script",
         tags={"Scripts"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Script",
-        },
+        annotations=write_hints(
+            "Remove Script", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="script", id_param="script_id")
     @log_tool_usage

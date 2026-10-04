@@ -33,6 +33,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -128,12 +129,7 @@ class ZoneTools:
     @tool(
         name="ha_get_zone",
         tags={"Zones"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Zone",
-        },
+        annotations=read_only_hints("Get Zone", open_world=False),
     )
     @log_tool_usage
     async def ha_get_zone(
@@ -391,11 +387,9 @@ class ZoneTools:
     @tool(
         name="ha_set_zone",
         tags={"Zones"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Set Zone",
-        },
+        annotations=write_hints(
+            "Set Zone", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @with_auto_backup(
         domain="zone",
@@ -541,12 +535,9 @@ class ZoneTools:
     @tool(
         name="ha_remove_zone",
         tags={"Zones"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Zone",
-        },
+        annotations=write_hints(
+            "Remove Zone", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="zone", id_param="zone_id")
     @log_tool_usage

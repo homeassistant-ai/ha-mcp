@@ -28,6 +28,7 @@ from .helpers import (
     log_tool_usage,
     register_tool_methods,
 )
+from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +55,12 @@ class SecurityPolicyTools:
     @tool(
         name="ha_manage_security_policy",
         tags={"System"},
-        annotations={
-            "title": "Manage Security Policy",
-            "readOnlyHint": False,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "openWorldHint": False,
-        },
+        annotations=write_hints(
+            "Manage Security Policy",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_manage_security_policy(
