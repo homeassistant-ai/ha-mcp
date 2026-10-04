@@ -310,6 +310,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
         <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
           <li>Install <strong>HA-MCP Custom Component</strong> from HACS, then restart Home Assistant.</li>
           <li>Go to <strong>Settings → Devices &amp; Services → Add Integration</strong>, search <strong>HA-MCP Custom Component</strong>, and choose <strong>HA-MCP Server</strong>.</li>
+          <li>In the form, paste an <strong>Administrator access token</strong> (your profile → <strong>Security</strong> → <strong>Long-lived access tokens</strong> → <strong>Create token</strong>; the account must be an administrator) and choose how clients may reach the server: remote access through Home Assistant is off and the port is limited to this machine unless you change them.</li>
           <li>Submit — creating the entry starts the server.</li>
           <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there).</li>
           <li>Paste it into your AI client — pick the client below for its exact config.</li>
@@ -1649,6 +1650,7 @@ volumes:
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li>Install <strong>HA-MCP Custom Component</strong> from HACS (or copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> into <code class="bg-slate-800 px-1 rounded">config/custom_components/</code>), then restart Home Assistant.</li>
             <li>Go to <strong>Settings → Devices &amp; Services → Add Integration</strong>, search <strong>HA-MCP Custom Component</strong>, and choose <strong>HA-MCP Server</strong>.</li>
+            <li>In the form, paste an <strong>Administrator access token</strong> (your profile → <strong>Security</strong> → <strong>Long-lived access tokens</strong> → <strong>Create token</strong>; the account must be an administrator) and choose how clients may reach the server: remote access through Home Assistant is off and the port is limited to this machine unless you change them.</li>
             <li>Submit — creating the entry starts the server (the first start takes a little longer while it installs the package).</li>
             <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there).</li>
             <li>Paste it into ${state.client.name} using the config below.</li>

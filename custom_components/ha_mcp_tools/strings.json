@@ -18,24 +18,34 @@
                 "description": "This runs the full ha-mcp server inside Home Assistant. It is a standalone server and a complete replacement for the app (add-on), Docker, uvx/PyPI, and stdio install methods - do not run it alongside another ha-mcp server.\n\nBy default nothing outside this Home Assistant machine can reach it: the sidebar panel and Home Assistant's own conversation agents work, but MCP clients on other devices cannot connect until you choose a remote access mode or local network access below. You can change both later in the integration options.",
                 "data": {
                     "remote_access": "Remote access through Home Assistant",
-                    "bind_host": "Network access"
+                    "bind_host": "Network access",
+                    "admin_token": "Administrator access token"
                 },
                 "data_description": {
                     "remote_access": "Lets MCP clients connect through a Home Assistant webhook, which works wherever Home Assistant is reachable (including Nabu Casa). Home Assistant sign-in: clients such as claude.ai log in with a Home Assistant administrator account. Legacy OAuth: a Client ID and Secret to paste into clients that need one. Secret URL: the webhook link itself is the only credential - anyone who has it can use every tool.",
-                    "bind_host": "Who can connect to the server's own port directly. This machine only is the safe default. Local network lets other devices on your network connect with the secret direct-access URL shown on the Configure screen."
+                    "bind_host": "Who can connect to the server's own port directly. This machine only is the safe default. Local network lets other devices on your network connect with the secret direct-access URL shown on the Configure screen.",
+                    "admin_token": "A long-lived access token the server uses to reach Home Assistant. Create one in Home Assistant: open your profile (your name at the bottom of the sidebar), select the Security tab, and under Long-lived access tokens select Create token. The account must be an administrator: the server acts with its permissions."
                 }
             }
         },
         "abort": {
             "already_configured": "This entry is already set up.",
             "unsupported_home_assistant": "The in-process HA-MCP Server requires Home Assistant {required} or newer, but this instance is running {installed}. You can still use this component's HA-MCP File & YAML Tools entry with an external ha-mcp server running as an app (add-on) or Docker container."
+        },
+        "error": {
+            "invalid_token": "Home Assistant does not recognise this token. Copy the whole token, or create a new one.",
+            "token_not_long_lived": "This is a temporary sign-in token, which expires. Create a long-lived access token instead.",
+            "token_not_admin": "This token belongs to an account that is not an active administrator."
         }
     },
     "options": {
         "error": {
             "invalid_connect_path": "Must not contain #, ?, %, or whitespace.",
             "invalid_webhook_id": "Webhook IDs must not contain a slash (/).",
-            "invalid_oauth_callback": "Each callback must be an https:// URL, or an http:// URL on 127.0.0.1, [::1] or localhost, without a #fragment."
+            "invalid_oauth_callback": "Each callback must be an https:// URL, or an http:// URL on 127.0.0.1, [::1] or localhost, without a #fragment.",
+            "invalid_token": "Home Assistant does not recognise this token. Copy the whole token, or create a new one.",
+            "token_not_long_lived": "This is a temporary sign-in token, which expires. Create a long-lived access token instead.",
+            "token_not_admin": "This token belongs to an account that is not an active administrator."
         },
         "step": {
             "tools_info": {
@@ -71,7 +81,8 @@
                     "llm_api_exposure": "Conversation-agent tool exposure",
                     "enable_startup_notification": "Startup notification",
                     "enable_sidebar_panel": "Sidebar settings panel",
-                    "oauth_redirect_allowlist": "Allowed OAuth callback URL"
+                    "oauth_redirect_allowlist": "Allowed OAuth callback URL",
+                    "admin_token_replacement": "Replace the administrator access token (optional)"
                 },
                 "data_description": {
                     "server_port": "The port this server listens on. The ha-mcp app (add-on) uses 9583, so this defaults to 9584 to let both run side by side - if you don't run the app (add-on), any free port works.",
@@ -91,7 +102,8 @@
                     "llm_api_exposure": "Shape of the toolset offered to conversation agents. Tool search (default) keeps the agent's context small: a compact API with pinned tools plus search/execute meta-tools. Full catalog lists every exposed tool directly - better for large-context models. Both registers the two side by side so each agent picks its own under Control Home Assistant. Per-tool exposure is managed in the HA-MCP settings panel; details: {llm_api_docs_url}",
                     "enable_startup_notification": "Show a notification each time the server starts, pointing at the admin-only settings surfaces. Turn off to start silently - the connect URLs stay on this screen.",
                     "enable_sidebar_panel": "Show the HA-MCP settings panel in the sidebar (administrators only). Turn off to remove the sidebar entry - server options stay available on this screen.",
-                    "oauth_redirect_allowlist": "Only used while Authentication mode is the secret webhook URL. When a client signs in with OAuth, HA-MCP returns the sign-in only to a callback URL on this list; any other is refused with a page explaining how to add it. Enter each callback exactly as the client sends it. An http:// loopback callback (127.0.0.1, [::1] or localhost) also matches on any port. Clients that connect with the webhook URL alone need no entry. Takes effect without a restart."
+                    "oauth_redirect_allowlist": "Only used while Authentication mode is the secret webhook URL. When a client signs in with OAuth, HA-MCP returns the sign-in only to a callback URL on this list; any other is refused with a page explaining how to add it. Enter each callback exactly as the client sends it. An http:// loopback callback (127.0.0.1, [::1] or localhost) also matches on any port. Clients that connect with the webhook URL alone need no entry. Takes effect without a restart.",
+                    "admin_token_replacement": "Leave empty to keep the current token. To switch to another one, paste an administrator's long-lived access token; the server restarts with it. Create one in Home Assistant: open your profile (your name at the bottom of the sidebar), select the Security tab, and under Long-lived access tokens select Create token. The account must be an administrator: the server acts with its permissions."
                 }
             }
         }
@@ -117,6 +129,28 @@
                         "title": "Restart Home Assistant?",
                         "description": "Submitting this form will restart Home Assistant and apply the legacy OAuth settings.\n\nClick **Submit** to restart now."
                     }
+                }
+            }
+        },
+        "server_token_needed": {
+            "title": "HA-MCP needs an administrator access token",
+            "fix_flow": {
+                "step": {
+                    "token": {
+                        "title": "Enter an administrator access token",
+                        "description": "The HA-MCP in-process server has no Home Assistant token it can use, so it is not running. The token may be missing, revoked or expired, or its account may no longer be an active administrator. Create one in Home Assistant: open your profile (your name at the bottom of the sidebar), select the Security tab, and under Long-lived access tokens select Create token. The account must be an administrator: the server acts with its permissions.",
+                        "data": {
+                            "admin_token": "Administrator access token"
+                        }
+                    }
+                },
+                "error": {
+                    "invalid_token": "Home Assistant does not recognise this token. Copy the whole token, or create a new one.",
+                    "token_not_long_lived": "This is a temporary sign-in token, which expires. Create a long-lived access token instead.",
+                    "token_not_admin": "This token belongs to an account that is not an active administrator."
+                },
+                "abort": {
+                    "entry_removed": "The HA-MCP Server entry no longer exists."
                 }
             }
         }

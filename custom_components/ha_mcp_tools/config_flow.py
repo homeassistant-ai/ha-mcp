@@ -45,10 +45,12 @@ from homeassistant.helpers.selector import (
 from homeassistant.loader import async_get_integration
 from packaging.version import InvalidVersion, Version
 
+from . import server_credentials
 from .const import (
     BIND_HOST_ALL,
     BIND_HOST_LOOPBACK,
     CONF_ENTRY_TYPE,
+    DATA_ADMIN_TOKEN,
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
@@ -71,6 +73,7 @@ from .const import (
     EXPOSURE_TOOL_SEARCH,
     LLM_API_DOCS_URL,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
+    OPT_ADMIN_TOKEN_REPLACEMENT,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
     OPT_ENABLE_SIDEBAR_PANEL,
@@ -110,6 +113,7 @@ _SERVER_UNIQUE_ID = f"{DOMAIN}-server"
 # decides exposure states it in one place.
 SETUP_REMOTE_ACCESS = "remote_access"
 REMOTE_ACCESS_DISABLED = "disabled"
+SETUP_ADMIN_TOKEN = "admin_token"
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -464,7 +468,7 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         the server until the administrator chooses a remote-access mode or LAN
         access here or later in the options. The choice is saved explicitly,
         so entries created before these defaults keep the behaviour they
-        inherit.
+        inherit. The server runs with the administrator token entered here.
         """
         try:
             supported = Version(HA_VERSION) >= Version(
@@ -484,26 +488,43 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         await self.async_set_unique_id(_SERVER_UNIQUE_ID)
         self._abort_if_unique_id_configured()
 
+        errors: dict[str, str] = {}
+        values = user_input or {}
         if user_input is not None:
-            remote = user_input.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED)
-            enabled = remote != REMOTE_ACCESS_DISABLED
-            return self.async_create_entry(
-                title=_SERVER_ENTRY_TITLE,
-                data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER},
-                options={
-                    OPT_ENABLE_WEBHOOK: enabled,
-                    # Disabled keeps Home Assistant sign-in queued, so enabling
-                    # the webhook later never lands on the secret-URL mode.
-                    OPT_WEBHOOK_AUTH: remote if enabled else WEBHOOK_AUTH_HA,
-                    OPT_BIND_HOST: user_input.get(OPT_BIND_HOST, BIND_HOST_LOOPBACK),
-                },
-            )
+            token = str(user_input.get(SETUP_ADMIN_TOKEN, "")).strip()
+            problem = server_credentials.token_problem(self.hass, token)
+            if problem is not None:
+                errors[SETUP_ADMIN_TOKEN] = problem
+            else:
+                remote = user_input.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED)
+                enabled = remote != REMOTE_ACCESS_DISABLED
+                return self.async_create_entry(
+                    title=_SERVER_ENTRY_TITLE,
+                    data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER, DATA_ADMIN_TOKEN: token},
+                    options={
+                        OPT_ENABLE_WEBHOOK: enabled,
+                        # Disabled keeps Home Assistant sign-in queued, so
+                        # enabling the webhook later never lands on the
+                        # secret-URL mode.
+                        OPT_WEBHOOK_AUTH: remote if enabled else WEBHOOK_AUTH_HA,
+                        OPT_BIND_HOST: user_input.get(
+                            OPT_BIND_HOST, BIND_HOST_LOOPBACK
+                        ),
+                    },
+                )
         return self.async_show_form(
             step_id="server",
+            errors=errors,
             data_schema=vol.Schema(
                 {
+                    # The server acts with this account's rights (#2427); the
+                    # component no longer creates an administrator for itself.
+                    vol.Required(SETUP_ADMIN_TOKEN): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
                     vol.Required(
-                        SETUP_REMOTE_ACCESS, default=REMOTE_ACCESS_DISABLED
+                        SETUP_REMOTE_ACCESS,
+                        default=values.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED),
                     ): SelectSelector(
                         SelectSelectorConfig(
                             options=[
@@ -516,9 +537,10 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
                             mode=SelectSelectorMode.LIST,
                         )
                     ),
-                    vol.Required(OPT_BIND_HOST, default=BIND_HOST_LOOPBACK): (
-                        _bind_host_selector()
-                    ),
+                    vol.Required(
+                        OPT_BIND_HOST,
+                        default=values.get(OPT_BIND_HOST, BIND_HOST_LOOPBACK),
+                    ): _bind_host_selector(),
                 }
             ),
         )
@@ -608,6 +630,11 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             )
             if invalid:
                 errors[OPT_OAUTH_REDIRECT_ALLOWLIST] = "invalid_oauth_callback"
+            token = str(user_input.get(OPT_ADMIN_TOKEN_REPLACEMENT) or "").strip()
+            if token and (
+                problem := server_credentials.token_problem(self.hass, token)
+            ):
+                errors[OPT_ADMIN_TOKEN_REPLACEMENT] = problem
             if not errors:
                 data = self._normalize(user_input)
                 data.pop(OPT_OAUTH_REDIRECT_ALLOWLIST, None)
@@ -764,6 +791,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     OPT_OAUTH_REGENERATE,
                     default=False,
                 ): bool,
+                # Never pre-filled: the stored token stays out of the form.
+                vol.Optional(OPT_ADMIN_TOKEN_REPLACEMENT): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
                 # suggested_value, not default: an emptied list must save as
                 # empty rather than fall back (see the OPT_PIP_SPEC note).
                 vol.Optional(
@@ -850,6 +881,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             OPT_SECRET_PATH_OVERRIDE,
             OPT_OAUTH_CLIENT_ID,
             OPT_OAUTH_CLIENT_SECRET,
+            OPT_ADMIN_TOKEN_REPLACEMENT,
         ):
             cleaned[key] = str(cleaned.get(key, "") or "").strip()
         cleaned[OPT_EXTERNAL_URL] = cleaned[OPT_EXTERNAL_URL].rstrip("/")

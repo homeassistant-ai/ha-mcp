@@ -37,7 +37,7 @@ from haos_runtime import (
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from test_constants import TEST_PASSWORD, TEST_USER
+from test_constants import TEST_PASSWORD, TEST_TOKEN, TEST_USER
 
 from ._conftest_embedded import (
     _EMBEDDED_BACKUP_OVERRIDES,
@@ -168,7 +168,7 @@ def _prepare_haos_image(
     # embedded-server E2E (#1527) exercises the PR's own src/ha_mcp when it
     # enables the entry. Best-effort — a failure only affects that one test.
     # Must run before boot (offline qcow2 edit), like the refreshers above.
-    stage_embedded_server_wheel_in_qcow2(image_path)
+    stage_embedded_server_wheel_in_qcow2(image_path, TEST_TOKEN)
     # haos_embedded lane only: the WHOLE suite runs through the in-process
     # server, so deliver the same settings overrides the container
     # ``embedded`` backend injects — feature flags (yaml editing, filesystem

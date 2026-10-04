@@ -511,11 +511,19 @@ def _install_frontend_and_selector_stubs(
         DROPDOWN = "dropdown"
         LIST = "list"
 
+    class _TextSelectorType:
+        TEXT = "text"
+        PASSWORD = "password"
+        URL = "url"
+
     setmod(
         "homeassistant.helpers.selector",
         SelectSelector=_SelectSelector,
         SelectSelectorConfig=_SelectSelectorConfig,
         SelectSelectorMode=_SelectSelectorMode,
+        TextSelector=_SelectSelector,
+        TextSelectorConfig=_SelectSelectorConfig,
+        TextSelectorType=_TextSelectorType,
     )
 
 

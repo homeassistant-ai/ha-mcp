@@ -1067,7 +1067,7 @@ If no event arrives at all, check the token the server authenticates with:
 Home Assistant only accepts `POST /api/events/<type>` from an admin user, so
 a standalone install running on a non-admin long-lived token does not fire
 the event and logs that to the server log and nowhere else. The embedded
-component provisions its own admin token, so it is not affected.
+component requires an administrator's token, so it is not affected.
 
 Approving happens in the Tool Security Policies tab by default. Answering
 from an automation is possible too, behind a switch and a PIN — see the next

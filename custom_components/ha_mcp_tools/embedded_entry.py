@@ -32,6 +32,7 @@ from .const import (
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
     DOMAIN,
+    OPT_ADMIN_TOKEN_REPLACEMENT,
     OPT_ENABLE_SIDEBAR_PANEL,
     OPT_ENABLE_WEBHOOK,
     OPT_OAUTH_CLIENT_ID,
@@ -307,8 +308,28 @@ def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if options.get(OPT_WEBHOOK_AUTH) == WEBHOOK_AUTH_LEGACY:
         changed = _ensure_legacy_oauth_secrets(data, options) or changed
 
+    changed = _adopt_replacement_token(hass, data, options) or changed
+
     if changed:
         hass.config_entries.async_update_entry(entry, data=data, options=options)
+
+
+def _adopt_replacement_token(hass: HomeAssistant, data: dict, options: dict) -> bool:
+    """Switch to Configure's replacement administrator token (#2427).
+
+    The options flow already validated it. ``data`` and ``options`` are mutated
+    in place and the one-shot option is cleared; returns True when it applied.
+    """
+    replacement = str(options.get(OPT_ADMIN_TOKEN_REPLACEMENT) or "").strip()
+    if not replacement:
+        return False
+    from .server_credentials import adopt_admin_token  # lazy (see import note)
+
+    adopted = adopt_admin_token(hass, data, replacement)
+    data.clear()
+    data.update(adopted)
+    options[OPT_ADMIN_TOKEN_REPLACEMENT] = ""
+    return True
 
 
 def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:

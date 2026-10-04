@@ -37,11 +37,8 @@ import custom_components.ha_mcp_tools.embedded_server as es  # noqa: E402
 _WHEELS_HOST = "wheels.home-assistant.io"
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CHANNEL_DEV,
-    DATA_ACCESS_TOKEN,
     DATA_LAST_PIP_SPEC,
-    DATA_REFRESH_TOKEN_ID,
     DATA_SECRET_PATH,
-    DATA_SERVER_USER_ID,
     DEFAULT_PIP_SPEC,
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
@@ -51,13 +48,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
-    SERVER_TOKEN_CLIENT_NAME,
 )
-
-# GROUP_ID_ADMIN / the LLAT token-type come from the homeassistant stub the
-# manager imports; the string values are pinned in _embedded_stubs.
-_GROUP_ID_ADMIN = es.GROUP_ID_ADMIN
-_TOKEN_TYPE_LLAT = es.TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 
 
 @pytest.fixture(autouse=True)
@@ -127,19 +118,6 @@ def _manager(tmp_path, *, options=None, data=None):
     hass = _make_hass(tmp_path)
     entry = _make_entry(options=options, data=data)
     return es.EmbeddedServerManager(hass, entry), hass, entry
-
-
-def _user(uid="user-1", refresh_tokens=None):
-    return SimpleNamespace(id=uid, refresh_tokens=refresh_tokens or {})
-
-
-def _rt(rt_id="rt-1", user=None, client_name="", token_type=""):
-    return SimpleNamespace(
-        id=rt_id,
-        user=user or _user(),
-        client_name=client_name,
-        token_type=token_type,
-    )
 
 
 def _stub_ha_mcp_surface(
@@ -1372,149 +1350,15 @@ class TestThreadEnvStaging:
 
 
 class TestTokenProvisioning:
-    async def test_first_run_creates_user_and_llat(self, tmp_path):
-        mgr, hass, entry = _manager(tmp_path)
-        user = _user("new-user")
-        hass.auth.async_create_user.return_value = user
-        hass.auth.async_create_refresh_token.return_value = _rt("rt-new", user=user)
-
-        token = await mgr._async_provision_token()
-
-        assert token == "access-token-xyz"
-        hass.auth.async_create_user.assert_awaited_once()
-        # Admin, local-only user.
-        assert hass.auth.async_create_user.await_args.kwargs["group_ids"] == [
-            _GROUP_ID_ADMIN
-        ]
-        assert hass.auth.async_create_user.await_args.kwargs["local_only"] is True
-        # A long-lived refresh token was minted.
-        rt_kwargs = hass.auth.async_create_refresh_token.await_args.kwargs
-        assert rt_kwargs["client_name"] == SERVER_TOKEN_CLIENT_NAME
-        assert rt_kwargs["token_type"] == _TOKEN_TYPE_LLAT
-        # Only the REUSE ids are persisted; the access token stays in
-        # memory (review finding: it was stored but never read, leaving an
-        # unused admin JWT at rest + a config-entry rewrite every start).
-        assert entry.data[DATA_SERVER_USER_ID] == "new-user"
-        assert entry.data[DATA_REFRESH_TOKEN_ID] == "rt-new"
-        assert DATA_ACCESS_TOKEN not in entry.data
-
-    async def test_reuse_across_restart_mints_only_access_token(self, tmp_path):
-        user = _user("stored-user")
-        rt = _rt("stored-rt", user=user)
-        mgr, hass, _entry = _manager(
-            tmp_path,
-            data={
-                DATA_SECRET_PATH: "/private_secret",
-                DATA_SERVER_USER_ID: "stored-user",
-                DATA_REFRESH_TOKEN_ID: "stored-rt",
-            },
-        )
-        hass.auth.async_get_user.return_value = user
-        hass.auth.async_get_refresh_token.return_value = rt
-
-        token = await mgr._async_provision_token()
-
-        assert token == "access-token-xyz"
-        hass.auth.async_create_user.assert_not_awaited()
-        hass.auth.async_create_refresh_token.assert_not_awaited()
-        hass.auth.async_create_access_token.assert_called_once_with(rt)
-
-    async def test_recreates_when_stored_user_gone(self, tmp_path):
-        mgr, hass, _entry = _manager(
-            tmp_path,
-            data={DATA_SECRET_PATH: "/p", DATA_SERVER_USER_ID: "ghost"},
-        )
-        hass.auth.async_get_user.return_value = None  # stored user vanished
-        new_user = _user("fresh")
-        hass.auth.async_create_user.return_value = new_user
-        hass.auth.async_create_refresh_token.return_value = _rt(
-            "fresh-rt", user=new_user
-        )
-
-        await mgr._async_provision_token()
-        hass.auth.async_create_user.assert_awaited_once()
-
-    async def test_discards_refresh_token_of_other_user(self, tmp_path):
-        user = _user("stored-user")
-        foreign_rt = _rt("foreign", user=_user("someone-else"))
-        mgr, hass, _entry = _manager(
-            tmp_path,
-            data={
-                DATA_SECRET_PATH: "/p",
-                DATA_SERVER_USER_ID: "stored-user",
-                DATA_REFRESH_TOKEN_ID: "foreign",
-            },
-        )
-        hass.auth.async_get_user.return_value = user
-        hass.auth.async_get_refresh_token.return_value = foreign_rt
-        hass.auth.async_create_refresh_token.return_value = _rt("mine", user=user)
-
-        await mgr._async_provision_token()
-        # A new refresh token was minted for the correct user.
-        hass.auth.async_create_refresh_token.assert_awaited_once()
-
-    async def test_clears_stale_llat_before_creating(self, tmp_path):
-        stale = _rt(
-            "stale",
-            client_name=SERVER_TOKEN_CLIENT_NAME,
-            token_type=_TOKEN_TYPE_LLAT,
-        )
-        user = _user("u", refresh_tokens={"stale": stale})
-        stale.user = user
-        mgr, hass, _entry = _manager(tmp_path)
-        hass.auth.async_create_user.return_value = user
-        hass.auth.async_create_refresh_token.return_value = _rt("rt-new", user=user)
-
-        await mgr._async_provision_token()
-        hass.auth.async_remove_refresh_token.assert_called_once_with(stale)
-
-
-class TestRevokeCredentials:
-    async def test_removes_token_and_user_and_strips_entry_data(self, tmp_path):
-        user = _user("u")
-        rt = _rt("rt", user=user)
-        mgr, hass, entry = _manager(
-            tmp_path,
-            data={
-                DATA_SECRET_PATH: "/p",
-                DATA_SERVER_USER_ID: "u",
-                DATA_REFRESH_TOKEN_ID: "rt",
-                DATA_ACCESS_TOKEN: "tok",
-            },
-        )
-        hass.auth.async_get_refresh_token.return_value = rt
-        hass.auth.async_get_user.return_value = user
-
-        await mgr.async_revoke_credentials()
-
-        hass.auth.async_remove_refresh_token.assert_called_once_with(rt)
-        hass.auth.async_remove_user.assert_awaited_once_with(user)
-        # The three provisioning keys are stripped; the secret path is kept.
-        assert DATA_SERVER_USER_ID not in entry.data
-        assert DATA_REFRESH_TOKEN_ID not in entry.data
-        assert DATA_ACCESS_TOKEN not in entry.data
-        assert entry.data[DATA_SECRET_PATH] == "/p"
-
-    async def test_idempotent_when_ids_missing(self, tmp_path):
+    async def test_a_missing_credential_files_the_token_repair(self, tmp_path):
+        # Older releases created an administrator here; none is created now.
         mgr, hass, _entry = _manager(tmp_path, data={DATA_SECRET_PATH: "/p"})
-        await mgr.async_revoke_credentials()  # must not raise
-        hass.auth.async_remove_refresh_token.assert_not_called()
-        hass.auth.async_remove_user.assert_not_awaited()
 
-    async def test_missing_objects_treated_as_success(self, tmp_path):
-        mgr, hass, _entry = _manager(
-            tmp_path,
-            data={
-                DATA_SECRET_PATH: "/p",
-                DATA_SERVER_USER_ID: "gone",
-                DATA_REFRESH_TOKEN_ID: "gone",
-            },
-        )
-        hass.auth.async_get_refresh_token.return_value = None
-        hass.auth.async_get_user.return_value = None
-        await mgr.async_revoke_credentials()
-        hass.auth.async_remove_refresh_token.assert_not_called()
-        hass.auth.async_remove_user.assert_not_awaited()
+        with pytest.raises(es.EmbeddedServerError) as err:
+            await mgr._async_provision_token()
+
+        assert err.value.kind == "token"
+        hass.auth.async_create_user.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

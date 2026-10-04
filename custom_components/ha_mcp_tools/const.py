@@ -360,6 +360,10 @@ OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
 # The callback URLs the none-mode auto-approve /authorize may redirect to
 # (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
 # empty one, replaces it. Read per request, so a change needs no reload.
+# One-shot: an administrator's long-lived access token to switch the server
+# to (#2427). Validated by the options flow, moved into entry.data on the next
+# setup (embedded_entry._ensure_secrets) and cleared; never shown back.
+OPT_ADMIN_TOKEN_REPLACEMENT = "admin_token_replacement"
 OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
 DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
     "https://claude.ai/api/mcp/auth_callback",
@@ -390,6 +394,10 @@ DATA_OAUTH_SIGNING_KEY = "oauth_signing_key"
 DATA_DCR_SIGNING_KEY = "dcr_signing_key"
 DATA_SERVER_USER_ID = "server_user_id"
 DATA_REFRESH_TOKEN_ID = "refresh_token_id"
+# A long-lived access token of an administrator, supplied by the user (#2427).
+# The server runs with it; entries from older releases may instead carry the
+# provisioned DATA_SERVER_USER_ID / DATA_REFRESH_TOKEN_ID pair.
+DATA_ADMIN_TOKEN = "admin_token"
 DATA_ACCESS_TOKEN = "access_token"
 # Last pip spec that was successfully installed. Lets a changed spec (the
 # pre-release test channel) force an actual reinstall on the next start instead
@@ -439,14 +447,6 @@ DEFAULT_LOOPBACK_URL = "http://127.0.0.1:8123"
 # migration from the former ".ha_mcp_server").
 SERVER_CONFIG_SUBDIR = ".ha_mcp"
 
-# Client name recorded on the provisioned long-lived access token, and the name
-# of the local admin user the server logs in as. Stable so a reused token is
-# recognizable in Settings -> People -> <user> -> tokens. "HA-MCP" phrasing (not
-# "Home Assistant MCP Server") to avoid confusion with HA's official MCP Server
-# integration.
-SERVER_TOKEN_CLIENT_NAME = "HA-MCP Server"
-SERVER_USER_NAME = "HA-MCP Server"
-
 # RFC 8414 / RFC 9728 discovery documents for ha_auth mode are served under this
 # namespace (mirrors the webhook-proxy add-on's /api/mcp_proxy/oauth base).
 OAUTH_BASE = "/api/ha_mcp_tools/oauth"
@@ -473,6 +473,9 @@ LLM_API_DOCS_URL = (
 # Repair-issue ids surfaced when server bring-up fails.
 ISSUE_PACKAGE_FAILED = "server_package_install_failed"
 ISSUE_START_FAILED = "server_start_failed"
+# Fixable repair issue: the server has no usable Home Assistant credential
+# (#2427). Its fix flow asks for an administrator's long-lived access token.
+ISSUE_TOKEN_NEEDED = "server_token_needed"
 # Repair issue surfaced when the installed ha-mcp server requires a newer
 # custom component than the one running. Each component release pins the
 # server it was built with, so this only fires for a pip-spec override that

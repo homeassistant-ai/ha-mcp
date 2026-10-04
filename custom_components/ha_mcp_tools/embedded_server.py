@@ -37,13 +37,10 @@ import subprocess
 import sys
 import threading
 from contextlib import suppress
-from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
-from homeassistant.auth.const import GROUP_ID_ADMIN
-from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.loader import async_get_integration
@@ -58,11 +55,8 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from .const import (
-    DATA_ACCESS_TOKEN,
     DATA_LAST_PIP_SPEC,
-    DATA_REFRESH_TOKEN_ID,
     DATA_SECRET_PATH,
-    DATA_SERVER_USER_ID,
     DEFAULT_BIND_HOST,
     DEFAULT_ENABLE_LLM_API,
     DEFAULT_LOOPBACK_URL,
@@ -79,8 +73,6 @@ from .const import (
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
     SERVER_CONFIG_SUBDIR,
-    SERVER_TOKEN_CLIENT_NAME,
-    SERVER_USER_NAME,
 )
 from .dependency_diagnostics import (
     DependencyViolation,
@@ -91,6 +83,11 @@ from .dependency_diagnostics import (
     requirement_forces_conflict,
     root_import_failure,
 )
+from .server_credentials import (
+    CredentialNeeded,
+    async_release_credentials,
+    async_server_access_token,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -98,11 +95,6 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
-
-# Access-token longevity for the provisioned long-lived token. HA caps nothing
-# here; ten years is effectively "for the life of the install" and is refreshed
-# from the same refresh token on every start regardless.
-_ACCESS_TOKEN_TTL = timedelta(days=3650)
 
 # Readiness probe: fail the bring-up only when there is no observable startup
 # progress (no new modules landing in sys.modules, no phase advance) for this
@@ -211,12 +203,14 @@ class EmbeddedServerError(Exception):
     """Raised when the in-process ha-mcp server could not be installed or started.
 
     ``kind`` classifies the failure so the caller can file the matching repair
-    issue: ``"package"`` for a pip install / import failure, ``"start"`` for
-    everything else (token provisioning, thread crash, readiness timeout).
+    issue: ``"package"`` for a pip install / import failure, ``"token"`` when
+    there is no usable Home Assistant credential (the message is the reason's
+    translation key), ``"start"`` for everything else (thread crash,
+    readiness timeout).
     """
 
     def __init__(
-        self, message: str, *, kind: Literal["package", "start"] = "start"
+        self, message: str, *, kind: Literal["package", "start", "token"] = "start"
     ) -> None:
         """Store the message and the failure ``kind`` (``package`` / ``start``)."""
         super().__init__(message)
@@ -494,29 +488,8 @@ class EmbeddedServerManager:
         self._running_version = None
 
     async def async_revoke_credentials(self) -> None:
-        """Revoke the provisioned refresh token and remove the server's user.
-
-        Called when the config entry is removed. Best-effort and idempotent:
-        missing ids / already-deleted objects are treated as success.
-        """
-        rt_id = self._entry.data.get(DATA_REFRESH_TOKEN_ID)
-        user_id = self._entry.data.get(DATA_SERVER_USER_ID)
-
-        if rt_id:
-            refresh_token = self._hass.auth.async_get_refresh_token(rt_id)
-            if refresh_token is not None:
-                self._hass.auth.async_remove_refresh_token(refresh_token)
-
-        if user_id:
-            user = await self._hass.auth.async_get_user(user_id)
-            if user is not None:
-                await self._hass.auth.async_remove_user(user)
-
-        remaining = {
-            k: v
-            for k, v in self._entry.data.items()
-            if k not in (DATA_SERVER_USER_ID, DATA_REFRESH_TOKEN_ID, DATA_ACCESS_TOKEN)
-        }
+        """Release the server's credential when the config entry is removed."""
+        remaining = await async_release_credentials(self._hass, self._entry.data)
         if remaining != dict(self._entry.data):
             self._hass.config_entries.async_update_entry(self._entry, data=remaining)
 
@@ -1190,66 +1163,15 @@ class EmbeddedServerManager:
     # -- token provisioning ------------------------------------------------
 
     async def _async_provision_token(self) -> str:
-        """Return an admin access token for the server, provisioning if needed.
+        """Return the access token the server runs with (#2427).
 
-        Reuses the previously-created local admin user and long-lived refresh
-        token across restarts (ids persisted in ``entry.data``); a fresh access
-        token is minted from the refresh token on every start. Falls back to
-        creating a new user / refresh token when the stored ones are gone.
+        Raises ``EmbeddedServerError(kind="token")`` when there is no usable
+        credential; nothing is created to replace it.
         """
-        user_id = self._entry.data.get(DATA_SERVER_USER_ID)
-        rt_id = self._entry.data.get(DATA_REFRESH_TOKEN_ID)
-
-        user = await self._hass.auth.async_get_user(user_id) if user_id else None
-        if user is None:
-            user = await self._hass.auth.async_create_user(
-                SERVER_USER_NAME,
-                group_ids=[GROUP_ID_ADMIN],
-                local_only=True,
-            )
-            rt_id = None
-
-        refresh_token = (
-            self._hass.auth.async_get_refresh_token(rt_id) if rt_id else None
-        )
-        if refresh_token is not None and refresh_token.user.id != user.id:
-            refresh_token = None
-
-        if refresh_token is None:
-            # A long-lived token's client_name must be unique per user, so clear
-            # any stale one left behind by a partial previous provision.
-            for token in list(user.refresh_tokens.values()):
-                if (
-                    token.client_name == SERVER_TOKEN_CLIENT_NAME
-                    and token.token_type == TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
-                ):
-                    self._hass.auth.async_remove_refresh_token(token)
-            refresh_token = await self._hass.auth.async_create_refresh_token(
-                user,
-                client_name=SERVER_TOKEN_CLIENT_NAME,
-                token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN,
-                access_token_expiration=_ACCESS_TOKEN_TTL,
-            )
-
-        # hass is untyped here (homeassistant mocked in unit tier); pin str.
-        access_token = str(self._hass.auth.async_create_access_token(refresh_token))
-
-        # Persist only the ids needed to REUSE the credentials next start.
-        # The access token itself is deliberately NOT stored: it is handed to
-        # the worker in memory, nothing ever reads it back from entry.data,
-        # and a fresh JWT is minted each start - persisting it would leave an
-        # unused admin token in .storage AND rewrite the config entry on
-        # every start (each mint differs). Review finding; the revoke path
-        # still strips the legacy key from entries written by older builds.
-        new_data = {
-            **self._entry.data,
-            DATA_SERVER_USER_ID: user.id,
-            DATA_REFRESH_TOKEN_ID: refresh_token.id,
-        }
-        new_data.pop(DATA_ACCESS_TOKEN, None)
-        if new_data != dict(self._entry.data):
-            self._hass.config_entries.async_update_entry(self._entry, data=new_data)
-        return access_token
+        try:
+            return await async_server_access_token(self._hass, self._entry)
+        except CredentialNeeded as err:
+            raise EmbeddedServerError(err.reason, kind="token") from err
 
     def _prepare_config_dir(self) -> None:
         """Create the server's persistent data directory (blocking)."""

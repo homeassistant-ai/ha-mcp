@@ -10,22 +10,26 @@ from typing import Any
 
 import pytest
 
-from . import test_component_ws_search as _base
-from .test_component_ws_search import (
+from ._embedded_stubs import install
+
+install()
+
+from custom_components.ha_mcp_tools.const import (  # noqa: E402
+    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
+)
+from custom_components.ha_mcp_tools.websocket_api import (  # noqa: E402
+    oauth_callbacks,
+)
+
+from . import test_component_ws_search as _base  # noqa: E402
+from .test_component_ws_search import (  # noqa: E402
     FakeConfigEntry,
     FakeHass,
     _FakeConnection,
     _FakeWSApi,
     _Unauthorized,
     wsapi,
-)
-
-from custom_components.ha_mcp_tools.const import (  # noqa: E402  (after stubs)
-    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
-)
-from custom_components.ha_mcp_tools.websocket_api import (  # noqa: E402
-    oauth_callbacks,
 )
 
 CALLBACK = "https://chatgpt.example/cb"
@@ -117,4 +121,6 @@ class TestAdminGate:
         wsapi.async_register_commands(FakeHass())
         handler = fake.registered[wsapi.WS_OAUTH_CALLBACKS_UPDATE]
         with pytest.raises(_Unauthorized):
-            handler(FakeHass(), conn, {"id": 1, "type": wsapi.WS_OAUTH_CALLBACKS_UPDATE})
+            handler(
+                FakeHass(), conn, {"id": 1, "type": wsapi.WS_OAUTH_CALLBACKS_UPDATE}
+            )

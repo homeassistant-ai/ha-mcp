@@ -97,6 +97,7 @@ class _TextSelector(_SelectSelector):
 class _TextSelectorType:
     TEXT = "text"
     URL = "url"
+    PASSWORD = "password"
 
 
 _sel = MagicMock()
@@ -139,6 +140,7 @@ from custom_components.ha_mcp_tools import const  # noqa: E402
 def _make_flow() -> cf.HaMcpToolsConfigFlow:
     """Build a flow with the HA framework methods stubbed to return markers."""
     flow = cf.HaMcpToolsConfigFlow()
+    flow.hass = MagicMock(name="hass")
     flow.async_set_unique_id = AsyncMock(return_value=None)
     flow._abort_if_unique_id_configured = MagicMock(return_value=None)
     flow.async_show_menu = MagicMock(side_effect=lambda **kw: {"type": "menu", **kw})
@@ -215,17 +217,32 @@ class TestToolsBranch:
 
 
 class TestServerBranch:
+    TOKEN = "admin-llat"
+
+    @pytest.fixture(autouse=True)
+    def _token_check(self, monkeypatch):
+        # Accept TOKEN; anything else is refused the way Home Assistant would.
+        self.checked: list[str] = []
+
+        def problem(_hass, token):
+            self.checked.append(token)
+            return None if token == self.TOKEN else "invalid_token"
+
+        monkeypatch.setattr(cf.server_credentials, "token_problem", problem)
+
     def test_server_step_shows_confirm_form(self):
         flow = _make_flow()
         form = asyncio.run(flow.async_step_server(None))
         assert form["type"] == "form"
         assert form["step_id"] == "server"
 
-    @staticmethod
-    def _defaults(form) -> dict:
-        return {
-            marker.schema: marker.default() for marker in form["data_schema"].schema
+    def _defaults(self, form) -> dict:
+        values = {
+            marker.schema: marker.default()
+            for marker in form["data_schema"].schema
+            if marker.schema != cf.SETUP_ADMIN_TOKEN
         }
+        return {**values, cf.SETUP_ADMIN_TOKEN: self.TOKEN}
 
     def test_new_install_defaults_to_no_webhook_and_loopback_only(self):
         # #2427 (HACS review): a fresh install exposes nothing beyond the Home
@@ -238,7 +255,7 @@ class TestServerBranch:
 
         assert entry["type"] == "entry"
         assert entry["title"] == cf._SERVER_ENTRY_TITLE
-        assert entry["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER}
+        assert entry["data"][const.CONF_ENTRY_TYPE] == const.ENTRY_TYPE_SERVER
         assert entry["options"][const.OPT_ENABLE_WEBHOOK] is False
         assert entry["options"][const.OPT_BIND_HOST] == const.BIND_HOST_LOOPBACK
 
@@ -262,7 +279,11 @@ class TestServerBranch:
         flow = _make_flow()
         entry = asyncio.run(
             flow.async_step_server(
-                {cf.SETUP_REMOTE_ACCESS: mode, const.OPT_BIND_HOST: const.BIND_HOST_ALL}
+                {
+                    cf.SETUP_REMOTE_ACCESS: mode,
+                    const.OPT_BIND_HOST: const.BIND_HOST_ALL,
+                    cf.SETUP_ADMIN_TOKEN: self.TOKEN,
+                }
             )
         )
         assert entry["options"][const.OPT_ENABLE_WEBHOOK] is True
@@ -278,10 +299,31 @@ class TestServerBranch:
                 {
                     cf.SETUP_REMOTE_ACCESS: cf.REMOTE_ACCESS_DISABLED,
                     const.OPT_BIND_HOST: const.BIND_HOST_LOOPBACK,
+                    cf.SETUP_ADMIN_TOKEN: self.TOKEN,
                 }
             )
         )
         assert entry["options"][const.OPT_WEBHOOK_AUTH] == const.WEBHOOK_AUTH_HA
+
+    def test_the_server_runs_with_the_administrators_token(self):
+        # #2427: setup no longer creates an administrator account for itself.
+        flow = _make_flow()
+        form = asyncio.run(flow.async_step_server(None))
+        values = {**self._defaults(form), cf.SETUP_ADMIN_TOKEN: f" {self.TOKEN} "}
+
+        entry = asyncio.run(flow.async_step_server(values))
+
+        assert entry["data"][const.DATA_ADMIN_TOKEN] == self.TOKEN
+
+    def test_an_unusable_token_keeps_the_form_open(self):
+        flow = _make_flow()
+        form = asyncio.run(flow.async_step_server(None))
+        values = {**self._defaults(form), cf.SETUP_ADMIN_TOKEN: "wrong"}
+
+        result = asyncio.run(flow.async_step_server(values))
+
+        assert result["type"] == "form"
+        assert result["errors"] == {cf.SETUP_ADMIN_TOKEN: "invalid_token"}
 
     def test_server_uses_distinct_unique_id(self):
         flow = _make_flow()
@@ -823,8 +865,11 @@ class TestServerOptionsFlow:
         for key in text_fields:
             assert markers[key].description["suggested_value"] == saved[key]
 
+        # The administrator token is never pre-filled from anything saved.
         defaults = {
-            key: m.default() for key, m in markers.items() if key not in text_fields
+            key: m.default()
+            for key, m in markers.items()
+            if key not in (*text_fields, const.OPT_ADMIN_TOKEN_REPLACEMENT)
         }
         # regenerate_secrets is a one-shot action, never pre-filled True;
         # enable_webhook / enable_startup_notification / enable_sidebar_panel
@@ -867,6 +912,7 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE: "",
             const.OPT_OAUTH_CLIENT_ID: "",
             const.OPT_OAUTH_CLIENT_SECRET: "",
+            const.OPT_ADMIN_TOKEN_REPLACEMENT: "",
             const.OPT_OAUTH_REDIRECT_ALLOWLIST: [],
         }
 
@@ -1280,6 +1326,54 @@ class TestOAuthCallbackAllowlistOption:
         )
         result = asyncio.run(flow.async_step_init({}))
         assert result["data"][const.OPT_OAUTH_REDIRECT_ALLOWLIST] == []
+
+
+class TestAdminTokenReplacement:
+    """Configure replaces the server's administrator token (#2427)."""
+
+    @pytest.fixture(autouse=True)
+    def _token_check(self, monkeypatch):
+        monkeypatch.setattr(
+            cf.server_credentials,
+            "token_problem",
+            lambda _hass, token: None if token == "good" else "token_not_admin",
+        )
+
+    def _marker(self, form):
+        return next(
+            m
+            for m in form["data_schema"].schema
+            if m.schema == const.OPT_ADMIN_TOKEN_REPLACEMENT
+        )
+
+    def test_the_stored_token_is_never_shown(self):
+        flow = _make_options_flow(
+            options={const.OPT_ADMIN_TOKEN_REPLACEMENT: "good"},
+            data={const.DATA_ADMIN_TOKEN: "secret"},
+        )
+        form = asyncio.run(flow.async_step_init(None))
+        assert not (self._marker(form).description or {}).get("suggested_value")
+
+    def test_a_working_token_is_saved_for_the_next_start(self):
+        flow = _make_options_flow()
+        result = asyncio.run(
+            flow.async_step_init({const.OPT_ADMIN_TOKEN_REPLACEMENT: " good "})
+        )
+        assert result["data"][const.OPT_ADMIN_TOKEN_REPLACEMENT] == "good"
+
+    def test_an_unusable_token_blocks_the_save(self):
+        flow = _make_options_flow()
+        result = asyncio.run(
+            flow.async_step_init({const.OPT_ADMIN_TOKEN_REPLACEMENT: "bad"})
+        )
+        assert result["errors"] == {
+            const.OPT_ADMIN_TOKEN_REPLACEMENT: "token_not_admin"
+        }
+
+    def test_leaving_it_empty_keeps_the_current_token(self):
+        flow = _make_options_flow()
+        result = asyncio.run(flow.async_step_init({}))
+        assert result["data"][const.OPT_ADMIN_TOKEN_REPLACEMENT] == ""
 
 
 class TestOptionsFormTranslations:
