@@ -2183,9 +2183,9 @@ class IntegrationTools:
         ),
         id_fn=removal_backup_id,
         domain_resolver=resolve_config_entry_backup_domain,
-        # Explicit Template removal validates and resolves its target through
-        # Core before the inner decorator captures the authoritative entry.
-        skip_fn=lambda kw: kw.get("helper_type") == "template",
+        # An explicit flow-helper removal validates and resolves its target
+        # through Core before the inner decorator captures the entry.
+        skip_fn=lambda kw: kw.get("helper_type") in FLOW_HELPER_TYPES,
     )
     @log_tool_usage
     async def ha_remove_helpers_integrations(

@@ -49,11 +49,11 @@ def entry_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
             return [{**entity, "config_entry_id": entry["entry_id"]}]
         assert message["type"] == "ha_mcp_tools/helpers_list"
         return {
-            "covered_types": ["template"],
+            "covered_types": [entry["domain"]],
             "helpers": [
                 {
                     "kind": "flow",
-                    "helper_type": "template",
+                    "helper_type": entry["domain"],
                     "entry_id": entry["entry_id"],
                     "entity_id": entity["entity_id"],
                     "options": deepcopy(options),
@@ -262,3 +262,29 @@ async def test_generic_template_mutation_preserves_best_effort_capture_policy(
     assert entry_backup.client.get_config_entry.await_count == (
         int(operation == "options") + int(capture_state == "lookup_failed")
     )
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+async def test_flow_helper_removal_captures_once_and_only_when_confirmed(
+    entry_backup: SimpleNamespace, confirm: bool
+) -> None:
+    """Every flow helper, not only template, is captured by the inner backup."""
+    entry_backup.entry["domain"] = "utility_meter"
+
+    async def registry_read(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == "config/entity_registry/get":
+            return {"success": True, "result": {"config_entry_id": "template-entry"}}
+        return {"success": True, "result": []}
+
+    entry_backup.client.send_websocket_message.side_effect = registry_read
+    call = entry_backup.tools.ha_remove_helpers_integrations(
+        target="sensor.example", helper_type="utility_meter", confirm=confirm
+    )
+    if not confirm:
+        with pytest.raises(ToolError, match="not confirmed"):
+            await call
+        assert not list(entry_backup.manager.backup_dir.glob("*.yaml"))
+        return
+    await call
+    snapshots = entry_backup.mutations[0]["snapshots"]
+    assert [s["domain"] for s in snapshots] == ["helper_utility_meter"]
