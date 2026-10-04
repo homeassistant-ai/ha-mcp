@@ -13,7 +13,7 @@ from ..config_entry_flow import (
     set_config_subentry,
     update_flow_helper,
 )
-from ..config_entry_flow_walker import fetch_helper_flow_info
+from ..config_entry_flow_introspect import fetch_helper_flow_info
 from ..helpers import raise_tool_error, validate_identifier_not_empty
 from .registry import (
     _apply_registry_updates_to_entity,
@@ -23,18 +23,6 @@ from .registry import (
 from .schemas import _attach_helper_skill, _helper_response
 
 logger = logging.getLogger(__name__)
-
-
-# Flow helper types whose top-level config-flow step is a MENU rather than a
-# FORM — for these, ``fetch_helper_flow_info`` cannot return a ``data_schema``
-# without a menu choice (``next_step_id`` / ``group_type`` / ``menu_option``).
-# The pre-flow gates in ``_handle_flow_helper`` use this set to surface a
-# ``data_schema_unavailable_reason: "menu_helper_requires_branch"`` marker
-# alongside the legal sub-types under ``menu_options`` so the LLM can pick
-# a branch on the next try without a separate discovery round-trip. Hint
-# set — extending it only sharpens the signal, missing entries fall back
-# to silent ``None``.
-_MENU_ROOTED_FLOW_HELPER_TYPES: frozenset[str] = frozenset({"template", "group"})
 
 
 # Keys callers may pass inside ``config`` to select a menu branch — mirrors
@@ -89,8 +77,9 @@ async def _flow_helper_error_context(
     itself sees the request, so the auto-attach in ``_raise_flow_api_error``
     never runs.
 
-    For menu-rooted helpers (``template``, ``group``) without a derivable
-    ``menu_choice``, the schema can't be fetched without picking a branch;
+    For a helper whose first step HA reports as a menu (``template``,
+    ``group``, ``random``) without a derivable ``menu_choice``, the schema
+    can't be fetched without picking a branch;
     a ``data_schema_unavailable_reason: "menu_helper_requires_branch"``
     marker is added instead, along with the legal sub-types under
     ``menu_options`` (issue #1186), so the caller can pick a branch on
@@ -122,10 +111,10 @@ async def _flow_helper_error_context(
             if redaction_enabled()
             else info["schema"]
         )
-    elif helper_type in _MENU_ROOTED_FLOW_HELPER_TYPES and not menu_choice:
+    elif "menu_options" in info:
+        # HA reports a menu first step: no schema until a branch is picked.
         context["data_schema_unavailable_reason"] = "menu_helper_requires_branch"
-        if "menu_options" in info:
-            context["menu_options"] = info["menu_options"]
+        context["menu_options"] = info["menu_options"]
     context.update(extra)
     return context
 

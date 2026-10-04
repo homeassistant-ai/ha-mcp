@@ -20,7 +20,7 @@ from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import FLOW_HELPER_TYPES
-from ..config_entry_flow_walker import fetch_helper_flow_info
+from ..config_entry_flow_introspect import fetch_helper_flow_info
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .schemas import SIMPLE_HELPER_SCHEMAS
 
@@ -186,6 +186,22 @@ async def _describe_form(
     return fields
 
 
+_MORE_FORMS = {False: "yes", None: "depends_on_answers"}
+
+
+def _later_forms(step: dict[str, Any]) -> dict[str, Any]:
+    """Say when HA asks for more fields on a later form of the same flow."""
+    more = _MORE_FORMS.get(step.get("last_step"))
+    if more is None:
+        return {}
+    return {
+        "more_forms": more,
+        "note": "Home Assistant asks for more fields on a later form, whose "
+        "fields can depend on these answers. Pass them in the same config; "
+        "a missing one comes back in the error with that form's fields.",
+    }
+
+
 async def _describe_flow(
     client: Any, helper_type: str, menu_choice: str | None, entry_id: str | None
 ) -> dict[str, Any]:
@@ -195,6 +211,7 @@ async def _describe_flow(
             return {
                 "source": "config_flow",
                 "fields": await _describe_form(client, helper_type, "config", info),
+                **_later_forms(info),
             }
         if "menu_options" in info:
             return {
@@ -216,6 +233,7 @@ async def _describe_flow(
         return {
             "source": "options_flow",
             "fields": await _describe_form(client, helper_type, "options", result),
+            **_later_forms(result),
         }
     finally:
         if flow_id:

@@ -3,8 +3,8 @@
 Extracted from ``config_entry_flow.py`` (which holds the public create/update
 entry points) when that module crossed the ~1000-line split threshold. Holds
 the two walkers that drive a flow to completion, the step submission that
-translates HA's 4xx bodies into structured errors, and the flow introspection
-that feeds those errors a ``data_schema``. Imports the menu and form step
+translates HA's 4xx bodies into structured errors. Flow introspection lives in
+``config_entry_flow_introspect``. Imports the menu and form step
 handling from ``config_entry_flow_menu`` / ``config_entry_flow_form``; the
 public entry points in ``config_entry_flow`` import from here.
 """
@@ -26,6 +26,7 @@ from .config_entry_flow_form import (
     _success_warnings,
     validate_step_values,
 )
+from .config_entry_flow_introspect import _FlowType, fetch_helper_flow_info
 from .config_entry_flow_menu import (
     _flow_step_budget,
     _handle_menu_step,
@@ -46,15 +47,6 @@ _RECONFIGURE_SUCCESS_REASONS = frozenset(
         "reconfigure_successful",
     }
 )
-
-
-class _FlowType(StrEnum):
-    """HA config flow result type strings."""
-
-    FORM = "form"
-    MENU = "menu"
-    ABORT = "abort"
-    CREATE_ENTRY = "create_entry"
 
 
 class ReconfigureStatus(StrEnum):
@@ -151,96 +143,6 @@ def _parse_flow_api_error(
     }
 
 
-def _form_info(step: dict[str, Any]) -> dict[str, Any]:
-    """A FORM step's schema and the step_id that keys its help text, else {}."""
-    schema = step.get("data_schema")
-    if step.get("type") != _FlowType.FORM or not isinstance(schema, list):
-        return {}
-    return {"schema": schema, "step_id": step.get("step_id")}
-
-
-async def _process_menu_flow_result(
-    flow_result: dict[str, Any],
-    client: Any,
-    intro_flow_id: str | None,
-    menu_choice: str | None,
-) -> dict[str, Any]:
-    """Return schema or menu_options dict for a MENU-type flow result."""
-    info: dict[str, Any] = {}
-    if menu_choice:
-        if not intro_flow_id:
-            return info
-        try:
-            step = await asyncio.wait_for(
-                client.submit_config_flow_step(
-                    intro_flow_id, {"next_step_id": menu_choice}
-                ),
-                timeout=10.0,
-            )
-        except (HomeAssistantAPIError, TimeoutError):
-            return info
-        return _form_info(step)
-
-    options = flow_result.get("menu_options")
-    if isinstance(options, list):
-        filtered = [opt for opt in options if isinstance(opt, str)]
-        if filtered:
-            info["menu_options"] = filtered
-    return info
-
-
-async def fetch_helper_flow_info(
-    client: Any,
-    helper_type: str | None,
-    menu_choice: str | None = None,
-) -> dict[str, Any]:
-    """Best-effort introspection of a helper's config-entry flow.
-
-    Starts a fresh introspection flow (always aborted) and returns a dict
-    with optional keys ``"schema"`` and ``"menu_options"`` so a single HA
-    round-trip serves both the schema-attach path (used by
-    ``_raise_flow_api_error`` and the pre-flow validation gates in
-    ``_handle_flow_helper``) and the menu-sub-types path (used when a
-    menu-rooted helper has no branch chosen yet — issue #1186).
-
-    Behaviour:
-
-    - FORM at top: ``{"schema": [...], "step_id": ...}``
-    - MENU at top with ``menu_choice``: submits and returns the branch
-      form schema as ``{"schema": [...]}`` (no ``menu_options`` since
-      the caller already picked a branch)
-    - MENU at top without ``menu_choice``: ``{"menu_options": [...]}``
-    - any failure or unparseable shape: ``{}`` (callers branch on
-      ``"schema" in info`` / ``"menu_options" in info``)
-    """
-    info: dict[str, Any] = {}
-    if not helper_type or client is None:
-        return info
-    intro_flow_id: str | None = None
-    try:
-        flow_result = await client.start_config_flow(helper_type)
-        intro_flow_id = flow_result.get("flow_id")
-        flow_type = flow_result.get("type")
-
-        if flow_type == _FlowType.MENU:
-            return await _process_menu_flow_result(
-                flow_result, client, intro_flow_id, menu_choice
-            )
-        return _form_info(flow_result)
-    except Exception:  # noqa: BLE001
-        return info
-    finally:
-        if intro_flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_config_flow(intro_flow_id), timeout=5.0
-                )
-            except Exception as abort_err:  # noqa: BLE001
-                logger.debug(
-                    f"Failed to abort introspection flow {intro_flow_id}: {abort_err}"
-                )
-
-
 def _build_flow_error_context(
     flow_id: str,
     status_code: int,
@@ -313,15 +215,14 @@ async def _raise_flow_api_error(
         if isinstance(step_schema, list):
             current_schema = step_schema
 
-    if is_reconfigure:
-        # The live reconfigure step already carries the schema HA is asking
-        # against. Introspecting here would start a second, normal setup flow
-        # whose schema is a different contract.
+    if current_schema is not None or is_reconfigure:
+        # The live step is the form HA rejected: in a multi-step flow a fresh
+        # introspection would show the first form instead, and for an options
+        # or reconfigure flow a setup form, a different contract.
         schema = current_schema
     else:
-        # Single introspection round-trip — used by both branches below.
         info = await fetch_helper_flow_info(client, helper_type, menu_choice)
-        schema = info.get("schema") or current_schema
+        schema = info.get("schema")
     # An options/reconfigure step's schema carries the persisted values in
     # description.suggested_value — under redact_secrets those must not ride
     # into the error context verbatim (#2157). Deep-copies, so the live

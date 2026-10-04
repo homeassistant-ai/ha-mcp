@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-from ha_mcp.tools.config_entry_flow_walker import fetch_helper_flow_info
+from ha_mcp.tools.config_entry_flow_introspect import fetch_helper_flow_info
 
 
 class TestFetchHelperFlowInfo:
@@ -38,7 +38,7 @@ class TestFetchHelperFlowInfo:
         info = await fetch_helper_flow_info(client, "filter")
 
         # step_id keys the step's field help text in HA's translations (#2632).
-        assert info == {"schema": intro_schema, "step_id": "user"}
+        assert info == {"schema": intro_schema, "step_id": "user", "last_step": None}
         client.abort_config_flow.assert_called_once_with("intro-1")
 
     async def test_menu_flow_with_choice_submits_and_returns_branch_schema(
@@ -69,7 +69,11 @@ class TestFetchHelperFlowInfo:
 
         # menu_options is intentionally NOT surfaced when a choice was
         # picked — the caller already has it.
-        assert info == {"schema": branch_schema, "step_id": "sensor"}
+        assert info == {
+            "schema": branch_schema,
+            "step_id": "sensor",
+            "last_step": None,
+        }
 
     async def test_menu_flow_without_choice_returns_menu_options(self) -> None:
         # ``template`` without a menu_choice can't be schema-fetched —

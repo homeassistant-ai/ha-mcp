@@ -105,6 +105,52 @@ async def test_flow_helper_menu_lists_sub_types_until_one_is_chosen(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("last_step", "more_forms"),
+    [(False, "yes"), (None, "depends_on_answers"), (True, None)],
+)
+async def test_flow_helper_says_when_more_forms_follow(
+    client, monkeypatch, last_step, more_forms
+):
+    """A statistics helper asks for its characteristic on a second form; the
+    agent learns that instead of taking the first form for all of it."""
+    monkeypatch.setattr(
+        mod,
+        "fetch_helper_flow_info",
+        AsyncMock(
+            return_value={
+                "step_id": "user",
+                "schema": [{"name": "entity_id"}],
+                "last_step": last_step,
+            }
+        ),
+    )
+
+    client.send_websocket_message.return_value = {}
+
+    result = await mod.describe_helper(client, "statistics")
+
+    assert result.get("more_forms") == more_forms
+    assert ("note" in result) is (more_forms is not None)
+
+
+@pytest.mark.asyncio
+async def test_existing_flow_helper_with_a_later_options_form_says_so(client):
+    client.start_options_flow.return_value = {
+        "type": "form",
+        "flow_id": "f1",
+        "step_id": "init",
+        "data_schema": [{"name": "away_temp"}],
+        "last_step": False,
+    }
+    client.send_websocket_message.return_value = {}
+
+    result = await mod.describe_helper(client, "generic_thermostat", helper_id="entry1")
+
+    assert result["more_forms"] == "yes"
+
+
+@pytest.mark.asyncio
 async def test_existing_flow_helper_reads_current_values_and_aborts_options_flow(
     client,
 ):

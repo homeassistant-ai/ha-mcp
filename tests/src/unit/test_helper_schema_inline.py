@@ -230,11 +230,12 @@ class TestFlowHelperErrorContext:
     async def test_menu_rooted_without_choice_surfaces_unavailable_reason(
         self,
     ) -> None:
-        # A menu-rooted flow type (``template``, ``group``) without a
-        # derivable menu_choice can't be schema-fetched without picking a
-        # branch — surface the marker so the caller has a non-silent
-        # signal, plus the legal sub-types inline as ``menu_options``
-        # so they can pick a branch on the next try (issue #1186).
+        # A flow whose first step HA reports as a MENU can't be
+        # schema-fetched without picking a branch — surface the marker so
+        # the caller has a non-silent signal, plus the legal sub-types
+        # inline as ``menu_options`` so they can pick a branch on the next
+        # try (issue #1186). ``random`` is menu-rooted too: the menu comes
+        # from HA, not from a list of known types (#2632).
         client = AsyncMock()
         client.start_config_flow = AsyncMock(
             return_value={
@@ -245,10 +246,10 @@ class TestFlowHelperErrorContext:
         )
         client.abort_config_flow = AsyncMock(return_value={})
 
-        ctx = await _flow_helper_error_context(client, "template")
+        ctx = await _flow_helper_error_context(client, "random")
 
         assert ctx == {
-            "helper_type": "template",
+            "helper_type": "random",
             "data_schema_unavailable_reason": "menu_helper_requires_branch",
             "menu_options": ["sensor", "binary_sensor"],
         }
@@ -256,35 +257,14 @@ class TestFlowHelperErrorContext:
     async def test_non_menu_helper_returns_helper_type_only_on_no_schema(
         self,
     ) -> None:
-        # A non-menu-rooted flow type whose schema fetch returns None
-        # (transient HA failure, etc.) keeps the previous "helper_type only"
-        # response — the marker is reserved for the menu-rooted case.
+        # A schema fetch that fails (transient HA failure, etc.) gives the
+        # "helper_type only" response — the marker needs HA to report a menu.
         client = AsyncMock()
         client.start_config_flow = AsyncMock(side_effect=RuntimeError("offline"))
 
         ctx = await _flow_helper_error_context(client, "filter")
 
         assert ctx == {"helper_type": "filter"}
-
-    async def test_menu_rooted_marker_omits_menu_options_on_ha_failure(
-        self,
-    ) -> None:
-        # If ``fetch_helper_flow_info`` returns ``{}`` (HA failure on the
-        # introspection round-trip) for a menu-rooted helper without a
-        # choice, the marker is still set but ``menu_options`` is
-        # omitted rather than written as an empty / None value. The
-        # caller can rely on ``"menu_options" in ctx`` as the
-        # has-options test.
-        client = AsyncMock()
-        client.start_config_flow = AsyncMock(side_effect=RuntimeError("offline"))
-
-        ctx = await _flow_helper_error_context(client, "template")
-
-        assert ctx == {
-            "helper_type": "template",
-            "data_schema_unavailable_reason": "menu_helper_requires_branch",
-        }
-        assert "menu_options" not in ctx
 
 
 # ---------------------------------------------------------------------------
