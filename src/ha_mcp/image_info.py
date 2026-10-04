@@ -25,44 +25,35 @@ def resolve_image_info(
 ) -> tuple[str, tuple[int, int] | None]:
     """Resolve the payload's actual format and its dimensions.
 
-    Dispatches on the declared *declared_format* (from the Content-Type
-    header) but verifies the payload's magic bytes: when a camera
-    mislabels its format, the sniff result wins, so the returned format
-    and dimensions always describe the same bytes. When no sniff
-    matches, the declared format is kept and no dimensions are
-    reported.
+    The magic bytes decide the format: a recognized container (JPEG, PNG
+    or GIF) wins over *declared_format*, so a mislabeled Content-Type can
+    never make the reported label disagree with the served bytes. When no
+    magic matches, *declared_format* is reported as-is with no
+    dimensions, so the text block can still name the format the header
+    claimed.
     """
-    fmt = (declared_format or "").lower()
-    if fmt in ("jpeg", "jpg"):
-        if data[:2] == b"\xff\xd8":
-            return "jpeg", _jpeg_dimensions(data)
-    elif fmt == "png":
-        if data[:8] == _PNG_SIGNATURE:
-            return fmt, _png_dimensions(data)
-    elif fmt == "gif":
-        if data[:6] in _GIF_SIGNATURES:
-            return fmt, _gif_dimensions(data)
-    # Declared format and payload disagree — trust the magic bytes.
     if data[:2] == b"\xff\xd8":
         return "jpeg", _jpeg_dimensions(data)
     if data[:8] == _PNG_SIGNATURE:
         return "png", _png_dimensions(data)
     if data[:6] in _GIF_SIGNATURES:
         return "gif", _gif_dimensions(data)
-    return fmt, None
+    # No recognized container: keep the declared name, report no size.
+    return declared_format, None
 
 
 def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
     """Walk JPEG segments to the first SOF marker, which carries the size.
 
-    Only the header is parsed; the compressed scan data is never decoded.
-    The declared segment length is validated before the dimension fields
-    are read, so a corrupt length can neither reach past the end of the
-    buffer nor report bytes outside the segment as the image size.
+    The dispatcher has already verified the two-byte SOI; every further
+    read is bounds-checked by the walk, so a truncated or corrupt header
+    yields ``None`` rather than an exception. Only the header is parsed;
+    the compressed scan data is never decoded. The declared segment
+    length is validated before the dimension fields are read, so a
+    corrupt length can neither reach past the end of the buffer nor
+    report bytes outside the segment as the image size.
     """
-    if len(data) < 4 or data[0] != 0xFF or data[1] != 0xD8:
-        return None
-    sof_pos = _find_sof_position(data, 2)
+    sof_pos = _find_sof_position(data)
     if sof_pos is None:
         return None
     # The SOF length field counts itself, so the segment spans
@@ -94,13 +85,14 @@ def _skip_fill_bytes(data: bytes, pos: int) -> int:
     return pos
 
 
-def _find_sof_position(data: bytes, pos: int) -> int | None:
-    """Advance through JPEG segments from *pos* to the first SOF marker.
+def _find_sof_position(data: bytes) -> int | None:
+    """Advance through the JPEG segments after the SOI to the first SOF marker.
 
     Returns the offset of the SOF marker, or ``None`` when the header is
     malformed, truncated, or ends (EOI) without a frame definition.
     """
     size = len(data)
+    pos = 2  # first segment after the two-byte SOI
     while pos + 2 <= size:
         if data[pos] != 0xFF:
             return None
