@@ -1,10 +1,12 @@
 """Unit tests for camera tools module."""
 
+import json
 import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_camera import CameraTools
 
@@ -20,6 +22,11 @@ def _png(width: int, height: int) -> bytes:
         + b"IHDR"
         + ihdr_payload
     )
+
+
+def _error_body(exc_info: pytest.ExceptionInfo[ToolError]) -> dict:
+    """Parse the structured error payload carried by a raised ToolError."""
+    return json.loads(exc_info.value.args[0])["error"]
 
 
 class TestHaGetCameraImage:
@@ -47,27 +54,38 @@ class TestHaGetCameraImage:
 
     @pytest.mark.asyncio
     async def test_invalid_entity_id_format_empty(self, camera_tools):
-        """Empty entity_id raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid entity_id format"):
+        """Empty entity_id raises a structured validation error."""
+        with pytest.raises(ToolError) as exc_info:
             await camera_tools.ha_get_camera_image(entity_id="")
+        error = _error_body(exc_info)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "Invalid entity_id format" in error["message"]
 
     @pytest.mark.asyncio
     async def test_invalid_entity_id_format_no_dot(self, camera_tools):
-        """Entity ID without dot raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid entity_id format"):
+        """Entity ID without dot raises a structured validation error."""
+        with pytest.raises(ToolError) as exc_info:
             await camera_tools.ha_get_camera_image(entity_id="front_door")
+        error = _error_body(exc_info)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
 
     @pytest.mark.asyncio
     async def test_non_camera_domain_raises_error(self, camera_tools):
-        """Non-camera entity raises ValueError."""
-        with pytest.raises(ValueError, match="not a camera entity"):
+        """Non-camera entity raises a structured validation error."""
+        with pytest.raises(ToolError) as exc_info:
             await camera_tools.ha_get_camera_image(entity_id="light.living_room")
+        error = _error_body(exc_info)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "not a camera entity" in error["message"]
 
     @pytest.mark.asyncio
     async def test_non_camera_domain_sensor(self, camera_tools):
-        """Sensor entity raises ValueError."""
-        with pytest.raises(ValueError, match="Domain is 'sensor', expected 'camera'"):
+        """Sensor entity raises a structured validation error naming the domain."""
+        with pytest.raises(ToolError) as exc_info:
             await camera_tools.ha_get_camera_image(entity_id="sensor.temperature")
+        error = _error_body(exc_info)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "Domain is 'sensor', expected 'camera'" in error["message"]
 
     @pytest.mark.asyncio
     async def test_successful_image_retrieval(self, mock_client):
@@ -217,42 +235,50 @@ class TestHaGetCameraImage:
 
     @pytest.mark.asyncio
     async def test_authentication_error(self, mock_client):
-        """Test 401 response raises PermissionError."""
+        """A 401 from the camera proxy raises a structured auth error."""
         mock_response = MagicMock()
         mock_response.status_code = 401
         mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
 
         tools = CameraTools(mock_client)
-        with pytest.raises(PermissionError, match="Invalid authentication token"):
+        with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_camera_image(entity_id="camera.front_door")
+        error = _error_body(exc_info)
+        assert error["code"] == "AUTH_INVALID_TOKEN"
+        assert "Invalid authentication token" in error["message"]
 
     @pytest.mark.asyncio
     async def test_not_found_error(self, mock_client):
-        """Test 404 response raises ValueError."""
+        """A 404 from the camera proxy raises a structured not-found error."""
         mock_response = MagicMock()
         mock_response.status_code = 404
         mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
 
         tools = CameraTools(mock_client)
-        with pytest.raises(ValueError, match="Camera entity not found"):
+        with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_camera_image(entity_id="camera.nonexistent")
+        error = _error_body(exc_info)
+        assert error["code"] == "ENTITY_NOT_FOUND"
+        assert "not found" in error["message"]
+        assert "ha_search" in error.get("details", "")
 
     @pytest.mark.asyncio
     async def test_server_error(self, mock_client):
-        """Test 500 response raises RuntimeError."""
+        """A 500 from the camera proxy raises a structured service error."""
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
 
         tools = CameraTools(mock_client)
-        with pytest.raises(
-            RuntimeError, match="Failed to retrieve camera image: HTTP 500"
-        ):
+        with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_camera_image(entity_id="camera.front_door")
+        error = _error_body(exc_info)
+        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert "HTTP 500" in error["message"]
 
     @pytest.mark.asyncio
     async def test_empty_image_data(self, mock_client):
-        """Test empty image data raises RuntimeError."""
+        """An empty 2xx body raises a structured service error."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.content = b""
@@ -260,8 +286,25 @@ class TestHaGetCameraImage:
         mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
 
         tools = CameraTools(mock_client)
-        with pytest.raises(RuntimeError, match="returned empty image data"):
+        with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_camera_image(entity_id="camera.front_door")
+        error = _error_body(exc_info)
+        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert "empty image" in error["message"]
+
+    @pytest.mark.asyncio
+    async def test_unexpected_failure_maps_to_structured_error(self, mock_client):
+        """The catch-all routes unexpected exceptions through the shared classifier."""
+        mock_client.httpx_client.get = AsyncMock(
+            side_effect=HomeAssistantConnectionError("connection refused")
+        )
+
+        tools = CameraTools(mock_client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_get_camera_image(entity_id="camera.front_door")
+        error = _error_body(exc_info)
+        # Classified by type, not swallowed as a generic "camera online" failure.
+        assert error["code"] == "CONNECTION_FAILED"
 
     @pytest.mark.asyncio
     async def test_png_content_type(self, mock_client):

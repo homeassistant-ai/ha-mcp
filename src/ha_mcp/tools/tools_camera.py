@@ -13,11 +13,23 @@ from datetime import UTC, datetime
 
 from pydantic import Field
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 from ha_mcp._vendor.fastmcp.utilities.types import Image
+from ha_mcp.errors import (
+    ErrorCode,
+    create_auth_error,
+    create_entity_not_found_error,
+    create_error_response,
+)
 from ha_mcp.image_info import resolve_image_info
 
-from .helpers import log_tool_usage, register_tool_methods
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 from .tool_hints import read_only_hints
 from .util_helpers import fetch_ha_timezone, resolve_local_timezone
 
@@ -75,22 +87,42 @@ class CameraTools:
 
     @staticmethod
     def _check_response(response: Any, entity_id: str) -> None:
-        """Validate camera proxy HTTP response status and content, raising on errors."""
+        """Validate a camera-proxy HTTP response, raising a structured ToolError.
+
+        401 maps to an authentication error, 404 to a missing-entity error,
+        any other 4xx/5xx to a service-call failure, and an empty 2xx body
+        is a service failure too (HA answered but had no image to serve).
+        """
         if response.status_code == 401:
-            raise PermissionError("Invalid authentication token for camera access")
+            raise_tool_error(
+                create_auth_error(
+                    "Invalid authentication token for camera access",
+                    context={"entity_id": entity_id},
+                )
+            )
         if response.status_code == 404:
-            raise ValueError(
-                f"Camera entity not found: {entity_id}. "
-                "Use ha_search() to find available cameras."
+            raise_tool_error(
+                create_entity_not_found_error(
+                    entity_id,
+                    details="Use ha_search to find available cameras",
+                )
             )
         if response.status_code >= 400:
-            raise RuntimeError(
-                f"Failed to retrieve camera image: HTTP {response.status_code}"
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to retrieve camera image: HTTP {response.status_code}",
+                    context={"entity_id": entity_id},
+                )
             )
         if not response.content:
-            raise RuntimeError(
-                f"Camera {entity_id} returned empty image data. "
-                "The camera may be offline or unavailable."
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Camera {entity_id} returned empty image data. The camera "
+                    "may be offline or temporarily unavailable.",
+                    context={"entity_id": entity_id},
+                )
             )
 
     @tool(
@@ -122,16 +154,23 @@ class CameraTools:
         EXAMPLE: ha_get_camera_image(entity_id="camera.backyard", width=640, height=480)
         """
         if not entity_id or "." not in entity_id:
-            raise ValueError(
-                f"Invalid entity_id format: {entity_id}. "
-                "Expected format: camera.entity_name"
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid entity_id format: {entity_id}. "
+                    "Expected format: camera.entity_name",
+                )
             )
 
         domain = entity_id.split(".", maxsplit=1)[0]
         if domain != "camera":
-            raise ValueError(
-                f"Entity {entity_id} is not a camera entity. "
-                f"Domain is '{domain}', expected 'camera'."
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Entity {entity_id} is not a camera entity. "
+                    f"Domain is '{domain}', expected 'camera'.",
+                    context={"entity_id": entity_id},
+                )
             )
 
         # Build the camera proxy URL with optional size parameters
@@ -185,14 +224,15 @@ class CameraTools:
                 Image(data=response.content, format=image_format),
             )
 
-        except (PermissionError, ValueError, RuntimeError):
+        except ToolError:
             raise
         except Exception as e:
             logger.error(f"Error retrieving camera image from {entity_id}: {e}")
-            raise RuntimeError(
-                f"Failed to retrieve camera image from {entity_id}: {str(e)}. "
-                "Ensure the camera is online and accessible."
-            ) from e
+            exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id},
+                suggestions=["Ensure the camera is online and accessible"],
+            )
 
 
 def register_camera_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
