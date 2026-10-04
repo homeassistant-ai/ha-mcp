@@ -17,9 +17,9 @@
      counts, run links, or per-lane status. Reviewers see those in the PR's
      checks, and they go stale on the next push. -->
 
-- [ ] I have tested these changes with a LLM agent
+- [ ] I have tested these changes with a LLM agent (tested directly on a live HA instance, or directly on an emulated HA instance such as the live dev environment)
 - [ ] All automated tests pass (`uv run pytest`)
-- [ ] Code passes lint, format, and type checks (`uv run ruff check`, `uv run ruff format`, `uv run mypy src/`)
+- [ ] Code passes lint, format, and type checks (`uv run ruff check`, `uv run ruff format --check` on changed files, `uv run mypy src/`)
 
 ## Future improvements
 
