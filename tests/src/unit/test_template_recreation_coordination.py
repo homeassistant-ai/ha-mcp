@@ -30,7 +30,7 @@ async def test_new_entry_writes_wait_until_recreation_finishes(  # noqa: PLR0915
     entered = asyncio.Event()
     original_create = recovery.create.side_effect
     original_send = bm._ws_send
-    original_verify = bm._verify_template_restore
+    original_verify = bm._verify_flow_restore
 
     async def pause():
         reached.set()
@@ -65,7 +65,7 @@ async def test_new_entry_writes_wait_until_recreation_finishes(  # noqa: PLR0915
 
     recovery.create.side_effect = create
     monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=send))
-    monkeypatch.setattr(bm, "_verify_template_restore", verify)
+    monkeypatch.setattr(bm, "_verify_flow_restore", verify)
     restore = asyncio.create_task(recovery.manager.restore_snapshot(recovery.name))
     writer = None
     try:

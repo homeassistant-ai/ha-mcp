@@ -43,6 +43,7 @@ WS endpoint shape.
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import logging
 import os
@@ -188,7 +189,7 @@ def _validate_snapshot_envelope(data: dict[str, Any]) -> None:
             raise InvalidBackupSnapshotError(f"Snapshot has invalid {key}")
 
 
-class _TemplateReadError(HomeAssistantError):
+class _FlowHelperReadError(HomeAssistantError):
     """A local validation failure with a safe diagnostic code."""
 
     def __init__(self, message: str, reason: str) -> None:
@@ -196,8 +197,20 @@ class _TemplateReadError(HomeAssistantError):
         self.reason = reason
 
 
-def _template_failure_reason(step: str, error: BaseException) -> str:
-    if isinstance(error, _TemplateReadError):
+@functools.cache
+def _flow_helper_types() -> frozenset[str]:
+    from .tools.config_entry_flow import FLOW_HELPER_TYPES
+
+    return FLOW_HELPER_TYPES
+
+
+def _is_flow_helper_domain(domain: str) -> bool:
+    """A ``helper_<type>`` snapshot of a config-entry (flow) helper."""
+    return domain.startswith("helper_") and domain[7:] in _flow_helper_types()
+
+
+def _flow_failure_reason(step: str, error: BaseException) -> str:
+    if isinstance(error, _FlowHelperReadError):
         return error.reason
     if isinstance(error, BackupRestoreError):
         return str(error.outcome.get("reason") or "restore_refused")
@@ -210,7 +223,7 @@ def _template_failure_reason(step: str, error: BaseException) -> str:
     return "upstream_error"
 
 
-def _template_safe_failure_detail(step: str, error: BaseException) -> str | None:
+def _flow_safe_failure_detail(step: str, error: BaseException) -> str | None:
     if isinstance(error, MandatoryBackupError):
         return error.safe_detail
     # The safety stage wraps remote fetch failures in MandatoryBackupError;
@@ -220,15 +233,15 @@ def _template_safe_failure_detail(step: str, error: BaseException) -> str | None
     return None
 
 
-def _log_template_failure(step: str, error: BaseException) -> None:
+def _log_flow_helper_failure(step: str, error: BaseException) -> None:
     # Remote exceptions can contain submitted options or credentials. Preserve
     # only local storage diagnostics and explicitly safe capture details.
-    detail = _template_safe_failure_detail(step, error)
+    detail = _flow_safe_failure_detail(step, error)
     logger.warning(
-        "Template restore step=%s failed: %s reason=%s%s",
+        "Flow helper restore step=%s failed: %s reason=%s%s",
         step,
         type(error).__name__,
-        _template_failure_reason(step, error),
+        _flow_failure_reason(step, error),
         f" detail={detail}" if detail else "",
     )
 
@@ -517,10 +530,10 @@ class BackupManager:
         )
         self._entry_write_owners: dict[str, asyncio.Task[Any]] = {}
         self._entry_admission_state = _EntryAdmissionState()
-        self._template_identity_cache: dict[
+        self._entry_identity_cache: dict[
             str, tuple[tuple[int, int, int, int, int], str | None]
         ] = {}
-        self._template_identity_lock = threading.Lock()
+        self._entry_identity_lock = threading.Lock()
         self._protected_snapshot_names: Counter[str] = Counter()
         self._snapshot_pin_lock = threading.Lock()
         self._init_dir_error: str | None = None
@@ -616,7 +629,7 @@ class BackupManager:
     async def _config_entry_admission(self, exclusive: bool) -> AsyncIterator[None]:
         """Drain guarded writes before a restore can expose an unknown new ID.
 
-        Ordinary writes remain parallel across entries. Template restores pause
+        Ordinary writes remain parallel across entries. Flow-helper restores pause
         them server-wide until creation, renaming and verification finish: the
         replacement can be visible before the create response gives us its ID.
         Admission precedes entry locking so already queued writes can drain.
@@ -628,7 +641,7 @@ class BackupManager:
         if task in state.admissions:
             if exclusive and not state.admissions[task]:
                 raise RuntimeError(
-                    "Cannot start Template restore inside an entry write"
+                    "Cannot start a helper restore inside an entry write"
                 )
             yield
             return
@@ -645,7 +658,7 @@ class BackupManager:
         else:
             if state.restore_owner or state.restores_waiting:
                 logger.info(
-                    "Auto-backup: config-entry write waiting for Template restore (%s)",
+                    "Auto-backup: config-entry write waiting for a helper restore (%s)",
                     state.restore_entity_id or "awaiting admission",
                 )
             while state.restore_owner or state.restores_waiting:
@@ -665,7 +678,7 @@ class BackupManager:
     async def config_entry_write_guard(
         self, entity_id: str, *, exclusive: bool = False
     ) -> AsyncIterator[None]:
-        """Serialize entry writes; Template restores also reserve admission."""
+        """Serialize entry writes; flow-helper restores also reserve admission."""
         async with self._config_entry_admission(exclusive):
             task = asyncio.current_task()
             assert task is not None
@@ -723,13 +736,13 @@ class BackupManager:
         if handler is None:
             return None
 
-        if domain == "helper_template" and "." in entity_id:
+        if _is_flow_helper_domain(domain) and "." in entity_id:
             config = await self._fetch_config_for_snapshot(
                 handler, entity_id, f"{domain}:{entity_id}", mandatory=mandatory
             )
             if config is _SNAPSHOT_SKIP:
                 return None
-            entity_id = _template_entry_id(entity_id, config)
+            entity_id = _flow_entry_id(entity_id, config, _flow_type(domain))
             # Resolve before bookkeeping, but read options again under the lock:
             # another write may complete while this alias capture waits.
         key = f"{domain}:{entity_id}"
@@ -1021,12 +1034,13 @@ class BackupManager:
         ``config`` (which is the whole automation, dashboard or file), so the
         read stops at the ``config:`` line and never parses the body: every
         listing row opens its file, and an unfiltered listing of hundreds of
-        whole-file snapshots has to stay a header read per row. Template
+        whole-file snapshots has to stay a header read per row. Flow-helper
         snapshots are the exception: older headers used aliases, so their
         stable identity must be read from config.entry_id.
         """
-        if path.name.startswith("helper_template."):
-            return self._template_snapshot_identity(path)
+        domain = path.name.split(".", 1)[0]
+        if _is_flow_helper_domain(domain):
+            return self._entry_snapshot_identity(path, _flow_type(domain))
         try:
             with path.open(encoding="utf-8") as handle:
                 header: list[str] = []
@@ -1047,8 +1061,8 @@ class BackupManager:
         found = loaded.get("entity_id")
         return found if isinstance(found, str) else None
 
-    def _template_snapshot_identity(self, path: Path) -> str | None:
-        """Validate new/changed Template YAML once, including legacy alias headers.
+    def _entry_snapshot_identity(self, path: Path, helper_type: str) -> str | None:
+        """Validate new/changed flow-helper YAML once, including legacy alias headers.
 
         Rotation still enumerates and stats the history to discover imported or
         changed files, but it does not repeatedly parse unrelated YAML bodies.
@@ -1063,8 +1077,8 @@ class BackupManager:
                 before.st_mtime_ns,
                 before.st_ctime_ns,
             )
-            with self._template_identity_lock:
-                cached = self._template_identity_cache.get(path.name)
+            with self._entry_identity_lock:
+                cached = self._entry_identity_cache.get(path.name)
                 if cached is not None and cached[0] == signature:
                     return cached[1]
             identity = None
@@ -1072,7 +1086,9 @@ class BackupManager:
                 data = self.read_snapshot(path.name)
                 entity_id = data.get("entity_id")
                 if isinstance(entity_id, str):
-                    identity = _template_entry_id(entity_id, data.get("config"))
+                    identity = _flow_entry_id(
+                        entity_id, data.get("config"), helper_type
+                    )
             except (ValueError, HomeAssistantError) as err:
                 # A stable malformed file is cached as unowned, never deleted.
                 # Parser messages may contain option values; retain only type.
@@ -1089,7 +1105,7 @@ class BackupManager:
                 after.st_mtime_ns,
                 after.st_ctime_ns,
             ):
-                self._forget_template_identity(path.name)
+                self._forget_entry_identity(path.name)
                 return None
         except OSError as err:
             logger.warning(
@@ -1097,15 +1113,15 @@ class BackupManager:
                 path.name,
                 type(err).__name__,
             )
-            self._forget_template_identity(path.name)
+            self._forget_entry_identity(path.name)
             return None
-        with self._template_identity_lock:
-            self._template_identity_cache[path.name] = (signature, identity)
+        with self._entry_identity_lock:
+            self._entry_identity_cache[path.name] = (signature, identity)
         return identity
 
-    def _forget_template_identity(self, name: str) -> None:
-        with self._template_identity_lock:
-            self._template_identity_cache.pop(name, None)
+    def _forget_entry_identity(self, name: str) -> None:
+        with self._entry_identity_lock:
+            self._entry_identity_cache.pop(name, None)
 
     def _snapshot_is_for(self, path: Path, entity_id: str) -> bool:
         """Whether ``path`` holds a snapshot of ``entity_id`` (see ``_id_matches``)."""
@@ -1115,13 +1131,13 @@ class BackupManager:
         self, domain: str, entity_id: str, protected: frozenset[str] = frozenset()
     ) -> None:
         candidates: set[Path] = set()
-        if domain == "helper_template":
+        if _is_flow_helper_domain(domain):
             # Older snapshots used the entity alias as their filename/header.
-            candidates.update(self._dir.glob("helper_template.*.yaml"))
+            candidates.update(self._dir.glob(f"{domain}.*.yaml"))
             names = {path.name for path in candidates}
-            with self._template_identity_lock:
-                for name in self._template_identity_cache.keys() - names:
-                    del self._template_identity_cache[name]
+            with self._entry_identity_lock:
+                for name in self._entry_identity_cache.keys() - names:
+                    del self._entry_identity_cache[name]
         else:
             for safe in _entity_id_aliases(entity_id):
                 candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
@@ -1144,7 +1160,7 @@ class BackupManager:
                     ):
                         continue
                     old.unlink()
-                    self._forget_template_identity(old.name)
+                    self._forget_entry_identity(old.name)
                     excess -= 1
             except OSError as err:
                 logger.warning("Auto-backup: failed to rotate %s: %s", old.name, err)
@@ -1203,7 +1219,7 @@ class BackupManager:
             return None
         if (
             safe_filter
-            and meta["domain"] != "helper_template"
+            and not _is_flow_helper_domain(meta["domain"])
             and meta["entity_id"] not in safe_filter
         ):
             return None
@@ -1212,7 +1228,7 @@ class BackupManager:
         # shown to the caller — digest or pre-digest — is a value the filter
         # would refuse or misroute, where the stored id is what the settings
         # UI and ha_manage_backup can send straight back and get that entity's
-        # whole history. Template payloads also supply the stable config-entry
+        # whole history. Flow-helper payloads also supply the stable config-entry
         # ID; other domains need only the header. A file that cannot identify
         # itself keeps its stem in an unfiltered
         # listing and is left out of a filtered one.
@@ -1265,7 +1281,7 @@ class BackupManager:
                     "Snapshot is in use by a capture or active restore; retry after it finishes"
                 )
             path.unlink()
-            self._forget_template_identity(name)
+            self._forget_entry_identity(name)
         return path
 
     def delete_bulk(
@@ -1359,19 +1375,19 @@ class BackupManager:
         self._protect_snapshot(name)
         try:
             data = await self._read_restore_snapshot(name)
-            if data["domain"] == "helper_template":
+            if _is_flow_helper_domain(data["domain"]):
                 try:
-                    snapshot = _validate_template_snapshot(
-                        data["entity_id"], data["config"]
+                    snapshot = _validate_flow_snapshot(
+                        data["entity_id"], data["config"], _flow_type(data["domain"])
                     )
                     entity_id = snapshot["entry_id"]
                 except InvalidBackupSnapshotError as err:
-                    _log_template_failure("snapshot_validation", err)
+                    _log_flow_helper_failure("snapshot_validation", err)
                     raise BackupRestoreError(
                         str(err),
                         reason="invalid_snapshot",
                         restored_from=name,
-                        domain="helper_template",
+                        domain=data["domain"],
                         entity_id=data["entity_id"],
                         safety_backup=None,
                     ) from err
@@ -1424,8 +1440,9 @@ class BackupManager:
         step = "safety_preflight"
         try:
             needs_safety = await self._restore_needs_safety(handler, entity_id, config)
-            # Existing Template helpers always require a fresh recovery point.
-            if needs_safety and (domain == "helper_template" or take_safety_backup):
+            # Existing flow helpers always require a fresh recovery point.
+            is_flow = _is_flow_helper_domain(domain)
+            if needs_safety and (is_flow or take_safety_backup):
                 step = "safety_backup"
                 safety_path = await self._capture_restore_safety(domain, entity_id)
                 if safety_path is not None:
@@ -1436,50 +1453,55 @@ class BackupManager:
             step = "apply"
             # Commit to the absent-target branch: if an entry reappeared since
             # preflight, recreation refuses instead of editing it without safety.
-            restore = handler.restore if needs_safety else _recreate_template_helper
+            restore = (
+                handler.restore
+                if needs_safety
+                else functools.partial(
+                    _recreate_flow_helper, helper_type=_flow_type(domain)
+                )
+            )
             result = await restore(self._client, entity_id, config)
         except BackupRestoreError as err:
-            if domain == "helper_template" and step != "apply":
-                _log_template_failure(step, err)
+            if _is_flow_helper_domain(domain) and step != "apply":
+                _log_flow_helper_failure(step, err)
             err.outcome = {**outcome, **err.outcome}
             raise
         except _RESTORE_ERRORS as err:
-            if domain == "helper_template":
-                _log_template_failure(step, err)
-                message = _template_safe_failure_detail(step, err) or (
-                    "Template helper restore was not attempted; inspect the target and backup storage"
+            if _is_flow_helper_domain(domain):
+                label = _flow_label(_flow_type(domain))
+                _log_flow_helper_failure(step, err)
+                message = _flow_safe_failure_detail(step, err) or (
+                    f"{label} helper restore was not attempted; inspect the target and backup storage"
                     if apply_status == "not_applied"
-                    else "Template helper restore outcome is unknown; inspect current options before retrying"
+                    else f"{label} helper restore outcome is unknown; inspect current options before retrying"
                 )
                 raise BackupRestoreError(
                     message,
                     apply_status=apply_status,
-                    reason=_template_failure_reason(step, err),
+                    reason=_flow_failure_reason(step, err),
                     **outcome,
                 ) from err
             raise
         finally:
             if safety_path is not None:
                 self._unprotect_snapshot(safety_path.name)
-        if domain == "helper_template":
+        if _is_flow_helper_domain(domain):
             outcome.update(apply_status="applied", verification_status="matched")
-            outcome.update(_template_recreated_outcome(result, entity_id))
+            outcome.update(_flow_recreated_outcome(result, entity_id))
         return {**outcome, "result": result}
 
     async def _restore_needs_safety(
         self, handler: DomainHandler, entity_id: str, config: Any
     ) -> bool:
-        if handler.domain != "helper_template":
+        if not _is_flow_helper_domain(handler.domain):
             return True
-        current = await handler.fetch(self._client, entity_id)
-        if current is None:
-            return False  # No existing entry to snapshot; recreation rechecks absence.
-        _template_restore_options(config, current)
-        return True
+        # No existing entry to snapshot: recreation rechecks absence. An
+        # existing one is checked against the snapshot by its options flow.
+        return await handler.fetch(self._client, entity_id) is not None
 
     async def _capture_restore_safety(self, domain: str, entity_id: str) -> Path | None:
-        """Template restore requires a fresh recovery point for its stable entry."""
-        if domain != "helper_template":
+        """Flow-helper restore requires a fresh recovery point for its stable entry."""
+        if not _is_flow_helper_domain(domain):
             return await self.maybe_snapshot(
                 domain, entity_id, tool_name="ha_manage_backup.restore.safety"
             )
@@ -1492,7 +1514,8 @@ class BackupManager:
         )
         if path is None:
             raise MandatoryBackupError(
-                "Template helper no longer exists; restore was not attempted"
+                f"{_flow_label(_flow_type(domain))} helper no longer exists; "
+                "restore was not attempted"
             )
         return path
 
@@ -1503,14 +1526,16 @@ class BackupManager:
         data = await asyncio.to_thread(self.read_snapshot, name)
         _validate_snapshot_envelope(data)
         domain = data["domain"]
-        if domain == "helper_template":
-            snapshot = _validate_template_snapshot(data["entity_id"], data["config"])
+        if _is_flow_helper_domain(domain):
+            snapshot = _validate_flow_snapshot(
+                data["entity_id"], data["config"], _flow_type(domain)
+            )
             data["entity_id"] = snapshot["entry_id"]
         handler = self._handlers.get(domain)
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
         current = await handler.fetch(self._client, data["entity_id"])
-        if domain == "helper_template" and current is not None:
+        if _is_flow_helper_domain(domain) and current is not None:
             # Both MCP and Settings preview this comparison. Registry metadata
             # is recreation-only; an existing-entry restore applies options.
             data["config"] = {
@@ -3069,30 +3094,31 @@ def _make_blueprint_handler(domain: str) -> DomainHandler:
     return DomainHandler(domain=f"blueprint_{domain}", fetch=fetch, restore=restore)
 
 
-def _template_options(config: Any) -> dict[str, Any]:
-    """Require persisted template options that can safely be restored."""
+def _flow_type(domain: str) -> str:
+    return domain.removeprefix("helper_")
+
+
+def _flow_label(helper_type: str) -> str:
+    return helper_type.replace("_", " ").capitalize()
+
+
+def _flow_options(config: Any, helper_type: str) -> dict[str, Any]:
+    """Require persisted flow-helper options that can safely be restored."""
     from .redaction import sentinel_option_keys
 
-    if not isinstance(config, dict):
-        raise _TemplateReadError(
-            "Template helper options must be an object", "invalid_options"
-        )
-    options = config
-    if not all(
-        isinstance(options.get(key), str) and options[key]
-        for key in ("name", "template_type")
-    ):
-        raise _TemplateReadError(
-            "Template helper options lack name or template_type", "invalid_options"
+    label = _flow_label(helper_type)
+    if not isinstance(config, dict) or not config:
+        raise _FlowHelperReadError(
+            f"{label} helper options must be a non-empty object", "invalid_options"
         )
     # The component's resolved-!secret scrub predates the server sentinels.
     # Neither kind of placeholder is a usable recovery value.
-    if sentinel_option_keys(options) or _contains_redacted_leaf(options):
-        raise _TemplateReadError(
-            "Template helper options contain redacted values; capture is incomplete",
+    if sentinel_option_keys(config) or _contains_redacted_leaf(config):
+        raise _FlowHelperReadError(
+            f"{label} helper options contain redacted values; capture is incomplete",
             "redacted_options",
         )
-    return options
+    return config
 
 
 def _contains_redacted_leaf(value: Any) -> bool:
@@ -3103,64 +3129,65 @@ def _contains_redacted_leaf(value: Any) -> bool:
     return isinstance(value, str) and value == "**redacted**"
 
 
-async def _fetch_template_helper(client: Any, entity_id: str) -> Any:
-    """Read template options through the component, without starting a flow.
+async def _fetch_flow_helper(client: Any, entity_id: str, helper_type: str) -> Any:
+    """Read a flow helper's options through the component, without starting a flow.
 
     Core's config-entry metadata and entity state omit this configuration.
     A missing/old component is an error, never a state-only snapshot. The
     component applies its normal secret scrub and never returns entry.data.
     """
+    label = _flow_label(helper_type)
     result = _require_dict(
         await _ws_send(
             client,
             {
                 "type": "ha_mcp_tools/helpers_list",
-                "helper_types": ["template"],
+                "helper_types": [helper_type],
                 "include_flow_helpers": True,
             },
         ),
         "ha_mcp_tools/helpers_list",
     )
     if result.get("secret_scrub_degraded"):
-        raise _TemplateReadError(
-            "Template helper secret scrub is degraded; capture is unsafe",
+        raise _FlowHelperReadError(
+            f"{label} helper secret scrub is degraded; capture is unsafe",
             "secret_scrub_degraded",
         )
     covered = _require_list(result.get("covered_types"), "helpers_list.covered_types")
-    if "template" not in covered:
-        raise _TemplateReadError(
-            "The component cannot authoritatively read template helpers",
-            "template_read_unsupported",
+    if helper_type not in covered:
+        raise _FlowHelperReadError(
+            f"The component cannot authoritatively read {helper_type} helpers",
+            f"{helper_type}_read_unsupported",
         )
     records = _require_list(result.get("helpers"), "ha_mcp_tools/helpers_list.helpers")
-    templates: dict[str, dict[str, Any]] = {}
+    entries: dict[str, dict[str, Any]] = {}
     for raw_record in records:
         record = _require_dict(raw_record, "helpers_list helper record")
-        if record.get("kind") != "flow" or record.get("helper_type") != "template":
+        if record.get("kind") != "flow" or record.get("helper_type") != helper_type:
             continue
         entry_id = record.get("entry_id")
-        if not isinstance(entry_id, str) or not entry_id or entry_id in templates:
-            raise _TemplateReadError(
-                "Template helper listing has ambiguous identities",
+        if not isinstance(entry_id, str) or not entry_id or entry_id in entries:
+            raise _FlowHelperReadError(
+                f"{label} helper listing has ambiguous identities",
                 "ambiguous_entry_identity",
             )
-        templates[entry_id] = record
+        entries[entry_id] = record
     matches = [
         record
-        for record in templates.values()
+        for record in entries.values()
         if entity_id in (record["entry_id"], record.get("entity_id"))
     ]
     if len(matches) > 1:
-        raise _TemplateReadError(
-            "Template helper target is ambiguous", "ambiguous_target"
+        raise _FlowHelperReadError(
+            f"{label} helper target is ambiguous", "ambiguous_target"
         )
     if matches:
         record = matches[0]
         entry_id = record["entry_id"]
-        registry = await _template_entity_registry(client)
+        registry = await _entity_registry_rows(client)
         return {
             "entry_id": entry_id,
-            "options": _template_options(record.get("options")),
+            "options": _flow_options(record.get("options"), helper_type),
             "entities": [
                 {
                     key: row.get(key)
@@ -3173,7 +3200,7 @@ async def _fetch_template_helper(client: Any, entity_id: str) -> Any:
     return None
 
 
-async def _template_entity_registry(client: Any) -> list[dict[str, Any]]:
+async def _entity_registry_rows(client: Any) -> list[dict[str, Any]]:
     """Read the native registry, refusing partial or malformed identity data."""
     rows = _require_list(
         await _ws_send(client, {"type": "config/entity_registry/list"}),
@@ -3185,7 +3212,7 @@ async def _template_entity_registry(client: Any) -> list[dict[str, Any]]:
         row = _require_dict(raw_row, "entity registry row")
         entity_id = row.get("entity_id")
         if not isinstance(entity_id, str) or "." not in entity_id or entity_id in seen:
-            raise _TemplateReadError(
+            raise _FlowHelperReadError(
                 "Entity registry has ambiguous identities", "ambiguous_registry"
             )
         seen.add(entity_id)
@@ -3193,64 +3220,48 @@ async def _template_entity_registry(client: Any) -> list[dict[str, Any]]:
     return result
 
 
-def _template_entry_id(entity_id: str, config: Any) -> str:
+def _flow_entry_id(entity_id: str, config: Any, helper_type: str) -> str:
     """Resolve a captured alias to the stable identity used for diff and restore."""
+    label = _flow_label(helper_type)
     if not isinstance(entity_id, str) or not entity_id:
-        raise HomeAssistantError("Template helper snapshot has no target identity")
-    snapshot = _require_dict(config, "template helper snapshot")
+        raise HomeAssistantError(f"{label} helper snapshot has no target identity")
+    snapshot = _require_dict(config, f"{helper_type} helper snapshot")
     entry_id = snapshot.get("entry_id")
     if not isinstance(entry_id, str) or not entry_id:
         raise HomeAssistantError(
-            "Template helper snapshot has no config-entry identity"
+            f"{label} helper snapshot has no config-entry identity"
         )
     if entity_id != entry_id and "." not in entity_id:
         raise HomeAssistantError(
-            "Template helper snapshot target does not match its entry"
+            f"{label} helper snapshot target does not match its entry"
         )
     return entry_id
 
 
-def _validate_template_snapshot(entity_id: str, config: Any) -> dict[str, Any]:
+def _validate_flow_snapshot(
+    entity_id: str, config: Any, helper_type: str
+) -> dict[str, Any]:
     """Reject corrupt stored data before accessing HA or making a change."""
     try:
-        _template_entry_id(entity_id, config)
-        snapshot = _require_dict(config, "template helper snapshot")
-        _template_options(snapshot.get("options"))
+        _flow_entry_id(entity_id, config, helper_type)
+        snapshot = _require_dict(config, f"{helper_type} helper snapshot")
+        _flow_options(snapshot.get("options"), helper_type)
     except HomeAssistantError as err:
         # These validators produce local messages without snapshot values.
         raise InvalidBackupSnapshotError(
-            f"Template helper snapshot is invalid: {err}"
+            f"{_flow_label(helper_type)} helper snapshot is invalid: {err}"
         ) from err
     return snapshot
 
 
-def _template_snapshot_for_restore(entity_id: str, config: Any) -> dict[str, Any]:
+def _flow_snapshot_for_restore(
+    entity_id: str, config: Any, helper_type: str
+) -> dict[str, Any]:
     try:
-        return _validate_template_snapshot(entity_id, config)
+        return _validate_flow_snapshot(entity_id, config, helper_type)
     except InvalidBackupSnapshotError as err:
-        _log_template_failure("snapshot_validation", err)
+        _log_flow_helper_failure("snapshot_validation", err)
         raise BackupRestoreError(str(err), reason="invalid_snapshot") from err
-
-
-def _template_restore_options(config: Any, current: Any) -> dict[str, Any]:
-    """Validate immutable identity before capturing or submitting a restore."""
-    snapshot = _require_dict(config, "template helper snapshot")
-    options = _template_options(snapshot.get("options"))
-    if current is None:
-        raise BackupRestoreError(
-            "Template helper no longer exists; restore cannot recreate it"
-        )
-    immutable = {"name", "template_type"}
-    # Core exposes device_class only during creation for these template types.
-    # Passing it through an options flow can fail after committing an empty edit.
-    if options["template_type"] in {"button", "cover", "event", "update"}:
-        immutable.add("device_class")
-    if any(
-        not _snapshot_configs_match(current["options"].get(key), options.get(key))
-        for key in immutable
-    ):
-        raise BackupRestoreError("Template helper identity changed; restore refused")
-    return {key: value for key, value in options.items() if key not in immutable}
 
 
 def _snapshot_configs_match(expected: Any, current: Any) -> bool:
@@ -3260,15 +3271,15 @@ def _snapshot_configs_match(expected: Any, current: Any) -> bool:
     return not patch
 
 
-async def _verify_template_restore(
-    client: Any, entry_id: str, expected: Any
+async def _verify_flow_restore(
+    client: Any, entry_id: str, expected: Any, helper_type: str
 ) -> Literal["matched", "mismatched", "unavailable"]:
     """Bound readback after a dispatched apply, including uncertain replies."""
     try:
         async with asyncio.timeout(5):
-            restored = await _fetch_template_helper(client, entry_id)
+            restored = await _fetch_flow_helper(client, entry_id, helper_type)
     except _CAPTURE_TRANSIENT_ERRORS as err:
-        _log_template_failure("options_readback", err)
+        _log_flow_helper_failure("options_readback", err)
         return "unavailable"
     actual = (
         {"entry_id": restored["entry_id"], "options": restored["options"]}
@@ -3277,45 +3288,51 @@ async def _verify_template_restore(
     )
     if _snapshot_configs_match(expected, actual):
         return "matched"
-    logger.warning("Template restore step=options_readback reason=options_mismatch")
+    logger.warning("Flow helper restore step=options_readback reason=options_mismatch")
     return "mismatched"
 
 
-async def _restore_template_helper(client: Any, entity_id: str, config: Any) -> Any:
-    """Restore options or recreate an authoritatively absent Template helper."""
+async def _restore_flow_helper(
+    client: Any, entity_id: str, config: Any, helper_type: str
+) -> Any:
+    """Restore a flow helper's options, or recreate an authoritatively absent one.
+
+    The snapshot goes through the helper's options flow. A snapshot option
+    none of its forms offers (fixed at creation, like a template's type) must
+    still match the stored one, or the restore is refused unapplied.
+    """
     from .tools.config_entry_flow import OptionsFlowError, update_config_entry_options
 
-    snapshot = _template_snapshot_for_restore(entity_id, config)
-    entry_id = _template_entry_id(entity_id, snapshot)
+    label = _flow_label(helper_type)
+    snapshot = _flow_snapshot_for_restore(entity_id, config, helper_type)
+    entry_id = _flow_entry_id(entity_id, snapshot, helper_type)
     try:
-        current = await _fetch_template_helper(client, entry_id)
+        current = await _fetch_flow_helper(client, entry_id, helper_type)
         if current is None:
-            return await _recreate_template_helper(client, entry_id, snapshot)
-        editable = _template_restore_options(snapshot, current)
+            return await _recreate_flow_helper(client, entry_id, snapshot, helper_type)
     except BackupRestoreError as err:
-        _log_template_failure("options_preflight", err)
+        _log_flow_helper_failure("options_preflight", err)
         raise
     except _CAPTURE_TRANSIENT_ERRORS as err:
-        _log_template_failure("options_preflight", err)
+        _log_flow_helper_failure("options_preflight", err)
         raise BackupRestoreError(
-            "Template helper could not be checked; restore was not attempted"
+            f"{label} helper could not be checked; restore was not attempted"
         ) from err
-    expected = {
-        "entry_id": entry_id,
-        "options": _template_options(snapshot.get("options")),
-    }
+    options = _flow_options(snapshot.get("options"), helper_type)
+    expected = {"entry_id": entry_id, "options": options}
     try:
         result = await update_config_entry_options(
             client,
             entry_id,
-            editable,
-            expected_domain="template",
+            options,
+            expected_domain=helper_type,
             noun="helper",
             keep_current_values=False,
+            fixed_options=current["options"],
         )
     except OptionsFlowError as err:
         logger.warning(
-            "Template restore step=options_flow failed: %s apply_status=%s reason=%s fields=%s",
+            "Flow helper restore step=options_flow failed: %s apply_status=%s reason=%s fields=%s",
             type(err).__name__,
             err.apply_status,
             err.reason,
@@ -3325,35 +3342,37 @@ async def _restore_template_helper(client: Any, entity_id: str, config: Any) -> 
             raise BackupRestoreError(
                 str(err)
                 if err.reason
-                else "Template helper options flow refused the restore; no options were applied",
+                else f"{label} helper options flow refused the restore; no options were applied",
                 reason=err.reason,
                 fields=list(err.fields),
             ) from err
-        verification = await _verify_template_restore(client, entry_id, expected)
+        verification = await _verify_flow_restore(
+            client, entry_id, expected, helper_type
+        )
         raise BackupRestoreError(
-            "Template helper restore did not complete normally; inspect current options before retrying",
+            f"{label} helper restore did not complete normally; inspect current options before retrying",
             apply_status=err.apply_status,
             verification_status=verification,
             reason=err.reason,
             fields=list(err.fields),
         ) from err
-    verification = await _verify_template_restore(client, entry_id, expected)
+    verification = await _verify_flow_restore(client, entry_id, expected, helper_type)
     if verification == "unavailable":
         raise BackupRestoreError(
-            "Template helper restore was applied but verification is unavailable; inspect current options before retrying",
+            f"{label} helper restore was applied but verification is unavailable; inspect current options before retrying",
             apply_status="applied",
             verification_status=verification,
         )
     if verification != "matched":
         raise BackupRestoreError(
-            "Template helper restore was applied but verification did not match the snapshot; inspect current options before retrying",
+            f"{label} helper restore was applied but verification did not match the snapshot; inspect current options before retrying",
             apply_status="applied",
             verification_status=verification,
         )
     return result
 
 
-def _template_recreated_outcome(result: Any, original_entry_id: str) -> dict[str, Any]:
+def _flow_recreated_outcome(result: Any, original_entry_id: str) -> dict[str, Any]:
     if result.get("restore_mode") != "recreated":
         return {}
     return {
@@ -3363,45 +3382,47 @@ def _template_recreated_outcome(result: Any, original_entry_id: str) -> dict[str
     }
 
 
-def _template_saved_entity(snapshot: dict[str, Any]) -> dict[str, Any] | None:
-    """Core creates one Template entity with the config-entry ID as unique ID."""
+def _flow_saved_entities(snapshot: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """The entities a flow-helper snapshot recorded for its config entry.
+
+    Each must derive its unique_id from the entry (see _recreated_unique_id),
+    or the recreated entity it maps to cannot be found.
+    """
     entities = snapshot.get("entities")
     if entities is None or entities == []:
         return None  # Older snapshots captured options without registry metadata.
-    if not isinstance(entities, list) or len(entities) != 1:
+    if not isinstance(entities, list):
         raise BackupRestoreError(
-            "Template snapshot has invalid or ambiguous entity mapping",
-            reason="invalid_snapshot",
+            "Helper snapshot has an invalid entity mapping", reason="invalid_snapshot"
         )
-    row = entities[0]
-    if not isinstance(row, dict):
-        raise BackupRestoreError(
-            "Template snapshot entity must be an object", reason="invalid_snapshot"
-        )
-    entity_id = row.get("entity_id")
-    if (
-        not isinstance(entity_id, str)
-        or not re.fullmatch(r"[a-z_]+\.[a-z0-9_]+", entity_id)
-        or entity_id.split(".")[0] != snapshot["options"]["template_type"]
-        or row.get("unique_id") != snapshot["entry_id"]
-        or any(
-            row.get(key) is not None and not isinstance(row[key], str)
-            for key in ("name", "original_name")
-        )
-    ):
-        raise BackupRestoreError(
-            "Template snapshot has an unsupported entity mapping",
-            reason="invalid_snapshot",
-        )
-    return row
+    seen: set[str] = set()
+    for row in entities:
+        entity_id = row.get("entity_id") if isinstance(row, dict) else None
+        if (
+            not isinstance(entity_id, str)
+            or not re.fullmatch(r"[a-z_]+\.[a-z0-9_]+", entity_id)
+            or entity_id in seen
+            or not isinstance(row.get("unique_id"), str)
+            or snapshot["entry_id"] not in row["unique_id"]
+            or any(
+                row.get(key) is not None and not isinstance(row[key], str)
+                for key in ("name", "original_name")
+            )
+        ):
+            raise BackupRestoreError(
+                "Helper snapshot has an unsupported entity mapping",
+                reason="invalid_snapshot",
+            )
+        seen.add(entity_id)
+    return entities
 
 
-async def _template_recreation_preflight(
-    client: Any, entry_id: str, snapshot: dict[str, Any]
-) -> dict[str, Any] | None:
+async def _flow_recreation_preflight(
+    client: Any, entry_id: str, snapshot: dict[str, Any], helper_type: str
+) -> list[dict[str, Any]] | None:
     """Confirm absence independently, then reject collisions before creating."""
-    _template_options(snapshot.get("options"))
-    saved = _template_saved_entity(snapshot)
+    _flow_options(snapshot.get("options"), helper_type)
+    saved = _flow_saved_entities(snapshot)
     # list_config_entries() drops malformed rows. Absence must be established
     # from the complete native response before a restore can create an entry.
     entries = _require_list(
@@ -3413,19 +3434,19 @@ async def _template_recreation_preflight(
             raise BackupRestoreError("Config-entry listing is incomplete")
         if entry["entry_id"] == entry_id:
             raise BackupRestoreError(
-                "Template config entry still exists; recreation was not attempted",
+                f"{_flow_label(helper_type)} config entry still exists; recreation was not attempted",
                 reason="entry_still_exists",
             )
-    if saved is not None:
-        await _check_template_entity_collision(client, saved["entity_id"])
+    for row in saved or []:
+        await _check_entity_collision(client, row["entity_id"])
     return saved
 
 
-async def _check_template_entity_collision(
+async def _check_entity_collision(
     client: Any, target: str, *, owned_entry_id: str | None = None
 ) -> None:
     """Check both registered and state-only occupants; never take another ID."""
-    registry = await _template_entity_registry(client)
+    registry = await _entity_registry_rows(client)
     owned_ids = {
         row["entity_id"]
         for row in registry
@@ -3442,114 +3463,121 @@ async def _check_template_entity_collision(
         )
 
 
-async def _created_template_entity(client: Any, entry_id: str) -> dict[str, Any]:
-    """Wait for the one native Template registry entity after flow completion."""
+def _recreated_unique_id(saved: dict[str, Any], old_entry: str, new_entry: str) -> str:
+    """Core derives a helper entity's unique_id from its config-entry ID."""
+    return str(saved["unique_id"]).replace(old_entry, new_entry)
+
+
+async def _created_entity(client: Any, entry_id: str, unique_id: str) -> dict[str, Any]:
+    """Wait for the recreated entry's entity with ``unique_id``."""
     async with asyncio.timeout(5):
         while True:
             rows = [
                 row
-                for row in await _template_entity_registry(client)
+                for row in await _entity_registry_rows(client)
                 if row.get("config_entry_id") == entry_id
+                and row.get("unique_id") == unique_id
             ]
+            if len(rows) > 1:
+                raise HomeAssistantError("Recreated entity mapping is ambiguous")
             if rows:
-                if len(rows) != 1 or rows[0].get("unique_id") != entry_id:
-                    raise HomeAssistantError(
-                        "Recreated Template entity mapping is ambiguous"
-                    )
                 return rows[0]
             await asyncio.sleep(0.1)
 
 
-async def _restore_template_entity_id(
-    client: Any, entry_id: str, saved: dict[str, Any]
-) -> dict[str, str]:
-    """Restore only the newly created entity's ID/name, guarded by ownership."""
-    row = await _created_template_entity(client, entry_id)
-    source, target = row["entity_id"], saved["entity_id"]
-    locked_ids = {source, target}
-    async with AsyncExitStack() as locks:
-        # A rename changes the lock key; hold both IDs in a stable order.
-        for entity_id in sorted(locked_ids):
-            await locks.enter_async_context(registry_update_lock("entity", entity_id))
-        row = await _created_template_entity(client, entry_id)
-        source = row["entity_id"]
-        if source not in locked_ids:
-            raise BackupRestoreError(
-                "Recreated Template entity ID changed while waiting to restore it",
-                reason="entity_identity_mismatch",
-                verification_status="mismatched",
-            )
-        if source.split(".")[0] != target.split(".")[0]:
-            raise BackupRestoreError(
-                "Recreated Template entity has an unexpected domain",
-                reason="entity_identity_mismatch",
-                verification_status="mismatched",
-            )
-        await _check_template_entity_collision(client, target, owned_entry_id=entry_id)
-        update: dict[str, Any] = {
-            "type": "config/entity_registry/update",
-            "entity_id": source,
-        }
-        if source != target:
-            update["new_entity_id"] = target
-        if row.get("name") != saved.get("name"):
-            update["name"] = saved.get("name")
-        if len(update) > 2:
-            try:
-                await _ws_send(client, update)
-            except _CAPTURE_TRANSIENT_ERRORS as err:
-                _log_template_failure("entity_rename", err)
+async def _restore_entity_ids(
+    client: Any, entry_id: str, original_entry_id: str, saved_rows: list[dict[str, Any]]
+) -> list[dict[str, str]]:
+    """Give each recreated entity its saved ID/name, guarded by ownership."""
+    mapping: list[dict[str, str]] = []
+    for saved in saved_rows:
+        unique_id = _recreated_unique_id(saved, original_entry_id, entry_id)
+        row = await _created_entity(client, entry_id, unique_id)
+        source, target = row["entity_id"], saved["entity_id"]
+        locked_ids = {source, target}
+        async with AsyncExitStack() as locks:
+            # A rename changes the lock key; hold both IDs in a stable order.
+            for entity_id in sorted(locked_ids):
+                await locks.enter_async_context(
+                    registry_update_lock("entity", entity_id)
+                )
+            row = await _created_entity(client, entry_id, unique_id)
+            source = row["entity_id"]
+            if source not in locked_ids:
                 raise BackupRestoreError(
-                    "The recreated helper's entity rename outcome is unknown",
-                    reason="entity_rename_outcome_unknown",
-                    entity_id_mapping={
-                        "created_entity_id": source,
-                        "target_entity_id": target,
-                    },
-                    verification_status="unavailable",
-                ) from err
-        actual = await _created_template_entity(client, entry_id)
-        if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
-            raise BackupRestoreError(
-                "Recreated Template entity identity did not match",
-                reason="entity_identity_mismatch",
-                verification_status="mismatched",
-            )
-        return {"created_entity_id": source, "restored_entity_id": target}
+                    "Recreated entity ID changed while waiting to restore it",
+                    reason="entity_identity_mismatch",
+                    verification_status="mismatched",
+                )
+            if source.split(".")[0] != target.split(".")[0]:
+                raise BackupRestoreError(
+                    "Recreated entity has an unexpected domain",
+                    reason="entity_identity_mismatch",
+                    verification_status="mismatched",
+                )
+            await _check_entity_collision(client, target, owned_entry_id=entry_id)
+            update: dict[str, Any] = {
+                "type": "config/entity_registry/update",
+                "entity_id": source,
+            }
+            if source != target:
+                update["new_entity_id"] = target
+            if row.get("name") != saved.get("name"):
+                update["name"] = saved.get("name")
+            if len(update) > 2:
+                try:
+                    await _ws_send(client, update)
+                except _CAPTURE_TRANSIENT_ERRORS as err:
+                    _log_flow_helper_failure("entity_rename", err)
+                    raise BackupRestoreError(
+                        "The recreated helper's entity rename outcome is unknown",
+                        reason="entity_rename_outcome_unknown",
+                        entity_id_mapping=[
+                            *mapping,
+                            {"created_entity_id": source, "target_entity_id": target},
+                        ],
+                        verification_status="unavailable",
+                    ) from err
+            actual = await _created_entity(client, entry_id, unique_id)
+            if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
+                raise BackupRestoreError(
+                    "Recreated entity identity did not match",
+                    reason="entity_identity_mismatch",
+                    verification_status="mismatched",
+                )
+            mapping.append({"created_entity_id": source, "restored_entity_id": target})
+    return mapping
 
 
-async def _recreate_template_helper(
-    client: Any, entry_id: str, snapshot: dict[str, Any]
+async def _recreate_flow_helper(
+    client: Any, entry_id: str, snapshot: dict[str, Any], helper_type: str
 ) -> dict[str, Any]:
     """Create through the ordinary helper flow; never retry uncertain writes."""
     from .tools.config_entry_flow import CreationFlowError, create_flow_helper
 
-    snapshot = _template_snapshot_for_restore(entry_id, snapshot)
+    label = _flow_label(helper_type)
+    snapshot = _flow_snapshot_for_restore(entry_id, snapshot, helper_type)
     try:
-        saved = await _template_recreation_preflight(client, entry_id, snapshot)
+        saved = await _flow_recreation_preflight(
+            client, entry_id, snapshot, helper_type
+        )
     except BackupRestoreError as err:
-        _log_template_failure("recreation_preflight", err)
+        _log_flow_helper_failure("recreation_preflight", err)
         raise
     except _CAPTURE_TRANSIENT_ERRORS as err:
-        _log_template_failure("recreation_preflight", err)
+        _log_flow_helper_failure("recreation_preflight", err)
         raise BackupRestoreError(
-            "Template helper absence and entity IDs could not be verified; recreation was not attempted",
+            f"{label} helper absence and entity IDs could not be verified; recreation was not attempted",
             reason="recreation_preflight_unavailable",
         ) from err
     try:
-        # Persisted template_type identifies the entry's entity platform; the
-        # create flow selects that platform through its initial menu instead.
-        create_config = {
-            key: value
-            for key, value in snapshot["options"].items()
-            if key != "template_type"
-        }
-        create_config["next_step_id"] = snapshot["options"]["template_type"]
+        # A menu-rooted creation flow is answered from the snapshot's options
+        # (a template's template_type names its branch).
         result = await create_flow_helper(
-            client, "template", create_config, complete_snapshot=True
+            client, helper_type, dict(snapshot["options"]), complete_snapshot=True
         )
     except CreationFlowError as err:
-        _log_template_failure("create_entry", err)
+        _log_flow_helper_failure("create_entry", err)
         identity: dict[str, Any] = (
             {"entry_id": err.entry_id, "entity_id": err.entry_id}
             if err.entry_id
@@ -3570,9 +3598,9 @@ async def _recreate_template_helper(
             **identity,
         ) from err
     except _CAPTURE_TRANSIENT_ERRORS as err:
-        _log_template_failure("create_entry", err)
+        _log_flow_helper_failure("create_entry", err)
         raise BackupRestoreError(
-            "Template helper creation outcome is unknown; inspect helpers before retrying",
+            f"{label} helper creation outcome is unknown; inspect helpers before retrying",
             apply_status="unknown",
             reason="creation_outcome_unknown",
             restore_mode="recreated",
@@ -3584,9 +3612,11 @@ async def _recreate_template_helper(
         or not new_entry_id
         or new_entry_id == entry_id
     ):
-        logger.warning("Template restore step=create_entry reason=missing_new_identity")
+        logger.warning(
+            "Flow helper restore step=create_entry reason=missing_new_identity"
+        )
         raise BackupRestoreError(
-            "Template helper creation returned no new identity; inspect helpers before retrying",
+            f"{label} helper creation returned no new identity; inspect helpers before retrying",
             apply_status="unknown",
             reason="creation_outcome_unknown",
             original_entry_id=entry_id,
@@ -3598,25 +3628,27 @@ async def _recreate_template_helper(
         "restore_mode": "recreated",
     }
     expected = {"entry_id": new_entry_id, "options": snapshot["options"]}
-    mapping: dict[str, str] = {}
+    mapping: list[dict[str, str]] = []
     try:
-        verification = await _verify_template_restore(client, new_entry_id, expected)
+        verification = await _verify_flow_restore(
+            client, new_entry_id, expected, helper_type
+        )
         if verification != "matched":
             raise BackupRestoreError(
-                "Template helper was recreated but its options could not be verified",
+                f"{label} helper was recreated but its options could not be verified",
                 verification_status=verification,
             )
         if saved is not None:
-            mapping = await _restore_template_entity_id(client, new_entry_id, saved)
+            mapping = await _restore_entity_ids(client, new_entry_id, entry_id, saved)
     except _CAPTURE_TRANSIENT_ERRORS as err:
-        _log_template_failure("recreation_readback", err)
+        _log_flow_helper_failure("recreation_readback", err)
         detail = (
             err.outcome
             if isinstance(err, BackupRestoreError)
             else {"verification_status": "unavailable"}
         )
         raise BackupRestoreError(
-            "Template helper was recreated but recovery is incomplete; inspect the new entry before retrying",
+            f"{label} helper was recreated but recovery is incomplete; inspect the new entry before retrying",
             **{**detail, **outcome, "apply_status": "applied"},
         ) from err
     response = {
@@ -3632,6 +3664,16 @@ async def _recreate_template_helper(
     return response
 
 
+def _make_flow_helper_handler(helper_type: str) -> DomainHandler:
+    async def fetch(client: Any, entity_id: str) -> Any:
+        return await _fetch_flow_helper(client, entity_id, helper_type)
+
+    async def restore(client: Any, entity_id: str, config: Any) -> Any:
+        return await _restore_flow_helper(client, entity_id, config, helper_type)
+
+    return DomainHandler(domain=f"helper_{helper_type}", fetch=fetch, restore=restore)
+
+
 def _make_helper_handler(helper_type: str) -> DomainHandler:
     async def fetch(client: Any, entity_id: str) -> Any:
         return await _fetch_helper(client, entity_id, helper_type)
@@ -3644,15 +3686,9 @@ def _make_helper_handler(helper_type: str) -> DomainHandler:
 
 # --------------------------- registry assembly ------------------------------
 
-# Helper types we register backup handlers for. Only list-backed types
-# (those served by ``<helper_type>/list`` WebSocket commands) have
-# round-trippable snapshot/restore — flow-helper types (group,
-# utility_meter, ...) live in config entries with a separate API and
-# would silently produce unrestorable backups if included here. The
-# decorator's ``domain_fn`` builds ``helper_<type>`` keys; if the user
-# edits an unsupported flow-helper, ``handler_for`` returns None and the capture
-# logs a single WARNING — neutral failure, not a silent corruption.
-# Template has its own options-backed handler below, not this list-backed family.
+# Helper types ha_config_set_helper's decorator snapshots as ``helper_<type>``:
+# storage collections through ``<helper_type>/list`` and ``<type>/update``,
+# flow helpers (config entries) through their options and options flow.
 _KNOWN_HELPER_TYPES = sorted(_HELPER_LIST_TYPES)
 
 
@@ -3692,8 +3728,5 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
         mgr.register(_make_blueprint_handler(blueprint_domain))
     for helper_type in _KNOWN_HELPER_TYPES:
         mgr.register(_make_helper_handler(helper_type))
-    mgr.register(
-        DomainHandler(
-            "helper_template", _fetch_template_helper, _restore_template_helper
-        )
-    )
+    for helper_type in sorted(_flow_helper_types()):
+        mgr.register(_make_flow_helper_handler(helper_type))

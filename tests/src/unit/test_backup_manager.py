@@ -1676,22 +1676,19 @@ class TestFactory:
         ]:
             assert mgr.handler_for(d) is not None, f"missing handler: {d}"
 
-    def test_helper_flow_types_have_no_handler(self, tmp_path: Path) -> None:
-        # Other flow-helper types (group, utility_meter, ...) live in
-        # config entries with a separate update API — registering them
-        # would produce unrestorable snapshots (entity-state stubs).
-        # They must NOT be registered as backup domains.
+    def test_every_flow_helper_type_has_an_options_handler(
+        self, tmp_path: Path
+    ) -> None:
+        # ha_config_set_helper snapshots flow helpers (config entries) as
+        # helper_<type>; each is backed up through its options (#2632).
+        from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
+
         settings = _StubSettings(auto_backup_dir=str(tmp_path))
         mgr = get_backup_manager(_StubClient(), settings)
-        for d in [
-            "helper_group",
-            "helper_utility_meter",
-            "helper_threshold",
-            "helper_derivative",
-        ]:
-            assert mgr.handler_for(d) is None, (
-                f"flow-helper domain {d!r} should NOT be registered (unrestorable)"
-            )
+        for helper_type in FLOW_HELPER_TYPES:
+            handler = mgr.handler_for(f"helper_{helper_type}")
+            assert handler is not None, helper_type
+            assert handler.fetch.__qualname__.startswith("_make_flow_helper_handler")
 
 
 # ---------------------------------------------------------------- default dir

@@ -111,7 +111,7 @@ async def test_non_template_restore_keeps_safety_opt_out(manager):
 async def test_refusal_keeps_selected_source_at_retention_one(manager, monkeypatch):
     manager._settings.auto_backup_retain_per_entity = 1
     source = snapshot(manager)
-    monkeypatch.setattr(bm, "_template_entity_registry", AsyncMock(return_value=[]))
+    monkeypatch.setattr(bm, "_entity_registry_rows", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         bm,
         "_ws_send",
@@ -119,11 +119,23 @@ async def test_refusal_keeps_selected_source_at_retention_one(manager, monkeypat
             return_value=_response(_record({**_record()["options"], "name": "Changed"}))
         ),
     )
+    # The sensor options form offers state, not name: a changed name refuses.
+    manager._client.get_config_entry = AsyncMock(return_value={"domain": "template"})
+    manager._client.start_options_flow = AsyncMock(
+        return_value={
+            "type": "form",
+            "flow_id": "restore",
+            "data_schema": [{"name": "state"}],
+            "last_step": True,
+        }
+    )
+    manager._client.submit_options_flow_step = AsyncMock()
+    manager._client.abort_options_flow = AsyncMock()
     with pytest.raises(bm.BackupRestoreError, match="identity changed") as caught:
         await manager.restore_snapshot(source.name)
     assert source.exists()
     assert caught.value.outcome["apply_status"] == "not_applied"
-    assert caught.value.outcome["safety_backup"] is None
+    manager._client.submit_options_flow_step.assert_not_awaited()
 
 
 async def test_active_restore_pins_source_and_safety_during_other_capture(manager):
@@ -206,7 +218,7 @@ async def test_verification_rejects_type_distinct_options(
     after = deepcopy(before)
     after["options"]["press"][0]["data"]["value"] = changed
     monkeypatch.setattr(
-        bm, "_fetch_template_helper", AsyncMock(side_effect=[before, after])
+        bm, "_fetch_flow_helper", AsyncMock(side_effect=[before, after])
     )
     monkeypatch.setattr(
         config_entry_flow,
@@ -214,7 +226,9 @@ async def test_verification_rejects_type_distinct_options(
         AsyncMock(return_value={"success": True}),
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
-        await bm._restore_template_helper(manager._client, "template-entry", before)
+        await bm._restore_flow_helper(
+            manager._client, "template-entry", before, "template"
+        )
     assert caught.value.outcome["apply_status"] == "applied"
     assert caught.value.outcome["verification_status"] == "mismatched"
 
@@ -228,7 +242,7 @@ async def test_lost_reply_reports_uncertainty_with_observed_readback(
     if not matched:
         current["options"]["state"] = "different"
     monkeypatch.setattr(
-        bm, "_fetch_template_helper", AsyncMock(side_effect=[current, current])
+        bm, "_fetch_flow_helper", AsyncMock(side_effect=[current, current])
     )
     error = config_entry_flow.OptionsFlowError(
         "Submit outcome unknown",
@@ -240,7 +254,9 @@ async def test_lost_reply_reports_uncertainty_with_observed_readback(
         config_entry_flow, "update_config_entry_options", AsyncMock(side_effect=error)
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
-        await bm._restore_template_helper(manager._client, "template-entry", desired)
+        await bm._restore_flow_helper(
+            manager._client, "template-entry", desired, "template"
+        )
     assert caught.value.outcome["apply_status"] == "unknown"
     assert caught.value.outcome["verification_status"] == (
         "matched" if matched else "mismatched"
@@ -492,7 +508,7 @@ async def test_unavailable_readback_retains_apply_knowledge(
     desired = {"entry_id": "template-entry", "options": _record()["options"]}
     monkeypatch.setattr(
         bm,
-        "_fetch_template_helper",
+        "_fetch_flow_helper",
         AsyncMock(
             side_effect=[desired, bm.HomeAssistantError("private upstream payload")]
         ),
@@ -507,7 +523,9 @@ async def test_unavailable_readback_retains_apply_knowledge(
         config_entry_flow, "update_config_entry_options", AsyncMock(side_effect=failure)
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
-        await bm._restore_template_helper(manager._client, "template-entry", desired)
+        await bm._restore_flow_helper(
+            manager._client, "template-entry", desired, "template"
+        )
     assert caught.value.outcome["apply_status"] == status
     assert caught.value.outcome["verification_status"] == "unavailable"
     assert "private upstream payload" not in str(caught.value)

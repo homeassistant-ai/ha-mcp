@@ -32,9 +32,9 @@ import json
 import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
@@ -58,11 +58,17 @@ logger = logging.getLogger(__name__)
 
 
 OptionsRestoreReason = Literal[
-    "unsupported_form", "unsupported_fields", "validation_failed", "flow_aborted"
+    "unsupported_form",
+    "unsupported_fields",
+    "identity_changed",
+    "validation_failed",
+    "flow_aborted",
 ]
 _RESTORE_REASON_MESSAGES: dict[OptionsRestoreReason, str] = {
     "unsupported_form": "Options restore requires an authoritative options form",
     "unsupported_fields": "Snapshot fields are not accepted by the options form",
+    "identity_changed": "Helper identity changed since the snapshot (options its "
+    "options form does not offer differ); restore refused",
     "validation_failed": "Home Assistant rejected the restored options as invalid",
     "flow_aborted": "Home Assistant aborted the options restore",
 }
@@ -125,7 +131,7 @@ class CreationFlowError(OptionsFlowError):
     """Complete-snapshot creation failure with conservative application knowledge."""
 
     reason_messages: ClassVar[dict[OptionsRestoreReason, str]] = {
-        "unsupported_form": "Template recreation requires an authoritative creation form",
+        "unsupported_form": "Helper recreation requires an authoritative creation form",
         "unsupported_fields": "Snapshot fields are not accepted by the creation form",
         "validation_failed": "Home Assistant rejected the recreated helper as invalid",
         "flow_aborted": "Home Assistant aborted the helper recreation",
@@ -134,13 +140,23 @@ class CreationFlowError(OptionsFlowError):
 
 @dataclass
 class _OptionsFlowProgress:
-    """Track replies before the walker can fail while interpreting them."""
+    """Track replies before the walker can fail while interpreting them.
+
+    A complete snapshot may span several forms: each form takes the snapshot
+    fields it declares. Before the form HA marks as the last (``last_step``),
+    every snapshot field no form took must equal ``fixed``, the entry's stored
+    options, since the options flow cannot change it.
+    """
 
     entry_id: str
     flow_id: str | None = None
     apply_status: Literal["not_applied", "unknown", "applied"] = "not_applied"
     reason: OptionsRestoreReason | None = None
     fields: tuple[str, ...] = ()
+    config: dict[str, Any] = field(default_factory=dict)
+    fixed: dict[str, Any] | None = None
+    current_step: dict[str, Any] = field(default_factory=dict)
+    consumed: set[str] = field(default_factory=set)
     error_type: ClassVar[type[OptionsFlowError]] = OptionsFlowError
     operation: ClassVar[str] = "Options restore"
 
@@ -168,6 +184,8 @@ class _OptionsFlowProgress:
         submit_fn: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
         | None = None,
     ) -> dict[str, Any]:
+        if self.current_step.get("type") == _FlowType.FORM:
+            self.check_form(self.current_step)
         self.apply_status = "unknown"
         try:
             submit = submit_fn or client.submit_options_flow_step
@@ -182,8 +200,54 @@ class _OptionsFlowProgress:
         self.record_reply(result)
         return result
 
+    def refuse(
+        self, reason: OptionsRestoreReason, fields: list[str] | tuple[str, ...] = ()
+    ) -> NoReturn:
+        self.reason, self.fields = reason, tuple(fields)
+        raise self.failure()
+
+    def start(self, step: dict[str, Any]) -> None:
+        """Accept the options flow's first reply only as a clean form."""
+        if step.get("type") != _FlowType.FORM:
+            self.refuse("unsupported_form")
+        self._refuse_form_errors(step)
+        self.current_step = step
+
+    def _refuse_form_errors(self, step: dict[str, Any]) -> None:
+        if errors := step.get("errors"):
+            self.refuse(
+                "validation_failed", tuple(errors) if isinstance(errors, dict) else ()
+            )
+
+    def check_form(self, step: dict[str, Any]) -> None:
+        """Before submitting a form, settle the snapshot fields it leaves."""
+        schema = step.get("data_schema")
+        if not isinstance(schema, list):
+            self.refuse("unsupported_form")
+        self._refuse_form_errors(step)
+        # Top-level names: a section's fields sit under the section's key.
+        declared = {f.get("name") for f in schema if isinstance(f, dict)}
+        mine = {key: value for key, value in self.config.items() if key in declared}
+        if unknown := _unknown_snapshot_fields(schema, mine):
+            self.refuse("unsupported_fields", unknown)
+        self.consumed |= mine.keys()
+        if step.get("last_step") is not True:
+            # A form follows (False), or may, chosen from these answers (None,
+            # as filter's): later forms take the rest, and a final readback
+            # verifies what a flow without a marked last form saved.
+            return
+        left = [key for key in self.config if key not in self.consumed]
+        fixed = self.fixed or {}
+        if unknown := [key for key in left if key not in fixed]:
+            self.refuse("unsupported_fields", unknown)
+        if changed := [
+            key for key in left if _json_differs(fixed[key], self.config[key])
+        ]:
+            self.refuse("identity_changed", changed)
+
     def record_reply(self, result: dict[str, Any]) -> None:
         """Record application knowledge before the walker interprets a reply."""
+        previous, self.current_step = self.current_step, result
         if result.get("type") == _FlowType.CREATE_ENTRY:
             self.apply_status = "applied"
         elif result.get("type") == _FlowType.ABORT:
@@ -196,14 +260,29 @@ class _OptionsFlowProgress:
             self.reason = "validation_failed"
             if isinstance(result["errors"], dict):
                 self.fields = tuple(result["errors"])
+        elif (
+            result.get("type") == _FlowType.FORM
+            and previous.get("last_step") is not True
+        ):
+            # The next form of the flow: nothing is committed before
+            # CREATE_ENTRY, and check_form fills it from the snapshot.
+            self.apply_status = "not_applied"
         else:
-            # A complete snapshot cannot safely populate an unexpected next step.
-            # Supported snapshot flows commit only on CREATE_ENTRY; another
-            # form or menu leaves the submitted options pending in the flow.
+            # A complete snapshot cannot choose a menu branch mid-flow, nor
+            # fill a form after the one HA called the last.
             if result.get("type") in (_FlowType.FORM, _FlowType.MENU):
                 self.apply_status = "not_applied"
                 self.reason = "unsupported_form"
             raise self.failure()
+
+
+def _json_differs(stored: Any, snapshot: Any) -> bool:
+    """Type-sensitive comparison, as the restore preview shows it (False is not 0)."""
+    from ..backup_diff import _compute_json_patch
+
+    patch: list[dict[str, Any]] = []
+    _compute_json_patch(snapshot, stored, 1, patch)
+    return bool(patch)
 
 
 def _unknown_snapshot_fields(
@@ -226,54 +305,25 @@ def _unknown_snapshot_fields(
     return unknown
 
 
-def _preflight_options_restore(
-    progress: _OptionsFlowProgress, step: dict[str, Any], config: dict[str, Any]
-) -> None:
-    """Reject unsupported complete-snapshot fields before an options submit."""
-    schema = step.get("data_schema")
-    reason: OptionsRestoreReason
-    fields: tuple[str, ...] = ()
-    if step.get("type") != _FlowType.FORM or not isinstance(schema, list):
-        reason = "unsupported_form"
-    elif unknown := _unknown_snapshot_fields(schema, config):
-        reason = "unsupported_fields"
-        fields = tuple(unknown)
-    elif step.get("errors"):
-        reason = "validation_failed"
-        if isinstance(step["errors"], dict):
-            fields = tuple(step["errors"])
-    else:
-        return
-    raise progress.error_type(
-        _RESTORE_REASON_MESSAGES[reason],
-        apply_status=progress.apply_status,
-        entry_id=progress.entry_id,
-        flow_id=progress.flow_id,
-        reason=reason,
-        fields=fields,
-    )
-
-
 class _CreationFlowProgress(_OptionsFlowProgress):
-    """Require the selected creation form to consume a complete snapshot."""
+    """Require the creation forms to consume a complete snapshot."""
 
     error_type = CreationFlowError
-    operation = "Template recreation"
+    operation = "Helper recreation"
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(entry_id="")
         self.config = {
             key: value for key, value in config.items() if key != "next_step_id"
         }
-        self.current_step: dict[str, Any] = {}
 
     def record_reply(self, result: dict[str, Any]) -> None:
         previous_type = self.current_step.get("type")
-        self.current_step = result
         if previous_type in (None, _FlowType.MENU) and result.get("type") in (
             _FlowType.MENU,
             _FlowType.FORM,
         ):
+            self.current_step = result
             self.apply_status = "not_applied"
             return
         super().record_reply(result)
@@ -288,8 +338,6 @@ class _CreationFlowProgress(_OptionsFlowProgress):
     async def submit(
         self, client: Any, flow_id: str, payload: dict[str, Any], **kwargs: Any
     ) -> dict[str, Any]:
-        if self.current_step.get("type") == _FlowType.FORM:
-            _preflight_options_restore(self, self.current_step, self.config)
         return await super().submit(
             client, flow_id, payload, submit_fn=client.submit_config_flow_step
         )
@@ -308,6 +356,8 @@ async def _create_snapshot_helper(
         progress.record_reply(initial_step)
         if not progress.flow_id:
             raise progress.failure()
+        if initial_step.get("type") == _FlowType.MENU:
+            config = _answer_menu_from_snapshot(progress, initial_step, config)
         result = await _handle_flow_steps(
             client,
             progress.flow_id,
@@ -315,6 +365,7 @@ async def _create_snapshot_helper(
             config,
             submit_fn=partial(progress.submit, client),
             helper_type=helper_type,
+            complete_snapshot=True,
         )
         entry = result["entry"].get("result", {})
         return {
@@ -330,6 +381,29 @@ async def _create_snapshot_helper(
         if isinstance(err, (CreationFlowError, asyncio.CancelledError)):
             raise
         raise failure from err
+
+
+def _answer_menu_from_snapshot(
+    progress: _CreationFlowProgress, menu: dict[str, Any], config: dict[str, Any]
+) -> dict[str, Any]:
+    """Pick the creation menu's branch the snapshot names.
+
+    A menu-rooted helper stores its branch among its options (template's
+    ``template_type``, group's ``group_type``): the one snapshot value that is
+    a menu option selects it, and no creation form takes that key.
+    """
+    if "next_step_id" in config:
+        return config
+    options = menu.get("menu_options")
+    choices = options if isinstance(options, list) else list(options or {})
+    keys = [key for key, value in config.items() if value in choices]
+    if len(keys) != 1:
+        progress.refuse("unsupported_form")
+    progress.config.pop(keys[0])
+    return {
+        **{key: value for key, value in config.items() if key != keys[0]},
+        "next_step_id": config[keys[0]],
+    }
 
 
 async def _cleanup_snapshot_creation(
@@ -647,6 +721,7 @@ async def update_config_entry_options(
     expected_domain: str | None = None,
     noun: str = "integration",
     keep_current_values: bool = True,
+    fixed_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Update an existing config entry via its options flow.
 
@@ -667,14 +742,22 @@ async def update_config_entry_options(
     schema default means submitting the ``None`` for Home Assistant to
     validate rather than omitting it into that default.
     A complete options snapshot restore passes ``keep_current_values=False``
-    so current values absent from the snapshot are not copied into the payload.
-    The caller must ensure the integration replaces its options only when its
-    flow returns CREATE_ENTRY. The restore requires
-    a single authoritative form and raises ``OptionsFlowError``
-    with apply knowledge on failure; uncertain or completed restores are not
-    aborted. Ordinary edits retain their existing error/abort behavior.
+    so current values absent from the snapshot are not copied into the payload,
+    and ``fixed_options``, the entry's stored options: a snapshot field none of
+    the options forms offers must still hold its stored value. The caller must
+    ensure the integration replaces its options only when its flow returns
+    CREATE_ENTRY. The restore requires authoritative forms and raises
+    ``OptionsFlowError`` with apply knowledge on failure; uncertain or
+    completed restores are not aborted. Ordinary edits retain their existing
+    error/abort behavior.
     """
-    progress = None if keep_current_values else _OptionsFlowProgress(entry_id)
+    progress = (
+        None
+        if keep_current_values
+        else _OptionsFlowProgress(
+            entry_id, config=dict(config_dict), fixed=dict(fixed_options or {})
+        )
+    )
     try:
         return await _update_config_entry_options(
             client, entry_id, config_dict, expected_domain, noun, progress
@@ -748,7 +831,7 @@ async def _update_config_entry_options(
 
     try:
         if progress is not None:
-            _preflight_options_restore(progress, flow_result, config_dict)
+            progress.start(flow_result)
 
         result = await _handle_flow_steps(
             client,
@@ -760,6 +843,7 @@ async def _update_config_entry_options(
             else client.submit_options_flow_step,
             helper_type=expected_domain,
             keep_current_values=progress is None,
+            complete_snapshot=progress is not None,
         )
     except Exception as flow_err:
         if progress is None or progress.apply_status == "not_applied":

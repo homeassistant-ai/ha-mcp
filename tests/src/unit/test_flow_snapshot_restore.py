@@ -21,6 +21,7 @@ from ha_mcp.tools.config_entry_flow_form import _handle_form_step, _ReuseState
 def _step() -> dict[str, Any]:
     return {
         "type": "form",
+        "last_step": True,
         "flow_id": "restore-flow",
         "step_id": "button",
         "data_schema": [
@@ -113,7 +114,12 @@ async def test_unsupported_snapshot_fields_are_refused_before_submit(config) -> 
     "step",
     [
         {"type": "menu", "flow_id": "restore-flow", "menu_options": ["button"]},
-        {"type": "form", "flow_id": "restore-flow", "step_id": "button"},
+        {
+            "type": "form",
+            "last_step": True,
+            "flow_id": "restore-flow",
+            "step_id": "button",
+        },
     ],
 )
 async def test_restore_requires_authoritative_single_form_schema(step) -> None:
@@ -207,12 +213,18 @@ async def test_http_submit_failure_preserves_application_knowledge(
 @pytest.mark.parametrize(
     "reply",
     [
-        {"type": "form", "flow_id": "restore-flow", "data_schema": []},
+        {
+            "type": "form",
+            "last_step": True,
+            "flow_id": "restore-flow",
+            "data_schema": [],
+        },
         {"type": "menu", "flow_id": "restore-flow", "menu_options": ["next"]},
     ],
 )
 async def test_unexpected_followup_does_not_submit_another_restore_step(reply) -> None:
-    client = _client()
+    """A form after the one HA called the last, or any menu, is not filled."""
+    client = _client({**_step(), "last_step": True})
     client.submit_options_flow_step.return_value = reply
     with pytest.raises(OptionsFlowError) as caught:
         await _restore(client, {"press": []})
@@ -222,6 +234,67 @@ async def test_unexpected_followup_does_not_submit_another_restore_step(reply) -
     client.submit_options_flow_step.assert_awaited_once_with(
         "restore-flow", {"press": []}
     )
+    client.abort_options_flow.assert_awaited_once_with("restore-flow")
+
+
+def _two_forms() -> SimpleNamespace:
+    """generic_thermostat's options: init, then presets (#2632)."""
+    init = {
+        "type": "form",
+        "flow_id": "restore-flow",
+        "step_id": "init",
+        "data_schema": [{"name": "cold_tolerance", "required": False}],
+        "last_step": False,
+    }
+    presets = {
+        **init,
+        "step_id": "presets",
+        "data_schema": [{"name": "away_temp", "required": False}],
+        "last_step": True,
+    }
+    client = _client(init)
+    client.submit_options_flow_step.side_effect = [
+        presets,
+        {"type": "create_entry", "result": {}},
+    ]
+    return client
+
+
+_SNAPSHOT = {"name": "Office", "cold_tolerance": 0.5, "away_temp": 16}
+
+
+async def test_multi_form_restore_fills_each_form_from_the_snapshot() -> None:
+    client = _two_forms()
+    result = await update_config_entry_options(
+        client,
+        "entry",
+        _SNAPSHOT,
+        keep_current_values=False,
+        fixed_options={**_SNAPSHOT, "away_temp": 20},
+    )
+    assert result["success"] is True
+    assert [c.args[1] for c in client.submit_options_flow_step.await_args_list] == [
+        {"cold_tolerance": 0.5},
+        {"away_temp": 16},
+    ]
+
+
+async def test_option_no_form_offers_must_still_match_or_nothing_applies() -> None:
+    """A creation-only option (here ``name``) that changed refuses the restore
+    before the final form is submitted."""
+    client = _two_forms()
+    with pytest.raises(OptionsFlowError) as caught:
+        await update_config_entry_options(
+            client,
+            "entry",
+            _SNAPSHOT,
+            keep_current_values=False,
+            fixed_options={**_SNAPSHOT, "name": "Renamed"},
+        )
+    assert caught.value.reason == "identity_changed"
+    assert caught.value.apply_status == "not_applied"
+    assert caught.value.fields == ("name",)
+    client.submit_options_flow_step.assert_awaited_once()
     client.abort_options_flow.assert_awaited_once_with("restore-flow")
 
 

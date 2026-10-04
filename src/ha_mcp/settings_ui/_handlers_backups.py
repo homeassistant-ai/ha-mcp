@@ -29,8 +29,8 @@ from ..backup_manager import (
     BackupRestoreError,
     MandatoryBackupError,
     SnapshotInUseError,
+    _FlowHelperReadError,
     _snapshot_validation_message,
-    _TemplateReadError,
     get_backup_manager,
 )
 from ..config import (
@@ -140,7 +140,7 @@ async def _diff_backup(
         return _bad_request(_snapshot_validation_message(err))
     except LookupError as err:
         return _bad_request(str(err), code=ErrorCode.RESOURCE_NOT_FOUND, status=404)
-    except _TemplateReadError as err:
+    except _FlowHelperReadError as err:
         return JSONResponse(
             create_error_response(
                 ErrorCode.CONFIG_VALIDATION_FAILED,

@@ -220,7 +220,7 @@ def test_template_identity_failure_logs_filename_and_safe_type(
         monkeypatch.setattr(Path, "stat", stat)
         expected_type = "PermissionError"
     with caplog.at_level(logging.WARNING):
-        assert manager._template_snapshot_identity(path) is None
+        assert manager._entry_snapshot_identity(path, "template") is None
     assert path.name in caplog.text
     assert expected_type in caplog.text
     assert "private-template-value" not in caplog.text

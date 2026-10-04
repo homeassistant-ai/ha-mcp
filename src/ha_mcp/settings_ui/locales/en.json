@@ -304,6 +304,7 @@
     "backup.restore.safety": "Safety backup: {name}. Inspect the current configuration before restoring this safety backup to recover the previous state.",
     "backup.restore.reason.unsupported_form": "Home Assistant did not provide a form suitable for this restore.",
     "backup.restore.reason.unsupported_fields": "Some snapshot fields are not accepted by the current form.",
+    "backup.restore.reason.identity_changed": "Some snapshot fields can only be set when the helper is created, and they changed since the backup.",
     "backup.restore.reason.validation_failed": "Home Assistant rejected the restored configuration as invalid.",
     "backup.restore.reason.flow_aborted": "Home Assistant aborted the restore flow.",
     "backup.restore.fields": "Fields: {fields}",

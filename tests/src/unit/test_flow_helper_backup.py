@@ -1,0 +1,211 @@
+"""Pre-write backups of flow helpers other than template (#2632).
+
+Every flow helper (a config entry) ha_config_set_helper edits is snapshotted
+as ``helper_<type>`` from its stored options, restored through its options
+flow, and recreated through its creation flow when deleted. What a form does
+not offer comes from Home Assistant's own forms, not a per-type list.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+
+from ha_mcp import backup_manager as bm
+from ha_mcp.tools.config_entry_flow import CreationFlowError, create_flow_helper
+
+_METER = {
+    "name": "Energy",
+    "source": "sensor.power",
+    "cycle": "daily",
+    "periodically_resetting": True,
+}
+
+
+def _listing(options: dict[str, Any], helper_type: str = "utility_meter") -> dict:
+    return {
+        "covered_types": [helper_type],
+        "helpers": [
+            {
+                "kind": "flow",
+                "helper_type": helper_type,
+                "entry_id": "meter-entry",
+                "entity_id": "sensor.energy",
+                "options": options,
+            }
+        ],
+    }
+
+
+@pytest.fixture
+def stored(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The meter's options as the component reports them; tests change it."""
+    current = dict(_METER)
+
+    async def send(client: Any, message: dict[str, Any]) -> Any:
+        if message["type"] == "ha_mcp_tools/helpers_list":
+            return _listing(dict(current))
+        if message["type"] == "config/entity_registry/list":
+            return []
+        raise AssertionError(message)
+
+    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=send))
+    return current
+
+
+def _options_flow(offered: list[str]) -> SimpleNamespace:
+    """utility_meter's options form offers source and periodically_resetting."""
+    return SimpleNamespace(
+        get_config_entry=AsyncMock(return_value={"domain": "utility_meter"}),
+        start_options_flow=AsyncMock(
+            return_value={
+                "type": "form",
+                "flow_id": "meter-options",
+                "step_id": "init",
+                "data_schema": [{"name": name} for name in offered],
+                "last_step": True,
+            }
+        ),
+        submit_options_flow_step=AsyncMock(
+            return_value={"type": "create_entry", "result": {}}
+        ),
+        abort_options_flow=AsyncMock(),
+    )
+
+
+async def test_capture_reads_the_stored_options(stored: dict[str, Any]) -> None:
+    handler = bm._make_flow_helper_handler("utility_meter")
+    snapshot = await handler.fetch(None, "sensor.energy")
+    assert snapshot["entry_id"] == "meter-entry"
+    assert snapshot["options"] == _METER
+
+
+async def test_restore_submits_what_the_options_form_offers(
+    stored: dict[str, Any],
+) -> None:
+    client = _options_flow(["source", "periodically_resetting"])
+    stored["source"] = "sensor.other"
+
+    async def applied(flow_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        stored.update(payload)  # HA saves the submitted options
+        return {"type": "create_entry", "result": {}}
+
+    client.submit_options_flow_step.side_effect = applied
+    handler = bm._make_flow_helper_handler("utility_meter")
+    await handler.restore(
+        client, "meter-entry", {"entry_id": "meter-entry", "options": dict(_METER)}
+    )
+    client.submit_options_flow_step.assert_awaited_once_with(
+        "meter-options", {"source": "sensor.power", "periodically_resetting": True}
+    )
+
+
+async def test_restore_refuses_a_changed_option_the_form_cannot_set(
+    stored: dict[str, Any],
+) -> None:
+    """A meter's cycle is fixed at creation: restoring an older cycle is refused
+    with nothing applied, rather than reported as done."""
+    client = _options_flow(["source", "periodically_resetting"])
+    stored["cycle"] = "monthly"
+    handler = bm._make_flow_helper_handler("utility_meter")
+    with pytest.raises(bm.BackupRestoreError, match="identity changed") as caught:
+        await handler.restore(
+            client, "meter-entry", {"entry_id": "meter-entry", "options": dict(_METER)}
+        )
+    assert caught.value.outcome["apply_status"] == "not_applied"
+    client.submit_options_flow_step.assert_not_awaited()
+
+
+def _creation_client(*replies: dict[str, Any], first: dict[str, Any]) -> Any:
+    return SimpleNamespace(
+        start_config_flow=AsyncMock(return_value=first),
+        submit_config_flow_step=AsyncMock(side_effect=list(replies)),
+        abort_config_flow=AsyncMock(),
+    )
+
+
+_CREATED = {"type": "create_entry", "result": {"entry_id": "new-entry"}}
+
+
+async def test_recreation_answers_the_menu_from_the_snapshot() -> None:
+    """A group stores its branch as group_type; the creation menu's option
+    with that value is chosen, and no form is asked for the key."""
+    client = _creation_client(
+        {
+            "type": "form",
+            "flow_id": "create",
+            "step_id": "light",
+            "data_schema": [{"name": "name"}, {"name": "entities"}],
+            "last_step": True,
+        },
+        _CREATED,
+        first={
+            "type": "menu",
+            "flow_id": "create",
+            "menu_options": ["binary_sensor", "light"],
+        },
+    )
+    options = {"group_type": "light", "name": "Hall", "entities": ["light.a"]}
+    result = await create_flow_helper(client, "group", options, complete_snapshot=True)
+    assert result["entry_id"] == "new-entry"
+    assert [c.args[1] for c in client.submit_config_flow_step.await_args_list] == [
+        {"next_step_id": "light"},
+        {"name": "Hall", "entities": ["light.a"]},
+    ]
+
+
+async def test_recreation_fills_every_form_of_a_multi_step_flow() -> None:
+    """statistics asks for its characteristic on a second form."""
+    form = {"type": "form", "flow_id": "create", "last_step": False}
+    client = _creation_client(
+        {
+            **form,
+            "step_id": "state_characteristic",
+            "data_schema": [{"name": "state_characteristic"}],
+        },
+        {**form, "step_id": "options", "data_schema": [{"name": "sampling_size"}]},
+        _CREATED,
+        first={
+            **form,
+            "step_id": "user",
+            "data_schema": [{"name": "name"}, {"name": "entity_id"}],
+        },
+    )
+    options = {
+        "name": "Mean",
+        "entity_id": "sensor.t",
+        "state_characteristic": "mean",
+        "sampling_size": 20,
+    }
+    result = await create_flow_helper(
+        client, "statistics", options, complete_snapshot=True
+    )
+    assert result["entry_id"] == "new-entry"
+    assert [c.args[1] for c in client.submit_config_flow_step.await_args_list] == [
+        {"name": "Mean", "entity_id": "sensor.t"},
+        {"state_characteristic": "mean"},
+        {"sampling_size": 20},
+    ]
+
+
+async def test_recreation_refuses_a_snapshot_key_no_form_takes() -> None:
+    client = _creation_client(
+        _CREATED,
+        first={
+            "type": "form",
+            "flow_id": "create",
+            "step_id": "user",
+            "data_schema": [{"name": "name"}],
+            "last_step": True,
+        },
+    )
+    with pytest.raises(CreationFlowError) as caught:
+        await create_flow_helper(
+            client, "derivative", {"name": "D", "extra": 1}, complete_snapshot=True
+        )
+    assert caught.value.reason == "unsupported_fields"
+    assert caught.value.apply_status == "not_applied"
+    client.submit_config_flow_step.assert_not_awaited()

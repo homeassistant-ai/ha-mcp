@@ -40,6 +40,11 @@ from .component_api import (
     is_unknown_command,
 )
 from .component_registry_lookup import resolve_entities_via_component
+from .config_entry_backup import (
+    flow_helper_backup_domain,
+    resolve_config_entry_backup_domain,
+    skip_unless_flow_helper,
+)
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_config_entry,
@@ -69,23 +74,6 @@ logger = logging.getLogger(__name__)
 
 # First wait between helper registry lookups; each later retry doubles it.
 _REGISTRY_RETRY_BASE_DELAY = 0.5
-
-
-async def _resolve_config_entry_backup_domain(
-    client: Any, kwargs: dict[str, Any], domain: str, entry_id: str
-) -> str:
-    """Capture Template options for generic options edits and entry deletion."""
-    if domain != "integration" or "." in entry_id:
-        return domain
-    edits_options = kwargs.get("config") is not None and kwargs.get("enabled") is None
-    deletes_entry = (
-        kwargs.get("target") is not None and kwargs.get("helper_type") is None
-    )
-    if not (edits_options or deletes_entry):
-        # Enable/disable restores must retain the integration's disabled flag.
-        return domain
-    entry = await client.get_config_entry(entry_id)
-    return "helper_template" if entry.get("domain") == "template" else domain
 
 
 def _reject_set_integration_mode_conflicts(
@@ -1757,7 +1745,7 @@ class IntegrationTools:
     @with_auto_backup(
         domain="integration",
         id_param="entry_id",
-        domain_resolver=_resolve_config_entry_backup_domain,
+        domain_resolver=resolve_config_entry_backup_domain,
         # Every reconfigure request validates the entry and confirmation before
         # the inner apply helper captures the normal edit snapshot.
         skip_fn=lambda kwargs: (
@@ -2193,7 +2181,7 @@ class IntegrationTools:
             f"helper_{kw['helper_type']}" if kw.get("helper_type") else "integration"
         ),
         id_param="target",
-        domain_resolver=_resolve_config_entry_backup_domain,
+        domain_resolver=resolve_config_entry_backup_domain,
         # Explicit Template removal validates and resolves its target through
         # Core before the inner decorator captures the authoritative entry.
         skip_fn=lambda kw: kw.get("helper_type") == "template",
@@ -2510,9 +2498,9 @@ class IntegrationTools:
             return None  # unreachable: exception_to_structured_error raises
 
     @with_auto_backup(
-        domain="helper_template",
-        id_param="entry_id",
-        skip_fn=lambda kw: kw.get("helper_type") != "template",
+        domain_fn=flow_helper_backup_domain,
+        id_fn=lambda kw: str(kw.get("entry_id") or ""),
+        skip_fn=skip_unless_flow_helper,
     )
     async def _delete_resolved_flow_helper(
         self,

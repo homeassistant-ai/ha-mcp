@@ -32,6 +32,7 @@ from ..backup_manager import (
     BackupRestoreError,
     MandatoryBackupError,
     SnapshotInUseError,
+    _is_flow_helper_domain,
     get_backup_manager,
 )
 from ..client.rest_client import (
@@ -1865,7 +1866,7 @@ async def _edits_create(
                 ],
             )
         )
-    if dom == "helper_template":
+    if _is_flow_helper_domain(dom):
         snapshot = await asyncio.to_thread(mgr.read_snapshot, path.name)
         eid = snapshot["entity_id"]
     return {

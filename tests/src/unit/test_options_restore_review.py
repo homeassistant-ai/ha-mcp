@@ -18,6 +18,7 @@ def flow_client() -> SimpleNamespace:
         start_options_flow=AsyncMock(
             return_value={
                 "type": "form",
+                "last_step": True,
                 "flow_id": "restore-flow",
                 "step_id": "sensor",
                 "data_schema": [

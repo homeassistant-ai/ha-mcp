@@ -52,7 +52,7 @@ async def test_diff_rejects_invalid_snapshot_before_live_fetch(manager, config):
     fetch.assert_not_awaited()
 
 
-@pytest.mark.parametrize("options", [None, {}, {"template_type": "sensor"}])
+@pytest.mark.parametrize("options", [None, {}, ["name"]])
 async def test_malformed_snapshot_is_permanent_refusal_before_live_read(
     recovery, options, caplog
 ):
@@ -94,8 +94,8 @@ async def test_recreated_identity_readback_mismatch_is_reported(recovery, monkey
 async def test_invalid_entity_metadata_is_a_snapshot_refusal(recovery, entities):
     recovery.config["entities"] = entities
     with pytest.raises(bm.BackupRestoreError) as caught:
-        await bm._recreate_template_helper(
-            recovery.manager._client, "old-entry", recovery.config
+        await bm._recreate_flow_helper(
+            recovery.manager._client, "old-entry", recovery.config, "template"
         )
     assert caught.value.outcome["reason"] == "invalid_snapshot"
     recovery.manager._client._request.assert_not_awaited()
@@ -105,7 +105,7 @@ async def test_invalid_entity_metadata_is_a_snapshot_refusal(recovery, entities)
 async def test_recreated_identity_read_failure_is_unavailable(recovery, monkeypatch):
     monkeypatch.setattr(
         bm,
-        "_created_template_entity",
+        "_created_entity",
         AsyncMock(side_effect=bm.HomeAssistantError("private upstream payload")),
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
@@ -118,7 +118,7 @@ async def test_applied_options_refusal_preserves_safe_details(monkeypatch):
     from ha_mcp.tools import config_entry_flow
 
     snapshot = {"entry_id": "old-entry", "options": OPTIONS}
-    monkeypatch.setattr(bm, "_fetch_template_helper", AsyncMock(return_value=snapshot))
+    monkeypatch.setattr(bm, "_fetch_flow_helper", AsyncMock(return_value=snapshot))
     failure = OptionsFlowError(
         "private upstream payload",
         apply_status="applied",
@@ -130,7 +130,7 @@ async def test_applied_options_refusal_preserves_safe_details(monkeypatch):
         config_entry_flow, "update_config_entry_options", AsyncMock(side_effect=failure)
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
-        await bm._restore_template_helper(object(), "old-entry", snapshot)
+        await bm._restore_flow_helper(object(), "old-entry", snapshot, "template")
     assert caught.value.outcome["apply_status"] == "applied"
     assert caught.value.outcome["verification_status"] == "matched"
     assert caught.value.outcome["reason"] == "unsupported_fields"
@@ -157,7 +157,7 @@ async def test_unavailable_verification_logs_safe_local_cause(
 ):
     monkeypatch.setattr(bm, "_ws_send", AsyncMock(return_value=response))
     with caplog.at_level(logging.WARNING):
-        result = await bm._verify_template_restore(object(), "old-entry", {})
+        result = await bm._verify_flow_restore(object(), "old-entry", {}, "template")
     assert result == "unavailable"
     assert "options_readback" in caplog.text
     assert reason in caplog.text
@@ -176,7 +176,7 @@ async def test_unknown_recreation_logs_step_and_type_without_remote_payload(
 
 def test_redaction_marker_inside_a_template_remains_a_recoverable_value():
     options = {**OPTIONS, "state": '{{ "**redacted**" }}'}
-    assert bm._template_options(options) == options
+    assert bm._flow_options(options, "template") == options
 
 
 @pytest.mark.parametrize(
@@ -184,7 +184,7 @@ def test_redaction_marker_inside_a_template_remains_a_recoverable_value():
 )
 def test_exact_redaction_leaves_are_still_refused(value):
     with pytest.raises(bm.HomeAssistantError, match="redacted"):
-        bm._template_options({**OPTIONS, "state": value})
+        bm._flow_options({**OPTIONS, "state": value}, "template")
 
 
 @pytest.mark.parametrize(

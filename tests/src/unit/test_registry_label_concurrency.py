@@ -14,7 +14,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import (
     BackupRestoreError,
     _restore_area_or_floor,
-    _restore_template_entity_id,
+    _restore_entity_ids,
 )
 from ha_mcp.tools.config_helpers.create import _apply_create_entity_registry
 from ha_mcp.tools.config_helpers.registry import _entity_registry_update_coro
@@ -357,6 +357,11 @@ async def test_area_revalidates_references_after_lock_wait(
 
 
 @pytest.mark.asyncio
+def _saved(target: str) -> dict[str, Any]:
+    """A recreated helper's saved entity; its unique_id follows the entry."""
+    return {"entity_id": target, "name": "Saved name", "unique_id": "entry"}
+
+
 @pytest.mark.parametrize("target", ["sensor.created", "sensor.restored"])
 async def test_template_restore_verifies_before_concurrent_name_update(
     target: str, monkeypatch: pytest.MonkeyPatch
@@ -367,7 +372,7 @@ async def test_template_restore_verifies_before_concurrent_name_update(
     updating = asyncio.Event()
     written = False
 
-    async def created(client: Any, entry_id: str) -> dict[str, Any]:
+    async def created(client: Any, entry_id: str, unique_id: str) -> dict[str, Any]:
         if written:
             verifying.set()
             await release.wait()
@@ -389,10 +394,8 @@ async def test_template_restore_verifies_before_concurrent_name_update(
         row["name"] = message["name"]
         return {"success": True, "result": {"entity_entry": dict(row)}}
 
-    monkeypatch.setattr("ha_mcp.backup_manager._created_template_entity", created)
-    monkeypatch.setattr(
-        "ha_mcp.backup_manager._check_template_entity_collision", collision
-    )
+    monkeypatch.setattr("ha_mcp.backup_manager._created_entity", created)
+    monkeypatch.setattr("ha_mcp.backup_manager._check_entity_collision", collision)
     monkeypatch.setattr("ha_mcp.backup_manager._ws_send", restore_send)
     client = SimpleNamespace(send_websocket_message=entity_send)
 
@@ -403,9 +406,7 @@ async def test_template_restore_verifies_before_concurrent_name_update(
         )
 
     first = asyncio.create_task(
-        _restore_template_entity_id(
-            client, "entry", {"entity_id": target, "name": "Saved name"}
-        )
+        _restore_entity_ids(client, "entry", "entry", [_saved(target)])
     )
     second = None
     try:
@@ -422,10 +423,9 @@ async def test_template_restore_verifies_before_concurrent_name_update(
             1,
         )
     assert blocked, "Name update interleaved with restore verification"
-    assert results[0] == {
-        "created_entity_id": "sensor.created",
-        "restored_entity_id": target,
-    }
+    assert results[0] == [
+        {"created_entity_id": "sensor.created", "restored_entity_id": target}
+    ]
     assert isinstance(results[1], dict) and results[1]["success"]
     assert row["name"] == "Later name"
 
@@ -446,7 +446,7 @@ async def test_template_restore_rereads_after_lock_wait(
         async with registry_update_lock(registry, resource_id):
             yield
 
-    async def created(client: Any, entry_id: str) -> dict[str, Any]:
+    async def created(client: Any, entry_id: str, unique_id: str) -> dict[str, Any]:
         return dict(row)
 
     async def collision(client: Any, target: str, **kwargs: Any) -> None:
@@ -459,16 +459,12 @@ async def test_template_restore_rereads_after_lock_wait(
         return dict(row)
 
     monkeypatch.setattr("ha_mcp.backup_manager.registry_update_lock", observed_lock)
-    monkeypatch.setattr("ha_mcp.backup_manager._created_template_entity", created)
-    monkeypatch.setattr(
-        "ha_mcp.backup_manager._check_template_entity_collision", collision
-    )
+    monkeypatch.setattr("ha_mcp.backup_manager._created_entity", created)
+    monkeypatch.setattr("ha_mcp.backup_manager._check_entity_collision", collision)
     monkeypatch.setattr("ha_mcp.backup_manager._ws_send", send)
     async with registry_update_lock("entity", source):
         pending = asyncio.create_task(
-            _restore_template_entity_id(
-                SimpleNamespace(), "entry", {"entity_id": target, "name": "Saved name"}
-            )
+            _restore_entity_ids(SimpleNamespace(), "entry", "entry", [_saved(target)])
         )
         try:
             await asyncio.wait_for(waiting.wait(), 1)
@@ -495,7 +491,7 @@ async def test_template_restore_releases_both_ids_on_failure(
 ) -> None:
     source, target = "sensor.created", "sensor.restored"
 
-    async def created(client: Any, entry_id: str) -> dict[str, Any]:
+    async def created(client: Any, entry_id: str, unique_id: str) -> dict[str, Any]:
         return {"entity_id": source, "name": None}
 
     async def collision(client: Any, target: str, **kwargs: Any) -> None:
@@ -504,15 +500,11 @@ async def test_template_restore_releases_both_ids_on_failure(
     async def send(message: dict[str, Any]) -> dict[str, Any]:
         return {"success": True, "result": {"entity_entry": dict(message)}}
 
-    monkeypatch.setattr("ha_mcp.backup_manager._created_template_entity", created)
-    monkeypatch.setattr(
-        "ha_mcp.backup_manager._check_template_entity_collision", collision
-    )
+    monkeypatch.setattr("ha_mcp.backup_manager._created_entity", created)
+    monkeypatch.setattr("ha_mcp.backup_manager._check_entity_collision", collision)
     client = SimpleNamespace(send_websocket_message=send)
     with pytest.raises(error):
-        await _restore_template_entity_id(
-            client, "entry", {"entity_id": target, "name": "Saved name"}
-        )
+        await _restore_entity_ids(client, "entry", "entry", [_saved(target)])
     results = await asyncio.wait_for(
         asyncio.gather(
             EntityTools(client).ha_set_entity(entity_id=source, name="Source"),

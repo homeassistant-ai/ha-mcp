@@ -147,7 +147,7 @@ async def test_generic_template_mutation_captures_options_before_write(
     }
 
 
-async def test_explicit_template_entry_id_is_rejected_without_capture(
+async def test_explicit_flow_entry_id_is_rejected_without_capture(
     entry_backup: SimpleNamespace,
 ) -> None:
     with pytest.raises(ToolError, match="ENTITY_NOT_FOUND"):

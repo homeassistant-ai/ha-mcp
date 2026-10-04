@@ -676,6 +676,7 @@ async def _handle_flow_steps(
     *,
     is_reconfigure: bool = False,
     keep_current_values: bool = False,
+    complete_snapshot: bool = False,
 ) -> dict[str, Any]:
     """Walk a multi-step config flow handling menu and form steps.
 
@@ -728,6 +729,8 @@ async def _handle_flow_steps(
             values are the step's data, so they neither count towards the
             "consumed at least one caller key" test below nor satisfy the
             reconfigure "consumed EVERY key" one.
+        complete_snapshot: A backup restore or recreation, whose ``submit_fn``
+            accounts for every snapshot key; skips the no-key-consumed check.
         is_reconfigure: Whether this is the official reconfigure flow — the
             same mode HA uses for reauth, so both ``reconfigure_successful``
             and ``reauth_successful`` count as its success aborts. In this
@@ -760,7 +763,13 @@ async def _handle_flow_steps(
     consumed_menu_selection_keys: list[str] = []
     ignored_config_keys: set[str] = set()
     reuse_state = _ReuseState()
-    supplied_keys = sorted(k for k in config if k not in _MENU_SELECTION_KEYS)
+    # A snapshot's submit_fn settles every key itself (_OptionsFlowProgress),
+    # and may legitimately submit no form field.
+    supplied_keys = (
+        []
+        if complete_snapshot
+        else sorted(k for k in config if k not in _MENU_SELECTION_KEYS)
+    )
     saw_form_step = False
     any_form_key_consumed = False
     max_steps = _flow_step_budget(config)

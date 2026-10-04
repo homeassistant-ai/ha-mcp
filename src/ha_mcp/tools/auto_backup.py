@@ -38,6 +38,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ..backup_manager import (
     _CAPTURE_TRANSIENT_ERRORS,
     MandatoryBackupError,
+    _is_flow_helper_domain,
     get_backup_manager,
 )
 from ..config import get_global_settings
@@ -284,14 +285,14 @@ async def _template_write_context(
     """Keep a helper edit's capture and mutation in the restore critical section.
 
     The lock is needed even when ordinary auto-backup is disabled: restores
-    of existing Template helpers require a safety snapshot before replacing
+    of existing flow helpers require a safety snapshot before replacing
     their current options.
     """
     # Both options-update tools take stable config-entry IDs. Alias-based helper
     # removal and dotted subentry targets have separate resolution paths.
     is_entry_write = (
-        domain in {"helper_template", "integration"} and "." not in entity_id
-    )
+        _is_flow_helper_domain(domain) or domain == "integration"
+    ) and "." not in entity_id
     if is_entry_write and entity_id and client is not None:
         manager = get_backup_manager(client, settings)
         async with manager.config_entry_write_guard(entity_id):
