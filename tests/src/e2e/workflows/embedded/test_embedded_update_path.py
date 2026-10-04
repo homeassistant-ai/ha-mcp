@@ -48,12 +48,10 @@ surface the #1783 / #1785 incident corrupted (that purge-and-reimport is the
 precise mechanism those issues broke), which makes it the most authoritative
 in-container proof the update actually took.
 
-Scope: this lane deliberately drives the options-flow ``pip_spec`` injection, NOT
-the automatic coordinator update path. A locally built wheel cannot ride
-auto-update (the coordinator only ever installs the published PyPI dist), and the
-auto-update decision logic — including the #1792 hold-back gate — is unit-tested.
-Both triggers converge on the same reload → install → purge → restart pipeline,
-which is what this lane proves end to end.
+Scope: this lane drives the options-flow ``pip_spec`` override, the one way a
+running component swaps its server without a component release (the stable
+component's automatic PyPI update path converges on the same reload → install →
+purge → restart pipeline; the working-tree component no longer has one, #2427).
 
 Gating: this lane is expensive (a full container bring-up plus a PyPI install of
 the whole fastmcp dependency tree per scenario, run for both scenarios). It runs
@@ -490,11 +488,17 @@ def _submit_options_update(
             f"options-flow start failed: {start.status_code} {start.text[:500]}\n"
             f"Container logs:\n{_dump_logs(container)}"
         )
-    flow_id = start.json()["flow_id"]
+    form = start.json()
+    flow_id = form["flow_id"]
+    # Echo only the fields this component version's form declares: the stable
+    # component still has the channel / auto-update fields the working-tree
+    # component retired (#2427), and a strict form rejects unknown keys.
+    declared = {field["name"] for field in form.get("data_schema") or []}
+    payload = {key: value for key, value in user_input.items() if key in declared}
     submit = requests.post(
         f"{base_url}/api/config/config_entries/options/flow/{flow_id}",
         headers=headers,
-        data=json.dumps(user_input),
+        data=json.dumps(payload),
         timeout=120,
     )
     if submit.status_code >= 400:
@@ -640,8 +644,9 @@ class TestEmbeddedUpdatePath:
         # Drive the component's REAL update path: save an options-flow pip_spec
         # override pointing at the checkout-built wheel staged under /config.
         # Saving reloads the entry, which force-installs the wheel and restarts
-        # the worker — the production sequence from #1783 / #1785. All schema keys
-        # are echoed with their defaults; only pip_spec changes.
+        # the worker — the production sequence from #1783 / #1785. Every field
+        # the form declares is echoed with its default; only pip_spec changes
+        # (_submit_options_update drops the ones this component lacks).
         user_input = {
             _OPT_CHANNEL: "stable",
             _OPT_AUTO_UPDATE: True,

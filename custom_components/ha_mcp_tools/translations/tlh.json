@@ -41,8 +41,6 @@
                 "title": "HA-MCP Server",
                 "description": "HA-MCP turwI' yIcher. {panel_hint}polDI' choHmeyvam lo'lu'.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
                 "data": {
-                    "channel": "Dotlh He",
-                    "auto_update": "nuv vangnISbe'taHvIS turwI' yIchu'moH",
                     "server_port": "MCP turwI' Qum lojmIt",
                     "bind_host": "rarmeH naw'",
                     "webhook_auth": "chaw' 'olmeH mIw",
@@ -62,8 +60,6 @@
                     "enable_sidebar_panel": "Dop UI DuHmey jIH yIQotlhHa'"
                 },
                 "data_description": {
-                    "channel": "Dotlh Qapchu'bogh wIvlu'chugh, release Qapchu'bogh chu'qu' jomlu'; ghunmeH Dotlh wIvlu'chugh, development build chu'qu' jomlu'. turwI' chu'moHmeH pat chu'lu'chugh, integration pagh Home Assistant taghqa'moHlu'DI', 'ej roD nuDlu'DI', He wIvlu'bogh build chu'qu' jom pat. bIngDaq ghunwI' package le' wIvlu'chugh, wa'DIch 'oH 'ej turwI' chu'moHmeH pat chu'Ha'moH.",
-                    "auto_update": "chu'lu'chugh, integration pagh Home Assistant taghqa'moHlu'DI', 'ej roD nuDlu'DI', He wIvlu'bogh release chu'qu' jom turwI' chu'moHmeH pat. chu'Ha'lu'chugh, Dotlh jomlu'bogh lo'taH turwI', latlhlogh DuHvam Dachu'pa'. ha-mcp turwI' package neH SeH; HACS vegh ghoS HA-MCP Custom Component De' chu'.",
                     "server_port": "Qum lojmItvamDaq 'Ij turwI'vam. 9583 lo' ha-mcp add-on, vaj 9584 motlh lo' turwI'vam, cha' turwI'pu' retlhDaq QaplaHmeH - add-on Dalo'be'chugh, Qum lojmIt tlhab Dalo'laH.",
                     "bind_host": "MCP turwI' Qum lojmItvaD rarlaHbogh ghotpu' SeH. add-on rur DuH motlh: SIr'o' Sumvo' naw'laH vay', 'ej pegh He 'oH chaw'e'. Home Assistant jan neHvo' rarmeH loopback yIwIv - webhook URL Dop jIH je QaptaH.",
                     "webhook_auth": "webhook URL-Daq ghoSmeH, paghDaq chaw' ghaj 'e' 'ol MCP nIqHommey. pegh URL lo'lu'chugh, chaw' 'oH URL'e'. Home Assistant sign-in lo'lu'chugh, Home Assistant loHwI' mab lo'ta' claude.ai rur nIqHom (OAuth). OAuth ngo' lo'lu'chugh, integrationvam Client ID Secret je chenmoH; Google Gemini Spark rur nIqHom poQboghDaq lanlu'. Dachu'DI' pagh Dachu'Ha'DI' Home Assistant Dataghqa'moHnIS.",
@@ -98,22 +94,12 @@
             "title": "HACS vegh HA-MCP Custom Component yIchu'moH",
             "description": "HA-MCP Custom Component {required} ghap chu' law' poQ ha-mcp turwI' jomlu'bogh, 'ach {installed} Daghaj. HACS vegh component yIchu'moH (HA-MCP Custom Component De' 'ay' yIpoS, 'ej De' chu' 'anglu'be'chugh 'Update information' yIlo'), ghIq Home Assistant yItaghqa'moH. qaStaHvIS QaptaH turwI', 'ach component chu'moHlu'pa' DuHmey chu' 'op Qapbe'laH."
         },
-        "server_update_held": {
-            "title": "component chu'moHghach loS HA-MCP turwI' chu'moHghach",
-            "description": "ha-mcp turwI' {latest} tu'lu', 'ach HA-MCP Custom Component chu'moH je releasevetlh ({shipped}; {running} Dalo'taH). turwI' Dotlh'e' nIDbe'pu'bogh component QaptaHbogh QapchoHmoHlu'be'meH, component chu'moHlu'pa' turwI' chu'moHghach pat jomQo'.\n\nHACS vegh component yIchu'moH (HA-MCP Custom Component De' 'ay' yIpoS, 'ej De' chu' 'anglu'be'chugh 'Update information' yIlo'), ghIq Home Assistant yItaghqa'moH - ghIq nuv vangnISbe'taHvIS turwI' chu'moHghach jomlu'. turwI' chu'moHghach DaH jom DaneHchugh, HA-MCP turwI' chu'moHghach DolDaq jom leQ yIwIv."
-        },
         "legacy_oauth_restart": {
             "title": "OAuth ngo' choH lo'meH Home Assistant yItaghqa'moH",
             "description": "OAuth ngo' chaw' 'olmeH mIw /authorize /token web endpoints ghajbogh'e' qon; Home Assistant naQ taghqa'moHlu'DI' neH rarlaH pagh rarHa'laH - mIwvam Dachu'pu'chugh, Dachu'Ha'pu'chugh, pagh Client ID/Secret DachoHpu'chugh je, rap ghu'. choH lo'meH Home Assistant yItaghqa'moH (Settings - System - Restart); Home Assistant Dataghqa'moHpa' QaptaH mIw ngo'."
         }
     },
     "selector": {
-        "server_channel": {
-            "options": {
-                "stable": "Dotlh Qapchu'bogh (chup)",
-                "dev": "ghunmeH Dotlh (build chu'qu')"
-            }
-        },
         "server_webhook_auth": {
             "options": {
                 "none": "webhook URL pegh (motlh)",
@@ -126,13 +112,6 @@
                 "tool_search": "jan nej (mach, motlh)",
                 "full": "janmey naQ",
                 "both": "cha' mIwmey (Hoch agentvaD yIwIv)"
-            }
-        }
-    },
-    "entity": {
-        "update": {
-            "server_update": {
-                "name": "chu'moH"
             }
         }
     },
@@ -150,7 +129,7 @@
         "tools_module_installed": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'pu'",
         "tools_module_not_installed": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'be' — navvamDaq \"De' 'ay' chel\" yI'uy, 'ej bobcho'vam DachelmeH \"HA-MCP File & YAML Tools\" yIwIv",
         "tools_module_not_loaded": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'pu' 'ach QaptaHbe' — navvamDaq \"HA-MCP File & YAML Tools\" De' 'ay' yIQotlhHa' pagh yItaghqa'moH",
-        "version_line": "component {component_version} - ha-mcp turwI' {server_version} ({channel} Dotlh He)",
+        "version_line": "component {component_version} - ha-mcp turwI' {server_version} ({source} Dotlh He)",
         "version_not_installed": "wej jomlu'",
         "version_unknown": "Sovbe'lu'"
     }

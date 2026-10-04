@@ -55,8 +55,8 @@ logger = logging.getLogger(__name__)
 FEATURE_FLAG = "HAMCP_ENABLE_DEV_MODE"
 
 # Domain of the ha_mcp_tools custom component. Its "server" config entry
-# runs the ha-mcp server in-process inside HA and exposes channel /
-# pip-spec options that ha_dev_manage_server drives.
+# runs the ha-mcp server in-process inside HA and exposes the pip-spec
+# override that ha_dev_manage_server drives.
 COMPONENT_DOMAIN = "ha_mcp_tools"
 
 # The component's own in-process command for locating its "server" config
@@ -64,17 +64,15 @@ COMPONENT_DOMAIN = "ha_mcp_tools"
 # ha_mcp_tools-domain entry's options-flow schema from the outside.
 WS_SERVER_ENTRY = "ha_mcp_tools/server_entry"
 
-# The WRITE counterpart: applies a channel / pip_spec delta to the server entry via
+# The WRITE counterpart: applies a pip_spec delta to the server entry via
 # ``async_update_entry`` directly (embedded mode only — see
 # ``_update_source_via_component``), collapsing update_source's options-flow start +
 # submit round-trip. Gated on the ``server_entry_update`` capability.
 WS_SERVER_ENTRY_UPDATE = "ha_mcp_tools/server_entry_update"
 
-# Options-flow field names of the component's server entry
-# (custom_components/ha_mcp_tools/const.py OPT_CHANNEL / OPT_PIP_SPEC).
-_OPT_CHANNEL = "channel"
+# Options-flow field name of the component's server entry
+# (custom_components/ha_mcp_tools/const.py OPT_PIP_SPEC).
 _OPT_PIP_SPEC = "pip_spec"
-_VALID_CHANNELS = ("stable", "dev")
 
 # Delay before a self-affecting action (embedded entry reload / options
 # submit) fires, so this tool's JSON response flushes to the MCP client
@@ -292,7 +290,7 @@ def _field_prefill(item: dict[str, Any]) -> Any:
 async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | None:
     """One ``ha_mcp_tools/server_entry`` read; ``None`` ⇒ use the legacy probe.
 
-    Returns the component's ``{entry_id, channel, pip_spec}`` payload —
+    Returns the component's ``{entry_id, pip_spec}`` payload —
     ``entry_id`` is ``None`` when no server entry exists, an AUTHORITATIVE
     verdict the component reaches in-process (its own ``DOMAIN`` entries),
     not a "try the legacy path" signal. Returns ``None`` (⇒ legacy probe) on
@@ -363,9 +361,9 @@ def _preserved_flow_overrides(flow: dict[str, Any]) -> dict[str, Any]:
     schema — the clearable text fields, per the same suggestion-over-default
     rule as the generic walker's ``keep_current_values`` backfill (issue
     #2254) — rather than a hardcoded key list, so a field added to the
-    component's options flow later cannot be silently wiped here. ``channel``
-    carries only a schema default (= its current value), never a suggestion,
-    so it drops out naturally; an empty or cleared override carries no
+    component's options flow later cannot be silently wiped here. A toggle or
+    dropdown carries only a schema default (= its current value), never a
+    suggestion, so it drops out naturally; an empty or cleared override carries no
     resendable value and stays omitted, which is how a cleared field stays
     cleared.
     """
@@ -387,7 +385,7 @@ async def _open_server_entry_flow(
 
     Builds ``current_options`` from the freshly-opened flow's own schema (via
     ``_fields_from_flow_schema``) rather than the component's narrower
-    ``{channel, pip_spec}`` shape, so callers like ``_update_source`` — whose
+    ``{entry_id, pip_spec}`` shape, so callers like ``_update_source`` — whose
     preserved-overrides resend harvests the flow schema itself (``server_url``
     / ``external_url`` / ``webhook_id_override`` / ``secret_path_override`` —
     fields the ``server_entry`` capability does not carry) — still see them.
@@ -1802,20 +1800,13 @@ class DevTools:
                 description=(
                     "info: deployment/version report; update_source: point the "
                     "ha_mcp_tools component's separate in-process server at a "
-                    "channel or pip spec and reinstall it; "
+                    "pip spec (or clear it) and reinstall it; "
                     "restart: restart this server; list_pending: list tool calls "
                     "blocked on a security-policy approval; approve / deny: decide "
                     "one blocked call by token"
                 )
             ),
         ],
-        channel: Annotated[
-            str | None,
-            Field(
-                default=None,
-                description="Release channel for update_source: 'stable' or 'dev'",
-            ),
-        ] = None,
         pip_spec: Annotated[
             str | None,
             Field(
@@ -1825,8 +1816,8 @@ class DevTools:
                     "(ha-mcp==7.9.0) or a GitHub tarball URL such as "
                     "https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/<PR>/head.tar.gz."
                     " The bare name 'clear' (case-insensitive) is reserved: it clears the "
-                    "override and falls back to the release channel instead of being "
-                    "treated as a requirement. An empty string also clears but some MCP "
+                    "override and returns to the server the component release pins "
+                    "instead of being treated as a requirement. An empty string also clears but some MCP "
                     "clients mangle it in transit — prefer 'clear'."
                 ),
             ),
@@ -1864,7 +1855,7 @@ class DevTools:
 
         EXAMPLES:
         ha_dev_manage_server("update_source", pip_spec="https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1234/head.tar.gz")
-        ha_dev_manage_server("update_source", pip_spec="clear", channel="stable")
+        ha_dev_manage_server("update_source", pip_spec="clear")
         ha_dev_manage_server("approve", token="abc123")
         """
         try:
@@ -1880,7 +1871,7 @@ class DevTools:
                 # so the caller sees the collapse at the call site.
                 if pip_spec is not None and pip_spec.strip().lower() in ("", "clear"):
                     pip_spec = ""
-                return await self._update_source(channel, pip_spec)
+                return await self._update_source(pip_spec)
             if action == "restart":
                 return await self._restart_server()
             if action == "list_pending":
@@ -1891,7 +1882,7 @@ class DevTools:
         except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
-                context={"action": action, "channel": channel, "pip_spec": pip_spec},
+                context={"action": action, "pip_spec": pip_spec},
                 suggestions=["Check server and Home Assistant logs for details"],
             )
             return None  # unreachable; explicit for CodeQL
@@ -1928,7 +1919,6 @@ class DevTools:
                 await abort_options_flow_quietly(self._client, flow)
                 data["component_server_entry"] = {
                     "entry_id": entry_id,
-                    "channel": options.get(_OPT_CHANNEL),
                     "pip_spec": options.get(_OPT_PIP_SPEC),
                     "role": (
                         "this server (embedded)"
@@ -1954,30 +1944,21 @@ class DevTools:
         return result
 
     @staticmethod
-    def _validate_update_source_args(channel: str | None, pip_spec: str | None) -> None:
-        """Validate ``update_source``'s channel/pip_spec arguments.
+    def _validate_update_source_args(pip_spec: str | None) -> None:
+        """Validate ``update_source``'s pip_spec argument.
 
-        Extracted verbatim from ``_update_source``: raises a structured
-        ToolError when neither is given, the channel is unknown, or the
-        pip_spec is multi-line / over 500 chars.
+        Raises a structured ToolError when it is missing, multi-line, or over
+        500 chars.
         """
-        if channel is None and pip_spec is None:
+        if pip_spec is None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "update_source needs 'channel' and/or 'pip_spec'",
+                    "update_source needs 'pip_spec' (a requirement, or 'clear' "
+                    "to return to the server the component release pins)",
                 )
             )
-        if channel is not None and channel not in _VALID_CHANNELS:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"channel must be one of {list(_VALID_CHANNELS)}",
-                )
-            )
-        if pip_spec is not None and (
-            len(pip_spec) > 500 or any(ord(c) < 32 for c in pip_spec)
-        ):
+        if len(pip_spec) > 500 or any(ord(c) < 32 for c in pip_spec):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -1985,10 +1966,8 @@ class DevTools:
                 )
             )
 
-    async def _update_source(
-        self, channel: str | None, pip_spec: str | None
-    ) -> dict[str, Any]:
-        self._validate_update_source_args(channel, pip_spec)
+    async def _update_source(self, pip_spec: str | None) -> dict[str, Any]:
+        self._validate_update_source_args(pip_spec)
 
         if is_embedded():
             # Embedded self-reload: prefer the component's one-hop direct write
@@ -2001,9 +1980,7 @@ class DevTools:
             # Non-embedded deployments never route here — they reload the SEPARATE
             # in-process server entry synchronously and keep this connection, so the
             # collapse buys nothing there.
-            component_result = await self._update_source_via_component(
-                channel, pip_spec
-            )
+            component_result = await self._update_source_via_component(pip_spec)
             if component_result is not None:
                 return component_result
 
@@ -2013,8 +1990,8 @@ class DevTools:
                 create_error_response(
                     ErrorCode.COMPONENT_NOT_INSTALLED,
                     "No ha_mcp_tools in-process server entry found. "
-                    "update_source drives that entry's channel/pip-spec "
-                    "options, so it needs the entry to exist.",
+                    "update_source drives that entry's pip-spec option, so "
+                    "it needs the entry to exist.",
                     suggestions=[
                         "Install the ha_mcp_tools component and add its "
                         + "'server' entry (Settings > Devices & Services)",
@@ -2035,9 +2012,6 @@ class DevTools:
         # never sees it either. Preserve it in the submission, keep it out of
         # the response.
         requested: dict[str, Any] = {}
-        if channel is not None:
-            user_input[_OPT_CHANNEL] = channel
-            requested[_OPT_CHANNEL] = channel
         if pip_spec is not None:
             user_input[_OPT_PIP_SPEC] = pip_spec
             requested[_OPT_PIP_SPEC] = pip_spec
@@ -2063,10 +2037,7 @@ class DevTools:
                         "this server (the embedded ha_mcp_tools in-process entry)"
                     ),
                     "applying": requested,
-                    "previous": {
-                        _OPT_CHANNEL: current.get(_OPT_CHANNEL),
-                        _OPT_PIP_SPEC: current.get(_OPT_PIP_SPEC),
-                    },
+                    "previous": {_OPT_PIP_SPEC: current.get(_OPT_PIP_SPEC)},
                     "note": (
                         "The in-process server will reinstall and restart "
                         "now; this connection will drop. Reconnect in 1-5 "
@@ -2091,10 +2062,7 @@ class DevTools:
                 "entry_id": entry_id,
                 "target": "ha_mcp_tools in-process server entry",
                 "applied": requested,
-                "previous": {
-                    _OPT_CHANNEL: current.get(_OPT_CHANNEL),
-                    _OPT_PIP_SPEC: current.get(_OPT_PIP_SPEC),
-                },
+                "previous": {_OPT_PIP_SPEC: current.get(_OPT_PIP_SPEC)},
                 "note": (
                     "Applied to the ha_mcp_tools component's SEPARATE "
                     "in-process server entry, which is now reinstalling in "
@@ -2107,9 +2075,9 @@ class DevTools:
         }
 
     async def _update_source_via_component(
-        self, channel: str | None, pip_spec: str | None
+        self, pip_spec: str | None
     ) -> dict[str, Any] | None:
-        """Apply the channel/pip_spec delta via the component's direct write.
+        """Apply the pip_spec delta via the component's direct write.
 
         Embedded-only fast path: when the component advertises
         ``server_entry_update``, one ``ha_mcp_tools/server_entry_update`` frame
@@ -2148,8 +2116,6 @@ class DevTools:
             )
             return None
         deltas: dict[str, Any] = {}
-        if channel is not None:
-            deltas[_OPT_CHANNEL] = channel
         if pip_spec is not None:
             deltas[_OPT_PIP_SPEC] = pip_spec
         try:
@@ -2212,7 +2178,7 @@ class DevTools:
         if result.get("unchanged"):
             data["unchanged"] = True
             data["note"] = (
-                "No change: the requested channel/pip_spec already matches the "
+                "No change: the requested pip_spec already matches the "
                 "current in-process server source."
             )
         else:

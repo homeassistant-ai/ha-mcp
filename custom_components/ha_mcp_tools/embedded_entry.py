@@ -20,8 +20,7 @@ import secrets
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 
 from .const import (
     DATA_BRINGUP_TASK,
@@ -30,7 +29,6 @@ from .const import (
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
     DATA_SECRET_PATH,
-    DATA_UPDATE_COORDINATOR,
     DATA_WEBHOOK_ID,
     DOMAIN,
     OPT_ENABLE_SIDEBAR_PANEL,
@@ -73,8 +71,7 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     """
     # Imported lazily (see the import note) so the aiohttp / auth / requirements
     # chain is pulled in only when an entry is actually set up.
-    from .coordinator import ServerVersionCoordinator
-    from .embedded_setup import async_bring_up_server, async_maybe_auto_update
+    from .embedded_setup import async_bring_up_server
     from .ui_panel import async_register_ui_panel
     from .websocket_api import async_register_commands
 
@@ -110,16 +107,10 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # entry.data, and those writes must not self-reload.
     domain_data[DATA_LAST_OPTIONS] = dict(entry.options)
 
-    # Server-version visibility + automatic updates (issue #1760): the
-    # coordinator polls PyPI on its own UPDATE_CHECK_INTERVAL regardless of the
-    # auto_update option, backing the `update` platform entity forwarded below.
-    # Its listener forwards every refresh to async_maybe_auto_update, which
-    # decides whether to actually reload. Created and stored BEFORE the
-    # bring-up task: bring-up's success path (_async_finish_update_cycle)
-    # refreshes this coordinator, so it must already be in hass.data whenever
-    # that task runs.
-    coordinator = ServerVersionCoordinator(hass, entry)
-    domain_data[DATA_UPDATE_COORDINATOR] = coordinator
+    # The server package arrives with the component release HACS delivers
+    # (the manifest pins it), so the server update entity, its PyPI poll and
+    # the automatic reinstall are gone. Drop the entity they left behind.
+    _remove_retired_update_entity(hass, entry)
 
     task = entry.async_create_background_task(
         hass, async_bring_up_server(hass, entry), f"{DOMAIN}_bring_up"
@@ -127,50 +118,17 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     domain_data[DATA_BRINGUP_TASK] = task
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
-
-    @callback
-    def _on_version_update() -> None:
-        # A reload must never run synchronously from inside this listener
-        # callback: it would unload the UPDATE platform this very coordinator
-        # drives (forwarded below), tearing the coordinator down mid-callback.
-        #
-        # hass-owned, NOT entry.async_create_background_task: entry background
-        # tasks are cancelled by the very unload that async_maybe_auto_update's
-        # reload performs, so an entry-owned task would cancel itself mid-reload
-        # and leave the entry unloaded without ever setting back up (server down
-        # until restart). The interval-timer wiring this replaces ran its checks
-        # as plain hass jobs for the same reason.
-        hass.async_create_background_task(
-            async_maybe_auto_update(hass, entry, coordinator.data),
-            f"{DOMAIN}_server_auto_update",
-        )
-
-    entry.async_on_unload(coordinator.async_add_listener(_on_version_update))
-
-    # Background, not awaited: entry setup must not block on a PyPI round-trip
-    # (this is why async_config_entry_first_refresh is NOT used here). The
-    # coordinator reschedules itself on UPDATE_CHECK_INTERVAL after this first
-    # refresh completes.
-    entry.async_create_background_task(
-        hass, coordinator.async_refresh(), f"{DOMAIN}_server_version_refresh"
-    )
-
-    await hass.config_entries.async_forward_entry_setups(entry, [Platform.UPDATE])
     return True
 
 
 async def async_unload_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Stop the server + ingress webhook (reload-safe; keeps the provisioned token).
 
-    Unloads the UPDATE platform first so the coordinator's entity is torn down
-    before the coordinator itself is popped from hass.data, then cancels the
-    bring-up task so a still-in-flight install/start is torn down before the
-    explicit teardown runs.
+    Cancels the bring-up task first so a still-in-flight install/start is torn
+    down before the explicit teardown runs.
     """
     from .embedded_setup import async_teardown_server  # lazy (see import note)
     from .ui_panel import async_unregister_ui_panel
-
-    await hass.config_entries.async_unload_platforms(entry, [Platform.UPDATE])
 
     domain_data = hass.data.get(DOMAIN, {})
     task = domain_data.pop(DATA_BRINGUP_TASK, None)
@@ -182,8 +140,24 @@ async def async_unload_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     await async_teardown_server(hass)
     async_unregister_ui_panel(hass)
     domain_data.pop(DATA_LAST_OPTIONS, None)
-    domain_data.pop(DATA_UPDATE_COORDINATOR, None)
     return True
+
+
+def _remove_retired_update_entity(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove the server update entity that component 2.x registered.
+
+    Its platform no longer exists, so without this the registry keeps a
+    permanently unavailable "HA-MCP server" update entity on every upgraded
+    install.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        "update", DOMAIN, f"{entry.entry_id}_server_update"
+    )
+    if entity_id is not None:
+        registry.async_remove(entity_id)
 
 
 async def async_remove_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
