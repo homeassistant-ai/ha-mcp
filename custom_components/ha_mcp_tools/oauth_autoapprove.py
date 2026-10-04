@@ -138,9 +138,9 @@ _UNLISTED_CALLBACK_PAGE = """<!DOCTYPE html>
 <p>HA-MCP did not send this sign-in back to <code>{callback}</code> because that
 address is not on its list of allowed callback URLs.</p>
 <p>If you trust the app you are connecting, a Home Assistant administrator can
-add this exact address under <b>Settings &rarr; Devices &amp; services &rarr;
-HA-MCP &rarr; HA-MCP Server &rarr; Configure &rarr; Allowed OAuth callback
-URLs</b>, or in the <b>HA-MCP</b> sidebar panel under <b>Server Settings</b>.
+add this exact address under <b>Settings &rarr; Devices &amp; Services &rarr;
+HA-MCP Custom Component &rarr; HA-MCP Server &rarr; Configure &rarr; Allowed
+OAuth callback URLs</b>, or in the <b>HA-MCP</b> sidebar panel under <b>Server Settings</b>.
 Then start connecting again.</p>
 <p>Clients that connect with the webhook URL alone do not need an entry.</p>
 </body></html>
