@@ -457,12 +457,12 @@ ADDON_SYNCED_ADVANCED_FIELDS: tuple[str, ...] = (
 )
 
 
-# Auto-backup runtime-editable fields (#1288 web UI editor). Each entry
+# Backup runtime-editable fields (#1288 web UI editor). Each entry
 # is (field_name, env_var_name, python_type). The web UI's
 # /api/settings/backups/config GET/POST endpoints iterate this tuple to
 # advertise per-field origin (env / addon / file / default) and to
 # validate incoming writes. Keep aligned with the matching ``Settings``
-# fields above — adding a fourth runtime-editable setting means a new
+# fields above — adding a runtime-editable setting means a new
 # tuple entry plus matching addon ``config.yaml`` schema mirror.
 BACKUP_OVERRIDE_FIELDS: tuple[BackupOverrideField, ...] = (
     BackupOverrideField("enable_auto_backup", "ENABLE_AUTO_BACKUP", bool),
@@ -478,6 +478,8 @@ BACKUP_OVERRIDE_FIELDS: tuple[BackupOverrideField, ...] = (
         "HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS",
         int,
     ),
+    BackupOverrideField("enable_snapshot_actions", "ENABLE_SNAPSHOT_ACTIONS", bool),
+    BackupOverrideField("backup_read_only", "BACKUP_READ_ONLY", bool),
     BackupOverrideField("enable_snapshot_delete", "ENABLE_SNAPSHOT_DELETE", bool),
     BackupOverrideField(
         "snapshot_delete_min_age_days", "SNAPSHOT_DELETE_MIN_AGE_DAYS", int

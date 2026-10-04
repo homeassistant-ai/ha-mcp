@@ -291,6 +291,33 @@ Controls when the AI assistant suggests creating backups before operations:
 
 **Note:** This is an advanced option. Enable "Show unused optional configuration options" in the app configuration UI to see it.
 
+### Backup permissions
+
+`ha_manage_backup` is mandatory and remains enabled when listed in
+`disabled_tools`. Control its actions with these app options or the web
+Settings UI **Backups** tab:
+
+- **Allow full HA snapshot actions** (`enable_snapshot_actions`, default
+  `true`): turning this off blocks every full HA snapshot action, including
+  listing. Edit backups remain available. Deletion is only available through
+  `ha_manage_backup`, also requires **Allow snapshot deletion**
+  (`enable_snapshot_delete`), and its protections still apply.
+- **Make backup management read-only** (`backup_read_only`, default `false`):
+  allows edit-backup list, view, and diff, and snapshot list when snapshot
+  actions are enabled. Blocks manual create, restore (including edit restores),
+  and delete. Automatic pre-edit backups continue.
+
+These options restrict AI calls to `ha_manage_backup` and the equivalent
+backup services and commands sent through `ha_call_service`
+(`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/` snapshot
+commands, and Supervisor `/backups` requests). Full snapshot deletion through
+`ha_call_service` is refused; use `ha_manage_backup`. Code Mode is a beta
+escape hatch and is not fully covered by these options. Scripts and
+automations that call these services run inside Home Assistant and are not
+covered. Human backup actions in the settings page remain available. Save,
+then restart the app to apply changes. Disabling snapshot actions blocks
+snapshot listing even when backup management is read-only.
+
 ### secret_path (Advanced)
 
 **Default:** Empty (auto-generated)

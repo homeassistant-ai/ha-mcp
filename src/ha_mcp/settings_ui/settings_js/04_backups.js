@@ -3,6 +3,14 @@ let backupEntries = [];
 let backupConfigFields = [];
 
 const BACKUP_FIELD_LABELS = {
+  enable_snapshot_actions: {
+    label: 'Allow full HA snapshot actions',
+    help: 'Allow AI assistants to manage full Home Assistant snapshots through ha_manage_backup. Turning this off blocks every snapshot action, including listing. Snapshot deletion also requires Allow snapshot deletion. Edit backups and human actions in this page remain available.',
+  },
+  backup_read_only: {
+    label: 'Make backup management read-only',
+    help: 'Allow AI assistants to list, view, and diff edit backups, and list full HA snapshots when snapshot actions are enabled. Block manual backup create, restore (including edit restores), and delete. Automatic pre-edit backups continue. Human actions in this page remain available.',
+  },
   enable_auto_backup: {
     label: 'Auto-backup edits',
     help: 'Capture a snapshot before every wrapped write/destructive tool call.',
@@ -636,4 +644,3 @@ document.getElementById('modalBackdrop').addEventListener('click', (e) => {
 });
 
 document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar);
-

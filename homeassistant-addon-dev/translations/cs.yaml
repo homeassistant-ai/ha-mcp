@@ -240,6 +240,23 @@ configuration:
       nastavení zapnuto; zrušení zaškrtnutí se odhlásí od zachycení nejlepším úsilím
       a vyřadí s nimi nástroje pro soubory a raw-YAML z provozu. Vyžaduje restart,
       aby se projevilo.'
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
+      in ha_call_service. Turning this off blocks every snapshot action, including
+      listing, while edit backups remain available. Snapshot deletion is only available
+      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
+      still apply. On by default. Change this option or use the web Settings UI Backups
+      tab; requires restart in the app.
+  backup_read_only:
+    name: Make backup management read-only
+    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
+      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
+      backup create, restore (including edit restores), and delete, including the
+      equivalent backup services and commands in ha_call_service. Automatic pre-edit
+      backups continue, and human actions in the web Settings UI remain available.
+      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Omezení automatické zálohy (minuty)
     description: Okno omezení pro každou entitu. 0 (výchozí) zachytí snímek při každém
