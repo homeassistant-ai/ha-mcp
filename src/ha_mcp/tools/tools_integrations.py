@@ -2210,8 +2210,8 @@ class IntegrationTools:
                     "e.g. 'my_button'; "
                     "(b) full entity_id, "
                     "e.g. 'input_button.my_button' or 'sensor.my_meter'; "
-                    "(c) config entry_id for any integration, "
-                    "e.g. value from ha_get_integration(); "
+                    "(c) config entry_id for any integration, with helper_type "
+                    "omitted, e.g. value from ha_get_integration(); "
                     "(d) parent config entry_id for a config subentry."
                 )
             ),
@@ -2687,11 +2687,9 @@ class IntegrationTools:
                     "entity_id": entity_id,
                 },
                 suggestions=[
-                    "If unsure about the correct entity_id, use "
-                    "ha_search() — flow helper types often "
-                    "expose entities under a different domain than "
-                    "the helper_type itself (e.g. utility_meter → "
-                    "sensor.*, switch_as_x → switch.* / light.*).",
+                    "For a config entry_id target, omit helper_type to delete it.",
+                    "Otherwise find the entity_id with ha_search(): flow helpers "
+                    "often use another domain (utility_meter → sensor.*).",
                 ],
             )
         )
