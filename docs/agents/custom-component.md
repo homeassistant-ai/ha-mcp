@@ -21,10 +21,11 @@ Releases follow from that:
   `ha-mcp==X.Y.Z`. A server-only release is therefore also a component
   release.
 - **Development:** after **Publish Dev Channel**, the mirror sync stamps the
-  master snapshot with the next release number (what semantic-release would
-  cut) and a pin on the `ha-mcp` dev build just published
-  (`<next>.dev<N>`, from `scripts/dev_version.sh`), and tags it
-  `v<next>-dev.<N>` as a HACS pre-release.
+  snapshot of the commit it built with the next release number (what
+  semantic-release would cut) and pins the exact build it uploaded,
+  `ha-mcp-dev==<next>.dev<N>` (the version `scripts/dev_version.sh` gave
+  that run, handed over as its `dev-version` artifact), and tags it
+  `v<next>-dev.<N>` as a HACS pre-release once PyPI serves that build.
 
 The component never reports a dev suffix: released servers parse the version
 segment by segment as integers, so the suffix lives only in the pre-release tag
