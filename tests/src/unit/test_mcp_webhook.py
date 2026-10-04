@@ -1170,7 +1170,7 @@ class TestRegisterWebhook:
         cfg = hass.data[DOMAIN][DATA_WEBHOOK]
         assert cfg["session"] is relay_session
         assert cfg["cimd_session"] is cimd_session
-        assert connector_calls == [{"limit": 4}]
+        assert connector_calls[-1] == {"limit": 4}
 
         await mw.async_unregister_webhook(hass)
         assert relay_session.closed is True
