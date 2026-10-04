@@ -258,6 +258,12 @@ If the original entry has been deleted, restore recreates the helper and reports
 <!-- TOOLS_TABLE_END -->
 </details>
 
+Z-Wave configuration values can be read through `ha_manage_radio` with
+`action="get_config_params"` or `action="get_config_param"`, even when their
+configuration entities are disabled or absent. Reads use the Z-Wave JS cache
+by default; a single full root parameter can explicitly request a device read.
+See [parameter reads, freshness, and examples](docs/zwave-parameter-reads.md).
+
 ---
 
 ## 🆚 ha-mcp vs. Home Assistant's built-in MCP Server

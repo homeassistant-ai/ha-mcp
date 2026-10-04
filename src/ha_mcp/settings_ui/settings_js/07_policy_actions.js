@@ -1,3 +1,24 @@
+// Every policy write goes through this queue and runs one at a time: the
+// cards, the global settings, the Tools-tab gate switch and PIN removal,
+// plus the card reload. The first three read the whole policy and write it
+// back; PIN removal can save it on the server. Two at once can fail with a
+// version conflict, and for one card the later write can carry its rule
+// from before the earlier write's change and undo it. A reload that read
+// the policy before a card save landed would rebuild the cards from the old
+// policy. Each write starts after the previous one settled, whether it
+// succeeded or failed. The caller gets a promise of its own, so a failure
+// nobody awaits still reaches the page's unhandledrejection handler.
+// policyLoadConfig() is also called from inside queued writes, so only its
+// direct callers (the tab switch) queue it; queuing it inside would deadlock.
+let policyWritesPending = 0;
+let policyWriteTail = Promise.resolve();
+function policyWriteOnce(write) {
+  policyWritesPending += 1;
+  const run = policyWriteTail.then(write).finally(() => { policyWritesPending -= 1; });
+  policyWriteTail = run.catch(() => {});
+  return run.then();
+}
+
 async function savePolicyRule(toolName, ruleObj) {
   // Under an allow list a card left without conditions approves every call
   // to the tool: the loosening direction, so it is never saved silently.
@@ -114,6 +135,140 @@ async function saveGlobalSettings() {
     statusEl.textContent = e.message;
     showToast(e.message, {isError: true});
   }
+}
+
+// policyLoadConfig() does not await policyRefreshPinStatus(), so an older
+// answer can land after a newer one; only the latest request may write.
+let pinStatusSeq = 0;
+
+// The PIN itself never reaches the page: this endpoint reports only that
+// one exists, so a reload cannot put it back in front of anyone.
+async function policyRefreshPinStatus() {
+  const statusEl = document.getElementById('policy-pin-status');
+  const toggle = document.getElementById('policy-event-decisions-toggle');
+  if (!statusEl || !toggle) return;
+  const mySeq = ++pinStatusSeq;
+  let status;
+  try {
+    const r = await fetch('./api/policy/decision-pin');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    status = await r.json();
+  } catch (e) {
+    if (mySeq !== pinStatusSeq) return;
+    // Say the state is unknown rather than implying "no PIN" — the switch
+    // stays as the server last reported it, and saveGlobalSettings is what
+    // the server validates anyway.
+    statusEl.textContent = t('policies.global.pin.unknown', {}, 'Could not read whether a PIN is set.');
+    return;
+  }
+  if (mySeq !== pinStatusSeq) return;
+  // Three states, not two: a stored record the server cannot verify
+  // against is neither "a PIN is set" nor "no PIN" — nobody can type a
+  // PIN that matches it, and saying so is the only way the user knows to
+  // set a new one rather than to keep retrying the old one.
+  if (status.set) {
+    statusEl.textContent = t('policies.global.pin.is_set', {}, 'A PIN is set.');
+  } else if (status.invalid) {
+    statusEl.textContent = t(
+      'policies.global.pin.invalid',
+      {},
+      'The stored PIN cannot be read and matches nothing. Set a new one.'
+    );
+  } else {
+    statusEl.textContent = t('policies.global.pin.not_set', {}, 'No PIN set. Set one to allow decisions over the event bus.');
+  }
+  // Without a PIN the server refuses the combination, so don't offer it.
+  toggle.disabled = !status.set;
+}
+
+async function policySetPin() {
+  const input = document.getElementById('policy-decision-pin');
+  const label = t('policies.operations.set_pin', {}, 'Set PIN');
+  try {
+    const r = await fetch('./api/policy/decision-pin', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({pin: input.value}),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
+    input.value = '';
+    showToast(t('policies.global.pin.saved', {}, 'PIN saved.'));
+    // A locked switch cannot be edited, so overwriting it loses nothing typed
+    // since it locked. It can read off after a PIN removal whose toggle save
+    // failed while the stored setting stayed on; show the stored value now
+    // that the switch is usable. When that read fails the switch may show
+    // off while the stored setting is on, and the next global Save would
+    // write off, so a toast tells the user; the console keeps the cause.
+    const toggle = document.getElementById('policy-event-decisions-toggle');
+    if (toggle && toggle.disabled) {
+      let reread = false;
+      try {
+        const cfg = await fetch('./api/policy/config');
+        if (cfg.ok) {
+          toggle.checked = !!(await cfg.json()).event_decisions_enabled;
+          reread = true;
+        } else {
+          console.warn('[ha-mcp] /api/policy/config returned HTTP ' + cfg.status + '; event-decisions switch may be stale');
+        }
+      } catch (err) {
+        console.warn('[ha-mcp] failed to re-read the event-decisions setting', err);
+      }
+      if (!reread) {
+        showToast(t(
+          'policies.global.pin.saved_switch_unread',
+          {},
+          'PIN saved, but the event-decisions setting could not be read. Reload the page before saving the global settings.'
+        ), {isError: true});
+      }
+    }
+  } catch (e) {
+    showToast(
+      t('common.operation_failed', {operation: label, detail: e.message}, label + ' failed: ' + e.message),
+      {isError: true}
+    );
+  }
+  await policyRefreshPinStatus();
+}
+
+async function policyClearPin() {
+  if (!confirm(t(
+    'policies.global.pin.confirm_clear',
+    {},
+    'Remove the approval PIN? Deciding over the event bus switches off with it; the pending list in this tab is unaffected.'
+  ))) return;
+  const label = t('policies.operations.clear_pin', {}, 'Remove PIN');
+  try {
+    const r = await fetch('./api/policy/decision-pin', {method: 'DELETE'});
+    const body = await r.json().catch(() => ({}));
+    // Unchecked whenever the PIN is actually gone — including the error
+    // the server sends when it removed the PIN but could not persist the
+    // toggle with it (pin_removed on a 500). The flag below reports only
+    // whether the PERSISTED toggle was on, so a box ticked but not yet
+    // saved would otherwise survive the removal: left checked, then
+    // disabled by the status refresh, and the next save submits the one
+    // combination the server refuses.
+    if (r.ok || body.pin_removed) {
+      const toggleEl = document.getElementById('policy-event-decisions-toggle');
+      if (toggleEl) toggleEl.checked = false;
+    }
+    if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
+    if (body.event_decisions_disabled) {
+      showToast(t(
+        'policies.global.pin.cleared_and_disabled',
+        {},
+        'PIN removed, and deciding over the event bus switched off with it.'
+      ));
+    } else {
+      showToast(t('policies.global.pin.cleared', {}, 'PIN removed.'));
+    }
+  } catch (e) {
+    showToast(
+      t('common.operation_failed', {operation: label, detail: e.message}, label + ' failed: ' + e.message),
+      {isError: true}
+    );
+  }
+  await policyRefreshPinStatus();
 }
 
 async function policyLoadPending() {
@@ -318,9 +473,11 @@ async function handleFailedFlagSave(checkbox, previous, saved, spec) {
   updateStatus(msg, ok, !ok);
 }
 
-document.getElementById('policy-save-global-btn').addEventListener('click', saveGlobalSettings);
+document.getElementById('policy-save-global-btn').addEventListener('click', () => policyWriteOnce(saveGlobalSettings));
 document.getElementById('policy-set-pin-btn').addEventListener('click', policySetPin);
-document.getElementById('policy-clear-pin-btn').addEventListener('click', policyClearPin);
+// Removing the PIN can also save the policy (it switches event decisions
+// off when they were on), so it queues like any other policy write.
+document.getElementById('policy-clear-pin-btn').addEventListener('click', () => policyWriteOnce(policyClearPin));
 
 // Master toggle on this tab mirrors the Server Settings checkbox.
 // Persist via the same /api/settings/features endpoint so a save here
@@ -447,7 +604,7 @@ function activateTab(target, opts) {
     p.classList.toggle('active', p.id === 'panel-' + target)
   );
   if (target === 'backups') { loadBackupConfig(); loadBackups(); }
-  if (target === 'tool-security-policies') { policyLoadConfig(); policyLoadPending(); }
+  if (target === 'tool-security-policies') { policyWriteOnce(policyLoadConfig); policyLoadPending(); }
   if (target === 'entity-visibility') { visibilityLoadConfig(); }
   if (target === 'tools') {
     // Refresh gated-toggle + read-only state in case the user changed

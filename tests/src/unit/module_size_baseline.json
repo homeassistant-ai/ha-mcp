@@ -103,7 +103,7 @@
   "tests/src/unit/test_search_fields_projection.py": 1223,
   "tests/src/unit/test_search_related_graph.py": 1052,
   "tests/src/unit/test_settings_ui.py": 5209,
-  "tests/src/unit/test_settings_ui_js_behavior.py": 8270,
+  "tests/src/unit/test_settings_ui_js_behavior.py": 8269,
   "tests/src/unit/test_smart_search_scene_phase25.py": 1209,
   "tests/src/unit/test_stdio_settings_sidecar.py": 2935,
   "tests/src/unit/test_tools_addons.py": 6980,

@@ -317,10 +317,26 @@ async def _execute_zone_config_update(
     longitude: float | None,
     radius: float | None,
     passive: bool | None,
+    icon: str | None,
 ) -> dict[str, Any]:
     """Update a zone entity via zone/update."""
+    item_icon = None
+    if icon is not None:
+        listed = await client.send_websocket_message({"type": "zone/list"})
+        if not listed.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ws_failure_code(listed),
+                    f"Failed to read zone config: {listed.get('error', 'Unknown error')}",
+                    context=_simple_helper_error_context("zone", entity_id=entity_id),
+                )
+            )
+        stored: dict[str, Any] = next(
+            (z for z in listed.get("result") or [] if z.get("id") == unique_id), {}
+        )
+        item_icon = _zone_item_icon(stored, icon, entity_id)
     update_msg = _zone_update_message(
-        unique_id, name, latitude, longitude, radius, passive
+        unique_id, name, latitude, longitude, radius, passive, item_icon
     )
     result = await client.send_websocket_message(update_msg)
     if not result.get("success"):
@@ -431,6 +447,7 @@ async def _execute_config_store_update(
             kw.get("longitude"),
             kw.get("radius"),
             kw.get("passive"),
+            icon,
         )
     return await _execute_standard_helper_update(
         client, helper_type, entity_id, unique_id, name, icon, **kw
@@ -764,6 +781,7 @@ def _zone_update_message(
     longitude: float | None,
     radius: float | None,
     passive: bool | None,
+    icon: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     fields = {
@@ -772,12 +790,41 @@ def _zone_update_message(
         "longitude": longitude,
         "radius": radius,
         "passive": passive,
+        "icon": icon,
     }
     return {
         "type": "zone/update",
         "zone_id": unique_id,
         **{key: value for key, value in fields.items() if value is not None},
     }
+
+
+def _zone_item_icon(
+    stored: dict[str, Any], icon: str | None, entity_id: str
+) -> str | None:
+    """The icon to write into a zone's stored item, ``None`` to leave it.
+
+    The zone entity shows the registry icon over the item's, and Core's zone
+    update merges into the item and rejects an empty or null icon, so an icon
+    stored there can never be removed. A new icon therefore goes into the item
+    only when it already holds one, which keeps it from showing again once the
+    registry override is cleared; otherwise the registry alone carries it and
+    stays clearable. Clearing an icon the item holds is refused.
+    """
+    if not stored.get("icon"):
+        return None
+    if icon == "":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"The icon of {entity_id} cannot be removed: the zone's stored "
+                f"icon ({stored['icon']}) is kept by Home Assistant's zone update "
+                "and would show again.",
+                context=_simple_helper_error_context("zone", entity_id=entity_id),
+                suggestions=["Set a different icon instead of an empty one"],
+            )
+        )
+    return icon
 
 
 def _tag_update_message(
@@ -803,7 +850,7 @@ def _build_update_message(
     if helper_type == "person":
         return _person_update_message(unique_id, existing, name, **kw)
     if helper_type == "zone":
-        return _zone_update_message(unique_id, name, **kw)
+        return _zone_update_message(unique_id, name, icon=icon, **kw)
     if helper_type == "tag":
         return _tag_update_message(unique_id, name, **kw)
     return _build_standard_update_message(
@@ -835,8 +882,11 @@ async def _update_via_component(
     item = await read_helper_item(client, helper_type, **target)
     if item is None:
         return None
+    message_icon = icon
+    if helper_type == "zone":
+        message_icon = _zone_item_icon(item["item"], icon, entity_id)
     message = _build_update_message(
-        helper_type, item["item_id"], item["item"], name, icon, **kw
+        helper_type, item["item_id"], item["item"], name, message_icon, **kw
     )
     registry = {
         key: value
