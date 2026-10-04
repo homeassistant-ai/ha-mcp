@@ -73,6 +73,7 @@ PIN_SERVER_JS = """
       order: String(++order),
       status: document.getElementById('policy-pin-status').textContent,
       'toast-error': String(!!toast && toast.classList.contains('ha-toast-error')),
+      'toast-msg': toast ? toast.querySelector('.ha-toast-msg').textContent : '',
     };
     for (const [key, value] of Object.entries(attrs)) {
       document.body.setAttribute('data-' + name + '-' + key, value);
@@ -239,7 +240,10 @@ def test_a_refused_pin_leaves_the_switch_locked(settings_script: str) -> None:
         pin_set=True,
         body="postFails = true;\n" + REPLACE_AFTER_PARTIAL_REMOVAL,
     )
+    # The removal before it leaves an error toast too; the message tells
+    # the two apart.
     assert _probe(result, "replaced-toast-error") == "true"
+    assert _probe(result, "replaced-toast-msg") == "Set PIN failed: not stored"
     assert _probe(result, "replaced-checked") == "false"
     assert _probe(result, "replaced-disabled") == "true"
 

@@ -128,8 +128,8 @@ async function saveGlobalSettings() {
   }
 }
 
-// policyLoadConfig() does not await its refresh, so an older answer can land
-// after a newer one; only the latest request may write.
+// policyLoadConfig() does not await policyRefreshPinStatus(), so an older
+// answer can land after a newer one; only the latest request may write.
 let pinStatusSeq = 0;
 
 // The PIN itself never reaches the page: this endpoint reports only that
