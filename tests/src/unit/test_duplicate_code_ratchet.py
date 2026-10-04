@@ -311,7 +311,7 @@ def test_failed_run_keeps_the_entry_of_a_group_that_gained_a_copy(
     _list(temp_repo, listed)
     _stage(temp_repo, "c.py", _pasted(HELPER))
 
-    assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
+    assert ratchet.main([], repo_root=temp_repo) == 1
     assert _baseline(temp_repo) == listed
 
 
@@ -322,7 +322,7 @@ def test_removed_copy_drops_its_group(temp_repo: Path) -> None:
     listed = ratchet.find_copies({"a.py": HELPER, "b.py": RENAMED_HELPER})
     _list(temp_repo, listed)
 
-    assert ratchet.main(["--staged"], repo_root=temp_repo) == 0
+    assert ratchet.main([], repo_root=temp_repo) == 0
     assert _baseline(temp_repo) == {}
 
 
@@ -369,10 +369,13 @@ def test_base_check_rejects_a_hand_listed_group(temp_repo: Path) -> None:
     assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
 
 
-def test_base_check_rejects_a_copy_in_a_removed_copys_place(temp_repo: Path) -> None:
+def test_base_check_rejects_a_copy_in_a_removed_copys_place(
+    temp_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Until the sync runs, the base's baseline still lists a copy the base
-    removed. A new copy in its place must fail: the sync would drop the old
-    one from the baseline and leave master with a copy it does not allow."""
+    removed. A new copy in its place must fail: otherwise it is accepted when
+    the sync runs after the merge, or leaves master with a copy it does not
+    allow if the sync dropped the old one first."""
     _stage(temp_repo, "a.py", HELPER)
     _stage(temp_repo, "b.py", RENAMED_HELPER)
     _list(
@@ -385,6 +388,27 @@ def test_base_check_rejects_a_copy_in_a_removed_copys_place(temp_repo: Path) -> 
     _stage(temp_repo, "d.py", _pasted(HELPER))
 
     assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
+    assert "d.py" in capsys.readouterr().err
+
+
+def test_base_check_passes_existing_and_removed_copies(temp_repo: Path) -> None:
+    """The base check scans the base commit's own files. If that scan came
+    back empty, every existing group would look new and fail every pull
+    request."""
+    _stage(temp_repo, "a.py", HELPER)
+    _stage(temp_repo, "b.py", RENAMED_HELPER)
+    _stage(temp_repo, "c.py", _pasted(HELPER))
+    _list(
+        temp_repo,
+        ratchet.find_copies(
+            {"a.py": HELPER, "b.py": RENAMED_HELPER, "c.py": _pasted(HELPER)}
+        ),
+    )
+    commit(temp_repo)
+
+    assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 0
+    (temp_repo / "c.py").unlink()
+    assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 0
 
 
 def test_repository_matches_the_baseline() -> None:

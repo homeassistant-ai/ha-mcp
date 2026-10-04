@@ -12,8 +12,9 @@ same code with at least as many copies, or a group that holds all of its
 places. Moving or renaming a copy, removing one, or editing every copy the
 same way passes; adding a copy fails.
 
-Pull requests never edit the baseline, so two of them cannot conflict over
-it. After a merge, ``.github/workflows/sync-ratchet-baselines.yml`` runs
+So a pull request need not edit the baseline, and two of them do not
+conflict over it. After a merge,
+``.github/workflows/sync-ratchet-baselines.yml`` runs
 
     python scripts/duplicate_code_ratchet.py
 
@@ -310,24 +311,27 @@ def find_added_groups(
     ]
 
 
+def find_copies_since(repo_root: Path, ref: str) -> list[str]:
+    """Return one message per group of copies that the baseline the sync
+    would write from ``ref`` does not allow.
+
+    Until the sync runs, ``ref``'s baseline can still list a copy ``ref``
+    removed. Checking against it would let a new copy take that place:
+    accepted silently if the sync runs after the merge, or failing master's
+    own check if the sync dropped the old copy first.
+    """
+    return find_violations(scan(repo_root), scan(repo_root, ref=ref))
+
+
 def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
-    """Fail on a new copy; otherwise, unless ``--check``, rewrite the baseline
+    """With ``--base``, compare the baseline and the files with that commit.
+    Otherwise fail on a new copy, and unless ``--check`` rewrite the baseline
     to the current groups."""
     args = module_size_ratchet.parse_args(argv, __doc__.splitlines()[0])
     if args.base:
         status: int = module_size_ratchet.compare_with_base(
-            repo_root, args.base, BASELINE_NAME, find_added_groups
+            repo_root, args.base, BASELINE_NAME, find_added_groups, find_copies_since
         )
-        # The sync rewrites the baseline to ``ref``'s groups, so checking
-        # against those keeps a copy removed there, but still listed until
-        # the sync runs, from being replaced by a new one.
-        if status == 0 and module_size_ratchet.has_baseline(
-            repo_root, args.base, BASELINE_NAME
-        ):
-            violations = find_violations(
-                scan(repo_root), scan(repo_root, ref=args.base)
-            )
-            status = module_size_ratchet.report(violations)
         return status
     baseline_path = repo_root / BASELINE_NAME
     # With --staged the baseline comes from the index too, so an unstaged
@@ -340,9 +344,8 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
     # Rewriting on a failure would drop the entry of a group that gained a
     # copy, so removing the new copy would then fail as well.
     if violations:
-        for violation in violations:
-            print(violation, file=sys.stderr)
-        return 1
+        status = module_size_ratchet.report(violations)
+        return status
     if args.check:
         return 0
     baseline_path.write_text(

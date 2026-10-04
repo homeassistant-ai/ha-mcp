@@ -2,8 +2,8 @@
 
 ``tests/src/unit/test_module_size_ratchet.py`` fails when a tracked source file
 crosses ``LINE_LIMIT`` or when a file listed in the baseline grows past its
-entry. A file that shrank or was deleted passes: pull requests never edit the
-baseline, so two of them cannot conflict over it. After a merge,
+entry. A file that shrank or was deleted passes, so a pull request need not
+edit the baseline and two of them do not conflict over it. After a merge,
 ``.github/workflows/sync-ratchet-baselines.yml`` runs
 
     python scripts/module_size_ratchet.py
@@ -12,7 +12,7 @@ on master and commits the lowered baseline. The command lowers or drops
 entries. It never raises an entry and never adds a file, so it cannot accept
 growth: split the file instead.
 
-``--check`` reports growth without writing the baseline; the lefthook
+``--check`` reports violations without writing the baseline; the lefthook
 pre-commit hook runs it with ``--staged`` to measure the staged content.
 The baseline is a plain file, so CI also runs ``--base <ref>``: it fails when
 the baseline raises or adds an entry compared with that commit's baseline, or
@@ -48,8 +48,10 @@ def read_text(
 ) -> str:
     """Return one file's text from the working tree, with ``staged`` from
     the index, or with ``ref`` from that commit."""
-    if staged or ref:
-        return _git(repo_root, "show", f"{ref or ''}:{path}").decode("utf-8")
+    if ref:
+        return _git(repo_root, "show", f"{ref}:{path}").decode("utf-8")
+    if staged:
+        return _git(repo_root, "show", f":{path}").decode("utf-8")
     return (repo_root / path).read_text("utf-8")
 
 
@@ -70,23 +72,24 @@ def compare_with_base(
     ref: str,
     baseline_name: str,
     find_growth: Callable[[dict[str, Any], dict[str, Any]], list[str]],
+    find_growth_since: Callable[[Path, str], list[str]],
 ) -> int:
     """Return 1 when ``find_growth`` reports growth of the working-tree
-    baseline over the one at ``ref``.
+    baseline over the one at ``ref``, or ``find_growth_since`` reports files
+    the baseline the sync would write from ``ref`` does not allow.
 
     A baseline file that ``ref`` does not have yet is new, so there is
     nothing to compare it with.
     """
     _git(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
-    if not has_baseline(repo_root, ref, baseline_name):
+    # ls-tree prints nothing for a path the commit lacks and fails for any
+    # other problem, which must not pass as "nothing to compare".
+    if not _git(repo_root, "ls-tree", "--name-only", ref, "--", baseline_name):
         print(f"{ref} has no {baseline_name}; nothing to compare")
         return 0
-    base = load_baseline(_git(repo_root, "show", f"{ref}:{baseline_name}"))
+    base = load_baseline(read_text(repo_root, baseline_name, ref=ref))
     head = load_baseline(read_text(repo_root, baseline_name))
-    messages = find_growth(head, base)
-    for message in messages:
-        print(message, file=sys.stderr)
-    return 1 if messages else 0
+    return report(find_growth(head, base) or find_growth_since(repo_root, ref))
 
 
 def excluded_prefixes(
@@ -110,16 +113,24 @@ def count_lines(content: bytes) -> int:
     return content.count(b"\n") + unterminated
 
 
+class GitError(subprocess.CalledProcessError):
+    """A failed git command, with git's own message in the text."""
+
+    def __str__(self) -> str:
+        detail = (self.stderr or b"").decode("utf-8", "replace").strip()
+        return f"{super().__str__()} {detail}".rstrip()
+
+
 def _git(repo_root: Path, *args: str, stdin: bytes | None = None) -> bytes:
-    return subprocess.run(
-        # The unit-test job runs as a different user than the checkout owner,
-        # which git refuses without this.
-        ["git", "-c", "safe.directory=*", *args],
-        cwd=repo_root,
-        check=True,
-        capture_output=True,
-        input=stdin,
-    ).stdout
+    # The unit-test job runs as a different user than the checkout owner,
+    # which git refuses without safe.directory.
+    command = ["git", "-c", "safe.directory=*", *args]
+    result = subprocess.run(
+        command, cwd=repo_root, capture_output=True, input=stdin, check=False
+    )
+    if result.returncode:
+        raise GitError(result.returncode, command, result.stdout, result.stderr)
+    return result.stdout
 
 
 def _working_tree_contents(
@@ -151,11 +162,11 @@ def _ref_contents(
     repo_root: Path, ref: str, excluded: tuple[str, ...]
 ) -> dict[str, bytes]:
     blobs: dict[str, str] = {}
-    for entry in (
-        _git(repo_root, "ls-tree", "-r", "-z", ref).decode("utf-8").split("\0")
-    ):
+    entries = _git(repo_root, "ls-tree", "-r", "-z", ref).decode("utf-8")
+    for entry in entries.split("\0"):
         # Each entry is "<mode> blob <object>\t<path>".
         meta, _, path = entry.partition("\t")
+        # Regular files only: a submodule or a symlink has another mode.
         if in_scope(path, excluded) and meta.startswith("100"):
             blobs[path] = meta.split()[2]
     return _read_blobs(repo_root, blobs)
@@ -172,7 +183,10 @@ def _read_blobs(repo_root: Path, blobs: dict[str, str]) -> dict[str, bytes]:
     offset = 0
     for path in blobs:
         header_end = replies.index(b"\n", offset)
-        size = int(replies[offset:header_end].split()[2])
+        header = replies[offset:header_end].split()
+        if len(header) != 3 or header[1] != b"blob":
+            raise RuntimeError(f"git cat-file could not read {path}: {header!r}")
+        size = int(header[2])
         contents[path] = replies[header_end + 1 : header_end + 1 + size]
         offset = header_end + 1 + size + 1
     return contents
@@ -257,17 +271,24 @@ def find_growth(baseline: dict[str, int], base: dict[str, int]) -> list[str]:
 
 
 def find_growth_since(repo_root: Path, ref: str) -> list[str]:
-    """Return one message per file that grew past the baseline the sync
-    would write from ``ref``.
+    """Return one message per listed file that grew past the baseline the
+    sync would write from ``ref``.
 
     Until the sync runs after a merge, ``ref``'s baseline can still hold an
     entry above its file. Checking against that entry would let a pull
-    request grow the file back, and the sync, which never raises an entry,
-    would then leave master failing its own check.
+    request grow the file back: accepted silently if the sync runs after it
+    merges, or leaving master failing its own check if the sync ran first,
+    since the sync never raises an entry.
     """
-    base_baseline = load_baseline(_git(repo_root, "show", f"{ref}:{BASELINE_NAME}"))
+    base_baseline = load_baseline(read_text(repo_root, BASELINE_NAME, ref=ref))
     synced = lowered_baseline(measure(repo_root, ref=ref), base_baseline, LINE_LIMIT)
-    return find_violations(measure(repo_root), synced, LINE_LIMIT)
+    return [
+        f"{path}: {lines} lines, but the base branch has it at {synced[path]}, "
+        f"and a listed file may not grow ({BASELINE_NAME} can show a higher "
+        "figure until sync-ratchet-baselines.yml lowers it). Move code out of it."
+        for path, lines in sorted(measure(repo_root).items())
+        if path in synced and lines > synced[path]
+    ]
 
 
 def parse_args(argv: list[str] | None, description: str) -> argparse.Namespace:
@@ -293,38 +314,27 @@ def parse_args(argv: list[str] | None, description: str) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
-    """Lower the baseline, or with ``--check`` leave it, then return 1 if a
-    file is over its limit."""
+    """With ``--base``, compare the baseline and the files with that commit.
+    Otherwise lower the baseline (only measure it with ``--check``) and
+    return 1 if a file is over its limit."""
     args = parse_args(argv, __doc__.splitlines()[0])
     if args.base:
-        status = compare_with_base(repo_root, args.base, BASELINE_NAME, find_growth)
-        if status == 0 and has_baseline(repo_root, args.base):
-            status = report(find_growth_since(repo_root, args.base))
-        return status
-    baseline_path = repo_root / BASELINE_NAME
+        return compare_with_base(
+            repo_root, args.base, BASELINE_NAME, find_growth, find_growth_since
+        )
     # With --staged the baseline comes from the index too, so an unstaged
     # edit to it cannot hide growth in a staged file.
-    baseline = json.loads(read_text(repo_root, BASELINE_NAME, args.staged))
+    baseline = load_baseline(read_text(repo_root, BASELINE_NAME, args.staged))
     sizes = measure(repo_root, staged=args.staged)
-    if args.check:
-        # A commit that stages no Python file runs no unit tests, so the hook's
-        # run of this command is the only check on it.
-        return report(find_violations(sizes, baseline, LINE_LIMIT))
     lowered = lowered_baseline(sizes, baseline, LINE_LIMIT)
-    baseline_path.write_text(
-        json.dumps(lowered, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    print(f"{len(baseline) - len(lowered)} entries dropped, {len(lowered)} remain")
+    if not args.check:
+        (repo_root / BASELINE_NAME).write_text(
+            json.dumps(lowered, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        print(f"{len(baseline) - len(lowered)} entries dropped, {len(lowered)} remain")
+    # A commit that stages no Python file runs no unit tests, so the hook's
+    # --check run of this command is the only check on it.
     return report(find_violations(sizes, lowered, LINE_LIMIT))
-
-
-def has_baseline(repo_root: Path, ref: str, name: str = BASELINE_NAME) -> bool:
-    """Whether commit ``ref`` has the baseline file ``name``."""
-    try:
-        _git(repo_root, "cat-file", "-e", f"{ref}:{name}")
-    except subprocess.CalledProcessError:
-        return False
-    return True
 
 
 def report(violations: list[str]) -> int:

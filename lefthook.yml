@@ -24,7 +24,8 @@ pre-commit:
 
     # Fails when a listed file grows or a new one crosses the limit. --check
     # never writes the baseline: sync-ratchet-baselines.yml lowers it on
-    # master after a merge, so pull requests do not conflict over it.
+    # master after a merge, so pull requests need not edit it or conflict
+    # over it.
     # --staged counts the index, so the check judges what the commit holds.
     - name: module-size-baseline
       glob:
@@ -35,7 +36,8 @@ pre-commit:
         - "**/*.astro"
       run: uv run python scripts/module_size_ratchet.py --staged --check
 
-    # Fails on a new copy of a function or class, like the job above.
+    # Fails on a new copy of a function or class; same --staged --check mode
+    # as the job above.
     - name: duplicate-code-baseline
       glob: "**/*.py"
       run: uv run python scripts/duplicate_code_ratchet.py --staged --check

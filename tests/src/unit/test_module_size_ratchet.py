@@ -202,6 +202,18 @@ def test_hook_never_writes_the_baseline(temp_repo: Path) -> None:
     assert (temp_repo / ratchet.BASELINE_NAME).read_text(encoding="utf-8") == listed
 
 
+def test_hook_passes_a_hand_lowered_entry_for_a_file_under_the_limit(
+    temp_repo: Path,
+) -> None:
+    """A maintainer may still lower an entry by hand. An entry below the
+    limit for a file that is also under it must not report the file as over
+    the limit."""
+    _stage(temp_repo, "small.py", LIMIT - 50)
+    _stage_baseline(temp_repo, json.dumps({"small.py": LIMIT - 100}))
+
+    assert ratchet.main(["--staged", "--check"], repo_root=temp_repo) == 0
+
+
 def test_post_merge_run_lowers_the_baseline(temp_repo: Path) -> None:
     """The sync workflow's run is what keeps an entry from staying high
     enough to let its file grow back."""
@@ -209,9 +221,8 @@ def test_post_merge_run_lowers_the_baseline(temp_repo: Path) -> None:
     _stage_baseline(temp_repo, json.dumps({"big.py": LIMIT + 5, "gone.py": 2000}))
 
     assert ratchet.main([], repo_root=temp_repo) == 0
-    assert json.loads((temp_repo / ratchet.BASELINE_NAME).read_text()) == {
-        "big.py": LIMIT + 1
-    }
+    baseline = (temp_repo / ratchet.BASELINE_NAME).read_text(encoding="utf-8")
+    assert json.loads(baseline) == {"big.py": LIMIT + 1}
 
 
 def test_baseline_raised_or_added_over_the_base_is_rejected() -> None:
@@ -244,16 +255,35 @@ def test_base_check_rejects_a_hand_raised_entry(temp_repo: Path) -> None:
     assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
 
 
-def test_base_check_rejects_growth_under_a_stale_entry(temp_repo: Path) -> None:
+def test_base_check_rejects_growth_under_a_stale_entry(
+    temp_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Until the sync runs, the base's entry can sit above its file. Growing
-    the file back under that entry must fail: the sync would lower the entry
-    from the base and leave master over it."""
+    the file back under that entry must fail: otherwise the growth is either
+    accepted when the sync runs after the merge, or leaves master over the
+    entry the sync already lowered."""
     _stage(temp_repo, "big.py", LIMIT + 1)
     _stage_baseline(temp_repo, json.dumps({"big.py": LIMIT + 5}))
     commit(temp_repo)
     (temp_repo / "big.py").write_text("x = 1\n" * (LIMIT + 3), encoding="utf-8")
 
     assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 1
+    assert f"big.py: {LIMIT + 3} lines, but the base branch has it at {LIMIT + 1}" in (
+        capsys.readouterr().err
+    )
+
+
+def test_base_check_passes_a_file_shrunk_under_a_stale_entry(temp_repo: Path) -> None:
+    """The base check reads the base commit's own files. If that read came
+    back empty, every listed module would look new and fail every pull
+    request."""
+    _stage(temp_repo, "big.py", LIMIT + 3)
+    _stage(temp_repo, "small.py", 10)
+    _stage_baseline(temp_repo, json.dumps({"big.py": LIMIT + 5}))
+    commit(temp_repo)
+    (temp_repo / "big.py").write_text("x = 1\n" * (LIMIT + 2), encoding="utf-8")
+
+    assert ratchet.main(["--base", "HEAD"], repo_root=temp_repo) == 0
 
 
 def test_base_check_rejects_a_nan_entry(temp_repo: Path) -> None:

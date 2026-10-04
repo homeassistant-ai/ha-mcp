@@ -92,15 +92,17 @@ are listed with their line count in
 grow, so a file that grew has to be split. Vendored trees, test fixtures and
 the stable webhook-proxy copy are not counted.
 
-Pull requests do not edit either ratchet baseline. Nearly every change to a
-listed file would otherwise rewrite the same shared file, and those edits
-conflict with each other. A shrunk or deleted file, or an edited copy, passes
-the checks as it is; after the merge, `sync-ratchet-baselines.yml` lowers the
-baselines on `master` with `python scripts/module_size_ratchet.py` and
-`python scripts/duplicate_code_ratchet.py`. Both commands only lower an entry
-or drop a group, and never accept growth. The lefthook pre-commit hook runs
-both with `--staged --check`, which reports growth in the staged content
-without writing a baseline.
+Do not edit either ratchet baseline in a pull request: nearly every change to
+a listed file would rewrite the same shared file, and those edits conflict
+with each other. A shrunk or deleted file, or an edited copy, passes the
+checks as it is; after the merge, `sync-ratchet-baselines.yml` updates the
+baselines on `master` with `python scripts/module_size_ratchet.py`, which only
+lowers or drops entries, and `python scripts/duplicate_code_ratchet.py`, which
+rewrites its baseline only when no group gained a copy. Neither accepts
+growth. Lowering an entry by hand remains possible as a maintainer escape
+hatch; the checks below reject only a raised entry or a new copy. The lefthook
+pre-commit hook runs both commands with `--staged --check`, which reports
+violations in the staged content without writing a baseline.
 
 Never edit a baseline by hand. The `Fast Checks` job compares each baseline
 with the one in the base commit the pull request was merged with, and fails
@@ -115,11 +117,12 @@ decorators, type hints and names are dropped, with at least two statements.
 Import the existing definition instead of copying it. Closures are not
 compared on their own, and a file with the same bytes as another counts once,
 because that is how the server and the component share code
-(`dashboard_patch.py`); such a file needs a test that the copies match. Copies that already existed are listed in
+(`dashboard_patch.py`); such a file needs a test that the copies match.
+Copies that already existed are listed in
 `tests/src/unit/duplicate_code_baseline.json`. Removing, moving or editing a
 listed copy passes without a baseline edit; the post-merge sync rewrites it.
-The command refuses to write the baseline while a group has a new copy, so it
-cannot accept one.
+`python scripts/duplicate_code_ratchet.py` refuses to write the baseline while
+a group has a new copy, so it cannot accept one.
 
 `BLE001` (a handler that catches `Exception` without re-raising it or logging
 its traceback) is enabled. Each handler that existed before carries
