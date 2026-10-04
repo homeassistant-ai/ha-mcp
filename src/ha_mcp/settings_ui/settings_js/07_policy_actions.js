@@ -130,22 +130,28 @@ async function saveGlobalSettings() {
 
 // The PIN itself never reaches the page: this endpoint reports only that
 // one exists, so a reload cannot put it back in front of anyone.
+// policyLoadConfig() does not await its refresh, so an older answer can land
+// after a newer one; only the latest request may write.
+let pinStatusSeq = 0;
 async function policyRefreshPinStatus() {
   const statusEl = document.getElementById('policy-pin-status');
   const toggle = document.getElementById('policy-event-decisions-toggle');
   if (!statusEl || !toggle) return;
+  const mySeq = ++pinStatusSeq;
   let status;
   try {
     const r = await fetch('./api/policy/decision-pin');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     status = await r.json();
   } catch (e) {
+    if (mySeq !== pinStatusSeq) return;
     // Say the state is unknown rather than implying "no PIN" — the switch
     // stays as the server last reported it, and saveGlobalSettings is what
     // the server validates anyway.
     statusEl.textContent = t('policies.global.pin.unknown', {}, 'Could not read whether a PIN is set.');
     return;
   }
+  if (mySeq !== pinStatusSeq) return;
   // Three states, not two: a stored record the server cannot verify
   // against is neither "a PIN is set" nor "no PIN" — nobody can type a
   // PIN that matches it, and saying so is the only way the user knows to
@@ -178,6 +184,16 @@ async function policySetPin() {
     if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
     input.value = '';
     showToast(t('policies.global.pin.saved', {}, 'PIN saved.'));
+    // A locked switch could not be changed, so it holds no unsaved edit. It
+    // may still read off from a PIN removal whose toggle save failed, while
+    // the stored setting stayed on; show the stored value now it is usable.
+    const toggle = document.getElementById('policy-event-decisions-toggle');
+    if (toggle && toggle.disabled) {
+      try {
+        const cfg = await fetch('./api/policy/config');
+        if (cfg.ok) toggle.checked = !!(await cfg.json()).event_decisions_enabled;
+      } catch (_e) { /* the switch keeps its value; the next load reads it */ }
+    }
   } catch (e) {
     showToast(
       t('common.operation_failed', {operation: label, detail: e.message}, label + ' failed: ' + e.message),
