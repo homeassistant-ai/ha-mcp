@@ -176,10 +176,10 @@ jobs:
         # Force pins the bump to patch and is rejected above when releasable
         # commits exist, so it cannot override a required minor/major bump.
         force: ${{ inputs.force && 'patch' || '' }}
-        # Don't create GitHub release here - the next step creates it
+        # Don't create GitHub release here - we'll create a draft below
         vcs_release: "false"
 
-    - name: Create GitHub release
+    - name: Create draft GitHub release
       if: steps.semantic.outputs.released == 'true'
       env:
         GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
@@ -198,11 +198,13 @@ jobs:
           echo "Release v${VERSION}" > release_notes.md
         fi
 
+        # A draft until the last step of this job publishes it.
         gh release create "$TAG" \
           --title "$TAG" \
-          --notes-file release_notes.md
+          --notes-file release_notes.md \
+          --draft
 
-        echo "✓ Created release $TAG"
+        echo "✓ Created draft release $TAG"
 
     - name: Copy changelog to addon directory
       if: steps.semantic.outputs.released == 'true'
@@ -249,6 +251,15 @@ jobs:
         git push origin stable
 
         echo "✓ 'stable' tag now points to v$VERSION"
+
+    - name: Publish GitHub release
+      if: steps.semantic.outputs.released == 'true'
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      run: |
+        # Last, so a failed changelog push or stable-tag update leaves a draft
+        # instead of a public release with no PyPI or Docker publish behind it.
+        gh release edit "v${{ steps.semantic.outputs.version }}" --draft=false
 
   # Build and push addon Docker images
   build-addon:

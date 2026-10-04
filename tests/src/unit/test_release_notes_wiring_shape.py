@@ -25,7 +25,7 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 _SCRIPT = "scripts/extract_release_notes.py"
-_STEP = "Create GitHub release"
+_STEP = "Create draft GitHub release"
 _WORKFLOW = "semver-release.yml"
 _OUT_RE = re.compile(r"extract_release_notes\.py[^\n]*--out\s+(\S+)")
 _RUNS_OF_BLANKS = re.compile(r"[ \t]+")
