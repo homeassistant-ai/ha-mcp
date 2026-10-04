@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _TEXT_KIND: Literal["text"] = "text"
 _DICT_KIND: Literal["dict"] = "dict"
 
-# Output cap for the text (file/YAML) diff. Bounded like ``_MAX_PATCH_OPS``
+# Output cap for the text (file/YAML) diff. Bounded like the manager's ``_MAX_PATCH_OPS``
 # so a pathological whole-file rewrite stays token-friendly; the response
 # sets ``truncated`` and points the caller at the full snapshot via view.
 _MAX_DIFF_LINES = 400
@@ -157,14 +157,6 @@ def _build_text_diff_response(
         "unchanged": len(lines) == 0,
         "truncated": truncated,
     }
-
-
-# Output cap for diff_snapshot. Bounded payload keeps the tool response
-# token-friendly even when the user diffs against a freshly-rewritten
-# automation. Picked to comfortably cover typical edits (a handful of
-# field changes) while still cutting off pathological cases like "I
-# renamed every step of a 500-step script".
-_MAX_PATCH_OPS = 200
 
 
 def _compute_json_patch(

@@ -66,7 +66,6 @@ import yaml  # type: ignore[import-untyped]
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .backup_diff import (
-    _MAX_PATCH_OPS,
     _TEXT_KIND,
     DiffResponse,
     DiffResponseText,
@@ -84,6 +83,13 @@ from .utils.data_paths import get_data_dir
 from .utils.registry_update_lock import registry_update_lock
 
 logger = logging.getLogger(__name__)
+
+# Output cap for diff_snapshot. Bounded payload keeps the tool response
+# token-friendly even when the user diffs against a freshly-rewritten
+# automation. Picked to comfortably cover typical edits (a handful of
+# field changes) while still cutting off pathological cases like "I
+# renamed every step of a 500-step script".
+_MAX_PATCH_OPS = 200
 
 SCHEMA_VERSION = 1
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9._-]")

@@ -24,10 +24,8 @@ import yaml
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.backup_diff import (
-    _MAX_PATCH_OPS,
-)
 from ha_mcp.backup_manager import (
+    _MAX_PATCH_OPS,
     SCHEMA_VERSION,
     BackupManager,
     DomainHandler,
