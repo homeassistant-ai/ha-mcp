@@ -279,11 +279,10 @@ def _single_line_pip_spec(value: str) -> str:
 
 
 def _server_entry_update_schema() -> dict[Any, Any]:
-    # Both fields are optional at the schema level (voluptuous cannot cleanly express
-    # "at least one of"); ``_server_entry_update_prep`` raises when NEITHER is present.
-    # ``channel`` is gated to the known set and ``pip_spec`` gets the length +
-    # single-line cap — schema-level defence-in-depth over (and symmetric with) the
-    # server's own channel validation (D6) and pip-spec normalization.
+    # ``_server_entry_update_prep`` requires ``pip_spec``. ``channel`` stays
+    # accepted (and ignored) because servers released before the paired-release
+    # change still send it; tightening the schema would reject their frames
+    # outright. ``pip_spec`` gets the length + single-line cap.
     return {
         vol.Required("type"): WS_SERVER_ENTRY_UPDATE,
         vol.Optional("channel"): vol.In((CHANNEL_STABLE, CHANNEL_DEV)),

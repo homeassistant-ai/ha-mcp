@@ -45,8 +45,6 @@
         "title": "HA-MCP 服务器",
         "description": "配置 HA-MCP 服务器。{panel_hint}此处的更改在保存时应用。\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
         "data": {
-          "channel": "发布通道",
-          "auto_update": "服务器自动更新",
           "server_port": "MCP 服务器监听端口",
           "bind_host": "网络访问",
           "webhook_auth": "身份验证模式",
@@ -66,8 +64,6 @@
           "enable_sidebar_panel": "侧边栏设置面板"
         },
         "data_description": {
-          "channel": "稳定版安装最新的稳定发行版；开发版安装最新的开发构建。启用自动更新后，重新加载或重启以及定期检查都会安装所选通道的最新构建。下方的开发者软件包覆盖优先级更高，并会禁用自动更新。",
-          "auto_update": "启用时，所选通道的最新发行版会自动安装——在重新加载或重启时，以及通过定期检查。关闭时，服务器会保持当前已安装的版本，直到您重新启用此项。它仅控制 ha-mcp 服务器软件包；HA-MCP 自定义组件自身的更新仍通过 HACS 进行。",
           "server_port": "此服务器监听的端口。ha-mcp app (add-on) 使用 9583，因此默认设置为 9584 以允许两者并存——如果您不运行该 app (add-on)，任何空闲端口均可。",
           "bind_host": "谁可以直接连接到 MCP 服务器端口。默认值与 app (add-on) 匹配：可在本地网络上访问，以机密路径作为凭据。选择 loopback 仅允许来自 Home Assistant 本机本身的连接——无论哪种方式，Webhook URL 和侧边栏面板都可以正常工作。",
           "webhook_auth": "MCP 客户端如何在 Webhook URL 处验证身份。使用秘密 URL 时，链接本身就是唯一的凭据——OAuth 仍会为使用它的客户端运行，但每次登录都会自动批准：无需登录，也无需客户端 ID 或密钥。使用 Home Assistant 登录时，claude.ai 等客户端会使用 Home Assistant 管理员账户登录 (OAuth)。使用旧版 OAuth 时，此集成会运行自己的登录服务，并颁发客户端 ID 和密钥以粘贴到需要它们的客户端中——可能需要重启 Home Assistant 才能完全启用或禁用它。",
@@ -102,10 +98,6 @@
       "title": "请通过 HACS 更新 HA-MCP 自定义组件",
       "description": "已安装的 ha-mcp 服务器需要 HA-MCP 自定义组件 {required} 或更高版本，但您的版本是 {installed}。请通过 HACS 更新组件（打开 HA-MCP 自定义组件条目；如果尚未显示更新，请使用“Update information”），然后重启 Home Assistant。在此期间服务器仍会继续运行，但在组件更新之前，某些较新的功能可能无法使用。"
     },
-    "server_update_held": {
-      "title": "HA-MCP 服务器更新正在等待组件更新",
-      "description": "ha-mcp 服务器 {latest} 已可用，但该发行版同时更新了 HA-MCP 自定义组件（更新至 {shipped}；您正在运行 {running}）。为避免启动一个当前组件从未测试过的服务器版本，服务器自动更新将暂缓，直到组件完成更新。\n\n请通过 HACS 更新组件（打开 HA-MCP 自定义组件条目；如果尚未显示更新，请使用“Update information”），然后重启 Home Assistant——之后服务器更新会自动安装。若仍要立即安装服务器更新，请在 HA-MCP 服务器更新实体上点击“安装”。"
-    },
     "legacy_oauth_restart": {
       "title": "重启 Home Assistant 以应用旧版 OAuth 设置",
       "fix_flow": {
@@ -119,12 +111,6 @@
     }
   },
   "selector": {
-    "server_channel": {
-      "options": {
-        "stable": "稳定版（推荐）",
-        "dev": "开发版（最新构建）"
-      }
-    },
     "server_webhook_auth": {
       "options": {
         "none": "密钥 Webhook URL（默认）",
@@ -137,13 +123,6 @@
         "tool_search": "工具搜索（紧凑，默认）",
         "full": "完整目录",
         "both": "两者（按智能体选择）"
-      }
-    }
-  },
-  "entity": {
-    "update": {
-      "server_update": {
-        "name": "更新"
       }
     }
   },
@@ -161,7 +140,7 @@
     "tools_module_installed": "Beta/高级文件与 YAML 工具模块（可选）：已安装",
     "tools_module_not_installed": "Beta/高级文件与 YAML 工具模块（可选）：未安装——请在此集成页面上点击“添加条目”并选择“HA-MCP File & YAML Tools”",
     "tools_module_not_loaded": "Beta/高级文件与 YAML 工具模块（可选）：已安装但未加载——请在此集成页面上启用或重新加载“HA-MCP File & YAML Tools”条目",
-    "version_line": "组件 {component_version} - 服务器 ha-mcp {server_version}（{channel} 通道）",
+    "version_line": "组件 {component_version} - 服务器 ha-mcp {server_version}（{source} 通道）",
     "version_not_installed": "尚未安装",
     "version_unknown": "未知"
   }

@@ -320,12 +320,9 @@ def _seed_config(config_path: Path, wheel_name: str, wheel_version: str) -> None
             "modified_at": "2025-09-07T23:56:28.040747+00:00",
             "options": {
                 # An exact index pin on the version the entrypoint installed:
-                # an explicit override (so it counts as "stable"), not a URL
-                # (which always force-installs), and already satisfied (so HA's
-                # requirements manager runs no pip).
+                # not a URL (which always force-installs), and already
+                # satisfied, so the bring-up installs nothing.
                 "pip_spec": pip_spec,
-                "channel": "stable",
-                "auto_update": True,
                 "server_port": _SERVER_PORT,
                 "bind_host": "127.0.0.1",
                 "webhook_auth": "none",

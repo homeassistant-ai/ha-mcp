@@ -9,7 +9,7 @@ menu on the first step:
 * ``server`` — the in-process ha-mcp FastMCP server (issue #1527). A single
   confirm step creates the entry (entry-exists = the server runs);
   single-instance, keyed on ``DOMAIN-server``. Its options flow tunes the
-  channel / port / bind host / webhook auth / pip spec / server URL.
+  port / bind host / webhook auth / pip spec / server URL.
 
 The two entry types are discriminated by ``entry.data[CONF_ENTRY_TYPE]``; the
 options-flow dispatcher branches on it — the server entry gets the configurable
@@ -48,17 +48,13 @@ from packaging.version import InvalidVersion, Version
 from .const import (
     BIND_HOST_ALL,
     BIND_HOST_LOOPBACK,
-    CHANNEL_DEV,
-    CHANNEL_STABLE,
     CONF_ENTRY_TYPE,
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
-    DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
-    DEFAULT_CHANNEL,
     DEFAULT_ENABLE_LLM_API,
     DEFAULT_LLM_API_EXPOSURE,
     DEFAULT_LOOPBACK_URL,
@@ -74,9 +70,7 @@ from .const import (
     EXPOSURE_TOOL_SEARCH,
     LLM_API_DOCS_URL,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
-    OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
-    OPT_CHANNEL,
     OPT_ENABLE_LLM_API,
     OPT_ENABLE_SIDEBAR_PANEL,
     OPT_ENABLE_STARTUP_NOTIFICATION,
@@ -129,9 +123,10 @@ _COMMON_FALLBACKS: dict[str, str] = {
         "server settings."
     ),
     "version_line": (
-        "Component {component_version} - "
-        "Server ha-mcp {server_version} ({channel} channel)"
+        "Component {component_version} - Server ha-mcp {server_version} ({source})"
     ),
+    "server_source_paired": "installed with this component release",
+    "server_source_override": "pip requirement override",
     "version_unknown": "unknown",
     "version_not_installed": "not installed yet",
     "tools_module_installed": (
@@ -359,7 +354,7 @@ def _legacy_restart_pending(hass: HomeAssistant) -> bool:
 def _installed_server_version() -> str | None:
     """Return the installed ha-mcp server version, or None if not installed.
 
-    Checks both channel distributions (only one is ever installed at a time).
+    Checks both server distributions (only one is ever installed at a time).
     Kept dependency-free (``importlib.metadata``) and swallow-nothing-surprising
     so a read can never break the options form.
     """
@@ -383,7 +378,7 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         """Return the options flow for this entry type.
 
-        The in-process server entry gets the configurable options flow (channel /
+        The in-process server entry gets the configurable options flow (
         port / bind / auth / pip spec / URL). The tools services entry has
         nothing to configure yet, so it gets a light informational options flow
         instead of aborting.
@@ -577,20 +572,6 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     )
                 ),
                 vol.Required(
-                    OPT_CHANNEL,
-                    default=form_values.get(OPT_CHANNEL, DEFAULT_CHANNEL),
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[CHANNEL_STABLE, CHANNEL_DEV],
-                        translation_key="server_channel",
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
-                ),
-                vol.Required(
-                    OPT_AUTO_UPDATE,
-                    default=bool(form_values.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)),
-                ): bool,
-                vol.Required(
                     OPT_SERVER_PORT,
                     default=form_values.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
@@ -783,12 +764,11 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         """Normalize the submitted options before they are persisted.
 
         Collapses the pip-spec field to empty when it is empty or equals
-        ``DEFAULT_PIP_SPEC`` (the unpinned ``ha-mcp`` distribution): the field is
-        pre-filled with the saved override or blank, but a user may also type the
-        default dist name, and persisting it verbatim would read as an
-        intentional override and disable the stable channel's automatic updates.
-        Empty means "no override" (track the selected channel); any other string
-        is a genuine override, stored as-is. Also strips the URL / secret
+        ``DEFAULT_PIP_SPEC`` (the bare ``ha-mcp`` distribution): a user may type
+        the default dist name, and persisting it verbatim would read as an
+        intentional override of the server this component release pins.
+        Empty means "no override" (run the paired server); any other string is
+        a genuine override, stored as-is. Also strips the URL / secret
         override fields, and drops a blank ``server_url`` so its default applies.
         """
         cleaned = dict(user_input)
@@ -822,13 +802,20 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         """Return a one-line component + server version summary for the form.
 
         Reads the component version from the integration manifest and the
-        installed server version from the channel's distribution metadata.
+        installed server version from the distribution metadata; the source
+        says whether that server is the one this release pins or a pip-spec
+        override.
         Failure-proof like the connect-URL hint: any read error degrades to a
         best-effort string ("unknown" / "not installed yet") rather than
         breaking the options form.
         """
         opts = self.config_entry.options
-        channel = str(opts.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
+        override = str(opts.get(OPT_PIP_SPEC) or "").strip()
+        source = (
+            common["server_source_override"]
+            if override and override != DEFAULT_PIP_SPEC
+            else common["server_source_paired"]
+        )
 
         component_version = common["version_unknown"]
         hass = getattr(self, "hass", None)
@@ -876,7 +863,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             "version_line",
             component_version=component_version,
             server_version=server_version,
-            channel=channel,
+            source=source,
         )
 
     def _tools_module_hint(self, common: dict[str, str]) -> str | None:

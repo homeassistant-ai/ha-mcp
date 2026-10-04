@@ -259,15 +259,7 @@ class TestDevManageServer:
             {"action": "update_source"},
         )
         assert result.get("success") is not True
-        assert "channel" in extract_error_message(result).lower()
-
-    async def test_update_source_rejects_bad_channel(self, mcp_client_with_dev_mode):
-        result = await safe_call_tool(
-            mcp_client_with_dev_mode,
-            "ha_dev_manage_server",
-            {"action": "update_source", "channel": "nightly"},
-        )
-        assert result.get("success") is not True
+        assert "pip_spec" in extract_error_message(result).lower()
 
     async def test_restart_unavailable_standalone(self, mcp_client_with_dev_mode):
         result = await safe_call_tool(

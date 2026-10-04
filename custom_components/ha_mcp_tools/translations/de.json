@@ -45,8 +45,6 @@
         "title": "HA-MCP Server",
         "description": "Konfiguriere den HA-MCP Server. {panel_hint}Änderungen hier werden beim Speichern angewendet.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
         "data": {
-          "channel": "Release-Kanal",
-          "auto_update": "Automatische Server-Updates",
           "server_port": "MCP-Server Listening-Port",
           "bind_host": "Netzwerkzugriff",
           "webhook_auth": "Authentifizierungsmodus",
@@ -66,8 +64,6 @@
           "enable_sidebar_panel": "Sidebar-Einstellungen-Panel"
         },
         "data_description": {
-          "channel": "Stable installiert das neueste stabile Release; Development installiert den neuesten Development-Build. Wenn automatische Updates an sind, installieren ein Reload oder Restart sowie eine regelmäßige Prüfung den neuesten Build des ausgewählten Kanals. Ein Developer Package Override unten hat Vorrang und deaktiviert automatische Updates.",
-          "auto_update": "Wenn an, wird das neueste Release des ausgewählten Kanals automatisch installiert – bei einem Reload oder Restart und über eine regelmäßige Prüfung. Wenn aus, bleibt der Server auf der aktuell installierten Version, bis du dies wieder einschaltest. Dies steuert nur das ha-mcp Server-Package; Updates für das HA-MCP Custom Component selbst kommen weiterhin über HACS.",
           "server_port": "Der Port, auf dem dieser Server lauscht. Die ha-mcp App (Add-on) verwendet 9583, daher ist standardmäßig 9584 voreingestellt, damit beide nebeneinander laufen können – wenn du die App (Add-on) nicht nutzt, funktioniert jeder freie Port.",
           "bind_host": "Wer sich direkt mit dem MCP-Server-Port verbinden kann. Der Standardwert entspricht der App (Add-on): erreichbar in deinem lokalen Netzwerk, mit dem geheimen Pfad als Zugangsdaten. Wähle Loopback, um nur Verbindungen von der Home Assistant-Maschine selbst zuzulassen – die Webhook-URL und das Seitenleifen-Panel funktionieren in beiden Fällen.",
           "webhook_auth": "Wie sich MCP-Clients an der Webhook-URL authentifizieren. Bei der geheimen URL ist der Link selbst die einzige Anmeldeinformation – OAuth läuft weiterhin für Clients, die es nutzen, aber jede Anmeldung wird automatisch genehmigt: kein Login und keine Client-ID oder kein Secret erforderlich. Bei der Home Assistant-Anmeldung melden sich Clients wie claude.ai mit einem Home Assistant-Administratorkonto (OAuth) an. Bei Legacy OAuth betreibt diese Integration einen eigenen Anmeldedienst und stellt eine Client-ID und ein Secret aus, die in Clients eingefügt werden müssen, die eine solche benötigen – ein Neustart von Home Assistant kann erforderlich sein, um sie vollständig ein- oder auszuschalten.",
@@ -102,10 +98,6 @@
       "title": "Aktualisiere das HA-MCP Custom Component über HACS",
       "description": "Der installierte ha-mcp Server benötigt HA-MCP Custom Component {required} oder neuer, aber du hast {installed}. Aktualisiere das Component über HACS (öffne den HA-MCP Custom Component-Eintrag und nutze 'Update information', falls noch kein Update angezeigt wird) und starte Home Assistant neu. Der Server läuft in der Zwischenzeit weiter, aber einige neuere Features funktionieren möglicherweise nicht, bis das Component aktualisiert ist."
     },
-    "server_update_held": {
-      "title": "HA-MCP Server-Update wartet auf ein Component-Update",
-      "description": "ha-mcp Server {latest} ist verfügbar, aber dieses Release hat auch das HA-MCP Custom Component aktualisiert (auf {shipped}; du nutzt {running}). Um zu vermeiden, dass eine Server-Version gestartet wird, die nie mit dem laufenden Component getestet wurde, ist das automatische Server-Update ausgesetzt, bis das Component aktualisiert ist.\n\nAktualisiere das Component über HACS (öffne den HA-MCP Custom Component-Eintrag und nutze 'Update information', falls noch kein Update angezeigt wird), starte dann Home Assistant neu – das Server-Update wird danach automatisch installiert. Um das Server-Update trotzdem zu installieren, drücke Install bei der HA-MCP Server Update-Entität."
-    },
     "legacy_oauth_restart": {
       "title": "Starte Home Assistant neu, um die Legacy OAuth-Einstellungen anzuwenden",
       "fix_flow": {
@@ -119,12 +111,6 @@
     }
   },
   "selector": {
-    "server_channel": {
-      "options": {
-        "stable": "Stable (empfohlen)",
-        "dev": "Development (neuester Build)"
-      }
-    },
     "server_webhook_auth": {
       "options": {
         "none": "Secret Webhook URL (Standard)",
@@ -137,13 +123,6 @@
         "tool_search": "Tool Search (kompakt, Standard)",
         "full": "Full Catalog",
         "both": "Beides (pro Agent wählen)"
-      }
-    }
-  },
-  "entity": {
-    "update": {
-      "server_update": {
-        "name": "Update"
       }
     }
   },
@@ -161,7 +140,7 @@
     "tools_module_installed": "Beta-/Erweitert-Modul für Datei- & YAML-Tools (optional): Installiert",
     "tools_module_not_installed": "Beta-/Erweitert-Modul für Datei- & YAML-Tools (optional): Nicht installiert — klicke auf „Eintrag hinzufügen“ auf der Seite dieser Integration und wähle „HA-MCP File & YAML Tools“",
     "tools_module_not_loaded": "Beta-/Erweitert-Modul für Datei- & YAML-Tools (optional): Installiert, aber nicht geladen — aktiviere oder lade den Eintrag „HA-MCP File & YAML Tools“ auf der Seite dieser Integration neu",
-    "version_line": "Komponente {component_version} - Server ha-mcp {server_version} ({channel}-Kanal)",
+    "version_line": "Komponente {component_version} - Server ha-mcp {server_version} ({source}-Kanal)",
     "version_not_installed": "noch nicht installiert",
     "version_unknown": "unbekannt"
   }

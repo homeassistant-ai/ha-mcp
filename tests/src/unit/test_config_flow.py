@@ -520,7 +520,7 @@ class TestServerOptionsFlow:
         # The Configure form carries a "versions" placeholder that names the
         # component version (from the manifest) and the installed server version.
         flow = _make_options_flow(
-            options={const.OPT_CHANNEL: const.CHANNEL_DEV},
+            options={},
             data={const.DATA_WEBHOOK_ID: "mcp_abc"},
         )
         flow.hass = MagicMock()
@@ -539,7 +539,7 @@ class TestServerOptionsFlow:
         # startswith, not equality: the tools-module status line (#1996) rides
         # the same placeholder below the version line.
         assert versions.startswith(
-            "Component 0.14.0 - Server ha-mcp 7.9.0 (dev channel)"
+            "Component 0.14.0 - Server ha-mcp 7.9.0 (installed with this component release)"
         )
 
     def test_versions_placeholder_is_failure_proof(self, monkeypatch, caplog):
@@ -564,7 +564,7 @@ class TestServerOptionsFlow:
             form = asyncio.run(flow.async_step_init(None))  # must not raise
         versions = form["description_placeholders"]["versions"]
         assert versions.startswith(
-            "Component unknown - Server ha-mcp not installed yet (stable channel)"
+            "Component unknown - Server ha-mcp not installed yet (installed with this component release)"
         )
         assert "Could not read the component version" in caplog.text
         assert "Could not read the server version" in caplog.text
@@ -606,7 +606,7 @@ class TestServerOptionsFlow:
         form = asyncio.run(flow.async_step_init(None))
         versions = form["description_placeholders"]["versions"]
         assert versions.startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
         assert "Not installed" in versions
         assert "Add entry" in versions
@@ -711,7 +711,7 @@ class TestServerOptionsFlow:
         form = asyncio.run(flow.async_step_init(None))  # must not raise
         versions = form["description_placeholders"]["versions"]
         assert versions.startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
         assert "tools module" not in versions
 
@@ -723,24 +723,6 @@ class TestServerOptionsFlow:
         markers = list(form["data_schema"].schema)
         assert markers[0].schema == const.OPT_WEBHOOK_AUTH
 
-    def test_channel_defaults_to_stable(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        channel = next(
-            m for m in form["data_schema"].schema if m.schema == const.OPT_CHANNEL
-        )
-        assert channel.default() == const.CHANNEL_STABLE
-
-    def test_auto_update_defaults_on(self):
-        # The auto-update checkbox is present and defaults on (checked) when the
-        # option has never been saved.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        marker = next(
-            m for m in form["data_schema"].schema if m.schema == const.OPT_AUTO_UPDATE
-        )
-        assert marker.default() is True
-
     def test_form_prefills_every_field_from_saved_options(self):
         # Review gap: the form must show the user's SAVED values, not the
         # defaults, for every field (a regression here silently reverts a
@@ -749,8 +731,6 @@ class TestServerOptionsFlow:
         # (a default there would make them impossible to clear — see
         # test_clearing_an_override_field_sticks).
         saved = {
-            const.OPT_CHANNEL: const.CHANNEL_DEV,
-            const.OPT_AUTO_UPDATE: False,
             const.OPT_SERVER_PORT: 12345,
             const.OPT_BIND_HOST: const.BIND_HOST_LOOPBACK,
             const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
@@ -1218,7 +1198,7 @@ class TestOptionsFormTranslations:
                     panel_hint="Öffne das Panel.",
                     version_line=(
                         "Komponente {component_version} - "
-                        "Server ha-mcp {server_version} ({channel}-Kanal)"
+                        "Server ha-mcp {server_version} ({source})"
                     ),
                     tools_module_not_installed="Modul: Nicht installiert",
                 )
@@ -1234,7 +1214,7 @@ class TestOptionsFormTranslations:
         # prose is added by the caller, not carried in the catalog.
         assert placeholders["panel_hint"] == "Öffne das Panel. "
         assert placeholders["versions"].startswith(
-            "Komponente 1.2.4 - Server ha-mcp 7.14.1 (stable-Kanal)"
+            "Komponente 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
         assert "Modul: Nicht installiert" in placeholders["versions"]
 
@@ -1259,7 +1239,7 @@ class TestOptionsFormTranslations:
 
         assert placeholders["panel_hint"] == "Öffne das Panel. "
         assert placeholders["versions"].startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
 
     def test_failing_lookup_degrades_to_english(self, monkeypatch, caplog):
@@ -1337,7 +1317,7 @@ class TestOptionsFormTranslations:
             ]
 
         assert placeholders["versions"].startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
         assert "Unusable version_line template" in caplog.text
 
@@ -1373,7 +1353,7 @@ class TestOptionsFormTranslations:
         ]
 
         assert placeholders["versions"].startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
 
     def test_the_seam_is_asked_for_the_configured_language(self, monkeypatch):

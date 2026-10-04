@@ -45,8 +45,6 @@
         "title": "HA-MCP Servilo",
         "description": "Agordu la HA-MCP servilon. {panel_hint}Ŝanĝoj ĉi tie aplikiĝas post konservado.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
         "data": {
-          "channel": "Eldona kanalo",
-          "auto_update": "Aŭtomataj servilaj ĝisdatigoj",
           "server_port": "Aŭskulta pordo de MCP servilo",
           "bind_host": "Reta aliro",
           "webhook_auth": "Aŭtentiga reĝimo",
@@ -66,8 +64,6 @@
           "enable_sidebar_panel": "Flankbreta agorda panelo"
         },
         "data_description": {
-          "channel": "Stabila instalas la plej novan stabilan eldonon; Disvolva instalas la plej novan disvolvan konstruaĵon. Kiam aŭtomataj ĝisdatigoj estas ŝaltitaj, reŝargo aŭ rekomenco, plus perioda kontrolo, instalas la plej novan konstruaĵon de la elektita kanalo. Programista pakaĵa superrego sube havas prioritaton kaj malŝaltas aŭtomatajn ĝisdatigojn.",
-          "auto_update": "Kiam ŝaltita, la plej nova eldono de la elektita kanalo estas instalita aŭtomate — dum reŝargo aŭ rekomenco, kaj per perioda kontrolo. Kiam malŝaltita, la servilo restas ĉe la nuntempe instalita versio ĝis vi reŝaltas ĉi tion. Ĉi tio regas nur la ha-mcp servilan pakaĵon; ĝisdatigoj al la HA-MCP Propra Komponanto mem ankoraŭ venas per HACS.",
           "server_port": "La pordo, kiun ĉi tiu servilo aŭskultas. La ha-mcp apo (aldonaĵo) uzas 9583, do ĉi tio defaŭltas al 9584 por lasi ambaŭ ruli flank-al-flanke — se vi ne rulas la apon (aldonaĵon), iu ajn libera pordo funkcias.",
           "bind_host": "Kiu povas konekti al la MCP-servila pordo rekte. La defaŭlto kongruas kun la apo (aldonaĵo): atingebla en via loka retumo, kun la sekreta vojo kiel la akreditaĵo. Elektu enbuklon (loopback) por permesi nur konektojn de la Home Assistant-maŝino mem — la rethoka URL kaj la flanka panelo funkcias ambaŭkaze.",
           "webhook_auth": "Kiel MCP-klientoj pruvas sin ĉe la retkroĉa URL. Kun la sekreta URL, la ligilo mem estas la sola akreditaĵo — OAuth ankoraŭ funkcias por klientoj, kiuj uzas ĝin, sed ĉiu ensaluto estas aŭtomate aprobita: neniu ensaluto kaj neniu Klienta ID aŭ Sekreto necesas. Kun Home Assistant-ensaluto, klientoj kiel claude.ai ensalutas per Home Assistant-administranta konto (OAuth). Kun hereda OAuth, ĉi tiu integriĝo funkciigas sian propran ensalutan servon kaj eldonas Klientan ID-on kaj Sekreton por alglui en klientojn, kiuj postulas tian — rekomenco de Home Assistant eble necesos por plene ŝalti aŭ malŝalti ĝin.",
@@ -102,10 +98,6 @@
       "title": "Ĝisdatigu la Personan Komponanton de HA-MCP per HACS",
       "description": "La instalita servilo ha-mcp postulas Personan Komponanton de HA-MCP {required} aŭ pli novan, sed vi havas {installed}. Ĝisdatigu la komponanton per HACS (malfermu la eniron de la Persona Komponanto de HA-MCP kaj uzu 'Ĝisdatigi informojn' se neniu ĝisdatigo ankoraŭ montriĝas) kaj rekomencu Home Assistant. La servilo daŭre funkcias dume, sed iuj pli novaj funkcioj eble ne funkcios ĝis la komponanto estos ĝisdatigita."
     },
-    "server_update_held": {
-      "title": "Ĝisdatigo de servilo HA-MCP atendas ĝisdatigon de komponanto",
-      "description": "Servilo ha-mcp {latest} estas disponebla, sed tiu eldono ankaŭ ĝisdatigis la Personan Komponanton de HA-MCP (al {shipped}; vi uzas {running}). Por eviti startigi servilan version, kun kiu la nuna komponanto neniam estis testita, la aŭtomata servila ĝisdatigo estas prokrastita ĝis la komponanto estos ĝisdatigita.\n\nĜisdatigu la komponanton per HACS (malfermu la eniron de la Persona Komponanto de HA-MCP kaj uzu 'Ĝisdatigi informojn' se neniu ĝisdatigo ankoraŭ montriĝas), poste rekomencu Home Assistant — la servila ĝisdatigo instaliĝos aŭtomate poste. Por instali la servilan ĝisdatigon ĉiukaze, premu Instali ĉe la ĝisdatiga ento de la servilo HA-MCP."
-    },
     "legacy_oauth_restart": {
       "title": "Rekomencu Home Assistant por apliki la heredajn OAuth-agordojn",
       "fix_flow": {
@@ -119,12 +111,6 @@
     }
   },
   "selector": {
-    "server_channel": {
-      "options": {
-        "stable": "Stabila (rekomendita)",
-        "dev": "Disvolva (plej nova konstruo)"
-      }
-    },
     "server_webhook_auth": {
       "options": {
         "none": "Sekreta retkroĉa URL (defaŭlta)",
@@ -137,13 +123,6 @@
         "tool_search": "Ilo-serĉo (kompakta, defaŭlta)",
         "full": "Plena katalogo",
         "both": "Ambaŭ (elektu laŭ agento)"
-      }
-    }
-  },
-  "entity": {
-    "update": {
-      "server_update": {
-        "name": "Ĝisdatigo"
       }
     }
   },
@@ -161,7 +140,7 @@
     "tools_module_installed": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Instalita",
     "tools_module_not_installed": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Ne instalita — premu \"Aldoni eniron\" sur la paĝo de ĉi tiu integriĝo kaj elektu \"HA-MCP File & YAML Tools\" por aldoni ĝin",
     "tools_module_not_loaded": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Instalita sed ne ŝargita — ebligu aŭ reŝarĝu la eniron \"HA-MCP File & YAML Tools\" sur la paĝo de ĉi tiu integriĝo",
-    "version_line": "Komponanto {component_version} - Servilo ha-mcp {server_version} ({channel} kanalo)",
+    "version_line": "Komponanto {component_version} - Servilo ha-mcp {server_version} ({source} kanalo)",
     "version_not_installed": "ankoraŭ ne instalita",
     "version_unknown": "nekonata"
   }

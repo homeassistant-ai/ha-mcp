@@ -45,8 +45,6 @@
         "title": "HA-MCP Server",
         "description": "設定 HA-MCP 伺服器。{panel_hint}此處的變更會在儲存時套用。\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
         "data": {
-          "channel": "發布管道",
-          "auto_update": "自動伺服器更新",
           "server_port": "MCP 伺服器監聽連接埠",
           "bind_host": "網路存取",
           "webhook_auth": "驗證模式",
@@ -66,8 +64,6 @@
           "enable_sidebar_panel": "側邊欄設定面板"
         },
         "data_description": {
-          "channel": "「穩定版 (Stable)」會安裝最新的穩定發布版本；「開發版 (Development)」會安裝最新的開發建置版本。當啟用自動更新時，重新載入或重新啟動，加上定期檢查，將會安裝所選管道的最新建置版本。下方覆寫的開發人員套件具有較高優先權，並會停用自動更新。",
-          "auto_update": "啟用時，將會自動安裝所選管道的最新發布版本——於重新載入或重新啟動時，以及透過定期檢查。關閉時，伺服器將維持在目前已安裝的版本，直到您重新開啟此功能為止。這僅控制 ha-mcp 伺服器套件；HA-MCP 自訂元件本身的更新依然透過 HACS 進行。",
           "server_port": "此伺服器監聽的連接埠。ha-mcp App（附加元件）使用 9583，因此預設為 9584，讓兩者可同時執行；若未執行該 App（附加元件），可使用任何未占用的連接埠。",
           "bind_host": "誰可以直接連線至 MCP 伺服器連接埠。預設值符合 app（附加元件）：可在您的本機網路上存取，並以密鑰路徑作為憑證。選擇「回送 (loopback)」以僅允許來自 Home Assistant 電腦本身的連線——無論哪種方式，Webhook URL 與側邊欄面板都能正常運作。",
           "webhook_auth": "MCP 用戶端如何在 Webhook URL 證明其身分。使用密鑰 URL 時，連結本身就是唯一的憑證——OAuth 仍會為使用它的用戶端執行，但每個登入都會自動核准：不需要登入，也不需要用戶端 ID 或密鑰。使用 Home Assistant 登入時，像 claude.ai 這類的用戶端會使用 Home Assistant 管理員帳號 (OAuth) 登入。使用舊版 OAuth 時，此整合會執行自己的登入服務，並發行用戶端 ID 與密鑰，以貼到需要它們的用戶端中——可能需要重新啟動 Home Assistant 才能完全啟用或停用它。",
@@ -102,10 +98,6 @@
       "title": "透過 HACS 更新 HA-MCP 自訂元件",
       "description": "已安裝的 ha-mcp 伺服器需要 HA-MCP 自訂元件 {required} 或更新版本，但您目前安裝的是 {installed}。請透過 HACS 更新元件（開啟 HA-MCP 自訂元件項目，若尚未顯示更新則使用「更新資訊」）並重新整理 Home Assistant。伺服器在此期間會繼續執行，但在更新元件之前，某些較新功能可能無法運作。"
     },
-    "server_update_held": {
-      "title": "HA-MCP 伺服器更新正在等待元件更新",
-      "description": "ha-mcp 伺服器 {latest} 可供使用，但該版本同時也更新了 HA-MCP 自訂元件（至 {shipped}；您目前執行的是 {running}）。為避免啟動執行中元件從未測試過的伺服器版本，自動伺服器更新將暫緩，直到元件更新為止。\n\n請透過 HACS 更新元件（開啟 HA-MCP 自訂元件項目，若尚未顯示更新則使用「更新資訊」），然後重新啟動 Home Assistant——伺服器更新隨後會自動安裝。若無論如何都要安裝伺服器更新，請按下 HA-MCP 伺服器更新實體上的「安裝」。"
-    },
     "legacy_oauth_restart": {
       "title": "重新啟動 Home Assistant 以套用舊版 OAuth 設定",
       "fix_flow": {
@@ -119,12 +111,6 @@
     }
   },
   "selector": {
-    "server_channel": {
-      "options": {
-        "stable": "穩定版（建議）",
-        "dev": "開發版（最新建置）"
-      }
-    },
     "server_webhook_auth": {
       "options": {
         "none": "機密 webhook URL（預設）",
@@ -137,13 +123,6 @@
         "tool_search": "工具搜尋（精簡，預設）",
         "full": "完整目錄",
         "both": "兩者（依每個代理程式選擇）"
-      }
-    }
-  },
-  "entity": {
-    "update": {
-      "server_update": {
-        "name": "更新"
       }
     }
   },
@@ -161,7 +140,7 @@
     "tools_module_installed": "Beta/進階檔案與 YAML 工具模組（選用）：已安裝",
     "tools_module_not_installed": "Beta/進階檔案與 YAML 工具模組（選填）：未安裝 — 請在此整合頁面上按一下「新增項目」並選擇 \"HA-MCP File & YAML Tools\" 來加以新增",
     "tools_module_not_loaded": "Beta/進階檔案與 YAML 工具模組（選填）：已安裝但未載載 — 請在此整合頁面上啟用或重新載入「HA-MCP File & YAML Tools」項目",
-    "version_line": "元件 {component_version} - 伺服器 ha-mcp {server_version}（{channel} 通道）",
+    "version_line": "元件 {component_version} - 伺服器 ha-mcp {server_version}（{source} 通道）",
     "version_not_installed": "尚未安裝",
     "version_unknown": "未知"
   }

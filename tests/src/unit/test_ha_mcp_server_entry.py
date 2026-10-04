@@ -177,20 +177,16 @@ class TestSetupEntry:
         domain_data = hass.data[DOMAIN]
         # Options snapshot taken so data writes don't self-reload.
         assert domain_data[DATA_LAST_OPTIONS] == {"server_port": 9584}
-        # Bring-up AND the coordinator's initial version refresh are both
-        # scheduled as config-entry background tasks (issue #1760).
-        assert entry.async_create_background_task.call_count == 2
+        # Only the bring-up runs in the background: the server arrives with
+        # the component release (#2427), so there is no version refresh.
+        assert entry.async_create_background_task.call_count == 1
         assert domain_data[DATA_BRINGUP_TASK] == "BRINGUP_TASK"
-        # Reload-on-options-change listener AND the coordinator's auto-update
-        # listener are both registered under async_on_unload for cleanup.
+        # The reload-on-options-change listener is registered for cleanup.
         entry.add_update_listener.assert_called_once_with(pkg._async_options_updated)
         unload_args = [c.args[0] for c in entry.async_on_unload.call_args_list]
-        assert "UNSUB" in unload_args  # options-change listener unsub
-        assert len(unload_args) == 2  # + the coordinator listener unsub
-        # The update platform entity is forwarded (issue #1760).
-        hass.config_entries.async_forward_entry_setups.assert_awaited_once_with(
-            entry, [pkg.Platform.UPDATE]
-        )
+        assert unload_args == ["UNSUB"]
+        # No update platform is forwarded any more.
+        hass.config_entries.async_forward_entry_setups.assert_not_called()
 
 
 class TestUnloadEntry:

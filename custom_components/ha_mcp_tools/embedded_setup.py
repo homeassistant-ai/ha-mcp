@@ -20,53 +20,40 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-from aiohttp import ClientError
 from awesomeversion import AwesomeVersion, AwesomeVersionException
 from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
 
 from .const import (
     BIND_HOST_ALL,
-    CHANNEL_DEV,
-    COMPONENT_MANIFEST_AT_TAG_URL,
-    DATA_BRINGUP_TASK,
     DATA_DCR_SIGNING_KEY,
     DATA_MANAGER,
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
-    DATA_PENDING_UPDATE_NOTIFY,
     DATA_SECRET_PATH,
-    DATA_UPDATE_COORDINATOR,
     DATA_WEBHOOK_ID,
-    DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
     DEFAULT_ENABLE_LLM_API,
-    DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
     DOMAIN,
     ISSUE_COMPONENT_OUTDATED,
     ISSUE_LEGACY_OAUTH_RESTART,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
-    ISSUE_UPDATE_HELD,
-    OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
     OPT_ENABLE_SIDEBAR_PANEL,
     OPT_ENABLE_STARTUP_NOTIFICATION,
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
-    OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_WEBHOOK_AUTH,
-    UPDATE_HOLD_DOCS_URL,
+    SERVER_UPDATES_DOCS_URL,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
-    channel_for_dist,
 )
 from .embedded_server import EmbeddedServerError, EmbeddedServerManager
 from .llm_api import async_register_llm_api, async_unregister_llm_api
@@ -76,21 +63,10 @@ from .oauth_legacy import legacy_credentials_active
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
-    from .coordinator import ServerVersionInfo
-
 _LOGGER = logging.getLogger(__name__)
 
 _NOTIFICATION_ID = "ha_mcp_tools_server_connect"
-_UPDATE_NOTIFICATION_ID = "ha_mcp_tools_server_updated"
-# ISSUE_UPDATE_HELD is cleared at bring-up start too: any reload that reaches
-# bring-up either bypassed the hold deliberately (the update entity's Install
-# button) or made it moot; if the hold still applies, the coordinator refresh
-# that follows setup re-files it within moments.
-_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED, ISSUE_UPDATE_HELD)
-
-# Per-request timeout for the component-manifest fetch behind the auto-update
-# gate — mirrors the coordinator's PyPI fetch budget; a miss fails open.
-_MANIFEST_FETCH_TIMEOUT_SECONDS = 30
+_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED)
 
 
 async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -183,12 +159,9 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
                 "Conversation-agent LLM API disabled by option - the toolset "
                 "will not be offered to Home Assistant conversation agents"
             )
-        await _async_finish_update_cycle(hass)
     except asyncio.CancelledError:
         # Unloaded mid-bring-up: undo whatever partial state exists, then let the
-        # cancellation propagate so the task ends cancelled. The pending
-        # update-notification marker (if any) deliberately survives — it
-        # belongs to a bring-up that has not run yet, not to this one.
+        # cancellation propagate so the task ends cancelled.
         await async_teardown_server(hass)
         raise
     except EmbeddedServerError as err:
@@ -199,15 +172,11 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         with suppress(Exception):
             await async_teardown_server(hass)
         _create_issue(hass, err.kind, str(err))
-        # The install did not land: never fire the "updated" notification for
-        # it — the repair issue above is the user-facing signal.
-        _drop_pending_update_notify(hass)
     except Exception as err:
         _LOGGER.exception("HA-MCP in-process server: bring-up failed")
         with suppress(Exception):
             await async_teardown_server(hass)
         _create_issue(hass, "start", str(err))
-        _drop_pending_update_notify(hass)
 
 
 async def async_teardown_server(hass: HomeAssistant) -> None:
@@ -535,293 +504,6 @@ def _clear_issues(hass: HomeAssistant) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Automatic server-version updates (channel auto-update)
-# ---------------------------------------------------------------------------
-
-
-async def async_maybe_auto_update(
-    hass: HomeAssistant, entry: ConfigEntry, info: ServerVersionInfo | None
-) -> None:
-    """Reload the entry when ``info`` shows a newer build AND auto-update is on.
-
-    Called from the :class:`~.coordinator.ServerVersionCoordinator` listener
-    registered by :mod:`embedded_entry` on every refresh (every
-    ``UPDATE_CHECK_INTERVAL``, plus once shortly after setup). The coordinator
-    itself always fetches (see its docstring) so the `update` platform entity
-    stays populated regardless of this option; only the reload decided here is
-    gated on it.
-
-    Skips entirely when: auto-update is off, a pip-spec override is set,
-    either version is unknown (``info`` may still be ``None`` — the
-    coordinator's ``data`` type before its first successful refresh), or a
-    bring-up is still in flight (below).
-
-    A pending update is additionally gated on component compatibility
-    (issues #1783/#1785): when the candidate release also shipped a newer
-    custom component than the one running, the reload is HELD — loudly (a
-    repair issue plus a warning log every check) and escapably (applying the
-    HACS component update — which takes an HA restart, as the issue text
-    says — unblocks the next check; the update entity's Install button never
-    passes through here, so manual installs — like pip-spec overrides above —
-    bypass the hold entirely). Every failure inside the gate fails OPEN so a
-    GitHub hiccup can never wedge updates.
-
-    Best-effort: an incomparable version string (AwesomeVersionException) is
-    logged at debug and skipped; the next refresh retries. Genuine bugs
-    propagate per the repo's no-silent-failure convention.
-    """
-    if hass.config.skip_pip:
-        # The system package manager owns ha-mcp; never reload to mutate it.
-        return
-
-    if not bool(entry.options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)):
-        # Auto-update turned off: stay on the currently-installed version.
-        return
-
-    override = str(entry.options.get(OPT_PIP_SPEC) or "").strip()
-    if override and override != DEFAULT_PIP_SPEC:
-        return
-
-    if info is None or info.installed is None or info.latest is None:
-        # Nothing to compare (not installed yet, or the PyPI fetch failed /
-        # was skipped) - the bring-up path installs the newest build itself.
-        return
-
-    bringup_task = hass.data.get(DOMAIN, {}).get(DATA_BRINGUP_TASK)
-    if bringup_task is not None and not bringup_task.done():
-        # The coordinator's first refresh runs shortly after setup, while the
-        # background bring-up (embedded_entry.async_setup_server_entry) may
-        # still be installing the package for the first time. Reloading here
-        # would cancel that in-flight install (async_unload_server_entry
-        # cancels the bring-up task on unload) and can loop: the reload's own
-        # bring-up starts a fresh install that the NEXT refresh could again
-        # interrupt.
-        return
-
-    try:
-        newer = AwesomeVersion(info.latest) > AwesomeVersion(info.installed)
-    except AwesomeVersionException as err:
-        # Incomparable version strategies (e.g. a non-semver build string) — the
-        # only expected failure here. Real bugs (TypeError, etc.) propagate.
-        _LOGGER.debug("HA-MCP auto-update version compare failed: %s", err)
-        return
-
-    if not newer:
-        # Up to date: a hold that was pending is resolved (the component
-        # update landed and the unblocked reload installed the server).
-        ir.async_delete_issue(hass, DOMAIN, ISSUE_UPDATE_HELD)
-        return
-
-    held = await _async_update_held_by_component(hass, info)
-    if held is not None:
-        shipped, running = held
-        _LOGGER.warning(
-            "HA-MCP server %s is available, but that release also updated the "
-            "custom component (%s; running %s); holding the automatic server "
-            "update until the component is updated via HACS. Press Install on "
-            "the HA-MCP server update entity to install anyway.",
-            info.latest,
-            shipped,
-            running,
-        )
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            ISSUE_UPDATE_HELD,
-            is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_UPDATE_HELD,
-            translation_placeholders={
-                "latest": str(info.latest),
-                "shipped": shipped,
-                "running": running,
-            },
-            learn_more_url=UPDATE_HOLD_DOCS_URL,
-        )
-        return
-    ir.async_delete_issue(hass, DOMAIN, ISSUE_UPDATE_HELD)
-
-    channel = channel_for_dist(info.dist)
-    _LOGGER.info(
-        "HA-MCP server update available on the %s channel (%s -> %s); "
-        "reloading the entry to install it.",
-        channel,
-        info.installed,
-        info.latest,
-    )
-    # The "updated" notification must wait for the reloaded entry's bring-up to
-    # actually install and start the new build — async_reload returns when
-    # entry SETUP finishes, while the pip install still runs in the background
-    # and can fail (review finding). Leave a marker for bring-up to pop:
-    # notification on success (_async_finish_update_cycle), silent drop on
-    # failure (the package/start repair issues cover that path).
-    hass.data.setdefault(DOMAIN, {})[DATA_PENDING_UPDATE_NOTIFY] = {
-        "old": info.installed
-    }
-    try:
-        await hass.config_entries.async_reload(entry.entry_id)
-    except Exception:
-        # A raising reload leaves no repair issue behind (those are filed by
-        # bring-up, which never ran), so this ERROR log is the only signal —
-        # it must not be swallowed or left at debug (review finding). The next
-        # coordinator refresh retries the whole cycle.
-        _drop_pending_update_notify(hass)
-        _LOGGER.exception(
-            "HA-MCP auto-update reload failed (%s -> %s on the %s channel)",
-            info.installed,
-            info.latest,
-            channel,
-        )
-
-
-def _drop_pending_update_notify(hass: HomeAssistant) -> None:
-    """Drop the deferred update-notification marker without notifying."""
-    hass.data.get(DOMAIN, {}).pop(DATA_PENDING_UPDATE_NOTIFY, None)
-
-
-async def _async_update_held_by_component(
-    hass: HomeAssistant, info: ServerVersionInfo
-) -> tuple[str, str] | None:
-    """Return ``(shipped, running)`` when the pending update must be held.
-
-    The #1783/#1785 breakage: a server release whose repo state also bumped the
-    custom component auto-installed under the OLD component before HACS had
-    even surfaced the component update. The component version in the manifest
-    at the candidate release's git tag is what shipped with that server build —
-    newer than the running component means the release changed the component
-    too, so the automatic server install waits for the component.
-
-    Fails OPEN (returns None → install proceeds, the pre-gate behavior) on
-    every expected failure: manifest unreachable, component version unreadable,
-    incomparable versions. Blocking updates indefinitely on a transient would
-    be worse than the crash this guards against — and the crash itself is now
-    also survivable server-side (the tools registry skips a failing module).
-    """
-    shipped = await _async_fetch_shipped_component_version(hass, str(info.latest))
-    if shipped is None:
-        return None
-
-    try:
-        integration = await async_get_integration(hass, DOMAIN)
-        if integration.version is None:
-            # None rather than an exception; "None" would then reach
-            # AwesomeVersion and compare as an ordinary string.
-            raise ValueError("the manifest carries no version")
-        running = str(integration.version)
-    except Exception:
-        # Same wide loader surface as _async_check_component_compat: advisory
-        # gate, logged visibly rather than swallowed silently.
-        _LOGGER.warning(
-            "Could not read the HA-MCP component version for the auto-update "
-            "gate; proceeding with the update",
-            exc_info=True,
-        )
-        return None
-
-    try:
-        if AwesomeVersion(running) < AwesomeVersion(shipped):
-            return shipped, running
-    except AwesomeVersionException as err:
-        # Incomparable version strategies only; real bugs propagate.
-        _LOGGER.debug("HA-MCP auto-update gate version compare failed: %s", err)
-    return None
-
-
-async def _async_fetch_shipped_component_version(
-    hass: HomeAssistant, server_version: str
-) -> str | None:
-    """Return the component version shipped at server release ``vX.Y.Z``.
-
-    Reads the component manifest as committed at the release's git tag (raw
-    GitHub URL). Stable tags exist before the PyPI publish; a dev tag only
-    appears after its binary builds finish, so a fresh dev version can 404
-    here for some minutes — see COMPONENT_MANIFEST_AT_TAG_URL. Returns None
-    on any failure; the caller treats that as "nothing to hold on"
-    (fail-open).
-    """
-    url = COMPONENT_MANIFEST_AT_TAG_URL.format(version=server_version)
-    try:
-        session = async_get_clientsession(hass)
-        async with asyncio.timeout(_MANIFEST_FETCH_TIMEOUT_SECONDS):
-            async with session.get(url) as resp:
-                resp.raise_for_status()
-                # content_type=None: raw.githubusercontent.com serves
-                # text/plain, which aiohttp's default json() rejects.
-                payload = await resp.json(content_type=None)
-        return str(payload["version"])
-    except (ClientError, TimeoutError, KeyError, TypeError, ValueError) as err:
-        _LOGGER.debug(
-            "HA-MCP shipped-component manifest fetch failed for %s: %s", url, err
-        )
-        return None
-
-
-async def _async_finish_update_cycle(hass: HomeAssistant) -> None:
-    """Refresh the version entity and fire the deferred update notification.
-
-    Runs at the end of a fully successful bring-up. Both halves belong exactly
-    here (review findings): the freshly installed version is only knowable once
-    the install landed — without a refresh the `update` entity keeps showing a
-    stale "update available" for up to UPDATE_CHECK_INTERVAL after a successful
-    install — and the notification deferred by async_maybe_auto_update must
-    only fire for an install that actually happened. Advisory: a failure here
-    must never fail the (already running) server, so it is logged visibly and
-    swallowed. No reload loop: the refresh's listener re-enters
-    async_maybe_auto_update, which no-ops on the still-running bring-up task.
-    """
-    domain_data = hass.data.get(DOMAIN, {})
-    coordinator = domain_data.get(DATA_UPDATE_COORDINATOR)
-    try:
-        if coordinator is not None:
-            await coordinator.async_refresh()
-    except Exception:
-        _LOGGER.warning("HA-MCP: post-install version refresh failed", exc_info=True)
-    marker = domain_data.pop(DATA_PENDING_UPDATE_NOTIFY, None)
-    if marker is None or coordinator is None or coordinator.data is None:
-        return
-    installed = coordinator.data.installed
-    old = marker.get("old")
-    if installed is None or installed == old:
-        # The reload ran but the installed version did not actually move (the
-        # install can legitimately resolve to the same build) — an "updated
-        # to" notification would be false.
-        return
-    _create_update_notification(
-        hass, channel_for_dist(coordinator.data.dist), old, installed
-    )
-
-
-def _create_update_notification(
-    hass: HomeAssistant, channel: str, old_version: str, new_version: str
-) -> None:
-    """Notify that an automatic server update installed and the server is up.
-
-    Only called from :func:`_async_finish_update_cycle` after a successful
-    bring-up, so the versions are the confirmed before/after pair, never a
-    prediction. SECURITY: same posture as ``_surface_connect_urls`` -
-    persistent notifications are visible to every authenticated Home Assistant
-    user, so this carries no secrets or connect URLs, only version numbers and
-    a public GitHub link.
-    """
-    release_url = (
-        "https://github.com/homeassistant-ai/ha-mcp/commits/master"
-        if channel == CHANNEL_DEV
-        else f"https://github.com/homeassistant-ai/ha-mcp/releases/tag/v{new_version}"
-    )
-    message = (
-        f"The HA-MCP server was automatically updated from {old_version} to "
-        f"{new_version} on the {channel} channel.\n\n"
-        f"[Release notes]({release_url})"
-    )
-    persistent_notification.async_create(
-        hass,
-        message,
-        title="HA-MCP Server updated",
-        notification_id=_UPDATE_NOTIFICATION_ID,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Component / server version-compatibility repair issue
 # ---------------------------------------------------------------------------
 
@@ -846,11 +528,10 @@ async def _async_check_component_compat(
     """File/clear the component-outdated repair issue for the running server.
 
     The ha-mcp server declares the minimum custom-component version it needs
-    (``MIN_COMPONENT_VERSION``). The server package updates independently of
-    the HACS component (this manager pip-installs new server builds), so the
-    running component can lag what the server expects. When it does, surface a
-    WARNING repair issue pointing at the HACS component update; clear it once
-    the component is new enough.
+    (``MIN_COMPONENT_VERSION``). Each component release pins the server it was
+    built with, so only a pip-spec override can install a server that expects
+    a newer component. When it does, surface a WARNING repair issue pointing
+    at the HACS component update; clear it once the component is new enough.
 
     Advisory only — it must never block or fail server startup, so an
     unexpected error is logged (visible, not silent) and swallowed rather than
@@ -901,7 +582,7 @@ async def _async_check_component_compat(
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_COMPONENT_OUTDATED,
             translation_placeholders={"required": required, "installed": own},
-            learn_more_url=UPDATE_HOLD_DOCS_URL,
+            learn_more_url=SERVER_UPDATES_DOCS_URL,
         )
     else:
         ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)

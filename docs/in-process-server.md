@@ -33,8 +33,9 @@ Webhook Proxy app uses.
 
 Once the in-process server config entry exists, it:
 
-1. Installs the `ha-mcp` package into Home Assistant at runtime (the first start
-   takes a little longer while pip downloads it — see
+1. Runs the `ha-mcp` server build this component release pins. Home Assistant
+   installs it as an integration requirement when it loads the component (the
+   first start takes a little longer while it downloads — see
    [First start](#first-start-takes-a-little-longer) below).
 2. Provisions a dedicated Home Assistant admin token the server uses to reach
    Home Assistant over loopback.
@@ -203,12 +204,10 @@ Configure there just reports that.)
 
 | Option | Default | What it does |
 |--------|---------|--------------|
-| **Release channel** | `stable` | `stable` installs the latest stable release; `dev` installs the latest development build. Both channels update automatically (a reload or restart, plus a periodic check, install the newest build of the selected channel). See [Release channels](#release-channels). |
-| **Automatic server updates** | on | When on, the selected channel's newest release is installed automatically (on reload/restart and via a periodic check). When off, the server stays on the version currently installed — new releases are still offered on the server's update entity, and its **Install** button installs one without turning automatic updates back on. Governs the ha-mcp **server package** only — component updates still come through HACS. A package override below overrides this. |
 | **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the app's `9583` so an existing app install does not conflict. |
 | **Network access** | `0.0.0.0` | The default matches the app: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
 | **Authentication mode** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. `legacy`: self-hosted OAuth with a static Client ID + Secret, for clients that need a credential to paste. See [Security](#security). |
-| **ha-mcp package (advanced)** | empty (tracks the selected release channel) | The pip requirement installed at runtime. Leave it empty unless you are testing a pre-release — it accepts any pip requirement string, including a version pin or a GitHub tarball URL. An explicit value overrides the release channel and **disables automatic updates** (a pin stays put until you clear it); changing it forces a reinstall on the next reload. |
+| **ha-mcp package (advanced)** | empty (the server this component release installed) | Leave it empty unless you are testing a specific build — it accepts any pip requirement string, including a version pin, a pull-request tarball or a wheel URL. Saving it reinstalls the server and restarts it in place, without restarting Home Assistant; clearing it returns to the paired server. See [Server updates](#server-updates). |
 | **Home Assistant URL for the server (advanced)** | empty (derived from your HA's http config) | How the in-process server reaches Home Assistant. Empty derives the loopback URL from your instance's real port and SSL setting (an SSL-enabled HA is reached over `https://127.0.0.1` with certificate verification off — the certificate never matches a loopback address). Only set a value when the server must take a different route entirely. |
 | **Remote access via webhook** | on | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
 | **Conversation-agent LLM API** | on | Offers the toolset to Home Assistant conversation agents — see [Chat with the toolset](#chat-with-the-toolset-from-home-assistant-conversation-agents--voice). Enabling only makes it selectable per agent; turn off to remove it from every agent's selector. |
@@ -218,104 +217,45 @@ Configure there just reports that.)
 | **Custom direct-access path (optional)** | empty | Replaces the random `/private_...` path on the server port. Same rule: the path is the credential. |
 | **Regenerate connect secrets now** | off | One-time action: mints fresh random values for both secrets, immediately invalidating the old connect URLs (and clearing the two overrides). |
 
-### Release channels
+### Server updates
 
-The **Release channel** option selects which build of the server is installed.
-Both channels install unpinned and **update automatically**:
+The server is part of the component release. Each HA-MCP Custom Component
+release names the exact `ha-mcp` build it was released with as an integration
+requirement, and Home Assistant installs it like any integration's Python
+packages. HACS is therefore the only update path: when it offers a component
+update, that update carries the matching server, and restarting Home Assistant
+after the update installs both. The component never downloads or swaps the
+server on its own.
 
-- **`stable` (default):** the latest `ha-mcp` release from PyPI.
-- **`dev`:** the latest development build, published to PyPI as `ha-mcp-dev` on
-  every change to the project's main branch. Use it to try upcoming fixes, and
-  expect the occasional rough edge.
+**Development builds** follow the main branch. Turn on the HACS **Pre-release**
+switch for the HA-MCP Custom Component repository to receive them; each
+pre-release pins the development build of the server it was cut with. Turn the
+switch off to return to stable releases with the next stable update.
 
-While **Automatic server updates** is on (the default), both channels install
-unpinned: an entry reload or a Home Assistant restart always reinstalls the
-newest build of the selected channel, and on top of that the component checks
-PyPI for a newer build every 6 hours and reloads the entry automatically when
-one is published — so a long-running instance picks up releases without a
-restart. The reload applies the new server code immediately (component >=
-1.0.1 reloads the module cache per worker start); only updates that require
-newer *third-party dependencies* still need a Home Assistant core restart.
-The web settings UI's **Restart HA-MCP Server** button performs the same
-entry reload. Each automatic update also raises a notification naming the old and
-new version, with a link to the release notes. Turn **Automatic server
-updates** off to freeze the server on the version currently installed:
-reloads/restarts keep that exact version until you turn it back on or install
-a newer build yourself from the update entity (this governs the server package
-only — component updates still arrive through HACS). Setting the **ha-mcp
-package (advanced)** field overrides the channel entirely (pin a version, or
-install from a URL for pre-release testing) and also disables automatic updates
-until you clear it.
+**Testing a specific build** is what the **ha-mcp package (advanced)** option is
+for. Set it to a pip requirement — a version pin, a pull-request tarball such
+as `https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/<PR>/head.tar.gz`,
+or a wheel URL — and save: the server entry reloads, installs that build and
+restarts the server in place, with no Home Assistant restart. Clear the field to
+return to the server this component release installed. Home Assistant puts the
+paired server back each time it starts, so with an override set, every Home
+Assistant restart installs the override again afterwards (this needs network
+access at startup).
 
-The server's version is always visible on its **update entity**, under
-**Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server**
-(and under **Settings → System → Updates** whenever an update is available).
-The entity shows the installed and latest version of the selected channel and
-links the release notes — the 6-hour PyPI check keeps it populated even with
-automatic updates off, where its **Install** button installs the offered
-version on your schedule. The server (`7.x`) and the component (`1.x`) are
-versioned independently: this entity and HACS each own one of the two numbers.
+`ha-mcp` and `ha-mcp-dev` share the same import package. When an override
+installs one of them while the other is present, the other is uninstalled and
+the requested one reinstalled, so only one is ever installed at a time.
 
-Switching channels reinstalls the server from the other channel on the next
-reload. `ha-mcp` and `ha-mcp-dev` share the same import package, so the previous
-channel's package is uninstalled first — only one is ever installed at a time.
+If a server installed through the override needs a newer version of the custom
+component than the one you have, a repair issue titled **Update the HA-MCP Custom
+Component via HACS** appears under **Settings → Repairs**. The server keeps
+running; update the component via HACS to clear it.
 
-If the installed server needs a newer version of the custom component than the
-one you have (HACS can deliver a server build before you update the component),
-a repair issue titled **Update the HA-MCP Custom Component via HACS** appears
-under **Settings → Repairs**. The server keeps running; update the component via
-HACS to clear it — see [Held server updates](#held-server-updates) if HACS does
-not show the update yet.
-
-If the component was installed from the legacy location — the main `ha-mcp`
-server repository added directly as a HACS custom repository, before the
-dedicated [`ha-mcp-integration`](https://github.com/homeassistant-ai/ha-mcp-integration)
-mirror existed — a repair issue titled **Component installed from the legacy
-repository** appears. Such an install keeps working, but HACS displays the
-server's `7.x` version numbers and the server's release notes for the
-component. Follow the issue's link to add the mirror in HACS and reinstall the
-component from it (your settings and config entries are kept), then restart
-Home Assistant; the issue clears itself afterwards.
-
-### Held server updates
-
-When a new server release also ships a **newer custom component** than the one
-you are running, the automatic server update is **held** instead of installed,
-and a repair issue titled **HA-MCP server update waiting for a component update**
-appears under **Settings → Repairs** to explain it. The hold exists to avoid
-auto-starting a server build under a component version it was never tested with —
-installing a newer server against an out-of-date component is the combination
-that has broken server startups. The server keeps running on its current version
-while the hold is in effect.
-
-**HACS usually shows no component update yet at this point.** The component
-notices the newer server quickly — it checks PyPI every 6 hours and again on
-every reload or restart — but HACS refreshes its own repository information far
-less often: for a custom repository (how this component is installed in HACS)
-that can take up to about two days. So when the hold appears the component
-update is typically not yet visible in HACS, and telling Home Assistant to check
-for updates does not make HACS re-fetch any sooner. The one manual refresh that
-does is in HACS itself: open the **HA-MCP Custom Component** repository, open its
-**⋮** (three-dot) menu, and choose **Update information**; the component update
-then appears.
-
-The component asks HACS to perform this refresh automatically whenever the hold —
-or the component-outdated repair — first appears, so in most cases the component
-update shows up in HACS right away with no manual step. The manual **Update
-information** refresh above is the fallback for when that automatic request cannot
-reach HACS (for example HACS is still starting up, or its internals changed in a
-newer HACS release).
-
-To **clear the hold**, update the component in HACS and restart Home Assistant.
-The held server update then installs automatically on the next periodic check or
-reload.
-
-To **install the update anyway**, press **Install** on the HA-MCP server update
-entity — this bypasses the hold and installs the newer server immediately. Be
-aware that it runs a server build against a component it has never been tested
-with; if that server in turn requires an even newer component, it raises a
-separate **Update the HA-MCP Custom Component via HACS** repair until you update
-the component.
+Upgrading from component 2.x: the **Release channel** and **Automatic server
+updates** options and the server update entity are gone (the entity is removed
+from the registry on the first start). A 2.x install on the `dev` channel moves
+to the stable server with this release; turn on the HACS **Pre-release** switch
+to keep receiving development builds.
 
 ### Local-only mode
 
@@ -391,11 +331,11 @@ File & YAML Tools**); it changes nothing about how the in-process server runs.
 
 ## First start takes a little longer
 
-The first time the server starts, the component downloads and installs the
-`ha-mcp` package with pip. This can take a minute or two — occasionally longer —
-depending on your connection and hardware; the server starts automatically once
-the install finishes. Later restarts are fast because the package is already
-installed.
+The first time Home Assistant loads the component after an install or update,
+it downloads and installs the pinned `ha-mcp` package. This can take a minute or
+two — occasionally longer — depending on your connection and hardware; the
+server starts automatically once the install finishes. Later restarts are fast
+because the package is already installed.
 
 ## Troubleshooting
 
@@ -417,7 +357,7 @@ version you must **restart Home Assistant** for the update to take effect.
 package (advanced)** field can install from a GitHub tarball URL, but a git
 archive excludes submodules — and the bundled skill content ships as a submodule.
 A tarball install therefore omits it, so the skill-guidance tools report empty
-listings. Install from PyPI instead (either release channel includes the skill
+listings. Pin a PyPI version instead (every PyPI build includes the skill
 content); the tarball override is only meant for quick pre-release testing.
 
 **Where the logs are.** The in-process server logs into the normal Home Assistant
