@@ -687,7 +687,11 @@ function renderPolicyCard(toolName, rule) {
   const readValueControl = () => {
     const op = opEl.value;
     const ctrl = valueSlotEl.querySelector('.policy-predicate-value-control');
-    if (!ctrl) return {ok: true, value: undefined};
+    // No control yet means the form is still loading. A blank value here
+    // would make Save turn the predicate into "exists".
+    if (!ctrl) {
+      return {ok: false, error: t('policies.editor.validation.still_loading', {}, 'still loading, try again in a moment')};
+    }
     if (ctrl.tagName === 'SELECT') {
       if (ctrl.multiple) {
         const picked = Array.from(ctrl.selectedOptions).map(o => o.value);

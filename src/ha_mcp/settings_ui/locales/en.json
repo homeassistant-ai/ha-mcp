@@ -411,6 +411,7 @@
     "policies.editor.validation.value_required": "value is required for op={operator}",
     "policies.editor.validation.empty_list": "empty list for op={operator}",
     "policies.editor.validation.argument_required": "argument is required",
+    "policies.editor.validation.still_loading": "still loading, try again in a moment",
     "policies.pending.offline": "Lost contact with server ({message}). Retrying.",
     "policies.pending.disabled": "Tool Security Policies is off. Turn it on and restart HA-MCP to enable gating.",
     "policies.pending.unavailable": "Live approvals unavailable. Check the HA-MCP log.",

@@ -87,10 +87,16 @@ def _two_conditions(effect: str) -> dict:
 
 
 def _run(
-    settings_script: str, policy: dict, invoke: str, *, puts: list[dict] | None = None
+    settings_script: str,
+    policy: dict,
+    invoke: str,
+    *,
+    puts: list[dict] | None = None,
+    fetches: dict | None = None,
 ) -> HarnessResult:
     """``puts`` sequences the responses to policy saves; every save succeeds
-    without it."""
+    without it. ``fetches`` adds or replaces routes, such as a tool schema
+    in place of the default 503."""
     config = {"status": 200, "json": policy}
     if puts is not None:
         config = {"byMethod": {"GET": config, "PUT": {"responses": puts}}}
@@ -101,6 +107,7 @@ def _run(
             **DEFAULT_FETCHES,
             "/api/policy/config": config,
             "/api/policy/tool-schema": {"status": 503, "json": {"error": "none"}},
+            **(fetches or {}),
         },
         invoke="await policyLoadConfig();" + FILL_JS + invoke,
     )
@@ -664,6 +671,50 @@ def test_overlapping_edit_openings_fill_the_form_for_the_last_click(
         },
         RESTART,
     ]
+
+
+def test_save_while_value_choices_load_keeps_the_predicate(
+    settings_script: str,
+) -> None:
+    """Save while the value choices are still loading has no value to read.
+    Taken as a blank value it saved ``args.domain exists`` in place of
+    ``args.domain eq light``, which under an allow list approves every
+    domain. Nothing may be saved, and the form says why."""
+    schema = {
+        "paths": [{"path": "args.domain", "type": "str"}],
+        "value_sources": {"args.domain": "domains"},
+    }
+    result = _run(
+        settings_script,
+        _two_conditions("allow"),
+        """
+          const realFetch = window.fetch;
+          window.fetch = async (url, opts) => {
+            if (String(url).includes('value-source')) await sleep(2000);
+            return realFetch(url, opts);
+          };
+          await click('.policy-edit-predicate[data-idx="1"][data-pred="0"]');
+          const card = document.querySelector('.policy-rule-card');
+          document.body.setAttribute('data-loading',
+            String(!card.querySelector('.policy-predicate-value-control')));
+          card.querySelector('.policy-predicate-form-save').click();
+          await sleep(100);
+          document.body.setAttribute('data-error',
+            card.querySelector('.policy-predicate-form-error').textContent);
+          await sleep(3000);
+        """,
+        fetches={
+            "/api/policy/tool-schema": {"status": 200, "json": schema},
+            "/api/policy/value-source": {
+                "status": 200,
+                "json": {"values": ["light", "lock"]},
+            },
+        },
+    )
+    # Save was clicked while the choices were loading.
+    assert _probe(result, "loading") == "true"
+    assert _saved_rules(result) == []
+    assert (_probe(result, "error") or "").strip()
 
 
 def test_predicate_buttons_name_their_predicate(settings_script: str) -> None:
