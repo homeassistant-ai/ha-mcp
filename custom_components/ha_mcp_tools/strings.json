@@ -71,7 +71,7 @@
                     "llm_api_exposure": "Conversation-agent tool exposure",
                     "enable_startup_notification": "Startup notification",
                     "enable_sidebar_panel": "Sidebar settings panel",
-                    "oauth_redirect_allowlist": "Allowed OAuth callback URLs"
+                    "oauth_redirect_allowlist": "Allowed OAuth callback URL"
                 },
                 "data_description": {
                     "server_port": "The port this server listens on. The ha-mcp app (add-on) uses 9583, so this defaults to 9584 to let both run side by side - if you don't run the app (add-on), any free port works.",
