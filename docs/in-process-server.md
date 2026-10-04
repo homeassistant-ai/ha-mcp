@@ -204,7 +204,8 @@ uses **9583**, so an existing app install does not conflict.
 ## Options
 
 Open **Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure** to change these. Saving the options reloads the server so
-the changes take effect. (The **HA-MCP File & YAML Tools** entry has no options — a
+the changes take effect; a change to the OAuth callback list alone applies to the
+next sign-in without a reload. (The **HA-MCP File & YAML Tools** entry has no options — a
 Configure there just reports that.)
 
 | Option | Default | What it does |
@@ -221,6 +222,7 @@ Configure there just reports that.)
 | **Custom webhook secret (optional)** | empty | Replaces the random webhook secret in `/api/webhook/<secret>`. The URL is the credential - use a long, hard-to-guess value. |
 | **Custom direct-access path (optional)** | empty | Replaces the random `/private_...` path on the server port. Same rule: the path is the credential. |
 | **Regenerate connect secrets now** | off | One-time action: mints fresh random values for both secrets, immediately invalidating the old connect URLs (and clearing the two overrides). |
+| **Allowed OAuth callback URL** | claude.ai's callback | In `none` mode, the only callback URLs an OAuth sign-in is sent back to. Also editable in the **HA-MCP** sidebar panel under **Server Settings → Remote access**. See [Security](#security). |
 
 ### Server updates
 
@@ -282,11 +284,25 @@ re-adding the entry also rotates everything, including the internal token.)
 The in-process server offers three authentication postures, chosen with the
 **Authentication mode** option:
 
-- **`none` (default): the secret webhook URL is the credential.** The webhook id
+- **`none`: the secret webhook URL is the credential.** The webhook id
   is a high-entropy random string, and anyone who has the full URL can reach the
   server — exactly like the Webhook Proxy app's default. When exposed through
   Nabu Casa (or another HTTPS reverse proxy) the URL travels over TLS. Treat the
   URL like a password: don't share it or paste it where it could be logged.
+  Entries created before setup asked for an authentication mode run in this mode.
+
+  Some connectors (claude.ai among them) insist on an OAuth sign-in even here.
+  The server approves it without a login, because the token it issues grants
+  nothing, but it sends the sign-in back only to a callback URL on the
+  **Allowed OAuth callback URL** list. The list starts with claude.ai's callback;
+  for any other OAuth client, add the callback URL its sign-in uses, exactly as
+  sent. An `http://` loopback callback (`127.0.0.1`, `[::1]` or `localhost`) also
+  matches on any port, because desktop clients pick a free port per sign-in. A
+  sign-in to an unlisted callback stops on a page that names the URL and where
+  to add it; registering a client cannot add to the list. Clients that connect
+  with the webhook URL alone need no entry. Before this list existed, any
+  callback was accepted, so a non-claude.ai OAuth client that worked before
+  needs its callback added after upgrading.
 - **`ha_auth`: clients sign in with your Home Assistant account.** Home Assistant
   Core acts as the OAuth authorization server. MCP clients that support OAuth
   (for example claude.ai and ChatGPT) discover the sign-in endpoints

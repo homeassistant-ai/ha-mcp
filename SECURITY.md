@@ -204,13 +204,14 @@ choice keep the webhook on in `none` mode with LAN binding.
   documents, an anonymous RFC 7591 registration endpoint, and an auto-approve
   authorization server) purely so OAuth-insisting connector brokers can
   complete a flow: the tokens it issues are cosmetic — bearers are ignored,
-  the webhook URL remains the only credential. The auto-approve endpoint
-  302-redirects to any spec-valid `redirect_uri` (https, or http loopback per
-  RFC 8252; no fragment), which makes the Home Assistant origin usable as a
-  crafted-link redirector — an accepted trade within this trust model
-  (maintainer decision 2026-08-14, superseding the exact-match callback
-  allowlist that shipped in #1976; the webhook-id protections from that PR are
-  unchanged).
+  the webhook URL remains the only credential. Because the auto-approve
+  endpoint is anonymous, it redirects only to a callback on an
+  administrator-editable allowlist (#2427): exact matching, plus the RFC 8252
+  §7.3 any-port rule for a listed `http` loopback callback. Anything else gets
+  a 400 page and no redirect, so the Home Assistant origin is not an open
+  redirector. The list ships with claude.ai's callback. It is stored on the
+  server entry and edited on its Configure screen or in the admin-only
+  sidebar panel; dynamic client registration cannot add to it.
 - **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth
   authorization server: the entry serves the discovery documents and
   validates inbound Bearer tokens against Home Assistant's own auth, so access
