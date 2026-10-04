@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from test_constants import TEST_TOKEN
 from urllib3.exceptions import InsecureRequestWarning
 
 from .utilities.streamable_http import parse_mcp_response
@@ -184,6 +183,8 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
        values (e.g. ``enable_snapshot_delete``) — a separate registry from
        ``FEATURE_FLAG_FIELDS``, read from a separate override file.
     """
+    from test_constants import TEST_TOKEN  # tests/ is on sys.path only in E2E
+
     storage_file = config_path / ".storage" / "core.config_entries"
     data = json.loads(storage_file.read_text())
     entries = data.setdefault("data", {}).setdefault("entries", [])

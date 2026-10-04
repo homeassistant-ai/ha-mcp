@@ -690,7 +690,8 @@ async function showApp() {{
     if (!timer) {{
       showMessage(
         "The in-process MCP server is starting or is not running yet. " +
-          "This view will refresh automatically."
+          "This view will refresh automatically. If it does not start, " +
+          "Settings - System - Repairs says what it needs."
       );
     }}
     setTimeout(mint, RETRY_MS);
