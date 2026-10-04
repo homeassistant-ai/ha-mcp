@@ -237,7 +237,7 @@
   {
     "name": "ha_set_area_or_floor",
     "title": "Create or Update Area or Floor",
-    "description": "Create or update a Home Assistant area or floor.\n\nPass kind='area' (with optional floor_id, picture, labels) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", labels=[\"site_home\"])\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)",
+    "description": "Create or update a Home Assistant area or floor.\n\nPass kind='area' (with optional floor_id, picture, labels, temperature_entity_id,\nhumidity_entity_id) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", labels=[\"site_home\"])\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", temperature_entity_id=\"sensor.kitchen_temp\", humidity_entity_id=\"\")\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)",
     "inputSchema": {
       "properties": {
         "kind": {
@@ -282,6 +282,16 @@
         "labels": {
           "type": "str | list[str] | None",
           "description": "Label IDs when kind='area' (replaces the area's label set; empty list to clear). Omit to leave labels unchanged. Floors have no labels.",
+          "default": null
+        },
+        "temperature_entity_id": {
+          "type": "str | None",
+          "description": "Sensor the area reports temperature from, when kind='area' (a sensor.* entity with device_class temperature; empty string to clear). Omit to leave unchanged.",
+          "default": null
+        },
+        "humidity_entity_id": {
+          "type": "str | None",
+          "description": "Sensor the area reports humidity from, when kind='area' (a sensor.* entity with device_class humidity; empty string to clear). Omit to leave unchanged.",
           "default": null
         }
       },
@@ -1586,7 +1596,7 @@
   {
     "name": "ha_set_entity",
     "title": "Set Entity",
-    "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, \"Show As\" device class override, per-domain registry options,\nenabled/disabled state, visibility, aliases, labels, voice assistant\nexposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.\n\nSHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload\nneeded.\n\nREGISTRY OPTIONS: multi-domain options are sent as separate registry\nupdates because HA's WS schema requires options_domain + options to be\npaired one domain at a time.\n\nENTITY ID RENAME: Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitations:\n- Entity history is preserved (HA 2022.4+)\n- Entities without unique IDs cannot be renamed\n- Entities disabled by their integration cannot be renamed\n\nDEVICE RENAME:\nnew_device_name can be combined with new_entity_id to rename both in one\ncall. The device is looked up automatically.\n\nUse ha_search() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Set Show As: ha_set_entity(\"binary_sensor.zone_10\", device_class=\"window\")\n- Set sensor precision: ha_set_entity(\"sensor.power\", options={\"sensor\": {\"display_precision\": 2}})\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nENABLED/DISABLED WARNING:\nA disabled entity will NOT appear in state queries, dashboards, or\nautomations until re-enabled AND the integration is reloaded. This is\nNOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. For automations,\nuse ha_config_set_automation(identifier=\"automation.xxx\", enabled=False)\n(or enabled=True to re-enable).\nFor scripts, ha_config_set_script(script_id=\"script.xxx\", run=\"stop\")\nonly stops a currently running execution; it does not disable the script.\nHome Assistant has no script runtime enable/disable service.",
+    "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, \"Show As\" device class override, per-domain registry options,\nenabled/disabled state, visibility, aliases, labels, voice assistant\nexposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, use_device_name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.\n\nSHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload\nneeded.\n\nREGISTRY OPTIONS: multi-domain options are sent as separate registry\nupdates because HA's WS schema requires options_domain + options to be\npaired one domain at a time.\n\nENTITY ID RENAME: Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitations:\n- Entity history is preserved (HA 2022.4+)\n- Entities without unique IDs cannot be renamed\n- Entities disabled by their integration cannot be renamed\n\nDEVICE RENAME:\nnew_device_name can be combined with new_entity_id to rename both in one\ncall. The device is looked up automatically.\n\nUse ha_search() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Set Show As: ha_set_entity(\"binary_sensor.zone_10\", device_class=\"window\")\n- Set sensor precision: ha_set_entity(\"sensor.power\", options={\"sensor\": {\"display_precision\": 2}})\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nENABLED/DISABLED WARNING:\nA disabled entity will NOT appear in state queries, dashboards, or\nautomations until re-enabled AND the integration is reloaded. This is\nNOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. For automations,\nuse ha_config_set_automation(identifier=\"automation.xxx\", enabled=False)\n(or enabled=True to re-enable).\nFor scripts, ha_config_set_script(script_id=\"script.xxx\", run=\"stop\")\nonly stops a currently running execution; it does not disable the script.\nHome Assistant has no script runtime enable/disable service.",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -1601,6 +1611,11 @@
         "name": {
           "type": "str | None",
           "description": "Display name for the entity. Use empty string '' to remove custom name and revert to default. A whitespace-only value acts like '', for clients that cannot send an empty string.",
+          "default": null
+        },
+        "use_device_name": {
+          "type": "bool | None",
+          "description": "HA 2026.10's 'Use device name' switch. True names the entity after its device and follows device renames; False restores the integration's default name. Omit to leave it as is; not combinable with name.",
           "default": null
         },
         "icon": {
@@ -2097,7 +2112,7 @@
   {
     "name": "ha_config_set_helper",
     "title": "Create or Update Helper",
-    "description": "Create or update Home Assistant helper entities and config subentries\n(30 types, unified interface).\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n``helper-selection.md`` ships under ``skill_content`` by default.\n\nSIMPLE types (structured params, WebSocket API): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag. Create requires `name`; update requires `helper_id`.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat,\nhistory_stats, mold_indicator. Create requires `name`; for updates pass the\nexisting entry_id as `helper_id` (options flows reject the `name` key).\n`otp` is a helper in the HA UI but not offered here — its flow needs a live\nTOTP code; create it with ha_set_integration(domain=\"otp\").\n\nCONFIG_SUBENTRY type (Config Subentry Flow API): pass `entry_id`,\n`subentry_type` and `config`; pass `subentry_id` to reconfigure an existing\nsubentry, omit it to create one.\n\nBehavior:\n- UPDATE preserves type-specific fields not re-passed (a rename never wipes\n  initial/icon/etc.); flow-helper and config subentry updates behave the same\n  way (see `config`).\n- Omitted `action` falls back to the `helper_id`-presence discriminator\n  (SIMPLE/FLOW) or the `subentry_id`-presence discriminator (config\n  subentries).\n- For flow-based helpers, config keys not declared by any step's data_schema\n  are silently ignored by HA. Validation errors carry the helper's\n  `data_schema` (and `menu_options` for menu-rooted helpers like\n  `template`/`group` when no sub-type is chosen yet), so a follow-up call\n  can self-correct without a separate schema-discovery round-trip.\n- Flows that present more than one menu (e.g. an MQTT device subentry\n  reconfigure looping through its summary menu) take `next_step_id` as a\n  LIST of successive selections, consumed one per menu encounter.\n\nEXAMPLES (menu-based types, where the first-call payload is non-obvious):\n- template sensor: ha_config_set_helper(helper_type=\"template\", name=\"Room Temp\", config={\"next_step_id\": \"sensor\", \"state\": \"{{ states('sensor.x')|float }}\", \"unit_of_measurement\": \"°C\"})\n- group: ha_config_set_helper(helper_type=\"group\", name=\"Kitchen Lights\", config={\"group_type\": \"light\", \"entities\": [\"light.a\", \"light.b\"]})\n- config subentry: ha_config_set_helper(helper_type=\"config_subentry\", entry_id=\"01HXYZ...\", subentry_type=\"conversation\", config={\"name\": \"Local agent\", \"model\": \"gemma3:27b\"})",
+    "description": "Create or update Home Assistant helper entities and config subentries\n(30 types, unified interface).\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n``helper-selection.md`` ships under ``skill_content`` by default.\n\nSIMPLE types (pass `config` dict): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag. Create requires `name`; update requires `helper_id`.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat,\nhistory_stats, mold_indicator. Create requires `name`; for updates pass the\nexisting entry_id as `helper_id` (options flows reject the `name` key).\n`otp` is a helper in the HA UI but not offered here — its flow needs a live\nTOTP code; create it with ha_set_integration(domain=\"otp\").\n\nCONFIG_SUBENTRY type (Config Subentry Flow API): pass `entry_id`,\n`subentry_type` and `config`; pass `subentry_id` to reconfigure an existing\nsubentry, omit it to create one.\n\nBehavior:\n- UPDATE preserves type-specific fields not re-passed (a rename never wipes\n  initial/icon/etc.); flow-helper and config subentry updates behave the same\n  way (see `config`).\n- Omitted `action` falls back to the `helper_id`-presence discriminator\n  (SIMPLE/FLOW) or the `subentry_id`-presence discriminator (config\n  subentries).\n- For flow-based helpers, config keys not declared by any step's data_schema\n  are silently ignored by HA. Validation errors carry the helper's\n  `data_schema` (and `menu_options` for menu-rooted helpers like\n  `template`/`group` when no sub-type is chosen yet), so a follow-up call\n  can self-correct without a separate schema-discovery round-trip.\n- Flows that present more than one menu (e.g. an MQTT device subentry\n  reconfigure looping through its summary menu) take `next_step_id` as a\n  LIST of successive selections, consumed one per menu encounter.\n\nEXAMPLES:\n- input_number: ha_config_set_helper(helper_type=\"input_number\", name=\"Target\", config={\"min_value\": 0, \"max_value\": 100, \"step\": 5})\n- template sensor: ha_config_set_helper(helper_type=\"template\", name=\"Room Temp\", config={\"next_step_id\": \"sensor\", \"state\": \"{{ states('sensor.x')|float }}\", \"unit_of_measurement\": \"°C\"})\n- group: ha_config_set_helper(helper_type=\"group\", name=\"Kitchen Lights\", config={\"group_type\": \"light\", \"entities\": [\"light.a\", \"light.b\"]})\n- config subentry: ha_config_set_helper(helper_type=\"config_subentry\", entry_id=\"01HXYZ...\", subentry_type=\"conversation\", config={\"name\": \"Local agent\", \"model\": \"gemma3:27b\"})",
     "inputSchema": {
       "properties": {
         "helper_type": {
@@ -2136,12 +2151,12 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:bell', 'mdi:toggle-switch')",
+          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it",
           "default": null
         },
         "area_id": {
           "type": "str | None",
-          "description": "Area/room ID to assign the helper to",
+          "description": "Area ID for the helper; '' or ' ' clears it",
           "default": null
         },
         "labels": {
@@ -2151,147 +2166,124 @@
         },
         "min_value": {
           "type": "float | None",
-          "description": "Minimum value (input_number/counter) or minimum length (input_text). Also accepts shorthand 'min'.",
           "default": null
         },
         "max_value": {
           "type": "float | None",
-          "description": "Maximum value (input_number/counter) or maximum length (input_text). Also accepts shorthand 'max'.",
           "default": null
         },
         "step": {
           "type": "float | None",
-          "description": "Step/increment value for input_number or counter",
           "default": null
         },
         "unit_of_measurement": {
           "type": "str | None",
-          "description": "Unit of measurement for input_number (e.g., '°C', '%', 'W'). Also accepts shorthand 'unit'.",
           "default": null
         },
         "options": {
           "type": "str | list[str] | None",
-          "description": "List of options for input_select (required for input_select)",
           "default": null
         },
         "initial": {
-          "type": "str | int | None",
-          "description": "Initial value for applicable helper types. For input_boolean, input_select, input_number, input_text, and input_datetime: setting `initial` — even to false/0 — disables last-state restore and forces that value on every HA restart; omit unless you want the helper to reset to that value on every restart instead of restoring its last state. For counter, `initial` is just the starting value — restore-on-restart is controlled separately by `restore` (default True).",
+          "type": "str | bool | int | float | None",
           "default": null
         },
         "mode": {
           "type": "str | None",
-          "description": "Display mode: 'box'/'slider' for input_number, 'text'/'password' for input_text",
           "default": null
         },
         "has_date": {
           "type": "bool | None",
-          "description": "Include date component for input_datetime",
           "default": null
         },
         "has_time": {
           "type": "bool | None",
-          "description": "Include time component for input_datetime",
           "default": null
         },
         "restore": {
           "type": "bool | None",
-          "description": "Restore state after restart (counter, timer). Defaults to True for counter, False for timer",
           "default": null
         },
         "duration": {
-          "type": "str | None",
-          "description": "Default duration for timer in format 'HH:MM:SS' or seconds (e.g., '0:05:00' for 5 minutes)",
+          "type": "str | int | float | None",
           "default": null
         },
         "monday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes (e.g. {'from': '07:00', 'to': '22:00', 'data': {'mode': 'comfort'}})",
           "default": null
         },
         "tuesday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Tuesday; same shape as monday.",
           "default": null
         },
         "wednesday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Wednesday; same shape as monday.",
           "default": null
         },
         "thursday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Thursday; same shape as monday.",
           "default": null
         },
         "friday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Friday; same shape as monday.",
           "default": null
         },
         "saturday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Saturday; same shape as monday.",
           "default": null
         },
         "sunday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Sunday; same shape as monday.",
           "default": null
         },
         "latitude": {
           "type": "float | None",
-          "description": "Latitude for zone (required for zone)",
           "default": null
         },
         "longitude": {
           "type": "float | None",
-          "description": "Longitude for zone (required for zone)",
           "default": null
         },
         "radius": {
           "type": "float | None",
-          "description": "Radius in meters for zone (default: 100)",
           "default": null
         },
         "passive": {
           "type": "bool | None",
-          "description": "Passive zone (won't trigger state changes for person entities)",
           "default": null
         },
         "user_id": {
           "type": "str | None",
-          "description": "User ID to link to person entity",
           "default": null
         },
         "device_trackers": {
           "type": "list[str] | None",
-          "description": "List of device_tracker entity IDs for person",
           "default": null
         },
         "picture": {
           "type": "str | None",
-          "description": "Picture URL for person entity",
           "default": null
         },
         "tag_id": {
           "type": "str | None",
-          "description": "Tag ID. On create, omit to auto-generate a uuid4 hex. On update, the existing tag_id is required (passed via helper_id).",
           "default": null
         },
         "description": {
           "type": "str | None",
-          "description": "Description for tag",
+          "default": null
+        },
+        "pattern": {
+          "type": "str | None",
           "default": null
         },
         "category": {
           "type": "str | None",
-          "description": "Category ID to assign to this helper. Use ha_config_get_category(scope='helpers') to list available categories, or ha_config_set_category() to create one.",
+          "description": "Category ID for this helper (ha_config_get_category(scope='helpers') lists them, ha_config_set_category() creates one); '' or ' ' clears it.",
           "default": null
         },
         "config": {
           "type": "dict[str, Any] | None",
-          "description": "Config dict for flow-based helper types and helper_type='config_subentry'. Ignored for simple helper types. On update it is a patch: a field you omit keeps its current value, and a field set to null is cleared where the schema allows that field to be empty. A field two steps declare gets your one value both times; pass step_values={'<step_id>': {'<field>': <value>}} to give a step its own value, or to leave it out of that step; a LIST of those objects supplies one per encounter when the flow presents a step more than once.",
+          "description": "Type-specific fields. On update it is a patch: a field you omit keeps its current value. SIMPLE types take these keys: input_select: options (list, required), initial. input_number: min_value, max_value, step, unit_of_measurement, mode ('box'/'slider'), initial. input_text: min_value, max_value (length), mode ('text'/'password'), initial, unit_of_measurement, pattern (regex the value must match). input_datetime: has_date, has_time, initial. input_boolean: initial. counter: initial (starting value), min_value, max_value, step, restore (default true). timer: duration ('HH:MM:SS' or seconds), restore (default false). schedule: monday..sunday, each a list of {'from': 'HH:MM', 'to': 'HH:MM'} with optional 'data' dict of extra attributes. zone: latitude, longitude (both required), radius (meters, default 100), passive (won't trigger person state changes). person: user_id, device_trackers (device_tracker entity IDs), picture (URL). tag: tag_id (omit on create to auto-generate), description. On input_* types, `initial` — even false/0 — disables last-state restore and forces that value on every HA restart. FLOW types and config_subentry take the flow's fields; a field set to null is cleared where the schema allows that field to be empty. A field two steps declare gets your one value both times; pass step_values={'<step_id>': {'<field>': <value>}} to give a step its own value, or to leave it out of that step; a LIST of those objects supplies one per encounter when the flow presents a step more than once.",
           "default": null
         },
         "wait": {
@@ -4478,23 +4470,23 @@
   {
     "name": "ha_report_issue",
     "title": "Report Issue or Feedback",
-    "description": "Get diagnostics and a finished GitHub issue for a bug report or agent feedback.\n\nUse it when the user reports an ha-mcp error, failure or wrong result,\nor says you used the wrong tool or worked inefficiently. If it is\nunclear which, ask: \"Are you reporting a bug in ha-mcp, or providing\nfeedback on how I used the tools?\"\n\nPass the report text in the call: the server combines it with the\ndiagnostics it collects into `issue_title`, `issue_body` (the full\nreport with logs) and `issue_url` (a new-issue link with title and\nbody filled in, log sections left out to fit GitHub's URL limit;\nerror messages stay in, with secrets redacted). A call\nwithout text still returns diagnostics, with placeholders in the body.\n\nThe response is LARGE; `fields=` narrows it. Read `instructions`\nbefore showing anything to the user: it covers the missing-tool and\nknown-client pre-checks, the duplicate check, the mandatory\nanonymisation step, and how to file the issue. Check\n`missing_tool_hint` FIRST when the report is about a missing tool: a\nstale client tool list (not a bug) is the usual cause.",
+    "description": "Get diagnostics and a finished GitHub issue for a bug, agent feedback or a feature request.\n\nUse it before filing any GitHub issue about ha-mcp: a bug report\nwithout this report is closed after 24 hours. `report_type` picks\nthe kind of report; if it is unclear which, ask: \"Are you reporting a\nbug in ha-mcp, giving feedback on how I used the tools, or requesting\na feature?\"\n\nPass the report text in the call: the server combines it with the\ndiagnostics it collects into `issue_title`, `issue_body` (the full\nreport with logs) and `issue_url` (a new-issue link with title and\nbody filled in, log sections left out to fit GitHub's URL limit;\nerror messages stay in, with secrets redacted). A call\nwithout text still returns diagnostics, with placeholders in the body.\n\nThe response is LARGE; `fields=` narrows it. Read `instructions`\nbefore showing anything to the user: it covers the missing-tool and\nknown-client pre-checks, the duplicate check, the mandatory\nanonymisation step, and how to file the issue. Check\n`missing_tool_hint` FIRST when the report is about a missing tool: a\nstale client tool list (not a bug) is the usual cause.",
     "inputSchema": {
       "properties": {
         "report_type": {
-          "type": "Literal['runtime_bug', 'agent_behavior']",
+          "type": "Literal['runtime_bug', 'agent_behavior', 'feature_request']",
           "default": "runtime_bug",
-          "description": "'runtime_bug' when ha-mcp errored or behaved wrongly; 'agent_behavior' when the user says you used the wrong tool or worked inefficiently."
+          "description": "'runtime_bug' when ha-mcp errored or behaved wrongly; 'agent_behavior' when the user says you used the wrong tool or worked inefficiently; 'feature_request' when the user wants ha-mcp to do something it cannot do yet."
         },
         "title": {
           "type": "str | None",
           "default": null,
-          "description": "One-line summary of what broke, for the issue title."
+          "description": "One-line summary of what broke or what is requested, for the issue title."
         },
         "description": {
           "type": "str | None",
           "default": null,
-          "description": "What went wrong in markdown: steps to reproduce, expected and actual behavior. For agent_behavior: what you did and what you should have done."
+          "description": "What went wrong in markdown: steps to reproduce, expected and actual behavior. For agent_behavior: what you did and what you should have done. For feature_request: what ha-mcp should do, why the user needs it, and what you tried."
         },
         "user_prompt": {
           "type": "str | None",

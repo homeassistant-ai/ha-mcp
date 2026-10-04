@@ -1,5 +1,6 @@
 """Helper type constants, per-type field schemas and the helper response shape."""
 
+from contextvars import ContextVar
 from typing import Any, TypedDict
 
 from ..config_write_helpers import attach_skill_content
@@ -9,7 +10,7 @@ __all__ = [
     "SIMPLE_HELPER_TYPES",
     "_ALL_TYPED_PARAMS",
     "_HELPER_SKILL_FILES",
-    "_INITIAL_PARAM_DESCRIPTION",
+    "_SIMPLE_CONFIG_KEYS_DESCRIPTION",
     "_TYPE_TYPED_PARAMS",
     "HelperResponse",
     "_attach_helper_skill",
@@ -69,17 +70,6 @@ _INITIAL_DISABLES_RESTORE_DESCRIPTION = (
 )
 
 
-_INITIAL_PARAM_DESCRIPTION = (
-    "Initial value for applicable helper types. For "
-    "input_boolean, input_select, input_number, input_text, and input_datetime: "
-    "setting `initial` — even to false/0 — disables last-state restore and forces "
-    "that value on every HA restart; omit unless you want the helper to reset to "
-    "that value on every restart instead of restoring its last state. For counter, "
-    "`initial` is just the starting value — restore-on-restart is controlled "
-    "separately by `restore` (default True)."
-)
-
-
 # Bug 4b/7c/10/14 (issue #1150): per-helper-type allowlists of typed
 # parameters. Inapplicable params are rejected at the top of the tool
 # instead of being silently dropped. Cross-cutting params (helper_type,
@@ -108,6 +98,8 @@ _TYPE_TYPED_PARAMS: dict[str, frozenset[str]] = {
             "max_value",
             "mode",
             "initial",
+            "unit_of_measurement",
+            "pattern",
         }
     ),
     "input_datetime": frozenset({"icon", "has_date", "has_time", "initial"}),
@@ -333,6 +325,13 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "required": False,
             "selector": {"select": {"options": ["text", "password"]}},
             "description": "Default 'text'.",
+        },
+        {"name": "unit_of_measurement", "required": False, "selector": {"text": {}}},
+        {
+            "name": "pattern",
+            "required": False,
+            "selector": {"text": {}},
+            "description": "Regex the value must match.",
         },
         {
             "name": "initial",
@@ -614,7 +613,7 @@ def _simple_helper_error_context(
     type), and any caller-supplied extra fields.
     """
     context: dict[str, Any] = {"helper_type": helper_type}
-    schema = get_simple_helper_schema(helper_type)
+    schema = _core_helper_fields(helper_type) or get_simple_helper_schema(helper_type)
     if schema is not None:
         context["data_schema"] = schema
     context.update(extra)
@@ -682,3 +681,64 @@ def _helper_response(
     if warnings:
         resp["warnings"] = warnings
     return resp
+
+
+# Per-type `config` keys for SIMPLE helpers, published in the `config` description.
+_SIMPLE_CONFIG_KEYS_DESCRIPTION = (
+    "input_select: options (list, required), initial. "
+    "input_number: min_value, max_value, step, unit_of_measurement, "
+    "mode ('box'/'slider'), initial. "
+    "input_text: min_value, max_value (length), mode ('text'/'password'), initial, "
+    "unit_of_measurement, pattern (regex the value must match). "
+    "input_datetime: has_date, has_time, initial. "
+    "input_boolean: initial. "
+    "counter: initial (starting value), min_value, max_value, step, "
+    "restore (default true). "
+    "timer: duration ('HH:MM:SS' or seconds), restore (default false). "
+    "schedule: monday..sunday, each a list of {'from': 'HH:MM', 'to': 'HH:MM'} "
+    "with optional 'data' dict of extra attributes. "
+    "zone: latitude, longitude (both required), radius (meters, default 100), "
+    "passive (won't trigger person state changes). "
+    "person: user_id, device_trackers (device_tracker entity IDs), picture (URL). "
+    "tag: tag_id (omit on create to auto-generate), description. "
+    "On input_* types, `initial` — even false/0 — disables last-state restore "
+    "and forces that value on every HA restart."
+)
+
+
+# Core's simple-helper field lists and the call's action, fetched from the
+# component once per ha_config_set_helper call; None falls back to
+# SIMPLE_HELPER_SCHEMAS.
+_CORE_HELPER_SCHEMAS: ContextVar[tuple[dict[str, Any], str] | None] = ContextVar(
+    "_CORE_HELPER_SCHEMAS", default=None
+)
+
+
+# Core's field names that differ from this tool's parameter names.
+_CORE_FIELD_ALIASES: dict[str, str] = {
+    "min": "min_value",
+    "max": "max_value",
+    "minimum": "min_value",
+    "maximum": "max_value",
+}
+
+
+def supported_core_fields(
+    helper_type: str, fields: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Core's fields for ``helper_type`` that this tool accepts in ``config``."""
+    accepted = _TYPE_TYPED_PARAMS.get(helper_type, frozenset()) | {"name"}
+    return [
+        field
+        for field in fields
+        if _CORE_FIELD_ALIASES.get(field.get("name", ""), field.get("name")) in accepted
+    ]
+
+
+def _core_helper_fields(helper_type: str) -> list[dict[str, Any]] | None:
+    current = _CORE_HELPER_SCHEMAS.get()
+    if current is None:
+        return None
+    schemas, action = current
+    fields = (schemas.get(helper_type) or {}).get(action)
+    return supported_core_fields(helper_type, fields) if fields else None

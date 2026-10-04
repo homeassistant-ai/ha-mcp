@@ -114,7 +114,7 @@ class TestStructuredFieldErrors:
 
         body = _parse_tool_error(exc_info.value)
         assert body["success"] is False
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         # Field errors are exposed at the top level (via context).
         assert body.get("field_errors") == {"entity_id": "not_a_sensor"}
         assert body.get("status_code") == 400
@@ -307,7 +307,7 @@ class TestHandleFlowStepsOptionsFlowError:
             )
 
         body = _parse_tool_error(exc_info.value)
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert body.get("field_errors") == {"window_size": "value_too_small"}
         assert body.get("status_code") == 400
         # Issue #1149: data_schema is now attached alongside field_errors.

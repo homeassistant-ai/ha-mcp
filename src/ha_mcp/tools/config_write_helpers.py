@@ -99,7 +99,7 @@ async def apply_entity_category(
     Args:
         client: HomeAssistantClient instance
         entity_id: Entity to update
-        category: Category ID to assign
+        category: Category ID to assign; empty clears the scope
         scope: Category scope (e.g., 'automation', 'script')
         result_dict: Tool result dict to update with category status
         entity_type: Human-readable type for warning messages
@@ -120,7 +120,7 @@ async def apply_entity_category(
                 for c in check.get("result") or []
                 if isinstance(c, dict)
             }
-            if category not in valid_ids:
+            if category and category not in valid_ids:
                 result_dict.setdefault("warnings", []).append(
                     f"{entity_type.capitalize()} saved but category "
                     f"{category!r} no longer exists in the {scope} registry — "
@@ -135,11 +135,11 @@ async def apply_entity_category(
             {
                 "type": "config/entity_registry/update",
                 "entity_id": entity_id,
-                "categories": {scope: category},
+                "categories": {scope: category or None},
             }
         )
         if ws_result.get("success"):
-            result_dict["category"] = category
+            result_dict["category"] = category or None
         else:
             error_detail = ws_result.get("error", {})
             error_msg = (

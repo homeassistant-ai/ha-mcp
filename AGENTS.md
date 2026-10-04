@@ -67,6 +67,8 @@ Keep this file short enough to load on every task:
 
 Do not create, edit, label, close, or comment on an issue or pull request without user authorization for that write. Draft the exact proposed text first when approval has not already been given.
 
+Every bug or agent-behavior issue filed here must contain the report `ha_report_issue` generates (its `issue_body`, unchanged), or a `### Why there is no ha_report_issue report` section saying why there is none (even "N/A"); feature requests should too. `issue-intake.yml` labels a new one that has neither `missing bug report output`, and `report-gate.yml` closes it after 24 hours unless one is added or a maintainer removes the label.
+
 The detailed label taxonomy, issue-analysis query, bot behavior, review commands, CI loop, and release automation live in the [GitHub workflow reference](docs/agents/github-workflow.md).
 
 Before changing automated issue documentation, read the [issue-intake policy and controls](docs/agents/issue-intake.md) for source handling, maintainer overrides, permissions, and bench validation.
@@ -152,6 +154,7 @@ Tools are lazy-discovered from `tools_*.py`; shared business logic belongs in se
 - Comment only non-obvious logic. Code should be self-documenting; too many comments is an anti-pattern.
 - In Python, type-hint every function signature and use async/await consistently for I/O.
 - Keep modules focused. A source file over 1,000 lines (Pylint's `max-module-lines` default) spans several concerns, and `test_module_size_ratchet.py` fails when a new file crosses that limit or a listed one grows; split along responsibilities and update internal imports and test patch targets together, since internal module paths are not a public MCP tool contract.
+- Import an existing helper instead of copying it. `test_duplicate_code_ratchet.py` fails when a new Python function or class has the same code as another; the [development reference](docs/agents/development.md#code-quality) explains the baseline.
 - Never hand-edit the root `CHANGELOG.md` or its `homeassistant-addon/CHANGELOG.md` copy; semantic-release generates both. The webhook-proxy app changelogs are maintained by hand per their scoped `AGENTS.md`.
 
 ## Terminology: apps, not add-ons

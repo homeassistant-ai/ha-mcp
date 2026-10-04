@@ -353,7 +353,7 @@ Set ENABLE_TOOL_SEARCH=true (or toggle the option in the HA app). The full catal
 
 | Tool | Purpose |
 |------|---------|
-| `ha_search_tools` | BM25 keyword search across all tools. Returns name, description, parameters, and annotations (`readOnlyHint` / `destructiveHint`) so the agent can pick the right one. |
+| `ha_search_tools` | BM25 English-keyword search across all tools, pinned ones included. Hidden tools return name, description, parameters, and annotations (`readOnlyHint` / `destructiveHint`) so the agent can pick the right one; a pinned tool returns a name-only stub (`pinned: true`) pointing back at the tool list, and does not use up a result slot. |
 | `ha_call_read_tool` | Execute a `readOnlyHint` tool by name. Safe — clients can auto-approve. |
 | `ha_call_write_tool` | Execute a write tool that creates or updates data. |
 | `ha_call_delete_tool` | Execute a tool that removes / deletes data. |
@@ -365,7 +365,7 @@ A `ha_manage_*` tool combines several operations, so it is reachable from more t
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `ENABLE_TOOL_SEARCH` | `false` | Replace full tool catalog with search-based discovery (tools deferred behind on-demand search). |
-| `TOOL_SEARCH_MAX_RESULTS` | `5` | Max results returned by `ha_search_tools` (range 2–10). |
+| `TOOL_SEARCH_MAX_RESULTS` | `5` | Max hidden tools returned per `ha_search_tools` call (range 2–10); a pinned tool that ranks inside that top count is added as a name-only stub on top of it. |
 | `PINNED_TOOLS` | empty | Comma-separated tool names to keep always visible. The web settings UI is the primary way to manage this. |
 
 ### When to enable
@@ -512,7 +512,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 💬 Community
 
 - **[GitHub Discussions](https://github.com/homeassistant-ai/ha-mcp/discussions)** — Ask questions, share ideas
-- **[Issue Tracker](https://github.com/homeassistant-ai/ha-mcp/issues)** — Report bugs, request features, or suggest tool behavior improvements
+- **[Issue Tracker](https://github.com/homeassistant-ai/ha-mcp/issues)** — Report bugs, request features, or suggest tool behavior improvements. Bug reports need the report the `ha_report_issue` tool generates, or a reason why there is none; without either they are closed after 24 hours.
 
 ---
 
