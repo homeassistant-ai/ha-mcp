@@ -8,23 +8,13 @@ parse path is best-effort: undecodable payloads yield no dimensions,
 and callers must degrade gracefully rather than fail the request.
 """
 
-_JPEG_SOF_MARKERS = frozenset(
-    (
-        0xC0,
-        0xC1,
-        0xC2,
-        0xC3,  # baseline / extended sequential DCT
-        0xC5,
-        0xC6,
-        0xC7,  # progressive DCT
-        0xC9,
-        0xCA,
-        0xCB,
-        0xCD,
-        0xCE,
-        0xCF,  # operation / expert modes
-    )
-)
+# Every T.81 start-of-frame (SOF) marker — 0xC0 through 0xCF across the
+# sequential, progressive, lossless and differential coding modes — minus
+# the three non-SOF markers that share the range: DHT (0xC4), JPG (0xC8)
+# and DAC (0xCC). The walker must skip those, not stop at them: a DHT
+# commonly precedes the frame, and misparsing its short header as a frame
+# definition would report garbage dimensions.
+_JPEG_SOF_MARKERS = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _GIF_SIGNATURES = (b"GIF87a", b"GIF89a")
