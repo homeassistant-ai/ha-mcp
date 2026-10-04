@@ -54,10 +54,15 @@ def _validate(action: str, args: dict[str, Any]) -> bool:
 
 
 def _no_raw_value(context: dict[str, Any], details: str | None = None) -> NoReturn:
+    message = (
+        "Device parameter read failed without a value (HA unknown_error); no cached fallback was used"
+        if context.get("ha_error_code") == "unknown_error"
+        else "Device parameter read returned no value; no cached fallback was used"
+    )
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
-            "Device parameter read returned no value; no cached fallback was used",
+            message,
             details=details,
             context=context,
             suggestions=[

@@ -100,7 +100,7 @@
   "tests/src/unit/test_oauth_ha_auth.py": 1210,
   "tests/src/unit/test_oauth_legacy_component.py": 1302,
   "tests/src/unit/test_oidc_entrypoint.py": 1370,
-  "tests/src/unit/test_read_only.py": 1205,
+  "tests/src/unit/test_read_only.py": 1179,
   "tests/src/unit/test_search_fields_projection.py": 1223,
   "tests/src/unit/test_search_related_graph.py": 1052,
   "tests/src/unit/test_settings_ui.py": 5209,

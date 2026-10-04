@@ -183,8 +183,8 @@ async def test_ha_failure_never_substitutes_a_cached_value() -> None:
         )
 
 
-async def test_device_read_with_no_value_is_not_reported_as_fresh() -> None:
-    """An empty raw result becomes HA's unknown_error, not a null value."""
+async def test_unknown_raw_failure_keeps_details_without_claiming_a_cause() -> None:
+    """HA uses unknown_error for empty results and unrelated handler failures."""
     client = client_with_parameters({"root": parameter(8)})
     client.send_websocket_message.side_effect = [
         {"success": True, "result": {"root": parameter(8)}},
@@ -194,7 +194,7 @@ async def test_device_read_with_no_value_is_not_reported_as_fresh() -> None:
             "error_code": "unknown_error",
         },
     ]
-    with pytest.raises(ToolError, match="no value") as exc:
+    with pytest.raises(ToolError, match="failed without a value") as exc:
         await RadioTools(client).ha_manage_radio(
             radio="zwave",
             action="get_config_param",
@@ -206,6 +206,8 @@ async def test_device_read_with_no_value_is_not_reported_as_fresh() -> None:
     assert body["device_id"] == "node-device"
     assert body["property"] == 3
     assert "no cached fallback" in body["error"]["message"]
+    assert "returned no value" not in body["error"]["message"]
+    assert body["error"]["details"] == "Command failed: Unknown error"
     assert "parameter" in body["error"]["suggestion"].lower()
     assert client.send_websocket_message.await_count == 2
 

@@ -522,8 +522,8 @@ class TestRadioDispatcherContract:
         ],
     )
     async def test_ha_failure_codes_offer_the_relevant_next_step(
-        self, ha_code, expected_code, suggestion
-    ):
+        self, ha_code: str, expected_code: str, suggestion: str
+    ) -> None:
         """Radio failures retain HA's verdict and give an actionable remedy."""
         client = _client(
             {
