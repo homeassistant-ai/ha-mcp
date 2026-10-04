@@ -84,15 +84,19 @@ async def ensure_use_device_name_supported(client: Any) -> None:
     try:
         release = Version(raw).release[:2]
     except InvalidVersion:
-        release = ()
-    if tuple(release) >= USE_DEVICE_NAME_MIN_CORE:
+        release = None
+    if release is not None and tuple(release) >= USE_DEVICE_NAME_MIN_CORE:
         return
+    detail = (
+        f"this Core reports {raw} and would show the default name instead"
+        if release is not None
+        else f"this Core's version {raw!r} could not be parsed, so support "
+        "cannot be confirmed"
+    )
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"use_device_name needs Home Assistant 2026.10 or newer; this Core "
-            f"reports {raw or 'an unknown version'} and would show the default "
-            f"name instead",
+            f"use_device_name needs Home Assistant 2026.10 or newer; {detail}",
             context={"ha_version": raw},
             suggestions=[
                 "Upgrade Home Assistant to 2026.10 or newer",
