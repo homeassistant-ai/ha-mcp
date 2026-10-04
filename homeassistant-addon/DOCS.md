@@ -474,7 +474,7 @@ redact_secrets: true
 
 Registers the `ha_manage_security_policy` tool, which lets connected AI agents read and rewrite the tool security policies, including removing approval gates.
 
-This option is independent of `enable_tool_security_policies`: it controls who can edit the rules, not whether they are enforced. The tool cannot see or decide pending approvals. To keep a human in the loop, gate the tool before you enable it: switch on "security gated" for Manage Security Policy in the **Tools** tab of the web UI.
+This option is independent of `enable_tool_security_policies`: it controls who can edit the rules, not whether they are enforced. The tool cannot see or decide pending approvals. To keep a human in the loop, gate the tool before you enable it: switch on "security gated" for Manage Security Policy in the **Tools** tab of the web UI. The gate is part of the policy this tool edits, so an approved `set` call can remove it. Check that each change you approve keeps it.
 
 Off by default. Requires app restart to take effect.
 
