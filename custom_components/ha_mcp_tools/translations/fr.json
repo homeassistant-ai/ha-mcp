@@ -91,8 +91,7 @@
       "description": "Le serveur HA-MCP intégré n'a pas pu être démarré à l'intérieur de Home Assistant :\n\n{detail}\n\nVérifiez les journaux Home Assistant, puis rechargez l'intégration (ou corrigez le problème sous-jacent et rechargez) pour réessayer."
     },
     "server_package_install_failed": {
-      "title": "Échec de l'installation du paquet serveur HA-MCP intégré",
-      "description": "L'installation du paquet ha-mcp pour le serveur intégré a échoué :\n\n{detail}\n\nRésolvez le problème de compatibilité ou d'installation décrit ci-dessus, puis rechargez l'intégration pour réessayer."
+      "title": "Échec de l'installation du paquet serveur HA-MCP intégré"
     },
     "component_outdated": {
       "title": "Mettez à jour le composant personnalisé HA-MCP via HACS",

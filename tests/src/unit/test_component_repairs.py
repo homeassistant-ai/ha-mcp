@@ -22,12 +22,15 @@ install()
 class _RepairsFlow:
     """Small HA RepairsFlow stand-in with real flow-result behavior."""
 
-    def async_show_form(self, *, step_id, data_schema, errors=None):
+    def async_show_form(
+        self, *, step_id, data_schema, errors=None, description_placeholders=None
+    ):
         return {
             "type": "form",
             "step_id": step_id,
             "data_schema": data_schema,
             "errors": errors or {},
+            "description_placeholders": description_placeholders,
         }
 
     def async_create_entry(self, *, data):
@@ -207,3 +210,95 @@ def test_token_repair_catalog_explains_every_refusal(catalog_path):
     step = catalog["issues"]["server_token_needed"]["fix_flow"]
     for reason in ("invalid_token", "token_not_long_lived", "token_not_admin"):
         assert step["error"][reason]
+
+
+# ---------------------------------------------------------------------------
+# server_package_install_failed (#2427): reinstall the server and its
+# dependencies, the only fix for a dependency another integration downgraded
+# ---------------------------------------------------------------------------
+
+
+def _package_hass(entry, *, skip_pip: bool = False):
+    hass = MagicMock()
+    hass.config.skip_pip = skip_pip
+    hass.config_entries.async_get_entry = MagicMock(return_value=entry)
+    hass.config_entries.async_update_entry = MagicMock()
+    hass.services.async_call = AsyncMock()
+    return hass
+
+
+async def _package_flow(hass):
+    repairs = _load_repairs_module()
+    flow = await repairs.async_create_fix_flow(
+        hass,
+        "server_package_install_failed",
+        {"entry_id": "srv1", "detail": "No module named 'pydantic_core'"},
+    )
+    flow.hass = hass
+    return flow
+
+
+async def test_package_repair_shows_the_failure_before_reinstalling():
+    hass = _package_hass(MagicMock(entry_id="srv1"))
+    flow = await _package_flow(hass)
+
+    result = await flow.async_step_init()
+
+    assert result["type"] == "form"
+    assert "pydantic_core" in result["description_placeholders"]["detail"]
+    hass.services.async_call.assert_not_awaited()
+
+
+async def test_package_repair_reinstalls_the_server_on_a_fresh_start():
+    """A failed import leaves the broken dependency loaded in Home Assistant's
+    process, so the reinstall must run at the next start, before any import."""
+    from custom_components.ha_mcp_tools.const import DATA_REINSTALL_REQUESTED
+
+    entry = MagicMock(entry_id="srv1", data={"webhook_id": "w"})
+    hass = _package_hass(entry)
+    flow = await _package_flow(hass)
+
+    result = await flow.async_step_confirm({})
+
+    assert result["type"] == "create_entry"
+    update = hass.config_entries.async_update_entry.call_args
+    assert update.kwargs["data"] == {"webhook_id": "w", DATA_REINSTALL_REQUESTED: True}
+    hass.services.async_call.assert_awaited_once_with(
+        "homeassistant", "restart", {}, blocking=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("entry", "skip_pip", "reason"),
+    [
+        (None, False, "entry_removed"),
+        (MagicMock(entry_id="srv1"), True, "externally_managed"),
+    ],
+    ids=["entry removed", "skip_pip"],
+)
+async def test_package_repair_explains_when_it_cannot_reinstall(
+    entry, skip_pip, reason
+):
+    hass = _package_hass(entry, skip_pip=skip_pip)
+    flow = await _package_flow(hass)
+
+    result = await flow.async_step_init()
+
+    assert result == {"type": "abort", "reason": reason}
+    hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "catalog_path",
+    [
+        "custom_components/ha_mcp_tools/strings.json",
+        "custom_components/ha_mcp_tools/translations/en.json",
+    ],
+)
+def test_package_repair_catalog_has_its_fix_flow(catalog_path):
+    root = Path(__file__).parents[3]
+    catalog = json.loads((root / catalog_path).read_text())
+    fix_flow = catalog["issues"]["server_package_install_failed"]["fix_flow"]
+    assert "{detail}" in fix_flow["step"]["confirm"]["description"]
+    for reason in ("entry_removed", "externally_managed"):
+        assert fix_flow["abort"][reason]

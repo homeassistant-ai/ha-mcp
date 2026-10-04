@@ -91,8 +91,7 @@
       "description": "Proses daxilindəki HA-MCP serverini Home Assistant daxilində başlatmaq mümkün olmadı:\n\n{detail}\n\nHome Assistant jurnallarını yoxlayın, sonra yenidən cəhd etmək üçün inteqrasiyanı yenidən yükləyin (və ya əsas problemi aradan qaldırıb yenidən yükləyin)."
     },
     "server_package_install_failed": {
-      "title": "Proses daxilindəki HA-MCP server paketini quraşdırmaq mümkün olmadı",
-      "description": "Proses daxilindəki server üçün ha-mcp paketinin quraşdırılması uğursuz oldu:\n\n{detail}\n\nYuxarıda təsvir olunan uyğunluq və ya quraşdırma problemini aradan qaldırın, sonra yenidən cəhd etmək üçün inteqrasiyanı yenidən yükləyin."
+      "title": "Proses daxilindəki HA-MCP server paketini quraşdırmaq mümkün olmadı"
     },
     "component_outdated": {
       "title": "HA-MCP fərdi komponentini HACS vasitəsilə yenilə",

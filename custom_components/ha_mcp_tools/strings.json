@@ -115,7 +115,18 @@
         },
         "server_package_install_failed": {
             "title": "The HA-MCP in-process server package could not be installed",
-            "description": "Installing the ha-mcp package for the in-process server failed:\n\n{detail}\n\nResolve the compatibility or installation problem described above, then reload the integration to retry."
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "Reinstall the HA-MCP server",
+                        "description": "The HA-MCP in-process server could not be installed or started:\n\n{detail}\n\nSubmit to restart Home Assistant; the server package and its dependencies are reinstalled before the server starts. If the message above names another integration that changed one of those packages, update or remove that integration first: otherwise Home Assistant puts its version back the next time it starts."
+                    }
+                },
+                "abort": {
+                    "entry_removed": "The HA-MCP Server entry no longer exists.",
+                    "externally_managed": "Home Assistant was started with skip_pip, so it does not install Python packages. Reinstall the ha-mcp package with your system's package manager, then reload the integration."
+                }
+            }
         },
         "component_outdated": {
             "title": "Update the HA-MCP Custom Component via HACS",

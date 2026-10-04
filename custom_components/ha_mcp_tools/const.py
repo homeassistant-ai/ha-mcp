@@ -373,6 +373,11 @@ DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"
 DATA_SECRET_PATH = "secret_path"
+# Set by the package repair's fix flow: the next start reinstalls the server
+# package even though its version is satisfied, before anything imports it. A
+# dependency another integration downgraded only resolves again on a
+# reinstall, and the broken module stays loaded until Home Assistant restarts.
+DATA_REINSTALL_REQUESTED = "reinstall_requested"
 # Legacy OAuth mode credentials, minted by embedded_entry._ensure_secrets and
 # consumed by oauth_legacy.LegacyOAuthProvider. DATA_OAUTH_SIGNING_KEY is a hex
 # string (entry.data must be JSON-serializable, so raw bytes aren't stored

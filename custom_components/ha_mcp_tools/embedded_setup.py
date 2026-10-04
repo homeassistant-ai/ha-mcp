@@ -183,12 +183,12 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         if err.kind == "token":
             _create_token_issue(hass, entry)
         else:
-            _create_issue(hass, err.kind, str(err))
+            _create_issue(hass, entry, err.kind, str(err))
     except Exception as err:
         _LOGGER.exception("HA-MCP in-process server: bring-up failed")
         with suppress(Exception):
             await async_teardown_server(hass)
-        _create_issue(hass, "start", str(err))
+        _create_issue(hass, entry, "start", str(err))
 
 
 async def async_teardown_server(hass: HomeAssistant) -> None:
@@ -491,13 +491,27 @@ _ISSUE_BY_KIND = {
 }
 
 
-def _create_issue(hass: HomeAssistant, kind: str, detail: str) -> None:
+def _create_issue(
+    hass: HomeAssistant, entry: ConfigEntry, kind: str, detail: str
+) -> None:
     """File the repair issue matching the failure ``kind`` (package / start).
 
     Exhaustive lookup on purpose: an unknown kind is a coding error and must
     raise here rather than silently filing the wrong user-facing repair issue.
+    A package failure is fixable: its fix flow reinstalls the server.
     """
     issue_id = _ISSUE_BY_KIND[kind]
+    if kind == "package":
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=True,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=issue_id,
+            data={"entry_id": entry.entry_id, "detail": detail},
+        )
+        return
     ir.async_create_issue(
         hass,
         DOMAIN,

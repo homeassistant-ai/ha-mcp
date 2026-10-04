@@ -87,8 +87,7 @@
             "description": "Home Assistant qoDaq HA-MCP turwI' QaptaHbogh QapchoHmoHlaHbe'lu':\n\n{detail}\n\nHome Assistant QonoSmey yInuD; ghIq nIDqa'meH integration yItaghqa'moH (pagh Qagh mung yItI' 'ej yItaghqa'moH)."
         },
         "server_package_install_failed": {
-            "title": "HA-MCP turwI' QaptaHbogh package jomlaHbe'lu'",
-            "description": "HA-MCP turwI' QaptaHboghvaD ha-mcp package jomlu'DI' Qagh qaS:\n\n{detail}\n\nbIngDaq compatibility Qagh, jomlu'DI' Qagh ghap QIjlu'bogh yItI'; ghIq nIDqa'meH integration yItaghqa'moH."
+            "title": "HA-MCP turwI' QaptaHbogh package jomlaHbe'lu'"
         },
         "component_outdated": {
             "title": "HACS vegh HA-MCP Custom Component yIchu'moH",

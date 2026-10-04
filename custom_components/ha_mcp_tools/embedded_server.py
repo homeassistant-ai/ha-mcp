@@ -56,6 +56,7 @@ from packaging.version import InvalidVersion, Version
 
 from .const import (
     DATA_LAST_PIP_SPEC,
+    DATA_REINSTALL_REQUESTED,
     DATA_SECRET_PATH,
     DEFAULT_BIND_HOST,
     DEFAULT_ENABLE_LLM_API,
@@ -749,6 +750,7 @@ class EmbeddedServerManager:
             if target_dist is not None
             else None
         )
+        reinstall_requested = bool(self._entry.data.get(DATA_REINSTALL_REQUESTED))
         conflicting = self._conflicting_dist_name()
         conflict_present = (
             conflicting is not None
@@ -756,7 +758,8 @@ class EmbeddedServerManager:
         )
 
         satisfied = (
-            target_dist is not None
+            not reinstall_requested
+            and target_dist is not None
             and target_version is not None
             and installed_version is not None
             and not conflict_present
@@ -779,7 +782,7 @@ class EmbeddedServerManager:
             deferred = True
             await self._async_defer_package_mutations(installed_version)
         else:
-            reinstall = False
+            reinstall = reinstall_requested
             if conflict_present and conflicting is not None:
                 _LOGGER.info(
                     "Removing %r, which shares the ha_mcp package with %r, "
@@ -798,6 +801,15 @@ class EmbeddedServerManager:
                 # installed at all.
                 await self._async_remove_replaced_source(stored_spec, installed_version)
             await self._async_force_install(reinstall=reinstall)
+            if reinstall_requested:
+                self._hass.config_entries.async_update_entry(
+                    self._entry,
+                    data={
+                        k: v
+                        for k, v in self._entry.data.items()
+                        if k != DATA_REINSTALL_REQUESTED
+                    },
+                )
 
         version: str | None = await self._hass.async_add_executor_job(
             _installed_ha_mcp_version, self._preferred_dist()

@@ -38,6 +38,7 @@ _WHEELS_HOST = "wheels.home-assistant.io"
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CHANNEL_DEV,
     DATA_LAST_PIP_SPEC,
+    DATA_REINSTALL_REQUESTED,
     DATA_SECRET_PATH,
     DEFAULT_PIP_SPEC,
     DIST_NAME_DEV,
@@ -529,6 +530,51 @@ class TestEnsurePairedPackage:
         await _ensure(mgr)
 
         assert env.installs == []
+
+    async def test_a_requested_reinstall_replaces_a_satisfied_pin(
+        self, tmp_path, monkeypatch
+    ):
+        # The package repair's fix: another integration downgraded one of the
+        # server's dependencies, the pin itself still reads as installed, and
+        # only a real reinstall resolves the dependencies again.
+        _paired(monkeypatch, "ha-mcp==8.6.0")
+        env = _PkgEnv(monkeypatch, {DIST_NAME_STABLE: "8.6.0"})
+        mgr, hass, _entry = _manager(
+            tmp_path,
+            data={
+                DATA_SECRET_PATH: "/p",
+                DATA_LAST_PIP_SPEC: "ha-mcp==8.6.0",
+                DATA_REINSTALL_REQUESTED: True,
+            },
+        )
+
+        await _ensure(mgr)
+
+        [(spec, kwargs)] = env.installs
+        assert spec == "ha-mcp==8.6.0"
+        assert kwargs["reinstall"] is True
+        # One reinstall per request, not on every later start.
+        saved = hass.config_entries.async_update_entry.call_args.kwargs["data"]
+        assert DATA_REINSTALL_REQUESTED not in saved
+
+    async def test_a_requested_reinstall_waits_for_a_live_importer(
+        self, tmp_path, monkeypatch
+    ):
+        _paired(monkeypatch, "ha-mcp==8.6.0")
+        env = _PkgEnv(monkeypatch, {DIST_NAME_STABLE: "8.6.0"})
+        mgr, hass, _entry = _manager(
+            tmp_path,
+            data={
+                DATA_SECRET_PATH: "/p",
+                DATA_LAST_PIP_SPEC: "ha-mcp==8.6.0",
+                DATA_REINSTALL_REQUESTED: True,
+            },
+        )
+
+        await _ensure(mgr, defer_mutations=True)
+
+        assert env.installs == []
+        hass.config_entries.async_update_entry.assert_not_called()
 
     async def test_override_reapplied_after_core_restored_the_pin(
         self, tmp_path, monkeypatch

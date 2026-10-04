@@ -91,8 +91,7 @@
       "description": "Serwer HA-MCP w procesie nie mógł zostać uruchomiony wewnątrz Home Assistant:\n\n{detail}\n\nSprawdź logi Home Assistant, a następnie przeładuj integrację (lub napraw podstawowy problem i przeładuj), aby spróbować ponownie."
     },
     "server_package_install_failed": {
-      "title": "Pakiet serwera HA-MCP w procesie nie mógł zostać zainstalowany",
-      "description": "Instalacja pakietu ha-mcp dla serwera w procesie nie powiodła się:\n\n{detail}\n\nRozwiąż problem zgodności lub instalacji opisany powyżej, a następnie przeładuj integrację, aby spróbować ponownie."
+      "title": "Pakiet serwera HA-MCP w procesie nie mógł zostać zainstalowany"
     },
     "component_outdated": {
       "title": "Zaktualizuj niestandardowy komponent HA-MCP przez HACS",

@@ -91,8 +91,7 @@
       "description": "无法在 Home Assistant 内部启动 HA-MCP 进程内服务器：\n\n{detail}\n\n请检查 Home Assistant 日志，然后重新加载该集成（或先修复根本问题再重新加载）以重试。"
     },
     "server_package_install_failed": {
-      "title": "无法安装 HA-MCP 进程内服务器软件包",
-      "description": "为进程内服务器安装 ha-mcp 软件包失败：\n\n{detail}\n\n请解决上述兼容性或安装问题，然后重新加载该集成以重试。"
+      "title": "无法安装 HA-MCP 进程内服务器软件包"
     },
     "component_outdated": {
       "title": "请通过 HACS 更新 HA-MCP 自定义组件",

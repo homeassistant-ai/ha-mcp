@@ -91,8 +91,7 @@
       "description": "HA-MCP-servern i processen kunde inte startas inuti Home Assistant:\n\n{detail}\n\nKontrollera Home Assistant-loggarna, ladda sedan om integrationen (eller åtgärda det underliggande problemet och ladda om) för att försöka igen."
     },
     "server_package_install_failed": {
-      "title": "HA-MCP-serverpaketet i processen kunde inte installeras",
-      "description": "Installationen av ha-mcp-paketet för servern i processen misslyckades:\n\n{detail}\n\nLös kompatibilitets- eller installationsproblemet som beskrivs ovan, ladda sedan om integrationen för att försöka igen."
+      "title": "HA-MCP-serverpaketet i processen kunde inte installeras"
     },
     "component_outdated": {
       "title": "Uppdatera HA-MCP Custom Component via HACS",
