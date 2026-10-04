@@ -12,10 +12,12 @@ import uuid
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client
+
 from ...utilities.assertions import MCPAssertions, assert_mcp_success, safe_call_tool
 
 
-async def _helper_names(mcp_client, helper_type: str) -> set[str]:
+async def _helper_names(mcp_client: Client, helper_type: str) -> set[str]:
     data = assert_mcp_success(
         await mcp_client.call_tool(
             "ha_config_list_helpers", {"helper_type": helper_type, "limit": 500}
@@ -25,7 +27,9 @@ async def _helper_names(mcp_client, helper_type: str) -> set[str]:
     return {h.get("name") for h in data["helpers"]}
 
 
-async def _rejected(mcp_client, params: dict, expected_error: str | None) -> dict:
+async def _rejected(
+    mcp_client: Client, params: dict, expected_error: str | None
+) -> dict:
     async with MCPAssertions(mcp_client) as mcp:
         result = await mcp.call_tool_failure(
             "ha_config_set_helper", params, expected_error=expected_error
@@ -39,7 +43,7 @@ async def _rejected(mcp_client, params: dict, expected_error: str | None) -> dic
 @pytest.mark.helper
 class TestHomeAssistantJudgesStorageHelperFields:
     async def test_unknown_key_is_named_by_home_assistant_and_nothing_is_written(
-        self, mcp_client
+        self, mcp_client: Client
     ) -> None:
         """A misspelt field is reported by name instead of being dropped."""
         name = f"E2E Typo {uuid.uuid4().hex[:6]}"
@@ -54,7 +58,9 @@ class TestHomeAssistantJudgesStorageHelperFields:
         )
         assert name not in await _helper_names(mcp_client, "input_number")
 
-    async def test_field_of_another_helper_type_is_rejected(self, mcp_client) -> None:
+    async def test_field_of_another_helper_type_is_rejected(
+        self, mcp_client: Client
+    ) -> None:
         """An input_select option list on an input_boolean is not silently lost
         (issue #1150)."""
         await _rejected(
@@ -77,7 +83,7 @@ class TestHomeAssistantJudgesStorageHelperFields:
         ids=["input_number-min-above-max", "input_datetime-neither", "no-options"],
     )
     async def test_invalid_values_are_rejected_by_home_assistant(
-        self, mcp_client, params: dict
+        self, mcp_client: Client, params: dict
     ) -> None:
         await _rejected(
             mcp_client,
@@ -86,7 +92,7 @@ class TestHomeAssistantJudgesStorageHelperFields:
         )
 
     async def test_update_left_invalid_by_its_stored_values_changes_nothing(
-        self, mcp_client
+        self, mcp_client: Client
     ) -> None:
         """Dropping the option the stored initial points at is refused, and the
         helper keeps its options: the stored item plus the change is judged."""
@@ -132,7 +138,7 @@ class TestHomeAssistantJudgesStorageHelperFields:
                 )
 
     async def test_step_wider_than_the_range_is_refused_by_the_tool(
-        self, mcp_client
+        self, mcp_client: Client
     ) -> None:
         """Home Assistant stores this counter, but it could never change value."""
         name = f"E2E Wide Step {uuid.uuid4().hex[:6]}"
