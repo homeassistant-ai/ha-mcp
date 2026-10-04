@@ -32,6 +32,7 @@ from ..errors import (
 )
 from ..read_only import require_write_access
 from ..utils.entity_membership import normalize_member_entity_ids
+from .backup_access import guard_snapshot_route
 from .bulk_selector import (
     _NON_AGGREGATE_ROOT_DOMAINS,
     BulkControlSelector,
@@ -792,8 +793,8 @@ class ServiceTools:
         """Validate service-mode params and return the (domain, service) pair.
 
         Raises a structured ToolError when domain/service are missing (the caller
-        likely wants the ws_command escape hatch) or when the domain targets the
-        reserved ha_mcp_tools namespace.
+        likely wants the ws_command escape hatch), when the domain targets the
+        reserved ha_mcp_tools namespace, or when backup controls block the service.
         """
         if not domain or not service:
             raise_tool_error(
@@ -823,6 +824,7 @@ class ServiceTools:
                     parameter="domain",
                 )
             )
+        guard_snapshot_route(domain=domain, service=service)
         return domain, service
 
     @staticmethod
@@ -1352,6 +1354,7 @@ class ServiceTools:
         # structured error. A dead transport raises instead (#1947), and this
         # branch runs BEFORE ha_call_service's own try block, so the mapping
         # has to happen here or the exception escapes the tool unstructured.
+        guard_snapshot_route(ws_command=command_type, ws_params=command_params)
         result = await self._send_ws_command_mapped(command_type, command_params)
 
         if not isinstance(result, dict) or not result.get("success", False):
@@ -1987,9 +1990,6 @@ class ServiceTools:
                 ws_command, data, domain=domain, service=service
             )
 
-        # Service mode requires domain + service (optional at the signature level
-        # only to make room for the ws_command escape hatch) and rejects the
-        # reserved ha_mcp_tools domain.
         domain, service = self._validate_service_call_params(domain, service)
         try:
             service_data = self._parse_service_data(data, entity_id)
