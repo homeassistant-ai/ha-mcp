@@ -252,7 +252,8 @@ def test_removing_one_predicate_keeps_the_rest_of_the_group(
           document.body.setAttribute('data-asked', String(asked));
         """,
     )
-    assert _probe(result, "asked") == "0"
+    # Under an allow list dropping a predicate approves more calls, so it asks.
+    assert _probe(result, "asked") == ("1" if effect == "allow" else "0")
     assert _last_put(result)["rules"] == [
         {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 60},
         {"tool_name": "ha_call_service", "when": [TURN_ON], "remember_minutes": 1},
@@ -714,7 +715,7 @@ def test_save_while_value_choices_load_keeps_the_predicate(
     # Save was clicked while the choices were loading.
     assert _probe(result, "loading") == "true"
     assert _saved_rules(result) == []
-    assert (_probe(result, "error") or "").strip()
+    assert _probe(result, "error") == "still loading, try again in a moment"
 
 
 def test_predicate_buttons_name_their_predicate(settings_script: str) -> None:
@@ -809,7 +810,10 @@ def test_predicate_values_render_as_text(settings_script: str) -> None:
 
 
 @pytest.mark.parametrize("effect", EFFECTS)
-def test_and_on_an_always_row_narrows_it(settings_script: str, effect: str) -> None:
+def test_an_always_row_offers_no_and(settings_script: str, effect: str) -> None:
+    """ "+ AND" on "(always)" would turn an unconditional rule into a
+    conditional one without saying so; in a require-approval list that stops
+    gating most calls. "+ Add condition" is still there."""
     always = _policy(
         effect, [{"tool_name": "ha_call_service", "when": [], "remember_minutes": 0}]
     )
@@ -817,14 +821,15 @@ def test_and_on_an_always_row_narrows_it(settings_script: str, effect: str) -> N
         settings_script,
         always,
         """
-          await click('.policy-and-predicate[data-idx="0"]');
-          await fill('args.domain', '"lock"');
+          const card = document.querySelector('.policy-rule-card[data-tool="ha_call_service"]');
+          document.body.setAttribute('data-and',
+            String(card.querySelectorAll('.policy-and-predicate').length));
+          document.body.setAttribute('data-add',
+            String(card.querySelectorAll('.policy-add-predicate').length));
         """,
     )
-    assert _last_put(result)["rules"] == [
-        {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 0},
-        RESTART,
-    ]
+    assert _probe(result, "and") == "0"
+    assert _probe(result, "add") == "1"
 
 
 @pytest.mark.parametrize("effect", EFFECTS)
@@ -883,6 +888,22 @@ def test_group_built_in_the_ui_reloads_as_one_condition(
             id="wildcard-path",
         ),
         pytest.param([LIGHT, {**LOCK, "op": "neq"}], False, id="not-both-equals"),
+        pytest.param([LIGHT, {**LIGHT, "op": "neq"}], True, id="equals-and-not"),
+        pytest.param(
+            [LIGHT, {**LIGHT, "op": "not_in", "value": ["lock", "Light"]}],
+            True,
+            id="equals-and-not-one-of",
+        ),
+        pytest.param(
+            [LIGHT, {**LIGHT, "op": "in", "value": ["lock", "switch"]}],
+            True,
+            id="equals-and-one-of-without-it",
+        ),
+        pytest.param(
+            [LIGHT, {**LIGHT, "op": "in", "value": ["lock", "light"]}],
+            False,
+            id="equals-and-one-of-with-it",
+        ),
         pytest.param(
             [{**LIGHT, "path": "domain"}, LOCK], True, id="args-prefix-optional"
         ),
@@ -919,7 +940,7 @@ def test_condition_that_can_never_match_is_flagged(
     )
     warning = html.unescape(_probe(result, "warning") or "")
     if flagged:
-        assert "cannot equal two different values" in warning
+        assert "never matches" in warning
         assert "domain" in warning
         # The warning appears when a save re-renders the card; only an alert
         # is announced by screen readers when it is inserted.

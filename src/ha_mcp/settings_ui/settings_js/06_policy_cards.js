@@ -4,11 +4,10 @@
 // config GET/PUT but returns 503 for the live endpoints — the UI
 // degrades to "Live approvals unavailable in this mode."
 //
-// The card UI keeps an in-memory mutable copy of each rule
-// (policyRuleEdits[tool_name]) so the user can edit conditions /
-// remember_minutes locally before pressing "Save changes" on a card,
-// which then GETs current policy, replaces the rule entry, and PUTs.
-// This mirrors the syncPolicyRule() flow used by the Tools-tab toggle.
+// The card UI keeps an in-memory copy of each tool's rules
+// (policyRuleEdits[tool_name]). Every condition or remember-minutes change
+// saves at once: savePolicyRule() GETs the current policy, replaces the
+// tool's rules, and PUTs, like syncPolicyRule() for the Tools-tab toggle.
 let policyRuleEdits = {};
 
 async function syncPolicyGlobalToggles() {
@@ -258,39 +257,63 @@ function renderPolicyCard(toolName, rule) {
         : '')
     )).join('')
     : '<code>' + escapeHtml(displayCondition(preds)) + '</code>');
-  // Two equals on one argument with different strings cannot both hold, so
-  // the condition saves fine but never matches. Flags only what never
-  // matches in either rule effect: non-strings are skipped (the evaluator
-  // compares in Python, where true equals 1), and so are wildcard paths and
-  // case-only differences, which a require-approval list can still match.
-  // The evaluator treats a leading "args." as optional, and so does this.
-  const conflictingEqPath = (preds) => {
-    const seen = new Map();
+  // An "equals X" next to a predicate on the same argument that rules X out
+  // (equals Y, does not equal X, is NOT one of [..X..], is one of [..no X..])
+  // never matches one value, so in a require-approval list it is a gate that
+  // never fires. A list argument can hold X and Y at once, but "contains"
+  // says that directly, so such a condition is refused either way (see
+  // saveConditions). Strings only (the evaluator compares in Python, where
+  // true equals 1), case-insensitive like a require-approval list, and
+  // wildcard paths skipped. A leading "args." is optional, as there.
+  const deadConditionPath = (preds) => {
+    const lower = (v) => (typeof v === 'string' ? v.toLowerCase() : null);
+    const byPath = new Map();
     for (const p of preds) {
-      if (!p || p.op !== 'eq' || typeof p.value !== 'string' || !p.path || p.path.includes('*')) continue;
+      if (!p || !p.path || p.path.includes('*')) continue;
       const key = p.path.replace(/^args\./, '');
-      const v = p.value.toLowerCase();
-      if (seen.has(key) && seen.get(key) !== v) return p.path;
-      seen.set(key, v);
+      byPath.set(key, (byPath.get(key) || []).concat([p]));
+    }
+    for (const group of byPath.values()) {
+      for (const e of group) {
+        if (e.op !== 'eq' || typeof e.value !== 'string') continue;
+        const x = e.value.toLowerCase();
+        const strings = (p) => Array.isArray(p.value) && p.value.every(v => typeof v === 'string');
+        const listed = (p) => strings(p) && p.value.some(v => v.toLowerCase() === x);
+        if (group.some(p => p !== e && (
+          (p.op === 'eq' && typeof p.value === 'string' && lower(p.value) !== x)
+          || (p.op === 'neq' && lower(p.value) === x)
+          || (p.op === 'not_in' && listed(p))
+          || (p.op === 'in' && strings(p) && !listed(p))
+        ))) return e.path;
+      }
     }
     return null;
   };
+  const neverMatchesText = (path) => t(
+    'policies.card.never_matches', {path: path},
+    path + ' cannot satisfy both of its predicates in this condition, so it never matches. For a list argument, use "contains" for each value it must hold.'
+  );
   // An alert: screen readers announce one inserted on re-render, not a note.
+  // Shown for a hand-authored condition loaded from tool_policy.json; the
+  // editor refuses to save one.
   const conflictWarning = (preds) => {
-    const path = conflictingEqPath(preds);
-    return path === null ? '' : '<span class="policy-condition-warning" role="alert">' + escapeHtml(t(
-      'policies.card.never_matches', {path: path},
-      path + ' cannot equal two different values at once, so this condition never matches.'
-    )) + '</span>';
+    const path = deadConditionPath(preds);
+    return path === null ? '' : '<span class="policy-condition-warning" role="alert">' +
+      escapeHtml(neverMatchesText(path)) + '</span>';
   };
   const predicateRows = rule.conditions.map((preds, i) => (
     '<li class="policy-predicate-row" data-idx="' + i + '">' +
       (i > 0 ? '<span class="policy-or-join">' + escapeHtml(t('policies.card.or_join', {}, 'OR')) + '</span>' : '') +
       predicateParts(preds, i) +
-      '<button class="policy-and-predicate" data-idx="' + i + '" title="' + escapeHtml(allowList
-        ? t('policies.card.add_and_title_allow', {}, 'Add a sub-condition that must also match. This condition then approves fewer calls.')
-        : t('policies.card.add_and_title', {}, 'Add a sub-condition that must also match. This condition then matches fewer calls.')) + '">' +
-        escapeHtml(t('policies.card.add_and', {}, '+ AND')) + '</button>' +
+      // Not on an "(always)" row: that would turn an unconditional rule into
+      // a conditional one. "+ Add condition" plus removing the always row
+      // says that change explicitly.
+      (preds.length
+        ? '<button class="policy-and-predicate" data-idx="' + i + '" title="' + escapeHtml(allowList
+          ? t('policies.card.add_and_title_allow', {}, 'Add a sub-condition that must also match. This condition then approves fewer calls.')
+          : t('policies.card.add_and_title', {}, 'Add a sub-condition that must also match. This condition then matches fewer calls.')) + '">' +
+          escapeHtml(t('policies.card.add_and', {}, '+ AND')) + '</button>'
+        : '') +
       '<button class="policy-remove-predicate" data-idx="' + i + '" aria-label="' + escapeHtml(t('policies.card.remove_condition', {}, 'Remove condition')) + '">×</button>' +
       conflictWarning(preds) +
     '</li>'
@@ -361,16 +384,14 @@ function renderPolicyCard(toolName, rule) {
   // Auto-save: every condition add/edit/remove and every remember-minutes
   // change immediately PUTs the rule to disk. No manual "Save changes"
   // button. Returns whether the save landed so callers skip re-rendering a
-  // card that no longer reflects the server.
-  let autoSaveSeq = 0;
+  // card that no longer reflects the server. Callers run it through
+  // policyWriteOnce, so saves never overlap.
   const autoSave = async (ruleToSave = rule) => {
     const status = card.querySelector('.policy-save-status');
-    const mySeq = ++autoSaveSeq;
     status.textContent = t('status.saving', {}, 'Saving…');
     try {
       await savePolicyRule(toolName, ruleToSave);
-      // Skip the success label if a newer save started (rapid edits)
-      if (mySeq === autoSaveSeq) status.textContent = t('status.saved', {}, 'Saved.');
+      status.textContent = t('status.saved', {}, 'Saved.');
       return true;
     } catch (err) {
       // A failed save must be LOUD and must not leave the card displaying a
@@ -379,7 +400,7 @@ function renderPolicyCard(toolName, rule) {
       // missable, so toast like every other save surface, then resync every
       // card from the server's actual policy.
       const message = t('errors.save_failed_detail', {message: err.message}, 'Save failed: ' + err.message);
-      if (mySeq === autoSaveSeq) status.textContent = message;
+      status.textContent = message;
       showToast(message, {isError: true});
       try {
         await policyLoadConfig();
@@ -397,21 +418,42 @@ function renderPolicyCard(toolName, rule) {
     card.replaceWith(replacement);
   };
 
+  // A queued write whose card was rebuilt in the meantime (a reload, or a
+  // failed save's resync) carries a rule the page no longer shows, and
+  // saving it would put the old conditions back. It is dropped, and said so.
+  const staleCard = () => {
+    if (policyRuleEdits[toolName] === rule) return false;
+    showToast(t('policies.card.stale_not_saved', {}, 'The policy was reloaded before this change was saved. Make the change again.'), {isError: true});
+    return true;
+  };
+
   // Condition edits save a changed copy and adopt it (re-rendering) only
   // once it lands, inside the write (policyWriteOnce), so the next write
-  // sends it. A condition click while a write is pending is refused with a
-  // toast: a double-clicked Remove could otherwise empty an AND condition,
-  // which under an allow list approves every call.
-  const saveConditions = async (conditions, remembers) => {
-    if (policyWriteInFlight) return showToast(t('policies.card.save_pending', {}, 'A change is still being saved. Try again once it is saved.'));
+  // sends it. A condition click while any policy write is pending is refused
+  // with a toast: it was built on a rule that pending write may replace,
+  // and sent after it would undo that write's change. `loosens` marks the
+  // changes that can approve more calls under an allow list (removing one
+  // predicate, editing one, adding an OR-ed condition): there they are
+  // never saved without asking. Adding an AND predicate or removing a whole
+  // condition only narrows what the card approves.
+  const saveConditions = async (conditions, remembers, loosens) => {
+    if (policyWritesPending) return showToast(t('policies.card.save_pending', {}, 'A change is still being saved. Try again once it is saved.'));
+    for (const preds of conditions) {
+      const dead = deadConditionPath(preds);
+      if (dead !== null) return showToast(neverMatchesText(dead), {isError: true});
+    }
+    if (loosens && allowList && !confirm(t(
+      'policies.card.confirm_loosen', {tool: toolName},
+      'This change can approve calls to "' + toolName + '" that needed your approval before. Save it?'
+    ))) return;
     await policyWriteOnce(async () => {
+      if (staleCard()) return;
       if (await autoSave({...rule, conditions, remembers})) { Object.assign(rule, {conditions, remembers}); rerenderCard(); }
     });
   };
 
   card.querySelector('.policy-rule-remove').addEventListener('click', async () => {
     if (!confirm(t('policies.card.confirm_remove', {tool: toolName}, 'Remove "' + toolName + '" from the security policy?'))) return;
-    while (policyWriteInFlight) await policyWriteInFlight;
     await policyWriteOnce(async () => { try {
       await removePolicyRule(toolName);
       delete policyRuleEdits[toolName];
@@ -425,7 +467,10 @@ function renderPolicyCard(toolName, rule) {
   });
 
   // remember-minutes is a number input; debounce so typing "30" doesn't fire
-  // three saves (3, 30, arrow keys). None once the card is gone or rebuilt.
+  // three saves (3, 30, arrow keys). The save queues behind any pending
+  // write and goes out unless the cards were rebuilt from the server first
+  // (staleCard), which a re-render after this card's own save is not: that
+  // keeps the same rule object.
   let rmDebounce = null;
   card.querySelector('.policy-remember-minutes').addEventListener('input', (e) => {
     rule.remember_minutes = parseInt(e.target.value, 10) || 0;
@@ -433,9 +478,8 @@ function renderPolicyCard(toolName, rule) {
     // lifetime on save; otherwise per-condition values are preserved.
     rule.rememberDirty = true;
     if (rmDebounce) clearTimeout(rmDebounce);
-    rmDebounce = setTimeout(async () => {
-      while (policyWriteInFlight) await policyWriteInFlight;
-      if (policyRuleEdits[toolName] === rule) policyWriteOnce(autoSave);
+    rmDebounce = setTimeout(() => {
+      policyWriteOnce(async () => { if (!staleCard()) await autoSave(); });
     }, 500);
   });
 
@@ -686,12 +730,8 @@ function renderPolicyCard(toolName, rule) {
 
   const readValueControl = () => {
     const op = opEl.value;
+    // The save handler has checked that the control exists.
     const ctrl = valueSlotEl.querySelector('.policy-predicate-value-control');
-    // No control yet means the form is still loading. A blank value here
-    // would make Save turn the predicate into "exists".
-    if (!ctrl) {
-      return {ok: false, error: t('policies.editor.validation.still_loading', {}, 'still loading, try again in a moment')};
-    }
     if (ctrl.tagName === 'SELECT') {
       if (ctrl.multiple) {
         const picked = Array.from(ctrl.selectedOptions).map(o => o.value);
@@ -847,7 +887,7 @@ function renderPolicyCard(toolName, rule) {
       const idx = parseInt(btn.dataset.idx, 10);
       const pred = parseInt(btn.dataset.pred, 10);
       await saveConditions(rule.conditions.map((preds, i) => (
-        i === idx ? preds.filter((_p, j) => j !== pred) : preds)), rule.remembers);
+        i === idx ? preds.filter((_p, j) => j !== pred) : preds)), rule.remembers, true);
     });
   });
 
@@ -855,7 +895,7 @@ function renderPolicyCard(toolName, rule) {
     btn.addEventListener('click', async () => {
       const idx = parseInt(btn.dataset.idx, 10);
       await saveConditions(rule.conditions.filter((_c, i) => i !== idx),
-        rule.remembers && rule.remembers.filter((_m, i) => i !== idx));
+        rule.remembers && rule.remembers.filter((_m, i) => i !== idx), false);
     });
   });
 
@@ -866,6 +906,14 @@ function renderPolicyCard(toolName, rule) {
   });
 
   formEl.querySelector('.policy-predicate-form-save').addEventListener('click', async () => {
+    // No value control yet means the form is still loading: the argument
+    // list may hold only its "(loading...)" placeholder, and a blank value
+    // here would make Save turn the predicate into "exists".
+    if (!valueSlotEl.querySelector('.policy-predicate-value-control')) {
+      errorEl.textContent = t('policies.editor.validation.still_loading', {}, 'still loading, try again in a moment');
+      errorEl.style.display = '';
+      return;
+    }
     let op = opEl.value;
     const path = currentPath();
     if (!path) {
@@ -898,6 +946,8 @@ function renderPolicyCard(toolName, rule) {
     }
     const conditions = rule.conditions.slice();
     let remembers = rule.remembers;
+    // Only appending to a condition is sure to narrow it (saveConditions).
+    const loosens = !(condIdx >= 0 && predIdx < 0);
     if (condIdx >= 0 && predIdx >= 0) {
       conditions[condIdx] = conditions[condIdx].map((p, j) => (j === predIdx ? predicate : p));
     } else if (condIdx >= 0) {
@@ -907,7 +957,7 @@ function renderPolicyCard(toolName, rule) {
       // A new condition takes the card's current lifetime value.
       remembers = (rule.remembers || []).concat([rule.remember_minutes || 0]);
     }
-    await saveConditions(conditions, remembers);
+    await saveConditions(conditions, remembers, loosens);
   });
 
   return card;

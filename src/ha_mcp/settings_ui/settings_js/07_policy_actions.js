@@ -1,13 +1,20 @@
-// Each card write reads the whole policy and writes it back, so the cards
-// write one at a time. Two at once can fail with a version conflict, and
-// for one card the later write can carry its rule from before the earlier
-// write's change and undo it. A remember save sent after "Remove from
-// policy" would also put the tool's rules back.
-let policyWriteInFlight = null;
+// Every policy write reads the whole policy and writes it back, so all of
+// them (the cards, the global settings, the Tools-tab gate switch, PIN
+// removal) and the card reload go through this queue and run one at a time. Two at once can
+// fail with a version conflict, and for one card the later write can carry
+// its rule from before the earlier write's change and undo it. A reload
+// that read the policy before a card save landed would rebuild the cards
+// from the old policy. Each write starts after the previous one settled,
+// whether it succeeded or failed; its own result goes to its caller only.
+// policyLoadConfig() is also called from inside queued writes, so only its
+// direct callers (the tab switch) queue it; queuing it inside would deadlock.
+let policyWritesPending = 0;
+let policyWriteTail = Promise.resolve();
 function policyWriteOnce(write) {
-  return (policyWriteInFlight = (async () => {
-    try { return await write(); } finally { policyWriteInFlight = null; }
-  })());
+  policyWritesPending += 1;
+  const run = policyWriteTail.then(write).finally(() => { policyWritesPending -= 1; });
+  policyWriteTail = run.catch(() => {});
+  return run;
 }
 
 async function savePolicyRule(toolName, ruleObj) {
@@ -188,16 +195,25 @@ async function policySetPin() {
     // A locked switch cannot be edited, so overwriting it loses nothing typed
     // since it locked. It can read off after a PIN removal whose toggle save
     // failed while the stored setting stayed on; show the stored value now
-    // that the switch is usable. A failed read leaves it until the next
-    // policyLoadConfig().
+    // that the switch is usable. When that read fails the switch may show
+    // off while the stored setting is on, and the next global Save would
+    // write off, so the user is told rather than only the console.
     const toggle = document.getElementById('policy-event-decisions-toggle');
     if (toggle && toggle.disabled) {
+      let reread = false;
       try {
         const cfg = await fetch('./api/policy/config');
-        if (cfg.ok) toggle.checked = !!(await cfg.json()).event_decisions_enabled;
-        else console.warn('[ha-mcp] /api/policy/config returned HTTP ' + cfg.status + '; event-decisions switch may be stale');
-      } catch (err) {
-        console.warn('[ha-mcp] failed to re-read the event-decisions setting', err);
+        if (cfg.ok) {
+          toggle.checked = !!(await cfg.json()).event_decisions_enabled;
+          reread = true;
+        }
+      } catch (_e) { /* reported below */ }
+      if (!reread) {
+        showToast(t(
+          'policies.global.pin.saved_switch_unread',
+          {},
+          'PIN saved, but the event-decisions setting could not be read. Reload the page before saving the global settings.'
+        ), {isError: true});
       }
     }
   } catch (e) {
@@ -451,9 +467,11 @@ async function handleFailedFlagSave(checkbox, previous, saved, spec) {
   updateStatus(msg, ok, !ok);
 }
 
-document.getElementById('policy-save-global-btn').addEventListener('click', saveGlobalSettings);
+document.getElementById('policy-save-global-btn').addEventListener('click', () => policyWriteOnce(saveGlobalSettings));
 document.getElementById('policy-set-pin-btn').addEventListener('click', policySetPin);
-document.getElementById('policy-clear-pin-btn').addEventListener('click', policyClearPin);
+// Removing the PIN also saves the policy (the event-decisions switch goes
+// off with it), so it queues like any other policy write.
+document.getElementById('policy-clear-pin-btn').addEventListener('click', () => policyWriteOnce(policyClearPin));
 
 // Master toggle on this tab mirrors the Server Settings checkbox.
 // Persist via the same /api/settings/features endpoint so a save here
@@ -580,7 +598,7 @@ function activateTab(target, opts) {
     p.classList.toggle('active', p.id === 'panel-' + target)
   );
   if (target === 'backups') { loadBackupConfig(); loadBackups(); }
-  if (target === 'tool-security-policies') { policyLoadConfig(); policyLoadPending(); }
+  if (target === 'tool-security-policies') { policyWriteOnce(policyLoadConfig); policyLoadPending(); }
   if (target === 'entity-visibility') { visibilityLoadConfig(); }
   if (target === 'tools') {
     // Refresh gated-toggle + read-only state in case the user changed

@@ -211,8 +211,8 @@ def test_a_failed_policy_read_does_not_report_the_saved_pin_as_failed(
     settings_script: str, failure: str
 ) -> None:
     """The PIN is saved before the switch's stored value is read. When that
-    read fails, the user must not be told the PIN failed, and the failure
-    is logged instead of passing silently."""
+    read fails, the user must not be told the PIN failed, but must be told
+    the switch may be stale: the next global Save would write it."""
     result = _run(
         settings_script,
         stored_on=True,
@@ -220,15 +220,13 @@ def test_a_failed_policy_read_does_not_report_the_saved_pin_as_failed(
         body=f"failConfig = '{failure}';\n" + REPLACE_AFTER_PARTIAL_REMOVAL,
     )
     assert _probe(result, "removed-disabled") == "true"
-    assert _probe(result, "replaced-toast-error") == "false"
+    toast = _probe(result, "replaced-toast-msg") or ""
+    assert toast.startswith("PIN saved, but")
+    assert "could not be read" in toast
     assert _probe(result, "replaced-status") == "A PIN is set."
     assert _probe(result, "replaced-disabled") == "false"
     # Nothing could be read, so the switch keeps what the page showed.
     assert _probe(result, "replaced-checked") == "false"
-    warnings = [
-        " ".join(entry["args"]) for entry in result.console if entry["level"] == "warn"
-    ]
-    assert any("event-decisions" in w for w in warnings), warnings
 
 
 def test_a_refused_pin_leaves_the_switch_locked(settings_script: str) -> None:
