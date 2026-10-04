@@ -1,11 +1,13 @@
-// Every policy write reads the whole policy and writes it back, so all of
-// them (the cards, the global settings, the Tools-tab gate switch, PIN
-// removal) and the card reload go through this queue and run one at a time. Two at once can
-// fail with a version conflict, and for one card the later write can carry
-// its rule from before the earlier write's change and undo it. A reload
-// that read the policy before a card save landed would rebuild the cards
-// from the old policy. Each write starts after the previous one settled,
-// whether it succeeded or failed; its own result goes to its caller only.
+// Every policy write goes through this queue and runs one at a time: the
+// cards, the global settings, the Tools-tab gate switch and PIN removal,
+// plus the card reload. The first three read the whole policy and write it
+// back; PIN removal can save it on the server. Two at once can fail with a
+// version conflict, and for one card the later write can carry its rule
+// from before the earlier write's change and undo it. A reload that read
+// the policy before a card save landed would rebuild the cards from the old
+// policy. Each write starts after the previous one settled, whether it
+// succeeded or failed. The caller gets a promise of its own, so a failure
+// nobody awaits still reaches the page's unhandledrejection handler.
 // policyLoadConfig() is also called from inside queued writes, so only its
 // direct callers (the tab switch) queue it; queuing it inside would deadlock.
 let policyWritesPending = 0;
@@ -14,7 +16,7 @@ function policyWriteOnce(write) {
   policyWritesPending += 1;
   const run = policyWriteTail.then(write).finally(() => { policyWritesPending -= 1; });
   policyWriteTail = run.catch(() => {});
-  return run;
+  return run.then();
 }
 
 async function savePolicyRule(toolName, ruleObj) {
@@ -197,7 +199,7 @@ async function policySetPin() {
     // failed while the stored setting stayed on; show the stored value now
     // that the switch is usable. When that read fails the switch may show
     // off while the stored setting is on, and the next global Save would
-    // write off, so the user is told rather than only the console.
+    // write off, so a toast tells the user; the console keeps the cause.
     const toggle = document.getElementById('policy-event-decisions-toggle');
     if (toggle && toggle.disabled) {
       let reread = false;
@@ -206,8 +208,12 @@ async function policySetPin() {
         if (cfg.ok) {
           toggle.checked = !!(await cfg.json()).event_decisions_enabled;
           reread = true;
+        } else {
+          console.warn('[ha-mcp] /api/policy/config returned HTTP ' + cfg.status + '; event-decisions switch may be stale');
         }
-      } catch (_e) { /* reported below */ }
+      } catch (err) {
+        console.warn('[ha-mcp] failed to re-read the event-decisions setting', err);
+      }
       if (!reread) {
         showToast(t(
           'policies.global.pin.saved_switch_unread',
@@ -469,8 +475,8 @@ async function handleFailedFlagSave(checkbox, previous, saved, spec) {
 
 document.getElementById('policy-save-global-btn').addEventListener('click', () => policyWriteOnce(saveGlobalSettings));
 document.getElementById('policy-set-pin-btn').addEventListener('click', policySetPin);
-// Removing the PIN also saves the policy (the event-decisions switch goes
-// off with it), so it queues like any other policy write.
+// Removing the PIN can also save the policy (it switches event decisions
+// off when they were on), so it queues like any other policy write.
 document.getElementById('policy-clear-pin-btn').addEventListener('click', () => policyWriteOnce(policyClearPin));
 
 // Master toggle on this tab mirrors the Server Settings checkbox.

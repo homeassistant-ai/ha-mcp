@@ -5,9 +5,10 @@
 // degrades to "Live approvals unavailable in this mode."
 //
 // The card UI keeps an in-memory copy of each tool's rules
-// (policyRuleEdits[tool_name]). Every condition or remember-minutes change
-// saves at once: savePolicyRule() GETs the current policy, replaces the
-// tool's rules, and PUTs, like syncPolicyRule() for the Tools-tab toggle.
+// (policyRuleEdits[tool_name]). Condition and remember-minutes changes save
+// without a separate Save step, through the policyWriteOnce queue:
+// savePolicyRule() GETs the current policy, replaces the tool's rules, and
+// PUTs, like syncPolicyRule() for the Tools-tab toggle.
 let policyRuleEdits = {};
 
 async function syncPolicyGlobalToggles() {
@@ -259,12 +260,13 @@ function renderPolicyCard(toolName, rule) {
     : '<code>' + escapeHtml(displayCondition(preds)) + '</code>');
   // An "equals X" next to a predicate on the same argument that rules X out
   // (equals Y, does not equal X, is NOT one of [..X..], is one of [..no X..])
-  // never matches one value, so in a require-approval list it is a gate that
-  // never fires. A list argument can hold X and Y at once, but "contains"
-  // says that directly, so such a condition is refused either way (see
-  // saveConditions). Strings only (the evaluator compares in Python, where
-  // true equals 1), case-insensitive like a require-approval list, and
-  // wildcard paths skipped. A leading "args." is optional, as there.
+  // no single value can satisfy. Under an allow list it never matches; in a
+  // require-approval list it fires only for a list or comma-separated value
+  // that holds both, which "contains" says directly. So the editor refuses
+  // it either way (see saveConditions). Strings only (the evaluator compares
+  // in Python, where true equals 1), case-insensitive like a require-approval
+  // list, and wildcard paths skipped. A leading "args." is optional, as in
+  // the evaluator.
   const deadConditionPath = (preds) => {
     const lower = (v) => (typeof v === 'string' ? v.toLowerCase() : null);
     const byPath = new Map();
@@ -291,11 +293,11 @@ function renderPolicyCard(toolName, rule) {
   };
   const neverMatchesText = (path) => t(
     'policies.card.never_matches', {path: path},
-    path + ' cannot satisfy both of its predicates in this condition, so it never matches. For a list argument, use "contains" for each value it must hold.'
+    'No single value of ' + path + ' satisfies all of its predicates in this condition. For a list argument, use "contains" for each value it must hold.'
   );
   // An alert: screen readers announce one inserted on re-render, not a note.
-  // Shown for a hand-authored condition loaded from tool_policy.json; the
-  // editor refuses to save one.
+  // Shown for such a condition saved outside the editor (tool_policy.json or
+  // the policy tool); the editor refuses to save a changed one.
   const conflictWarning = (preds) => {
     const path = deadConditionPath(preds);
     return path === null ? '' : '<span class="policy-condition-warning" role="alert">' +
@@ -381,13 +383,15 @@ function renderPolicyCard(toolName, rule) {
     '</div>' +
     '<span class="policy-save-status" style="font-size:0.78rem;color:var(--text-secondary)"></span>';
 
-  // Auto-save: every condition add/edit/remove and every remember-minutes
-  // change immediately PUTs the rule to disk. No manual "Save changes"
-  // button. Returns whether the save landed so callers skip re-rendering a
-  // card that no longer reflects the server. Callers run it through
-  // policyWriteOnce, so saves never overlap.
+  // Saves the card's rules; there is no separate Save button. Returns
+  // whether the save landed so callers skip re-rendering a card that no
+  // longer reflects the server. Callers run it through policyWriteOnce, so
+  // saves never overlap. The status goes to the card on the page, which a
+  // re-render may have replaced since this closure was made.
   const autoSave = async (ruleToSave = rule) => {
-    const status = card.querySelector('.policy-save-status');
+    const shown = Array.from(document.querySelectorAll('.policy-rule-card'))
+      .find(c => c.dataset.tool === toolName) || card;
+    const status = shown.querySelector('.policy-save-status');
     status.textContent = t('status.saving', {}, 'Saving…');
     try {
       await savePolicyRule(toolName, ruleToSave);
@@ -418,11 +422,14 @@ function renderPolicyCard(toolName, rule) {
     card.replaceWith(replacement);
   };
 
-  // A queued write whose card was rebuilt in the meantime (a reload, or a
-  // failed save's resync) carries a rule the page no longer shows, and
-  // saving it would put the old conditions back. It is dropped, and said so.
+  // A queued write whose card was rebuilt in the meantime (a reload, a
+  // failed save's resync, or a Tools-tab gate change for this tool, see
+  // syncPolicyRule) carries a rule the page no longer shows, and saving it
+  // would put the old rules back. It is dropped, and said so, unless the
+  // tool has left the policy, which is what the user just asked for.
   const staleCard = () => {
     if (policyRuleEdits[toolName] === rule) return false;
+    if (!(toolName in policyRuleEdits)) return true;
     showToast(t('policies.card.stale_not_saved', {}, 'The policy was reloaded before this change was saved. Make the change again.'), {isError: true});
     return true;
   };
@@ -434,11 +441,14 @@ function renderPolicyCard(toolName, rule) {
   // and sent after it would undo that write's change. `loosens` marks the
   // changes that can approve more calls under an allow list (removing one
   // predicate, editing one, adding an OR-ed condition): there they are
-  // never saved without asking. Adding an AND predicate or removing a whole
-  // condition only narrows what the card approves.
+  // never saved without asking. Adding an AND predicate narrows a condition,
+  // and removing a whole condition narrows the card, except removing the
+  // last one, which leaves an approve-every-call rule that savePolicyRule
+  // asks about. Only changed conditions are checked for never matching, so
+  // a card holding such conditions can still be fixed one at a time.
   const saveConditions = async (conditions, remembers, loosens) => {
-    if (policyWritesPending) return showToast(t('policies.card.save_pending', {}, 'A change is still being saved. Try again once it is saved.'));
-    for (const preds of conditions) {
+    if (policyWritesPending) return showToast(t('policies.card.save_pending', {}, 'A change is still being saved or the policy is reloading. Try again in a moment.'));
+    for (const preds of conditions.filter(c => !rule.conditions.includes(c))) {
       const dead = deadConditionPath(preds);
       if (dead !== null) return showToast(neverMatchesText(dead), {isError: true});
     }

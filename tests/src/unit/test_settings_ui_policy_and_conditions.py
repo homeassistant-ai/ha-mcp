@@ -245,15 +245,10 @@ def test_removing_one_predicate_keeps_the_rest_of_the_group(
         settings_script,
         _two_conditions(effect),
         """
-          let asked = 0;
-          window.confirm = () => { asked += 1; return true; };
           await click('.policy-remove-part[data-idx="1"][data-pred="0"]');
           await sleep(200);
-          document.body.setAttribute('data-asked', String(asked));
         """,
     )
-    # Under an allow list dropping a predicate approves more calls, so it asks.
-    assert _probe(result, "asked") == ("1" if effect == "allow" else "0")
     assert _last_put(result)["rules"] == [
         {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 60},
         {"tool_name": "ha_call_service", "when": [TURN_ON], "remember_minutes": 1},
@@ -813,7 +808,7 @@ def test_predicate_values_render_as_text(settings_script: str) -> None:
 def test_an_always_row_offers_no_and(settings_script: str, effect: str) -> None:
     """ "+ AND" on "(always)" would turn an unconditional rule into a
     conditional one without saying so; in a require-approval list that stops
-    gating most calls. "+ Add condition" is still there."""
+    gating every call the new predicate does not match. "+ Add condition" is still there."""
     always = _policy(
         effect, [{"tool_name": "ha_call_service", "when": [], "remember_minutes": 0}]
     )
@@ -940,7 +935,7 @@ def test_condition_that_can_never_match_is_flagged(
     )
     warning = html.unescape(_probe(result, "warning") or "")
     if flagged:
-        assert "never matches" in warning
+        assert "No single value of" in warning
         assert "domain" in warning
         # The warning appears when a save re-renders the card; only an alert
         # is announced by screen readers when it is inserted.

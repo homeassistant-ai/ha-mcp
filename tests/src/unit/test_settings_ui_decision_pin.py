@@ -204,6 +204,8 @@ def test_a_new_pin_shows_the_stored_switch_after_a_partial_removal(
     assert _probe(result, "removed-disabled") == "true"
     assert _probe(result, "replaced-checked") == "true"
     assert _probe(result, "replaced-disabled") == "false"
+    # The re-read worked, so no "could not be read" warning.
+    assert _probe(result, "replaced-toast-msg") == "PIN saved."
 
 
 @pytest.mark.parametrize("failure", ["network", "500"])
@@ -212,7 +214,8 @@ def test_a_failed_policy_read_does_not_report_the_saved_pin_as_failed(
 ) -> None:
     """The PIN is saved before the switch's stored value is read. When that
     read fails, the user must not be told the PIN failed, but must be told
-    the switch may be stale: the next global Save would write it."""
+    the switch may be stale: the next global Save would write it. The cause
+    goes to the console."""
     result = _run(
         settings_script,
         stored_on=True,
@@ -221,8 +224,14 @@ def test_a_failed_policy_read_does_not_report_the_saved_pin_as_failed(
     )
     assert _probe(result, "removed-disabled") == "true"
     toast = _probe(result, "replaced-toast-msg") or ""
+    assert _probe(result, "replaced-toast-error") == "true"
     assert toast.startswith("PIN saved, but")
     assert "could not be read" in toast
+    # The toast is generic; the console keeps which of the reads failed.
+    warnings = [
+        " ".join(entry["args"]) for entry in result.console if entry["level"] == "warn"
+    ]
+    assert any("event-decisions" in w for w in warnings), warnings
     assert _probe(result, "replaced-status") == "A PIN is set."
     assert _probe(result, "replaced-disabled") == "false"
     # Nothing could be read, so the switch keeps what the page showed.

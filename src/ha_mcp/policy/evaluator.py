@@ -232,8 +232,8 @@ def match_predicate(
 
     Outside allow mode the predicate matches when ANY value at the path
     satisfies the op: each value at a wildcard, and for a list or a
-    comma-separated string also each item Home Assistant reads out of it
-    (``_with_parts``).
+    comma-separated or whitespace-padded string also each item Home
+    Assistant reads out of it (``_with_parts``).
 
     ``strict`` is allow mode, where a match APPROVES the call, so every
     ambiguity must resolve towards "no match":
@@ -288,7 +288,7 @@ def _with_parts(values: Iterable[Any]) -> Iterator[Any]:
     A list stands for its items, and a string with a comma or surrounding
     whitespace for its comma-split, stripped parts, so ``eq "sun.sun"`` must
     also gate ``["sun.sun"]`` and ``"sun.sun, zone.home"``. The value itself
-    is still tried first, so a match it gave before is never lost: a
+    is still tried as well, so a match it gave before is never lost: a
     negated op (``neq``, ``not_in``) that held for the whole list still
     holds. Free text is split too and can gate a call it did not before;
     without the argument's type that is the safe direction.
