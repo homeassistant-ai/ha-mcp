@@ -15,7 +15,11 @@ from homeassistant.helpers.selector import (
 )
 
 from . import server_credentials
-from .const import ISSUE_TOKEN_NEEDED
+from .const import (
+    DATA_REINSTALL_REQUESTED,
+    ISSUE_PACKAGE_FAILED,
+    ISSUE_TOKEN_NEEDED,
+)
 
 _ADMIN_TOKEN = "admin_token"
 
@@ -99,6 +103,52 @@ class ServerTokenRepairFlow(RepairsFlow):
         )
 
 
+class ServerPackageRepairFlow(RepairsFlow):
+    """Reinstall the in-process server and its dependencies (#2427).
+
+    Home Assistant installs the pinned server once and only checks its version
+    afterwards, so a dependency another integration downgraded stays broken
+    until something reinstalls the server. The failed import left the broken
+    module loaded in this process, so the reinstall runs on a fresh start.
+    """
+
+    def __init__(self, entry_id: str, detail: str) -> None:
+        """Remember the server entry and the failure to show."""
+        self._entry_id = entry_id
+        self._detail = detail
+
+    async def async_step_init(
+        self, user_input: dict[str, str] | None = None
+    ) -> data_entry_flow.FlowResult:
+        """Open the confirmation step."""
+        return await self.async_step_confirm()
+
+    async def async_step_confirm(
+        self, user_input: dict[str, str] | None = None
+    ) -> data_entry_flow.FlowResult:
+        """Request the reinstall, then restart Home Assistant to run it."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            return self.async_abort(reason="entry_removed")
+        if self.hass.config.skip_pip:
+            return self.async_abort(reason="externally_managed")
+        if user_input is not None:
+            self.hass.config_entries.async_update_entry(
+                entry, data={**entry.data, DATA_REINSTALL_REQUESTED: True}
+            )
+            # As in the legacy OAuth repair: a rejected restart raises, and
+            # the repair stays open.
+            await self.hass.services.async_call(
+                "homeassistant", "restart", {}, blocking=True
+            )
+            return self.async_create_entry(data={})
+        return self.async_show_form(
+            step_id="confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders={"detail": self._detail},
+        )
+
+
 async def async_create_fix_flow(
     hass: HomeAssistant,
     issue_id: str,
@@ -107,4 +157,8 @@ async def async_create_fix_flow(
     """Create the fix flow for one of this integration's fixable repairs."""
     if issue_id == ISSUE_TOKEN_NEEDED:
         return ServerTokenRepairFlow(str((data or {}).get("entry_id", "")))
+    if issue_id == ISSUE_PACKAGE_FAILED:
+        return ServerPackageRepairFlow(
+            str((data or {}).get("entry_id", "")), str((data or {}).get("detail", ""))
+        )
     return LegacyOAuthRestartRepairFlow()

@@ -91,8 +91,7 @@
       "description": "De HA-MCP in-process server kon niet worden gestart binnen Home Assistant:\n\n{detail}\n\nControleer de Home Assistant-logboeken en herlaad vervolgens de integratie (of los het onderliggende probleem op en herlaad) om opnieuw te proberen."
     },
     "server_package_install_failed": {
-      "title": "Het HA-MCP in-process serverpakket kon niet worden geïnstalleerd",
-      "description": "Het installeren van het ha-mcp pakket voor de in-process server is mislukt:\n\n{detail}\n\nLos het hierboven beschreven compatibiliteits- of installatieprobleem op en herlaad vervolgens de integratie om opnieuw te proberen."
+      "title": "Het HA-MCP in-process serverpakket kon niet worden geïnstalleerd"
     },
     "component_outdated": {
       "title": "Update de HA-MCP Custom Component via HACS",

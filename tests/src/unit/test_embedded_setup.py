@@ -277,8 +277,15 @@ class TestBringUp:
         assert DATA_MANAGER not in hass.data.get(DOMAIN, {})
         esetup.async_register_webhook.assert_not_awaited()
         esetup.async_register_llm_api.assert_not_awaited()
-        # The failure kind selects the package-install repair issue.
-        assert esetup.ir.async_create_issue.call_args.args[2] == ISSUE_PACKAGE_FAILED
+        # The failure kind selects the package-install repair issue, whose
+        # fix flow reinstalls the server for this entry.
+        call = esetup.ir.async_create_issue.call_args
+        assert call.args[2] == ISSUE_PACKAGE_FAILED
+        assert call.kwargs["is_fixable"] is True
+        assert call.kwargs["data"] == {
+            "entry_id": entry.entry_id,
+            "detail": "pip failed",
+        }
 
     async def test_start_failure_files_start_issue(self, fake_manager):
         hass = _make_hass()
