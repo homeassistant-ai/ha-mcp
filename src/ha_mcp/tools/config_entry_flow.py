@@ -783,16 +783,11 @@ async def update_config_entry_options(
         raise failure from err
 
 
-async def _update_config_entry_options(
-    client: Any,
-    entry_id: str,
-    config_dict: dict[str, Any],
-    expected_domain: str | None,
-    noun: str,
-    progress: _OptionsFlowProgress | None,
+async def config_entry_of_domain(
+    client: Any, entry_id: str, expected_domain: str | None
 ) -> dict[str, Any]:
-    _reject_redaction_sentinels(config_dict)
-    config_entry = await client.get_config_entry(entry_id)
+    """The config entry, refused when it belongs to another domain."""
+    config_entry: dict[str, Any] = await client.get_config_entry(entry_id)
     actual_domain = config_entry.get("domain")
     if expected_domain is not None and actual_domain != expected_domain:
         raise_tool_error(
@@ -809,6 +804,20 @@ async def _update_config_entry_options(
                 },
             )
         )
+    return config_entry
+
+
+async def _update_config_entry_options(
+    client: Any,
+    entry_id: str,
+    config_dict: dict[str, Any],
+    expected_domain: str | None,
+    noun: str,
+    progress: _OptionsFlowProgress | None,
+) -> dict[str, Any]:
+    _reject_redaction_sentinels(config_dict)
+    config_entry = await config_entry_of_domain(client, entry_id, expected_domain)
+    actual_domain = config_entry.get("domain")
 
     flow_result = await client.start_options_flow(entry_id)
     flow_id = flow_result.get("flow_id")

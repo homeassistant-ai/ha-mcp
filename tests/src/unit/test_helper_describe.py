@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.config_helpers import describe as mod
 
 _SCHEDULE_CORE = [
@@ -164,6 +165,7 @@ async def test_flow_helper_says_when_more_forms_follow(
 async def test_existing_flow_helper_with_a_later_options_form_says_so(
     client: AsyncMock,
 ) -> None:
+    client.get_config_entry.return_value = {"domain": "generic_thermostat"}
     client.start_options_flow.return_value = {
         "type": "form",
         "flow_id": "f1",
@@ -187,6 +189,7 @@ async def test_options_flow_menu_lists_only_string_choices(
     client: AsyncMock, menu: Any, expected: list[str] | None
 ) -> None:
     """A malformed options-flow menu reports nothing rather than a None list."""
+    client.get_config_entry.return_value = {"domain": "group"}
     client.start_options_flow.return_value = {
         "type": "menu",
         "flow_id": "f1",
@@ -201,10 +204,24 @@ async def test_options_flow_menu_lists_only_string_choices(
 
 
 @pytest.mark.asyncio
+async def test_entry_of_another_helper_type_is_refused_without_opening_its_flow(
+    client: AsyncMock,
+) -> None:
+    """Describing a utility meter's entry as a template must not show its options."""
+    client.get_config_entry.return_value = {"domain": "utility_meter"}
+
+    with pytest.raises(ToolError, match="belongs to domain 'utility_meter'"):
+        await mod.describe_helper(client, "template", helper_id="entry1")
+
+    client.start_options_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_existing_flow_helper_reads_current_values_and_aborts_options_flow(
     client: AsyncMock,
 ) -> None:
     """An options flow opened only to read values is never left open."""
+    client.get_config_entry.return_value = {"domain": "template"}
     client.start_options_flow.return_value = {
         "type": "form",
         "flow_id": "f1",
