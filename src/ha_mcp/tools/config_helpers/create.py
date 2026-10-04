@@ -26,11 +26,12 @@ def _build_create_message(
     helper_type: str, name: str, icon: str | None, fields: dict[str, Any]
 ) -> dict[str, Any]:
     """The WebSocket {type}/create message: the caller's fields under Core's names."""
-    message: dict[str, Any] = {"type": f"{helper_type}/create", "name": name}
+    message: dict[str, Any] = {"name": name}
     if icon:
         message["icon"] = icon
     message.update(with_create_defaults(helper_type, fields))
     check_core_gaps(helper_type, message)
+    message["type"] = f"{helper_type}/create"  # never a field's
     return message
 
 

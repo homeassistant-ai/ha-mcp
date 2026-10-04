@@ -32,6 +32,14 @@ def core_fields(
     low, high = _RANGE_KEYS.get(helper_type, _DEFAULT_RANGE_KEYS)
     rename = {"min_value": low, "max_value": high}
     fields = {rename.get(k, k): v for k, v in type_kw.items() if v is not None}
+    # These address the WebSocket request (its command, the item to update),
+    # not a field of the item.
+    if reserved := sorted({"type", "id", f"{helper_type}_id"} & passthrough.keys()):
+        _reject(
+            helper_type,
+            f"config keys {', '.join(reserved)} address the request, not a "
+            f"field of the {helper_type}.",
+        )
     fields.update(passthrough)
     return fields
 

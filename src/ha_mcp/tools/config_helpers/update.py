@@ -74,7 +74,7 @@ async def _execute_legacy_update(
     body = merged_update(helper_type, stored, name, icon, fields, entity_id)
     check_core_gaps(helper_type, body)
     result = await client.send_websocket_message(
-        {"type": f"{helper_type}/update", f"{helper_type}_id": unique_id, **body}
+        {**body, "type": f"{helper_type}/update", f"{helper_type}_id": unique_id}
     )
     if not result.get("success"):
         raise_tool_error(

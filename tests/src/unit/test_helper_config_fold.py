@@ -164,6 +164,44 @@ async def test_unknown_config_keys_reach_core_for_its_suggestion(
     assert _fields(capture_create) == {"minn": 1}
 
 
+@pytest.mark.parametrize(
+    ("helper_type", "key"),
+    [("input_boolean", "type"), ("input_number", "input_number_id"), ("tag", "id")],
+)
+async def test_config_cannot_choose_the_command_or_the_item(
+    capture_create, helper_type: str, key: str
+) -> None:
+    """``type`` and the item ids address the WebSocket request; a config key
+    with that name would send another command or write another item."""
+    mcp, _ = await _registered_tool()
+    with pytest.raises(ToolError, match=key):
+        await _call(mcp, helper_type=helper_type, name="T", config={key: "x"})
+    assert capture_create.args == []
+
+
+async def test_websocket_messages_keep_their_command_and_target() -> None:
+    """Defence in depth below the config check: fields never override the
+    command, nor the update's target id."""
+    client = _ws_by_type(
+        {
+            "input_boolean/list": [{"id": "b", "name": "B"}],
+            "config/entity_registry/get": {"unique_id": "b"},
+        }
+    )
+    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+        await hc_update._execute_legacy_update(
+            client, "input_boolean", "input_boolean.b", "b", None, None,
+            {"type": "input_boolean/delete", "input_boolean_id": "other"},
+        )  # fmt: skip
+    (update,) = _sent(client, "input_boolean/update")
+    assert update["input_boolean_id"] == "b"
+    assert not _sent(client, "input_boolean/delete")
+    message = hc_create._build_create_message(
+        "input_boolean", "B", None, {"type": "input_boolean/delete"}
+    )
+    assert message["type"] == "input_boolean/create"
+
+
 async def test_one_field_passed_twice_with_different_values_is_rejected(
     capture_create,
 ) -> None:
