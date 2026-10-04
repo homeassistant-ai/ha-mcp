@@ -258,12 +258,10 @@ def _running_in_docker() -> bool:
 def update_command_hint(current: str) -> str:
     """Return a deployment- and channel-aware one-liner for how to upgrade."""
     if is_embedded():
-        # In-process (custom component) server: the component's update
-        # entity / auto-update installs new builds; the entry reload (or
-        # the settings UI's Restart button) applies them.
+        # In-process (custom component) server: each component release
+        # installs its own server build when Home Assistant restarts.
         return (
-            "Update via the HA-MCP Server update entity (Settings -> "
-            "Devices & Services -> HA-MCP), or reload the integration."
+            "Update the HA-MCP Custom Component in HACS, then restart Home Assistant."
         )
     if is_running_in_addon():
         # Add-on users update through the Supervisor UI, not pip/docker.
