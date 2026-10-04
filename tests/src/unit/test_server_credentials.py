@@ -138,7 +138,12 @@ class TestAdoptToken:
 
         new = sc.adopt_admin_token(hass, data, "user-token")
 
-        assert new == {"webhook_id": "keep", DATA_ADMIN_TOKEN: "user-token"}
+        # The account id stays so removing the entry can still delete it.
+        assert new == {
+            DATA_SERVER_USER_ID: "u1",
+            "webhook_id": "keep",
+            DATA_ADMIN_TOKEN: "user-token",
+        }
         hass.auth.async_remove_refresh_token.assert_called_once_with(rt)
 
     def test_switching_never_removes_an_account(self) -> None:
@@ -172,3 +177,32 @@ class TestReleaseOnRemove:
         assert remaining == {}
         hass.auth.async_remove_refresh_token.assert_called_once_with(rt)
         hass.auth.async_remove_user.assert_awaited_once_with(user)
+
+    async def test_switching_tokens_does_not_orphan_the_old_account(self) -> None:
+        old_account = _user("u1")
+        hass = _hass(
+            users={"u1": old_account},
+            refresh_tokens={"rt1": _rt(user=old_account)},
+            validated=_rt("rt2", user=_user("owner")),
+        )
+        switched = sc.adopt_admin_token(
+            hass, {DATA_SERVER_USER_ID: "u1", DATA_REFRESH_TOKEN_ID: "rt1"}, "tok"
+        )
+
+        await sc.async_release_credentials(hass, switched)
+
+        hass.auth.async_remove_user.assert_awaited_once_with(old_account)
+
+    async def test_the_account_behind_the_supplied_token_is_never_removed(
+        self,
+    ) -> None:
+        # An administrator may have given the old account a login and taken a
+        # token from it; that account is theirs now.
+        account = _user("u1")
+        hass = _hass(users={"u1": account}, validated=_rt("rt2", user=account))
+
+        await sc.async_release_credentials(
+            hass, {DATA_SERVER_USER_ID: "u1", DATA_ADMIN_TOKEN: "tok"}
+        )
+
+        hass.auth.async_remove_user.assert_not_awaited()
