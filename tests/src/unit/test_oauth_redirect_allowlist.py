@@ -69,6 +69,12 @@ class TestIsRedirectAllowed:
     def test_loopback_port_exception_keeps_the_host_exact(self) -> None:
         assert not is_redirect_allowed("http://localhost:61264/callback", [LOOPBACK])
 
+    def test_loopback_port_exception_keeps_the_userinfo_exact(self) -> None:
+        # Only the port may vary; anything else in the authority must match.
+        assert not is_redirect_allowed(
+            "http://user@127.0.0.1:61264/callback", [LOOPBACK]
+        )
+
     def test_https_callbacks_get_no_port_exception(self) -> None:
         assert not is_redirect_allowed(
             "https://claude.ai:8443/api/mcp/auth_callback", [CLAUDE]

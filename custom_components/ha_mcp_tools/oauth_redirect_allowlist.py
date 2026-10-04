@@ -105,7 +105,11 @@ def normalize_allowlist(values: Iterable[Any]) -> tuple[list[str], list[str]]:
 
 def _loopback_key(uri: str) -> tuple[str, str, str] | None:
     parts = urlsplit(uri)
-    if parts.scheme != "http" or not _is_loopback_host(parts.hostname or ""):
+    if (
+        parts.scheme != "http"
+        or "@" in parts.netloc
+        or not _is_loopback_host(parts.hostname or "")
+    ):
         return None
     return (parts.hostname or "", parts.path, parts.query)
 
