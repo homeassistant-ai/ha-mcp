@@ -37,9 +37,10 @@ _COMMON_FALLBACKS: dict[str, str] = {
         "server settings."
     ),
     "version_line": (
-        "Component {component_version} - "
-        "Server ha-mcp {server_version} ({channel} channel)"
+        "Component {component_version} - Server ha-mcp {server_version} ({source})"
     ),
+    "server_source_paired": "installed with this component release",
+    "server_source_override": "pip requirement override",
     "version_unknown": "unknown",
     "version_not_installed": "not installed yet",
     "tools_module_installed": (

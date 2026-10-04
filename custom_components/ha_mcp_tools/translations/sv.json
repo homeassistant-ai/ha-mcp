@@ -45,8 +45,6 @@
         "title": "HA-MCP Server",
         "description": "Konfigurera HA-MCP-servern. {panel_hint}Ändringar här tillämpas vid spara.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
         "data": {
-          "channel": "Utgivningskanal",
-          "auto_update": "Automatiska serveruppdateringar",
           "server_port": "MCP-serverns lyssningsport",
           "bind_host": "Nätverksåtkomst",
           "webhook_auth": "Autentiseringsläge",
@@ -66,8 +64,6 @@
           "enable_sidebar_panel": "Sidopanel för inställningar"
         },
         "data_description": {
-          "channel": "Stabil installerar den senaste stabila utgåvan; Utveckling installerar den nyaste utvecklingsversionen. När automatiska uppdateringar är aktiverade, installeras den nyaste versionen av den valda kanalen vid en omladdning eller omstart, samt via en periodisk kontroll. En åsidosättning av utvecklarpaketet nedan har företräde och inaktiverar automatiska uppdateringar.",
-          "auto_update": "När aktiverat installeras den nyaste utgåvan av den valda kanalen automatiskt – vid en omladdning eller omstart, och via en periodisk kontroll. När inaktiverat stannar servern på den version som för närvarande är installerad tills du aktiverar detta igen. Detta styr endast ha-mcp-serverpaketet; uppdateringar till själva HA-MCP Anpassade Komponent kommer fortfarande via HACS.",
           "server_port": "Porten som denna server lyssnar på. Ha-mcp-appen (tillägget) använder 9583, så standardvärdet är 9584 för att låta båda köra sida vid sida – om du inte kör appen (tillägget) fungerar vilken ledig port som helst.",
           "bind_host": "Vem som kan ansluta direkt till MCP-serverporten. Standardvärdet matchar appen (tillägget): nås på ditt lokala nätverk, med den hemliga sökvägen som autentiseringsuppgift. Välj loopback för att endast tillåta anslutningar från själva Home Assistant-maskinen – webhook-URL:en och sidofältsspanelen fungerar oavsett vilket.",
           "webhook_auth": "Hur MCP-klienter autentiserar sig vid webhook-URL:en. Med den hemliga URL:en är länken i sig den enda autentiseringsuppgiften – OAuth körs fortfarande för klienter som använder det, men varje inloggning godkänns automatiskt: ingen inloggning och inget klient-ID eller hemlighet behövs. Med Home Assistant-inloggning loggar klienter som claude.ai in med ett Home Assistant-administratörskonto (OAuth). Med äldre OAuth kör denna integration sin egen inloggningstjänst och utfärdar ett klient-ID och en hemlighet att klistra in i klienter som kräver ett – en omstart av Home Assistant kan behövas för att helt aktivera eller inaktivera det.",
@@ -102,10 +98,6 @@
       "title": "Uppdatera HA-MCP Custom Component via HACS",
       "description": "Den installerade ha-mcp-servern kräver HA-MCP Custom Component {required} eller nyare, men du har {installed}. Uppdatera komponenten via HACS (öppna HA-MCP Custom Component-posten och använd 'Uppdatera information' om ingen uppdatering visas ännu) och starta om Home Assistant. Servern fortsätter att köra under tiden, men vissa nyare funktioner kanske inte fungerar förrän komponenten är uppdaterad."
     },
-    "server_update_held": {
-      "title": "HA-MCP-serveruppdatering väntar på en komponentuppdatering",
-      "description": "ha-mcp-server {latest} är tillgänglig, men den versionen uppdaterade också HA-MCP Custom Component (till {shipped}; du kör {running}). För att undvika att starta en serverversion som den körande komponenten aldrig har testats med, är den automatiska serveruppdateringen pausad tills komponenten är uppdaterad.\n\nUppdatera komponenten via HACS (öppna HA-MCP Custom Component-posten och använd 'Uppdatera information' om ingen uppdatering visas ännu), starta sedan om Home Assistant – serveruppdateringen installeras automatiskt därefter. För att installera serveruppdateringen ändå, tryck på Installera på HA-MCP-serveruppdateringsentiteten."
-    },
     "legacy_oauth_restart": {
       "title": "Starta om Home Assistant för att tillämpa de äldre OAuth-inställningarna",
       "fix_flow": {
@@ -119,12 +111,6 @@
     }
   },
   "selector": {
-    "server_channel": {
-      "options": {
-        "stable": "Stabil (rekommenderas)",
-        "dev": "Utveckling (senaste bygget)"
-      }
-    },
     "server_webhook_auth": {
       "options": {
         "none": "Hemlig webhook-URL (standard)",
@@ -137,13 +123,6 @@
         "tool_search": "Verktygssökning (kompakt, standard)",
         "full": "Fullständig katalog",
         "both": "Båda (välj per agent)"
-      }
-    }
-  },
-  "entity": {
-    "update": {
-      "server_update": {
-        "name": "Uppdatera"
       }
     }
   },
@@ -161,7 +140,7 @@
     "tools_module_installed": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Installerad",
     "tools_module_not_installed": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Ej installerad — tryck på \"Lägg till post\" på denna integrationssida och välj \"HA-MCP File & YAML Tools\" för att lägga till den",
     "tools_module_not_loaded": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Installerad men inte laddad — aktivera eller ladda om posten \"HA-MCP File & YAML Tools\" på denna integrationssida",
-    "version_line": "Komponent {component_version} - Server ha-mcp {server_version} ({channel}-kanal)",
+    "version_line": "Komponent {component_version} - Server ha-mcp {server_version} ({source}-kanal)",
     "version_not_installed": "inte installerad ännu",
     "version_unknown": "okänd"
   }
