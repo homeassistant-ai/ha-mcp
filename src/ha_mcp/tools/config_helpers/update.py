@@ -5,10 +5,18 @@ from typing import Any
 
 from ...errors import ErrorCode, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
+from ..component_helper_collections import (
+    collection_payload,
+    native_result,
+    read_helper_item,
+    tag_entity_id,
+    tag_item_id,
+    write_helper_item,
+)
 from ..config_write_helpers import apply_entity_category
-from ..helpers import raise_tool_error
+from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
-from .create import _format_schedule_days
+from .create import _SCHEDULE_DAYS, _format_schedule_days
 from .registry import _ws_error_msg
 from .schemas import (
     _attach_helper_skill,
@@ -18,6 +26,7 @@ from .schemas import (
 from .validation import (
     _validate_datetime_has_date_or_time,
     _validate_initial_in_options,
+    _validate_merged_range,
     _validate_mode,
 )
 
@@ -34,7 +43,9 @@ def _update_fields_input_select(
 ) -> dict[str, Any]:
     merged_options = options if options is not None else existing.get("options", [])
     initial_val = initial if initial is not None else existing.get("initial")
-    _validate_initial_in_options(merged_options, initial_val)
+    _validate_initial_in_options(
+        merged_options, initial_val, stored=initial is None and options is not None
+    )
     fields: dict[str, Any] = {"options": merged_options}
     if initial_val is not None:
         fields["initial"] = initial_val
@@ -65,6 +76,13 @@ def _update_fields_input_number(
     )
     if unit_val is not None:
         fields["unit_of_measurement"] = unit_val
+    _validate_merged_range(
+        "input_number",
+        (min_value, max_value, step),
+        fields["min"],
+        fields["max"],
+        step_val,
+    )
     _validate_mode("input_number", mode)
     mode_val = mode if mode is not None else existing.get("mode")
     if mode_val is not None:
@@ -81,15 +99,26 @@ def _update_fields_input_text(
     max_value: float | None,
     mode: str | None,
     initial: Any,
+    unit_of_measurement: str | None = None,
+    pattern: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
+    # Full-replace update: an unpassed unit or pattern keeps its stored value.
+    fields: dict[str, Any] = {
+        key: value if value is not None else existing.get(key)
+        for key, value in (
+            ("unit_of_measurement", unit_of_measurement),
+            ("pattern", pattern),
+        )
+        if (value if value is not None else existing.get(key)) is not None
+    }
     min_val = int(min_value) if min_value is not None else existing.get("min")
     if min_val is not None:
         fields["min"] = min_val
     max_val = int(max_value) if max_value is not None else existing.get("max")
     if max_val is not None:
         fields["max"] = max_val
+    _validate_merged_range("input_text", (min_value, max_value), min_val, max_val)
     _validate_mode("input_text", mode)
     mode_val = mode if mode is not None else existing.get("mode")
     if mode_val is not None:
@@ -153,6 +182,9 @@ def _update_fields_counter(
     step_val = int(step) if step is not None else existing.get("step")
     if step_val is not None:
         fields["step"] = step_val
+    _validate_merged_range(
+        "counter", (min_value, max_value, step), minimum_val, maximum_val, step_val
+    )
     restore_val = restore if restore is not None else existing.get("restore")
     if restore_val is not None:
         fields["restore"] = restore_val
@@ -175,6 +207,12 @@ def _update_fields_timer(
     return fields
 
 
+def _update_fields_schedule(existing: dict[str, Any], **kw: Any) -> dict[str, Any]:
+    """schedule/update is full-replace: an unpassed day keeps its stored ranges."""
+    passed = _format_schedule_days(*(kw.get(day) for day in _SCHEDULE_DAYS))
+    return {day: passed.get(day, existing.get(day, [])) for day in _SCHEDULE_DAYS}
+
+
 _SIMPLE_UPDATE_FIELD_BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
     "input_select": _update_fields_input_select,
     "input_number": _update_fields_input_number,
@@ -183,6 +221,7 @@ _SIMPLE_UPDATE_FIELD_BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
     "input_datetime": _update_fields_input_datetime,
     "counter": _update_fields_counter,
     "timer": _update_fields_timer,
+    "schedule": _update_fields_schedule,
 }
 
 
@@ -207,8 +246,9 @@ def _build_standard_update_message(
         "name": name if name is not None else existing.get("name"),
     }
     if helper_type not in ("person", "tag"):
+        # Core rejects an empty icon; a cleared one is left out of the item.
         icon_val = icon if icon is not None else existing.get("icon")
-        if icon_val is not None:
+        if icon_val:
             message["icon"] = icon_val
     builder = _SIMPLE_UPDATE_FIELD_BUILDERS.get(helper_type)
     if builder is not None:
@@ -253,24 +293,14 @@ async def _execute_person_config_update(
                 context=_simple_helper_error_context("person", entity_id=entity_id),
             )
         )
-    update_msg: dict[str, Any] = {
-        "type": "person/update",
-        "person_id": unique_id,
-        "name": name if name is not None else current_config.get("name"),
-        "user_id": user_id if user_id is not None else current_config.get("user_id"),
-        "device_trackers": device_trackers
-        if device_trackers is not None
-        else current_config.get("device_trackers", []),
-    }
-    if picture is not None:
-        update_msg["picture"] = picture
-    elif current_config.get("picture"):
-        update_msg["picture"] = current_config["picture"]
+    update_msg = _person_update_message(
+        unique_id, current_config, name, user_id, device_trackers, picture
+    )
     result = await client.send_websocket_message(update_msg)
     if not result.get("success"):
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                ws_failure_code(result),
                 f"Failed to update person config: {result.get('error', 'Unknown error')}",
                 context=_simple_helper_error_context("person", entity_id=entity_id),
             )
@@ -289,61 +319,16 @@ async def _execute_zone_config_update(
     passive: bool | None,
 ) -> dict[str, Any]:
     """Update a zone entity via zone/update."""
-    update_msg: dict[str, Any] = {"type": "zone/update", "zone_id": unique_id}
-    if name is not None:
-        update_msg["name"] = name
-    if latitude is not None:
-        update_msg["latitude"] = latitude
-    if longitude is not None:
-        update_msg["longitude"] = longitude
-    if radius is not None:
-        update_msg["radius"] = radius
-    if passive is not None:
-        update_msg["passive"] = passive
-    result = await client.send_websocket_message(update_msg)
-    if not result.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to update zone config: {result.get('error', 'Unknown error')}",
-                context=_simple_helper_error_context("zone", entity_id=entity_id),
-            )
-        )
-    return result.get("result", {})  # type: ignore[no-any-return]
-
-
-async def _execute_schedule_config_update(
-    client: Any,
-    entity_id: str,
-    unique_id: str,
-    name: str | None,
-    icon: str | None,
-    monday: list | None,
-    tuesday: list | None,
-    wednesday: list | None,
-    thursday: list | None,
-    friday: list | None,
-    saturday: list | None,
-    sunday: list | None,
-) -> dict[str, Any]:
-    """Update a schedule entity via schedule/update."""
-    update_msg: dict[str, Any] = {"type": "schedule/update", "schedule_id": unique_id}
-    if name is not None:
-        update_msg["name"] = name
-    if icon is not None:
-        update_msg["icon"] = icon
-    update_msg.update(
-        _format_schedule_days(
-            monday, tuesday, wednesday, thursday, friday, saturday, sunday
-        )
+    update_msg = _zone_update_message(
+        unique_id, name, latitude, longitude, radius, passive
     )
     result = await client.send_websocket_message(update_msg)
     if not result.get("success"):
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to update schedule config: {result.get('error', 'Unknown error')}",
-                context=_simple_helper_error_context("schedule", entity_id=entity_id),
+                ws_failure_code(result),
+                f"Failed to update zone config: {result.get('error', 'Unknown error')}",
+                context=_simple_helper_error_context("zone", entity_id=entity_id),
             )
         )
     return result.get("result", {})  # type: ignore[no-any-return]
@@ -391,7 +376,7 @@ async def _execute_standard_helper_update(
     if not result.get("success"):
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                ws_failure_code(result),
                 f"Failed to update {helper_type} config: {result.get('error', 'Unknown error')}",
                 context=_simple_helper_error_context(helper_type, entity_id=entity_id),
             )
@@ -446,21 +431,6 @@ async def _execute_config_store_update(
             kw.get("longitude"),
             kw.get("radius"),
             kw.get("passive"),
-        )
-    if helper_type == "schedule":
-        return await _execute_schedule_config_update(
-            client,
-            entity_id,
-            unique_id,
-            name,
-            icon,
-            kw.get("monday"),
-            kw.get("tuesday"),
-            kw.get("wednesday"),
-            kw.get("thursday"),
-            kw.get("friday"),
-            kw.get("saturday"),
-            kw.get("sunday"),
         )
     return await _execute_standard_helper_update(
         client, helper_type, entity_id, unique_id, name, icon, **kw
@@ -574,7 +544,7 @@ async def _apply_update_registry_and_category(
         client, entity_id, icon, area_id, labels, updated_data, warnings
     )
 
-    if category:
+    if category is not None:
         cat_result: dict[str, Any] = {}
         await apply_entity_category(
             client, entity_id, category, "helpers", cat_result, "helper"
@@ -622,7 +592,7 @@ async def _execute_fallback_registry_update(
                 context=_simple_helper_error_context(helper_type, entity_id=entity_id),
             )
         )
-    if category:
+    if category is not None:
         cat_result: dict[str, Any] = {}
         await apply_entity_category(
             client, entity_id, category, "helpers", cat_result, "helper"
@@ -661,32 +631,56 @@ async def _execute_update_simple_helper(
     warnings: list[str] = []
     updated_data: dict[str, Any] = {}
 
-    if helper_type == "tag":
-        tag_update_id = (
-            helper_id.removeprefix("tag.")
-            if helper_id.startswith("tag.")
-            else helper_id
+    native = await _update_via_component(
+        client,
+        helper_type,
+        entity_id,
+        helper_id,
+        name,
+        icon,
+        area_id,
+        labels,
+        category,
+        **kw,
+    )
+    if native is not None:
+        updated_data, entity_id, warnings = native
+        native_response = _helper_response(
+            "update",
+            helper_type,
+            data=updated_data,
+            entity_id=entity_id,
+            message=f"Successfully updated {helper_type}: {entity_id}",
+            warnings=warnings,
         )
-        update_msg: dict[str, Any] = {"type": "tag/update", "tag_id": tag_update_id}
-        if name is not None:
-            update_msg["name"] = name
-        if kw.get("description") is not None:
-            update_msg["description"] = kw["description"]
+        _attach_helper_skill(native_response, MandatoryBPS)
+        return native_response
+
+    if helper_type == "tag":
+        tag_update_id = await tag_item_id(client, helper_id)
+        update_msg = _tag_update_message(tag_update_id, name, kw.get("description"))
         result = await client.send_websocket_message(update_msg)
         if not result.get("success"):
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
+                    ws_failure_code(result),
                     f"Failed to update tag config: {result.get('error', 'Unknown error')}",
                     context=_simple_helper_error_context(
                         helper_type, entity_id=entity_id
                     ),
                 )
             )
+        tag_data = result.get("result", {})
+        tag_entity = await tag_entity_id(client, tag_update_id)
+        if tag_entity:
+            entity_id = tag_entity
+            await _apply_update_registry_and_category(
+                client, entity_id, None, area_id, labels, category, tag_data, warnings
+            )
         tag_response = _helper_response(
             "update",
             helper_type,
-            data=result.get("result", {}),
+            data=tag_data,
             entity_id=entity_id,
             message=f"Successfully updated {helper_type}: {entity_id}",
             warnings=warnings,
@@ -735,3 +729,132 @@ async def _execute_update_simple_helper(
     )
     _attach_helper_skill(update_response, MandatoryBPS)
     return update_response
+
+
+def _person_update_message(
+    unique_id: str,
+    current: dict[str, Any],
+    name: str | None,
+    user_id: str | None,
+    device_trackers: list[str] | None,
+    picture: str | None,
+    **_: Any,
+) -> dict[str, Any]:
+    """person/update is full-replace, so unpassed fields keep their current value."""
+    update_msg: dict[str, Any] = {
+        "type": "person/update",
+        "person_id": unique_id,
+        "name": name if name is not None else current.get("name"),
+        "user_id": user_id if user_id is not None else current.get("user_id"),
+        "device_trackers": device_trackers
+        if device_trackers is not None
+        else current.get("device_trackers", []),
+    }
+    if picture is not None:
+        update_msg["picture"] = picture
+    elif current.get("picture"):
+        update_msg["picture"] = current["picture"]
+    return update_msg
+
+
+def _zone_update_message(
+    unique_id: str,
+    name: str | None,
+    latitude: float | None,
+    longitude: float | None,
+    radius: float | None,
+    passive: bool | None,
+    **_: Any,
+) -> dict[str, Any]:
+    fields = {
+        "name": name,
+        "latitude": latitude,
+        "longitude": longitude,
+        "radius": radius,
+        "passive": passive,
+    }
+    return {
+        "type": "zone/update",
+        "zone_id": unique_id,
+        **{key: value for key, value in fields.items() if value is not None},
+    }
+
+
+def _tag_update_message(
+    item_id: str, name: str | None, description: str | None = None, **_: Any
+) -> dict[str, Any]:
+    update_msg: dict[str, Any] = {"type": "tag/update", "tag_id": item_id}
+    if name is not None:
+        update_msg["name"] = name
+    if description is not None:
+        update_msg["description"] = description
+    return update_msg
+
+
+def _build_update_message(
+    helper_type: str,
+    unique_id: str,
+    existing: dict[str, Any],
+    name: str | None,
+    icon: str | None,
+    **kw: Any,
+) -> dict[str, Any]:
+    """The ``{type}/update`` WS message for any simple helper type."""
+    if helper_type == "person":
+        return _person_update_message(unique_id, existing, name, **kw)
+    if helper_type == "zone":
+        return _zone_update_message(unique_id, name, **kw)
+    if helper_type == "tag":
+        return _tag_update_message(unique_id, name, **kw)
+    return _build_standard_update_message(
+        helper_type, unique_id, existing, name, icon, **kw
+    )
+
+
+async def _update_via_component(
+    client: Any,
+    helper_type: str,
+    entity_id: str,
+    helper_id: str,
+    name: str | None,
+    icon: str | None,
+    area_id: str | None,
+    labels: list[str] | None,
+    category: str | None,
+    **kw: Any,
+) -> tuple[dict[str, Any], str, list[str]] | None:
+    """Update through Core's collection in-process; ``None`` uses the WS commands.
+
+    A helper the component cannot find also returns ``None``, so the legacy path
+    reports it with its usual error.
+    """
+    if helper_type == "tag":
+        target: dict[str, Any] = {"item_id": await tag_item_id(client, helper_id)}
+    else:
+        target = {"entity_id": entity_id}
+    item = await read_helper_item(client, helper_type, **target)
+    if item is None:
+        return None
+    message = _build_update_message(
+        helper_type, item["item_id"], item["item"], name, icon, **kw
+    )
+    registry = {
+        key: value
+        for key, value in (
+            ("icon", icon),
+            ("area_id", area_id),
+            ("labels", labels),
+            ("category", category),
+        )
+        if value is not None
+    }
+    result = await write_helper_item(
+        client,
+        helper_type,
+        "update",
+        collection_payload(helper_type, message),
+        item_id=item["item_id"],
+        registry=registry,
+        error_context=_simple_helper_error_context(helper_type, entity_id=entity_id),
+    )
+    return None if result is None else native_result(helper_type, result)

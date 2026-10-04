@@ -1,5 +1,6 @@
 """Unit tests for config subentries folded into existing tools."""
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -243,6 +244,62 @@ async def test_config_set_helper_creates_config_subentry(helper_tools, mock_clie
     )
 
 
+async def test_config_subentry_create_returns_the_new_subentry_id(
+    helper_tools, mock_client
+):
+    """Core's create_entry result carries no subentry_id; the tool reports it."""
+    listed = [{"subentry_id": "old", "subentry_type": "conversation"}]
+    mock_client.list_config_subentries.side_effect = [
+        {"success": True, "result": listed},
+        {"success": True, "result": [*listed, {"subentry_id": "new"}]},
+    ]
+    mock_client.start_config_subentry_flow.return_value = {
+        "flow_id": "flow-1",
+        "type": "form",
+        "step_id": "set_options",
+        "data_schema": [{"name": "model"}],
+    }
+    mock_client.submit_config_subentry_flow_step.return_value = {"type": "create_entry"}
+    result = await helper_tools["ha_config_set_helper"](
+        helper_type="config_subentry",
+        entry_id="entry-1",
+        subentry_type="conversation",
+        config={"model": "m"},
+    )
+    assert result["subentry_id"] == "new"
+
+
+async def test_concurrent_creates_each_return_their_subentry_id():
+    from ha_mcp.tools.config_entry_flow import set_config_subentry
+
+    ids: list[str] = []
+    client = MagicMock()
+
+    async def listing(entry_id):
+        await asyncio.sleep(0)
+        return {"success": True, "result": [{"subentry_id": i} for i in ids]}
+
+    async def submit(flow_id, data):
+        await asyncio.sleep(0)
+        ids.append(f"sub-{data['model']}")
+        return {"type": "create_entry"}
+
+    flows = iter(["a", "b"])
+    client.list_config_subentries = AsyncMock(side_effect=listing)
+    client.start_config_subentry_flow = AsyncMock(
+        side_effect=lambda *a, **k: {
+            "flow_id": next(flows), "type": "form", "step_id": "user",
+            "data_schema": [{"name": "model"}],
+        }
+    )  # fmt: skip
+    client.submit_config_subentry_flow_step = AsyncMock(side_effect=submit)
+    first, second = await asyncio.gather(
+        set_config_subentry(client, "entry-1", "conversation", {"model": "m"}),
+        set_config_subentry(client, "entry-1", "conversation", {"model": "n"}),
+    )
+    assert (first["subentry_id"], second["subentry_id"]) == ("sub-m", "sub-n")
+
+
 async def test_config_set_helper_walks_multistep_subentry_flow(
     helper_tools, mock_client
 ):
@@ -345,7 +402,7 @@ async def test_config_set_helper_subentry_preserves_flow_api_error_context(
         )
 
     error_data = json.loads(str(exc_info.value))
-    assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "model: invalid_model" in error_data["error"]["message"]
     assert error_data["field_errors"] == {"model": "invalid_model"}
     assert error_data["data_schema"] == [

@@ -707,3 +707,75 @@ class TestSetAreaLabels:
         assert error_data["area_id"] == "kitchen"
         assert error_data["expected_labels"] == ["site_home"]
         assert "ws dropped" in error_data["error"]["details"]
+
+
+class TestSetAreaSensorReferences:
+    """Issue #2619: an area's temperature/humidity sensor references could not be
+    set or cleared — the raw WS guard points at ha_set_area_or_floor, which had
+    no parameter for either field."""
+
+    @pytest.fixture
+    def tools(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {"area_id": "kitchen", "name": "Kitchen"},
+            }
+        )
+        return AreaTools(client)
+
+    @staticmethod
+    def _sent(tools):
+        return tools._client.send_websocket_message.call_args.args[0]
+
+    async def test_create_includes_sensor_references(self, tools):
+        await tools.ha_set_area_or_floor(
+            kind="area",
+            name="Kitchen",
+            temperature_entity_id="sensor.kitchen_temp",
+            humidity_entity_id="sensor.kitchen_hum",
+        )
+        sent = self._sent(tools)
+        assert sent["type"] == "config/area_registry/create"
+        assert sent["temperature_entity_id"] == "sensor.kitchen_temp"
+        assert sent["humidity_entity_id"] == "sensor.kitchen_hum"
+
+    async def test_update_sets_one_reference_and_leaves_the_other_alone(self, tools):
+        await tools.ha_set_area_or_floor(
+            kind="area", id="kitchen", temperature_entity_id="sensor.kitchen_temp"
+        )
+        sent = self._sent(tools)
+        assert sent["type"] == "config/area_registry/update"
+        assert sent["temperature_entity_id"] == "sensor.kitchen_temp"
+        assert "humidity_entity_id" not in sent
+
+    async def test_empty_string_clears_reference(self, tools):
+        """'' is the clear sentinel the sibling fields (icon, picture) already use;
+        HA accepts null to drop the reference."""
+        await tools.ha_set_area_or_floor(
+            kind="area", id="kitchen", temperature_entity_id="", humidity_entity_id=""
+        )
+        sent = self._sent(tools)
+        assert sent["temperature_entity_id"] is None
+        assert sent["humidity_entity_id"] is None
+
+    async def test_omitted_references_absent_from_payload(self, tools):
+        await tools.ha_set_area_or_floor(kind="area", id="kitchen", name="K2")
+        sent = self._sent(tools)
+        assert "temperature_entity_id" not in sent
+        assert "humidity_entity_id" not in sent
+
+    async def test_sensor_references_rejected_for_floor(self, tools):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_area_or_floor(
+                kind="floor",
+                name="Ground",
+                temperature_entity_id="sensor.t",
+                humidity_entity_id="sensor.h",
+            )
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "temperature_entity_id" in error_data["error"]["message"]
+        assert "humidity_entity_id" in error_data["error"]["message"]
+        tools._client.send_websocket_message.assert_not_called()

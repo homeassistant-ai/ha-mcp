@@ -132,7 +132,7 @@
     "features.enable_tool_search.label": "Schakel tool-zoekfunctie in",
     "features.enable_tool_search.help": "Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking. Vermindert de inactieve context met ongeveer 90%, tot ongeveer 5K tokens. ⚠️ Schakel dit NIET in bij clients met hun eigen ingebouwde tool-zoekfunctie / uitgestelde tools (claude.ai, Claude Desktop, Claude Code) — de twee zoeklagen conflicteren, en de ingebouwde tool-zoekfunctie van de client is daar de betere keuze; laat dit uitgeschakeld. Of tools worden uitgesteld, hangt af van je client- en modelcombinatie: gebruik dit wanneer je setup de volledige catalogus vooraf laadt — modellen zonder native uitgestelde tools (bijv. Gemini, OpenAI-compatibele lokale modellen, Claude Haiku), clients die alle tool-schema's inline zetten ongeacht het model (bijv. GitHub Copilot CLI), of kleinere contextvensters. Sommige Codex-modellen en ChatGPT bevatten ook uitgestelde tools — controleer je client/model direct om de functies ervan te bevestigen, zodat je dit niet onnodig ingeschakeld laat. Tools worden gevonden via ha_search_tools en uitgevoerd via gecategoriseerde proxies (lezen/schrijven/verwijderen). Vereist een herstart om van kracht te worden.",
     "features.tool_search_max_results.label": "Max. resultaten tool-zoekfunctie",
-    "features.tool_search_max_results.help": "Maximaal aantal tools geretourneerd door ha_search_tools wanneer de tool-zoekfunctie is ingeschakeld. Lagere waarden (2-3) besparen context-tokens, maar kunnen relevante tools missen. Bereik: 2-10. Vereist een herstart.",
+    "features.tool_search_max_results.help": "Maximum aantal verborgen tools dat wordt geretourneerd per ha_search_tools aanroep wanneer tool zoeken is ingeschakeld; een vastgezette tool die binnen die top valt, wordt hier bovenop toegevoegd als een korte vermelding met alleen de naam. Lagere waarden (2-3) besparen contexttokens, maar missen mogelijk relevante tools. Bereik: 2-10. Vereist een herstart.",
     "features.enable_tool_security_policies.label": "Schakel Tool Beveiligingsbeleid in (geavanceerd)",
     "features.enable_tool_security_policies.help": "Beveilig risicovolle tool-aanroepen (vergrendelings-/alarmbediening, automatiseringsschrijvingen, enz.) achter gebruikersgoedkeuring. Wanneer een beveiligde tool wordt aangeroepen, instrueert de agent de gebruiker om het tabblad 'Tool Security Policies' in de web-UI te openen en op 'Goedkeuren' te klikken voordat de aanroep doorgaat. Per-tool regels met optionele argumentcondities worden geconfigureerd in het tabblad 'Tool Security Policies'. Standaard uitgeschakeld. Vereist een herstart om van kracht te worden.",
     "features.read_only_mode.label": "Alleen-lezen modus",
@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "Probleem of Feedback Rapporteren",
-      "description": "Haal diagnostische gegevens en een kant-en-klaar GitHub-issue op voor een bugrapport of agent-feedback."
+      "description": "Haal diagnostische gegevens en een kant-en-klaar GitHub-issue op voor een bug, agent-feedback of een functieverzoek."
     },
     "ha_restart": {
       "title": "Home Assistant Herstarten",
