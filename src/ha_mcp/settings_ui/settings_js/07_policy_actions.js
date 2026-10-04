@@ -128,11 +128,12 @@ async function saveGlobalSettings() {
   }
 }
 
-// The PIN itself never reaches the page: this endpoint reports only that
-// one exists, so a reload cannot put it back in front of anyone.
 // policyLoadConfig() does not await its refresh, so an older answer can land
 // after a newer one; only the latest request may write.
 let pinStatusSeq = 0;
+
+// The PIN itself never reaches the page: this endpoint reports only that
+// one exists, so a reload cannot put it back in front of anyone.
 async function policyRefreshPinStatus() {
   const statusEl = document.getElementById('policy-pin-status');
   const toggle = document.getElementById('policy-event-decisions-toggle');
@@ -184,15 +185,20 @@ async function policySetPin() {
     if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
     input.value = '';
     showToast(t('policies.global.pin.saved', {}, 'PIN saved.'));
-    // A locked switch could not be changed, so it holds no unsaved edit. It
-    // may still read off from a PIN removal whose toggle save failed, while
-    // the stored setting stayed on; show the stored value now it is usable.
+    // A locked switch cannot be edited, so overwriting it loses nothing typed
+    // since it locked. It can read off after a PIN removal whose toggle save
+    // failed while the stored setting stayed on; show the stored value now
+    // that the switch is usable. A failed read leaves it until the next
+    // policyLoadConfig().
     const toggle = document.getElementById('policy-event-decisions-toggle');
     if (toggle && toggle.disabled) {
       try {
         const cfg = await fetch('./api/policy/config');
         if (cfg.ok) toggle.checked = !!(await cfg.json()).event_decisions_enabled;
-      } catch (_e) { /* the switch keeps its value; the next load reads it */ }
+        else console.warn('[ha-mcp] /api/policy/config returned HTTP ' + cfg.status + '; event-decisions switch may be stale');
+      } catch (err) {
+        console.warn('[ha-mcp] failed to re-read the event-decisions setting', err);
+      }
     }
   } catch (e) {
     showToast(
