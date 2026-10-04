@@ -151,6 +151,14 @@ def _parse_flow_api_error(
     }
 
 
+def _form_info(step: dict[str, Any]) -> dict[str, Any]:
+    """A FORM step's schema and the step_id that keys its help text, else {}."""
+    schema = step.get("data_schema")
+    if step.get("type") != _FlowType.FORM or not isinstance(schema, list):
+        return {}
+    return {"schema": schema, "step_id": step.get("step_id")}
+
+
 async def _process_menu_flow_result(
     flow_result: dict[str, Any],
     client: Any,
@@ -171,11 +179,7 @@ async def _process_menu_flow_result(
             )
         except (HomeAssistantAPIError, TimeoutError):
             return info
-        if step.get("type") == _FlowType.FORM:
-            schema = step.get("data_schema")
-            if isinstance(schema, list):
-                info["schema"] = schema
-        return info
+        return _form_info(step)
 
     options = flow_result.get("menu_options")
     if isinstance(options, list):
@@ -201,7 +205,7 @@ async def fetch_helper_flow_info(
 
     Behaviour:
 
-    - FORM at top: ``{"schema": [...]}``
+    - FORM at top: ``{"schema": [...], "step_id": ...}``
     - MENU at top with ``menu_choice``: submits and returns the branch
       form schema as ``{"schema": [...]}`` (no ``menu_options`` since
       the caller already picked a branch)
@@ -218,18 +222,11 @@ async def fetch_helper_flow_info(
         intro_flow_id = flow_result.get("flow_id")
         flow_type = flow_result.get("type")
 
-        if flow_type == _FlowType.FORM:
-            schema = flow_result.get("data_schema")
-            if isinstance(schema, list):
-                info["schema"] = schema
-            return info
-
         if flow_type == _FlowType.MENU:
             return await _process_menu_flow_result(
                 flow_result, client, intro_flow_id, menu_choice
             )
-
-        return info
+        return _form_info(flow_result)
     except Exception:  # noqa: BLE001
         return info
     finally:

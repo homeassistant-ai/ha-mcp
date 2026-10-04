@@ -1,12 +1,14 @@
 """Record shaping and pagination for ha_config_list_helpers."""
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
 from ...errors import ErrorCode, create_error_response
 from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..helpers import raise_tool_error
 from ..response_helpers import build_pagination_metadata
+from .schemas import SIMPLE_HELPER_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -213,3 +215,91 @@ def _raise_all_requires_component() -> NoReturn:
             context={"helper_type": "all"},
         )
     )
+
+
+async def shape_all_helpers_response(
+    result: dict[str, Any],
+    legacy_list: Callable[[str], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Map an all-types ``helpers_list`` result into the merged listing envelope.
+
+    Each record is shaped by kind (flow → ``_shape_flow_helper_record``,
+    collection → ``_shape_collection_helper_record``) and stamped with its
+    own ``helper_type`` so records of different types stay distinguishable in
+    the flat list. Respecting ``covered_types`` (mirroring the single-type
+    path): a simple type the component could not enumerate from the state
+    machine — ``tag`` has no state entity — is fetched per-type via its
+    legacy ``{type}/list`` (``legacy_list``) and merged, so ``all`` never silently drops it.
+    """
+    raw = result.get("helpers")
+    records = raw if isinstance(raw, list) else []
+    helpers: list[dict[str, Any]] = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("kind") == "flow":
+            helpers.append(_shape_flow_helper_record(rec))
+        else:
+            shaped = _shape_collection_helper_record(rec)
+            # All-types records span many types, so each self-describes its
+            # type (single-type mode carries it at the envelope top instead).
+            shaped["helper_type"] = rec.get("helper_type")
+            helpers.append(shaped)
+
+    covered = result.get("covered_types")
+    covered_set = set(covered) if isinstance(covered, list) else set()
+    # Flow helper types have no legacy ``{type}/list`` fallback — if the
+    # component did not authoritatively cover one, a "successful" merged
+    # listing would silently omit it. Mirror the single-type taxonomy:
+    # hard error, never a partial inventory reported as complete.
+    uncovered_flow = sorted(FLOW_HELPER_TYPES - covered_set)
+    if uncovered_flow:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.COMPONENT_NOT_INSTALLED,
+                "The ha_mcp_tools component response did not cover flow "
+                f"helper type(s): {', '.join(uncovered_flow)} — cannot "
+                "return a complete all-types listing.",
+                context={"helper_type": "all", "uncovered": uncovered_flow},
+                suggestions=[
+                    "Update the ha_mcp_tools custom component",
+                    "List helper types individually instead of 'all'",
+                ],
+            )
+        )
+    merge_warnings: list[str] = []
+    for helper_type in sorted(SIMPLE_HELPER_TYPES - covered_set):
+        legacy = await legacy_list(helper_type)
+        # legacy_list joins the registry (issue #1945) and, degrade-
+        # open, flags a failed registry read in warnings[]; surface those here
+        # instead of dropping them, else an uncovered type is served stale and
+        # silent during an all-types listing.
+        merge_warnings.extend(legacy.get("warnings", []))
+        skipped = 0
+        for item in legacy.get("helpers", []):
+            if isinstance(item, dict):
+                row = dict(item)
+                row.setdefault("helper_type", helper_type)
+                helpers.append(row)
+            else:
+                skipped += 1
+        if skipped:
+            # This is how the unflattened person/list dict used to vanish:
+            # iterating it yielded its keys, and each failed the check here.
+            logger.warning(
+                "Dropped %d unrecognised item(s) from the %s listing while "
+                "merging all types; the merged listing is incomplete",
+                skipped,
+                helper_type,
+            )
+
+    response: dict[str, Any] = {
+        "success": True,
+        "helper_type": "all",
+        "count": len(helpers),
+        "helpers": helpers,
+        "message": f"Found {len(helpers)} helper(s)",
+    }
+    if merge_warnings:
+        response["warnings"] = merge_warnings
+    return response
