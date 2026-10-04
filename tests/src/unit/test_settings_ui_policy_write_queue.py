@@ -66,13 +66,24 @@ def test_allow_list_asks_before_a_change_that_approves_more(
     assert len(_saved_rules(result)) == (0 if asks else 1)
 
 
-def test_a_condition_that_can_never_match_is_not_saved(settings_script: str) -> None:
+@pytest.mark.parametrize(
+    ("effect", "advice"),
+    [
+        # A list holding both values matches "contains" for each.
+        ("require_approval", "contains"),
+        # Under an allow list every item must be approved.
+        ("allow", "is one of"),
+    ],
+)
+def test_a_condition_that_can_never_match_is_not_saved(
+    settings_script: str, effect: str, advice: str
+) -> None:
     """``domain eq lock AND domain eq light`` never matches, so in a
     require-approval list it is a gate that never fires. The save is
     refused with the reason, not saved with a warning."""
     result = _run(
         settings_script,
-        _two_conditions("require_approval"),
+        _two_conditions(effect),
         """
           await click('.policy-and-predicate[data-idx="0"]');
           await fill('args.domain', '"light"');
@@ -81,7 +92,9 @@ def test_a_condition_that_can_never_match_is_not_saved(settings_script: str) -> 
         """,
     )
     assert _saved_rules(result) == []
-    assert "No single value of" in html.unescape(_probe(result, "toast") or "")
+    toast = html.unescape(_probe(result, "toast") or "")
+    assert "No single value of" in toast
+    assert f'use "{advice}"' in toast
 
 
 # Holds the first policy save for 1.5 s and records the most policy requests

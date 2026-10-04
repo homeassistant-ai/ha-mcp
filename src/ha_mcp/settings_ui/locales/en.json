@@ -375,6 +375,7 @@
     "policies.card.and_hint": "Must also match: {condition}",
     "policies.card.remove_condition": "Remove condition",
     "policies.card.never_matches": "No single value of {path} satisfies all of its predicates in this condition. For a list argument, use \"contains\" for each value it must hold.",
+    "policies.card.never_matches_allow": "No single value of {path} satisfies all of its predicates in this condition. To approve a list argument, use \"is one of\" with every value its items may take.",
     "policies.card.confirm_loosen": "This change can approve calls to \"{tool}\" that needed your approval before. Save it?",
     "policies.card.stale_not_saved": "The policy was reloaded before this change was saved. Make the change again.",
     "policies.card.save_pending": "A change is still being saved or the policy is reloading. Try again in a moment.",

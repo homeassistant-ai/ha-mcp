@@ -262,8 +262,10 @@ function renderPolicyCard(toolName, rule) {
   // (equals Y, does not equal X, is NOT one of [..X..], is one of [..no X..])
   // no single value can satisfy. Under an allow list it never matches; in a
   // require-approval list it fires only for a list or comma-separated value
-  // that holds both, which "contains" says directly. So the editor refuses
-  // it either way (see saveConditions). Strings only (the evaluator compares
+  // that holds both, which "contains" for each value says directly. So the
+  // editor refuses it either way (see saveConditions), and the message names
+  // what works in the card's mode: under an allow list every item of a list
+  // must be approved, which "is one of" says. Strings only (the evaluator compares
   // in Python, where true equals 1), case-insensitive like a require-approval
   // list, and wildcard paths skipped. A leading "args." is optional, as in
   // the evaluator.
@@ -291,10 +293,11 @@ function renderPolicyCard(toolName, rule) {
     }
     return null;
   };
-  const neverMatchesText = (path) => t(
-    'policies.card.never_matches', {path: path},
-    'No single value of ' + path + ' satisfies all of its predicates in this condition. For a list argument, use "contains" for each value it must hold.'
-  );
+  const neverMatchesText = (path) => (allowList
+    ? t('policies.card.never_matches_allow', {path: path},
+      'No single value of ' + path + ' satisfies all of its predicates in this condition. To approve a list argument, use "is one of" with every value its items may take.')
+    : t('policies.card.never_matches', {path: path},
+      'No single value of ' + path + ' satisfies all of its predicates in this condition. For a list argument, use "contains" for each value it must hold.'));
   // An alert: screen readers announce one inserted on re-render, not a note.
   // Shown for such a condition saved outside the editor (tool_policy.json or
   // the policy tool); the editor refuses to save a changed one.
