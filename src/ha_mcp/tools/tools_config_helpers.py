@@ -33,6 +33,7 @@ from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     SUPPORTED_HELPERS,
 )
+from .config_helpers.core_payload import core_fields
 from .config_helpers.create import _execute_create_simple_helper
 from .config_helpers.describe import describe_helper_response
 from .config_helpers.flow import _handle_flow_helper, _handle_set_config_subentry
@@ -56,10 +57,7 @@ from .config_helpers.schemas import (
 )
 from .config_helpers.typed_config import _core_schema_context, _prepare_typed_params
 from .config_helpers.update import _execute_update_simple_helper
-from .config_helpers.validation import (
-    _validate_pre_dispatch_params,
-    _validate_set_helper_action,
-)
+from .config_helpers.validation import _validate_set_helper_action
 from .config_write_helpers import (
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
@@ -811,7 +809,7 @@ class HelperConfigTools:
           LIST of successive selections, consumed one per menu encounter.
 
         EXAMPLES:
-        - input_number: ha_config_set_helper(helper_type="input_number", name="Target", config={"min_value": 0, "max_value": 100, "step": 5})
+        - input_number: ha_config_set_helper(helper_type="input_number", name="Target", config={"min": 0, "max": 100, "step": 5})
         - template sensor: ha_config_set_helper(helper_type="template", name="Room Temp", config={"next_step_id": "sensor", "state": "{{ states('sensor.x')|float }}", "unit_of_measurement": "°C"})
         - group: ha_config_set_helper(helper_type="group", name="Kitchen Lights", config={"group_type": "light", "entities": ["light.a", "light.b"]})
         - config subentry: ha_config_set_helper(helper_type="config_subentry", entry_id="01HXYZ...", subentry_type="conversation", config={"name": "Local agent", "model": "gemma3:27b"})
@@ -866,7 +864,7 @@ class HelperConfigTools:
                     "description": description,
                     "pattern": pattern,
                 }
-                name, icon, type_kw = _prepare_typed_params(
+                name, icon, type_kw, passthrough = _prepare_typed_params(
                     helper_type, config, name, icon, type_kw
                 )
 
@@ -913,21 +911,8 @@ class HelperConfigTools:
                     fail_closed=True,
                 )
 
-                # Bug 13/17 (issue #1150): pre-validate per-type schema constraints.
-                _validate_pre_dispatch_params(
-                    helper_type,
-                    type_kw["min_value"],
-                    type_kw["max_value"],
-                    type_kw["step"],
-                    type_kw["options"],
-                    type_kw["monday"],
-                    type_kw["tuesday"],
-                    type_kw["wednesday"],
-                    type_kw["thursday"],
-                    type_kw["friday"],
-                    type_kw["saturday"],
-                    type_kw["sunday"],
-                )
+                # Home Assistant validates the fields itself (#2632).
+                fields = core_fields(helper_type, type_kw, passthrough)
 
                 if action == "create":
                     return await _execute_create_simple_helper(
@@ -940,7 +925,7 @@ class HelperConfigTools:
                         category,
                         wait,
                         MandatoryBPS,
-                        **type_kw,
+                        fields,
                     )
 
                 if action != "update":
@@ -968,7 +953,7 @@ class HelperConfigTools:
                     category,
                     wait,
                     MandatoryBPS,
-                    **type_kw,
+                    fields,
                 )
 
         except ToolError as te:

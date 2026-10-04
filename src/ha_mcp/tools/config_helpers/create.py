@@ -1,7 +1,5 @@
 """Create path for simple (non-flow) helper types."""
 
-import uuid
-from collections.abc import Callable
 from typing import Any
 
 from ...errors import ErrorCode, create_error_response
@@ -15,329 +13,24 @@ from ..component_helper_collections import (
 from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
+from .core_payload import check_core_gaps, with_create_defaults
 from .registry import _ws_error_msg
 from .schemas import (
     _attach_helper_skill,
     _helper_response,
     _simple_helper_error_context,
 )
-from .validation import (
-    _validate_datetime_has_date_or_time,
-    _validate_initial_in_options,
-    _validate_mode,
-)
-
-
-def _format_schedule_days(
-    monday: list | None,
-    tuesday: list | None,
-    wednesday: list | None,
-    thursday: list | None,
-    friday: list | None,
-    saturday: list | None,
-    sunday: list | None,
-) -> dict[str, list[dict[str, Any]]]:
-    """Format schedule day data, ensuring time strings include seconds.
-
-    Returns a dict of day_name -> formatted time ranges, only for days
-    where data was provided (not None).
-    """
-    day_params = {
-        "monday": monday,
-        "tuesday": tuesday,
-        "wednesday": wednesday,
-        "thursday": thursday,
-        "friday": friday,
-        "saturday": saturday,
-        "sunday": sunday,
-    }
-    formatted_days: dict[str, list[dict[str, Any]]] = {}
-    for day_name, day_schedule in day_params.items():
-        if day_schedule is not None:
-            formatted_ranges = []
-            for time_range in day_schedule:
-                formatted_range: dict[str, Any] = {}
-                for key in ["from", "to"]:
-                    if key in time_range:
-                        time_val = time_range[key]
-                        if isinstance(time_val, str) and time_val.count(":") == 1:
-                            time_val = f"{time_val}:00"
-                        formatted_range[key] = time_val
-                if "data" in time_range:
-                    formatted_range["data"] = time_range["data"]
-                formatted_ranges.append(formatted_range)
-            formatted_days[day_name] = formatted_ranges
-    return formatted_days
-
-
-# ---------------------------------------------------------------------------
-# CREATE INFRASTRUCTURE
-# ---------------------------------------------------------------------------
-
-
-_SCHEDULE_DAYS: tuple[str, ...] = (
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-    "sunday",
-)
-
-
-def _create_fields_input_select(
-    options: list[str] | None, initial: Any, **_: Any
-) -> dict[str, Any]:
-    if not options:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "options list is required for input_select",
-                context=_simple_helper_error_context("input_select"),
-            )
-        )
-    if not isinstance(options, list) or len(options) == 0:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "options must be a non-empty list for input_select",
-                context=_simple_helper_error_context("input_select"),
-            )
-        )
-    fields: dict[str, Any] = {"options": options}
-    _validate_initial_in_options(options, initial)
-    if initial is not None:
-        fields["initial"] = initial
-    return fields
-
-
-def _create_fields_input_number(
-    min_value: float | None,
-    max_value: float | None,
-    step: float | None,
-    unit_of_measurement: str | None,
-    mode: str | None,
-    initial: Any,
-    **_: Any,
-) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
-    if min_value is not None:
-        fields["min"] = min_value
-    if max_value is not None:
-        fields["max"] = max_value
-    if step is not None:
-        fields["step"] = step
-    if unit_of_measurement:
-        fields["unit_of_measurement"] = unit_of_measurement
-    _validate_mode("input_number", mode)
-    if mode is not None:
-        fields["mode"] = mode
-    if initial is not None:
-        fields["initial"] = initial
-    return fields
-
-
-def _create_fields_input_text(
-    min_value: float | None,
-    max_value: float | None,
-    mode: str | None,
-    initial: Any,
-    unit_of_measurement: str | None = None,
-    pattern: str | None = None,
-    **_: Any,
-) -> dict[str, Any]:
-    fields: dict[str, Any] = {
-        key: value
-        for key, value in (
-            ("unit_of_measurement", unit_of_measurement),
-            ("pattern", pattern),
-        )
-        if value is not None
-    }
-    if min_value is not None:
-        fields["min"] = int(min_value)
-    if max_value is not None:
-        fields["max"] = int(max_value)
-    _validate_mode("input_text", mode)
-    if mode is not None:
-        fields["mode"] = mode
-    if initial is not None:
-        fields["initial"] = initial
-    return fields
-
-
-def _create_fields_input_boolean(initial: Any, **_: Any) -> dict[str, Any]:
-    if initial is None:
-        return {}
-    return {"initial": str(initial).lower() in ["true", "on", "yes", "1"]}
-
-
-def _create_fields_input_datetime(
-    has_date: bool | None,
-    has_time: bool | None,
-    initial: Any,
-    **_: Any,
-) -> dict[str, Any]:
-    if has_date is None and has_time is None:
-        fields: dict[str, Any] = {"has_date": True, "has_time": True}
-    elif has_date is None:
-        fields = {"has_date": False, "has_time": has_time}
-    elif has_time is None:
-        fields = {"has_date": has_date, "has_time": False}
-    else:
-        fields = {"has_date": has_date, "has_time": has_time}
-    _validate_datetime_has_date_or_time(fields["has_date"], fields["has_time"])
-    if initial is not None:
-        fields["initial"] = initial
-    return fields
-
-
-def _create_fields_counter(
-    initial: Any,
-    min_value: float | None,
-    max_value: float | None,
-    step: float | None,
-    restore: bool | None,
-    **_: Any,
-) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
-    if initial is not None:
-        fields["initial"] = int(initial) if isinstance(initial, str) else initial
-    if min_value is not None:
-        fields["minimum"] = int(min_value)
-    if max_value is not None:
-        fields["maximum"] = int(max_value)
-    if step is not None:
-        fields["step"] = int(step)
-    if restore is not None:
-        fields["restore"] = restore
-    return fields
-
-
-def _create_fields_timer(
-    duration: str | None, restore: bool | None, **_: Any
-) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
-    if duration is not None:
-        fields["duration"] = duration
-    if restore is not None:
-        fields["restore"] = restore
-    return fields
-
-
-def _create_fields_schedule(
-    monday: list | None,
-    tuesday: list | None,
-    wednesday: list | None,
-    thursday: list | None,
-    friday: list | None,
-    saturday: list | None,
-    sunday: list | None,
-    **_: Any,
-) -> dict[str, Any]:
-    formatted = _format_schedule_days(
-        monday, tuesday, wednesday, thursday, friday, saturday, sunday
-    )
-    if not any(formatted.get(d) for d in _SCHEDULE_DAYS):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "schedule helper requires at least one day-of-week with at least one time range.",
-                context=_simple_helper_error_context("schedule"),
-                suggestions=[
-                    'Pass e.g. monday=[{"from": "08:00", "to": "17:00"}]',
-                    'Each day\'s value is a list of {"from": "HH:MM", "to": "HH:MM"} dicts',
-                ],
-            )
-        )
-    return formatted
-
-
-def _create_fields_zone(
-    latitude: float | None,
-    longitude: float | None,
-    radius: float | None,
-    passive: bool | None,
-    **_: Any,
-) -> dict[str, Any]:
-    missing = []
-    if latitude is None:
-        missing.append("latitude")
-    if longitude is None:
-        missing.append("longitude")
-    if missing:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"zone helper requires {' and '.join(missing)}.",
-                context=_simple_helper_error_context("zone", missing_fields=missing),
-                suggestions=[
-                    "Pass latitude (float) and longitude (float)",
-                    "Optionally pass radius (meters, default 100) and passive (bool)",
-                ],
-            )
-        )
-    fields: dict[str, Any] = {"latitude": latitude, "longitude": longitude}
-    if radius is not None:
-        fields["radius"] = radius
-    if passive is not None:
-        fields["passive"] = passive
-    return fields
-
-
-def _create_fields_person(
-    user_id: str | None,
-    device_trackers: list[str] | None,
-    picture: str | None,
-    **_: Any,
-) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
-    if user_id:
-        fields["user_id"] = user_id
-    if device_trackers:
-        fields["device_trackers"] = device_trackers
-    if picture:
-        fields["picture"] = picture
-    return fields
-
-
-def _create_fields_tag(
-    tag_id: str | None, description: str | None, **_: Any
-) -> dict[str, Any]:
-    fields: dict[str, Any] = {
-        "tag_id": tag_id if tag_id is not None else uuid.uuid4().hex
-    }
-    if description:
-        fields["description"] = description
-    return fields
-
-
-_SIMPLE_CREATE_FIELD_BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
-    "input_select": _create_fields_input_select,
-    "input_number": _create_fields_input_number,
-    "input_text": _create_fields_input_text,
-    "input_boolean": _create_fields_input_boolean,
-    "input_datetime": _create_fields_input_datetime,
-    "counter": _create_fields_counter,
-    "timer": _create_fields_timer,
-    "schedule": _create_fields_schedule,
-    "zone": _create_fields_zone,
-    "person": _create_fields_person,
-    "tag": _create_fields_tag,
-}
 
 
 def _build_create_message(
-    helper_type: str, name: str, icon: str | None, **kw: Any
+    helper_type: str, name: str, icon: str | None, fields: dict[str, Any]
 ) -> dict[str, Any]:
-    """Build the WebSocket {type}/create message for a simple helper."""
+    """The WebSocket {type}/create message: the caller's fields under Core's names."""
     message: dict[str, Any] = {"type": f"{helper_type}/create", "name": name}
-    if icon and helper_type not in ("person", "tag"):
+    if icon:
         message["icon"] = icon
-    builder = _SIMPLE_CREATE_FIELD_BUILDERS.get(helper_type)
-    if builder is not None:
-        message.update(builder(**kw))
+    message.update(with_create_defaults(helper_type, fields))
+    check_core_gaps(helper_type, message)
     return message
 
 
@@ -406,7 +99,7 @@ async def _execute_create_simple_helper(
     category: str | None,
     wait: bool,
     MandatoryBPS: bool,
-    **kw: Any,
+    fields: dict[str, Any],
 ) -> dict[str, Any]:
     """Execute the create path for a simple (non-flow) helper type."""
     if not name or not name.strip():
@@ -424,7 +117,7 @@ async def _execute_create_simple_helper(
             )
         )
 
-    message = _build_create_message(helper_type, name, icon, **kw)
+    message = _build_create_message(helper_type, name, icon, fields)
     native = await _create_via_component(
         client, helper_type, message, area_id, labels, category
     )

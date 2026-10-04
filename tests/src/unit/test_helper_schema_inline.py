@@ -14,10 +14,7 @@ Tests in this module:
    schema entry, every entry has a uniform ``{name, required, selector}``
    shape, ``name`` is required for every simple type, the import-time
    drift guard matches the ``SIMPLE_HELPER_TYPES`` set.
-2. Simple-helper validation errors carry the schema — ``name``-required,
-   ``options``-required, ``latitude``/``longitude``-required, etc., all
-   surface ``data_schema`` in the response context.
-3. Flow pre-flow validation gates carry the schema — the gates in
+2. Flow pre-flow validation gates carry the schema — the gates in
    ``_handle_flow_helper`` (``name``-required for create, malformed
    ``config``, etc.) attach the data_schema fetched via the introspection
    flow, with menu-rooted types surfacing a
@@ -124,60 +121,16 @@ class TestSimpleHelperSchemasInvariants:
         assert tag_id_field is not None
         assert tag_id_field["required"] is False
 
-    def test_field_names_align_with_typed_param_table(self) -> None:
-        # Each simple type's schema fields (minus the cross-cutting `name`)
-        # should be a subset of `_TYPE_TYPED_PARAMS[helper_type]` plus the
-        # cross-cutting allowed params (`name`/`icon`). Drift here means a
-        # caller could pass a schema-listed param that the tool then
-        # rejects via _validate_applicable_params.
-        from ha_mcp.tools.config_helpers.schemas import _TYPE_TYPED_PARAMS
+    def test_range_params_land_on_the_types_schema_fields(self) -> None:
+        # min_value/max_value are the tool's own names; Core calls the
+        # range min/max, or minimum/maximum for counter. A rename that
+        # misses the type's field makes Core reject the call.
+        from ha_mcp.tools.config_helpers.core_payload import core_fields
 
-        cross_cutting = {"name", "icon"}
-        for helper_type, schema in SIMPLE_HELPER_SCHEMAS.items():
-            schema_names = {f["name"] for f in schema}
-            type_params = _TYPE_TYPED_PARAMS.get(helper_type, frozenset())
-            allowed = cross_cutting | set(type_params)
-            extras = schema_names - allowed
-            assert not extras, (
-                f"{helper_type} schema lists fields not in _TYPE_TYPED_PARAMS "
-                f"or cross-cutting set: {extras}"
-            )
-
-    def test_create_and_update_builder_tables_cover_simple_helper_types(self) -> None:
-        """Every type in SIMPLE_HELPER_TYPES must have an entry in both dispatch tables.
-
-        input_button is a deliberate exception — it has no type-specific fields beyond
-        name/icon, so there is no builder for it.
-        """
-        from ha_mcp.tools.config_helpers.create import _SIMPLE_CREATE_FIELD_BUILDERS
-        from ha_mcp.tools.config_helpers.update import _SIMPLE_UPDATE_FIELD_BUILDERS
-
-        # input_button has no type-specific fields; name+icon only is correct.
-        no_builder_types = {"input_button"}
-        expected = SIMPLE_HELPER_TYPES - no_builder_types
-
-        missing_create = expected - frozenset(_SIMPLE_CREATE_FIELD_BUILDERS)
-        assert not missing_create, (
-            f"Missing create builders for: {missing_create}. "
-            "Add a _create_fields_<type> function and register it."
-        )
-
-        # Update builders only cover the standard {type}/update path; person/zone/
-        # schedule/tag use dedicated executors and are intentionally absent.
-        update_builder_types = {
-            "input_select",
-            "input_number",
-            "input_text",
-            "input_boolean",
-            "input_datetime",
-            "counter",
-            "timer",
-        }
-        missing_update = update_builder_types - frozenset(_SIMPLE_UPDATE_FIELD_BUILDERS)
-        assert not missing_update, (
-            f"Missing update builders for: {missing_update}. "
-            "Add a _update_fields_<type> function and register it."
-        )
+        for helper_type in ("counter", "input_number", "input_text"):
+            fields = core_fields(helper_type, {"min_value": 1, "max_value": 2}, {})
+            schema_names = {f["name"] for f in SIMPLE_HELPER_SCHEMAS[helper_type]}
+            assert set(fields) <= schema_names, (helper_type, fields)
 
 
 # ---------------------------------------------------------------------------
@@ -335,99 +288,7 @@ class TestFlowHelperErrorContext:
 
 
 # ---------------------------------------------------------------------------
-# 4. Simple-helper validation errors carry data_schema
-# ---------------------------------------------------------------------------
-
-
-class TestSimpleHelperValidationAttachesSchema:
-    """The high-leverage simple-helper validation gates inside
-    ``ha_config_set_helper`` (name-required, options-required,
-    latitude/longitude-required, has_date|has_time, etc.) all surface
-    ``data_schema`` on the response context."""
-
-    def _call_simple_validator(
-        self, *, helper_type: str, **kwargs: Any
-    ) -> dict[str, Any]:
-        """Drive a single simple-helper validator directly and return the
-        parsed ToolError body. Used to exercise validators that don't need
-        a client (e.g. _validate_input_select_options, _validate_mode)."""
-        raise NotImplementedError  # exercised via the per-test calls below
-
-    def test_input_select_duplicate_options_attaches_schema(self) -> None:
-        from ha_mcp.tools.config_helpers.validation import (
-            _validate_input_select_options,
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            _validate_input_select_options(["a", "b", "a"])
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert body["helper_type"] == "input_select"
-        # Schema attached (the LLM's path to "what's accepted").
-        assert body.get("data_schema") == SIMPLE_HELPER_SCHEMAS["input_select"]
-        # Diagnostic detail kept (the path to "what failed").
-        assert body["duplicates"] == ["a"]
-
-    def test_invalid_mode_attaches_schema(self) -> None:
-        from ha_mcp.tools.config_helpers.validation import _validate_mode
-
-        with pytest.raises(ToolError) as exc_info:
-            _validate_mode("input_number", "decimal")
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["helper_type"] == "input_number"
-        assert body.get("data_schema") == SIMPLE_HELPER_SCHEMAS["input_number"]
-        assert body["mode"] == "decimal"
-
-    def test_numeric_range_min_gt_max_attaches_schema(self) -> None:
-        from ha_mcp.tools.config_helpers.validation import _validate_numeric_range
-
-        with pytest.raises(ToolError) as exc_info:
-            _validate_numeric_range("input_number", 10, 5, None)
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["helper_type"] == "input_number"
-        assert body.get("data_schema") == SIMPLE_HELPER_SCHEMAS["input_number"]
-
-    def test_input_text_length_above_255_attaches_schema(self) -> None:
-        from ha_mcp.tools.config_helpers.validation import _validate_numeric_range
-
-        with pytest.raises(ToolError) as exc_info:
-            _validate_numeric_range("input_text", 0, 256, None)
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["helper_type"] == "input_text"
-        assert body.get("data_schema") == SIMPLE_HELPER_SCHEMAS["input_text"]
-
-    def test_schedule_overlap_attaches_schema(self) -> None:
-        # _validate_schedule_days raises on overlapping ranges; verify
-        # schedule's schema is attached.
-        from ha_mcp.tools.config_helpers.validation import _validate_schedule_days
-
-        overlapping = [
-            {"from": "08:00", "to": "10:00"},
-            {"from": "09:00", "to": "11:00"},
-        ]
-        with pytest.raises(ToolError) as exc_info:
-            _validate_schedule_days(
-                overlapping,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["helper_type"] == "schedule"
-        assert body.get("data_schema") == SIMPLE_HELPER_SCHEMAS["schedule"]
-        assert body["day"] == "monday"
-
-
-# ---------------------------------------------------------------------------
-# 5. Flow pre-flow validation gates carry data_schema
+# 3. Flow pre-flow validation gates carry data_schema
 # ---------------------------------------------------------------------------
 
 

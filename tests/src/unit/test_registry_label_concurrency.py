@@ -18,10 +18,7 @@ from ha_mcp.backup_manager import (
 )
 from ha_mcp.tools.config_helpers.create import _apply_create_entity_registry
 from ha_mcp.tools.config_helpers.registry import _entity_registry_update_coro
-from ha_mcp.tools.config_helpers.update import (
-    _apply_update_icon_area_labels,
-    _execute_fallback_registry_update,
-)
+from ha_mcp.tools.config_helpers.update import _apply_update_icon_area_labels
 from ha_mcp.tools.tools_areas import AreaTools
 from ha_mcp.tools.tools_entities import EntityTools
 from ha_mcp.tools.tools_labels import LabelTools
@@ -260,12 +257,6 @@ async def test_area_replacement_waits_for_inflight_add(
             ),
         ),
         (
-            "entity",
-            lambda c: _execute_fallback_registry_update(
-                c, "test", "light.target", None, None, None, ["blue"], None, []
-            ),
-        ),
-        (
             "area",
             lambda c: _restore_area_or_floor(c, "area:target", {"labels": ["blue"]}),
         ),
@@ -274,7 +265,6 @@ async def test_area_replacement_waits_for_inflight_add(
         "flow-helper",
         "created-helper",
         "updated-helper",
-        "fallback-helper",
         "area-restore",
     ],
 )

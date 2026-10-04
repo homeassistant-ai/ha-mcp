@@ -196,13 +196,24 @@ async def test_flow_fields_carry_ha_own_help_text_including_sections(
 
 
 @pytest.mark.asyncio
-async def test_flow_fields_still_described_when_translations_fail(client, monkeypatch):
+@pytest.mark.parametrize(
+    "reply",
+    [RuntimeError("ws down"), {"result": ["not", "a", "dict"]}, {"resources": "x"}],
+    ids=["call-fails", "result-not-a-dict", "resources-not-a-dict"],
+)
+async def test_flow_fields_still_described_when_translations_fail(
+    client, monkeypatch, reply
+):
+    """Help text is best-effort: a failed or malformed reply leaves it out."""
     monkeypatch.setattr(
         mod,
         "fetch_helper_flow_info",
         AsyncMock(return_value={"step_id": "user", "schema": [{"name": "source"}]}),
     )
-    client.send_websocket_message.side_effect = RuntimeError("ws down")
+    if isinstance(reply, Exception):
+        client.send_websocket_message.side_effect = reply
+    else:
+        client.send_websocket_message.return_value = reply
 
     result = await mod.describe_helper(client, "derivative")
 

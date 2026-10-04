@@ -2688,8 +2688,10 @@ class IntegrationTools:
                 },
                 suggestions=[
                     "For a config entry_id target, omit helper_type to delete it.",
-                    "Otherwise find the entity_id with ha_search(): flow helpers "
-                    "often use another domain (utility_meter → sensor.*).",
+                    (
+                        "Otherwise find the entity_id with ha_search(): flow "
+                        "helpers often use another domain (utility_meter → sensor.*)."
+                    ),
                 ],
             )
         )

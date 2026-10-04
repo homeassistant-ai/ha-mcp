@@ -22,7 +22,7 @@ from ..component_helper_collections import fetch_helper_schemas, read_helper_ite
 from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..config_entry_flow_walker import fetch_helper_flow_info
 from ..helpers import exception_to_structured_error, raise_tool_error
-from .schemas import _CORE_FIELD_ALIASES, SIMPLE_HELPER_SCHEMAS
+from .schemas import SIMPLE_HELPER_SCHEMAS
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +107,9 @@ def _with_static_hints(
     # follow the static table's order where it knows the field.
     order = {name: i for i, name in enumerate(static)}
 
-    def rank(field: dict[str, Any]) -> int:
-        name = field.get("name", "")
-        return order.get(name, order.get(_CORE_FIELD_ALIASES.get(name, ""), len(order)))
-
-    core_fields = sorted(core_fields, key=rank)
+    core_fields = sorted(
+        core_fields, key=lambda f: order.get(f.get("name", ""), len(order))
+    )
     merged = []
     for field in core_fields:
         hint = static.get(field.get("name", ""))
@@ -150,7 +148,10 @@ async def _field_help(
     except Exception as err:  # noqa: BLE001
         logger.debug("describe: translations for %s failed: %s", handler, err)
         return {}
-    resources = (result.get("result") or result).get("resources", {})
+    payload = result.get("result") or result
+    resources = payload.get("resources") if isinstance(payload, dict) else None
+    if not isinstance(resources, dict):
+        return {}
     prefix = f"component.{handler}.{category}.step.{step_id}."
     descriptions: dict[str, str] = {}
     labels: dict[str, str] = {}
@@ -269,16 +270,6 @@ async def _describe_simple(
         if item is None:
             out["current_unavailable"] = True
         else:
-            # The static table names some fields as this tool's parameters
-            # (min_value) where the stored item uses Core's names (min).
-            item = {
-                **item,
-                **{
-                    _CORE_FIELD_ALIASES[k]: v
-                    for k, v in item.items()
-                    if k in _CORE_FIELD_ALIASES
-                },
-            }
             for field in out["fields"]:
                 if field["name"] in item:
                     field["current"] = item[field["name"]]
