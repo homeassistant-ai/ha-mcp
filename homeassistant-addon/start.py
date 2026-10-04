@@ -235,26 +235,24 @@ def _option_problem(option: dict[str, Any], raw: Any) -> str | None:
 
 
 def resolve_option(config: dict[str, Any], option: dict[str, Any]) -> Any:
-    """Return the option's value from ``config``, or a fallback.
+    """Return the option's value from ``config``, or its default.
 
     An absent key gives the default silently. A value of the wrong type or
-    outside its limits gives the option's ``invalid`` value, which is the
-    default except for a safety control that fails closed, with a warning:
-    Supervisor validates the schema, so such a value means a hand-edited
-    options.json.
+    outside its limits gives the default with a warning: Supervisor
+    validates the schema, so such a value means a hand-edited options.json.
     """
-    key = option["key"]
+    key, default = option["key"], option["default"]
     if key not in config:
-        return option["default"]
+        return default
     raw = config[key]
     problem = _option_problem(option, raw)
     if problem is None:
         return raw
-    fallback = option["invalid"]
     log_warning(
-        f"app option {key!r} has invalid value {raw!r} ({problem}); using {fallback!r}."
+        f"app option {key!r} has invalid value {raw!r} ({problem}); "
+        f"using default {default!r}."
     )
-    return fallback
+    return default
 
 
 def export_app_options(

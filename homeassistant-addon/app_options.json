@@ -6,7 +6,6 @@
     "default": true,
     "range": null,
     "choices": null,
-    "invalid": true,
     "always": true
   },
   {
@@ -19,7 +18,6 @@
       32
     ],
     "choices": null,
-    "invalid": 0,
     "always": true
   },
   {
@@ -34,7 +32,6 @@
       "weak",
       "auto"
     ],
-    "invalid": "normal",
     "always": true
   },
   {
@@ -44,7 +41,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": false
   },
   {
@@ -54,7 +50,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": true
   },
   {
@@ -67,7 +62,6 @@
       10
     ],
     "choices": null,
-    "invalid": 5,
     "always": true
   },
   {
@@ -77,7 +71,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": true
   },
   {
@@ -87,7 +80,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": true
   },
   {
@@ -97,7 +89,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": true
   },
   {
@@ -107,7 +98,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": true
   },
   {
@@ -117,7 +107,6 @@
     "default": true,
     "range": null,
     "choices": null,
-    "invalid": true,
     "always": true
   },
   {
@@ -127,7 +116,6 @@
     "default": true,
     "range": null,
     "choices": null,
-    "invalid": true,
     "always": true
   },
   {
@@ -137,7 +125,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": false
   },
   {
@@ -147,7 +134,6 @@
     "default": true,
     "range": null,
     "choices": null,
-    "invalid": true,
     "always": false
   },
   {
@@ -157,7 +143,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": false
   },
   {
@@ -167,7 +152,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": false
   },
   {
@@ -177,7 +161,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": false
   },
   {
@@ -187,7 +170,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": false
   },
   {
@@ -197,7 +179,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": false
   },
   {
@@ -207,7 +188,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": false
   },
   {
@@ -217,7 +197,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": false
   },
   {
@@ -227,7 +206,6 @@
     "default": true,
     "range": null,
     "choices": null,
-    "invalid": true,
     "always": true
   },
   {
@@ -240,7 +218,6 @@
       1440
     ],
     "choices": null,
-    "invalid": 0,
     "always": true
   },
   {
@@ -253,7 +230,6 @@
       10000
     ],
     "choices": null,
-    "invalid": 100,
     "always": true
   },
   {
@@ -263,7 +239,6 @@
     "default": true,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": true
   },
   {
@@ -273,7 +248,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": true,
     "always": true
   },
   {
@@ -283,7 +257,6 @@
     "default": false,
     "range": null,
     "choices": null,
-    "invalid": false,
     "always": true
   },
   {
@@ -296,7 +269,6 @@
       365
     ],
     "choices": null,
-    "invalid": 7,
     "always": true
   },
   {
@@ -306,7 +278,6 @@
     "default": "",
     "range": null,
     "choices": null,
-    "invalid": "",
     "always": true
   },
   {
@@ -316,7 +287,6 @@
     "default": "",
     "range": null,
     "choices": null,
-    "invalid": "",
     "always": true
   }
 ]

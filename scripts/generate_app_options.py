@@ -138,10 +138,6 @@ def options_table() -> str:
                 "default": field.default,
                 "range": list(setting.range) if setting.range else None,
                 "choices": list(setting.choices) if setting.choices else None,
-                # Used when options.json holds an invalid value.
-                "invalid": (
-                    field.default if app.invalid_value is None else app.invalid_value
-                ),
                 # An option missing from a flavor is exported only when
                 # options.json has it; see AppOption.
                 "always": set(app.flavors) == set(FLAVOR_DIRS),

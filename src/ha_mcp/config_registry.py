@@ -131,12 +131,6 @@ def _check_setting(name: str, field: FieldInfo, setting: Setting) -> None:
             setting.app is not None and field.annotation not in (bool, int, str),
             "an app option of a type start.py cannot check",
         ),
-        (
-            setting.app is not None
-            and setting.app.invalid_value is not None
-            and field.annotation is not bool,
-            "an invalid-value fallback on a non-bool app option",
-        ),
         # start.py treats the dev-only app options, apart from the master,
         # as the beta sub-flags the master gates.
         (

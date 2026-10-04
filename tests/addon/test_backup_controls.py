@@ -70,8 +70,8 @@ def _boot_until_server_import(
         ({"enable_snapshot_actions": True, "backup_read_only": False}, "true", "false"),
         (
             {"enable_snapshot_actions": "false", "backup_read_only": "true"},
-            "false",
             "true",
+            "false",
         ),
         ("{invalid json", "true", "false"),
     ],
@@ -94,25 +94,3 @@ def test_app_startup_exports_backup_controls(
     assert len(warnings) == (2 if malformed else 0)
     if isinstance(options, str):
         assert "reverts to its addon-schema default" in " ".join(errors)
-
-
-@pytest.mark.parametrize("invalid", ["false", "true", 0, 1, None, [], {}])
-def test_malformed_app_backup_controls_warn_and_restrict_ai_actions(
-    invalid: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    addon = _load_addon_start()
-    monkeypatch.setattr(addon.os, "environ", dict(os.environ))
-    warnings: list[str] = []
-    monkeypatch.setattr(addon, "log_warning", warnings.append)
-    addon.export_app_options(
-        {"enable_snapshot_actions": invalid, "backup_read_only": invalid},
-        addon.load_app_options(),
-    )
-
-    assert os.environ["ENABLE_SNAPSHOT_ACTIONS"] == "false"
-    assert os.environ["BACKUP_READ_ONLY"] == "true"
-    assert len(warnings) == 2
-    assert "enable_snapshot_actions" in warnings[0]
-    assert "False" in warnings[0]
-    assert "backup_read_only" in warnings[1]
-    assert "True" in warnings[1]
