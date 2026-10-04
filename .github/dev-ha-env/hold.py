@@ -29,8 +29,8 @@ import subprocess
 import tarfile
 import tempfile
 import time
-from functools import partial
 from pathlib import Path
+from typing import Any
 
 import requests
 from haos_runtime import (
@@ -55,7 +55,16 @@ TRACK_REF = os.environ["TRACK_REF"]
 POLL_S = 20
 COMPONENT = Path("custom_components") / HA_MCP_SERVER_DOMAIN
 SERVER_PATHS = ("src/ha_mcp/", "pyproject.toml", "uv.lock")
-APP_PATHS = (*SERVER_PATHS, "homeassistant-addon-dev/", "homeassistant-addon/start.py")
+# Everything build_dev_addon_source_tar copies into the app's build context.
+APP_PATHS = (
+    *SERVER_PATHS,
+    *DEV_ADDON_REPO_FILES,
+    "homeassistant-addon-dev/",
+    "homeassistant-addon/start.py",
+)
+# A failed update is retried on later polls this many times before it waits
+# for the next commit.
+MAX_TRIES = 3
 
 # Agents meet strict best-practices mode by default; the E2E suite pins it off.
 STRICT_BPS = os.environ.get("DEVENV_STRICT_BPS", "true") == "true"
@@ -261,10 +270,11 @@ class Instance:
             "MCP_HOST": "127.0.0.1",
             "ENABLE_STRICT_MANDATORY_BPS": str(STRICT_BPS).lower(),
         }
-        out = open(SRC.parent / "server.log", "ab")  # noqa: SIM115
-        self.server = subprocess.Popen(
-            ["uv", "run", "ha-mcp-web"], cwd=SRC, env=env, stdout=out, stderr=out
-        )
+        # The child keeps its own copy of the log handle.
+        with open(SRC.parent / "server.log", "ab") as out:
+            self.server = subprocess.Popen(
+                ["uv", "run", "ha-mcp-web"], cwd=SRC, env=env, stdout=out, stderr=out
+            )
 
     def update_component(self) -> None:
         if self.haos:
@@ -298,19 +308,22 @@ class Instance:
             shutil.copytree(SRC / COMPONENT, dest)
             subprocess.run(["sudo", "chmod", "-R", "a+rwX", str(config)], check=True)
             self.env["container"].get_wrapped_container().restart(timeout=30)
-        _wait_for_ha_api_ready(self.base_url, self.headers, timeout=600)
+        if not _wait_for_ha_api_ready(self.base_url, self.headers, timeout=600):
+            raise RuntimeError("Home Assistant did not come back after the restart")
 
     def update_server(self, sha: str) -> None:
         if self.standalone:
             self.start_server()
+            self.wait_server()
         elif self.embedded:
             with tempfile.TemporaryDirectory() as tmp:
                 wheel = _build_embedded_server_wheel(Path(tmp))
-                rel = f"devenv/{sha[:12]}/{wheel.name}"
+                # A new path per attempt: an unchanged pip_spec skips the reinstall.
+                tag = f"{sha[:12]}-{int(time.time())}"
+                rel = f"devenv/{tag}/{wheel.name}"
                 if self.haos:
                     supervisor_data(
-                        f"homeassistant/devenv/{sha[:12]}",
-                        tar_dir(wheel.parent, sha[:12]),
+                        f"homeassistant/devenv/{tag}", tar_dir(wheel.parent, tag)
                     )
                 else:
                     dest = Path(self.env["config_path"]) / rel
@@ -341,6 +354,12 @@ class Instance:
             self.wait_server()
 
     def wait_server(self) -> None:
+        if self.standalone:
+            target = self.targets()
+            if not _wait_for_embedded_webhook_ready(
+                target["mcp"] + target["mcp_path"], timeout=120
+            ):
+                raise RuntimeError("standalone server did not answer; see server.log")
         if self.embedded and not _wait_for_embedded_webhook_ready(
             self.env["embedded_webhook_url"], timeout=300
         ):
@@ -349,40 +368,75 @@ class Instance:
             wait_for_addon_mcp_ready(timeout=300)
 
 
-def test_hold_dev_ha_env(ha_container_with_fresh_config) -> None:
+def changed_kinds(inst: Instance, changed: list[str]) -> set[str]:
+    """Which updates a commit's changed paths call for."""
+    server_paths = APP_PATHS if inst.backend == "haos_inaddon" else SERVER_PATHS
+    kinds = set()
+    if any(p.startswith(server_paths) for p in changed):
+        kinds.add("server")
+    if any(p.startswith(f"{COMPONENT.as_posix()}/") for p in changed):
+        kinds.add("component")
+    return kinds
+
+
+def apply_updates(inst: Instance, sha: str, pending: dict[str, int]) -> dict[str, str]:
+    """Run the pending updates, server first; failures stay pending up to MAX_TRIES."""
+    errors = {}
+    for name in ("server", "component"):
+        if name not in pending:
+            continue
+        if name == "component" and not (
+            inst.haos or (Path(inst.env["config_path"]) / COMPONENT).exists()
+        ):
+            del pending[name]
+            continue
+        try:
+            if name == "server":
+                inst.update_server(sha)
+            else:
+                inst.update_component()
+            del pending[name]
+        except Exception as err:  # noqa: BLE001
+            # Keep the instance up and apply the other update anyway.
+            errors[name] = f"{type(err).__name__}: {err}"
+            pending[name] += 1
+            if pending[name] >= MAX_TRIES:
+                del pending[name]
+    return errors
+
+
+def test_hold_dev_ha_env(ha_container_with_fresh_config: dict[str, Any]) -> None:
     inst = Instance(dict(ha_container_with_fresh_config))
     inst.start_server()
     Path(os.environ["DEVENV_TARGETS"]).write_text(json.dumps(inst.targets()))
     sha = git("rev-parse", "HEAD")
-    log(sha=sha, backend=inst.backend, ready=True)
+    try:
+        inst.wait_server()
+        log(sha=sha, backend=inst.backend, ready=True)
+    except Exception as err:  # noqa: BLE001
+        # HA is up; a push that fixes the server is picked up below.
+        log(sha=sha, backend=inst.backend, ready=False, error=str(err))
+    # Update kind -> failed attempts, retried on each poll up to MAX_TRIES.
+    pending: dict[str, int] = {}
     end = time.monotonic() + 60 * int(os.environ.get("DEVENV_MINUTES", "340"))
     while time.monotonic() < end:
         time.sleep(POLL_S)
         try:
             git("fetch", "-q", "origin", TRACK_REF)
             head = git("rev-parse", "FETCH_HEAD")
-            if head == sha:
-                continue
-            changed = git("diff", "--name-only", sha, head).splitlines()
-            git("checkout", "-q", "-f", head)
+            if head != sha:
+                changed = git("diff", "--name-only", sha, head).splitlines()
+                git("checkout", "-q", "-f", head)
+                git("submodule", "update", "-q", "--init", "--recursive")
+                sha = head
+                pending = dict.fromkeys(set(pending) | changed_kinds(inst, changed), 0)
+                if not pending:
+                    log(sha=sha, ready=True)
         except subprocess.CalledProcessError as err:
             log(sha=sha, error=f"git: {err}")
             continue
-        sha = head
-        log(sha=sha, ready=False, updating=True)
-        server_paths = APP_PATHS if inst.backend == "haos_inaddon" else SERVER_PATHS
-        updates = []
-        if any(p.startswith(server_paths) for p in changed):
-            updates.append(("server", partial(inst.update_server, sha)))
-        if any(p.startswith(f"{COMPONENT.as_posix()}/") for p in changed) and (
-            inst.haos or (Path(inst.env["config_path"]) / COMPONENT).exists()
-        ):
-            updates.append(("component", inst.update_component))
-        errors = {}
-        for name, update in updates:
-            try:
-                update()
-            except Exception as err:  # noqa: BLE001
-                # Keep the instance up and apply the other update anyway.
-                errors[name] = f"{type(err).__name__}: {err}"
+        if not pending:
+            continue
+        log(sha=sha, ready=False, updating=sorted(pending))
+        errors = apply_updates(inst, sha, pending)
         log(sha=sha, ready=not errors, **({"errors": errors} if errors else {}))

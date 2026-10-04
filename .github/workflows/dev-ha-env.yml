@@ -146,8 +146,13 @@ jobs:
         working-directory: src
         run: uv sync --all-extras --dev
       - name: Install cloudflared
+        env:
+          # The binary runs beside the passphrase, so pin it and check its digest.
+          CLOUDFLARED_VERSION: "2026.9.3"
+          CLOUDFLARED_SHA256: 77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2
         run: |
-          curl -fsSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          curl -fsSL -o cloudflared "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-linux-amd64"
+          echo "$CLOUDFLARED_SHA256  cloudflared" | sha256sum -c -
           chmod +x cloudflared
 
       - name: Boot HA and open the tunnels
@@ -196,6 +201,7 @@ jobs:
           if [ ! -s targets.json ]; then echo "HA never came up"; tail -150 env.log; exit 1; fi
           tunnel() {
             nohup ./cloudflared tunnel --no-autoupdate --url "$1" > "$2" 2>&1 &
+            echo $! >> tunnel.pids
             url=""
             for i in $(seq 1 60); do
               url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$2" | head -1)
@@ -227,6 +233,12 @@ jobs:
           while kill -0 "$(cat hold.pid)" 2>/dev/null; do
             sleep 60
             grep -E "STATUS|Traceback|Error" env.log | tail -3 || true
+            for pid in $(cat tunnel.pids); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                echo "::error::A tunnel exited, so its URL is dead. Start the run again."
+                exit 1
+              fi
+            done
           done
           tail -80 env.log
       - name: Logs
