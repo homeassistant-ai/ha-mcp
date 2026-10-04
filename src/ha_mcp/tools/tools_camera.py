@@ -8,8 +8,8 @@ The text block never contains Home Assistant entity data.
 """
 
 import logging
-from typing import Annotated, Any
 from datetime import UTC, datetime
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -30,8 +30,8 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .response_helpers import fetch_ha_timezone, resolve_local_timezone
 from .tool_hints import read_only_hints
-from .util_helpers import fetch_ha_timezone, resolve_local_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +226,7 @@ class CameraTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error retrieving camera image from {entity_id}: {e}")
             exception_to_structured_error(
                 e,
