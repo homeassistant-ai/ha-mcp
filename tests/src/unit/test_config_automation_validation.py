@@ -176,6 +176,14 @@ class TestValidateRequiredFields:
         assert "runtime-only" in all_text
         # The two guidance sentences are separated, not run together.
         assert ". 'enabled'" in error["message"]
+        # The sequence branch folds in the enabled suggestions the same way
+        # the other combined rejection does.
+        suggestions = error.get("suggestions", [])
+        assert any("Remove 'enabled' from config" in s for s in suggestions)
+        assert (
+            "Use enabled=None to leave the current runtime state unchanged"
+            in suggestions
+        )
 
     def test_missing_alias_on_transform_points_at_transform(self) -> None:
         """A transform that drops 'alias' is told to set it in the transform

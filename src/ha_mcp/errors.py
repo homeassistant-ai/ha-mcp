@@ -466,6 +466,7 @@ def create_validation_error(
     details: str | None = None,
     invalid_json: bool = False,
     context: dict[str, Any] | None = None,
+    suggestions: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create a validation error response."""
     code = (
@@ -480,7 +481,11 @@ def create_validation_error(
     if parameter:
         final_context["parameter"] = parameter
     return create_error_response(
-        code, message, details, context=final_context if final_context else None
+        code,
+        message,
+        details,
+        suggestions=suggestions,
+        context=final_context if final_context else None,
     )
 
 

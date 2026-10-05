@@ -162,6 +162,24 @@ def _unknown_argument_hint(
     )
 
 
+def _argument_hint(
+    param: str,
+    errs: Sequence[ErrorDetails],
+    unclaimed: Sequence[str],
+    valid_parameters: list[str] | None,
+    config_keys: set[str] | None,
+) -> tuple[str, bool]:
+    """Hint for one rejected argument.
+
+    Returns the hint text and whether the argument is a config root key
+    passed at the top level of a config-writing tool (issue #2649).
+    """
+    if valid_parameters is not None and errs[0]["type"] == _UNKNOWN_ARGUMENT:
+        hint = _unknown_argument_hint(param, unclaimed, config_keys)
+        return hint, config_keys is not None and param in config_keys
+    return _type_hint(errs), False
+
+
 def _type_hint(errs: Sequence[ErrorDetails]) -> str:
     """Prefer a dict_type/list_type hint; else the first error's raw message."""
     return next(
@@ -225,14 +243,13 @@ class ValidationErrorMiddleware(Middleware):
                 )
 
             parts: list[str] = []
+            misplaced_keys: list[str] = []
             for param, errs in grouped.items():
-                if (
-                    valid_parameters is not None
-                    and errs[0]["type"] == _UNKNOWN_ARGUMENT
-                ):
-                    hint = _unknown_argument_hint(param, unclaimed, config_keys)
-                else:
-                    hint = _type_hint(errs)
+                hint, misplaced = _argument_hint(
+                    param, errs, unclaimed, valid_parameters, config_keys
+                )
+                if misplaced:
+                    misplaced_keys.append(param)
                 parts.append(f"`{param}`: {hint}" if param else hint)
             message = "; ".join(parts) if parts else "Invalid argument types."
             error_context: dict[str, Any] | None = None
@@ -241,11 +258,22 @@ class ValidationErrorMiddleware(Middleware):
                 listing = ", ".join(valid_parameters) or "none"
                 message += f"{separator}Valid parameters: {listing}."
                 error_context = {"valid_parameters": valid_parameters}
+            # A misplaced config key repeats the move in the suggestions, the
+            # way the missing-field rejection does (issue #2649 section 1);
+            # otherwise the generic suggestions stand.
+            suggestions: list[str] | None = None
+            if misplaced_keys:
+                suggestions = [
+                    f"Move `{key}` inside the `config` argument, e.g. "
+                    f"config={{'{key}': ...}}."
+                    for key in misplaced_keys
+                ]
             raise_tool_error(
                 create_validation_error(
                     message,
                     details=", ".join(dict.fromkeys(err["type"] for err in errors)),
                     context=error_context,
+                    suggestions=suggestions,
                 )
             )
         return result

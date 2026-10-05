@@ -49,6 +49,7 @@ from .config_helpers.registry import validate_registry_ids
 from .config_write_errors import (
     ENABLED_MISPLACED_GUIDANCE,
     ENABLED_REMOVE_SUGGESTION,
+    ENABLED_UNCHANGED_SUGGESTION,
     config_has_enabled,
     reject_invalid_config_inputs,
 )
@@ -903,9 +904,11 @@ class AutomationConfigTools:
             # (trigger -> triggers, action -> actions, condition -> conditions).
             config_dict = _normalize_automation_config(config_dict)
 
-            # Purely local input checks run before any Home Assistant I/O, so
-            # a malformed config rejects without spending GETs or needing HA
-            # reachable.
+            # Purely local input checks run before the tool's own reads, so
+            # a malformed config rejects without spending the hash check's
+            # or the alias guard's GETs. (The auto-backup wrapper may take
+            # its pre-write snapshot first on updates; that read is outside
+            # this tool's control.)
             self._validate_required_fields(config_dict, identifier)
 
             # Both the hash check and alias guard read the resolved storage key.
@@ -1875,7 +1878,9 @@ class AutomationConfigTools:
             if config_has_enabled(config_dict):
                 context["invalid_key"] = "enabled"
                 message += f". {ENABLED_MISPLACED_GUIDANCE}"
-                suggestions.append(ENABLED_REMOVE_SUGGESTION)
+                suggestions.extend(
+                    [ENABLED_REMOVE_SUGGESTION, ENABLED_UNCHANGED_SUGGESTION]
+                )
             raise_tool_error(
                 create_error_response(
                     code=ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,

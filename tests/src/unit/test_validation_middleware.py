@@ -427,10 +427,17 @@ async def test_misplaced_automation_config_key_says_it_belongs_in_config() -> No
     with pytest.raises(ToolError) as exc_info:
         await mcp.call_tool("ha_config_set_automation", {"alias": "Goodnight"})
 
-    msg = json.loads(str(exc_info.value))["error"]["message"]
+    body = json.loads(str(exc_info.value))
+    msg = body["error"]["message"]
     assert "`alias`: unknown parameter" in msg
     assert "inside `config`" in msg
     assert msg.endswith("Valid parameters: config, identifier, python_transform.")
+    # The guidance is repeated in the suggestions, not only in the message.
+    error = body["error"]
+    all_suggestions = [error.get("suggestion")] + (error.get("suggestions") or [])
+    assert any(
+        s and "Move `alias` inside the `config` argument" in s for s in all_suggestions
+    )
 
 
 @pytest.mark.asyncio
@@ -443,9 +450,16 @@ async def test_misplaced_script_config_key_says_it_belongs_in_config() -> None:
             {"script_id": "blink", "sequence": [{"action": "x"}]},
         )
 
-    msg = json.loads(str(exc_info.value))["error"]["message"]
+    body = json.loads(str(exc_info.value))
+    msg = body["error"]["message"]
     assert "`sequence`: unknown parameter" in msg
     assert "inside `config`" in msg
+    error = body["error"]
+    all_suggestions = [error.get("suggestion")] + (error.get("suggestions") or [])
+    assert any(
+        s and "Move `sequence` inside the `config` argument" in s
+        for s in all_suggestions
+    )
 
 
 @pytest.mark.asyncio
