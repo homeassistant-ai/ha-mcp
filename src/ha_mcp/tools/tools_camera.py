@@ -35,20 +35,27 @@ from .tool_hints import read_only_hints
 logger = logging.getLogger(__name__)
 
 
-_CONTENT_TYPE_MAP = {
-    "jpeg": "jpeg",
-    "jpg": "jpeg",
-    "png": "png",
-    "gif": "gif",
-}
+# Subtypes that denote JPEG under an alternate spelling. Every other
+# image/* subtype is reported verbatim (image/webp -> "webp"); the JPEG
+# default applies only when the header names no image subtype at all.
+_JPEG_ALIASES = {"jpg": "jpeg", "jpe": "jpeg", "jif": "jpeg"}
 
 
 def _detect_image_format(content_type: str) -> str:
-    """Detect image format from Content-Type header, defaulting to JPEG."""
-    for key, fmt in _CONTENT_TYPE_MAP.items():
-        if key in content_type:
-            return fmt
-    return "jpeg"
+    """Report the declared image format from a Content-Type header.
+
+    Only the media type's subtype is relevant (``image/jpeg`` -> ``jpeg``);
+    parameters such as ``; q=0.9`` are stripped and JPEG's alternate
+    spellings are folded in. Unknown image subtypes pass through verbatim —
+    relabelling ``image/webp`` as JPEG would misidentify the Image block.
+    The JPEG default applies only when the header is missing, empty, or
+    not an ``image/*`` type with a subtype (e.g. ``application/octet-stream``).
+    """
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    primary, _, subtype = media_type.partition("/")
+    if primary != "image" or not subtype:
+        return "jpeg"
+    return _JPEG_ALIASES.get(subtype, subtype)
 
 
 def _snapshot_info_text(

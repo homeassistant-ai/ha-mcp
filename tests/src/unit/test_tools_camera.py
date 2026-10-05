@@ -8,7 +8,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.tools.tools_camera import CameraTools
+from ha_mcp.tools.tools_camera import CameraTools, _detect_image_format
 
 
 def _png(width: int, height: int) -> bytes:
@@ -27,6 +27,34 @@ def _png(width: int, height: int) -> bytes:
 def _error_body(exc_info: pytest.ExceptionInfo[ToolError]) -> dict:
     """Parse the structured error payload carried by a raised ToolError."""
     return json.loads(exc_info.value.args[0])["error"]
+
+
+class TestDetectImageFormat:
+    """Content-Type header -> the declared format the sniff falls back to."""
+
+    @pytest.mark.parametrize(
+        ("content_type", "expected"),
+        [
+            ("image/jpeg", "jpeg"),
+            ("image/jpg", "jpeg"),  # alias folding
+            ("image/jpe", "jpeg"),
+            ("image/jif", "jpeg"),
+            ("image/png", "png"),
+            ("image/gif", "gif"),
+            ("image/webp", "webp"),  # unknown subtypes pass through verbatim
+            ("image/tiff", "tiff"),
+            ("image/avif", "avif"),
+            ("image/jpeg; q=0.9", "jpeg"),  # parameters are stripped
+            ("IMAGE/PNG", "png"),  # case-insensitive
+            ("  image/png  ", "png"),  # whitespace is stripped
+            ("application/octet-stream", "jpeg"),  # non-image -> default
+            ("audio/mpeg", "jpeg"),
+            ("image/", "jpeg"),  # type present, no subtype
+            ("", "jpeg"),  # missing header
+        ],
+    )
+    def test_declared_format(self, content_type: str, expected: str) -> None:
+        assert _detect_image_format(content_type) == expected
 
 
 class TestHaGetCameraImage:
@@ -347,6 +375,25 @@ class TestHaGetCameraImage:
         assert image.to_image_content().mime_type == "image/jpeg"
         # No recognized magic bytes — the text reports the format only.
         assert text.startswith("Camera snapshot (JPEG).")
+
+    @pytest.mark.asyncio
+    async def test_unrecognized_image_subtype_is_not_relabelled_jpeg(self, mock_client):
+        """image/webp stays image/webp end to end.
+
+        The sniff recognizes no container in the payload, so the declared
+        format is what both blocks report — and it must be webp, not a
+        JPEG guess, or the Image block lies about its bytes.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"RIFF\x00\x00\x00\x00WEBP"
+        mock_response.headers = {"content-type": "image/webp"}
+        mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
+
+        tools = CameraTools(mock_client)
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
+        assert image.to_image_content().mime_type == "image/webp"
+        assert text.startswith("Camera snapshot (WEBP).")
 
     @pytest.mark.asyncio
     async def test_width_only_param(self, mock_client):
