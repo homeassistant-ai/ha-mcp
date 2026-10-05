@@ -72,6 +72,49 @@ def _missing_field_guidance(
     )
 
 
+def reject_sequence_misroute(
+    config_dict: dict[str, Any],
+    missing_fields: list[str],
+    identifier: str | None,
+) -> None:
+    """Raise when a 'sequence' key shows the config is really a script.
+
+    Returns silently when the config does not look script-shaped, so the
+    caller stays a one-liner. A runtime-only ``enabled`` key folds into the
+    same rejection instead of costing another round trip.
+    """
+    if not (
+        missing_fields
+        and "sequence" in config_dict
+        and ("triggers" in missing_fields or "actions" in missing_fields)
+    ):
+        return
+    context: dict[str, Any] = {"missing_fields": missing_fields}
+    if identifier:
+        context["identifier"] = identifier
+    message = f"Missing required fields: {', '.join(missing_fields)}"
+    suggestions = [
+        "Did you mean ha_config_set_script? Scripts use 'sequence' directly.",
+        "For an automation, replace 'sequence' with 'actions' and add 'triggers'.",
+    ]
+    if config_has_enabled(config_dict):
+        context["invalid_key"] = "enabled"
+        message += f". {ENABLED_MISPLACED_GUIDANCE}"
+        suggestions.extend([ENABLED_REMOVE_SUGGESTION, ENABLED_UNCHANGED_SUGGESTION])
+    raise_tool_error(
+        create_error_response(
+            code=ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+            message=message,
+            details=(
+                "Config contains 'sequence', which belongs to scripts. "
+                "Automations use 'triggers' and 'actions'; scripts use 'sequence'."
+            ),
+            suggestions=suggestions,
+            context=context,
+        )
+    )
+
+
 def reject_invalid_config_inputs(
     config_dict: dict[str, Any],
     missing_fields: list[str],

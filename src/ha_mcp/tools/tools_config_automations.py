@@ -47,11 +47,8 @@ from .coercion import JSON_STRING_COERCION, coerce_to_list, parse_json_param
 from .component_config_reads import fetch_entity_lookup_via_component
 from .config_helpers.registry import validate_registry_ids
 from .config_write_errors import (
-    ENABLED_MISPLACED_GUIDANCE,
-    ENABLED_REMOVE_SUGGESTION,
-    ENABLED_UNCHANGED_SUGGESTION,
-    config_has_enabled,
     reject_invalid_config_inputs,
+    reject_sequence_misroute,
 )
 from .config_write_helpers import (
     apply_entity_category,
@@ -1859,40 +1856,7 @@ class AutomationConfigTools:
             required_fields = ["alias", "triggers", "actions"]
 
         missing_fields = [f for f in required_fields if f not in config_dict]
-        # If the caller supplied a 'sequence' key, the config looks like a
-        # script — point them at ha_config_set_script instead of the generic
-        # missing-fields error.
-        if (
-            missing_fields
-            and "sequence" in config_dict
-            and ("triggers" in missing_fields or "actions" in missing_fields)
-        ):
-            context: dict[str, Any] = {"missing_fields": missing_fields}
-            if identifier:
-                context["identifier"] = identifier
-            message = f"Missing required fields: {', '.join(missing_fields)}"
-            suggestions = [
-                "Did you mean ha_config_set_script? Scripts use 'sequence' directly.",
-                "For an automation, replace 'sequence' with 'actions' and add 'triggers'.",
-            ]
-            if config_has_enabled(config_dict):
-                context["invalid_key"] = "enabled"
-                message += f". {ENABLED_MISPLACED_GUIDANCE}"
-                suggestions.extend(
-                    [ENABLED_REMOVE_SUGGESTION, ENABLED_UNCHANGED_SUGGESTION]
-                )
-            raise_tool_error(
-                create_error_response(
-                    code=ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
-                    message=message,
-                    details=(
-                        "Config contains 'sequence', which belongs to scripts. "
-                        "Automations use 'triggers' and 'actions'; scripts use 'sequence'."
-                    ),
-                    suggestions=suggestions,
-                    context=context,
-                )
-            )
+        reject_sequence_misroute(config_dict, missing_fields, identifier)
         reject_invalid_config_inputs(config_dict, missing_fields, identifier, source)
 
         # Issue #1169: see _check_scene_create_misroute
