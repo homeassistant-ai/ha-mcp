@@ -173,11 +173,14 @@ jobs:
           case "$CHANNEL" in
             stable)
               # The newest vX.Y.Z tag is the release semantic-release just cut;
-              # its commit carries the stamped manifest. Snapshot THAT commit,
-              # not master's tip, so later merges never ride a stable tag.
+              # its commit carries the stamped manifest. Snapshot THAT commit's
+              # component, not master's tip, so later merges never ride a
+              # stable tag. A separate worktree keeps this workflow's own
+              # scripts: a recovery dispatch may target an older tag.
               VER=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
               VER="${VER#v}"
-              git checkout --quiet "v${VER}"
+              SRC="$RUNNER_TEMP/release-src"
+              git worktree add --quiet --detach "$SRC" "v${VER}"
               PIN="$VER"
               TAG="v${VER}"
               DIST=ha-mcp
@@ -193,6 +196,7 @@ jobs:
               VER="${PIN%.dev*}"
               TAG="v${VER}-dev.${PIN##*.dev}"
               DIST=ha-mcp-dev
+              SRC=.
               ;;
             *)
               exit 0
@@ -203,6 +207,7 @@ jobs:
             echo "version=$VER"
             echo "pin=$PIN"
             echo "dist=$DIST"
+            echo "src=$SRC"
             echo "tag=$TAG"
           } >> "$GITHUB_OUTPUT"
 
@@ -226,6 +231,7 @@ jobs:
           VER: ${{ steps.release.outputs.version }}
           PIN: ${{ steps.release.outputs.pin }}
           DIST: ${{ steps.release.outputs.dist }}
+          SRC: ${{ steps.release.outputs.src }}
         run: |
           if [ "$CHANNEL" = none ]; then
             # A docs-only push refreshes the README and repo files; the
@@ -234,7 +240,7 @@ jobs:
           else
             rm -rf /tmp/mirror/custom_components
             mkdir -p /tmp/mirror/custom_components
-            cp -r custom_components/ha_mcp_tools /tmp/mirror/custom_components/
+            cp -r "$SRC/custom_components/ha_mcp_tools" /tmp/mirror/custom_components/
             rm -rf /tmp/mirror/custom_components/ha_mcp_tools/__pycache__
             python3 scripts/stamp_component_version.py \
               --component-dir /tmp/mirror/custom_components/ha_mcp_tools \

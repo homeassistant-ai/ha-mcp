@@ -76,9 +76,8 @@ class TestOAuthCallbackEditor:
             invoke=(
                 "document.getElementById('oauthCallbacksInput').value = "
                 "' https://a.example/cb \\n\\nhttp://127.0.0.1/cb';"
-                "await saveOAuthCallbacks({allowlist: document.getElementById("
-                "'oauthCallbacksInput').value.split('\\n').map(s => s.trim())"
-                ".filter(Boolean)});"
+                "document.getElementById('oauthCallbacksSave').click();"
+                "await new Promise(r => setTimeout(r, 0));"
             ),
         )
         posts = [

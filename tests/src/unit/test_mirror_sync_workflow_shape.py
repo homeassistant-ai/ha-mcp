@@ -92,6 +92,20 @@ class TestMirrorSyncShape:
             "Tag the mirror"
         )
 
+    def test_stable_leg_keeps_the_workflows_own_scripts(self) -> None:
+        # A recovery dispatch runs this workflow from master against an older
+        # tag; checking the tag out over the working tree would run that
+        # tag's scripts with arguments only master's understand.
+        steps = _workflow(_MIRROR)["jobs"]["sync"]["steps"]
+        resolve = next(
+            s
+            for s in steps
+            if s.get("name") == "Resolve the release this run publishes"
+        )
+        stage = next(s for s in steps if s.get("name") == "Stage snapshot")
+        assert "git checkout" not in resolve["run"]
+        assert '"$SRC/custom_components/ha_mcp_tools"' in stage["run"]
+
     def test_snapshot_is_stamped(self) -> None:
         stage = next(
             step
