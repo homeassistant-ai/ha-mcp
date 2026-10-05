@@ -17,7 +17,7 @@ _DATA_DIR = tempfile.mkdtemp(prefix="ha-mcp-uat-")
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    os.environ.setdefault("HA_MCP_CONFIG_DIR", _DATA_DIR)
+    os.environ["HA_MCP_CONFIG_DIR"] = _DATA_DIR
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
