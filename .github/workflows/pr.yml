@@ -43,7 +43,8 @@ jobs:
   # reports Success to a required check (a workflow path-skip would not).
   # The HACS component shares the server's version and pins the server build
   # it runs (#2427). semantic-release stamps all four places in each release
-  # commit (version_variables in pyproject.toml); this fails a PR that edits
+  # commit (pyproject's project.version, the manifest's version and ha-mcp pin,
+  # const.py's COMPONENT_VERSION); this fails a PR that edits
   # one of them by hand, which would ship a component reporting a version, or
   # pinning a server, other than the release it is part of. The job keeps its
   # old name so a branch rule requiring it stays satisfied.

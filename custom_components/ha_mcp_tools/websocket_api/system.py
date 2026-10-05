@@ -399,8 +399,8 @@ async def _server_entry_update_prep(
     get its confirmation. It is therefore scheduled after a flush delay. The task is
     created with :func:`hass.async_create_background_task` (hass-owned), NOT
     ``entry.async_create_background_task``: an entry-owned task is cancelled by the
-    unload the reload performs, so it could cancel itself before firing — the exact
-    trap ``embedded_entry._on_version_update`` documents. Being hass-owned, the task
+    unload the reload performs, so it would cancel itself before
+    ``async_update_entry`` runs. Being hass-owned, the task
     survives to invoke ``async_update_entry`` (a synchronous ``@callback`` that
     returns as soon as it schedules the listener), then completes; the reload it
     triggers runs as its own hass task after the response has flushed.
