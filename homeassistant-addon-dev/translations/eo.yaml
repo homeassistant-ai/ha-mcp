@@ -257,22 +257,24 @@ configuration:
       momentfotoj preter ĉi tiu limo estas forigitaj ĉe ĉiu sukcesa kapto. Defaŭlte
       100, gamo 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+    name: Permesi plenajn akompanajn agojn de HA-momentfotoj
+    description: Permesi al AI-asistantoj administri plenajn momentfotojn de Home
+      Assistant per ha_manage_backup(scope='snapshot') kaj la ekvivalentaj rezervaj
+      servoj kaj komandoj en ha_call_service. Malŝalti ĉi tion blokas ĉiun momentfotan
+      agon, inkluzive de listigado, dum redaktaj rezervoj restas disponeblaj. Forigo
+      de momentfotoj nur disponeblas per ha_manage_backup, ankaŭ postulas enable_snapshot_delete,
+      kaj ĝiaj protektoj ankoraŭ validas. Ŝaltita defaŭlte. Ŝanĝu ĉi tiun agordon
+      aŭ uzu la retpaĝan Agordan UI-rigardeton Backups; postulas restartigon en la
+      aplikaĵo.
   backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    name: Igi rezervadministradon nur-legebla
+    description: Limigi ha_manage_backup al listigado, rigardado kaj komparado de
+      redaktaj rezervoj, kaj listigado de plenaj HA-momentfotoj kiam momentfotaj agoj
+      estas ebligitaj. Blokas manan kreadon de rezervoj, restarigon (inkluzive de
+      redaktaj restarigoj), kaj forigon, inkluzive de la ekvivalentaj rezervaj servoj
+      kaj komandoj en ha_call_service. Aŭtomataj antaŭredaktaj rezervoj daŭras, kaj
+      homaj agoj en la reta Agorda UI restas disponeblaj. Malŝaltita defaŭlte; postulas
+      restartigon en la aplikaĵo.
   enable_snapshot_delete:
     name: Permesi forigon de momentfotoj
     description: Permesas al ha_manage_backup forigi plenajn HA-momentfotajn tarball-ojn

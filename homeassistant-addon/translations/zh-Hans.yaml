@@ -71,22 +71,16 @@ configuration:
     name: 自动备份保留数量（每个实体）
     description: 每个实体保留的最大快照数量。超出该上限的较旧快照会在每次成功捕获时被轮换清除。默认 100，范围 1–10000。
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+    name: 允许完整的 Home Assistant 快照操作
+    description: 允许 AI 助手通过 ha_manage_backup(scope='snapshot') 以及 ha_call_service
+      中的等效备份服务和命令来管理完整的 Home Assistant 快照。关闭此项将阻止所有快照操作（包括列出快照），同时编辑备份仍然可用。快照删除仅可通过
+      ha_manage_backup 进行，还需启用 enable_snapshot_delete，且其保护措施依然有效。默认开启。请更改此选项或使用网页设置
+      UI 的“备份”标签页；在应用中需要重启。
   backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    name: 将备份管理设为只读
+    description: 限制 ha_manage_backup 仅能列出、查看和对比编辑备份，并在启用快照操作时列出完整的 Home Assistant
+      快照。阻止手动创建、恢复（包括编辑恢复）和删除备份，包括 ha_call_service 中的等效备份服务和命令。自动编辑前备份将继续进行，网页设置 UI
+      中的人工操作将保持可用。默认关闭；在应用中需要重启。
   enable_snapshot_delete:
     name: 允许删除快照
     description: 允许 ha_manage_backup 删除完整的 HA 快照 tarball（scope='snapshot', action='delete'）。默认关闭——快照可能是错误更改之后最后的恢复点，因此必须由人工在此主动开启。即使开启，计划备份、最新剩余的快照，以及比下方年龄下限更新的快照仍受保护。

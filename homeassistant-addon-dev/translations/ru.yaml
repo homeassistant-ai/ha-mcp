@@ -279,22 +279,24 @@ configuration:
       При каждом успешном создании снимка более старые снимки сверх этого лимита удаляются
       по ротации. По умолчанию: 100, диапазон: 1–10000.'
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+    name: Разрешить действия с полными бэкапами HA
+    description: Разрешить ИИ-ассистентам управлять полными бэкапами Home Assistant
+      через ha_manage_backup(scope='snapshot'), а также соответствующие службы резервного
+      копирования и команды в ha_call_service. Отключение этой настройки блокирует
+      любые действия со снапшотами, включая их вывод списком, в то время как бэкапы
+      редактирования остаются доступными. Удаление снапшотов доступно только через
+      ha_manage_backup, также требует включения enable_snapshot_delete, и его защиты
+      по-прежнему действуют. Включено по умолчанию. Измените эту опцию или используйте
+      вкладку Backups в веб-интерфейсе настроек; требуется перезапуск в приложении.
   backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    name: Сделать управление бэкапами доступным только для чтения
+    description: Ограничить ha_manage_backup получением списка, просмотром и сравнением
+      бэкапов редактирования, а также выводом списка полных бэкапов HA, когда действия
+      со снапшотами включены. Блокирует создание ручных бэкапов, восстановление (включая
+      восстановление после редактирования) и удаление, включая эквивалентные службы
+      бэкапов и команды в ha_call_service. Автоматические бэкапы до редактирования
+      продолжают создаваться, а действия пользователя на вкладке веб-интерфейса Настройки
+      остаются доступными. Выключено по умолчанию; требует перезапуска в приложении.
   enable_snapshot_delete:
     name: Разрешить удаление снимков
     description: 'Позволяет ha_manage_backup удалять полные tar-архивы снимков HA

@@ -284,22 +284,27 @@ configuration:
       plus anciens au-delà de cette limite sont retirés à chaque capture réussie.
       Par défaut 100, plage 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+    name: Autoriser les actions d'instantané complet de Home Assistant
+    description: Permettre aux assistants IA de gérer les instantanés complets de
+      Home Assistant via ha_manage_backup(scope='snapshot') ainsi que les services
+      et commandes de sauvegarde équivalents dans ha_call_service. Désactiver cette
+      option bloque toutes les actions d'instantané, y compris le listage, tandis
+      que les sauvegardes de modification restent disponibles. La suppression d'instantanés
+      n'est possible que via ha_manage_backup, nécessite également enable_snapshot_delete,
+      et ses protections s'appliquent toujours. Activé par défaut. Modifiez cette
+      option ou utilisez l'onglet Backups de l'interface des paramètres web ; nécessite
+      un redémarrage dans l'application.
   backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    name: Rendre la gestion des sauvegardes en lecture seule
+    description: Restreindre ha_manage_backup au listage, à l'affichage et à la comparaison
+      des sauvegardes de modification, ainsi qu'au listage des instantanés complets
+      de Home Assistant lorsque les actions d'instantané sont activées. Bloque la
+      création, la restauration (y compris les restaurations de modification) et la
+      suppression manuelles de sauvegardes, ainsi que les services et commandes de
+      sauvegarde équivalents dans ha_call_service. Les sauvegardes automatiques avant
+      modification continuent, et les actions humaines dans l'interface des paramètres
+      web restent disponibles. Désactivé par défaut ; nécessite un redémarrage dans
+      l'application.
   enable_snapshot_delete:
     name: Autoriser la suppression d'instantanés
     description: Permet à ha_manage_backup de supprimer des instantanés HA complets

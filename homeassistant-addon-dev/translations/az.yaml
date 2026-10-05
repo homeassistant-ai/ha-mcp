@@ -279,22 +279,25 @@ configuration:
       aşan köhnə anlıq nüsxələr hər uğurlu nüsxə yaratma zamanı silinir. Standart
       dəyər 100, aralıq 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+    name: Tam HA arxiv (snapshot) əməliyyatlarına icazə ver
+    description: AI köməkçilərinə ha_manage_backup(scope='snapshot') və ha_call_service
+      daxilindəki ekvivalent arxiv xidmətləri və əmrləri vasitəsilə tam Home Assistant
+      arxivlərini idarə etməyə icazə verin. Bunu söndürmək siyahıyaalma daxil olmaqla
+      bütün arxiv əməliyyatlarını bloklayır, redaktə arxivləri isə əlçatan qalır.
+      Arxivin silinməsi yalnız ha_manage_backup vasitəsilə mümkündür, həmçinin enable_snapshot_delete
+      tələb edir və onun qoruma mexanizmləri hələ də qüvvədədir. Varsayılan olaraq
+      aktivdir. Bu seçimi dəyişdirin və ya veb Settings UI Backups vərəqindən istifadə
+      edin; tətbiqdə yenidən başladılmasını tələb edir.
   backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    name: Arxiv idarəetməsini yalnız oxunaqlı edin
+    description: ha_manage_backup funksiyasını arxiv redaktələrini siyahıya almaq,
+      baxmaq və fərqləri yoxlamaq, həmçinin arxiv əməliyyatları aktiv olduqda tam
+      HA arxivlərini siyahıya almaqla məhdudlaşdırın. Əl ilə arxiv yaratma, bərpa
+      etmə (redaktə bərpaları daxil olmaqla) və silmə əməliyyatlarını, o cümlədən
+      ha_call_service daxilindəki ekvivalent arxiv xidmətləri və əmrlərini bloklayır.
+      Avtomatik redaktədən əvvəlki arxivlər davam edir və veb Settings UI səhifəsindəki
+      insan tərəfindən edilən əməliyyatlar əlçatan olaraq qalır. Varsayılan olaraq
+      deaktivdir; tətbiqdə yenidən başladılmasını tələb edir.
   enable_snapshot_delete:
     name: Anlıq nüsxələrin silinməsinə icazə ver
     description: ha_manage_backup alətinə HA-nın tam anlıq nüsxələrinin tar arxivlərini

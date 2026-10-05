@@ -250,22 +250,24 @@ configuration:
       utöver denna gräns roteras ut vid varje lyckad fångst. Standard 100, intervall
       1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+    name: Tillåt fullständiga HA-ögonblicksbildsåtgärder
+    description: Tillåt AI-assistenter att hantera fullständiga Home Assistant-ögonblicksbilder
+      genom ha_manage_backup(scope='snapshot') och motsvarande säkerhetskopieringstjänster
+      och kommandon i ha_call_service. Att stänga av detta blockerar alla ögonblicksbildsåtgärder,
+      inklusive listning, medan redigeringssäkerhetskopior förblir tillgängliga. Borttagning
+      av ögonblicksbilder är endast tillgänglig via ha_manage_backup, kräver dessutom
+      enable_snapshot_delete, och dess skydd gäller fortfarande. På som standard.
+      Ändra det här alternativet eller använd fliken Backups i webbens inställningsgränssnitt;
+      kräver omstart i appen.
   backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    name: Gör säkerhetskopieringshanteringen skrivskyddad
+    description: Begränsa ha_manage_backup till att lista, visa och jämföra redigeringssäkerhetskopior,
+      samt lista fullständiga HA-ögonblicksbilder när ögonblicksbildsåtgärder är aktiverade.
+      Blockerar manuell skapande, återställning (inklusive redigeringsåterställningar)
+      och borttagning av säkerhetskopior, inklusive motsvarande säkerhetskopieringstjänster
+      och kommandon i ha_call_service. Automatiska säkerhetskopior före redigering
+      fortsätter, och mänskliga åtgärder i webbens inställningsgränssnitt förblir
+      tillgängliga. Av som standard; kräver omstart i appen.
   enable_snapshot_delete:
     name: Tillåt radering av ögonblicksbilder
     description: Låter ha_manage_backup radera fullständiga HA-ögonblicksbilds-tarballar

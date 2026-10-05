@@ -275,22 +275,24 @@ configuration:
       limiet overschrijden, worden verwijderd bij elke succesvolle opname. Standaard
       100, bereik 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+    name: Volledige acties voor HA-snapshots toestaan
+    description: Staat AI-assistenten toe om volledige Home Assistant-snapshots te
+      beheren via ha_manage_backup(scope='snapshot') en de equivalente back-upservices
+      en -commando's in ha_call_service. Als je dit uitschakelt, worden alle snapshotacties
+      geblokkeerd, inclusief het weergeven van lijsten, terwijl bewerkingsback-ups
+      beschikbaar blijven. Het verwijderen van snapshots is alleen beschikbaar via
+      ha_manage_backup, vereist ook enable_snapshot_delete en de beveiligingen daarvoor
+      blijven van toepassing. Standaard ingeschakeld. Wijzig deze optie of gebruik
+      het tabblad Backups in de webinstellingen; vereist een herstart in de app.
   backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    name: Beheer van back-ups alleen-lezen maken
+    description: Beperkt ha_manage_backup tot het vermelden, bekijken en vergelijken
+      van bewerkingsback-ups en het vermelden van volledige HA-snapshots wanneer snapshotacties
+      zijn ingeschakeld. Blokkeert handmatige creatie, herstel (inclusief bewerkingsherstel)
+      en verwijdering van back-ups, inclusief de equivalente back-upservices en -commando's
+      in ha_call_service. Automatische back-ups vóór bewerkingen gaan door en handmatige
+      acties in de webinstellingen blijven beschikbaar. Standaard uitgeschakeld; vereist
+      een herstart in de app.
   enable_snapshot_delete:
     name: Snapshotverwijdering toestaan
     description: Laat ha_manage_backup volledige HA snapshot tarballs verwijderen

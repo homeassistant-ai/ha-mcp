@@ -125,22 +125,16 @@ configuration:
     name: 自動備份保留數量（每個實體）
     description: 每個實體保留的最大快照數。超出此上限的較舊快照會在每次成功擷取時被輪替清除。預設 100，範圍 1–10000。
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+    name: 允許完整的 Home Assistant 快照操作
+    description: 允許 AI 助理透過 ha_manage_backup(scope='snapshot') 以及 ha_call_service
+      中的對應備份服務和指令來管理完整的 Home Assistant 快照。關閉此選項將會封鎖所有快照操作（包含列出），而編輯備份則維持可用。快照刪除僅能透過
+      ha_manage_backup 進行，同時需要 enable_snapshot_delete，且其保護機制仍然適用。預設為開啟。請變更此選項或使用網頁設定
+      UI 的「備份」分頁；在應用程式中需要重新啟動。
   backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    name: 將備份管理設為唯讀
+    description: 限制 ha_manage_backup 僅能列出、檢視、比對編輯備份，並在啟用快照操作時列出完整的 Home Assistant
+      快照。封鎖手動備份建立、還原（包含編輯還原）與刪除，包含 ha_call_service 中的對應備份服務和指令。自動的編輯前備份將繼續執行，且網頁設定
+      UI 中的人工操作維持可用。預設為關閉；在應用程式中需要重新啟動。
   enable_snapshot_delete:
     name: 允許刪除快照
     description: 允許 ha_manage_backup 刪除完整的 Home Assistant 快照 tarball（scope='snapshot'，action='delete'）。預設為關閉

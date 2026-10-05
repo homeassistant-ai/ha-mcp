@@ -167,22 +167,25 @@ configuration:
       vecchi oltre questo limite vengono ruotati a ogni cattura riuscita. Valore predefinito
       100, intervallo 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+    name: Consenti azioni sui backup completi di HA
+    description: Consente agli assistenti IA di gestire i backup completi di Home
+      Assistant tramite ha_manage_backup(scope='snapshot') e i servizi e comandi di
+      backup equivalenti in ha_call_service. Disattivando questa opzione vengono bloccate
+      tutte le azioni sui backup, inclusa la visualizzazione dell'elenco, mentre i
+      backup di modifica rimangono disponibili. L'eliminazione dei backup è disponibile
+      solo tramite ha_manage_backup, richiede anche enable_snapshot_delete e le relative
+      protezioni continuano ad applicarsi. Attivato per impostazione predefinita.
+      Modifica questa opzione o usa la scheda Backups dell'interfaccia Impostazioni
+      web; richiede il riavvio nell'applicazione.
   backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    name: Rendi la gestione dei backup di sola lettura
+    description: Limita ha_manage_backup all'elenco, visualizzazione e diff dei backup
+      di modifica e all'elenco dei backup completi di HA quando le azioni sui backup
+      sono abilitate. Blocca la creazione, il ripristino (inclusi i ripristini di
+      modifica) e l'eliminazione manuale dei backup, inclusi i servizi e comandi di
+      backup equivalenti in ha_call_service. I backup automatici pre-modifica continuano
+      e le azioni umane nell'interfaccia Impostazioni web rimangono disponibili. Disattivato
+      per impostazione predefinita; richiede il riavvio nell'applicazione.
   enable_snapshot_delete:
     name: Consenti l'eliminazione degli snapshot
     description: 'Consente a ha_manage_backup di eliminare gli archivi tarball degli

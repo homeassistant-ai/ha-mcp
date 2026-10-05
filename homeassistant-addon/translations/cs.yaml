@@ -149,22 +149,22 @@ configuration:
       tento limit jsou při každém úspěšném zachycení vyřazeny. Výchozí 100, rozsah
       1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+    name: Povolit akce s úplnými snapshoty HA
+    description: Umožnit AI asistentům spravovat úplné snapshoty Home Assistant prostřednictvím
+      ha_manage_backup(scope='snapshot') a odpovídajících zálohovacích služeb a příkazů
+      v ha_call_service. Vypnutím zablokujete všechny akce se snapshoty, včetně výpisu,
+      přičemž zálohy pro úpravy zůstanou dostupné. Mazání snapshotů je dostupné pouze
+      přes ha_manage_backup, vyžaduje také enable_snapshot_delete a jeho ochrany se
+      stále uplatňují. Ve výchozím nastavení zapnuto. Změňte tuto volbu nebo použijte
+      kartu Backups v nastavení webového rozhraní; v aplikaci je vyžadován restart.
   backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    name: Nastavit správu záloh jako jen pro čtení
+    description: Omezit ha_manage_backup na výpis, zobrazení a porovnávání záloh pro
+      úpravy a výpis úplných snapshotů HA, když jsou povoleny akce se snapshoty. Blokuje
+      ruční vytváření, obnovení (včetně obnovení úprav) a mazání záloh, včetně odpovídajících
+      zálohovacích služeb a příkazů v ha_call_service. Automatické zálohy před úpravami
+      pokračují a lidské akce ve webovém rozhraní nastavení zůstávají dostupné. Ve
+      výchozím nastavení vypnuto; v aplikaci je vyžadován restart.
   enable_snapshot_delete:
     name: Povolit smazání snímků
     description: Umožňuje ha_manage_backup mazat úplné HA snapshot tarbally (scope='snapshot',
