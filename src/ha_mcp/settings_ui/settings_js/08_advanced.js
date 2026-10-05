@@ -1,41 +1,4 @@
 // ===== Advanced settings =====
-const ADVANCED_FIELD_META = {
-  homeassistant_url:   { label: "Home Assistant URL",          help: "Display only. Set via HOMEASSISTANT_URL env var or App (add-on)-managed (Supervisor)." },
-  homeassistant_token: { label: "Home Assistant token",        help: "Display only. Set via HOMEASSISTANT_TOKEN env var. Masked here for security." },
-  timeout:             { label: "HA request timeout (s)",      help: "Per-request HTTP timeout. Range 1–600. Restart required." },
-  max_retries:         { label: "HA request max retries",      help: "Retry budget per failed REST call. Range 0–20. Restart required." },
-  verify_ssl:          { label: "Verify SSL certificates",     help: "Skip TLS verification only on trusted networks (self-signed certs, hostname mismatch). Restart required." },
-  ha_tool_concurrency: { label: "Home Assistant tool concurrency", help: "Optional limit on outer Home Assistant tool calls across all MCP sessions. Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps unlimited behavior. A call waiting for capacity fails after 60 seconds. Range 0–32. Restart required." },
-  fuzzy_threshold:     { label: "Fuzzy-search threshold",      help: "Lower = looser entity match. Range 0–100." },
-  automation_config_time_budget: { label: "Automation config time budget (s)", help: "Max seconds deep search spends fetching automation configs before returning a partial result. Raise on instances with many automations. Range 1–600. Restart required." },
-  script_config_time_budget:     { label: "Script config time budget (s)",     help: "Max seconds deep search spends fetching script configs before returning a partial result. Range 1–600. Restart required." },
-  scene_config_time_budget:      { label: "Scene config time budget (s)",      help: "Max seconds deep search spends fetching scene configs before returning a partial result. Range 1–600. Restart required." },
-  individual_config_timeout:     { label: "Per-request config fetch timeout (s)", help: "Timeout for each individual automation/script/scene config fetch during deep search. On HA servers that serve config reads serially, raise this and/or lower the batch size so queued requests don't time out. Values above the HA request timeout (HA_TIMEOUT, default 30) have no extra effect — the HTTP client gives up first. Range 1–600. Restart required." },
-  individual_fetch_batch_size:   { label: "Config fetch batch size",          help: "How many per-id config fetches deep search issues concurrently. Lower toward 1 on HA servers that serve config reads serially (symptom: 'timed out' partial-result warnings). Range 1–100. Restart required." },
-  enable_history_query_guardrails: { label: "History query guardrails",         help: "Reject recorder queries that exceed conservative entity and time-range budgets. Disabled by default." },
-  backup_hint:         { label: "Backup-hint level",           help: "Tunes how strongly the LLM is prompted to take a full-HA snapshot before risky writes." },
-  dashboard_screenshot_engine_url: { label: "Dashboard screenshot engine URL", help: "Base URL of the screenshot engine (e.g. http://puppet:10000). Leave blank to auto-discover the Puppet App (add-on) via the Supervisor (HA OS / Supervised). Only used when the Dashboard Screenshot beta feature is enabled. Takes effect without a restart." },
-  enable_websocket:    { label: "Enable WebSocket",            help: "WebSocket-based state monitoring. Disabling falls back to polling; many tools degrade. Restart required." },
-  enabled_tool_modules: { label: "Enabled tool modules",       help: "Comma-separated module names, or 'all'. Restricts which tool registry modules load at startup. Restart required." },
-  enable_dashboard_partial_tools: { label: "Dashboard partial-update tools", help: "Token-efficient partial dashboard tools. Disable for clients with programmatic tool use." },
-  mcp_server_name:     { label: "MCP server name",             help: "Reported in MCP handshake. Restart required." },
-  mcp_server_version:  { label: "MCP server version",          help: "Defaults to the package version. Overriding can confuse clients that key on this string. Restart required." },
-  environment:         { label: "Environment",                 help: "'development' or 'production'. Affects logging verbosity. Restart required." },
-  log_level:           { label: "Log level",                   help: "DEBUG/INFO/WARNING/ERROR/CRITICAL. Set once at startup; restart required." },
-  debug:               { label: "Debug mode",                  help: "Verbose request logging. Logs sensitive data; do not enable in production. Restart required." },
-  http_transport_diagnostics: { label: "HTTP transport diagnostics", help: "Experimental. Automatically enable INFO logging for HTTP diagnostics while the server runs, without payloads or credentials. Other loggers are unchanged; explicit Home Assistant logger overrides and filters still apply. Does not confirm client receipt. HTTP only; restart required." },
-  http_json_response: { label: "JSON responses instead of streaming", help: "Experimental. Return a single JSON response instead of an SSE stream. Affects all HTTP clients on this server and disables streamed progress for these responses. HTTP only; restart required." },
-  code_mode_max_duration:    { label: "Code-mode max duration (s)",   help: "Wall-clock budget per sandbox run. Range 1–300. Restart required." },
-  code_mode_max_memory:      { label: "Code-mode max memory (bytes)", help: "RSS cap per sandbox run. Range 1 MB–256 MB. Restart required." },
-  code_mode_max_recursion:   { label: "Code-mode max recursion",      help: "Recursion-depth cap per sandbox run. Restart required." },
-  code_mode_max_invocations: { label: "Code-mode max invocations",    help: "API/tool-call cap per sandbox run. Restart required." },
-  code_mode_saved_tools_path:{ label: "Saved-tools path",              help: "JSON file where ha_manage_custom_tool persists saved tools across restarts. Restart required." },
-  extra_yaml_write_keys:     { label: "Extra YAML write keys",        help: "Extra top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Enter one key per line or separate keys with commas. Keys that redefine Home Assistant's own trust boundary can never be added and are ignored. Requires custom component 1.2.4 or newer." },
-  sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "0 picks a free port on first start and keeps it for later restarts; 1024–65535 pins a preferred port (falls back to a free one if taken). Restart required." },
-  enable_dev_mode:     { label: "Developer mode",               help: "⚠ DANGER: registers hidden developer tools (ha_dev_manage_server, ha_dev_manage_settings) that let AI agents change server settings and replace the running server version (e.g. install a PR build). For development and testing only. Restart required." },
-  dev_tools_security_policy_access: { label: "Dev tools security policy access", help: "⚠ DANGER: while developer mode is on, lets the developer tools rewrite tool security policies, add or remove per-tool approval gates, and approve or deny pending approvals on your behalf — an AI agent can accept its own gated calls. For policy testing only. Takes effect without a restart." },
-};
-
 let _advancedFields = [];
 let _advancedDirty = {};  // {field: newValue} for unsaved edits
 
@@ -157,11 +120,7 @@ function renderAdvancedSection(containerId, fields) {
   fields.forEach(f => {
     const row = document.createElement('div');
     row.className = 'adv-row' + (f.editable ? '' : ' locked');
-    const meta = localizeMeta(
-      'advanced',
-      f.field,
-      ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' }
-    );
+    const meta = localizeMeta('advanced', f.field, {});
     let controlHtml;
     if (f.choices) {
       controlHtml = `<select name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-labelledby="label-adv-${escapeHtml(f.field)}" ${f.editable ? '' : 'disabled'}>` +

@@ -479,11 +479,7 @@ function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByG
 function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
   const cmRows = (_advancedFields || []).filter(x => x.section === section);
   cmRows.forEach(f => {
-    const meta = localizeMeta(
-      'advanced',
-      f.field,
-      ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' }
-    );
+    const meta = localizeMeta('advanced', f.field, {});
     const row = document.createElement('div');
     row.className = 'feature-row ' + cssClass + (lockedByGate ? ' dimmed' : '');
     const multiline = f.field === 'extra_yaml_write_keys';
