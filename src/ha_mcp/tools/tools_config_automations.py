@@ -1873,6 +1873,7 @@ class AutomationConfigTools:
                 "For an automation, replace 'sequence' with 'actions' and add 'triggers'.",
             ]
             if config_has_enabled(config_dict):
+                context["invalid_key"] = "enabled"
                 message += f". {ENABLED_MISPLACED_GUIDANCE}"
                 suggestions.append(ENABLED_REMOVE_SUGGESTION)
             raise_tool_error(

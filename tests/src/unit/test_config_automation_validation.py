@@ -169,6 +169,7 @@ class TestValidateRequiredFields:
             )
         body = _body_from_tool_error(exc_info.value)
         assert body["missing_fields"] == ["alias", "triggers", "actions"]
+        assert body["invalid_key"] == "enabled"
         error = body["error"]
         all_text = json.dumps(error)
         assert "ha_config_set_script" in all_text
