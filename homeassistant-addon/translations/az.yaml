@@ -3,6 +3,21 @@
 # src/ha_mcp/settings_ui/locales/az.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: TLS sertifikatını yoxla
+    description: Home Assistant serverinin TLS sertifikatını yoxlayın. Tətbiq (əlavə)
+      Supervisor proksisi vasitəsilə qoşulur, buna görə adətən bu seçimin təsiri olmur
+      və aktiv saxlanmalıdır. Yalnız tətbiqi (əlavəni) HA ilə özünün imzaladığı sertifikatı
+      olan və ya host adı uyğun gəlməyən ictimai HTTPS host adı üzərindən əlaqə yaratmaq
+      üçün yenidən konfiqurasiya etmisinizsə söndürün. Söndürmək ötürülmənin təhlükəsizliyini
+      zəiflədir — buna ehtiyacınız olduğunu dəqiq bilmirsinizsə, aktiv saxlayın. Qüvvəyə
+      minməsi üçün yenidən başlatmaq tələb olunur.
+  ha_tool_concurrency:
+    name: Home Assistant alətlərinin paralel icrası
+    description: Bütün sessiyalar üzrə Home Assistant alətlərinin üst səviyyəli çağırışlarının
+      eyni vaxtda icrası üçün istəyə bağlı limit. Daxili REST, WebSocket və hər alətin
+      daxilində şaxələnən çağırışların paralel icrası dəyişmir. 0 məhdudiyyətsiz davranışı
+      saxlayır. İcra üçün boş yer gözləyən çağırış 60 saniyədən sonra uğursuz olur.
   backup_hint:
     name: HA-nın tam anlıq nüsxəsi üçün tövsiyə səviyyəsi (LLM üçün)
     description: 'Riskli əməliyyatlardan (məs. cihazların kütləvi silinməsindən) əvvəl
@@ -22,12 +37,6 @@ configuration:
 
       aşağıdakı ayrıca **Redaktələrin avtomatik ehtiyat nüsxəsini aktivləşdir** seçimindən
       istifadə edin.'
-  secret_path:
-    name: Gizli yolun əvəzlənməsi
-    description: 'MCP serveri üçün istəyə bağlı fərdi HTTP yolu. Avtomatik yaradılmış
-      təhlükəsiz yoldan istifadə etmək üçün boş saxlayın.
-
-      '
   enable_tool_search:
     name: Alət axtarışını aktivləşdir
     description: 'Tam alət kataloqunu axtarış əsasında aşkarlama ilə əvəz edin. Boşdayanma
@@ -121,27 +130,6 @@ configuration:
       aktiv vəziyyətdə kilidlənir — təsdiq açarını yalnız o təqdim edir. Yuxarıdakı
       "Attach best-practice skills on writes" seçiminə tabedir və həmin seçim deaktiv
       olduqda təsirsizdir. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.'
-  ha_tool_concurrency:
-    name: Home Assistant alətlərinin paralel icrası
-    description: Bütün sessiyalar üzrə Home Assistant alətlərinin üst səviyyəli çağırışlarının
-      eyni vaxtda icrası üçün istəyə bağlı limit. Daxili REST, WebSocket və hər alətin
-      daxilində şaxələnən çağırışların paralel icrası dəyişmir. 0 məhdudiyyətsiz davranışı
-      saxlayır. İcra üçün boş yer gözləyən çağırış 60 saniyədən sonra uğursuz olur.
-  disabled_tools:
-    name: Deaktiv alətlər (vergüllə ayrılmış)
-    description: Burada sadalanan alətlər məcburi söndürülür və veb Parametrlər interfeysində
-      (Alətlər vərəqində) kilidlənir — əvvəlcə bu seçimdəki təyinatı ləğv etmədən
-      onları orada yenidən aktivləşdirmək mümkün deyil. Məcburi alətlərin kiçik bir
-      qrupu (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
-      söndürülə bilməz və burada sadalansa belə işləməyə davam edir. ha_get_skill_guide
-      yalnız ən yaxşı təcrübələrə ciddi riayət rejimi (enable_strict_mandatory_bps)
-      deaktiv olduqda söndürülə bilər. Vergüllə ayrılmış alət adları (məs. ha_call_event,ha_eval_template).
-  pinned_tools:
-    name: Sancaqlanmış alətlər (vergüllə ayrılmış)
-    description: Burada sadalanan alətlər sancaqlanmış vəziyyətdə kilidlənir — Alətlər
-      vərəqinin yuxarısında görünür və əvvəlcə bu seçimdəki təyinatı ləğv etmədən
-      veb Parametrlər interfeysindən sancaqlarını çıxarmaq mümkün deyil. Alət axtarışı
-      ilə birlikdə faydalıdır. Vergüllə ayrılmış alət adları.
   enable_auto_backup:
     name: Redaktələrin avtomatik ehtiyat nüsxəsini aktivləşdir
     description: 'Ehtiyat nüsxə mexanizmi ilə əhatə olunan hər yazma/dağıdıcı MCP
@@ -162,23 +150,6 @@ configuration:
       söndürmək imkan daxilində yaradılan nüsxələrdən imtina edir və bununla birlikdə
       fayl və birbaşa YAML alətlərini də istifadədən çıxarır. Qüvvəyə minməsi üçün
       yenidən başlatmaq tələb olunur.'
-  enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
-  backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Avtomatik ehtiyat nüsxə tezliyi limiti (dəqiqə)
     description: Hər obyekt üçün tezlik məhdudiyyətinin müddəti. 0 (standart) ehtiyat
@@ -190,6 +161,26 @@ configuration:
     description: Hər obyekt üçün saxlanılan anlıq nüsxələrin maksimum sayı. Bu limiti
       aşan köhnə anlıq nüsxələr hər uğurlu nüsxə yaratma zamanı silinir. Standart
       dəyər 100, aralıq 1–10000.
+  enable_snapshot_actions:
+    name: Tam HA arxiv (snapshot) əməliyyatlarına icazə ver
+    description: AI köməkçilərinə ha_manage_backup(scope='snapshot') və ha_call_service
+      daxilindəki ekvivalent arxiv xidmətləri və əmrləri vasitəsilə tam Home Assistant
+      arxivlərini idarə etməyə icazə verin. Bunu söndürmək siyahıyaalma daxil olmaqla
+      bütün arxiv əməliyyatlarını bloklayır, redaktə arxivləri isə əlçatan qalır.
+      Arxivin silinməsi yalnız ha_manage_backup vasitəsilə mümkündür, həmçinin enable_snapshot_delete
+      tələb edir və onun qoruma mexanizmləri hələ də qüvvədədir. Varsayılan olaraq
+      aktivdir. Bu seçimi dəyişdirin və ya veb Settings UI Backups vərəqindən istifadə
+      edin; tətbiqdə yenidən başladılmasını tələb edir.
+  backup_read_only:
+    name: Arxiv idarəetməsini yalnız oxunaqlı edin
+    description: ha_manage_backup funksiyasını arxiv redaktələrini siyahıya almaq,
+      baxmaq və fərqləri yoxlamaq, həmçinin arxiv əməliyyatları aktiv olduqda tam
+      HA arxivlərini siyahıya almaqla məhdudlaşdırın. Əl ilə arxiv yaratma, bərpa
+      etmə (redaktə bərpaları daxil olmaqla) və silmə əməliyyatlarını, o cümlədən
+      ha_call_service daxilindəki ekvivalent arxiv xidmətləri və əmrlərini bloklayır.
+      Avtomatik redaktədən əvvəlki arxivlər davam edir və veb Settings UI səhifəsindəki
+      insan tərəfindən edilən əməliyyatlar əlçatan olaraq qalır. Varsayılan olaraq
+      deaktivdir; tətbiqdə yenidən başladılmasını tələb edir.
   enable_snapshot_delete:
     name: Anlıq nüsxələrin silinməsinə icazə ver
     description: ha_manage_backup alətinə HA-nın tam anlıq nüsxələrinin tar arxivlərini
@@ -204,12 +195,24 @@ configuration:
       vaxt keçməlidir. Aralıq 0–365; 0 minimum həddi söndürür (ən yeni anlıq nüsxənin
       və planlaşdırılmış ehtiyat nüsxələrin qorunması qüvvədə qalır). Standart dəyər
       7.
-  verify_ssl:
-    name: TLS sertifikatını yoxla
-    description: Home Assistant serverinin TLS sertifikatını yoxlayın. Tətbiq (əlavə)
-      Supervisor proksisi vasitəsilə qoşulur, buna görə adətən bu seçimin təsiri olmur
-      və aktiv saxlanmalıdır. Yalnız tətbiqi (əlavəni) HA ilə özünün imzaladığı sertifikatı
-      olan və ya host adı uyğun gəlməyən ictimai HTTPS host adı üzərindən əlaqə yaratmaq
-      üçün yenidən konfiqurasiya etmisinizsə söndürün. Söndürmək ötürülmənin təhlükəsizliyini
-      zəiflədir — buna ehtiyacınız olduğunu dəqiq bilmirsinizsə, aktiv saxlayın. Qüvvəyə
-      minməsi üçün yenidən başlatmaq tələb olunur.
+  disabled_tools:
+    name: Deaktiv alətlər (vergüllə ayrılmış)
+    description: Burada sadalanan alətlər məcburi söndürülür və veb Parametrlər interfeysində
+      (Alətlər vərəqində) kilidlənir — əvvəlcə bu seçimdəki təyinatı ləğv etmədən
+      onları orada yenidən aktivləşdirmək mümkün deyil. Məcburi alətlərin kiçik bir
+      qrupu (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      söndürülə bilməz və burada sadalansa belə işləməyə davam edir. ha_get_skill_guide
+      yalnız ən yaxşı təcrübələrə ciddi riayət rejimi (enable_strict_mandatory_bps)
+      deaktiv olduqda söndürülə bilər. Vergüllə ayrılmış alət adları (məs. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Sancaqlanmış alətlər (vergüllə ayrılmış)
+    description: Burada sadalanan alətlər sancaqlanmış vəziyyətdə kilidlənir — Alətlər
+      vərəqinin yuxarısında görünür və əvvəlcə bu seçimdəki təyinatı ləğv etmədən
+      veb Parametrlər interfeysindən sancaqlarını çıxarmaq mümkün deyil. Alət axtarışı
+      ilə birlikdə faydalıdır. Vergüllə ayrılmış alət adları.
+  secret_path:
+    name: Gizli yolun əvəzlənməsi
+    description: 'MCP serveri üçün istəyə bağlı fərdi HTTP yolu. Avtomatik yaradılmış
+      təhlükəsiz yoldan istifadə etmək üçün boş saxlayın.
+
+      '

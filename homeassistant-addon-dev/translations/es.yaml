@@ -3,6 +3,21 @@
 # src/ha_mcp/settings_ui/locales/es.json (keys addon.*, features.*,
 # addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Verificar el certificado TLS
+    description: Verifica el certificado TLS del servidor de Home Assistant. La app
+      (add-on) se conecta a través del proxy del Supervisor, por lo que normalmente
+      esto no tiene efecto y debe permanecer habilitado. Desactívalo solo si has reconfigurado
+      la app (add-on) para comunicarse con HA a través de un nombre de host HTTPS
+      público con un certificado autofirmado o un error de coincidencia en el nombre
+      de host. Desactivarlo debilita la seguridad del transporte; déjalo activado
+      a menos que sepas que lo necesitas. Requiere reiniciar para aplicar los cambios.
+  ha_tool_concurrency:
+    name: Concurrencia de herramientas de Home Assistant
+    description: Límite opcional en las llamadas externas a herramientas de Home Assistant
+      en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución
+      por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una
+      llamada que espera capacidad falla después de 60 segundos.
   backup_hint:
     name: Nivel de sugerencia de instantánea completa de HA (para el LLM)
     description: 'Ajusta la redacción de la indicación que el LLM ve en la descripción
@@ -22,12 +37,19 @@ configuration:
       auxiliares / etc., usa la opción independiente **Activar copia de
 
       seguridad automática de las ediciones** que aparece más abajo.'
-  secret_path:
-    name: Ruta secreta personalizada
-    description: 'Ruta HTTP personalizada opcional para el servidor MCP. Déjala vacía
-      para usar la ruta segura generada automáticamente.
-
-      '
+  enable_beta_features:
+    name: Activar las funciones beta (principal)
+    description: ⚠ PELIGRO — estas herramientas pueden DAÑAR PERMANENTEMENTE tu instalación
+      de Home Assistant. Escriben en tu configuración YAML, tu sistema de archivos,
+      instalan componentes personalizados, ejecutan Python arbitrario en un entorno
+      aislado y editan las docstrings de las herramientas que ve la IA. No hay garantía
+      ni soporte — las habilitas BAJO TU PROPIO RIESGO. Haz una copia de seguridad
+      de Home Assistant antes de activarlas, y nunca las habilites en producción sin
+      una. Puerta maestra para las sub-banderas experimentales a continuación; las
+      sub-banderas se ignoran en tiempo de ejecución mientras esta maestra está desactivada,
+      incluso cuando se establecen explícitamente en verdadero. El mismo interruptor
+      también aparece en la interfaz de usuario de configuración web bajo "Funciones
+      beta (peligrosas)" — cualquiera de las dos superficies refleja la otra al reiniciar.
   enable_tool_search:
     name: Activar la búsqueda de herramientas
     description: 'Sustituye el catálogo completo de herramientas por un descubrimiento
@@ -46,6 +68,14 @@ configuration:
       Las herramientas se localizan mediante ha_search_tools y se ejecutan a través
       de proxies por categoría (lectura/escritura/borrado). Requiere reiniciar para
       que surta efecto.'
+  tool_search_max_results:
+    name: Máximo de resultados de la búsqueda de herramientas
+    description: 'Número máximo de herramientas ocultas devueltas por cada llamada
+      a ha_search_tools cuando la búsqueda de herramientas está habilitada; una herramienta
+      fijada que se encuentre dentro de ese recuento superior se añade como una entrada
+      breve de solo nombre además de este. Los valores más bajos (2-3) ahorran tokens
+      de contexto, pero pueden omitir herramientas relevantes. Rango: 2-10. Requiere
+      reinicio.'
   enable_tool_security_policies:
     name: Activar las políticas de seguridad de herramientas (avanzado)
     description: Somete a aprobación del usuario las llamadas a herramientas de alto
@@ -87,102 +117,6 @@ configuration:
       ya que reemplazar fragmentos diminutos corrompería resultados no relacionados).
       Los campos no marcados como contraseñas por su esquema no se pueden detectar.
       Desactivado por defecto.
-  enable_beta_features:
-    name: Activar las funciones beta (principal)
-    description: ⚠ PELIGRO — estas herramientas pueden DAÑAR PERMANENTEMENTE tu instalación
-      de Home Assistant. Escriben en tu configuración YAML, tu sistema de archivos,
-      instalan componentes personalizados, ejecutan Python arbitrario en un entorno
-      aislado y editan las docstrings de las herramientas que ve la IA. No hay garantía
-      ni soporte — las habilitas BAJO TU PROPIO RIESGO. Haz una copia de seguridad
-      de Home Assistant antes de activarlas, y nunca las habilites en producción sin
-      una. Puerta maestra para las sub-banderas experimentales a continuación; las
-      sub-banderas se ignoran en tiempo de ejecución mientras esta maestra está desactivada,
-      incluso cuando se establecen explícitamente en verdadero. El mismo interruptor
-      también aparece en la interfaz de usuario de configuración web bajo "Funciones
-      beta (peligrosas)" — cualquiera de las dos superficies refleja la otra al reiniciar.
-  enable_yaml_config_editing:
-    name: Activar la edición de la configuración YAML (beta)
-    description: Función beta. Permite que los asistentes de IA añadan, sustituyan
-      o eliminen claves de primer nivel en configuration.yaml y packages/*.yaml. Solo
-      se permiten las claves de la lista blanca (p. ej. template, sensor, command_line,
-      mqtt, knx); las claves centrales como homeassistant, http y recorder están bloqueadas.
-      Cada edición valida la sintaxis YAML, ejecuta una comprobación de la configuración
-      y crea una copia de seguridad automática. Los cambios en la mayoría de las claves
-      requieren reiniciar HA por completo para surtir efecto. Consulta docs/beta.md
-      para conocer las limitaciones. Cuando estén disponibles, es preferible usar
-      las herramientas específicas (automatizaciones, scripts, escenas, auxiliares,
-      sensores de plantilla). REQUIERE que la opción principal "Activar las funciones
-      beta" de arriba (y en la interfaz web) esté activada; de lo contrario, este
-      subindicador se ignora en tiempo de ejecución sea cual sea su valor aquí.
-  enable_yaml_packages_automation:
-    name: Permitir automation en packages/*.yaml
-    description: Subopción de la edición de configuración YAML. Cuando está activada,
-      ha_config_set_yaml acepta yaml_path='automation' dentro de packages/*.yaml.
-      Cuando está desactivada, la llamada se rechaza tanto en el cliente como en el
-      servidor. La herramienta en modo almacenamiento (ha_config_set_automation) no
-      se ve afectada. Desactivada de forma predeterminada; solo surte efecto si "Activar
-      la edición de la configuración YAML" de arriba también está activada.
-  enable_yaml_packages_script:
-    name: Permitir script en packages/*.yaml
-    description: Subopción de la edición de configuración YAML. Cuando está activada,
-      ha_config_set_yaml acepta yaml_path='script' dentro de packages/*.yaml. Cuando
-      está desactivada, la llamada se rechaza tanto en el cliente como en el servidor.
-      La herramienta en modo almacenamiento (ha_config_set_script) no se ve afectada.
-      Desactivada de forma predeterminada; solo surte efecto si "Activar la edición
-      de la configuración YAML" de arriba también está activada.
-  enable_yaml_packages_scene:
-    name: Permitir scene en packages/*.yaml
-    description: Subopción de la edición de configuración YAML. Cuando está activada,
-      ha_config_set_yaml acepta yaml_path='scene' dentro de packages/*.yaml. Cuando
-      está desactivada, la llamada se rechaza tanto en el cliente como en el servidor.
-      La herramienta en modo almacenamiento (ha_config_set_scene) no se ve afectada.
-      Desactivada de forma predeterminada; solo surte efecto si "Activar la edición
-      de la configuración YAML" de arriba también está activada.
-  enable_yaml_edit_confirm:
-    name: Exigir confirmación en las ediciones YAML (vista previa del diff)
-    description: 'Subopción de la edición de configuración YAML, activada de forma
-      predeterminada (recomendado). La primera llamada a ha_config_set_yaml devuelve
-      un diff unificado con exactamente lo que cambiaría en disco, más un token de
-      confirmación, y no escribe nada; la edición solo se aplica cuando se repite
-      la llamada con ese token. Existe para detectar cambios no intencionados fuera
-      de la edición solicitada antes de que lleguen al disco (issue #1720). Desactívalo
-      solo para ahorrar una ida y vuelta por edición.'
-  enable_code_mode:
-    name: Activar el entorno aislado de herramientas personalizadas (beta)
-    description: Función beta. Habilita la herramienta ha_manage_custom_tool, que
-      permite a los asistentes de IA crear, ejecutar, guardar y eliminar código Python
-      personalizado en un espacio aislado seguro cuando ninguna herramienta integrada
-      puede manejar la solicitud. El código se ejecuta en un intérprete aislado sin
-      acceso al sistema de archivos ni red arbitraria. El código del espacio aislado
-      puede acceder a la API REST de HA (api_get/api_post), enviar comandos WebSocket
-      (ws_send), llamar a herramientas MCP existentes (call_tool) o eliminar una herramienta
-      guardada (delete_saved_tool). Las herramientas guardadas persisten en /data/saved_tools.json
-      por defecto para sobrevivir a los reinicios de la app (add-on), y son visibles
-      para cualquier cliente que pueda conectarse. Consulta docs/beta.md para conocer
-      las limitaciones conocidas. Requiere reiniciar para que surta efecto. REQUIERE
-      que el interruptor principal "Enable beta features" de arriba (y en la interfaz
-      web) esté activado; de lo contrario, este subindicador se ignorará en tiempo
-      de ejecución independientemente de su valor aquí.
-  enable_lite_docstrings:
-    name: Activar descripciones de herramientas reducidas (beta)
-    description: 'Función beta. Reemplaza las cadenas de documentación en 15 herramientas
-      pesadas de ha-mcp (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
-      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
-      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
-      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) con variantes
-      más cortas que delegan los detalles de esquemas y ejemplos a la herramienta
-      ha_get_skill_guide (o su recurso skill://). Una excepción: ha_report_issue delega
-      al campo instructions de su propia respuesta en su lugar. El ajuste de la opción
-      Backup-hint sigue funcionando en modo lite. ADVERTENCIA: esto reduce el uso
-      de tokens en reposo, pero puede disminuir el rendimiento del LLM; las descripciones
-      recortadas dependen de que el LLM realmente llame a la herramienta de habilidades
-      o lea el recurso de habilidades para obtener detalles, lo cual no está garantizado
-      (algunos modelos omitirán la llamada adicional a la herramienta y terminarán
-      con menos orientación que antes). Se combina mejor con un cliente que admita
-      recursos MCP o con enable_tool_search. Requiere reiniciar para surtir efecto.
-      REQUIRES el interruptor maestro "Enable beta features" de arriba (y en la interfaz
-      web) activado; de lo contrario, esta subopción se ignorará en tiempo de ejecución
-      independientemente de su valor aquí.'
   enable_mandatory_bps:
     name: Adjuntar skills de buenas prácticas en las escrituras
     description: 'Interruptor principal de la entrega de contenido de skills en las
@@ -211,12 +145,73 @@ configuration:
       es la única que publica esa clave de confirmación. Depende de la opción "Adjuntar
       skills de buenas prácticas en las escrituras" de arriba y es inerte mientras
       esa opción principal esté desactivada. Requiere reiniciar para que surta efecto.'
-  ha_tool_concurrency:
-    name: Concurrencia de herramientas de Home Assistant
-    description: Límite opcional en las llamadas externas a herramientas de Home Assistant
-      en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución
-      por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una
-      llamada que espera capacidad falla después de 60 segundos.
+  enable_yaml_config_editing:
+    name: Activar la edición de la configuración YAML (beta)
+    description: Función beta. Permite que los asistentes de IA añadan, sustituyan
+      o eliminen claves de primer nivel en configuration.yaml y packages/*.yaml. Solo
+      se permiten las claves de la lista blanca (p. ej. template, sensor, command_line,
+      mqtt, knx); las claves centrales como homeassistant, http y recorder están bloqueadas.
+      Cada edición valida la sintaxis YAML, ejecuta una comprobación de la configuración
+      y crea una copia de seguridad automática. Los cambios en la mayoría de las claves
+      requieren reiniciar HA por completo para surtir efecto. Consulta docs/beta.md
+      para conocer las limitaciones. Cuando estén disponibles, es preferible usar
+      las herramientas específicas (automatizaciones, scripts, escenas, auxiliares,
+      sensores de plantilla). REQUIERE que la opción principal "Activar las funciones
+      beta" de arriba (y en la interfaz web) esté activada; de lo contrario, este
+      subindicador se ignora en tiempo de ejecución sea cual sea su valor aquí.
+  enable_yaml_edit_confirm:
+    name: Exigir confirmación en las ediciones YAML (vista previa del diff)
+    description: 'Subopción de la edición de configuración YAML, activada de forma
+      predeterminada (recomendado). La primera llamada a ha_config_set_yaml devuelve
+      un diff unificado con exactamente lo que cambiaría en disco, más un token de
+      confirmación, y no escribe nada; la edición solo se aplica cuando se repite
+      la llamada con ese token. Existe para detectar cambios no intencionados fuera
+      de la edición solicitada antes de que lleguen al disco (issue #1720). Desactívalo
+      solo para ahorrar una ida y vuelta por edición.'
+  enable_yaml_packages_automation:
+    name: Permitir automation en packages/*.yaml
+    description: Subopción de la edición de configuración YAML. Cuando está activada,
+      ha_config_set_yaml acepta yaml_path='automation' dentro de packages/*.yaml.
+      Cuando está desactivada, la llamada se rechaza tanto en el cliente como en el
+      servidor. La herramienta en modo almacenamiento (ha_config_set_automation) no
+      se ve afectada. Desactivada de forma predeterminada; solo surte efecto si "Activar
+      la edición de la configuración YAML" de arriba también está activada.
+  enable_yaml_packages_script:
+    name: Permitir script en packages/*.yaml
+    description: Subopción de la edición de configuración YAML. Cuando está activada,
+      ha_config_set_yaml acepta yaml_path='script' dentro de packages/*.yaml. Cuando
+      está desactivada, la llamada se rechaza tanto en el cliente como en el servidor.
+      La herramienta en modo almacenamiento (ha_config_set_script) no se ve afectada.
+      Desactivada de forma predeterminada; solo surte efecto si "Activar la edición
+      de la configuración YAML" de arriba también está activada.
+  enable_yaml_packages_scene:
+    name: Permitir scene en packages/*.yaml
+    description: Subopción de la edición de configuración YAML. Cuando está activada,
+      ha_config_set_yaml acepta yaml_path='scene' dentro de packages/*.yaml. Cuando
+      está desactivada, la llamada se rechaza tanto en el cliente como en el servidor.
+      La herramienta en modo almacenamiento (ha_config_set_scene) no se ve afectada.
+      Desactivada de forma predeterminada; solo surte efecto si "Activar la edición
+      de la configuración YAML" de arriba también está activada.
+  enable_lite_docstrings:
+    name: Activar descripciones de herramientas reducidas (beta)
+    description: 'Función beta. Reemplaza las cadenas de documentación en 15 herramientas
+      pesadas de ha-mcp (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
+      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
+      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) con variantes
+      más cortas que delegan los detalles de esquemas y ejemplos a la herramienta
+      ha_get_skill_guide (o su recurso skill://). Una excepción: ha_report_issue delega
+      al campo instructions de su propia respuesta en su lugar. El ajuste de la opción
+      Backup-hint sigue funcionando en modo lite. ADVERTENCIA: esto reduce el uso
+      de tokens en reposo, pero puede disminuir el rendimiento del LLM; las descripciones
+      recortadas dependen de que el LLM realmente llame a la herramienta de habilidades
+      o lea el recurso de habilidades para obtener detalles, lo cual no está garantizado
+      (algunos modelos omitirán la llamada adicional a la herramienta y terminarán
+      con menos orientación que antes). Se combina mejor con un cliente que admita
+      recursos MCP o con enable_tool_search. Requiere reiniciar para surtir efecto.
+      REQUIRES el interruptor maestro "Enable beta features" de arriba (y en la interfaz
+      web) activado; de lo contrario, esta subopción se ignorará en tiempo de ejecución
+      independientemente de su valor aquí.'
   enable_filesystem_tools:
     name: Activar las herramientas de sistema de archivos (beta)
     description: 'Establece HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Habilita el acceso
@@ -227,6 +222,22 @@ configuration:
       principal "Activar las funciones beta" de arriba (y en la interfaz web) esté
       activada; de lo contrario, este subindicador se ignora en tiempo de ejecución
       sea cual sea su valor aquí.'
+  enable_code_mode:
+    name: Activar el entorno aislado de herramientas personalizadas (beta)
+    description: Función beta. Habilita la herramienta ha_manage_custom_tool, que
+      permite a los asistentes de IA crear, ejecutar, guardar y eliminar código Python
+      personalizado en un espacio aislado seguro cuando ninguna herramienta integrada
+      puede manejar la solicitud. El código se ejecuta en un intérprete aislado sin
+      acceso al sistema de archivos ni red arbitraria. El código del espacio aislado
+      puede acceder a la API REST de HA (api_get/api_post), enviar comandos WebSocket
+      (ws_send), llamar a herramientas MCP existentes (call_tool) o eliminar una herramienta
+      guardada (delete_saved_tool). Las herramientas guardadas persisten en /data/saved_tools.json
+      por defecto para sobrevivir a los reinicios de la app (add-on), y son visibles
+      para cualquier cliente que pueda conectarse. Consulta docs/beta.md para conocer
+      las limitaciones conocidas. Requiere reiniciar para que surta efecto. REQUIERE
+      que el interruptor principal "Enable beta features" de arriba (y en la interfaz
+      web) esté activado; de lo contrario, este subindicador se ignorará en tiempo
+      de ejecución independientemente de su valor aquí.
   enable_dashboard_screenshot:
     name: Activar el modo de captura de pantalla de paneles (beta)
     description: 'Función beta: deshabilitada por defecto. Añade la herramienta ha_get_dashboard_screenshot
@@ -266,23 +277,6 @@ configuration:
       desactiva las capturas de "mejor esfuerzo" y deja fuera de servicio las herramientas
       de archivo y YAML sin procesar con ellas. Requiere un reinicio para que surta
       efecto.'
-  enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
-  backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Limitación de la copia automática (minutos)
     description: Ventana de limitación por entidad. 0 (predeterminado) captura una
@@ -293,6 +287,27 @@ configuration:
     description: Número máximo de instantáneas conservadas por entidad. Las instantáneas
       más antiguas que superen este límite se rotan en cada captura correcta. Predeterminado
       100, rango 1–10000.
+  enable_snapshot_actions:
+    name: Permitir acciones de instantáneas completas de HA
+    description: Permitir a los asistentes de IA gestionar instantáneas completas
+      de Home Assistant mediante ha_manage_backup(scope='snapshot') y los servicios
+      y comandos de copia de seguridad equivalentes en ha_call_service. Desactivar
+      esto bloquea todas las acciones de instantáneas, incluida su lista, mientras
+      que las copias de seguridad de edición siguen estando disponibles. La eliminación
+      de instantáneas solo está disponible a través de ha_manage_backup, también requiere
+      enable_snapshot_delete y sus protecciones siguen aplicándose. Activado por defecto.
+      Cambia esta opción o utiliza la pestaña Copias de seguridad de la interfaz web
+      de configuración; requiere reiniciar en la aplicación.
+  backup_read_only:
+    name: Hacer que la gestión de copias de seguridad sea de solo lectura
+    description: Restringir ha_manage_backup a listar, ver y comparar copias de seguridad
+      de edición, y listar instantáneas completas de HA cuando las acciones de instantáneas
+      estén habilitadas. Bloquea la creación, restauración (incluidas las restauraciones
+      de edición) y eliminación manuales de copias de seguridad, incluidos los servicios
+      y comandos de copia de seguridad equivalentes en ha_call_service. Las copias
+      de seguridad automáticas previas a la edición continúan y las acciones humanas
+      en la interfaz web de configuración siguen estando disponibles. Desactivado
+      por defecto; requiere reiniciar en la aplicación.
   enable_snapshot_delete:
     name: Permitir la eliminación de instantáneas
     description: 'Permite que ha_manage_backup elimine archivos tarball de instantáneas
@@ -307,14 +322,6 @@ configuration:
     description: Una instantánea debe tener al menos esta antigüedad para poder eliminarse.
       Rango 0–365; 0 desactiva el mínimo (las protecciones de la instantánea más reciente
       y de las copias programadas siguen aplicándose). Predeterminado 7.
-  tool_search_max_results:
-    name: Máximo de resultados de la búsqueda de herramientas
-    description: 'Número máximo de herramientas ocultas devueltas por cada llamada
-      a ha_search_tools cuando la búsqueda de herramientas está habilitada; una herramienta
-      fijada que se encuentre dentro de ese recuento superior se añade como una entrada
-      breve de solo nombre además de este. Los valores más bajos (2-3) ahorran tokens
-      de contexto, pero pueden omitir herramientas relevantes. Rango: 2-10. Requiere
-      reinicio.'
   disabled_tools:
     name: Herramientas desactivadas (separadas por comas)
     description: 'Las herramientas indicadas aquí quedan forzadas a desactivadas y
@@ -331,12 +338,9 @@ configuration:
       desde la interfaz web de ajustes sin quitar antes esta opción. Resulta útil
       en combinación con la búsqueda de herramientas. Nombres de herramientas separados
       por comas.'
-  verify_ssl:
-    name: Verificar el certificado TLS
-    description: Verifica el certificado TLS del servidor de Home Assistant. La app
-      (add-on) se conecta a través del proxy del Supervisor, por lo que normalmente
-      esto no tiene efecto y debe permanecer habilitado. Desactívalo solo si has reconfigurado
-      la app (add-on) para comunicarse con HA a través de un nombre de host HTTPS
-      público con un certificado autofirmado o un error de coincidencia en el nombre
-      de host. Desactivarlo debilita la seguridad del transporte; déjalo activado
-      a menos que sepas que lo necesitas. Requiere reiniciar para aplicar los cambios.
+  secret_path:
+    name: Ruta secreta personalizada
+    description: 'Ruta HTTP personalizada opcional para el servidor MCP. Déjala vacía
+      para usar la ruta segura generada automáticamente.
+
+      '

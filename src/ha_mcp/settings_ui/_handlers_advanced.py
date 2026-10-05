@@ -88,6 +88,7 @@ def _advanced_field_row(
         _ADVANCED_SETTINGS_SENTINELS,
         OAUTH_MODE_TOKEN,
     )
+    from ..config_registry import ADVANCED_RESTART_REQUIRED
 
     origin = _origin_for_advanced_field(env_name, overrides=overrides)
     value: Any = getattr(settings, fname, None)
@@ -107,6 +108,8 @@ def _advanced_field_row(
         # Env-pin makes the field read-only regardless of the registry's
         # ``editable`` flag. Display-only rows stay locked forever.
         "editable": registry_editable and origin != "env",
+        # The UI shows the restart banner after saving such a field.
+        "restart_required": fname in ADVANCED_RESTART_REQUIRED,
     }
     bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
     if bounds is not None:

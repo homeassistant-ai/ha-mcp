@@ -3,6 +3,21 @@
 # src/ha_mcp/settings_ui/locales/sv.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Verifiera TLS-certifikat
+    description: Verifiera Home Assistant-serverns TLS-certifikat. Appen (tillägget)
+      ansluter via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli
+      aktiverat. Inaktivera endast om du har konfigurerat om appen (tillägget) för
+      att kommunicera med HA över ett offentligt HTTPS-värdnamn med ett självsignerat
+      certifikat eller matchningsfel för värdnamn. Inaktivering försvagar transportsäkerheten
+      – lämna på om du inte vet att du behöver det. Kräver omstart för att träda i
+      kraft.
+  ha_tool_concurrency:
+    name: Samtidighet för Home Assistant-verktyg
+    description: Valfri gräns för yttre anrop av Home Assistant-verktyg över alla
+      sessioner. Intern samtidighet för REST, WebSocket och per-verktyg-grenar är
+      oförändrad. 0 behåller obegränsat beteende. Ett anrop som väntar på kapacitet
+      misslyckas efter 60 sekunder.
   backup_hint:
     name: Förslagsläge för fullständig HA-ögonblicksbild (LLM-riktad)
     description: 'Justerar formuleringen av tipset som LLM ser i verktygsbeskrivningen
@@ -14,12 +29,6 @@ configuration:
       För automatiska ögonblicksbilder per redigering av automationer / skript / hjälpare
       / etc., använd den separata växlingsknappen **Aktivera automatisk säkerhetskopiering
       av redigeringar** nedan.'
-  secret_path:
-    name: Åsidosättning av hemlig sökväg
-    description: 'Valfri anpassad HTTP-sökväg för MCP-servern. Lämna tom för att använda
-      den automatiskt genererade säkra sökvägen.
-
-      '
   enable_tool_search:
     name: Aktivera verktygssökning
     description: 'Ersätt hela verktygskatalogen med sökbaserad upptäckt. Minskar inaktiv
@@ -107,27 +116,6 @@ configuration:
       alternativet ”Bifoga bästa praxis-färdigheter vid skrivningar” ovan och inaktivt
       när det överordnade alternativet är avstängt. Kräver omstart för att träda i
       kraft.'
-  ha_tool_concurrency:
-    name: Samtidighet för Home Assistant-verktyg
-    description: Valfri gräns för yttre anrop av Home Assistant-verktyg över alla
-      sessioner. Intern samtidighet för REST, WebSocket och per-verktyg-grenar är
-      oförändrad. 0 behåller obegränsat beteende. Ett anrop som väntar på kapacitet
-      misslyckas efter 60 sekunder.
-  disabled_tools:
-    name: Inaktiverade verktyg (kommaseparerade)
-    description: Verktyg som listas här är tvingade att vara avstängda och låsta i
-      webbinställningsgränssnittet (fliken Verktyg) – de kan inte återaktiveras där
-      utan att först avmarkera detta alternativ. En liten uppsättning obligatoriska
-      verktyg (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
-      kan inte inaktiveras och fortsätter att köras även om de listas här. ha_get_skill_guide
-      kan endast inaktiveras när strikt bästa praxis-läge (enable_strict_mandatory_bps)
-      är avstängt. Kommaseparerade verktygsnamn (t.ex. ha_call_event,ha_eval_template).
-  pinned_tools:
-    name: Fästa verktyg (kommaseparerade)
-    description: Verktyg som listas här är låsta som fästa – de visas överst på fliken
-      Verktyg och kan inte lossas från webbinställningsgränssnittet utan att först
-      avmarkera detta alternativ. Användbart i kombination med Verktygssökning. Kommaseparerade
-      verktygsnamn.
   enable_auto_backup:
     name: Aktivera automatisk säkerhetskopiering av redigeringar
     description: 'Fångar en ögonblicksbild per entitet före varje omslutet skriv-/destruktivt
@@ -146,23 +134,6 @@ configuration:
       den. På som standard; avmarkering avaktiverar ''best-effort''-fångsterna och
       tar fil- och rå-YAML-verktygen ur bruk med dem. Kräver omstart för att träda
       i kraft.'
-  enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
-  backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Begränsning för automatisk säkerhetskopiering (minuter)
     description: Begränsningsfönster per entitet. 0 (standard) tar en ögonblicksbild
@@ -173,6 +144,25 @@ configuration:
     description: Maximalt antal ögonblicksbilder som behålls per entitet. Äldre ögonblicksbilder
       utöver denna gräns roteras ut vid varje lyckad fångst. Standard 100, intervall
       1–10000.
+  enable_snapshot_actions:
+    name: Tillåt fullständiga HA-ögonblicksbildsåtgärder
+    description: Tillåt AI-assistenter att hantera fullständiga Home Assistant-ögonblicksbilder
+      genom ha_manage_backup(scope='snapshot') och motsvarande säkerhetskopieringstjänster
+      och kommandon i ha_call_service. Att stänga av detta blockerar alla ögonblicksbildsåtgärder,
+      inklusive listning, medan redigeringssäkerhetskopior förblir tillgängliga. Borttagning
+      av ögonblicksbilder är endast tillgänglig via ha_manage_backup, kräver dessutom
+      enable_snapshot_delete, och dess skydd gäller fortfarande. På som standard.
+      Ändra det här alternativet eller använd fliken Backups i webbens inställningsgränssnitt;
+      kräver omstart i appen.
+  backup_read_only:
+    name: Gör säkerhetskopieringshanteringen skrivskyddad
+    description: Begränsa ha_manage_backup till att lista, visa och jämföra redigeringssäkerhetskopior,
+      samt lista fullständiga HA-ögonblicksbilder när ögonblicksbildsåtgärder är aktiverade.
+      Blockerar manuell skapande, återställning (inklusive redigeringsåterställningar)
+      och borttagning av säkerhetskopior, inklusive motsvarande säkerhetskopieringstjänster
+      och kommandon i ha_call_service. Automatiska säkerhetskopior före redigering
+      fortsätter, och mänskliga åtgärder i webbens inställningsgränssnitt förblir
+      tillgängliga. Av som standard; kräver omstart i appen.
   enable_snapshot_delete:
     name: Tillåt radering av ögonblicksbilder
     description: Låter ha_manage_backup radera fullständiga HA-ögonblicksbilds-tarballar
@@ -186,12 +176,24 @@ configuration:
     description: En ögonblicksbild måste vara minst så här gammal innan den kan raderas.
       Intervall 0–365; 0 inaktiverar gränsen (skydden för nyaste ögonblicksbild och
       schemalagd säkerhetskopiering gäller fortfarande). Standard 7.
-  verify_ssl:
-    name: Verifiera TLS-certifikat
-    description: Verifiera Home Assistant-serverns TLS-certifikat. Appen (tillägget)
-      ansluter via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli
-      aktiverat. Inaktivera endast om du har konfigurerat om appen (tillägget) för
-      att kommunicera med HA över ett offentligt HTTPS-värdnamn med ett självsignerat
-      certifikat eller matchningsfel för värdnamn. Inaktivering försvagar transportsäkerheten
-      – lämna på om du inte vet att du behöver det. Kräver omstart för att träda i
-      kraft.
+  disabled_tools:
+    name: Inaktiverade verktyg (kommaseparerade)
+    description: Verktyg som listas här är tvingade att vara avstängda och låsta i
+      webbinställningsgränssnittet (fliken Verktyg) – de kan inte återaktiveras där
+      utan att först avmarkera detta alternativ. En liten uppsättning obligatoriska
+      verktyg (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      kan inte inaktiveras och fortsätter att köras även om de listas här. ha_get_skill_guide
+      kan endast inaktiveras när strikt bästa praxis-läge (enable_strict_mandatory_bps)
+      är avstängt. Kommaseparerade verktygsnamn (t.ex. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Fästa verktyg (kommaseparerade)
+    description: Verktyg som listas här är låsta som fästa – de visas överst på fliken
+      Verktyg och kan inte lossas från webbinställningsgränssnittet utan att först
+      avmarkera detta alternativ. Användbart i kombination med Verktygssökning. Kommaseparerade
+      verktygsnamn.
+  secret_path:
+    name: Åsidosättning av hemlig sökväg
+    description: 'Valfri anpassad HTTP-sökväg för MCP-servern. Lämna tom för att använda
+      den automatiskt genererade säkra sökvägen.
+
+      '

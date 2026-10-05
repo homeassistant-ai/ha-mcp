@@ -3,6 +3,22 @@
 # src/ha_mcp/settings_ui/locales/pl.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Weryfikuj certyfikat TLS
+    description: Zweryfikuj certyfikat TLS serwera Home Assistant. Aplikacja (dodatek)
+      łączy się przez proxy Supervisora, więc zazwyczaj nie ma to wpływu i powinno
+      pozostać włączone. Wyłącz tylko wtedy, gdy skonfigurowano aplikację (dodatek)
+      tak, aby komunikowała się z HA przez publiczną nazwę hosta HTTPS z certyfikatem
+      z podpisem własnym lub niedopasowaniem nazwy hosta. Wyłączenie osłabia bezpieczeństwo
+      transportu — pozostaw włączone, chyba że wiesz, że tego potrzebujesz. Wymaga
+      ponownego uruchomienia, aby zaczęło obowiązywać.
+  ha_tool_concurrency:
+    name: Współbieżność narzędzi Home Assistant
+    description: Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we
+      wszystkich sesjach. Wewnętrzna współbieżność REST, WebSocket oraz rozgałęziania
+      dla poszczególnych narzędzi pozostaje bez zmian. Wartość 0 zachowuje zachowanie
+      bez limitu. Wywołanie oczekujące na wolne zasoby kończy się niepowodzeniem po
+      60 sekundach.
   backup_hint:
     name: Poziom sugestii pełnej migawki HA (dla LLM)
     description: 'Dostosowuje sformułowanie podpowiedzi, którą LLM widzi w opisie
@@ -15,12 +31,6 @@ configuration:
       W przypadku automatycznych migawek automatyzacji / skryptów / pomocników / itp.
       dla każdej edycji, użyj oddzielnego przełącznika **Włącz automatyczne tworzenie
       kopii zapasowych edycji** poniżej.'
-  secret_path:
-    name: Nadpisanie tajnej ścieżki
-    description: 'Opcjonalna niestandardowa ścieżka HTTP dla serwera MCP. Pozostaw
-      puste, aby użyć automatycznie generowanej bezpiecznej ścieżki.
-
-      '
   enable_tool_search:
     name: Włącz wyszukiwanie narzędzi
     description: 'Zastąp pełny katalog narzędzi wyszukiwaniem. Zmniejsza bezczynny
@@ -114,29 +124,6 @@ configuration:
       podrzędna opcji „Dołącz umiejętności najlepszych praktyk przy zapisach” powyżej
       i nieaktywna, gdy opcja nadrzędna jest wyłączona. Wymaga ponownego uruchomienia,
       aby zmiany weszły w życie.'
-  ha_tool_concurrency:
-    name: Współbieżność narzędzi Home Assistant
-    description: Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we
-      wszystkich sesjach. Wewnętrzna współbieżność REST, WebSocket oraz rozgałęziania
-      dla poszczególnych narzędzi pozostaje bez zmian. Wartość 0 zachowuje zachowanie
-      bez limitu. Wywołanie oczekujące na wolne zasoby kończy się niepowodzeniem po
-      60 sekundach.
-  disabled_tools:
-    name: Wyłączone narzędzia (oddzielone przecinkami)
-    description: Narzędzia wymienione tutaj są wymuszone na wyłączone i zablokowane
-      w interfejsie użytkownika Ustawień (zakładka Tools) — nie można ich ponownie
-      włączyć bez wcześniejszego wyłączenia tej opcji. Niewielki zestaw obowiązkowych
-      narzędzi (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
-      nie może zostać wyłączony i działa nadal, nawet jeśli jest tutaj wymieniony.
-      ha_get_skill_guide może zostać wyłączony tylko wtedy, gdy tryb ścisłych najlepszych
-      praktyk (enable_strict_mandatory_bps) jest wyłączony. Nazwy narzędzi oddzielone
-      przecinkami (np. ha_call_event,ha_eval_template).
-  pinned_tools:
-    name: Przypięte narzędzia (oddzielone przecinkami)
-    description: Narzędzia wymienione tutaj są zablokowane jako przypięte — pojawiają
-      się na górze zakładki „Narzędzia” i nie można ich odpiąć z interfejsu ustawień
-      sieciowych bez wcześniejszego usunięcia tej opcji. Przydatne w połączeniu z
-      wyszukiwaniem narzędzi. Nazwy narzędzi oddzielone przecinkami.
   enable_auto_backup:
     name: Włącz automatyczne tworzenie kopii zapasowych zmian
     description: 'Tworzy migawkę dla każdej encji przed każdym wywołaniem narzędzia
@@ -157,23 +144,6 @@ configuration:
       Domyślnie włączone; odznaczenie wyłącza przechwytywanie typu "best-effort" i
       wyłącza z użytku narzędzia do plików i surowego YAML. Wymaga ponownego uruchomienia,
       aby zmiany weszły w życie.'
-  enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
-  backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Ograniczenie automatycznej kopii zapasowej (minuty)
     description: Okno ograniczenia dla każdej encji. 0 (domyślnie) tworzy migawkę
@@ -184,6 +154,26 @@ configuration:
     description: Maksymalna liczba migawek przechowywanych dla każdej encji. Starsze
       migawki przekraczające ten limit są usuwane przy każdym udanym przechwyceniu.
       Domyślnie 100, zakres 1–10000.
+  enable_snapshot_actions:
+    name: Zezwalaj na działania na pełnych migawkach Home Assistant
+    description: Zezwalaj asystentom AI na zarządzanie pełnymi migawkami Home Assistant
+      za pomocą ha_manage_backup(scope='snapshot') oraz odpowiednich usług kopii zapasowych
+      i poleceń w ha_call_service. Wyłączenie tej opcji blokuje wszystkie działania
+      na migawkach, w tym ich listowanie, podczas gdy kopie zapasowe edycji pozostają
+      dostępne. Usuwanie migawek jest dostępne wyłącznie przez ha_manage_backup, wymaga
+      również enable_snapshot_delete, a jego zabezpieczenia nadal obowiązują. Włączone
+      domyślnie. Zmień tę opcję lub skorzystaj z karty Kopie zapasowe w interfejsie
+      sieciowym Ustawień; wymaga ponownego uruchomienia w aplikacji.
+  backup_read_only:
+    name: Ustaw zarządzanie kopiami zapasowymi jako tylko do odczytu
+    description: Ogranicz ha_manage_backup do listowania, przeglądania i porównywania
+      kopii zapasowych edycji oraz listowania pełnych migawek Home Assistant, gdy
+      włączone są działania na migawkach. Blokuje ręczne tworzenie, przywracanie (w
+      tym przywracanie edycji) i usuwanie kopii zapasowych, w tym odpowiednie usługi
+      kopii zapasowych i polecenia w ha_call_service. Automatyczne kopie zapasowe
+      przed edycją są kontynuowane, a działania użytkowników w sieciowym interfejsie
+      Ustawień pozostają dostępne. Wyłączone domyślnie; wymaga ponownego uruchomienia
+      w aplikacji.
   enable_snapshot_delete:
     name: Zezwól na usuwanie migawek
     description: Pozwala ha_manage_backup usuwać pełne archiwa migawek HA (scope='snapshot',
@@ -196,12 +186,25 @@ configuration:
     description: Migawka musi być co najmniej tak stara, zanim będzie mogła zostać
       usunięta. Zakres 0–365; 0 wyłącza limit (ochrona najnowszej migawki i zaplanowanych
       kopii zapasowych nadal obowiązuje). Domyślnie 7.
-  verify_ssl:
-    name: Weryfikuj certyfikat TLS
-    description: Zweryfikuj certyfikat TLS serwera Home Assistant. Aplikacja (dodatek)
-      łączy się przez proxy Supervisora, więc zazwyczaj nie ma to wpływu i powinno
-      pozostać włączone. Wyłącz tylko wtedy, gdy skonfigurowano aplikację (dodatek)
-      tak, aby komunikowała się z HA przez publiczną nazwę hosta HTTPS z certyfikatem
-      z podpisem własnym lub niedopasowaniem nazwy hosta. Wyłączenie osłabia bezpieczeństwo
-      transportu — pozostaw włączone, chyba że wiesz, że tego potrzebujesz. Wymaga
-      ponownego uruchomienia, aby zaczęło obowiązywać.
+  disabled_tools:
+    name: Wyłączone narzędzia (oddzielone przecinkami)
+    description: Narzędzia wymienione tutaj są wymuszone na wyłączone i zablokowane
+      w interfejsie użytkownika Ustawień (zakładka Tools) — nie można ich ponownie
+      włączyć bez wcześniejszego wyłączenia tej opcji. Niewielki zestaw obowiązkowych
+      narzędzi (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      nie może zostać wyłączony i działa nadal, nawet jeśli jest tutaj wymieniony.
+      ha_get_skill_guide może zostać wyłączony tylko wtedy, gdy tryb ścisłych najlepszych
+      praktyk (enable_strict_mandatory_bps) jest wyłączony. Nazwy narzędzi oddzielone
+      przecinkami (np. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Przypięte narzędzia (oddzielone przecinkami)
+    description: Narzędzia wymienione tutaj są zablokowane jako przypięte — pojawiają
+      się na górze zakładki „Narzędzia” i nie można ich odpiąć z interfejsu ustawień
+      sieciowych bez wcześniejszego usunięcia tej opcji. Przydatne w połączeniu z
+      wyszukiwaniem narzędzi. Nazwy narzędzi oddzielone przecinkami.
+  secret_path:
+    name: Nadpisanie tajnej ścieżki
+    description: 'Opcjonalna niestandardowa ścieżka HTTP dla serwera MCP. Pozostaw
+      puste, aby użyć automatycznie generowanej bezpiecznej ścieżki.
+
+      '

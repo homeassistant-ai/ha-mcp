@@ -3,6 +3,19 @@
 # src/ha_mcp/settings_ui/locales/en.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Verify TLS certificate
+    description: Verify the Home Assistant server's TLS certificate. The app (add-on)
+      connects via the Supervisor proxy, so this normally has no effect and should
+      stay enabled. Disable only if you've reconfigured the app (add-on) to talk to
+      HA over a public HTTPS hostname with a self-signed certificate or hostname mismatch.
+      Disabling weakens transport security — leave on unless you know you need it.
+      Requires restart to take effect.
+  ha_tool_concurrency:
+    name: Home Assistant tool concurrency
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds.
   backup_hint:
     name: Full-HA snapshot suggestion level (LLM-facing)
     description: 'Tunes the wording of the hint the LLM sees in the
@@ -19,12 +32,6 @@ configuration:
       For per-edit automatic snapshots of automations / scripts / helpers /
 
       etc., use the separate **Enable auto-backup of edits** toggle below.'
-  secret_path:
-    name: Secret path override
-    description: 'Optional custom HTTP path for the MCP server. Leave empty to use
-      the auto-generated secure path.
-
-      '
   enable_tool_search:
     name: Enable tool search
     description: 'Replace the full tool catalog with search-based discovery. Reduces
@@ -105,26 +112,6 @@ configuration:
       on, the ha_get_skill_guide tool is locked enabled — it is the only publisher
       of the acknowledgment key. Child of the "Attach best-practice skills on writes"
       option above and inert while that parent is off. Requires restart to take effect.'
-  ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
-  disabled_tools:
-    name: Disabled tools (comma-separated)
-    description: Tools listed here are forced off and locked in the web Settings UI
-      (Tools tab) — they cannot be re-enabled there without unsetting this option
-      first. A small set of mandatory tools (ha_search, ha_get_overview, ha_get_state,
-      ha_report_issue, ha_manage_backup) cannot be disabled and keep running even
-      if listed here. ha_get_skill_guide can be disabled only while strict best-practices
-      mode (enable_strict_mandatory_bps) is off. Comma-separated tool names (e.g.
-      ha_call_event,ha_eval_template).
-  pinned_tools:
-    name: Pinned tools (comma-separated)
-    description: Tools listed here are locked pinned — they appear at the top of the
-      Tools tab and cannot be unpinned from the web Settings UI without unsetting
-      this option first. Useful in combination with Tool Search. Comma-separated tool
-      names.
   enable_auto_backup:
     name: Enable auto-backup of edits
     description: 'Captures a per-entity snapshot before every wrapped write/destructive
@@ -142,6 +129,15 @@ configuration:
       it. On by default; unchecking opts out of the best-effort captures and takes
       the file and raw-YAML tools out of service with them. Requires restart to take
       effect.'
+  auto_backup_throttle_minutes:
+    name: Auto-backup throttle (minutes)
+    description: Per-entity throttle window. 0 (default) captures a snapshot on every
+      wrapped write. N>0 captures at most one snapshot per N minutes per entity. Range
+      0–1440.
+  auto_backup_retain_per_entity:
+    name: Auto-backup retention (per entity)
+    description: Maximum number of snapshots kept per entity. Older snapshots beyond
+      this cap are rotated out on each successful capture. Default 100, range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -159,15 +155,6 @@ configuration:
       equivalent backup services and commands in ha_call_service. Automatic pre-edit
       backups continue, and human actions in the web Settings UI remain available.
       Off by default; requires restart in the app.
-  auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
-    description: Per-entity throttle window. 0 (default) captures a snapshot on every
-      wrapped write. N>0 captures at most one snapshot per N minutes per entity. Range
-      0–1440.
-  auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
-    description: Maximum number of snapshots kept per entity. Older snapshots beyond
-      this cap are rotated out on each successful capture. Default 100, range 1–10000.
   enable_snapshot_delete:
     name: Allow snapshot deletion
     description: Lets ha_manage_backup delete full HA snapshot tarballs (scope='snapshot',
@@ -180,11 +167,24 @@ configuration:
     description: A snapshot must be at least this old before it can be deleted. Range
       0–365; 0 disables the floor (the newest-snapshot and scheduled-backup protections
       still apply). Default 7.
-  verify_ssl:
-    name: Verify TLS certificate
-    description: Verify the Home Assistant server's TLS certificate. The app (add-on)
-      connects via the Supervisor proxy, so this normally has no effect and should
-      stay enabled. Disable only if you've reconfigured the app (add-on) to talk to
-      HA over a public HTTPS hostname with a self-signed certificate or hostname mismatch.
-      Disabling weakens transport security — leave on unless you know you need it.
-      Requires restart to take effect.
+  disabled_tools:
+    name: Disabled tools (comma-separated)
+    description: Tools listed here are forced off and locked in the web Settings UI
+      (Tools tab) — they cannot be re-enabled there without unsetting this option
+      first. A small set of mandatory tools (ha_search, ha_get_overview, ha_get_state,
+      ha_report_issue, ha_manage_backup) cannot be disabled and keep running even
+      if listed here. ha_get_skill_guide can be disabled only while strict best-practices
+      mode (enable_strict_mandatory_bps) is off. Comma-separated tool names (e.g.
+      ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Pinned tools (comma-separated)
+    description: Tools listed here are locked pinned — they appear at the top of the
+      Tools tab and cannot be unpinned from the web Settings UI without unsetting
+      this option first. Useful in combination with Tool Search. Comma-separated tool
+      names.
+  secret_path:
+    name: Secret path override
+    description: 'Optional custom HTTP path for the MCP server. Leave empty to use
+      the auto-generated secure path.
+
+      '
