@@ -99,6 +99,21 @@ class TestValidateRequiredFields:
         error = _error_from_tool_error(exc_info.value)
         assert "ha_config_set_script" in error.get("suggestion", "")
 
+    def test_sequence_hint_also_places_alias_when_missing(self) -> None:
+        """Sequence-shaped config missing alias too: the automation correction
+        must name alias placement and show the config shape, or following the
+        suggestion leaves the next call invalid."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"sequence": [{"action": "light.turn_off"}]},
+                identifier=None,
+            )
+        error = _error_from_tool_error(exc_info.value)
+        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
+        all_text = json.dumps(error)
+        assert "alias" in all_text
+        assert "config={'alias':" in all_text
+
     def test_missing_alias_says_it_belongs_inside_config(self) -> None:
         """Missing 'alias' names the config body and shows the expected shape
         in one line (issue #2649 section 2)."""

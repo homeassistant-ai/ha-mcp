@@ -93,9 +93,17 @@ def reject_sequence_misroute(
     if identifier:
         context["identifier"] = identifier
     message = f"Missing required fields: {', '.join(missing_fields)}"
+    automation_fix = (
+        "For an automation, replace 'sequence' with 'actions' and add 'triggers'."
+    )
+    if "alias" in missing_fields:
+        automation_fix += (
+            " Put 'alias' inside `config` too, e.g. "
+            f"{_missing_fields_shape(is_blueprint=False)}."
+        )
     suggestions = [
         "Did you mean ha_config_set_script? Scripts use 'sequence' directly.",
-        "For an automation, replace 'sequence' with 'actions' and add 'triggers'.",
+        automation_fix,
     ]
     if config_has_enabled(config_dict):
         context["invalid_key"] = "enabled"
