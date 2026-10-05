@@ -1,41 +1,22 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/ru.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/ru.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Проверять сертификат TLS
-    description: Проверять TLS-сертификат сервера Home Assistant. Приложение (аддон)
-      подключается через прокси Supervisor, поэтому обычно это не оказывает влияния
-      и должно быть включено. Отключайте только в случае перенастройки приложения
-      (аддона) для связи с HA по публичному HTTPS-имени хоста с самоподписанным сертификатом
-      или несовпадением имени хоста. Отключение снижает безопасность передачи данных
-      — оставляйте включенным, только если это необходимо. Требуется перезапуск для
-      применения.
+    name: Проверять SSL-сертификаты
+    description: Отключайте проверку TLS только в доверенной сети. Нужен перезапуск.
   ha_tool_concurrency:
     name: Параллелизм инструментов Home Assistant
     description: Необязательный лимит внешних вызовов инструментов Home Assistant
       во всех сеансах. Внутренний параллелизм REST, WebSocket и вентирования по инструментам
       остается неизменным. 0 сохраняет неограниченное поведение. Вызов, ожидающий
-      свободных ресурсов, завершается ошибкой через 60 секунд.
+      свободных ресурсов, завершается ошибкой через 60 секунд. Диапазон 0–32. Требуется
+      перезапуск.
   backup_hint:
-    name: Уровень рекомендации полного снимка HA (для LLM)
-    description: 'Настраивает формулировку подсказки, которую видит LLM в описании
-
-      инструмента `ha_manage_backup(scope=''snapshot'')`, о том, когда следует
-
-      предложить создание полной резервной копии Home Assistant в виде tar-архива
-
-      перед рискованными операциями (например, массовым удалением устройств).
-
-      Влияет ТОЛЬКО на одно это предложение в подсказке для LLM.
-
-
-      Для автоматического создания снимков перед каждым изменением автоматизаций,
-
-      скриптов, помощников и т. д. используйте отдельный переключатель
-
-      **Включить автоматическое резервное копирование изменений** ниже.'
+    name: Уровень напоминания о резервной копии
+    description: Настраивает, насколько настойчиво LLM предлагает полный снимок HA
+      перед рискованной записью.
   enable_tool_search:
     name: Включить поиск инструментов
     description: 'Заменить полный каталог инструментов поисковым обнаружением. Снижает
@@ -130,67 +111,40 @@ configuration:
       при записи», который не действует, пока родительский параметр выключен. Для
       применения требуется перезапуск.'
   enable_auto_backup:
-    name: Включить автоматическое резервное копирование изменений
-    description: 'Создает снимок для каждой сущности перед каждым вызовом обернутого
-      инструмента MCP для записи/деструктивных операций (automation, script, scene,
-      helper, dashboard, dashboard resource, label, category, group, zone, area, calendar,
-      todo, entity, device, integration, а также связанные инструменты удаления).
-      Ограничитель авторезервного копирования определяет частоту создания снимков:
-      0 (по умолчанию) создает снимок при каждом таком вызове, N>0 — не более одного
-      снимка на N минут для каждой сущности. Снимки сохраняются как YAML-файлы в директории
-      /data/ha_mcp_backups/ (можно переопределить через HAMCP_BACKUP_DIR) и могут
-      быть просмотрены, восстановлены или удалены через вкладку «Резервные копии»
-      в пользовательском интерфейсе веб-настроек или с помощью ha_manage_backup(scope=''edits'',
-      ...). Для этих доменов создание снимка осуществляется по принципу «максимальных
-      усилий» — при сбое регистрируется ПРЕДУПРЕЖДЕНИЕ, и запись продолжается. Инструменты
-      для работы с файлами и необработанным YAML являются исключением: ha_write_file,
-      ha_delete_file и ha_config_set_yaml рассматривают снимок как предварительное
-      условие, поэтому запись через них отклоняется, если эта функция отключена, а
-      неудачное создание снимка блокирует ее. Включено по умолчанию; снятие флажка
-      отключает создание снимков по принципу «максимальных усилий» и выводит из строя
-      инструменты для работы с файлами и необработанным YAML. Требуется перезапуск
-      для вступления в силу.'
+    name: Авторезервные копии перед изменениями
+    description: Создавать снимок перед каждым обёрнутым вызовом записи или разрушительной
+      операции.
   auto_backup_throttle_minutes:
-    name: Интервал автоматического резервного копирования (минуты)
-    description: 'Интервал ограничения для каждой сущности. Значение 0 (по умолчанию)
-      создаёт снимок при каждой обёрнутой операции записи. При N>0 создаётся не более
-      одного снимка сущности за N минут. Диапазон: 0–1440.'
+    name: Интервал (минуты)
+    description: 'Ограничение для каждой сущности: 0 — каждая запись; N > 0 — не более
+      одной копии за N минут. Диапазон 0–1440.'
   auto_backup_retain_per_entity:
-    name: Хранение автоматических резервных копий (на сущность)
-    description: 'Максимальное количество снимков, сохраняемых для каждой сущности.
-      При каждом успешном создании снимка более старые снимки сверх этого лимита удаляются
-      по ротации. По умолчанию: 100, диапазон: 1–10000.'
+    name: Хранить на сущность
+    description: Максимальное число снимков для одной сущности (1–10000). Старые удаляются
+      по ротации.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Разрешить удаление снимков
-    description: 'Позволяет ha_manage_backup удалять полные tar-архивы снимков HA
-      (scope=''snapshot'', action=''delete''). По умолчанию выключено: снимок может
-      оказаться последней точкой восстановления после ошибочного изменения, поэтому
-      пользователь должен явно разрешить это здесь. Даже после включения защищёнными
-      остаются запланированные резервные копии, самый новый из оставшихся снимков
-      и всё, что новее указанного ниже минимального возраста.'
+    description: Разрешает ha_manage_backup удалять полные снимки HA; запланированные,
+      самый новый и слишком свежие снимки остаются защищёнными.
   snapshot_delete_min_age_days:
     name: Минимальный возраст снимка для удаления (дни)
-    description: 'Снимок можно удалить, только если он не моложе указанного возраста.
-      Диапазон: 0–365; значение 0 отключает это ограничение (защита самого нового
-      снимка и запланированных резервных копий продолжает действовать). По умолчанию:
-      7.'
+    description: Снимок можно удалить только после достижения этого возраста. Диапазон
+      0–365.
   disabled_tools:
     name: Отключённые инструменты (через запятую)
     description: 'Перечисленные здесь инструменты принудительно отключаются и блокируются

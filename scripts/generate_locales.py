@@ -3,7 +3,8 @@
 The canonical store is ``src/ha_mcp/settings_ui/locales/<code>.json`` — one
 file per language holding every translatable string, including the add-on
 option strings under ``addon.<key>.*`` / ``addon_stable.<key>.*`` and the
-shared feature strings under ``features.<key>.*``. The derived catalogs stay
+strings shared with the settings UI under ``features.<key>.*``,
+``advanced.<key>.*`` and ``backup.fields.<key>.*``. The derived catalogs stay
 committed at the fixed paths Supervisor and the web UI read them from:
 
 - ``homeassistant-addon/translations/<code>.yaml``
@@ -18,6 +19,8 @@ key and field the text is resolved in override order:
 1. ``addon_<flavor>.<key>.<name|description>`` — flavor-specific wording
 2. ``features.<key>.<label|help>`` — strings shared with the settings UI
 3. ``addon.<key>.<name|description>`` — add-on-only options
+4. ``advanced.<key>.<label|help>`` and ``backup.fields.<key>.<label|help>`` —
+   the settings UI's own rows for an option it also shows
 
 A locale that lacks a key falls back to English, mirroring the settings UI's
 own per-key fallback, so every generated catalog is structurally complete.
@@ -153,6 +156,8 @@ def resolve_text(
         f"addon_{flavor}.{key}.{field}",
         f"features.{key}.{ui_field}",
         f"addon.{key}.{field}",
+        f"advanced.{key}.{ui_field}",
+        f"backup.fields.{key}.{ui_field}",
     )
     # Locale-then-English per candidate, not all-locale-then-all-English: a
     # flavor override that the locale has not translated yet must fall back
@@ -166,7 +171,8 @@ def resolve_text(
             return english[candidate]
     raise SystemExit(
         f"no canonical string for add-on option {key!r} field {field!r} — add "
-        f"addon.{key}.{field} (or features.{key}.{ui_field}) to en.json"
+        f"addon.{key}.{field} (or features.{key}.{ui_field}, "
+        f"advanced.{key}.{ui_field} or backup.fields.{key}.{ui_field}) to en.json"
     )
 
 
@@ -195,9 +201,9 @@ def addon_yaml(
         "---\n"
         f"# GENERATED FILE — do not edit. Translations live in\n"
         f"# src/ha_mcp/settings_ui/locales/{code}.json (keys addon.*, "
-        "features.*,\n"
-        f"# addon_{flavor}.*); regenerate with: python scripts/generate_locales.py\n"
-        + body
+        "features.*, advanced.*,\n"
+        f"# backup.fields.*, addon_{flavor}.*); regenerate with: "
+        "python scripts/generate_locales.py\n" + body
     )
 
 

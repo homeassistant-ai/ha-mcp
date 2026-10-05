@@ -1,36 +1,21 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/tlh.json (keys addon.*, features.*,
-# addon_dev.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/tlh.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: TLS certificate yI'ol
-    description: Home Assistant turwI' TLS certificate lugh 'e' yI'ol. Supervisor
-      proxy vegh rar add-on, vaj motlh pagh choH. add-on Dacherqa'ta' 'ej HochvaD
-      poSbogh HTTPS hostname, nIteb 'ollu'bogh certificate, pagh hostname muj lo'chugh
-      neH yIchu'Ha'. chu'Ha'lu'chugh Qum Hung pujmoH — poQbe'chugh yIchu'taH. QapchoHmeH
-      add-on Dataghqa'moHnIS.
+    name: SSL certificates tob
+    description: SIr'o' Davoqchugh neH TLS tobmeH mIw yIchu'Ha'. taghqa'moHnISlu'.
   ha_tool_concurrency:
     name: Home Assistant tool concurrency
     description: Optional limit on outer Home Assistant tool calls across all sessions.
       Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
+      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
+      0–32. Restart required.
   backup_hint:
-    name: HA naQ snapshot chupmeH pat (LLM-vaD)
-    description: 'Qobbogh mIw qaSpa'' Home Assistant tarball backup naQ chupmeH
-
-      `ha_manage_backup(scope=''snapshot'')` jan DelmeH ghItlhDaq LLMvaD
-
-      ''anglu''bogh qeS mu''mey choH. chovnatlh janmey law'' teqmeH mIw.
-
-      LLM-vaD QInvam wa'' neH SIgh.
-
-
-      automation / script / helper / latlh choH Hoch qaSpa'' nuv
-
-      vangnISbe''taHvIS snapshot chenmoHmeH, bIngDaq **choHmey
-
-      auto-backup yIQotlhHa''** DuH pIm yIlo''.'
+    name: polqa'meH De' chup HoS
+    description: Qobbogh ghItlhmeH mIwmey qaSpa' HA Dotlh mIllogh naQ chenmoH LLM
+      'e' chupra' 'ar 'e' SeH.
   enable_beta_features:
     name: Beta DuHmey yIQotlhHa' (wa'DIch SeHwI')
     description: ⚠ QOB — Home AssistantlIj QIHlaHqu' janmeyvam. YAML configlIj, 'a'baqa'
@@ -190,53 +175,39 @@ configuration:
       leQ chu'lu'nIS (web UI-Daq je); pagh QaptaHvIS DuH puqvam buSHa'lu'; naDev true
       wIvlu'pu'chugh je buSHa'lu'.
   enable_auto_backup:
-    name: choHmey auto-backup yIQotlhHa'
-    description: 'MCP jan ghItlh/Qaw'' Hoch qaSpa'' Dol snapshot pol (automation,
-      script, scene, helper, dashboard, label, category, group, zone, area, calendar,
-      todo, Dol, integration, latlh teq/polHa'' janmey je). poH botwI'': 0 (motlh)
-      = Hoch mIw; N > 0 = Dol HochvaD N tupmeyDaq wa'' snapshot neH. /data/ha_mcp_backups/
-      bIngDaq YAML teywI''pu'' snapshotmey pollu'' (HAMCP_BACKUP_DIR vegh qa''laH),
-      ''ej web DuHmey UI Backups jIHDaq pagh ha_manage_backup(scope=''edits'', ...)
-      vegh tetlhlu'', polqa''lu'', Qaw''lu'' ghap. nID neH — Qagh QonoSDaq ghuH ghItlhlu'',
-      ''ach mIw ghItlh botbe''. ha_write_file, ha_delete_file, ha_config_set_yaml
-      jevaD snapshot poQlu''. motlh chu''lu''; wIvHa''meH yIwIvHa''. QapchoHmeH add-on
-      Dataghqa''moHnIS.'
+    name: choHmey'e' polqa'meH De' chenmoH'egh
+    description: ghItlhmeH pagh Qaw'meH jan rI'lu'bogh Hoch ta'lu'pa' Dotlh mIllogh
+      pol.
   auto_backup_throttle_minutes:
-    name: auto-backup poH veH (tup)
-    description: Dol HochvaD poH veH. 0 (motlh) wIvlu'chugh, ghItlh Hoch qaSpa' snapshot
-      chenmoH. N>0 wIvlu'chugh, Hoch N tupDaq Dol HochvaD wa' snapshot neH chenmoH.
-      veH 0–1440.
+    name: poH veH (tupmey)
+    description: 'Dol HochvaD poH. 0 = Hoch ghItlhlu''DI''; N > 0 = N tupmey HochDaq
+      wa'' polqa''meH De'' neH. poQbogh mI''mey: 0–1440.'
   auto_backup_retain_per_entity:
-    name: auto-backup polmeH mI' (Dol Hoch)
-    description: Dol HochvaD snapshotmey polbogh mI' jenqu'. Hoch polta'ghach QapDI',
-      snapshotmey ngo' veH juSbogh Qaw'lu'. motlh 100; veH 1–10000.
+    name: Dol HochvaD pol
+    description: Dol HochvaD polbogh Dotlh mIlloghmey 'aqroS (1–10000). ngo'bogh mIlloghmey
+      teqlu'.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
-    name: snapshot Qaw'meH chaw' yInob
-    description: HA snapshot tarballmey naQ Qaw'laH ha_manage_backup (scope='snapshot',
-      action='delete'). motlh chu'Ha'lu' — choH muj qaSpu'DI' cheghmeH snapshot Qav
-      'oHlaH, vaj naDev nuv wIv poQlu'. chu'lu'chugh je, backups nablu'bogh, snapshot
-      chu'qu' ratlhbogh. bIngDaq ngo' veH tu'lu'; snapshot ngo'be'chugh Qaw'laHbe'lu'.
+    name: Dotlh mIllogh Qaw' chaw'
+    description: HA Dotlh mIlloghmey naQ Qaw' <code>ha_manage_backup</code> 'e' chaw';
+      'ach ghunbogh, chu'qu'bogh, ngo'be'bogh je mIlloghmey Qan.
   snapshot_delete_min_age_days:
-    name: snapshot Qaw'meH ngo' veH (jaj)
-    description: snapshot Qaw'laHlu'pa' ngo'nIS. veH 0–365; 0 wIvlu'chugh veH chu'Ha'
-      (snapshot chu'qu' backups nablu'bogh je HungtaH). motlh 7.
+    name: Qaw'lu'pa' Dotlh mIllogh ngo'nISbogh 'ar (jajmey)
+    description: 'Qaw''lu''pa'' ngo''nIS Dotlh mIllogh. poQbogh mI''mey: 0–365.'
   disabled_tools:
     name: janmey luQotlhlu'bogh (comma-mey)
     description: naDev lutetlhlu'bogh janmey luchu'Ha'lu' 'ej web DuHmey UI (janmey

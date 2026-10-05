@@ -1,40 +1,21 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/eo.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/eo.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Kontroli TLS-atestilon
-    description: Kontrolu la TLS-atestilon de la servilo Home Assistant. La programo
-      (aldonaĵo) konektiĝas per la provkuratora prokurservilo (Supervisor proxy),
-      do ĉi tio kutime havas neniun efikon kaj devas resti ebligita. Malŝaltu nur
-      se vi reagordis la programon (aldonaĵo) por komuniki kun HA per publika HTTPS-gastnomo
-      kun memsubskribita atestilo aŭ malkongruo de gastnomo. Malŝalto malfortigas
-      transportan sekurecon — lasu ebligita krom se vi scias, ke vi bezonas tion.
-      Postulas restartigon por ekvalidi.
+    name: Kontroli SSL-atestilojn
+    description: Malebligu TLS-kontrolon nur en fidindaj retoj. Restartigo necesas.
   ha_tool_concurrency:
     name: Konkureco de hejmaŭtomatigaj iloj de Home Assistant
     description: Laŭvola limo pri eksteraj vokoj al Home Assistant-iloj tra ĉiuj sesioj.
       Interna REST-, WebSocket-, kaj perila disbranĉiĝa konkureco restas neŝanĝita.
       0 tenas la senliman konduton. Voko atendanta je kapablo malsukcesas post 60
-      sekundoj.
+      sekundoj. Intervalo 0–32. Postiĝas restartigo.
   backup_hint:
-    name: Nivelo de sugesto por plena HA-momentfoto (por LLM)
-    description: 'Agordas la vortumon de la sugesto, kiun la LLM vidas en la
-
-      `ha_manage_backup(scope=''snapshot'')` ilpriskribo pri kiam
-
-      sugesti plenan Home Assistant tarball-sekurkopion antaŭ riskaj operacioj
-
-      (ekz. amasa forigo de aparatoj). Influas NUR ĉi tiun unu LLM-alfrontan promptan
-
-      frazon.
-
-
-      Por aŭtomataj momentfotoj por ĉiu redakto de aŭtomatigoj / skriptoj / helpiloj
-      /
-
-      ktp., uzu la apartan ŝaltilon **Ebligi aŭtomatan sekurkopion de redaktoj** sube.'
+    name: Nivelo de rezerva sugesto
+    description: Regulas kiom forte la LLM estas instigita fari plenan HA-momentfoton
+      antaŭ riskaj skriboj.
   enable_tool_search:
     name: Ebligi ilo-serĉon
     description: 'Anstataŭigu la plenan il-katalogon per serĉ-bazita malkovro. Reduktas
@@ -122,62 +103,38 @@ configuration:
       praktikajn kapablojn ĉe skriboj” supre kaj inerta dum tiu gepatro estas malŝaltita.
       Postulas restartigon por ekvalidi.'
   enable_auto_backup:
-    name: Ebligi aŭtomatan sekurkopion de redaktoj
-    description: 'Kaptas momentfoton por ĉiu ento antaŭ ĉiu ĉirkaŭvolvita skriba/detrua
-      MCP-ilvoko (aŭtomatigo, skripto, sceno, helpilo, panelo, panelresurso, etikedo,
-      kategorio, grupo, zono, areo, kalendaro, farendaĵo, ento, aparato, integriĝo,
-      kaj parencaj forigaj/detruaj iloj). La aŭtomata sekurkopia limigo difinas kiom
-      ofte tio okazas: 0 (defaŭlte) kaptas ĉe ĉiu tia voko, N>0 maksimume unu momentfoton
-      po N minutoj por ĉiu ento. Momentfotoj estas konservitaj kiel YAML-dosieroj
-      sub /data/ha_mcp_backups/ (anstataŭigebla per HAMCP_BACKUP_DIR) kaj listigitaj,
-      restarigitaj, aŭ forigitaj per la langeto ''Sekurkopioj'' en la reta agorda
-      UI aŭ per ha_manage_backup(scope=''edits'', ...). Por tiuj domajnoj la kapto
-      estas plejbone klopoda — malsukceso registras AVERTON kaj la skribo daŭras.
-      La dosieraj kaj krud-YAML-iloj estas la escepto: ha_write_file, ha_delete_file
-      kaj ha_config_set_yaml traktas la momentfoton kiel antaŭkondiĉon, do skribo
-      tra ili estas rifuzita dum ĉi tio estas malŝaltita, kaj malsukcesa kapto blokas
-      ĝin. Defaŭlte ŝaltita; malmarkado malaktivigas la plejbone klopodajn kaptojn
-      kaj malfunkciigas la dosierajn kaj krud-YAML-ilojn kun ili. Postulas restartigon
-      por efektiviĝi.'
+    name: Aŭtomataj sekurkopioj de redaktoj
+    description: Kaptu momentfoton antaŭ ĉiu envolvita skribo aŭ detrua ilvoko.
   auto_backup_throttle_minutes:
-    name: Aŭtomata sekurkopia limigo (minutoj)
-    description: Limiga fenestro por ĉiu ento. 0 (defaŭlte) kaptas momentfoton ĉe
-      ĉiu ĉirkaŭvolvita skribo. N>0 kaptas maksimume unu momentfoton po N minutoj
-      por ĉiu ento. Gamo 0–1440.
+    name: Limigo (minutoj)
+    description: Limigo por ento. 0 = ĉiu skribo; N > 0 = maksimume unu sekurkopio
+      po N minutoj. Intervalo 0–1440.
   auto_backup_retain_per_entity:
-    name: Aŭtomata sekurkopia reteno (por ĉiu ento)
-    description: Maksimuma nombro de momentfotoj konservitaj por ĉiu ento. Pli malnovaj
-      momentfotoj preter ĉi tiu limo estas forigitaj ĉe ĉiu sukcesa kapto. Defaŭlte
-      100, gamo 1–10000.
+    name: Konservi po ento
+    description: Maksimumaj momentfotoj konservitaj po ento (1–10000). Pli malnovaj
+      elrotacias.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Permesi forigon de momentfotoj
-    description: Permesas al ha_manage_backup forigi plenajn HA-momentfotajn tarball-ojn
-      (scope='snapshot', action='delete'). Malŝaltita defaŭlte — momentfoto povas
-      esti la lasta reakira punkto post erara ŝanĝo, do homo devas elekti ĉi tie.
-      Eĉ kiam ŝaltita, planitaj sekurkopioj, la plej nova restanta momentfoto, kaj
-      io ajn pli juna ol la suba aĝlimo restas protektitaj.
+    description: Permesi al ha_manage_backup forigi plenajn HA-momentfotojn, dum konservante
+      planitajn, plej novajn, kaj tro-junajn momentfotojn protektitaj.
   snapshot_delete_min_age_days:
-    name: Minimuma aĝo de momentfoto por forigo (tagoj)
-    description: Momentfoto devas esti almenaŭ tiom aĝa antaŭ ol ĝi povas esti forigita.
-      Gamo 0–365; 0 malaktivigas la limon (la protektoj de la plej nova momentfoto
-      kaj planitaj sekurkopioj ankoraŭ validas). Defaŭlte 7.
+    name: Minimuma aĝo de momentfoto por forigi (tagoj)
+    description: Momentfoto devas esti almenaŭ tiom aĝa antaŭ forigo. Intervalo 0–365.
   disabled_tools:
     name: Malaktivigitaj iloj (disigitaj per komoj)
     description: Iloj listigitaj ĉi tie estas devige malŝaltitaj kaj ŝlositaj en la

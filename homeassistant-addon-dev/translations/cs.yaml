@@ -1,37 +1,21 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/cs.json (keys addon.*, features.*,
-# addon_dev.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/cs.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Ověřit certifikát TLS
-    description: Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk)
-      se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo
-      by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci
-      (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed
-      certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu –
-      nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.
+    name: Ověřit SSL certifikáty
+    description: Zakažte ověřování TLS pouze na důvěryhodných sítích. Vyžadován restart.
   ha_tool_concurrency:
     name: Souběžnost nástrojů Home Assistant
     description: Volitelný limit pro vnější volání nástrojů Home Assistant napříč
       všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé
       nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající
-      na kapacitu selže po 60 sekundách.
+      na kapacitu selže po 60 sekundách. Rozsah 0–32. Vyžadován restart.
   backup_hint:
-    name: Úroveň návrhu snímku celé HA (pro LLM)
-    description: 'Upravuje znění nápovědy, kterou LLM vidí v popisu nástroje
-
-      `ha_manage_backup(scope=''snapshot'')` pro to, kdy navrhnout úplnou zálohu Home
-      Assistant tarballu před rizikovými operacemi
-
-      (např. hromadné mazání zařízení). Ovlivňuje POUZE tuto jednu větu výzvy směřující
-      k LLM.
-
-
-      Pro automatické snímky automatizací / skriptů / pomocníků /
-
-      atd. pro každou úpravu použijte samostatný přepínač **Povolit automatické zálohování
-      úprav** níže.'
+    name: Úroveň nápovědy k zálohování
+    description: Určuje, jak silně je LLM vyzváno k vytvoření úplného snímku HA před
+      rizikovými zápisy.
   enable_beta_features:
     name: Povolit beta funkce (hlavní)
     description: ⚠ NEBEZPEČÍ — tyto nástroje mohou TRVALE POŠKODIT vaši instalaci
@@ -232,62 +216,39 @@ configuration:
       beta features“ zapnutý (a to i ve webovém rozhraní) – v opačném případě bude
       tento dílčí příznak za běhu ignorován bez ohledu na jeho hodnotu zde.
   enable_auto_backup:
-    name: Povolit automatické zálohování úprav
-    description: 'Pořídí snímek pro každou entitu před každým zabaleným zápisem/destruktivním
-      voláním nástroje MCP (automatizace, skript, scéna, pomocník, dashboard, zdroj
-      dashboardu, štítek, kategorie, skupina, zóna, oblast, kalendář, úkol, entita,
-      zařízení, integrace a související nástroje pro odebrání/smazání). Omezení automatické
-      zálohy určuje, jak často se to děje: 0 (výchozí) zachytí při každém takovém
-      volání, N>0 maximálně jeden snímek za N minut na entitu. Snímky jsou uloženy
-      jako soubory YAML pod /data/ha_mcp_backups/ (přepsání přes HAMCP_BACKUP_DIR)
-      a jsou uvedeny, obnoveny nebo smazány přes kartu Zálohy ve webovém uživatelském
-      rozhraní nastavení nebo přes ha_manage_backup(scope=''edits'', ...). Pro tyto
-      domény je zachycení nejlepším možným úsilím — selhání zaznamená VAROVÁNÍ a zápis
-      pokračuje. Nástroje pro soubory a raw-YAML jsou výjimkou: ha_write_file, ha_delete_file
-      a ha_config_set_yaml považují snímek za předpoklad, takže zápis přes ně je odmítnut,
-      pokud je tato možnost vypnuta, a neúspěšné zachycení jej blokuje. Ve výchozím
-      nastavení zapnuto; zrušení zaškrtnutí se odhlásí od zachycení nejlepším úsilím
-      a vyřadí s nimi nástroje pro soubory a raw-YAML z provozu. Vyžaduje restart,
-      aby se projevilo.'
+    name: Automatické zálohování úprav
+    description: Pořiďte snímek před každým zabaleným zápisem nebo destruktivním voláním
+      nástroje.
   auto_backup_throttle_minutes:
-    name: Omezení automatické zálohy (minuty)
-    description: Okno omezení pro každou entitu. 0 (výchozí) zachytí snímek při každém
-      zabaleném zápisu. N>0 zachytí maximálně jeden snímek za N minut na entitu. Rozsah
-      0–1440.
+    name: Omezení (minuty)
+    description: Omezení na entitu. 0 = každý zápis; N > 0 = maximálně jedna záloha
+      za N minut. Rozsah 0–1440.
   auto_backup_retain_per_entity:
-    name: Uchovávání automatických záloh (na entitu)
-    description: Maximální počet snímků uchovávaných na entitu. Starší snímky nad
-      tento limit jsou při každém úspěšném zachycení vyřazeny. Výchozí 100, rozsah
-      1–10000.
+    name: Zachovat na entitu
+    description: Maximální počet snímků uchovávaných na entitu (1–10000). Starší se
+      postupně odstraňují.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Povolit smazání snímků
-    description: Umožňuje ha_manage_backup mazat úplné HA snapshot tarbally (scope='snapshot',
-      action='delete'). Ve výchozím nastavení vypnuto — snímek může být posledním
-      bodem obnovy po chybné změně, takže zde musí člověk souhlasit. I když je zapnuto,
-      plánované zálohy, nejnovější zbývající snímek a cokoli mladšího než níže uvedený
-      věkový limit zůstávají chráněny.
+    description: Povolit ha_manage_backup mazat úplné snímky HA, přičemž plánované,
+      nejnovější a příliš mladé snímky zůstanou chráněny.
   snapshot_delete_min_age_days:
     name: Minimální stáří snímku pro smazání (dny)
-    description: Snímek musí být alespoň takto starý, než může být smazán. Rozsah
-      0–365; 0 zakáže dolní hranici (ochrany nejnovějšího snímku a plánované zálohy
-      stále platí). Výchozí 7.
+    description: Snímek musí být před smazáním alespoň takto starý. Rozsah 0–365.
   disabled_tools:
     name: Zakázané nástroje (oddělené čárkami)
     description: Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém

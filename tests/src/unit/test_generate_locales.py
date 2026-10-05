@@ -77,11 +77,15 @@ def test_invalid_best_effort_entries_warn_and_preserve_valid_messages(
 
 
 class TestResolveText:
-    def test_override_order_is_flavor_then_features_then_addon(self) -> None:
+    def test_override_order_is_flavor_then_features_then_addon_then_ui_rows(
+        self,
+    ) -> None:
         messages = {
             "addon_stable.opt.description": "stable wording",
             "features.opt.help": "shared wording",
             "addon.opt.description": "addon wording",
+            "advanced.opt.help": "advanced row wording",
+            "backup.fields.opt.help": "backup row wording",
         }
         assert (
             generate_locales.resolve_text(messages, {}, "stable", "opt", "description")
@@ -96,6 +100,16 @@ class TestResolveText:
         assert (
             generate_locales.resolve_text(messages, {}, "stable", "opt", "description")
             == "addon wording"
+        )
+        del messages["addon.opt.description"]
+        assert (
+            generate_locales.resolve_text(messages, {}, "stable", "opt", "description")
+            == "advanced row wording"
+        )
+        del messages["advanced.opt.help"]
+        assert (
+            generate_locales.resolve_text(messages, {}, "stable", "opt", "description")
+            == "backup row wording"
         )
 
     def test_locale_falls_back_to_english(self) -> None:

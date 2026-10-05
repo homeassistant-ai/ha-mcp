@@ -1,43 +1,22 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/de.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/de.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: TLS-Zertifikat verifizieren
-    description: Überprüfe das TLS-Zertifikat des Home Assistant-Servers. Die App
-      (das Add-on) verbindet sich über den Supervisor-Proxy, daher hat dies normalerweise
-      keine Auswirkungen und sollte aktiviert bleiben. Deaktiviere es nur, wenn du
-      die App (das Add-on) so rekonfiguriert hast, dass sie über einen öffentlichen
-      HTTPS-Hostnamen mit einem selbstsignierten Zertifikat oder einem Hostnamen-Mismatch
-      mit HA kommuniziert. Das Deaktivieren schwächt die Transportsicherheit — lasse
-      es eingeschaltet, es sei denn, du weißt, dass du es brauchst. Erfordert einen
-      Neustart, um wirksam zu werden.
+    name: SSL-Zertifikate überprüfen
+    description: Deaktiviere TLS-Überprüfung nur in vertrauenswürdigen Netzwerken.
+      Neustart erforderlich.
   ha_tool_concurrency:
     name: Home-Assistant-Tool-Gleichzeitigkeit
     description: Optionales Limit für äußere Home-Assistant-Tool-Aufrufe über alle
       Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit
       bleibt unverändert. 0 behält das unbegrenzte Verhalten bei. Ein auf Kapazität
-      wartender Aufruf schlägt nach 60 Sekunden fehl.
+      wartender Aufruf schlägt nach 60 Sekunden fehl. Bereich 0–32. Neustart erforderlich.
   backup_hint:
-    name: Full-HA Snapshot-Vorschlagsebene (LLM-seitig)
-    description: 'Passt die Formulierung des Hinweises an, den das LLM in der
-
-      `ha_manage_backup(scope=''snapshot'')`-Tool-Beschreibung sieht, wann es ein
-
-      vollständiges Home Assistant Tarball-Backup vor riskanten Operationen
-
-      vorschlagen soll (z.B. Massen-Gerätelöschungen). Betrifft NUR diesen einen
-
-      LLM-seitigen Prompt-Satz.
-
-
-      Für automatische Snapshots pro Bearbeitung von Automatisierungen / Skripten
-      /
-
-      Helfern / etc. nutze den separaten **Auto-Backup von Bearbeitungen aktivieren**-Schalter
-
-      unten.'
+    name: Backup-Hinweis-Level
+    description: Steuert, wie stark das LLM aufgefordert wird, einen vollständigen
+      HA-Snapshot vor riskanten Schreibvorgängen zu erstellen.
   enable_tool_search:
     name: Tool-Suche aktivieren
     description: 'Ersetze den vollständigen Tool-Katalog durch eine suchend basierte
@@ -131,64 +110,40 @@ configuration:
       bei Schreibvorgängen anhängen oben und inert, während dieser Elternteil ausgeschaltet
       ist. Erfordert Neustart, um wirksam zu werden.'
   enable_auto_backup:
-    name: Auto-Backup von Bearbeitungen aktivieren
-    description: 'Erstellt einen Snapshot pro Entität vor jedem umschlossenen Schreib-/destruktiven
-      MCP-Tool-Aufruf (Automatisierung, Skript, Szene, Helfer, Dashboard, Dashboard-Ressource,
-      Label, Kategorie, Gruppe, Zone, Bereich, Kalender, Todo, Entität, Gerät, Integration
-      und zugehörige Entfernungs-/Lösch-Tools). Die Auto-Backup-Drosselung begrenzt,
-      wie oft dies geschieht: 0 (Standard) erstellt bei jedem solchen Aufruf einen
-      Snapshot, N>0 maximal einen Snapshot pro N Minuten pro Entität. Snapshots werden
-      als YAML-Dateien unter /data/ha_mcp_backups/ (Überschreibung über HAMCP_BACKUP_DIR)
-      gespeichert und können über den Tab „Backups“ in der Web-Einstellungen-UI oder
-      über ha_manage_backup(scope=''edits'', ...) aufgelistet, wiederhergestellt oder
-      gelöscht werden. Für diese Domänen ist die Erfassung ein Best-Effort-Versuch
-      — ein Fehler protokolliert eine WARNING und der Schreibvorgang wird fortgesetzt.
-      Die Datei- und Raw-YAML-Tools sind die Ausnahme: ha_write_file, ha_delete_file
-      und ha_config_set_yaml behandeln den Snapshot als Vorbedingung, sodass ein Schreibvorgang
-      über sie verweigert wird, solange dies deaktiviert ist, und eine fehlgeschlagene
-      Erfassung ihn blockiert. Standardmäßig aktiviert; Deaktivieren meldet sich von
-      den Best-Effort-Erfassungen ab und nimmt die Datei- und Raw-YAML-Tools mit ihnen
-      außer Betrieb. Erfordert einen Neustart, um wirksam zu werden.'
+    name: Automatische Backup-Bearbeitungen
+    description: Erfasse einen Snapshot vor jedem umwickelten Schreib- oder destruktiven
+      Tool-Aufruf.
   auto_backup_throttle_minutes:
-    name: Auto-Backup-Drosselung (Minuten)
-    description: Pro-Entität-Drosselungsfenster. 0 (Standard) erfasst einen Snapshot
-      bei jedem umschlossenen Schreibvorgang. N>0 erfasst höchstens einen Snapshot
-      pro N Minuten pro Entität. Bereich 0–1440.
+    name: Drosselung (Minuten)
+    description: Drosselung pro Entität. 0 = jeder Schreibvorgang; N > 0 = höchstens
+      ein Backup pro N Minuten. Bereich 0-1440.
   auto_backup_retain_per_entity:
-    name: Auto-Backup-Aufbewahrung (pro Entität)
-    description: Maximale Anzahl von Snapshots, die pro Entität behalten werden. Ältere
-      Snapshots jenseits dieser Grenze werden bei jeder erfolgreichen Erfassung ausgetauscht.
-      Standard 100, Bereich 1–10000.
+    name: Behalten pro Entität
+    description: Maximale Snapshots, die pro Entität behalten werden (1-10000). Ältere
+      rotieren heraus.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Snapshot-Löschung erlauben
-    description: Lässt ha_manage_backup vollständige HA-Snapshot-Tarballs löschen
-      (scope='snapshot', action='delete'). Standardmäßig aus – ein Snapshot könnte
-      der letzte Wiederherstellungspunkt nach einer fehlerhaften Änderung sein, also
-      muss ein Mensch dies hier aktiv aktivieren. Auch wenn an, bleiben geplante Backups,
-      der neueste verbleibende Snapshot und alles jünger als der Alters-Floor unten
-      geschützt.
+    description: Erlaube ha_manage_backup, vollständige HA-Snapshots zu löschen, während
+      geplante, neueste und zu junge Snapshots geschützt bleiben.
   snapshot_delete_min_age_days:
     name: Mindestalter des Snapshots zum Löschen (Tage)
-    description: Ein Snapshot muss mindestens so alt sein, bevor er gelöscht werden
-      kann. Bereich 0–365; 0 deaktiviert den Floor (die Neuester-Snapshot- und Geplante-Backup-Schutzmaßnahmen
-      gelten weiterhin). Standard 7.
+    description: Ein Snapshot muss mindestens so alt sein, bevor er gelöscht wird.
+      Bereich 0-365.
   disabled_tools:
     name: Deaktivierte Tools (kommagetrennt)
     description: Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI

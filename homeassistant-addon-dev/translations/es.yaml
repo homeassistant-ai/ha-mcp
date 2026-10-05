@@ -1,42 +1,23 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/es.json (keys addon.*, features.*,
-# addon_dev.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/es.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Verificar el certificado TLS
-    description: Verifica el certificado TLS del servidor de Home Assistant. La app
-      (add-on) se conecta a través del proxy del Supervisor, por lo que normalmente
-      esto no tiene efecto y debe permanecer habilitado. Desactívalo solo si has reconfigurado
-      la app (add-on) para comunicarse con HA a través de un nombre de host HTTPS
-      público con un certificado autofirmado o un error de coincidencia en el nombre
-      de host. Desactivarlo debilita la seguridad del transporte; déjalo activado
-      a menos que sepas que lo necesitas. Requiere reiniciar para aplicar los cambios.
+    name: Verificar los certificados SSL
+    description: Desactiva la verificación TLS solo en redes de confianza. Hay que
+      reiniciar.
   ha_tool_concurrency:
     name: Concurrencia de herramientas de Home Assistant
     description: Límite opcional en las llamadas externas a herramientas de Home Assistant
       en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución
       por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una
-      llamada que espera capacidad falla después de 60 segundos.
+      llamada que espera capacidad falla después de 60 segundos. Rango de 0 a 32.
+      Requiere reinicio.
   backup_hint:
-    name: Nivel de sugerencia de instantánea completa de HA (para el LLM)
-    description: 'Ajusta la redacción de la indicación que el LLM ve en la descripción
-      de la
-
-      herramienta `ha_manage_backup(scope=''snapshot'')` sobre cuándo sugerir una
-
-      copia de seguridad completa de Home Assistant antes de operaciones
-
-      arriesgadas (p. ej. borrados masivos de dispositivos). Afecta ÚNICAMENTE a
-
-      esa frase dirigida al LLM.
-
-
-      Para instantáneas automáticas por edición de automatizaciones / scripts /
-
-      auxiliares / etc., usa la opción independiente **Activar copia de
-
-      seguridad automática de las ediciones** que aparece más abajo.'
+    name: Nivel de la indicación de copia de seguridad
+    description: Controla con cuánta insistencia se pide al LLM que haga una instantánea
+      completa de HA antes de escrituras arriesgadas.
   enable_beta_features:
     name: Activar las funciones beta (principal)
     description: ⚠ PELIGRO — estas herramientas pueden DAÑAR PERMANENTEMENTE tu instalación
@@ -257,67 +238,40 @@ configuration:
       este subindicador se ignorará en tiempo de ejecución independientemente de su
       valor aquí.'
   enable_auto_backup:
-    name: Activar copia de seguridad automática de las ediciones
-    description: 'Captura una instantánea por entidad antes de cada llamada envuelta
-      de herramienta MCP de escritura/destructiva (automatización, script, escena,
-      asistente, panel, recurso de panel, etiqueta, categoría, grupo, zona, área,
-      calendario, tarea, entidad, dispositivo, integración y herramientas de eliminación/borrado
-      de elementos relacionados). El límite de frecuencia de la copia de seguridad
-      automática establece la frecuencia con la que esto ocurre: 0 (predeterminado)
-      captura en cada llamada de este tipo, N>0 como máximo una instantánea cada N
-      minutos por entidad. Las instantáneas se guardan como archivos YAML en /data/ha_mcp_backups/
-      (anular mediante HAMCP_BACKUP_DIR) y se listan, restauran o eliminan a través
-      de la pestaña "Copias de seguridad" en la interfaz de usuario de configuración
-      web o mediante ha_manage_backup(scope=''edits'', ...). Para esos dominios, la
-      captura es de "mejor esfuerzo" — un fallo registra una ADVERTENCIA y la escritura
-      procede. Las herramientas de archivo y YAML sin procesar son la excepción: ha_write_file,
-      ha_delete_file y ha_config_set_yaml tratan la instantánea como una condición
-      previa, por lo que una escritura a través de ellas se rechaza mientras esto
-      está desactivado, y una captura fallida la bloquea. Activado por defecto; desmarcar
-      desactiva las capturas de "mejor esfuerzo" y deja fuera de servicio las herramientas
-      de archivo y YAML sin procesar con ellas. Requiere un reinicio para que surta
-      efecto.'
+    name: Copia automática de las ediciones
+    description: Captura una instantánea antes de cada llamada cubierta a una herramienta
+      de escritura o destructiva.
   auto_backup_throttle_minutes:
-    name: Limitación de la copia automática (minutos)
-    description: Ventana de limitación por entidad. 0 (predeterminado) captura una
-      instantánea en cada escritura cubierta. N>0 captura como mucho una instantánea
-      cada N minutos por entidad. Rango 0–1440.
+    name: Limitación (minutos)
+    description: Limitación por entidad. 0 = en cada escritura; N > 0 = como mucho
+      una copia cada N minutos. Rango 0–1440.
   auto_backup_retain_per_entity:
-    name: Retención de copias automáticas (por entidad)
-    description: Número máximo de instantáneas conservadas por entidad. Las instantáneas
-      más antiguas que superen este límite se rotan en cada captura correcta. Predeterminado
-      100, rango 1–10000.
+    name: Conservar por entidad
+    description: Número máximo de instantáneas conservadas por entidad (1–10000).
+      Las más antiguas se rotan.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Permitir la eliminación de instantáneas
-    description: 'Permite que ha_manage_backup elimine archivos tarball de instantáneas
-      completas de HA (scope=''snapshot'', action=''delete''). Desactivado de forma
-      predeterminada: una instantánea puede ser el último punto de recuperación tras
-      un cambio equivocado, así que una persona debe autorizarlo aquí expresamente.
-      Incluso estando activado, las copias de seguridad programadas, la instantánea
-      más reciente que quede y todo lo más nuevo que el mínimo de antigüedad de abajo
-      siguen protegidos.'
+    description: Permite que ha_manage_backup elimine instantáneas completas de HA,
+      manteniendo protegidas las programadas, la más reciente y las demasiado recientes.
   snapshot_delete_min_age_days:
     name: Antigüedad mínima de la instantánea para eliminarla (días)
     description: Una instantánea debe tener al menos esta antigüedad para poder eliminarse.
-      Rango 0–365; 0 desactiva el mínimo (las protecciones de la instantánea más reciente
-      y de las copias programadas siguen aplicándose). Predeterminado 7.
+      Rango 0–365.
   disabled_tools:
     name: Herramientas desactivadas (separadas por comas)
     description: 'Las herramientas indicadas aquí quedan forzadas a desactivadas y
