@@ -123,6 +123,10 @@ jobs:
             if [ "$leg" = stable ]; then
               echo "::warning::Could not query the triggering run's jobs; failing open."
               echo "channel=stable" >> "$GITHUB_OUTPUT"
+            elif [ "$EVENT" = workflow_dispatch ]; then
+              # A maintainer asked for this pre-release: fail and say why.
+              echo "::error::Could not query Publish Dev Channel run ${TRIGGER_RUN_ID}'s jobs."
+              exit 1
             else
               echo "::warning::Could not query the triggering run's jobs; skipping this dev build."
               echo "channel=skip" >> "$GITHUB_OUTPUT"
@@ -133,6 +137,9 @@ jobs:
           if [ "$conclusion" = success ] || { [ "$leg" = stable ] && [ -z "$conclusion" ]; }; then
             echo "channel=$leg" >> "$GITHUB_OUTPUT"
             echo "dev_run=$TRIGGER_RUN_ID" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" = workflow_dispatch ]; then
+            echo "::error::'$job' in Publish Dev Channel run ${TRIGGER_RUN_ID} is ${conclusion:-absent}, not success; no dev build to pin."
+            exit 1
           else
             echo "channel=skip" >> "$GITHUB_OUTPUT"
           fi

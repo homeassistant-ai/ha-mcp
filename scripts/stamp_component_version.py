@@ -1,9 +1,11 @@
 """Stamp the HACS component's version and the ha-mcp build it pins.
 
-A stable release needs no stamping: semantic-release writes the release version
-into ``manifest.json`` (``version`` and the ``ha-mcp==`` requirement) and
-``const.py`` in the release commit. A development pre-release is cut from a
-master snapshot, so the mirror sync stamps the snapshot with:
+semantic-release writes a stable release's version into ``manifest.json``
+(``version`` and the ``ha-mcp==`` requirement) and ``const.py`` in the release
+commit; the mirror sync's stable leg stamps the same values again, which
+changes nothing and guards against a commit that missed them. A development
+pre-release is cut from a master snapshot, so the mirror sync stamps the
+snapshot with:
 
 - ``--version``: the plain next-release number (``9.0.0``). Released servers
   parse the component version segment by segment as integers, so a component
