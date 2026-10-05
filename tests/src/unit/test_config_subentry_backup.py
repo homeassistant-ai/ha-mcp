@@ -243,6 +243,37 @@ async def test_deleted_subentry_is_created_again_from_its_snapshot(
 
 
 @pytest.mark.usefixtures("component")
+async def test_subentry_restore_takes_a_safety_snapshot_whatever_the_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """A reconfigure flow can apply a restore partly, so the pre-restore
+    capture is forced (auto-backup off, throttle) and mandatory."""
+    from pathlib import Path
+
+    ha = _HA({"s1": dict(PLANE)})
+    monkeypatch.setattr(bm, "_ws_send", ha.ws)
+    manager = bm.get_backup_manager(
+        ha.client,
+        SimpleNamespace(
+            enable_auto_backup=False,
+            auto_backup_throttle_minutes=60,
+            auto_backup_retain_per_entity=5,
+            auto_backup_dir=str(tmp_path),
+        ),
+    )
+
+    first = await manager._capture_restore_safety("helper_config_subentry", "e1/s1")
+    second = await manager._capture_restore_safety("helper_config_subentry", "e1/s1")
+
+    assert isinstance(first, Path) and isinstance(second, Path)
+    assert manager.read_snapshot(second.name)["config"]["data"] == PLANE
+    ha.subentries.clear()  # a deleted subentry has nothing to capture
+    assert (
+        await manager._capture_restore_safety("helper_config_subentry", "e1/s1") is None
+    )
+
+
+@pytest.mark.usefixtures("component")
 async def test_create_flow_that_aborts_is_reported_as_aborted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

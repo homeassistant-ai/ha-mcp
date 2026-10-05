@@ -1,14 +1,13 @@
 """The explicit ``ha_manage_backup(edits, create)`` capture."""
 
 from pathlib import Path
-from typing import Any
 
-from ..backup_manager import MandatoryBackupError
+from ..backup_manager import BackupManager, MandatoryBackupError
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
 
 
-async def capture_on_demand(mgr: Any, domain: str, entity_id: str) -> Path:
+async def capture_on_demand(mgr: BackupManager, domain: str, entity_id: str) -> Path:
     """Snapshot ``domain:entity_id`` now, or raise a structured error.
 
     Mandatory, so a fetch that fails is reported as such (a flow helper the

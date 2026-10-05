@@ -1515,6 +1515,16 @@ class BackupManager:
 
     async def _capture_restore_safety(self, domain: str, entity_id: str) -> Path | None:
         """Flow-helper restore requires a fresh recovery point for its stable entry."""
+        if domain == "helper_config_subentry":
+            # A reconfigure flow can apply partly, so the capture is forced and
+            # mandatory; a deleted subentry has nothing to capture (None).
+            return await self.maybe_snapshot(
+                domain,
+                entity_id,
+                tool_name="ha_manage_backup.restore.safety",
+                force=True,
+                mandatory=True,
+            )
         if not _is_flow_helper_domain(domain):
             return await self.maybe_snapshot(
                 domain, entity_id, tool_name="ha_manage_backup.restore.safety"

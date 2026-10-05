@@ -46,6 +46,7 @@ from ..client.rest_client import (
 from ..errors import ErrorCode, create_error_response
 from ..redaction import sentinel_option_keys
 from .config_entry_flow_form import _extract_schema_field_names
+from .config_entry_flow_menu import answer_menu_from_snapshot
 from .config_entry_flow_walker import (
     POST_COMMIT_STATUSES,
     _FlowType,
@@ -368,7 +369,7 @@ async def _create_snapshot_helper(
         if not progress.flow_id:
             raise progress.failure()
         if initial_step.get("type") == _FlowType.MENU:
-            config = _answer_menu_from_snapshot(
+            config = answer_menu_from_snapshot(
                 progress, initial_step, config, helper_type
             )
         result = await _handle_flow_steps(
@@ -394,47 +395,6 @@ async def _create_snapshot_helper(
         if isinstance(err, (CreationFlowError, asyncio.CancelledError)):
             raise
         raise failure from err
-
-
-# The option a menu-rooted helper stores its creation branch under.
-_MENU_BRANCH_KEYS = {
-    "template": "template_type",
-    "group": "group_type",
-    "random": "entity_type",
-}
-
-
-def _answer_menu_from_snapshot(
-    progress: _CreationFlowProgress,
-    menu: dict[str, Any],
-    config: dict[str, Any],
-    helper_type: str,
-) -> dict[str, Any]:
-    """Pick the creation menu's branch the snapshot names.
-
-    A menu-rooted helper stores its branch among its options (template's
-    ``template_type``, group's ``group_type``); that key selects it, and no
-    creation form takes it. Other option values can also be menu names (a
-    template binary_sensor's ``device_class`` "light"), so the branch key is
-    looked up by helper type first and matched by value only for a type
-    without a known key.
-    """
-    if "next_step_id" in config:
-        return config
-    options = menu.get("menu_options")
-    choices = options if isinstance(options, list) else list(options or {})
-    branch_key = _MENU_BRANCH_KEYS.get(helper_type)
-    if branch_key is not None and config.get(branch_key) in choices:
-        keys = [branch_key]
-    else:
-        keys = [key for key, value in config.items() if value in choices]
-    if len(keys) != 1:
-        progress.refuse("unsupported_form")
-    progress.config.pop(keys[0])
-    return {
-        **{key: value for key, value in config.items() if key != keys[0]},
-        "next_step_id": config[keys[0]],
-    }
 
 
 async def _cleanup_snapshot_creation(

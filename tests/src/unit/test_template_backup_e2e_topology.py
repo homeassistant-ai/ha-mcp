@@ -45,7 +45,7 @@ async def test_missing_component_never_creates_or_edits_helper(
             return {
                 "success": False,
                 "error": {
-                    "code": "RESOURCE_NOT_FOUND",
+                    "code": "BACKUP_CAPTURE_FAILED",
                     "message": "Persisted options could not be read",
                 },
             }
