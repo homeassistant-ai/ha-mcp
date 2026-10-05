@@ -4,18 +4,21 @@
 # backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Verifiera SSL-certifikat
-    description: Inaktivera TLS-verifiering endast på betrodda nätverk. Omstart krävs.
+    name: Verify TLS certificates
+    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
+      only on a trusted network, for a self-signed certificate or a hostname mismatch:
+      it weakens transport security.'
   ha_tool_concurrency:
     name: Samtidighet för Home Assistant-verktyg
-    description: Valfri gräns för yttre anrop av Home Assistant-verktyg över alla
-      sessioner. Intern samtidighet för REST, WebSocket och per-verktyg-grenar är
-      oförändrad. 0 behåller obegränsat beteende. Ett anrop som väntar på kapacitet
-      misslyckas efter 60 sekunder. Intervall 0–32. Omstart krävs. Range 0–32.
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
+      0–32.
   backup_hint:
-    name: Nivå för säkerhetskopieringshint
-    description: Styr hur starkt LLM uppmanas att ta en fullständig HA-ögonblicksbild
-      före riskfyllda skrivningar.
+    name: Backup hint level
+    description: How strongly AI assistants are told to suggest a full Home Assistant
+      backup before risky changes. It changes only this hint; automatic edit backups
+      have their own setting.
   enable_beta_features:
     name: Aktivera beta-funktioner (huvud)
     description: ⚠ FARA — dessa verktyg kan PERMANENT SKADA din Home Assistant-installation.
@@ -45,11 +48,10 @@ configuration:
       att träda i kraft.'
   tool_search_max_results:
     name: Max antal resultat för verktygssökning
-    description: 'Maximalt antal dolda verktyg som returneras per ha_search_tools-anrop
-      när verktygssökning är aktiverat; ett fäst verktyg som placerar sig inom det
-      toppantalet läggs till som en kort namnpost över det. Lägre värden (2-3) sparar
-      kontexttoken men kan missa relevanta verktyg. Intervall: 2-10. Kräver omstart.
-      Range 2–10.'
+    description: Maximum number of hidden tools returned per ha_search_tools call
+      when tool search is enabled; a pinned tool that ranks inside that top count
+      is added as a short name-only entry on top of it. Lower values (2-3) save context
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
   enable_tool_security_policies:
     name: Aktivera verktygssäkerhetspolicyer (avancerat)
     description: Spärra verktygsanrop med hög risk (lås-/larmkontroll, automatiseringsskrivningar,
@@ -211,40 +213,44 @@ configuration:
       är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
   enable_auto_backup:
     name: Automatisk säkerhetskopiering av redigeringar
-    description: Ta en ögonblicksbild före varje omsluten skrivning eller destruktivt
-      verktygsanrop.
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
   auto_backup_throttle_minutes:
-    name: Begränsning (minuter)
-    description: Begränsning per entitet. 0 = varje skrivning; N > 0 = högst en säkerhetskopia
-      per N minuter. Område 0–1440. Range 0–1440.
+    name: Auto-backup throttle (minutes)
+    description: How often auto-backup may capture the same entity. 0 captures on
+      every write; N above 0 captures at most one snapshot per N minutes per entity.
+      Range 0–1440.
   auto_backup_retain_per_entity:
-    name: Behåll per entitet
-    description: Maximalt antal ögonblicksbilder som behålls per entitet (1–10000).
-      Äldre roteras ut. Range 1–10000.
+    name: Auto-backup retention (per entity)
+    description: The most snapshots kept per entity. Each new capture removes the
+      oldest snapshots above this number. Range 1–10000.
   enable_snapshot_actions:
     name: Tillåt fullständiga HA-ögonblicksbildsåtgärder
-    description: Tillåt AI-assistenter att hantera fullständiga Home Assistant-ögonblicksbilder
-      genom ha_manage_backup och motsvarande säkerhetskopieringstjänster och kommandon
-      i ha_call_service. Att stänga av detta blockerar alla ögonblicksbildsåtgärder,
-      inklusive listning. Borttagning av ögonblicksbilder är endast tillgänglig via
-      ha_manage_backup och kräver dessutom Tillåt borttagning av ögonblicksbilder.
-      Redigera säkerhetskopior och mänskliga åtgärder på den här sidan förblir tillgängliga.
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Gör säkerhetskopieringshanteringen skrivskyddad
-    description: Tillåt AI-assistenter att lista, visa och jämföra redigeringssäkerhetskopior,
-      samt lista fullständiga HA-ögonblicksbilder när ögonblicksbildsåtgärder är aktiverade.
-      Blockera manuell skapande, återställning (inklusive redigeringsåterställningar)
-      och borttagning av säkerhetskopior, inklusive motsvarande säkerhetskopieringstjänster
-      och kommandon i ha_call_service. Automatiska säkerhetskopior före redigering
-      fortsätter. Mänskliga åtgärder på den här sidan förblir tillgängliga.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Tillåt borttagning av ögonblicksbilder
-    description: Tillåt ha_manage_backup att ta bort fullständiga HA-ögonblicksbilder,
-      samtidigt som schemalagda, nyaste och för unga ögonblicksbilder skyddas.
+    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
+      snapshot may be the last way back after a mistaken change, so a person must
+      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
+      the minimum age stay protected.
   snapshot_delete_min_age_days:
     name: Minsta ålder för ögonblicksbild att ta bort (dagar)
-    description: En ögonblicksbild måste vara minst så här gammal innan den kan tas
-      bort. Område 0–365. Range 0–365.
+    description: How old a snapshot must be, in days, before it can be deleted. 0
+      turns off the age limit; the newest snapshot and scheduled backups stay protected.
+      Range 0–365.
   disabled_tools:
     name: Inaktiverade verktyg (kommaseparerade)
     description: Verktyg som listas här är tvingade att vara avstängda och låsta i

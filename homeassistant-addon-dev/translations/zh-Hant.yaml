@@ -4,15 +4,21 @@
 # backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: 驗證 SSL 憑證
-    description: 僅在受信網路中停用 TLS 驗證。需要重新啟動。
+    name: Verify TLS certificates
+    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
+      only on a trusted network, for a self-signed certificate or a hostname mismatch:
+      it weakens transport security.'
   ha_tool_concurrency:
     name: Home Assistant 工具並行數
-    description: 跨所有工作階段對外部 Home Assistant 工具呼叫的選擇性限制。內部 REST、WebSocket 及每個工具的分發並行數保持不變。0
-      表示維持無限制行為。等待容量的呼叫會在 60 秒後失敗。範圍 0–32。需要重新啟動。 Range 0–32.
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
+      0–32.
   backup_hint:
-    name: 備份提示層級
-    description: 控制在進行有風險的寫入之前，提示 LLM 進行完整 HA 快照的強度。
+    name: Backup hint level
+    description: How strongly AI assistants are told to suggest a full Home Assistant
+      backup before risky changes. It changes only this hint; automatic edit backups
+      have their own setting.
   enable_beta_features:
     name: 啟用測試版功能 (master)
     description: ⚠ 危險 —— 這些工具可能會永久損壞您的 Home Assistant 安裝。它們會寫入您的 YAML 設定、檔案系統、安裝自訂元件、執行任意沙盒
@@ -27,8 +33,10 @@ configuration:
       ha_search_tools 尋找，並透過已分類的代理程式（讀取／寫入／刪除）執行。需要重新啟動才能生效。
   tool_search_max_results:
     name: 工具搜尋最大結果數
-    description: 啟用工具搜尋時，每次 ha_search_tools 呼叫所傳回的隱藏工具最大數量；排名在前幾名之內的釘選工具會以僅顯示名稱的簡短條目形式額外加入最上方。較低的值
-      (2-3) 可節省上下文符記，但可能會漏掉相關工具。範圍：2-10。需要重新啟動。 Range 2–10.
+    description: Maximum number of hidden tools returned per ha_search_tools call
+      when tool search is enabled; a pinned tool that ranks inside that top count
+      is added as a short name-only entry on top of it. Lower values (2-3) save context
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
   enable_tool_security_policies:
     name: 啟用工具安全性策略（進階）
     description: 將高風險工具呼叫（鎖定／警報控制、自動化寫入等）限制在使用者核准之後。當呼叫受保護的工具時，代理程式會指示使用者在網頁 UI 中開啟「工具安全性策略」分頁並點擊「核准」，然後呼叫才會繼續。具備選用引數條件的個別工具規則可在「工具安全性策略」分頁中進行設定。預設為關閉。需要重新啟動才能生效。
@@ -107,27 +115,44 @@ configuration:
       UI 中的）主「啟用測試版功能」切換開關 — 否則此子旗標在執行階段將被忽略，無論其在此處的值為何。
   enable_auto_backup:
     name: 自動備份編輯
-    description: 在每個包裝的寫入或破壞性工具呼叫之前擷取快照。
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
   auto_backup_throttle_minutes:
-    name: 節流（分鐘）
-    description: 每個實體的節流。0 = 每次寫入；N > 0 = 每 N 分鐘最多一次備份。範圍 0–1440。 Range 0–1440.
+    name: Auto-backup throttle (minutes)
+    description: How often auto-backup may capture the same entity. 0 captures on
+      every write; N above 0 captures at most one snapshot per N minutes per entity.
+      Range 0–1440.
   auto_backup_retain_per_entity:
-    name: 每個實體保留數量
-    description: 每個實體保留的最大快照數（1–10000）。較舊的快照將會被輪替清除。 Range 1–10000.
+    name: Auto-backup retention (per entity)
+    description: The most snapshots kept per entity. Each new capture removes the
+      oldest snapshots above this number. Range 1–10000.
   enable_snapshot_actions:
     name: 允許完整的 Home Assistant 快照操作
-    description: 允許 AI 助理透過 ha_manage_backup 以及 ha_call_service 中的對應備份服務和指令來管理完整的
-      Home Assistant 快照。關閉此選項將會封鎖所有快照操作（包含列出）。快照刪除僅能透過 ha_manage_backup 進行，且同樣需要「允許快照刪除」。此頁面中的編輯備份與人工操作將維持可用。
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: 將備份管理設為唯讀
-    description: 允許 AI 助理列出、檢視、比對編輯備份，並在啟用快照操作時列出完整的 Home Assistant 快照。封鎖手動備份建立、還原（包含編輯還原）與刪除，包含
-      ha_call_service 中的對應備份服務和指令。自動的編輯前備份將繼續執行。此頁面中的人工操作將維持可用。
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: 允許刪除快照
-    description: 允許 ha_manage_backup 刪除完整的 HA 快照，同時保持排程、最新以及過於年輕的快照受到保護。
+    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
+      snapshot may be the last way back after a mistaken change, so a person must
+      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
+      the minimum age stay protected.
   snapshot_delete_min_age_days:
     name: 允許刪除的最小快照天數（天）
-    description: 快照必須達到此最低天數才能被刪除。範圍 0–365。 Range 0–365.
+    description: How old a snapshot must be, in days, before it can be deleted. 0
+      turns off the age limit; the newest snapshot and scheduled backups stay protected.
+      Range 0–365.
   disabled_tools:
     name: 停用的工具（以逗號分隔）
     description: 此處列出的工具會被強制關閉並在網頁設定 UI（「工具」分頁）中鎖定 — 若不先取消此選項，將無法在該處重新啟用。一小組強制性工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）無法停用，即使列在此處也會繼續執行。ha_get_skill_guide

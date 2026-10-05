@@ -4,19 +4,21 @@
 # backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Проверять SSL-сертификаты
-    description: Отключайте проверку TLS только в доверенной сети. Нужен перезапуск.
+    name: Verify TLS certificates
+    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
+      only on a trusted network, for a self-signed certificate or a hostname mismatch:
+      it weakens transport security.'
   ha_tool_concurrency:
     name: Параллелизм инструментов Home Assistant
-    description: Необязательный лимит внешних вызовов инструментов Home Assistant
-      во всех сеансах. Внутренний параллелизм REST, WebSocket и вентирования по инструментам
-      остается неизменным. 0 сохраняет неограниченное поведение. Вызов, ожидающий
-      свободных ресурсов, завершается ошибкой через 60 секунд. Диапазон 0–32. Требуется
-      перезапуск. Range 0–32.
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
+      0–32.
   backup_hint:
-    name: Уровень напоминания о резервной копии
-    description: Настраивает, насколько настойчиво LLM предлагает полный снимок HA
-      перед рискованной записью.
+    name: Backup hint level
+    description: How strongly AI assistants are told to suggest a full Home Assistant
+      backup before risky changes. It changes only this hint; automatic edit backups
+      have their own setting.
   enable_tool_search:
     name: Включить поиск инструментов
     description: 'Заменить полный каталог инструментов поисковым обнаружением. Снижает
@@ -40,11 +42,10 @@ configuration:
       это применяется после изменения любого параметра здесь.'
   tool_search_max_results:
     name: Максимальное количество результатов поиска инструментов
-    description: 'Максимальное количество скрытых инструментов, возвращаемых за один
-      вызов ha_search_tools при включенном поиске инструментов; закрепленный инструмент,
-      попавший в этот топ, добавляется в виде краткой записи только с именем поверх
-      него. Меньшие значения (2-3) экономят токены контекста, но могут пропустить
-      нужные инструменты. Диапазон: 2-10. Требуется перезапуск. Range 2–10.'
+    description: Maximum number of hidden tools returned per ha_search_tools call
+      when tool search is enabled; a pinned tool that ranks inside that top count
+      is added as a short name-only entry on top of it. Lower values (2-3) save context
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
   enable_tool_security_policies:
     name: Включить политики безопасности инструментов (расширенная настройка)
     description: Требует подтверждения пользователя для особо важных вызовов инструментов
@@ -112,41 +113,44 @@ configuration:
       применения требуется перезапуск.'
   enable_auto_backup:
     name: Авторезервные копии перед изменениями
-    description: Создавать снимок перед каждым обёрнутым вызовом записи или разрушительной
-      операции.
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
   auto_backup_throttle_minutes:
-    name: Интервал (минуты)
-    description: 'Ограничение для каждой сущности: 0 — каждая запись; N > 0 — не более
-      одной копии за N минут. Диапазон 0–1440. Range 0–1440.'
+    name: Auto-backup throttle (minutes)
+    description: How often auto-backup may capture the same entity. 0 captures on
+      every write; N above 0 captures at most one snapshot per N minutes per entity.
+      Range 0–1440.
   auto_backup_retain_per_entity:
-    name: Хранить на сущность
-    description: Максимальное число снимков для одной сущности (1–10000). Старые удаляются
-      по ротации. Range 1–10000.
+    name: Auto-backup retention (per entity)
+    description: The most snapshots kept per entity. Each new capture removes the
+      oldest snapshots above this number. Range 1–10000.
   enable_snapshot_actions:
     name: Разрешить действия с полными бэкапами HA
-    description: Разрешить ИИ-ассистентам управлять полными бэкапами Home Assistant
-      через ha_manage_backup, а также соответствующие службы резервного копирования
-      и команды в ha_call_service. Отключение этой настройки блокирует любые действия
-      со снапшотами, включая их вывод списком. Удаление снапшотов доступно только
-      через ha_manage_backup и также требует включения параметра разрешения удаления
-      бэкапов. Редактирование бэкапов и действия пользователя на этой странице остаются
-      доступными.
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Сделать управление бэкапами доступным только для чтения
-    description: Разрешить ИИ-ассистентам получать список, просматривать и сравнивать
-      бэкапы редактирования, а также получать список полных бэкапов HA при включенных
-      действиях со снапшотами. Блокирует создание ручных бэкапов, восстановление (включая
-      восстановление из бэкапов редактирования) и удаление, включая эквивалентные
-      службы бэкапов и команды в ha_call_service. Автоматические бэкапы перед редактированием
-      продолжают создаваться. Действия пользователя на этой странице остаются доступными.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Разрешить удаление снимков
-    description: Разрешает ha_manage_backup удалять полные снимки HA; запланированные,
-      самый новый и слишком свежие снимки остаются защищёнными.
+    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
+      snapshot may be the last way back after a mistaken change, so a person must
+      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
+      the minimum age stay protected.
   snapshot_delete_min_age_days:
     name: Минимальный возраст снимка для удаления (дни)
-    description: Снимок можно удалить только после достижения этого возраста. Диапазон
-      0–365. Range 0–365.
+    description: How old a snapshot must be, in days, before it can be deleted. 0
+      turns off the age limit; the newest snapshot and scheduled backups stay protected.
+      Range 0–365.
   disabled_tools:
     name: Отключённые инструменты (через запятую)
     description: 'Перечисленные здесь инструменты принудительно отключаются и блокируются

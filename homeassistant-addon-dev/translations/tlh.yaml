@@ -4,8 +4,10 @@
 # backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: SSL certificates tob
-    description: SIr'o' Davoqchugh neH TLS tobmeH mIw yIchu'Ha'. taghqa'moHnISlu'.
+    name: Verify TLS certificates
+    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
+      only on a trusted network, for a self-signed certificate or a hostname mismatch:
+      it weakens transport security.'
   ha_tool_concurrency:
     name: Home Assistant tool concurrency
     description: Optional limit on outer Home Assistant tool calls across all sessions.
@@ -13,9 +15,10 @@ configuration:
       unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
       0–32.
   backup_hint:
-    name: polqa'meH De' chup HoS
-    description: Qobbogh ghItlhmeH mIwmey qaSpa' HA Dotlh mIllogh naQ chenmoH LLM
-      'e' chupra' 'ar 'e' SeH.
+    name: Backup hint level
+    description: How strongly AI assistants are told to suggest a full Home Assistant
+      backup before risky changes. It changes only this hint; automatic edit backups
+      have their own setting.
   enable_beta_features:
     name: Beta DuHmey yIQotlhHa' (wa'DIch SeHwI')
     description: ⚠ QOB — Home AssistantlIj QIHlaHqu' janmeyvam. YAML configlIj, 'a'baqa'
@@ -38,9 +41,10 @@ configuration:
       proxy Seghmey vegh lo'lu'. QapchoHmeH add-on Dataghqa'moHnIS.
   tool_search_max_results:
     name: jan nej mI' jenqu'
-    description: jan nej chu'lu'taHvIS ha_search_tools nobbogh janmey mI' jenqu'.
-      mI' mach (2-3) wIvlu'chugh context tokenmey pol, 'ach janmey lI' 'op leghbe'laH.
-      veH 2-10. QapchoHmeH add-on Dataghqa'moHnIS. Range 2–10.
+    description: Maximum number of hidden tools returned per ha_search_tools call
+      when tool search is enabled; a pinned tool that ranks inside that top count
+      is added as a short name-only entry on top of it. Lower values (2-3) save context
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
   enable_tool_security_policies:
     name: jan Hung chutmey tIQotlhHa' ('Itlh)
     description: 'jan Qob lo''lu''DI'' (ngaQ/alarm SeH, automation ghItlh, latlh)
@@ -176,16 +180,18 @@ configuration:
       wIvlu'pu'chugh je buSHa'lu'.
   enable_auto_backup:
     name: choHmey'e' polqa'meH De' chenmoH'egh
-    description: ghItlhmeH pagh Qaw'meH jan rI'lu'bogh Hoch ta'lu'pa' Dotlh mIllogh
-      pol.
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
   auto_backup_throttle_minutes:
-    name: poH veH (tupmey)
-    description: 'Dol HochvaD poH. 0 = Hoch ghItlhlu''DI''; N > 0 = N tupmey HochDaq
-      wa'' polqa''meH De'' neH. poQbogh mI''mey: 0–1440. Range 0–1440.'
+    name: Auto-backup throttle (minutes)
+    description: How often auto-backup may capture the same entity. 0 captures on
+      every write; N above 0 captures at most one snapshot per N minutes per entity.
+      Range 0–1440.
   auto_backup_retain_per_entity:
-    name: Dol HochvaD pol
-    description: Dol HochvaD polbogh Dotlh mIlloghmey 'aqroS (1–10000). ngo'bogh mIlloghmey
-      teqlu'. Range 1–10000.
+    name: Auto-backup retention (per entity)
+    description: The most snapshots kept per entity. Each new capture removes the
+      oldest snapshots above this number. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -203,12 +209,15 @@ configuration:
       The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Dotlh mIllogh Qaw' chaw'
-    description: HA Dotlh mIlloghmey naQ Qaw' <code>ha_manage_backup</code> 'e' chaw';
-      'ach ghunbogh, chu'qu'bogh, ngo'be'bogh je mIlloghmey Qan.
+    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
+      snapshot may be the last way back after a mistaken change, so a person must
+      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
+      the minimum age stay protected.
   snapshot_delete_min_age_days:
     name: Qaw'lu'pa' Dotlh mIllogh ngo'nISbogh 'ar (jajmey)
-    description: 'Qaw''lu''pa'' ngo''nIS Dotlh mIllogh. poQbogh mI''mey: 0–365. Range
-      0–365.'
+    description: How old a snapshot must be, in days, before it can be deleted. 0
+      turns off the age limit; the newest snapshot and scheduled backups stay protected.
+      Range 0–365.
   disabled_tools:
     name: janmey luQotlhlu'bogh (comma-mey)
     description: naDev lutetlhlu'bogh janmey luchu'Ha'lu' 'ej web DuHmey UI (janmey

@@ -4,19 +4,21 @@
 # backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: SSL-certificaten verifiëren
-    description: Schakel TLS-verificatie alleen uit op vertrouwde netwerken. Herstart
-      vereist.
+    name: Verify TLS certificates
+    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
+      only on a trusted network, for a self-signed certificate or a hostname mismatch:
+      it weakens transport security.'
   ha_tool_concurrency:
     name: Home Assistant-toolgelijktijdigheid
-    description: Optionele limiet voor uiterste Home Assistant-toolaanroepen over
-      alle sessies. Interne REST-, WebSocket- en per-tool fan-out gelijktijdigheid
-      blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit
-      mislukt na 60 seconden. Bereik 0–32. Herstart vereist. Range 0–32.
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
+      0–32.
   backup_hint:
-    name: Back-up hintniveau
-    description: Bepaalt hoe sterk de LLM wordt aangemoedigd om een volledige HA-snapshot
-      te maken vóór risicovolle schrijfbewerkingen.
+    name: Backup hint level
+    description: How strongly AI assistants are told to suggest a full Home Assistant
+      backup before risky changes. It changes only this hint; automatic edit backups
+      have their own setting.
   enable_beta_features:
     name: Schakel bètafuncties in (hoofd)
     description: ⚠ GEVAAR — deze tools kunnen je Home Assistant installatie PERMANENT
@@ -49,11 +51,10 @@ configuration:
       om van kracht te worden.'
   tool_search_max_results:
     name: Max. resultaten tool-zoekfunctie
-    description: 'Maximum aantal verborgen tools dat wordt geretourneerd per ha_search_tools
-      aanroep wanneer tool zoeken is ingeschakeld; een vastgezette tool die binnen
-      die top valt, wordt hier bovenop toegevoegd als een korte vermelding met alleen
-      de naam. Lagere waarden (2-3) besparen contexttokens, maar missen mogelijk relevante
-      tools. Bereik: 2-10. Vereist een herstart. Range 2–10.'
+    description: Maximum number of hidden tools returned per ha_search_tools call
+      when tool search is enabled; a pinned tool that ranks inside that top count
+      is added as a short name-only entry on top of it. Lower values (2-3) save context
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
   enable_tool_security_policies:
     name: Schakel Tool Beveiligingsbeleid in (geavanceerd)
     description: Beveilig risicovolle tool-aanroepen (vergrendelings-/alarmbediening,
@@ -225,40 +226,44 @@ configuration:
       deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hiervan.
   enable_auto_backup:
     name: Auto-backup bewerkingen
-    description: Maak een momentopname vóór elke ingepakte schrijf- of destructieve
-      tooloproep.
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
   auto_backup_throttle_minutes:
-    name: Beperking (minuten)
-    description: Beperking per entiteit. 0 = elke schrijfbewerking; N > 0 = maximaal
-      één backup per N minuten. Bereik 0–1440. Range 0–1440.
+    name: Auto-backup throttle (minutes)
+    description: How often auto-backup may capture the same entity. 0 captures on
+      every write; N above 0 captures at most one snapshot per N minutes per entity.
+      Range 0–1440.
   auto_backup_retain_per_entity:
-    name: Behouden per entiteit
-    description: Maximaal aantal momentopnamen per entiteit (1–10000). Oudere worden
-      verwijderd. Range 1–10000.
+    name: Auto-backup retention (per entity)
+    description: The most snapshots kept per entity. Each new capture removes the
+      oldest snapshots above this number. Range 1–10000.
   enable_snapshot_actions:
     name: Volledige acties voor HA-snapshots toestaan
-    description: Staat AI-assistenten toe om volledige Home Assistant-snapshots te
-      beheren via ha_manage_backup en de equivalente back-upservices en -commando's
-      in ha_call_service. Als je dit uitschakelt, worden alle snapshotacties geblokkeerd,
-      inclusief het weergeven van lijsten. Het verwijderen van snapshots is alleen
-      beschikbaar via ha_manage_backup en vereist ook 'Allow snapshot deletion'. Back-ups
-      bewerken en handmatige acties op deze pagina blijven beschikbaar.
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Beheer van back-ups alleen-lezen maken
-    description: Staat AI-assistenten toe om bewerkingsback-ups te vermelden, bekijken
-      en te vergelijken via diff, en volledige HA-snapshots te vermelden wanneer snapshotacties
-      zijn ingeschakeld. Blokkeert handmatige creatie, herstel (inclusief bewerkingsherstel)
-      en verwijdering van back-ups, inclusief de equivalente back-upservices en -commando's
-      in ha_call_service. Automatische back-ups vóór bewerkingen gaan door. Handmatige
-      acties op deze pagina blijven beschikbaar.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Momentopname verwijdering toestaan
-    description: Sta ha_manage_backup toe om volledige HA-momentopnamen te verwijderen,
-      terwijl geplande, nieuwste en te jonge momentopnamen beschermd blijven.
+    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
+      snapshot may be the last way back after a mistaken change, so a person must
+      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
+      the minimum age stay protected.
   snapshot_delete_min_age_days:
     name: Minimale leeftijd momentopname om te verwijderen (dagen)
-    description: Een momentopname moet minstens zo oud zijn voordat deze wordt verwijderd.
-      Bereik 0–365. Range 0–365.
+    description: How old a snapshot must be, in days, before it can be deleted. 0
+      turns off the age limit; the newest snapshot and scheduled backups stay protected.
+      Range 0–365.
   disabled_tools:
     name: Uitgeschakelde tools (komma-gescheiden)
     description: Tools die hier worden vermeld, zijn geforceerd uitgeschakeld en vergrendeld
