@@ -22,6 +22,7 @@ import logging
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -236,10 +237,18 @@ class TestConfigEntryFlow:
                         },
                     },
                 )
-            assert update_data.get("warnings") == [
+            warnings = update_data.get("warnings") or []
+            assert (
                 "Ignored config keys not declared by the Home Assistant flow "
                 "schema: availabilty"
-            ]
+            ) in warnings
+            # Without the component the options cannot be read for the
+            # pre-write backup, and the response says so (#2632).
+            skipped = [w for w in warnings if w.startswith("No pre-write backup")]
+            if component_surface_available():
+                assert skipped == []
+            else:
+                assert len(skipped) == 1 and "unknown_command" in skipped[0]
 
             async with MCPAssertions(mcp_client) as mcp:
                 integration_data = await mcp.call_tool_success(

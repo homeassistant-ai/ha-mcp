@@ -235,6 +235,10 @@ def _flow_safe_failure_detail(step: str, error: BaseException) -> str | None:
         return error.safe_detail
     if isinstance(error, _FlowHelperReadError):
         return str(error)  # locally authored, names no option values
+    if isinstance(error, HomeAssistantCommandError) and error.code:
+        # HA's structured code, not its message: unknown_command is the
+        # ha_mcp_tools component being absent.
+        return f"{type(error).__name__} ({error.code})"
     # The safety stage wraps remote fetch failures in MandatoryBackupError;
     # a raw OSError here comes from retained-file I/O. Other stages call HA.
     if step == "safety_backup" and isinstance(error, OSError):
