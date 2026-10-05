@@ -51,25 +51,46 @@ class _SubentryFlowProgress(_OptionsFlowProgress):
         )
 
 
+def _feed_title_as_name(
+    progress: _SubentryFlowProgress, step: dict[str, Any], title: str | None
+) -> None:
+    """Offer the snapshot's title to a form that asks for a ``name``.
+
+    Many subentry flows (Kitchen Sink's entity, the conversation agents) pop
+    the form's ``name`` into the subentry title, so the snapshot's data never
+    holds it; without this the recreated subentry would carry the form's
+    default name, or the form would refuse a required one.
+    """
+    schema = step.get("data_schema")
+    declared = (
+        {f.get("name") for f in schema if isinstance(f, dict)}
+        if isinstance(schema, list)
+        else set()
+    )
+    if isinstance(title, str) and "name" in declared and "name" not in progress.config:
+        progress.config["name"] = title
+
+
 async def _walk_snapshot(
     client: Any,
     progress: _SubentryFlowProgress,
     subentry_type: str,
     subentry_id: str | None,
+    title: str | None = None,
 ) -> None:
-    data = progress.config
     try:
-        _reject_redaction_sentinels(data)
+        _reject_redaction_sentinels(progress.config)
         initial_step = await client.start_config_subentry_flow(
             progress.entry_id, subentry_type, subentry_id=subentry_id
         )
         progress.flow_id = initial_step.get("flow_id")
         progress.start(initial_step)
+        _feed_title_as_name(progress, initial_step, title)
         await _handle_flow_steps(
             client,
             progress.flow_id or "",
             initial_step,
-            dict(data),
+            dict(progress.config),
             submit_fn=partial(progress.submit, client),
             is_reconfigure=subentry_id is not None,
             complete_snapshot=True,
@@ -90,6 +111,7 @@ async def restore_config_subentry(
     subentry_type: str,
     data: dict[str, Any],
     stored: dict[str, Any],
+    title: str | None = None,
 ) -> dict[str, Any]:
     """Reconfigure the subentry to ``data``; ``stored`` is its current data.
 
@@ -100,12 +122,16 @@ async def restore_config_subentry(
     Raises :class:`OptionsFlowError` with apply knowledge on failure.
     """
     progress = _SubentryFlowProgress(entry_id, config=dict(data), fixed=stored)
-    await _walk_snapshot(client, progress, subentry_type, subentry_id)
+    await _walk_snapshot(client, progress, subentry_type, subentry_id, title)
     return {"success": True, "entry_id": entry_id, "subentry_id": subentry_id}
 
 
 async def recreate_config_subentry(
-    client: Any, entry_id: str, subentry_type: str, data: dict[str, Any]
+    client: Any,
+    entry_id: str,
+    subentry_type: str,
+    data: dict[str, Any],
+    title: str | None = None,
 ) -> dict[str, Any]:
     """Create a deleted subentry again from its data; a field no form takes is
     refused before a form Home Assistant marks as last."""
@@ -115,7 +141,7 @@ async def recreate_config_subentry(
         if before is None:
             # Without the listing the new subentry could not be identified.
             raise progress.failure()
-        await _walk_snapshot(client, progress, subentry_type, None)
+        await _walk_snapshot(client, progress, subentry_type, None, title)
         subentry_id = await _created_subentry_id(client, entry_id, before)
     if subentry_id is None:
         raise OptionsFlowError(

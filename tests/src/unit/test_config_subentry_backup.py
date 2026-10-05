@@ -70,8 +70,13 @@ def test_subentry_deletion_is_keyed_by_entry_and_subentry() -> None:
 class _HA:
     """Subentries of entry ``e1`` as Home Assistant holds them."""
 
-    def __init__(self, subentries: dict[str, dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        subentries: dict[str, dict[str, Any]],
+        titles: dict[str, str] | None = None,
+    ) -> None:
         self.subentries = subentries
+        self.titles = titles or {}
         self.client = AsyncMock()
         self.client.start_config_subentry_flow.return_value = dict(_FORM)
         self.client.submit_config_subentry_flow_step.side_effect = self._submit
@@ -83,7 +88,12 @@ class _HA:
     async def ws(self, client: Any, message: dict[str, Any]) -> dict[str, Any]:
         assert message["include_subentry_data"] is True
         rows = [
-            {"subentry_id": sid, "subentry_type": "plane", "data": dict(data)}
+            {
+                "subentry_id": sid,
+                "subentry_type": "plane",
+                "title": self.titles.get(sid),
+                "data": dict(data),
+            }
             for sid, data in self.subentries.items()
         ]
         entries = [{"entry_id": "e1", "subentries": rows}] if self.parent_exists else []
@@ -99,11 +109,17 @@ class _HA:
         }
 
     async def _submit(self, flow_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """A flow that, like Kitchen Sink's, pops the form's name into the title."""
         kwargs = self.client.start_config_subentry_flow.await_args.kwargs
+        payload = dict(payload)
+        title = payload.pop("name", "Default name")
+        sid = kwargs["subentry_id"] or next(  # a recreation gets a new id
+            f"s{i}" for i in range(2, 9) if f"s{i}" not in self.subentries
+        )
+        self.subentries[sid] = payload
+        self.titles[sid] = title
         if kwargs["subentry_id"] is None:
-            self.subentries["s2"] = payload
             return {"type": "create_entry"}
-        self.subentries[kwargs["subentry_id"]] = payload
         return {"type": "abort", "reason": "reconfigure_successful"}
 
 
@@ -115,13 +131,98 @@ def component(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _snapshot(data: dict[str, Any]) -> dict[str, Any]:
+def _snapshot(data: dict[str, Any], title: str | None = None) -> dict[str, Any]:
     return {
         "entry_id": "e1",
         "subentry_id": "s1",
         "subentry_type": "plane",
+        "title": title,
         "data": data,
     }
+
+
+_NAMED_FORM = {**_FORM, "data_schema": [{"name": "name"}, {"name": "state"}]}
+
+
+@pytest.mark.usefixtures("component")
+async def test_recreation_offers_the_snapshot_title_to_a_form_that_asks_a_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Kitchen Sink's entity (and the conversation agents) keep the name in the
+    subentry title, never in data; without it the form refuses or defaults."""
+    ha = _HA({})
+    ha.client.start_config_subentry_flow.return_value = dict(_NAMED_FORM)
+    monkeypatch.setattr(bm, "_ws_send", ha.ws)
+
+    result = await bm._restore_config_subentry(
+        ha.client, "e1/s1", _snapshot({"state": 1}, title="Kitchen")
+    )
+
+    assert ha.subentries == {"s2": {"state": 1}}
+    assert ha.titles == {"s2": "Kitchen"}
+    assert result["restore_mode"] == "recreated"
+
+
+@pytest.mark.usefixtures("component")
+async def test_recreated_subentry_whose_title_differs_is_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A form without a name field cannot carry the title back; the readback
+    says so instead of reporting a match on data alone."""
+    ha = _HA({})
+    ha.client.start_config_subentry_flow.return_value = {
+        **_FORM,
+        "data_schema": [{"name": "state"}],
+    }
+    monkeypatch.setattr(bm, "_ws_send", ha.ws)
+
+    with pytest.raises(bm.BackupRestoreError, match="data or title") as caught:
+        await bm._restore_config_subentry(
+            ha.client, "e1/s1", _snapshot({"state": 1}, title="Kitchen")
+        )
+
+    assert caught.value.outcome["apply_status"] == "applied"
+    assert caught.value.outcome["verification_status"] == "mismatched"
+    assert ha.titles == {"s2": "Default name"}
+
+
+@pytest.mark.usefixtures("component")
+async def test_sibling_with_the_same_data_but_another_name_is_not_a_recreation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two agents can differ by name alone; the one still present must not
+    block restoring the deleted one."""
+    ha = _HA({"s2": {"state": 1}}, titles={"s2": "Pantry"})
+    ha.client.start_config_subentry_flow.return_value = dict(_NAMED_FORM)
+    monkeypatch.setattr(bm, "_ws_send", ha.ws)
+
+    await bm._restore_config_subentry(
+        ha.client, "e1/s1", _snapshot({"state": 1}, title="Kitchen")
+    )
+
+    assert ha.titles == {"s2": "Pantry", "s3": "Kitchen"}
+    with pytest.raises(bm.BackupRestoreError) as again:
+        await bm._restore_config_subentry(
+            ha.client, "e1/s1", _snapshot({"state": 1}, title="Kitchen")
+        )
+    assert again.value.outcome["reason"] == "already_recreated"
+    assert again.value.outcome["entity_id"] == "e1/s3"
+
+
+@pytest.mark.usefixtures("component")
+async def test_reconfigure_restore_offers_the_snapshot_title_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ha = _HA({"s1": {"state": 2}}, titles={"s1": "Renamed"})
+    ha.client.start_config_subentry_flow.return_value = dict(_NAMED_FORM)
+    monkeypatch.setattr(bm, "_ws_send", ha.ws)
+
+    await bm._restore_config_subentry(
+        ha.client, "e1/s1", _snapshot({"state": 1}, title="Kitchen")
+    )
+
+    assert ha.subentries == {"s1": {"state": 1}}
+    assert ha.titles == {"s1": "Kitchen"}
 
 
 @pytest.mark.usefixtures("component")

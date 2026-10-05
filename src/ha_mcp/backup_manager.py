@@ -3790,6 +3790,7 @@ async def _restore_config_subentry(client: Any, entity_id: str, config: Any) -> 
         return await _recreate_config_subentry(
             client, entity_id, snapshot, data, subentries
         )
+    expected, keys = _subentry_expectation(snapshot, data)
     return await _apply_and_verify(
         "Config subentry",
         partial(
@@ -3800,14 +3801,26 @@ async def _restore_config_subentry(client: Any, entity_id: str, config: Any) -> 
             snapshot["subentry_type"],
             data,
             current["data"],
+            snapshot.get("title"),
         ),
         partial(
             _verify_readback,
             partial(_fetch_config_subentry, client, entity_id),
-            {"data": data},
-            ("data",),
+            expected,
+            keys,
         ),
     )
+
+
+def _subentry_expectation(
+    snapshot: dict[str, Any], data: dict[str, Any]
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """What a restored subentry must read back: its data, and its title when
+    the snapshot recorded one (a flow may keep the name there, not in data)."""
+    title = snapshot.get("title")
+    if isinstance(title, str):
+        return {"data": data, "title": title}, ("data", "title")
+    return {"data": data}, ("data",)
 
 
 async def _recreate_config_subentry(
@@ -3820,19 +3833,22 @@ async def _recreate_config_subentry(
     """Create a deleted subentry again from its snapshot; it gets a new id.
 
     ``siblings`` are the entry's current subentries: one of the snapshot's type
-    that already holds its data is an earlier recreation, so restoring the
-    same snapshot twice does not add a second copy.
+    that already holds its data and title is an earlier recreation, so
+    restoring the same snapshot twice does not add a second copy. The title
+    is part of the match because sibling agents can differ by name alone.
     """
     from .tools.config_entry_flow import OptionsFlowError
     from .tools.config_subentry_restore import recreate_config_subentry
 
     entry_id, subentry_id = _subentry_target(entity_id)
+    title = snapshot.get("title")
     recreated = next(
         (
             sub.get("subentry_id")
             for sub in siblings
             if sub.get("subentry_type") == snapshot["subentry_type"]
             and sub.get("data") == data
+            and (not isinstance(title, str) or sub.get("title") == title)
         ),
         None,
     )
@@ -3845,7 +3861,7 @@ async def _recreate_config_subentry(
         )
     try:
         result = await recreate_config_subentry(
-            client, entry_id, snapshot["subentry_type"], data
+            client, entry_id, snapshot["subentry_type"], data, snapshot.get("title")
         )
     except OptionsFlowError as err:
         _log_flow_helper_failure("subentry_recreation", err)
@@ -3859,12 +3875,14 @@ async def _recreate_config_subentry(
             fields=list(err.fields),
         ) from err
     target = f"{entry_id}/{result['subentry_id']}"
+    expected, keys = _subentry_expectation(snapshot, data)
     verification = await _verify_readback(
-        partial(_fetch_config_subentry, client, target), {"data": data}, ("data",)
+        partial(_fetch_config_subentry, client, target), expected, keys
     )
     if verification != "matched":
         raise BackupRestoreError(
-            f"Config subentry was recreated as {target} but could not be verified",
+            f"Config subentry was recreated as {target} but its data or title "
+            "could not be verified",
             apply_status="applied",
             verification_status=verification,
             entity_id=target,
