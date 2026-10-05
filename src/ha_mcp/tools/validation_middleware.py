@@ -53,9 +53,9 @@ _UNKNOWN_ARGUMENT = "unexpected_keyword_argument"
 # key belongs inside `config` instead of only listing the valid tool
 # parameters (issue #2649 section 1).
 #
-# Scoped to these two tools on purpose: only they were measured (BAT runs),
-# and the hint must not fire for a declared tool parameter of the same name
-# (e.g. `variables` is a real parameter of ha_config_set_script).
+# Scoped per tool on purpose: only the config-writing tools take a `config`
+# body, so only their top-level arguments can be misplaced config keys.
+# (Only these two were measured in BAT runs.)
 _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
     "ha_config_set_automation": {
         "alias",
@@ -219,8 +219,6 @@ class ValidationErrorMiddleware(Middleware):
                 message_obj = getattr(context, "message", None)
                 supplied = getattr(message_obj, "arguments", None) or {}
                 unclaimed = [p for p in valid_parameters if p not in supplied]
-                # Issue #2649 section 1: a config root key at the top level of a
-                # config-writing tool is told where it belongs.
                 tool_name = getattr(message_obj, "name", None)
                 config_keys = (
                     _CONFIG_ROOT_KEYS_BY_TOOL.get(tool_name) if tool_name else None

@@ -48,6 +48,7 @@ from .component_config_reads import fetch_entity_lookup_via_component
 from .config_helpers.registry import validate_registry_ids
 from .config_write_errors import (
     ENABLED_MISPLACED_GUIDANCE,
+    ENABLED_REMOVE_SUGGESTION,
     config_has_enabled,
     reject_invalid_config_inputs,
 )
@@ -902,6 +903,11 @@ class AutomationConfigTools:
             # (trigger -> triggers, action -> actions, condition -> conditions).
             config_dict = _normalize_automation_config(config_dict)
 
+            # Purely local input checks run before any Home Assistant I/O, so
+            # a malformed config rejects without spending GETs or needing HA
+            # reachable.
+            self._validate_required_fields(config_dict, identifier)
+
             # Both the hash check and alias guard read the resolved storage key.
             # Reuse it for the write to avoid a second entity-ID lookup (#1813).
             # Creation and responses without an id retain the existing fallback.
@@ -915,7 +921,6 @@ class AutomationConfigTools:
                     identifier, config_dict
                 )
 
-            self._validate_required_fields(config_dict, identifier)
             bp_warnings = _check_best_practices(config_dict)
             validation_meta = await validate_config_references(
                 self._client, config_dict
@@ -1371,7 +1376,9 @@ class AutomationConfigTools:
         conflict_warnings = _detect_conflicting_root_keys(transformed_config)
 
         transformed_config = _normalize_automation_config(transformed_config)
-        self._validate_required_fields(transformed_config, identifier)
+        self._validate_required_fields(
+            transformed_config, identifier, source="python_transform"
+        )
         bp_warnings = _check_best_practices(transformed_config)
 
         # Issue #2159: reject an unknown category before the write, so a
@@ -1832,11 +1839,12 @@ class AutomationConfigTools:
 
     @staticmethod
     def _validate_required_fields(
-        config_dict: dict[str, Any], identifier: str | None
+        config_dict: dict[str, Any], identifier: str | None, source: str = "config"
     ) -> None:
         """Validate required fields and prevent duplicate creation.
 
-        Independent input violations surface in ONE rejection (issue #2649).
+        A missing required field and a misplaced runtime-only ``enabled`` key
+        surface in ONE rejection (issue #2649).
         """
         if "use_blueprint" in config_dict:
             required_fields = ["alias"]
@@ -1865,13 +1873,8 @@ class AutomationConfigTools:
                 "For an automation, replace 'sequence' with 'actions' and add 'triggers'.",
             ]
             if config_has_enabled(config_dict):
-                # Issue #2649: report the independent 'enabled' violation in
-                # the same rejection instead of one round trip each.
-                message += f" {ENABLED_MISPLACED_GUIDANCE}"
-                suggestions.append(
-                    "Remove 'enabled' from config and pass enabled=True/False "
-                    "to ha_config_set_automation."
-                )
+                message += f". {ENABLED_MISPLACED_GUIDANCE}"
+                suggestions.append(ENABLED_REMOVE_SUGGESTION)
             raise_tool_error(
                 create_error_response(
                     code=ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
@@ -1884,9 +1887,7 @@ class AutomationConfigTools:
                     context=context,
                 )
             )
-        # Issue #2649: missing-field guidance and the runtime-only 'enabled'
-        # rejection fold into one rejection here.
-        reject_invalid_config_inputs(config_dict, missing_fields, identifier)
+        reject_invalid_config_inputs(config_dict, missing_fields, identifier, source)
 
         # Issue #1169: see _check_scene_create_misroute
         AutomationConfigTools._check_scene_create_misroute(config_dict, identifier)
