@@ -316,9 +316,9 @@ entry's **Regenerate connect secrets now** option once.
 
 The connect notification deliberately carries no secrets: Home Assistant
 shows persistent notifications to every authenticated user, so the webhook
-URL (the credential in the default posture) is surfaced only on
-administrator-only surfaces - the entry's Configure screen and the sidebar
-panel; the log and notifications never carry it. New entries start with the
+URL (the credential in secret-URL mode) is surfaced only on the
+administrator-only Configure screen of the entry; the log and notifications
+never carry it. New entries start with the
 webhook off, and a local-only option removes it entirely.
 
 The server reaches Home Assistant with an administrator's long-lived access

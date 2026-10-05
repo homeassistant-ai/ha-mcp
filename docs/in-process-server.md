@@ -282,7 +282,7 @@ If a connect URL may have leaked, open the entry's options and check
 **Regenerate connect secrets now**, then save - both the webhook secret and the
 direct-access path are re-minted on the spot and every old URL stops working.
 Update your MCP clients with the new URL from the Configure screen. (Removing and
-re-adding the entry also rotates everything, including the internal token.)
+re-adding the entry also rotates the webhook secret and direct-access path.)
 
 ## Security
 
@@ -417,7 +417,7 @@ log (**Settings → System → Logs**, or `home-assistant.log`). Its working dat
 lives in `.ha_mcp/` under your Home Assistant config directory.
 
 **The Configure screen shows only a webhook path.** If Home Assistant cannot
-determine an external or internal URL, the Configure screen and log show the
+determine an external or internal URL, the Configure screen shows the
 webhook path on its own (`/api/webhook/<webhook-id>`); prefix it with your Home
 Assistant URL. Set your internal/external URLs under **Settings → System →
 Network** so the full URL is shown.

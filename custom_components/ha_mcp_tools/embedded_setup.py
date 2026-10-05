@@ -181,7 +181,7 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         with suppress(Exception):
             await async_teardown_server(hass)
         if err.kind == "token":
-            _create_token_issue(hass, entry)
+            _create_token_issue(hass, entry, str(err))
         else:
             _create_issue(hass, entry, err.kind, str(err))
     except Exception as err:
@@ -523,8 +523,12 @@ def _create_issue(
     )
 
 
-def _create_token_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Ask for a replacement administrator token; its fix flow takes one."""
+def _create_token_issue(hass: HomeAssistant, entry: ConfigEntry, reason: str) -> None:
+    """Ask for a replacement administrator token; its fix flow takes one.
+
+    ``reason`` (a ``CredentialNeeded`` reason) lets the fix flow say why the
+    stored token was refused.
+    """
     ir.async_create_issue(
         hass,
         DOMAIN,
@@ -532,7 +536,7 @@ def _create_token_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
         is_fixable=True,
         severity=ir.IssueSeverity.ERROR,
         translation_key=ISSUE_TOKEN_NEEDED,
-        data={"entry_id": entry.entry_id},
+        data={"entry_id": entry.entry_id, "reason": reason},
     )
 
 

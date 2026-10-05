@@ -10,7 +10,14 @@ let _oauthCallbacks = null;
 async function loadOAuthCallbacks() {
   try {
     const resp = await fetch('./api/settings/oauth-callbacks');
-    _oauthCallbacks = resp.ok ? await resp.json() : null;
+    if (resp.ok) {
+      _oauthCallbacks = await resp.json();
+    } else {
+      // Keep the section visible with the reason instead of hiding it.
+      console.error('loadOAuthCallbacks: HTTP', resp.status);
+      _oauthCallbacks = {available: false, reason: t('oauth_callbacks.load_failed',
+        {status: resp.status}, `Could not load the callback list (HTTP ${resp.status}). Reload the page to try again.`)};
+    }
   } catch (err) {
     console.error('loadOAuthCallbacks failed:', err);
     _oauthCallbacks = null;
@@ -106,7 +113,6 @@ async function saveOAuthCallbacks(change) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(change),
     });
-    data = await resp.json();
   } catch (err) {
     buttons.forEach(b => { b.disabled = false; });
     setStatusAlert(statusEl, true);
@@ -114,6 +120,15 @@ async function saveOAuthCallbacks(change) {
     return;
   }
   buttons.forEach(b => { b.disabled = false; });
+  try {
+    data = await resp.json();
+  } catch (err) {
+    // A proxy error page, not our JSON: report the status, not a parse error.
+    setStatusAlert(statusEl, true);
+    statusEl.textContent = t('errors.save_failed_non_json', {status: resp.status},
+      `Save failed (HTTP ${resp.status}, non-JSON body)`);
+    return;
+  }
   if (!resp.ok || !data.success) {
     const invalid = (data && data.invalid) || [];
     let msg;

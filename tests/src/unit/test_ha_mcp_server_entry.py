@@ -28,6 +28,7 @@ install()
 import custom_components.ha_mcp_tools as component  # noqa: E402
 import custom_components.ha_mcp_tools.embedded_entry as pkg  # noqa: E402
 import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
+from custom_components.ha_mcp_tools import server_credentials  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CONF_ENTRY_TYPE,
     DATA_ADMIN_TOKEN,
@@ -111,9 +112,12 @@ class TestEnsureSecrets:
         hass.config_entries.async_update_entry.assert_not_called()
         assert entry.data[DATA_WEBHOOK_ID] == "mcp_existing"
 
-    def test_a_replacement_token_takes_over_once_and_is_cleared(self):
-        # #2427: Configure's token is consumed into entry.data on the next
-        # setup; the option must not linger or keep re-applying.
+    def test_a_replacement_token_takes_over_once_and_is_cleared(self, monkeypatch):
+        # #2427: a token an earlier build parked in the options is consumed into
+        # entry.data on the next setup; the option must not linger.
+        monkeypatch.setattr(
+            server_credentials, "token_problem", MagicMock(return_value=None)
+        )
         hass = _make_hass()
         hass.auth.async_get_refresh_token = MagicMock(return_value=None)
         entry = _make_entry(
@@ -130,6 +134,32 @@ class TestEnsureSecrets:
 
         assert entry.data[DATA_ADMIN_TOKEN] == "new-token"
         assert DATA_REFRESH_TOKEN_ID not in entry.data
+        assert entry.options[OPT_ADMIN_TOKEN_REPLACEMENT] == ""
+
+    def test_a_parked_token_revoked_since_keeps_the_working_credential(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            server_credentials,
+            "token_problem",
+            MagicMock(return_value="invalid_token"),
+        )
+        hass = _make_hass()
+        hass.auth.async_get_refresh_token = MagicMock(return_value=MagicMock())
+        entry = _make_entry(
+            data={
+                DATA_WEBHOOK_ID: "mcp_keep",
+                DATA_SECRET_PATH: "/private_keep",
+                DATA_REFRESH_TOKEN_ID: "old-rt",
+            },
+            options={OPT_ADMIN_TOKEN_REPLACEMENT: "revoked-token"},
+        )
+
+        pkg._ensure_secrets(hass, entry)
+
+        assert entry.data[DATA_REFRESH_TOKEN_ID] == "old-rt"
+        assert DATA_ADMIN_TOKEN not in entry.data
+        hass.auth.async_remove_refresh_token.assert_not_called()
         assert entry.options[OPT_ADMIN_TOKEN_REPLACEMENT] == ""
 
     def test_webhook_override_replaces_stored_id(self):

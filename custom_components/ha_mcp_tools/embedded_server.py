@@ -30,6 +30,7 @@ import asyncio
 import importlib
 import importlib.metadata
 import importlib.util
+import inspect
 import logging
 import os
 import site
@@ -213,7 +214,7 @@ class EmbeddedServerError(Exception):
     def __init__(
         self, message: str, *, kind: Literal["package", "start", "token"] = "start"
     ) -> None:
-        """Store the message and the failure ``kind`` (``package`` / ``start``)."""
+        """Store the message and the failure ``kind``."""
         super().__init__(message)
         self.kind = kind
 
@@ -240,8 +241,8 @@ def _install_log_filters_if_available() -> None:
     """Attach the shared MCP SDK/fastmcp log-noise filters, if this ha-mcp has them.
 
     Mirrors the ``register_browser_landing`` guard just above ``_serve``'s call
-    site: the installed server version is user-controlled (channel choice,
-    pip-spec override), so an older ha-mcp without ``ha_mcp.log_filters`` must
+    site: the installed server version is user-controlled (the HACS component
+    release, a pip-spec override), so an older ha-mcp without ``ha_mcp.log_filters`` must
     keep serving -- the filters are simply absent there, as they are today.
 
     Only a ``ModuleNotFoundError`` for exactly ``ha_mcp.log_filters`` is that
@@ -377,7 +378,8 @@ class EmbeddedServerManager:
                 f"Assistant {HA_VERSION} satisfies its minimum requirement of "
                 f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION}. Install a standard Home "
                 "Assistant release before reloading this integration.",
-                kind="package",
+                # Not "package": reinstalling the server cannot fix this.
+                kind="start",
             ) from err
         if home_assistant_version < Version(MIN_EMBEDDED_HOME_ASSISTANT_VERSION):
             raise EmbeddedServerError(
@@ -385,10 +387,15 @@ class EmbeddedServerManager:
                 f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION} or newer; this instance "
                 f"is running {HA_VERSION}. Update Home Assistant before "
                 "reloading this integration.",
-                kind="package",
+                kind="start",
             )
 
         self._paired_spec = await _async_paired_server_requirement(self._hass)
+        if self._paired_spec is None and not self._pip_spec_override:
+            _LOGGER.warning(
+                "This component's manifest pins no ha-mcp server; running "
+                "whichever ha-mcp is installed. Reinstall the integration from HACS"
+            )
         self._pip_spec = self._resolve_pip_spec()
 
         # Read the importer registry BEFORE the package step too: replacing
@@ -574,8 +581,8 @@ class EmbeddedServerManager:
         could never recover (#1904). Never skipped under a pip-spec override
         — the one workflow where a reinstall can change the code without
         changing the version string (re-pointed tarball/pin), which a
-        version-keyed skip would serve stale; channel installs mint a
-        distinct version per build.
+        version-keyed skip would serve stale; every released or dev build
+        carries a distinct version.
         """
         orphan = self._orphaned_thread
         if orphan is not None and not orphan.is_alive():
@@ -722,10 +729,14 @@ class EmbeddedServerManager:
           version cannot prove (a cleared override that installed the same
           version string, issue #1914 — see _async_remove_replaced_source),
         * the other server distribution is installed beside the target (a
-          component 2.x dev-channel install, or an override on the other
+          component 2.x dev-channel install, a HACS pre-release swapping
+          ``ha-mcp`` for ``ha-mcp-dev`` or back, or an override on the other
           one). It is removed first, and because both distributions own the
           same ``ha_mcp`` files, that removal deletes the target's files too,
-          so the target is then REINSTALLED rather than upgraded.
+          so the target is then REINSTALLED rather than upgraded,
+        * the package repair asked for a reinstall (``DATA_REINSTALL_REQUESTED``):
+          even a satisfied pin is reinstalled, and the flag is cleared only
+          once that install succeeds.
 
         ``defer_mutations=True`` (a previous bring-up's worker is still
         importing) downgrades any would-be uninstall/install to the
@@ -1050,8 +1061,9 @@ class EmbeddedServerManager:
         # Compare the pin against the version of the distribution actually
         # being replaced, not the caller's ``installed_version``: that one is
         # read from whichever dist provides ``ha_mcp`` and is read BEFORE
-        # _async_remove_conflicting_dist() runs, so on a cross-channel switch
-        # it can describe the other channel's dist — or one already
+        # _async_ensure_managed_package removes the conflicting distribution,
+        # so on an ``ha-mcp`` <-> ``ha-mcp-dev`` swap it can describe the
+        # other distribution — or one already
         # uninstalled. Comparing against it could report "the pin moved" for a
         # target that is in fact already at the pinned version, skip this
         # uninstall, and let the install no-op as satisfied (#1914).
@@ -1122,7 +1134,7 @@ class EmbeddedServerManager:
         already matches: removing the other server distribution deletes the
         ``ha_mcp`` files both of them own.
         """
-        kwargs = pip_kwargs(self._hass.config.config_dir)
+        kwargs = self._pip_kwargs()
         timeout = max(int(kwargs.get("timeout") or 0), _PIP_INSTALL_TIMEOUT_SECONDS)
         installed = await self._async_run_tracked_install_job(
             partial(
@@ -1146,6 +1158,17 @@ class EmbeddedServerManager:
                 kind="package",
             )
 
+    def _pip_kwargs(self) -> dict[str, Any]:
+        """Home Assistant's own pip arguments (constraints file, target dir).
+
+        Core 2026.11 drops ``pip_kwargs``'s ``config_dir`` argument
+        (home-assistant/core#168155); passing it there raises ``TypeError``.
+        """
+        core_pip_kwargs: Any = pip_kwargs  # typed for one Core release only
+        if inspect.signature(core_pip_kwargs).parameters:
+            return dict(core_pip_kwargs(self._hass.config.config_dir))
+        return dict(core_pip_kwargs())
+
     async def _async_remove_distribution(self, dist_name: str) -> bool:
         """Remove a distribution from the same target used for installation.
 
@@ -1155,7 +1178,7 @@ class EmbeddedServerManager:
         cleanup) or fatal (the replaced-source removal, whose failure would
         silently void the reinstall — see ``_async_remove_replaced_source``).
         """
-        target = pip_kwargs(self._hass.config.config_dir).get("target")
+        target = self._pip_kwargs().get("target")
         if target is None:
             result = await self._async_run_tracked_install_job(
                 partial(_uninstall_distribution, dist_name)
@@ -1470,7 +1493,7 @@ class EmbeddedServerManager:
         import ha_mcp.config as _hamcp_config
 
         # Record which code generation this worker imported. Prefer the
-        # configured channel when both distributions have metadata because
+        # distribution this install targets when both distributions have metadata because
         # ha_mcp.__version__ itself checks stable first and stale stable
         # metadata can otherwise make a fresh dev worker look outdated.
         self._running_version = _running_ha_mcp_version(self._preferred_dist())
@@ -1550,7 +1573,7 @@ class EmbeddedServerManager:
         # with the friendly landing page (405 + setup guidance) instead of a
         # bare "Method Not Allowed" — both on the direct URL and through the
         # ingress webhook. Guard only the import: the installed server version
-        # is user-controlled (channel choice, pip-spec override), so an older
+        # is user-controlled (the HACS component release, a pip-spec override), so an older
         # ha-mcp without this module must keep serving; the landing is simply
         # absent there, as it is today.
         try:

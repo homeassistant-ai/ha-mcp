@@ -141,10 +141,16 @@ class TestServerBranch:
     def test_server_refuses_a_second_entry_on_every_submit(self):
         # Two open dialogs may both reach submit; the second must abort rather
         # than let Home Assistant replace the first entry.
+        class _AlreadyConfigured(Exception):
+            pass
+
         flow = _make_flow()
+        # The first dialog's entry exists by the time this one submits.
+        flow._abort_if_unique_id_configured.side_effect = _AlreadyConfigured
         values = {cf.SETUP_ADMIN_TOKEN: self.TOKEN}
-        asyncio.run(flow.async_step_server(values))
-        flow._abort_if_unique_id_configured.assert_called_once()
+        with pytest.raises(_AlreadyConfigured):
+            asyncio.run(flow.async_step_server(values))
+        flow.async_create_entry.assert_not_called()
 
     def test_server_uses_distinct_unique_id(self):
         flow = _make_flow()
@@ -205,6 +211,20 @@ class TestOAuthCallbackAllowlistOption:
         assert result["errors"] == {
             const.OPT_OAUTH_REDIRECT_ALLOWLIST: "invalid_oauth_callback"
         }
+        # With several callbacks listed, the error names the one to fix.
+        assert result["description_placeholders"]["invalid_callbacks"] == (
+            "http://not-loopback/cb"
+        )
+
+    def test_more_callbacks_than_the_cap_block_the_save(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        many = [f"{self.CALLBACK}{n}" for n in range(const.MAX_OAUTH_CALLBACKS + 1)]
+        result = asyncio.run(
+            flow.async_step_init({const.OPT_OAUTH_REDIRECT_ALLOWLIST: many})
+        )
+        assert result["errors"] == {
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST: "too_many_oauth_callbacks"
+        }
 
     def test_saving_the_untouched_default_keeps_following_it(self):
         # Pinning the default would hide callbacks a later release adds to it.
@@ -256,12 +276,33 @@ class TestAdminTokenReplacement:
         form = asyncio.run(flow.async_step_init(None))
         assert not (self._marker(form).description or {}).get("suggested_value")
 
-    def test_a_working_token_is_saved_for_the_next_start(self):
-        flow = _make_options_flow()
+    def _token_flow(self, options=None):
+        flow = _make_options_flow(options=options, data={"webhook_id": "w"})
+        flow.config_entry.entry_id = "srv1"
+        return flow
+
+    def test_a_working_token_goes_into_the_entry_data_not_the_options(self):
+        # config_entries/get returns the options, so the token must never
+        # pass through them.
+        flow = self._token_flow()
         result = asyncio.run(
             flow.async_step_init({const.OPT_ADMIN_TOKEN_REPLACEMENT: " good "})
         )
-        assert result["data"][const.OPT_ADMIN_TOKEN_REPLACEMENT] == "good"
+        assert result["data"][const.OPT_ADMIN_TOKEN_REPLACEMENT] == ""
+        update = flow.hass.config_entries.async_update_entry.call_args
+        assert update.kwargs["data"] == {"webhook_id": "w", "admin_token": "good"}
+
+    def test_a_token_only_save_restarts_the_server_with_it(self):
+        # Unchanged options do not reload the entry by themselves.
+        saved = asyncio.run(self._token_flow().async_step_init({}))["data"]
+        flow = self._token_flow(options=saved)
+        asyncio.run(flow.async_step_init({const.OPT_ADMIN_TOKEN_REPLACEMENT: "good"}))
+        flow.hass.config_entries.async_schedule_reload.assert_called_once_with("srv1")
+
+    def test_a_save_that_changes_options_leaves_the_reload_to_the_listener(self):
+        flow = self._token_flow()
+        asyncio.run(flow.async_step_init({const.OPT_ADMIN_TOKEN_REPLACEMENT: "good"}))
+        flow.hass.config_entries.async_schedule_reload.assert_not_called()
 
     def test_an_unusable_token_blocks_the_save(self):
         flow = _make_options_flow()

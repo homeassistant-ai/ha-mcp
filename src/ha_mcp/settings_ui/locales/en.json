@@ -334,6 +334,7 @@
     "oauth_callbacks.reset": "Restore default",
     "oauth_callbacks.invalid": "Not saved. These are not usable callback URLs: {urls}. Use https://, or http:// on 127.0.0.1, [::1] or localhost, without a #fragment.",
     "oauth_callbacks.saved": "Saved. Applies to the next sign-in.",
+    "oauth_callbacks.load_failed": "Could not load the callback list (HTTP {status}). Reload the page to try again.",
     "origins.env_locked": "Set via environment variable; unset it to edit here.",
     "origins.addon_synced": "Synced to the app (add-on) Configuration tab. Restart required after save.",
     "origins.env_var_unset": "Set via environment variable {variable}; unset it to edit here.",

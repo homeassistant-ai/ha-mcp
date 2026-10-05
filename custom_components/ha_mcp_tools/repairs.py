@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, get_args
 
 import voluptuous as vol
 from homeassistant import data_entry_flow
@@ -16,12 +16,15 @@ from homeassistant.helpers.selector import (
 
 from . import server_credentials
 from .const import (
+    DATA_ADMIN_TOKEN,
     DATA_REINSTALL_REQUESTED,
+    ISSUE_LEGACY_OAUTH_RESTART,
     ISSUE_PACKAGE_FAILED,
     ISSUE_TOKEN_NEEDED,
 )
 
-_ADMIN_TOKEN = "admin_token"
+# The token field shares its name with the entry.data key it fills.
+_ADMIN_TOKEN = DATA_ADMIN_TOKEN
 
 
 class LegacyOAuthRestartRepairFlow(RepairsFlow):
@@ -59,9 +62,10 @@ class LegacyOAuthRestartRepairFlow(RepairsFlow):
 class ServerTokenRepairFlow(RepairsFlow):
     """Take a replacement administrator token for the in-process server (#2427)."""
 
-    def __init__(self, entry_id: str) -> None:
-        """Remember which server entry the token is for."""
+    def __init__(self, entry_id: str, reason: str = "") -> None:
+        """Remember which server entry the token is for, and why it was refused."""
         self._entry_id = entry_id
+        self._reason = reason
 
     async def async_step_init(
         self, user_input: dict[str, str] | None = None
@@ -77,6 +81,11 @@ class ServerTokenRepairFlow(RepairsFlow):
         if entry is None:
             return self.async_abort(reason="entry_removed")
         errors: dict[str, str] = {}
+        if user_input is None and self._reason in get_args(
+            server_credentials.TokenProblem
+        ):
+            # Say why the stored token stopped working before asking for another.
+            errors[_ADMIN_TOKEN] = self._reason
         if user_input is not None:
             token = str(user_input.get(_ADMIN_TOKEN, "")).strip()
             problem = server_credentials.token_problem(self.hass, token)
@@ -155,10 +164,15 @@ async def async_create_fix_flow(
     data: dict[str, Any] | None,
 ) -> RepairsFlow:
     """Create the fix flow for one of this integration's fixable repairs."""
+    data = data or {}
     if issue_id == ISSUE_TOKEN_NEEDED:
-        return ServerTokenRepairFlow(str((data or {}).get("entry_id", "")))
+        return ServerTokenRepairFlow(
+            str(data.get("entry_id", "")), str(data.get("reason", ""))
+        )
     if issue_id == ISSUE_PACKAGE_FAILED:
         return ServerPackageRepairFlow(
-            str((data or {}).get("entry_id", "")), str((data or {}).get("detail", ""))
+            str(data.get("entry_id", "")), str(data.get("detail", ""))
         )
-    return LegacyOAuthRestartRepairFlow()
+    if issue_id == ISSUE_LEGACY_OAUTH_RESTART:
+        return LegacyOAuthRestartRepairFlow()
+    raise ValueError(f"no fix flow for repair issue {issue_id!r}")

@@ -106,3 +106,56 @@ class TestOAuthCallbackEditor:
             r'<div id="oauthCallbacksStatus"[^>]*>(.*?)</div>', result.dom, re.S
         )
         assert status and "http://lan.example/cb" in status.group(1)
+
+    def test_restore_default_asks_the_server_to_reset(self, settings_script):
+        result = _oauth_run(
+            settings_script,
+            {**_OAUTH_STATE, "customized": True},
+            post={"status": 200, "json": {**_OAUTH_STATE, "saved": True}},
+            invoke=(
+                "document.getElementById('oauthCallbacksReset').click();"
+                "await new Promise(r => setTimeout(r, 0));"
+            ),
+        )
+        posts = [
+            json.loads(f["body"])
+            for f in result.fetches_to("/api/settings/oauth-callbacks")
+            if f["method"] == "POST"
+        ]
+        assert posts == [{"reset": True}]
+
+    def test_a_list_that_cannot_load_says_so_instead_of_vanishing(
+        self, settings_script
+    ):
+        # An expired panel session or a proxy error must not hide the editor
+        # without a word.
+        result = run_script(
+            settings_script,
+            initial_html=_OAUTH_DOM,
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/oauth-callbacks": {
+                    "status": 401,
+                    "body": "Unauthorized",
+                },
+            },
+            invoke="await loadOAuthCallbacks();",
+        )
+        assert not _section_hidden(result.dom)
+        assert "HTTP 401" in result.dom
+
+    def test_a_proxy_error_page_reports_its_status(self, settings_script):
+        result = _oauth_run(
+            settings_script,
+            _OAUTH_STATE,
+            post={"status": 502, "body": "<html>Bad gateway</html>"},
+            invoke=(
+                "document.getElementById('oauthCallbacksSave').click();"
+                "await new Promise(r => setTimeout(r, 0));"
+            ),
+        )
+        status = re.search(
+            r'<div id="oauthCallbacksStatus"[^>]*>(.*?)</div>', result.dom, re.S
+        )
+        assert status and "HTTP 502" in status.group(1)
+        assert "SyntaxError" not in status.group(1)

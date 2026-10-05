@@ -296,8 +296,8 @@ class TestForwardingHandler:
         # the FORWARDER must still never 401 and never validate a bearer — the
         # secret webhook URL is the credential and the OAuth token is cosmetic.
         session = FakeSession(upstream=FakeUpstream(status=200, body=b"{}"))
-        hass = _make_hass()
-        _store_cfg(hass, session=session, autoapprove_provider=mw.AutoApproveProvider())
+        hass, provider = _make_hass(), mw.AutoApproveProvider(list)
+        _store_cfg(hass, session=session, autoapprove_provider=provider)
 
         request = make_request(
             headers={"Authorization": "Bearer whatever-cosmetic-or-forged"}
@@ -781,7 +781,7 @@ def _none_live_hass(webhook_id: str = WEBHOOK_ID) -> MagicMock:
             "auth_mode": WEBHOOK_AUTH_NONE,
             "resource_server": None,
             "oauth_provider": None,
-            mw.CFG_AUTOAPPROVE_PROVIDER: mw.AutoApproveProvider(),
+            mw.CFG_AUTOAPPROVE_PROVIDER: mw.AutoApproveProvider(list),
         }
     }
     return hass
@@ -888,7 +888,7 @@ class TestNoneModeDiscovery:
             "auth_mode": WEBHOOK_AUTH_NONE,
             "resource_server": None,
             "oauth_provider": None,
-            mw.CFG_AUTOAPPROVE_PROVIDER: mw.AutoApproveProvider(),
+            mw.CFG_AUTOAPPROVE_PROVIDER: mw.AutoApproveProvider(list),
         }
         back_doc = (await view.get(request)).json_body
         assert back_doc["authorization_endpoint"] == (

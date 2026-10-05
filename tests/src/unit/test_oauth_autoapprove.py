@@ -111,6 +111,7 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
 )
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK,
+    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     DOMAIN,
     OAUTH_BASE,
     WEBHOOK_AUTH_LEGACY,
@@ -145,7 +146,8 @@ def _live_hass(provider: aa.AutoApproveProvider | None = None) -> MagicMock:
             "auth_mode": "none",
             "resource_server": None,
             "oauth_provider": None,
-            aa.CFG_AUTOAPPROVE_PROVIDER: provider or aa.AutoApproveProvider(),
+            aa.CFG_AUTOAPPROVE_PROVIDER: provider
+            or aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST),
         }
     }
     return hass
@@ -217,7 +219,7 @@ def _mode_cfg(
         }
     if mode == "none":
         provider = (
-            aa.AutoApproveProvider()
+            aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
             if allowlist is None
             else aa.AutoApproveProvider(lambda: allowlist)
         )
@@ -317,21 +319,21 @@ async def unified_view_client_factory():
 
 class TestAutoApproveProvider:
     def test_issue_and_consume_roundtrip(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         verifier, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
         assert code
         assert provider.consume_code(code, CLAUDE_REDIRECT, verifier) is True
 
     def test_wrong_verifier_rejected(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         _, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
         other_verifier, _ = _pkce_pair()
         assert provider.consume_code(code, CLAUDE_REDIRECT, other_verifier) is False
 
     def test_code_is_one_shot(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         verifier, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
         assert provider.consume_code(code, CLAUDE_REDIRECT, verifier) is True
@@ -357,7 +359,7 @@ class TestAuthorizeView:
         assert resp.status == 404
 
     async def test_happy_path_issues_code_and_redirects_no_ui(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         view = aa.AutoApproveAuthorizeView(hass)
         verifier, challenge = _pkce_pair()
@@ -431,7 +433,7 @@ class TestAuthorizeView:
         assert resp.status == 400
 
     async def test_code_store_at_capacity_redirects_temporarily_unavailable(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         provider.issue_code = lambda *a, **k: None  # type: ignore[method-assign]
         hass = _live_hass(provider)
         view = aa.AutoApproveAuthorizeView(hass)
@@ -463,7 +465,7 @@ class TestTokenView:
         assert resp.status == 404
 
     async def test_valid_pkce_exchange_returns_opaque_token_no_secret(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         verifier, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
@@ -491,7 +493,7 @@ class TestTokenView:
         assert resp.headers["Pragma"] == "no-cache"
 
     async def test_wrong_verifier_rejected(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         _, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
@@ -511,7 +513,7 @@ class TestTokenView:
         assert resp.json_body["error"] == "invalid_grant"
 
     async def test_code_is_one_time_at_token_endpoint(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         verifier, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
@@ -529,7 +531,7 @@ class TestTokenView:
         assert second.json_body["error"] == "invalid_grant"
 
     async def test_missing_params_returns_invalid_request(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         _, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
@@ -592,7 +594,7 @@ class TestBindAutoApproveViews:
 
 class TestFullFlow:
     async def test_authorize_then_token_completes_invisibly(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         authorize = aa.AutoApproveAuthorizeView(hass)
         token = aa.AutoApproveTokenView(hass)

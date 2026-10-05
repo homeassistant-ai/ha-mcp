@@ -6,6 +6,8 @@ Assistant origin is an open redirector.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from ._embedded_stubs import install
@@ -14,12 +16,14 @@ install()
 
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
+    MAX_OAUTH_CALLBACK_LENGTH,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
 from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (  # noqa: E402
     effective_allowlist,
     is_redirect_allowed,
     normalize_allowlist,
+    stored_allowlist,
 )
 
 from . import test_oauth_autoapprove as aa_tests  # noqa: E402
@@ -75,6 +79,16 @@ class TestIsRedirectAllowed:
             "http://user@127.0.0.1:61264/callback", [LOOPBACK]
         )
 
+    def test_loopback_port_exception_keeps_the_query_exact(self) -> None:
+        assert not is_redirect_allowed(
+            "http://127.0.0.1:61264/callback?x=1", [LOOPBACK]
+        )
+
+    def test_listed_ipv6_loopback_callback_matches_any_port(self) -> None:
+        assert is_redirect_allowed(
+            "http://[::1]:61264/callback", ["http://[::1]/callback"]
+        )
+
     def test_https_callbacks_get_no_port_exception(self) -> None:
         assert not is_redirect_allowed(
             "https://claude.ai:8443/api/mcp/auth_callback", [CLAUDE]
@@ -93,6 +107,26 @@ class TestEffectiveAllowlist:
         # Removing every entry must not bring the default back.
         assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: []}) == []
 
+    def test_a_malformed_stored_list_refuses_every_callback(self, caplog) -> None:
+        # Falling back to the default would widen a security setting silently.
+        with caplog.at_level(logging.WARNING):
+            assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: CLAUDE}) == []
+        assert "malformed OAuth callback allowlist" in caplog.text
+
+
+class TestStoredAllowlist:
+    def test_submitting_the_default_unchanged_keeps_following_it(self) -> None:
+        assert stored_allowlist({}, list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)) is None
+
+    def test_a_saved_list_stays_saved_even_when_it_equals_the_default(self) -> None:
+        options = {OPT_OAUTH_REDIRECT_ALLOWLIST: [CLAUDE, LOOPBACK]}
+        default = list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
+        assert stored_allowlist(options, default) == default
+
+    @pytest.mark.parametrize("entries", [[], [LOOPBACK], [CLAUDE, LOOPBACK]])
+    def test_any_other_list_is_saved(self, entries: list[str]) -> None:
+        assert stored_allowlist({}, entries) == entries
+
 
 class TestNormalizeAllowlist:
     def test_trims_and_drops_blank_and_repeated_entries(self) -> None:
@@ -105,6 +139,10 @@ class TestNormalizeAllowlist:
     )
     def test_reports_entries_no_request_could_use(self, bad: str) -> None:
         assert normalize_allowlist([CLAUDE, bad]) == ([CLAUDE], [bad])
+
+    def test_reports_an_over_long_callback(self) -> None:
+        long = "https://example.com/" + "a" * MAX_OAUTH_CALLBACK_LENGTH
+        assert normalize_allowlist([long]) == ([], [long])
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +165,20 @@ async def test_none_mode_refuses_an_unlisted_callback_without_redirecting(
     assert "Location" not in resp.headers
 
 
+async def test_none_mode_refusal_is_logged(unified_view_client_factory, caplog):
+    """Whoever reads the log can tell why a client keeps failing to sign in."""
+    client = await unified_view_client_factory(mode="none")
+    with caplog.at_level(logging.WARNING):
+        await client.get(
+            "/api/ha_mcp_tools/oauth/authorize"
+            + AUTH_QS
+            + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb",
+            allow_redirects=False,
+        )
+    assert "https://chatgpt.example/connector/cb" in caplog.text
+    assert "not on the OAuth callback list" in caplog.text
+
+
 async def test_none_mode_refusal_page_escapes_the_callback(
     unified_view_client_factory,
 ):
@@ -141,6 +193,11 @@ async def test_none_mode_refusal_page_escapes_the_callback(
     body = await resp.text()
     assert "<script>x" not in body
     assert "&lt;script&gt;x" in body
+    # Defence in depth: nothing on the page may run, and it is never cached.
+    csp = resp.headers["Content-Security-Policy"]
+    assert "default-src 'none'" in csp
+    assert "script-src" not in csp
+    assert "no-store" in resp.headers["Cache-Control"]
 
 
 async def test_none_mode_follows_allowlist_edits_without_a_reload(
@@ -176,6 +233,7 @@ async def test_none_mode_dynamic_registration_cannot_add_a_callback(
         allow_redirects=False,
     )
     assert resp.status == 400
+    assert "Location" not in resp.headers
 
 
 async def test_none_mode_listed_loopback_callback_autoapproves_on_any_port(

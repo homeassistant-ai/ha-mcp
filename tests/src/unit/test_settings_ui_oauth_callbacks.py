@@ -99,7 +99,14 @@ async def test_unusable_callbacks_are_named_back(embedded, component) -> None:
 
 
 @pytest.mark.parametrize(
-    "body", [{"allowlist": "x"}, {"allowlist": [1]}, {"allowlist": ["x"] * 51}, []]
+    "body",
+    [
+        {"allowlist": "x"},
+        {"allowlist": [1]},
+        {"allowlist": ["x"] * 51},
+        {"allowlist": ["https://example.com/" + "a" * 2048]},
+        [],
+    ],
 )
 async def test_a_malformed_save_is_refused_before_the_component(
     embedded, component, body: Any
@@ -113,3 +120,31 @@ async def test_a_save_outside_the_embedded_server_is_refused(component) -> None:
     status, _ = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
     assert status == 409
     assert component == []
+
+
+async def test_a_refusal_by_the_component_is_a_400_not_a_502(
+    embedded, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The component ran the command and rejected it: the panel was reached.
+    from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+    async def refuse(*_a: Any, **_k: Any) -> dict[str, Any]:
+        raise HomeAssistantCommandError("Command failed: bad value")
+
+    monkeypatch.setattr(oc, "_component_command", refuse)
+    status, body = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
+    assert status == 400
+    assert "bad value" in body["error"]["message"]
+
+
+async def test_an_unreachable_component_is_a_502(
+    embedded, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ha_mcp.client.rest_client import HomeAssistantConnectionError
+
+    async def down(*_a: Any, **_k: Any) -> dict[str, Any]:
+        raise HomeAssistantConnectionError("WebSocket not connected")
+
+    monkeypatch.setattr(oc, "_component_command", down)
+    status, _ = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
+    assert status == 502

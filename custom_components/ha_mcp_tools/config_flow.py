@@ -6,8 +6,9 @@ menu on the first step:
 * ``tools`` — the privileged file / YAML services (the original component).
   A single confirm step creates the entry. Single-instance, keyed on
   ``DOMAIN``.
-* ``server`` — the in-process ha-mcp FastMCP server (issue #1527). A single
-  confirm step creates the entry (entry-exists = the server runs);
+* ``server`` — the in-process ha-mcp FastMCP server (issue #1527). A setup
+  form (administrator token, remote access, network access) creates the
+  entry (entry-exists = the server runs);
   single-instance, keyed on ``DOMAIN-server``. Its options flow tunes the
   port / bind host / webhook auth / pip spec / server URL.
 
@@ -66,7 +67,6 @@ from .const import (
     DEFAULT_ENABLE_LLM_API,
     DEFAULT_LLM_API_EXPOSURE,
     DEFAULT_LOOPBACK_URL,
-    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
     DIST_NAME_DEV,
@@ -78,6 +78,7 @@ from .const import (
     EXPOSURE_FULL,
     EXPOSURE_TOOL_SEARCH,
     LLM_API_DOCS_URL,
+    MAX_OAUTH_CALLBACKS,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
     OPT_ADMIN_TOKEN_REPLACEMENT,
     OPT_BIND_HOST,
@@ -104,10 +105,11 @@ from .const import (
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
 )
-from .oauth_redirect_allowlist import effective_allowlist, normalize_allowlist
-
-# Title shown for the server entry in the integration tile's entry list; the
-# tools entry's title lives in const.py (setup migration in __init__ needs it).
+from .oauth_redirect_allowlist import (
+    effective_allowlist,
+    normalize_allowlist,
+    stored_allowlist,
+)
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
@@ -119,7 +121,7 @@ _SERVER_UNIQUE_ID = f"{DOMAIN}-server"
 # decides exposure states it in one place.
 SETUP_REMOTE_ACCESS = "remote_access"
 REMOTE_ACCESS_DISABLED = "disabled"
-SETUP_ADMIN_TOKEN = "admin_token"
+SETUP_ADMIN_TOKEN = DATA_ADMIN_TOKEN
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -194,8 +196,8 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         """Return the options flow for this entry type.
 
-        The in-process server entry gets the configurable options flow (
-        port / bind / auth / pip spec / URL). The tools services entry has
+        The in-process server entry gets the configurable options flow
+        (port / bind / auth / pip spec / URL). The tools services entry has
         nothing to configure yet, so it gets a light informational options flow
         instead of aborting.
         """
@@ -410,6 +412,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         """Show / apply the server options."""
         opts = self.config_entry.options
         errors: dict[str, str] = {}
+        invalid: list[str] = []
         if user_input is not None:
             errors = self._connect_path_override_errors(user_input)
             entries, invalid = normalize_allowlist(
@@ -417,6 +420,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             )
             if invalid:
                 errors[OPT_OAUTH_REDIRECT_ALLOWLIST] = "invalid_oauth_callback"
+            elif len(entries) > MAX_OAUTH_CALLBACKS:
+                errors[OPT_OAUTH_REDIRECT_ALLOWLIST] = "too_many_oauth_callbacks"
             token = str(user_input.get(OPT_ADMIN_TOKEN_REPLACEMENT) or "").strip()
             if token and (
                 problem := server_credentials.token_problem(self.hass, token)
@@ -425,12 +430,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             if not errors:
                 data = self._normalize(user_input)
                 data.pop(OPT_OAUTH_REDIRECT_ALLOWLIST, None)
-                # An entry still following the shipped default keeps following
-                # it, so a later release's additions reach it.
-                if OPT_OAUTH_REDIRECT_ALLOWLIST in opts or entries != list(
-                    DEFAULT_OAUTH_REDIRECT_ALLOWLIST
-                ):
-                    data[OPT_OAUTH_REDIRECT_ALLOWLIST] = entries
+                if (stored := stored_allowlist(opts, entries)) is not None:
+                    data[OPT_OAUTH_REDIRECT_ALLOWLIST] = stored
+                if token:
+                    self._adopt_token(token, data)
                 return self.async_create_entry(title="", data=data)
 
         # A validation failure must re-render the values the user just entered.
@@ -479,8 +482,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     # optional text field below.) Only a genuinely saved
                     # override is suggested; the normalized "no override" state
                     # renders an EMPTY field — the help text says "Leave empty",
-                    # and pre-filling DEFAULT_PIP_SPEC would show the STABLE dist
-                    # name even on the dev channel.
+                    # and pre-filling DEFAULT_PIP_SPEC would show the stable dist
+                    # name even when a HACS pre-release pins ha-mcp-dev.
                     description={
                         "suggested_value": suggested_values.get(OPT_PIP_SPEC, "")
                     },
@@ -627,8 +630,28 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 "oauth_creds": self._oauth_creds_hint(common),
                 "llm_api_docs_url": LLM_API_DOCS_URL,
                 "panel_hint": panel_hint,
+                "invalid_callbacks": ", ".join(invalid),
+                "max_callbacks": str(MAX_OAUTH_CALLBACKS),
             },
         )
+
+    def _adopt_token(self, token: str, options: Mapping[str, Any]) -> None:
+        """Store the validated replacement token straight into ``entry.data``.
+
+        Like the token repair, it never passes through the options, which
+        ``config_entries/get`` returns. The entry reloads to use it: the update
+        listener reloads only for an options change, so a token-only save
+        schedules the reload here.
+        """
+        from .embedded_entry import _reload_relevant
+
+        entry = self.config_entry
+        self.hass.config_entries.async_update_entry(
+            entry,
+            data=server_credentials.adopt_admin_token(self.hass, entry.data, token),
+        )
+        if _reload_relevant(options) == _reload_relevant(entry.options):
+            self.hass.config_entries.async_schedule_reload(entry.entry_id)
 
     @staticmethod
     def _connect_path_override_errors(
@@ -668,9 +691,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             OPT_SECRET_PATH_OVERRIDE,
             OPT_OAUTH_CLIENT_ID,
             OPT_OAUTH_CLIENT_SECRET,
-            OPT_ADMIN_TOKEN_REPLACEMENT,
         ):
             cleaned[key] = str(cleaned.get(key, "") or "").strip()
+        # The token never reaches the options; see _adopt_token.
+        cleaned[OPT_ADMIN_TOKEN_REPLACEMENT] = ""
         cleaned[OPT_EXTERNAL_URL] = cleaned[OPT_EXTERNAL_URL].rstrip("/")
         # server_url gets no _normalize-forced empty like the fields above; strip
         # it and drop it entirely when blank so a whitespace-only value can't be

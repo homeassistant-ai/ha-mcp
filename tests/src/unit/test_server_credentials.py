@@ -65,11 +65,8 @@ class TestTokenProblem:
             "token_not_long_lived"
         )
 
-    @pytest.mark.parametrize(
-        "user", [_user(admin=False), _user(active=False)], ids=["non_admin", "inactive"]
-    )
-    def test_a_token_without_administrator_rights_is_refused(self, user) -> None:
-        validated = _rt(user=user)
+    def test_a_token_without_administrator_rights_is_refused(self) -> None:
+        validated = _rt(user=_user(admin=False))
         assert sc.token_problem(_hass(validated=validated), "tok") == "token_not_admin"
 
 
@@ -96,6 +93,18 @@ class TestServerAccessToken:
         )
         assert await sc.async_server_access_token(hass, entry) == "minted"
         hass.auth.async_create_access_token.assert_called_once_with(rt)
+
+    async def test_a_demoted_provisioned_account_asks_for_a_new_token(self) -> None:
+        # An administrator can demote the account an older release created.
+        user = _user(admin=False)
+        hass = _hass(users={"u1": user}, refresh_tokens={"rt1": _rt(user=user)})
+        entry = SimpleNamespace(
+            data={DATA_SERVER_USER_ID: "u1", DATA_REFRESH_TOKEN_ID: "rt1"}
+        )
+        with pytest.raises(sc.CredentialNeeded) as err:
+            await sc.async_server_access_token(hass, entry)
+        assert err.value.reason == "token_not_admin"
+        hass.auth.async_create_access_token.assert_not_called()
 
     @pytest.mark.parametrize(
         ("users", "refresh_tokens"),

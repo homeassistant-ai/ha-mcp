@@ -42,7 +42,8 @@
         "error": {
             "invalid_connect_path": "Must not contain #, ?, %, or whitespace.",
             "invalid_webhook_id": "Webhook IDs must not contain a slash (/).",
-            "invalid_oauth_callback": "Each callback must be an https:// URL, or an http:// URL on 127.0.0.1, [::1] or localhost, without a #fragment.",
+            "invalid_oauth_callback": "Each callback must be an https:// URL, or an http:// URL on 127.0.0.1, [::1] or localhost, without a #fragment, and at most 2048 characters long. Fix: {invalid_callbacks}",
+            "too_many_oauth_callbacks": "List at most {max_callbacks} callbacks.",
             "invalid_token": "Home Assistant does not recognise this token. Copy the whole token, or create a new one.",
             "token_not_long_lived": "This is a temporary sign-in token, which expires. Create a long-lived access token instead.",
             "token_not_admin": "This token belongs to an account that is not an active administrator."

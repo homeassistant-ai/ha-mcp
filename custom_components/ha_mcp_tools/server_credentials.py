@@ -12,7 +12,7 @@ release created itself, and only when its config entry is deleted.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from .const import (
     DATA_ACCESS_TOKEN,
@@ -29,17 +29,24 @@ if TYPE_CHECKING:
 # entry.data keys of the credential an older release provisioned.
 _PROVISIONED_KEYS = (DATA_SERVER_USER_ID, DATA_REFRESH_TOKEN_ID, DATA_ACCESS_TOKEN)
 
+# Why a token cannot run the server: the setup / repair error translation keys.
+TokenProblem = Literal["invalid_token", "token_not_long_lived", "token_not_admin"]
+
 
 class CredentialNeeded(Exception):
-    """The server has no usable credential; ``reason`` is a translation key."""
+    """The server has no usable credential.
 
-    def __init__(self, reason: str) -> None:
+    ``reason`` is a :data:`TokenProblem`, or ``"missing_token"`` when an older
+    release's provisioned credential is gone.
+    """
+
+    def __init__(self, reason: TokenProblem | Literal["missing_token"]) -> None:
         """Keep the reason the credential was refused."""
         super().__init__(reason)
         self.reason = reason
 
 
-def token_problem(hass: HomeAssistant, token: str) -> str | None:
+def token_problem(hass: HomeAssistant, token: str) -> TokenProblem | None:
     """Why ``token`` cannot run the server, or None when it can.
 
     It must be a long-lived token, since a session token expires within the
@@ -50,11 +57,11 @@ def token_problem(hass: HomeAssistant, token: str) -> str | None:
 
     refresh_token = hass.auth.async_validate_access_token(token)
     if refresh_token is None:
+        # Also a deactivated account's token: deactivating removes its tokens.
         return "invalid_token"
     if refresh_token.token_type != TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN:
         return "token_not_long_lived"
-    user = refresh_token.user
-    if not (user.is_active and user.is_admin):
+    if not refresh_token.user.is_admin:
         return "token_not_admin"
     return None
 
@@ -79,6 +86,9 @@ async def async_server_access_token(hass: HomeAssistant, entry: Any) -> str:
         or refresh_token.user.id != user.id
     ):
         raise CredentialNeeded("missing_token")
+    if not user.is_admin:
+        # An administrator can demote the account an older release created.
+        raise CredentialNeeded("token_not_admin")
     return str(hass.auth.async_create_access_token(refresh_token))
 
 

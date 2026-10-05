@@ -141,7 +141,7 @@ def test_legacy_oauth_repair_catalog_has_fix_flow(catalog_path):
 # ---------------------------------------------------------------------------
 
 
-def _token_hass(*, problem: str | None, entry):
+def _token_hass(monkeypatch, *, problem: str | None, entry):
     from custom_components.ha_mcp_tools import server_credentials
 
     hass = MagicMock()
@@ -149,32 +149,24 @@ def _token_hass(*, problem: str | None, entry):
     hass.config_entries.async_update_entry = MagicMock()
     hass.config_entries.async_schedule_reload = MagicMock()
     hass.auth.async_get_refresh_token = MagicMock(return_value=None)
-    server_credentials.token_problem = MagicMock(return_value=problem)
+    monkeypatch.setattr(
+        server_credentials, "token_problem", MagicMock(return_value=problem)
+    )
     return hass
 
 
-async def _token_flow(hass):
+async def _token_flow(hass, reason: str = ""):
     repairs = _load_repairs_module()
     flow = await repairs.async_create_fix_flow(
-        hass, "server_token_needed", {"entry_id": "srv1"}
+        hass, "server_token_needed", {"entry_id": "srv1", "reason": reason}
     )
     flow.hass = hass
     return flow
 
 
-@pytest.fixture
-def _restore_token_problem():
-    from custom_components.ha_mcp_tools import server_credentials
-
-    original = server_credentials.token_problem
-    yield
-    server_credentials.token_problem = original
-
-
-@pytest.mark.usefixtures("_restore_token_problem")
-async def test_token_repair_starts_the_server_with_the_new_token():
+async def test_token_repair_starts_the_server_with_the_new_token(monkeypatch):
     entry = MagicMock(entry_id="srv1", data={"webhook_id": "w"})
-    hass = _token_hass(problem=None, entry=entry)
+    hass = _token_hass(monkeypatch, problem=None, entry=entry)
     flow = await _token_flow(hass)
 
     result = await flow.async_step_token({"admin_token": "  new-token "})
@@ -185,16 +177,50 @@ async def test_token_repair_starts_the_server_with_the_new_token():
     hass.config_entries.async_schedule_reload.assert_called_once_with("srv1")
 
 
-@pytest.mark.usefixtures("_restore_token_problem")
-async def test_token_repair_keeps_asking_until_the_token_works():
+async def test_token_repair_keeps_asking_until_the_token_works(monkeypatch):
     entry = MagicMock(entry_id="srv1", data={})
-    hass = _token_hass(problem="token_not_admin", entry=entry)
+    hass = _token_hass(monkeypatch, problem="token_not_admin", entry=entry)
     flow = await _token_flow(hass)
 
     result = await flow.async_step_token({"admin_token": "tok"})
 
     assert result["errors"] == {"admin_token": "token_not_admin"}
     hass.config_entries.async_update_entry.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("reason", "errors"),
+    [
+        ("token_not_admin", {"admin_token": "token_not_admin"}),
+        ("invalid_token", {"admin_token": "invalid_token"}),
+        ("missing_token", {}),
+    ],
+)
+async def test_token_repair_says_why_the_stored_token_stopped_working(
+    monkeypatch, reason, errors
+):
+    entry = MagicMock(entry_id="srv1", data={})
+    hass = _token_hass(monkeypatch, problem=None, entry=entry)
+    flow = await _token_flow(hass, reason)
+
+    result = await flow.async_step_init()
+
+    assert result["errors"] == errors
+
+
+async def test_token_repair_aborts_when_the_entry_is_gone(monkeypatch):
+    hass = _token_hass(monkeypatch, problem=None, entry=None)
+    flow = await _token_flow(hass)
+
+    result = await flow.async_step_token({"admin_token": "tok"})
+
+    assert result == {"type": "abort", "reason": "entry_removed"}
+
+
+async def test_an_unknown_repair_issue_has_no_fix_flow():
+    repairs = _load_repairs_module()
+    with pytest.raises(ValueError, match="no fix flow"):
+        await repairs.async_create_fix_flow(MagicMock(), "not_an_issue", None)
 
 
 @pytest.mark.parametrize(
@@ -266,6 +292,22 @@ async def test_package_repair_reinstalls_the_server_on_a_fresh_start():
     hass.services.async_call.assert_awaited_once_with(
         "homeassistant", "restart", {}, blocking=True
     )
+
+
+async def test_a_refused_restart_keeps_the_repair_and_the_reinstall_request():
+    """The repair stays open, and the next start still reinstalls."""
+    from custom_components.ha_mcp_tools.const import DATA_REINSTALL_REQUESTED
+
+    entry = MagicMock(entry_id="srv1", data={})
+    hass = _package_hass(entry)
+    hass.services.async_call = AsyncMock(side_effect=RuntimeError("invalid config"))
+    flow = await _package_flow(hass)
+
+    with pytest.raises(RuntimeError):
+        await flow.async_step_confirm({})
+
+    update = hass.config_entries.async_update_entry.call_args
+    assert update.kwargs["data"] == {DATA_REINSTALL_REQUESTED: True}
 
 
 @pytest.mark.parametrize(

@@ -1323,6 +1323,9 @@ def _build_app(
     # it. A bare GET on / returns a generic 404 because the only way to reach
     # the page is via the secret path. The table is the shared HTTP surface,
     # minus the app restart the sidecar cannot perform, so the two never drift.
+    # Policy pending/approve/deny answer 503 here (the ApprovalQueue lives in
+    # the main process); the decision-pin routes must still work, because the
+    # config PUT refuses event-bus decisions without a stored PIN.
     routes = [
         Route(f"{secret_prefix}{path}", handlers[key], methods=methods)
         for path, methods, key in SETTINGS_ROUTES
