@@ -257,8 +257,9 @@ def with_auto_backup(
                 snap_domain,
                 entity_id,
             ):
+                skipped = None
                 if enabled:
-                    await _capture_pre_write_snapshot(
+                    skipped = await _capture_pre_write_snapshot(
                         func,
                         args,
                         kwargs,
@@ -271,7 +272,11 @@ def with_auto_backup(
                         mandatory=mandatory,
                         domain_resolver=domain_resolver,
                     )
-                return await func(*args, **kwargs)
+                result = await func(*args, **kwargs)
+                if skipped and isinstance(result, dict):
+                    # The caller, not only the log, learns no backup was taken.
+                    result.setdefault("warnings", []).append(skipped)
+                return result
 
         return wrapper
 
@@ -342,11 +347,12 @@ async def _capture_pre_write_snapshot(
     id_fn: Callable[[dict[str, Any]], str] | None,
     mandatory: bool,
     domain_resolver: Callable[[Any, dict[str, Any], str, str], Awaitable[str]] | None,
-) -> None:
+) -> str | None:
     """Resolve the snapshot target and capture a pre-write backup.
 
     Extracted from ``with_auto_backup``'s wrapper. Best-effort: a transient
-    capture failure logs a WARNING and lets the write proceed; a ``mandatory``
+    capture failure logs a WARNING, lets the write proceed and returns the
+    warning text for the tool response; a ``mandatory``
     failure maps to a structured ``BACKUP_CAPTURE_FAILED`` error that fails the
     write closed (nothing is changed).
     """
@@ -354,6 +360,7 @@ async def _capture_pre_write_snapshot(
     snap_domain, entity_id = _resolve_snapshot_target(
         kwargs, domain=domain, domain_fn=domain_fn, id_param=id_param, id_fn=id_fn
     )
+    skipped: list[str] = []
     if entity_id:
         try:
             if client_obj is not None:
@@ -367,6 +374,7 @@ async def _capture_pre_write_snapshot(
                     entity_id,
                     tool_name=func.__name__,
                     mandatory=mandatory,
+                    skip_reasons=skipped,
                 )
             elif mandatory:
                 # No client to capture with, but this tool requires a
@@ -419,3 +427,5 @@ async def _capture_pre_write_snapshot(
                 type(err).__name__,
                 err,
             )
+            skipped.append(f"No pre-write backup was taken: {type(err).__name__}")
+    return "; ".join(skipped) or None

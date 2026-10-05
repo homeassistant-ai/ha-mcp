@@ -131,7 +131,7 @@ async def test_refusal_keeps_selected_source_at_retention_one(manager, monkeypat
     )
     manager._client.submit_options_flow_step = AsyncMock()
     manager._client.abort_options_flow = AsyncMock()
-    with pytest.raises(bm.BackupRestoreError, match="identity changed") as caught:
+    with pytest.raises(bm.BackupRestoreError, match="no restore form offers") as caught:
         await manager.restore_snapshot(source.name)
     assert source.exists()
     assert caught.value.outcome["apply_status"] == "not_applied"

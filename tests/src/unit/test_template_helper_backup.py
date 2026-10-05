@@ -481,7 +481,7 @@ async def test_changed_creation_only_device_class_refused_before_apply(
         abort_options_flow=AsyncMock(),
     )
     handler = manager.handler_for("helper_template")
-    with pytest.raises(HomeAssistantError, match="identity changed"):
+    with pytest.raises(HomeAssistantError, match="no restore form offers"):
         await handler.restore(
             client,
             "template-entry",

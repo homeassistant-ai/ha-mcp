@@ -52,6 +52,17 @@ def test_cleared_icon_is_left_out_of_the_item() -> None:
     assert "icon" not in cleared
 
 
+def test_tag_update_does_not_echo_the_listed_name() -> None:
+    """A tag's name lives in the entity registry and Core writes the name it is
+    sent there: echoing the listed one would pin a never-named tag's default
+    "Tag <id>" as a registry override."""
+    stored = {"id": "abc", "name": "Tag abc", "description": "door"}
+    kept = merged_update("tag", stored, None, None, {"description": "gate"}, "abc")
+    renamed = merged_update("tag", stored, "Front", None, {}, "abc")
+    assert kept == {"description": "gate"}
+    assert renamed == {"name": "Front", "description": "door"}
+
+
 # --- create defaults ---------------------------------------------------------
 
 

@@ -66,9 +66,14 @@ def merged_update(
 ) -> dict[str, Any]:
     """The stored item plus the changes: Core's update writes the whole item.
 
-    A cleared icon ('') is left out, since Core rejects an empty icon.
+    A cleared icon ('') is left out, since Core rejects an empty icon. A tag's
+    name lives in the entity registry, and Core's tag update writes the name
+    it is sent there: the listed one is not echoed, or a tag that was never
+    named would get its default "Tag <id>" pinned as a registry override.
     """
     body = {k: v for k, v in stored.items() if k != "id"}
+    if helper_type == "tag":
+        body.pop("name", None)
     if name is not None:
         body["name"] = name
     if helper_type == "zone":

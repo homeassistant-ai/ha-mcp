@@ -73,6 +73,7 @@ class TestFetchHelperFlowInfo:
             "schema": branch_schema,
             "step_id": "sensor",
             "last_step": None,
+            "branch": "sensor",
         }
 
     async def test_menu_flow_without_choice_returns_menu_options(self) -> None:

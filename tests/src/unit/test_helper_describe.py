@@ -115,20 +115,75 @@ async def test_existing_person_reports_current_values_without_component(
 
     result = await mod.describe_helper(client, "person", helper_id="pat")
 
-    assert "current_unavailable" not in result
     assert _fields(result)["device_trackers"]["current"] == ["a.b"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_component")
-async def test_unknown_storage_helper_says_current_values_are_missing(
+async def test_unknown_storage_helper_is_an_error_not_a_field_list(
     client: AsyncMock,
 ) -> None:
+    """As the flow path refuses a wrong entry, a storage id that matches nothing
+    is refused rather than described without current values."""
     client.send_websocket_message.return_value = {"result": []}
 
-    result = await mod.describe_helper(client, "input_number", helper_id="gone")
+    with pytest.raises(ToolError, match="RESOURCE_NOT_FOUND"):
+        await mod.describe_helper(client, "input_number", helper_id="gone")
 
-    assert result["current_unavailable"] is True
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("helper_type", "kwargs"),
+    [
+        ("input_number", {}),  # a storage helper has no menu
+        ("group", {"helper_id": "entry1"}),  # an existing helper: its options
+        ("derivative", {}),  # a flow helper that opens with a form
+    ],
+)
+async def test_menu_choice_without_a_menu_is_refused_not_ignored(
+    client: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+    helper_type: str,
+    kwargs: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(
+        mod,
+        "fetch_helper_flow_info",
+        AsyncMock(return_value={"step_id": "user", "schema": [{"name": "name"}]}),
+    )
+    client.get_config_entry.return_value = {"domain": helper_type}
+
+    with pytest.raises(ToolError, match="menu_choice 'sensor' does not apply"):
+        await mod.describe_helper(client, helper_type, menu_choice="sensor", **kwargs)
+
+    client.start_options_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_current_values_of_a_password_field_are_redacted(
+    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mod, "redaction_enabled", lambda: True)
+    client.get_config_entry.return_value = {"domain": "group"}
+    client.start_options_flow.return_value = {
+        "type": "form",
+        "flow_id": "f1",
+        "step_id": "init",
+        "data_schema": [
+            {
+                "name": "api_key",
+                "selector": {"text": {"type": "password"}},
+                "description": {"suggested_value": "hunter2"},
+            },
+            {"name": "name", "description": {"suggested_value": "Hall"}},
+        ],
+    }
+
+    fields = _fields(await mod.describe_helper(client, "group", helper_id="entry1"))
+
+    assert "hunter2" not in str(fields)
+    assert fields["api_key"]["current"].startswith("<redacted")
+    assert fields["name"]["current"] == "Hall"
 
 
 @pytest.mark.asyncio
@@ -340,6 +395,7 @@ async def test_flow_fields_carry_ha_own_help_text_including_sections(
         AsyncMock(
             return_value={
                 "step_id": "sensor",
+                "branch": "sensor",
                 "schema": [
                     {"name": "state", "selector": {"template": {}}},
                     {

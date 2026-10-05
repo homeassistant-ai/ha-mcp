@@ -67,7 +67,8 @@ def entry_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
             "flow_id": "edit-flow",
             "step_id": options.get("template_type", "init"),
             "data_schema": [
-                {"name": "state", "required": True, "selector": {"template": {}}}
+                {"name": "state", "required": True, "selector": {"template": {}}},
+                {"name": "source", "required": False, "selector": {"entity": {}}},
             ],
         }
 

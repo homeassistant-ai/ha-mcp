@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
@@ -208,6 +208,10 @@ async def _describe_flow(
 ) -> dict[str, Any]:
     if entry_id is None:
         info = await fetch_helper_flow_info(client, helper_type, menu_choice)
+        if menu_choice and "schema" in info and "branch" not in info:
+            _reject_menu_choice(
+                helper_type, menu_choice, f"{helper_type} opens with a form, not a menu"
+            )
         if "schema" in info:
             return {
                 "source": "config_flow",
@@ -240,6 +244,10 @@ async def _describe_flow(
             )
         )
 
+    if menu_choice:
+        _reject_menu_choice(
+            helper_type, menu_choice, "an existing helper is described by its options"
+        )
     await config_entry_of_domain(client, entry_id, helper_type)
     flow_id: str | None = None
     try:
@@ -273,6 +281,17 @@ async def _describe_flow(
                 await asyncio.wait_for(client.abort_options_flow(flow_id), 5.0)
             except Exception as err:  # noqa: BLE001
                 logger.debug("describe: options flow %s abort failed: %s", flow_id, err)
+
+
+def _reject_menu_choice(helper_type: str, menu_choice: str, why: str) -> NoReturn:
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"menu_choice {menu_choice!r} does not apply: {why}.",
+            context={"helper_type": helper_type, "menu_choice": menu_choice},
+            suggestions=["Drop menu_choice"],
+        )
+    )
 
 
 async def _stored_item(
@@ -324,7 +343,14 @@ async def _describe_simple(
     if helper_id:
         item = await _stored_item(client, helper_type, helper_id)
         if item is None:
-            out["current_unavailable"] = True
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"No {helper_type} with id or entity_id {helper_id!r} was found.",
+                    context={"helper_type": helper_type, "helper_id": helper_id},
+                    suggestions=[f"ha_config_list_helpers({helper_type!r}) lists them"],
+                )
+            )
         else:
             for field in out["fields"]:
                 if field["name"] in item:
@@ -348,6 +374,10 @@ async def describe_helper(
     if helper_type in FLOW_HELPER_TYPES:
         described = await _describe_flow(client, helper_type, menu_choice, helper_id)
     else:
+        if menu_choice:
+            _reject_menu_choice(
+                helper_type, menu_choice, f"{helper_type} is a storage helper"
+            )
         described = await _describe_simple(client, helper_type, helper_id)
     return {"helper_type": helper_type, **described}
 

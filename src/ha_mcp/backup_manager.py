@@ -712,6 +712,7 @@ class BackupManager:
         tool_name: str | None = None,
         force: bool = False,
         mandatory: bool = False,
+        skip_reasons: list[str] | None = None,
     ) -> Path | None:
         """Capture a snapshot for ``domain:entity_id`` if throttle elapsed.
 
@@ -736,6 +737,9 @@ class BackupManager:
         The ``handler is None`` and ``config is None`` skips still
         apply (force can't conjure a snapshot for an entity that
         doesn't exist or has no registered handler).
+
+        ``skip_reasons`` (best-effort mode) collects why a capture that was
+        due did not happen, so the caller can tell its own caller.
         """
         if not force:
             await self.ensure_directory_ready()
@@ -747,7 +751,11 @@ class BackupManager:
 
         if _is_flow_helper_domain(domain) and "." in entity_id:
             config = await self._fetch_config_for_snapshot(
-                handler, entity_id, f"{domain}:{entity_id}", mandatory=mandatory
+                handler,
+                entity_id,
+                f"{domain}:{entity_id}",
+                mandatory=mandatory,
+                skip_reasons=skip_reasons,
             )
             if config is _SNAPSHOT_SKIP:
                 return None
@@ -772,7 +780,7 @@ class BackupManager:
             ):
                 return None
             config = await self._fetch_config_for_snapshot(
-                handler, entity_id, key, mandatory=mandatory
+                handler, entity_id, key, mandatory=mandatory, skip_reasons=skip_reasons
             )
             if config is _SNAPSHOT_SKIP:
                 return None
@@ -824,7 +832,13 @@ class BackupManager:
         return handler
 
     async def _fetch_config_for_snapshot(
-        self, handler: DomainHandler, entity_id: str, key: str, *, mandatory: bool
+        self,
+        handler: DomainHandler,
+        entity_id: str,
+        key: str,
+        *,
+        mandatory: bool,
+        skip_reasons: list[str] | None = None,
     ) -> Any:
         """Fetch the pre-write config; return ``_SNAPSHOT_SKIP`` to skip capture.
 
@@ -856,6 +870,13 @@ class BackupManager:
                 type(err).__name__,
                 err,
             )
+            if skip_reasons is not None:
+                # Only locally authored detail: a remote error may carry values.
+                detail = _flow_safe_failure_detail("capture", err)
+                skip_reasons.append(
+                    f"No pre-write backup of {key} was taken: "
+                    + (detail or type(err).__name__)
+                )
             return _SNAPSHOT_SKIP
         if config is None:
             # Entity didn't exist at fetch time (create operation, or

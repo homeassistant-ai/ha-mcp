@@ -59,7 +59,10 @@ async def _process_menu_flow_result(
             )
         except (HomeAssistantAPIError, TimeoutError):
             return info
-        return _form_info(step)
+        info = _form_info(step)
+        if info:
+            info["branch"] = menu_choice  # the menu was answered
+        return info
 
     if choices := menu_choices(flow_result):
         info["menu_options"] = choices
@@ -95,8 +98,8 @@ async def fetch_helper_flow_info(
 
     - FORM at top: ``{"schema": [...], "step_id": ..., "last_step": ...}``
     - MENU at top with ``menu_choice``: submits and returns the branch form
-      in the same shape (no ``menu_options`` since the caller already picked
-      a branch)
+      in the same shape plus ``branch`` (no ``menu_options`` since the caller
+      already picked a branch)
     - MENU at top without ``menu_choice``: ``{"menu_options": [...]}``
     - any failure or unparseable shape, including a ``menu_choice`` HA
       rejects: ``{}`` (callers branch on ``"schema" in info`` /

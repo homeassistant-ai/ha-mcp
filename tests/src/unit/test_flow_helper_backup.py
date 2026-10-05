@@ -8,6 +8,8 @@ not offer comes from Home Assistant's own forms, not a per-type list.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -154,6 +156,70 @@ def _creation_client(*replies: dict[str, Any], first: dict[str, Any]) -> Any:
 
 
 _CREATED = {"type": "create_entry", "result": {"entry_id": "new-entry"}}
+
+
+async def test_edit_whose_capture_the_component_cannot_serve_warns_the_caller(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The write goes ahead, and the response (not only the log) says that no
+    backup was taken and why."""
+    from ha_mcp.tools import auto_backup
+
+    async def send(client: Any, message: dict[str, Any]) -> Any:
+        if message["type"] == "ha_mcp_tools/helpers_list":
+            return {"covered_types": [], "helpers": []}  # meters not covered
+        raise AssertionError(message)
+
+    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=send))
+    settings = SimpleNamespace(
+        enable_auto_backup=True,
+        auto_backup_throttle_minutes=0,
+        auto_backup_retain_per_entity=5,
+        auto_backup_dir=str(tmp_path),
+    )
+    monkeypatch.setattr(auto_backup, "get_global_settings", lambda: settings)
+    client = SimpleNamespace()
+
+    @auto_backup.with_auto_backup(
+        domain="helper_utility_meter", id_param="helper_id", client=client
+    )
+    async def edit(helper_id: str) -> dict[str, Any]:
+        return {"success": True}
+
+    result = await edit(helper_id="meter-entry")
+
+    assert result["success"] is True
+    (warning,) = result["warnings"]
+    assert warning.startswith("No pre-write backup of helper_utility_meter:meter-entry")
+    assert "cannot authoritatively read utility_meter" in warning
+
+
+async def test_every_flow_helper_edit_runs_in_the_restore_critical_section(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard that keeps an edit and a restore of one entry apart is keyed
+    by domain family, not by the template type alone."""
+    from ha_mcp.tools import auto_backup
+
+    entered: list[str] = []
+
+    @asynccontextmanager
+    async def guard(entry_id: str) -> AsyncIterator[None]:
+        entered.append(entry_id)
+        yield
+
+    manager = SimpleNamespace(config_entry_write_guard=guard)
+    monkeypatch.setattr(auto_backup, "get_backup_manager", lambda c, s: manager)
+    async with auto_backup._template_write_context(
+        object(), SimpleNamespace(), "helper_utility_meter", "meter-entry"
+    ):
+        pass
+    async with auto_backup._template_write_context(
+        object(), SimpleNamespace(), "helper_utility_meter", "sensor.alias"
+    ):
+        pass  # an alias target resolves on its own path
+
+    assert entered == ["meter-entry"]
 
 
 async def test_recreation_answers_the_menu_from_the_snapshot() -> None:
