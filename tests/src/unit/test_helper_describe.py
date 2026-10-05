@@ -165,6 +165,7 @@ async def test_current_values_of_a_password_field_are_redacted(
 ) -> None:
     monkeypatch.setattr(mod, "redaction_enabled", lambda: True)
     client.get_config_entry.return_value = {"domain": "group"}
+    client.send_websocket_message.return_value = {"result": {"resources": {}}}
     client.start_options_flow.return_value = {
         "type": "form",
         "flow_id": "f1",

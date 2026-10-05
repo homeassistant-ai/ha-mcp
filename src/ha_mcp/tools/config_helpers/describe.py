@@ -149,6 +149,8 @@ async def _field_help(
     except Exception as err:  # noqa: BLE001
         logger.debug("describe: translations for %s failed: %s", handler, err)
         return {}
+    if not isinstance(result, dict):
+        return {}
     payload = result.get("result") or result
     resources = payload.get("resources") if isinstance(payload, dict) else None
     if not isinstance(resources, dict):
