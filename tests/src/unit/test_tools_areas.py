@@ -874,3 +874,15 @@ class TestClearableParamsThroughMcp:
         await tool.run({"kind": "area", "id": "kitchen", "temperature_entity_id": ""})
         sent = client.send_websocket_message.call_args.args[0]
         assert sent["temperature_entity_id"] is None
+
+    async def test_omitted_params_do_not_leak_the_sentinel_into_usage_logs(self, tool):
+        """log_tool_usage records the call's kwargs, and ha_report_issue returns
+        those entries as structured content, so the UNSET default must serialize."""
+        from ha_mcp.utils.usage_logger import get_recent_logs
+
+        tool, _ = tool
+        await tool.run({"kind": "area", "id": "kitchen", "name": "K2"})
+        entry = get_recent_logs(max_entries=1)[-1]
+        assert entry["tool_name"] == "ha_set_area_or_floor"
+        json.dumps(entry)
+        assert "floor_id" not in entry["parameters"]

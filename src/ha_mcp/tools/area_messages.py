@@ -9,19 +9,8 @@ from typing import Any
 from pydantic.fields import FieldInfo
 
 from ..errors import ErrorCode, create_error_response
+from .coercion import UNSET
 from .helpers import raise_tool_error
-
-
-class _Unset:
-    """Default for the clearable params: tells "omitted" apart from explicit null."""
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        return "UNSET"
-
-
-UNSET: Any = _Unset()
 
 
 def resolve_clearable(value: Any) -> str | None:
@@ -35,7 +24,7 @@ def resolve_clearable(value: Any) -> str | None:
         return None
     if value is None:
         return ""
-    return value
+    return str(value)
 
 
 _AREA_PARAMS = (

@@ -18,7 +18,6 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from ..utils.registry_update_lock import registry_update_lock
 from .area_messages import (
-    UNSET,
     build_area_create_message,
     build_area_update_message,
     build_floor_create_message,
@@ -27,7 +26,7 @@ from .area_messages import (
     validate_cross_kind_params,
 )
 from .auto_backup import with_auto_backup
-from .coercion import JSON_STRING_COERCION, parse_string_list_param
+from .coercion import JSON_STRING_COERCION, UNSET, parse_string_list_param
 from .component_registries import fetch_registries_via_component
 from .config_helpers.registry import validate_registry_ids
 from .helpers import (
