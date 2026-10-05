@@ -228,20 +228,19 @@ configuration:
     description: Maximální počet snímků uchovávaných na entitu (1–10000). Starší se
       postupně odstraňují. Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: Povolit akce s úplnými snapshoty HA
+    description: Umožnit AI asistentům spravovat úplné snapshoty Home Assistant prostřednictvím
+      ha_manage_backup a odpovídajících zálohovacích služeb a příkazů v ha_call_service.
+      Vypnutím zablokujete všechny akce se snapshoty, včetně jejich výpisu. Mazání
+      snapshotů je dostupné pouze přes ha_manage_backup a vyžaduje také Povolit mazání
+      snapshotů. Úpravy záloh a lidské akce na této stránce zůstávají dostupné.
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: Nastavit správu záloh jako jen pro čtení
+    description: Umožnit AI asistentům vypisovat, zobrazovat a porovnávat zálohy pro
+      úpravy a vypisovat úplné snapshoty HA, pokud jsou povoleny akce se snapshoty.
+      Blokuje ruční vytváření, obnovení (včetně obnovení úprav) a mazání záloh, včetně
+      odpovídajících zálohovacích služeb a příkazů v ha_call_service. Automatické
+      zálohy před úpravami pokračují. Lidské akce na této stránce zůstávají dostupné.
   enable_snapshot_delete:
     name: Povolit smazání snímků
     description: Povolit ha_manage_backup mazat úplné snímky HA, přičemž plánované,

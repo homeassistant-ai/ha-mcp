@@ -236,20 +236,21 @@ configuration:
     description: Maximaal aantal momentopnamen per entiteit (1–10000). Oudere worden
       verwijderd. Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: Volledige acties voor HA-snapshots toestaan
+    description: Staat AI-assistenten toe om volledige Home Assistant-snapshots te
+      beheren via ha_manage_backup en de equivalente back-upservices en -commando's
+      in ha_call_service. Als je dit uitschakelt, worden alle snapshotacties geblokkeerd,
+      inclusief het weergeven van lijsten. Het verwijderen van snapshots is alleen
+      beschikbaar via ha_manage_backup en vereist ook 'Allow snapshot deletion'. Back-ups
+      bewerken en handmatige acties op deze pagina blijven beschikbaar.
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: Beheer van back-ups alleen-lezen maken
+    description: Staat AI-assistenten toe om bewerkingsback-ups te vermelden, bekijken
+      en te vergelijken via diff, en volledige HA-snapshots te vermelden wanneer snapshotacties
+      zijn ingeschakeld. Blokkeert handmatige creatie, herstel (inclusief bewerkingsherstel)
+      en verwijdering van back-ups, inclusief de equivalente back-upservices en -commando's
+      in ha_call_service. Automatische back-ups vóór bewerkingen gaan door. Handmatige
+      acties op deze pagina blijven beschikbaar.
   enable_snapshot_delete:
     name: Momentopname verwijdering toestaan
     description: Sta ha_manage_backup toe om volledige HA-momentopnamen te verwijderen,

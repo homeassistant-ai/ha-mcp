@@ -242,20 +242,23 @@ configuration:
     description: Maksymalna liczba migawek przechowywanych na encję (1–10000). Starsze
       są usuwane. Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: Zezwalaj na działania na pełnych migawkach Home Assistant
+    description: Zezwalaj asystentom AI na zarządzanie pełnymi migawkami Home Assistant
+      za pomocą ha_manage_backup oraz odpowiednich usług tworzenia kopii zapasowych
+      i poleceń w ha_call_service. Wyłączenie tej opcji blokuje wszystkie działania
+      na migawkach, w tym ich listowanie. Usuwanie migawek jest dostępne wyłącznie
+      przez ha_manage_backup i wymaga również włączenia opcji Zezwalaj na usuwanie
+      migawek. Edycja kopii zapasowych oraz działania użytkowników na tej stronie
+      pozostają dostępne.
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: Ustaw zarządzanie kopiami zapasowymi jako tylko do odczytu
+    description: Zezwalaj asystentom AI na listowanie, przeglądanie i porównywanie
+      kopii zapasowych edycji oraz listowanie pełnych migawek Home Assistant, gdy
+      włączone są działania na migawkach. Blokuje ręczne tworzenie, przywracanie (w
+      tym przywracanie edycji) i usuwanie kopii zapasowych, w tym odpowiednie usługi
+      kopii zapasowych i polecenia w ha_call_service. Automatyczne kopie zapasowe
+      przed edycją są kontynuowane. Działania użytkowników na tej stronie pozostają
+      dostępne.
   enable_snapshot_delete:
     name: Zezwól na usuwanie migawek
     description: Zezwól ha_manage_backup na usuwanie pełnych migawek HA, jednocześnie

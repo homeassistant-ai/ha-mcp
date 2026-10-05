@@ -128,20 +128,23 @@ configuration:
     description: Nombre maximum d'instantanés conservés par entité (1–10000). Les
       plus anciens sont retirés. Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: Autoriser les actions d'instantané complet de Home Assistant
+    description: Permettre aux assistants IA de gérer les instantanés complets de
+      Home Assistant via ha_manage_backup ainsi que les services et commandes de sauvegarde
+      équivalents dans ha_call_service. Désactiver cette option bloque toutes les
+      actions d'instantané, y compris le listage. La suppression d'instantanés n'est
+      possible que via ha_manage_backup et nécessite également l'autorisation de suppression
+      d'instantanés. Les modifications de sauvegardes et les actions humaines sur
+      cette page restent disponibles.
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: Rendre la gestion des sauvegardes en lecture seule
+    description: Permettre aux assistants IA de lister, d'afficher et de comparer
+      les sauvegardes de modification, ainsi que de lister les instantanés complets
+      de Home Assistant lorsque les actions d'instantané sont activées. Bloque la
+      création, la restauration (y compris les restaurations de modification) et la
+      suppression manuelles de sauvegardes, ainsi que les services et commandes de
+      sauvegarde équivalents dans ha_call_service. Les sauvegardes automatiques avant
+      modification continuent. Les actions humaines sur cette page restent disponibles.
   enable_snapshot_delete:
     name: Autoriser la suppression d'instantanés
     description: Permet à ha_manage_backup de supprimer les instantanés HA complets,

@@ -83,6 +83,7 @@ from .const import (
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
     SERVER_CONFIG_SUBDIR,
+    SERVER_KEEPALIVE_SECONDS,
     SERVER_TOKEN_CLIENT_NAME,
     SERVER_USER_NAME,
     dist_for_channel,
@@ -1798,17 +1799,16 @@ class EmbeddedServerManager:
             lifespan="on",
             # HTTP-ONLY listener, so no WebSocket protocol is loaded. uvicorn
             # resolves its ``ws`` class EAGERLY in Config.load(), and
-            # "websockets-sansio" imports the SHARED websockets package —
-            # the unowned, tearable copy ha-mcp vendors its own copy to stay
-            # clear of (#2135/#2146). With that setting a torn shared install
-            # crashed this server at listener startup no matter what the
-            # client imports. "none" resolves to None and imports nothing;
-            # the MCP app serves Streamable HTTP and registers no WebSocket
-            # route. Pinned by tests/src/unit/test_vendored_websockets.py.
+            # "websockets-sansio" imports the SHARED websockets package — the
+            # unowned, tearable copy ha-mcp vendors its own to stay clear of
+            # (#2135/#2146); a torn shared install crashed this server at
+            # startup. "none" imports nothing; the MCP app serves Streamable
+            # HTTP only. Pinned by tests/src/unit/test_vendored_websockets.py.
             ws="none",
             # Leave Home Assistant's logging untouched — do not let uvicorn
             # reconfigure the root logger from this thread.
             log_config=None,
+            timeout_keep_alive=SERVER_KEEPALIVE_SECONDS,
         )
         uv_server = uvicorn.Server(config)
 

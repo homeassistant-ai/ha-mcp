@@ -124,20 +124,22 @@ configuration:
     description: Hər obyekt üçün saxlanılan anlıq nüsxələrin maksimum sayı (1–10000).
       Köhnələri növbə ilə silinir. Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: Tam HA arxiv (snapshot) əməliyyatlarına icazə ver
+    description: AI köməkçilərinə ha_manage_backup və ha_call_service daxilindəki
+      ekvivalent arxiv xidmətləri və əmrləri vasitəsilə tam Home Assistant arxivlərini
+      idarə etməyə icazə verin. Bunu söndürmək siyahıyaalma daxil olmaqla bütün arxiv
+      əməliyyatlarını bloklayır. Arxivin silinməsi yalnız ha_manage_backup vasitəsilə
+      mümkündür və həmçinin Arxivin silinməsinə icazə verilməsini tələb edir. Bu səhifədəki
+      arxiv redaktələri və insan tərəfindən edilən əməliyyatlar əlçatan olaraq qalır.
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: Arxiv idarəetməsini yalnız oxunaqlı edin
+    description: AI köməkçilərinə arxiv redaktələrini siyahıya almağa, baxmağa və
+      fərqləri yoxlamağa, həmçinin arxiv əməliyyatları aktiv olduqda tam HA arxivlərini
+      siyahıya almağa icazə verin. Əl ilə arxiv yaratma, bərpa etmə (redaktə bərpaları
+      daxil olmaqla) və silmə əməliyyatlarını, o cümlədən ha_call_service daxilindəki
+      ekvivalent arxiv xidmətləri və əmrlərini bloklayın. Avtomatik redaktədən əvvəlki
+      arxivlər davam edir. Bu səhifədəki insan tərəfindən edilən əməliyyatlar əlçatan
+      olaraq qalır.
   enable_snapshot_delete:
     name: Anlıq nüsxələrin silinməsinə icazə ver
     description: Planlaşdırılmış, ən yeni və kifayət qədər köhnəlməmiş anlıq nüsxələrin

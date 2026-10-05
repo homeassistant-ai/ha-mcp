@@ -129,20 +129,22 @@ configuration:
     description: Numero massimo di snapshot conservati per entità (1–10000). I più
       vecchi vengono eliminati a rotazione. Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: Consenti azioni sui backup completi di HA
+    description: Consente agli assistenti IA di gestire i backup completi di Home
+      Assistant tramite ha_manage_backup e i servizi e comandi di backup equivalenti
+      in ha_call_service. Disattivando questa opzione vengono bloccate tutte le azioni
+      sui backup, inclusa la visualizzazione dell'elenco. L'eliminazione dei backup
+      è disponibile solo tramite ha_manage_backup e richiede anche l'impostazione
+      Consenti eliminazione backup. La modifica dei backup e le azioni umane in questa
+      pagina rimangono disponibili.
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: Rendi la gestione dei backup di sola lettura
+    description: Consente agli assistenti IA di elencare, visualizzare ed eseguire
+      il diff dei backup di modifica, nonché di elencare i backup completi di HA quando
+      le azioni sui backup sono abilitate. Blocca la creazione, il ripristino (inclusi
+      i ripristini di modifica) e l'eliminazione manuale dei backup, inclusi i servizi
+      e comandi di backup equivalenti in ha_call_service. I backup automatici pre-modifica
+      continuano. Le azioni umane in questa pagina rimangono disponibili.
   enable_snapshot_delete:
     name: Consenti l'eliminazione degli snapshot
     description: Consente a ha_manage_backup di eliminare gli snapshot completi di

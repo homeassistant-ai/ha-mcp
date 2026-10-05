@@ -114,20 +114,20 @@ configuration:
     description: Maksimumaj momentfotoj konservitaj po ento (1–10000). Pli malnovaj
       elrotacias. Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: Permesi plenajn akompanajn agojn de HA-momentfotoj
+    description: Permesi al AI-asistantoj administri plenajn momentfotojn de Home
+      Assistant per ha_manage_backup kaj la ekvivalentaj rezervaj servoj kaj komandoj
+      en ha_call_service. Malŝalti ĉi tion blokas ĉiun momentfotan agon, inkluzive
+      de listigado. Forigo de momentfotoj nur disponeblas per ha_manage_backup kaj
+      ankaŭ postulas Permesi forigon de momentfotoj. Redakti rezervojn kaj homajn
+      agojn en ĉi tiu paĝo restas disponeblaj.
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: Igi rezervadministradon nur-legebla
+    description: Permesi al AI-asistantoj listigi, rigardi kaj kompari redaktajn rezervojn,
+      kaj listigi plenajn HA-momentfotojn kiam momentfotaj agoj estas ebligitaj. Bloki
+      manan kreadon de rezervoj, restarigon (inkluzive de redaktaj restarigoj), kaj
+      forigon, inkluzive de la ekvivalentaj rezervaj servoj kaj komandoj en ha_call_service.
+      Aŭtomataj antaŭredaktaj rezervoj daŭras. Homaj agoj en ĉi tiu paĝo restas disponeblaj.
   enable_snapshot_delete:
     name: Permesi forigon de momentfotoj
     description: Permesi al ha_manage_backup forigi plenajn HA-momentfotojn, dum konservante

@@ -222,20 +222,21 @@ configuration:
     description: Maximalt antal ögonblicksbilder som behålls per entitet (1–10000).
       Äldre roteras ut. Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: Tillåt fullständiga HA-ögonblicksbildsåtgärder
+    description: Tillåt AI-assistenter att hantera fullständiga Home Assistant-ögonblicksbilder
+      genom ha_manage_backup och motsvarande säkerhetskopieringstjänster och kommandon
+      i ha_call_service. Att stänga av detta blockerar alla ögonblicksbildsåtgärder,
+      inklusive listning. Borttagning av ögonblicksbilder är endast tillgänglig via
+      ha_manage_backup och kräver dessutom Tillåt borttagning av ögonblicksbilder.
+      Redigera säkerhetskopior och mänskliga åtgärder på den här sidan förblir tillgängliga.
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: Gör säkerhetskopieringshanteringen skrivskyddad
+    description: Tillåt AI-assistenter att lista, visa och jämföra redigeringssäkerhetskopior,
+      samt lista fullständiga HA-ögonblicksbilder när ögonblicksbildsåtgärder är aktiverade.
+      Blockera manuell skapande, återställning (inklusive redigeringsåterställningar)
+      och borttagning av säkerhetskopior, inklusive motsvarande säkerhetskopieringstjänster
+      och kommandon i ha_call_service. Automatiska säkerhetskopior före redigering
+      fortsätter. Mänskliga åtgärder på den här sidan förblir tillgängliga.
   enable_snapshot_delete:
     name: Tillåt borttagning av ögonblicksbilder
     description: Tillåt ha_manage_backup att ta bort fullständiga HA-ögonblicksbilder,

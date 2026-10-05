@@ -18,7 +18,6 @@ from ..tools.component_helper_collections import (
 from ..tools.config_helpers.schemas import (
     _SIMPLE_CONFIG_KEYS_DESCRIPTION,
     SIMPLE_HELPER_TYPES,
-    supported_core_fields,
 )
 
 if TYPE_CHECKING:
@@ -80,7 +79,7 @@ def render_core_keys(schemas: dict[str, Any]) -> str:
     for helper_type in _ORDER:
         fields = [
             f
-            for f in supported_core_fields(helper_type, schemas[helper_type]["create"])
+            for f in schemas[helper_type]["create"]
             if f.get("name") not in ("name", "icon")
         ]
         rendered = [_render_field(f) for f in fields if f.get("name") not in _WEEKDAYS]

@@ -241,20 +241,22 @@ configuration:
     description: Максимальное число снимков для одной сущности (1–10000). Старые удаляются
       по ротации. Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: Разрешить действия с полными бэкапами HA
+    description: Разрешить ИИ-ассистентам управлять полными бэкапами Home Assistant
+      через ha_manage_backup, а также соответствующие службы резервного копирования
+      и команды в ha_call_service. Отключение этой настройки блокирует любые действия
+      со снапшотами, включая их вывод списком. Удаление снапшотов доступно только
+      через ha_manage_backup и также требует включения параметра разрешения удаления
+      бэкапов. Редактирование бэкапов и действия пользователя на этой странице остаются
+      доступными.
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: Сделать управление бэкапами доступным только для чтения
+    description: Разрешить ИИ-ассистентам получать список, просматривать и сравнивать
+      бэкапы редактирования, а также получать список полных бэкапов HA при включенных
+      действиях со снапшотами. Блокирует создание ручных бэкапов, восстановление (включая
+      восстановление из бэкапов редактирования) и удаление, включая эквивалентные
+      службы бэкапов и команды в ha_call_service. Автоматические бэкапы перед редактированием
+      продолжают создаваться. Действия пользователя на этой странице остаются доступными.
   enable_snapshot_delete:
     name: Разрешить удаление снимков
     description: Разрешает ha_manage_backup удалять полные снимки HA; запланированные,

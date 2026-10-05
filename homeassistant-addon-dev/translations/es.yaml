@@ -250,20 +250,23 @@ configuration:
     description: Número máximo de instantáneas conservadas por entidad (1–10000).
       Las más antiguas se rotan. Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: Permitir acciones de instantáneas completas de HA
+    description: Permitir a los asistentes de IA gestionar instantáneas completas
+      de Home Assistant mediante ha_manage_backup y los servicios y comandos de copia
+      de seguridad equivalentes en ha_call_service. Desactivar esto bloquea todas
+      las acciones de instantáneas, incluida su lista. La eliminación de instantáneas
+      solo está disponible a través de ha_manage_backup y también requiere Permitir
+      eliminación de instantáneas. Las copias de seguridad de edición y las acciones
+      humanas en esta página siguen estando disponibles.
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: Hacer que la gestión de copias de seguridad sea de solo lectura
+    description: Permitir a los asistentes de IA listar, ver y comparar copias de
+      seguridad de edición, y listar instantáneas completas de HA cuando las acciones
+      de instantáneas estén habilitadas. Bloquea la creación, restauración (incluidas
+      las restauraciones de edición) y eliminación manuales de copias de seguridad,
+      incluidos los servicios y comandos de copia de seguridad equivalentes en ha_call_service.
+      Las copias de seguridad automáticas previas a la edición continúan. Las acciones
+      humanas en esta página siguen estando disponibles.
   enable_snapshot_delete:
     name: Permitir la eliminación de instantáneas
     description: Permite que ha_manage_backup elimine instantáneas completas de HA,

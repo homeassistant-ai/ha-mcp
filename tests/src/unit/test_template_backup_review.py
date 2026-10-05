@@ -80,7 +80,9 @@ async def test_degraded_safety_capture_blocks_restore(manager, monkeypatch):
     monkeypatch.setattr(bm, "_ws_send", send)
     restore = AsyncMock(return_value={"success": True})
     manager.register(
-        bm.DomainHandler("helper_template", bm._fetch_template_helper, restore)
+        bm.DomainHandler(
+            "helper_template", bm._make_flow_helper_handler("template").fetch, restore
+        )
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
         await manager.restore_snapshot(source.name)

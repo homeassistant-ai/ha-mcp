@@ -49,11 +49,11 @@ def entry_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
             return [{**entity, "config_entry_id": entry["entry_id"]}]
         assert message["type"] == "ha_mcp_tools/helpers_list"
         return {
-            "covered_types": ["template"],
+            "covered_types": [entry["domain"]],
             "helpers": [
                 {
                     "kind": "flow",
-                    "helper_type": "template",
+                    "helper_type": entry["domain"],
                     "entry_id": entry["entry_id"],
                     "entity_id": entity["entity_id"],
                     "options": deepcopy(options),
@@ -65,9 +65,10 @@ def entry_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
         return {
             "type": "form",
             "flow_id": "edit-flow",
-            "step_id": options["template_type"],
+            "step_id": options.get("template_type", "init"),
             "data_schema": [
-                {"name": "state", "required": True, "selector": {"template": {}}}
+                {"name": "state", "required": True, "selector": {"template": {}}},
+                {"name": "source", "required": False, "selector": {"entity": {}}},
             ],
         }
 
@@ -147,7 +148,34 @@ async def test_generic_template_mutation_captures_options_before_write(
     }
 
 
-async def test_explicit_template_entry_id_is_rejected_without_capture(
+@pytest.mark.parametrize("operation", ["options", "delete"])
+async def test_generic_mutation_of_any_flow_helper_captures_its_options(
+    entry_backup: SimpleNamespace, operation: str
+) -> None:
+    """The routing is by the entry's domain, not a template-only rule (#2632)."""
+    entry_backup.entry["domain"] = "utility_meter"
+    entry_backup.options.clear()
+    entry_backup.options.update(
+        {"name": "Energy", "source": "sensor.power", "cycle": "daily"}
+    )
+    original = deepcopy(entry_backup.options)
+    if operation == "options":
+        result = await entry_backup.tools.ha_set_integration(
+            entry_id="template-entry", config={"source": "sensor.other"}
+        )
+    else:
+        result = await entry_backup.tools.ha_remove_helpers_integrations(
+            target="template-entry", confirm=True
+        )
+
+    assert result["success"] is True
+    (mutation,) = entry_backup.mutations
+    (snapshot,) = mutation["snapshots"]
+    assert snapshot["domain"] == "helper_utility_meter"
+    assert snapshot["config"]["options"] == original
+
+
+async def test_explicit_flow_entry_id_is_rejected_without_capture(
     entry_backup: SimpleNamespace,
 ) -> None:
     with pytest.raises(ToolError, match="ENTITY_NOT_FOUND"):
@@ -262,3 +290,30 @@ async def test_generic_template_mutation_preserves_best_effort_capture_policy(
     assert entry_backup.client.get_config_entry.await_count == (
         int(operation == "options") + int(capture_state == "lookup_failed")
     )
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+async def test_flow_helper_removal_captures_once_and_only_when_confirmed(
+    entry_backup: SimpleNamespace, confirm: bool
+) -> None:
+    """Every flow helper, not only template, is captured by the inner backup."""
+    entry_backup.entry["domain"] = "utility_meter"
+
+    async def registry_read(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == "config/entity_registry/get":
+            return {"success": True, "result": {"config_entry_id": "template-entry"}}
+        return {"success": True, "result": []}
+
+    entry_backup.client.send_websocket_message.side_effect = registry_read
+    remove = entry_backup.tools.ha_remove_helpers_integrations
+    if not confirm:
+        with pytest.raises(ToolError, match="not confirmed"):
+            await remove(target="sensor.example", helper_type="utility_meter")
+        assert not list(entry_backup.manager.backup_dir.glob("*.yaml"))
+        return
+    result = await remove(
+        target="sensor.example", helper_type="utility_meter", confirm=True
+    )
+    assert result["success"] is True
+    snapshots = entry_backup.mutations[0]["snapshots"]
+    assert [s["domain"] for s in snapshots] == ["helper_utility_meter"]

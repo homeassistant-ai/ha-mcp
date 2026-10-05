@@ -47,6 +47,10 @@ class Predicate(BaseModel):
     def _validate_path(cls, v: str) -> str:
         if not v:
             raise ValueError("path must be non-empty")
+        # ``*~`` yields key strings, and a named or wildcard segment after it
+        # dead-ends on every string, so such a rule could never match.
+        if "*~" in v.split(".")[:-1]:
+            raise ValueError("'*~' must be the last segment of a path")
         return v
 
     @field_validator("value")

@@ -114,20 +114,13 @@ configuration:
     name: 每实体保留数
     description: 每个实体保留的最大快照数（1–10000）。较旧的会轮转出去。 Range 1–10000.
   enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    name: 允许完整的 Home Assistant 快照操作
+    description: 允许 AI 助手通过 ha_manage_backup 以及 ha_call_service 中的等效备份服务和命令来管理完整的
+      Home Assistant 快照。关闭此项将阻止所有快照操作，包括列出快照。快照删除仅可通过 ha_manage_backup 进行，并且还需要启用“允许快照删除”。本页面中的编辑备份和人工操作将继续可用。
   backup_read_only:
-    name: Make backup management read-only
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    name: 将备份管理设为只读
+    description: 允许 AI 助手列出、查看和对比编辑备份，并在启用快照操作时列出完整的 Home Assistant 快照。阻止手动创建、恢复（包括编辑恢复）和删除备份，包括
+      ha_call_service 中的等效备份服务和命令。自动编辑前备份将继续进行。本页面中的人工操作将继续可用。
   enable_snapshot_delete:
     name: 允许删除快照
     description: 允许 ha_manage_backup 删除完整的 HA 快照，同时保护计划的、最新的和过新的快照。
