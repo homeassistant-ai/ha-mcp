@@ -42,7 +42,7 @@
   "src/ha_mcp/tools/tools_system.py": 1997,
   "src/ha_mcp/tools/tools_updates.py": 1115,
   "tests/addon/test_webhook_proxy.py": 7378,
-  "tests/haos_image_build/build_image.py": 2862,
+  "tests/haos_image_build/build_image.py": 2859,
   "tests/src/e2e/error_handling/test_network_errors.py": 1150,
   "tests/src/e2e/tools/test_create_custom_tool.py": 2037,
   "tests/src/e2e/tools/test_search_entities.py": 2387,
