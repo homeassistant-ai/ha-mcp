@@ -22,8 +22,10 @@ no-tools E2E lanes. `strict_bps` (default on, as agents meet it) sets strict
 best-practices mode for the standalone and embedded servers. `ha_image`
 overrides the Docker image (default: the branch's pinned E2E image). `minutes`
 defaults to and is capped at 330. A HAOS run builds the HAOS image the first
-time its inputs change (the image build files, the test config or the
-component) and saves it to the fork's cache for later runs.
+time the image build files, the test config or the proxy app change, and saves
+it to the fork's cache for later runs. A branch whose component differs from
+every cached image reuses one with the same base and applies its own component
+at boot with a Core restart, the way a pushed commit is applied.
 
 Run it **from your fork only**. The job refuses to run in
 `homeassistant-ai/ha-mcp`, whose runners are shared CI capacity.
