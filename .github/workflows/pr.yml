@@ -566,6 +566,15 @@ jobs:
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
 
+    - name: Run BAT runner tests
+      # The tests of the UAT/BAT tooling need no Docker and no model.
+      # test_stories.py runs the stories themselves against a live Home
+      # Assistant and an AI agent, so it stays out.
+      run: >-
+        uv run pytest tests/uat/
+        --ignore=tests/uat/stories/test_stories.py
+        -n auto --tb=short -v
+
     - name: Check unit tests left no local state
       # The runner's home starts without ~/.ha-mcp. A unit test that writes
       # there or leaves a settings sidecar running bypassed the isolation in
