@@ -36,42 +36,6 @@ const ADVANCED_FIELD_META = {
   dev_tools_security_policy_access: { label: "Dev tools security policy access", help: "⚠ DANGER: while developer mode is on, lets the developer tools rewrite tool security policies, add or remove per-tool approval gates, and approve or deny pending approvals on your behalf — an AI agent can accept its own gated calls. For policy testing only. Takes effect without a restart." },
 };
 
-// Fields that require an MCP-host restart to take effect when changed
-// from this surface. Used to surface the restart-required banner on save.
-// REST client construction (timeout / verify_ssl / max_retries) is cached
-// once at startup so those need restart even though the underlying call
-// is per-request.
-const ADVANCED_RESTART_REQUIRED = new Set([
-  "timeout", "max_retries", "verify_ssl",
-  "ha_tool_concurrency",
-  "enabled_tool_modules", "enable_websocket",
-  "log_level", "debug",
-  "http_transport_diagnostics", "http_json_response",
-  "mcp_server_name", "mcp_server_version", "environment",
-  // fuzzy_threshold is read once by SmartSearchTools at the
-  // lazy-init singleton (tools/smart_search/) — changes
-  // need restart to rebuild the searcher.
-  "fuzzy_threshold",
-  // The three smart-search time budgets are read once at import by
-  // SmartSearchTools' _config module (singleton), so a change needs a
-  // restart. dashboard_screenshot_engine_url is intentionally absent —
-  // it is resolved live per capture, so it takes effect immediately.
-  "automation_config_time_budget", "script_config_time_budget",
-  "scene_config_time_budget",
-  // The Attempt-C per-request timeout and batch size (#1784) share the
-  // budgets' import-time consumption, so they need a restart too.
-  "individual_config_timeout", "individual_fetch_batch_size",
-  "code_mode_max_duration", "code_mode_max_memory",
-  "code_mode_max_recursion", "code_mode_max_invocations",
-  "code_mode_saved_tools_path",
-  // The sidecar binds its port once at spawn (run_main), so changing the
-  // pin needs a restart to respawn the sidecar on the new port.
-  "sidecar_pin_port",
-  // Dev-mode tools register at startup; toggling needs a restart to
-  // (un)register them.
-  "enable_dev_mode",
-]);
-
 let _advancedFields = [];
 let _advancedDirty = {};  // {field: newValue} for unsaved edits
 
@@ -372,7 +336,7 @@ async function saveAdvancedSettings() {
     // the toast itself (the restartNotice banner also appears) so the
     // requirement is never silent.
     const needsRestart = restartFields.some(
-      f => ADVANCED_RESTART_REQUIRED.has(f)
+      f => _advancedFields.some(x => x.field === f && x.restart_required)
     );
     showToast(needsRestart
       ? t('status.saved_restart', {}, 'Saved. Restart required.')

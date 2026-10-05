@@ -3,6 +3,7 @@ component-routed writes, and the component-aware catalog (issue #2479)."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from copy import deepcopy
 from typing import Annotated, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -91,7 +92,7 @@ class _Captured:
 
 
 @pytest.fixture
-def capture_create():
+def capture_create() -> Iterator[_Captured]:
     captured = _Captured()
     with (
         patch.object(tch, "_execute_create_simple_helper", captured),
@@ -112,7 +113,9 @@ def _fields(captured: _Captured, call: int = 0) -> dict[str, Any]:
     return captured.args[call][-1]  # type: ignore[no-any-return]
 
 
-async def test_flat_and_config_fields_reach_create_identically(capture_create) -> None:
+async def test_flat_and_config_fields_reach_create_identically(
+    capture_create: _Captured,
+) -> None:
     mcp, _ = await _registered_tool()
     base = {"helper_type": "input_number", "name": "Target", "action": "create"}
     await _call(mcp, **base, min_value=1, max_value="9", step=2)
@@ -121,7 +124,7 @@ async def test_flat_and_config_fields_reach_create_identically(capture_create) -
     assert _fields(capture_create, 1) == {"min": 1, "max": 9, "step": 2}
 
 
-async def test_config_accepts_core_names_and_name(capture_create) -> None:
+async def test_config_accepts_core_names_and_name(capture_create: _Captured) -> None:
     mcp, _ = await _registered_tool()
     await _call(
         mcp,
@@ -134,14 +137,16 @@ async def test_config_accepts_core_names_and_name(capture_create) -> None:
     assert capture_create.args[0][2:4] == ("Laps", "mdi:run")
 
 
-async def test_counter_range_params_use_counters_core_names(capture_create) -> None:
+async def test_counter_range_params_use_counters_core_names(
+    capture_create: _Captured,
+) -> None:
     """Core's counter calls the range minimum/maximum, not min/max."""
     mcp, _ = await _registered_tool()
     await _call(mcp, helper_type="counter", name="C", min_value=0, max_value=5)
     assert _fields(capture_create) == {"minimum": 0, "maximum": 5}
 
 
-async def test_core_value_types_pass_through(capture_create) -> None:
+async def test_core_value_types_pass_through(capture_create: _Captured) -> None:
     """Core takes seconds for a timer and a fractional number initial."""
     mcp, _ = await _registered_tool()
     base = {"action": "create", "name": "T"}
@@ -155,7 +160,7 @@ async def test_core_value_types_pass_through(capture_create) -> None:
 
 
 async def test_unknown_config_keys_reach_core_for_its_suggestion(
-    capture_create,
+    capture_create: _Captured,
 ) -> None:
     """Core rejects a key its schema lacks and names the closest one, so the
     tool sends it rather than replacing that with its own generic error."""
@@ -169,7 +174,7 @@ async def test_unknown_config_keys_reach_core_for_its_suggestion(
     [("input_boolean", "type"), ("input_number", "input_number_id"), ("tag", "id")],
 )
 async def test_config_cannot_choose_the_command_or_the_item(
-    capture_create, helper_type: str, key: str
+    capture_create: _Captured, helper_type: str, key: str
 ) -> None:
     """``type`` and the item ids address the WebSocket request; a config key
     with that name would send another command or write another item."""
@@ -203,7 +208,7 @@ async def test_websocket_messages_keep_their_command_and_target() -> None:
 
 
 async def test_one_field_passed_twice_with_different_values_is_rejected(
-    capture_create,
+    capture_create: _Captured,
 ) -> None:
     mcp, _ = await _registered_tool()
     base = {"helper_type": "input_number", "name": "T", "action": "create"}
@@ -533,7 +538,9 @@ async def test_empty_category_clears_via_the_component() -> None:
     assert write.call_args.kwargs["registry"] == {"category": ""}
 
 
-async def test_blank_clears_and_quote_only_is_rejected(capture_create) -> None:
+async def test_blank_clears_and_quote_only_is_rejected(
+    capture_create: _Captured,
+) -> None:
     mcp, _ = await _registered_tool()
     base = {"helper_type": "input_boolean", "name": "B", "action": "create"}
     await _call(mcp, **base, area_id="  ", icon=" ", category="")
@@ -679,7 +686,7 @@ async def test_write_falls_back_to_websocket_when_component_unavailable() -> Non
 
 class TestCatalogTransform:
     @pytest.fixture
-    def available(self, monkeypatch):
+    def available(self, monkeypatch: pytest.MonkeyPatch) -> None:
         caps = ComponentCaps(1, "2.2.2", frozenset({"helper_schemas", "helper_item",
                                                     "helper_write"}), {})  # fmt: skip
         monkeypatch.setattr(
@@ -692,7 +699,7 @@ class TestCatalogTransform:
         )
 
     async def test_registration_advertises_core_fields_and_keeps_wait(
-        self, available
+        self, available: None
     ) -> None:
         # The helper tools' registration installs the transform.
         _, tool = await _registered_tool()
@@ -705,7 +712,9 @@ class TestCatalogTransform:
             "step (float, default 1), mode (box|slider)." in description
         )
 
-    async def test_static_contract_without_component(self, monkeypatch):
+    async def test_static_contract_without_component(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from ha_mcp.transforms.component_helpers import ComponentHelperSchemaTransform
 
         monkeypatch.setattr(

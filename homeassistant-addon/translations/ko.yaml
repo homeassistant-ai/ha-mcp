@@ -3,6 +3,16 @@
 # src/ha_mcp/settings_ui/locales/ko.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: TLS 인증서 검증
+    description: Home Assistant 서버의 TLS 인증서를 검증합니다. 앱(애드온)은 Supervisor 프록시를 통해 연결하므로
+      보통 아무 영향이 없으며 켜 두는 것이 좋습니다. 자체 서명 인증서나 호스트 이름이 일치하지 않는 공개 HTTPS 호스트 이름으로 HA에
+      접속하도록 앱(애드온)을 다시 구성한 경우에만 끄세요. 끄면 전송 구간 보안이 약해지므로, 반드시 필요한 경우가 아니면 켜 두세요. 적용하려면
+      다시 시작해야 합니다.
+  ha_tool_concurrency:
+    name: Home Assistant 도구 동시성
+    description: 모든 세션에 걸친 외부 Home Assistant 도구 호출에 대한 선택적 제한입니다. 내부 REST, WebSocket
+      및 도구별 팬아웃 동시성은 변경되지 않습니다. 0은 무제한 동작을 유지합니다. 용량을 기다리는 호출은 60초 후에 실패합니다.
   backup_hint:
     name: HA 전체 스냅숏 권유 강도(LLM 대상)
     description: '위험한 작업(예: 기기 대량 삭제) 전에 Home Assistant 전체
@@ -17,11 +27,6 @@ configuration:
       자동화·스크립트·헬퍼 등을 편집할 때마다 자동으로 스냅숏을
 
       남기려면 아래의 **편집 자동 백업 사용** 토글을 쓰세요.'
-  secret_path:
-    name: 비밀 경로 재정의
-    description: 'MCP 서버에 사용할 사용자 지정 HTTP 경로입니다(선택). 자동 생성된 안전한 경로를 쓰려면 비워 두세요.
-
-      '
   enable_tool_search:
     name: 도구 검색 사용
     description: '전체 도구 카탈로그 대신 검색 기반 탐색을 사용합니다. 대기 상태 컨텍스트를 약 90% 줄여 약 5K 토큰 수준으로
@@ -76,21 +81,6 @@ configuration:
       모범 사례 스킬을 읽은 뒤 거기서 받은 확인 키를 다시 전달하라는 오류를 반환합니다. 또한 켜져 있는 동안 ha_get_skill_guide
       도구는 활성 상태로 잠깁니다. 확인 키를 발급하는 유일한 도구이기 때문입니다. 위의 "쓰기 시 모범 사례 스킬 첨부" 옵션의 하위 항목이며,
       상위 옵션이 꺼져 있으면 아무 효과가 없습니다. 적용하려면 다시 시작해야 합니다.
-  ha_tool_concurrency:
-    name: Home Assistant 도구 동시성
-    description: 모든 세션에 걸친 외부 Home Assistant 도구 호출에 대한 선택적 제한입니다. 내부 REST, WebSocket
-      및 도구별 팬아웃 동시성은 변경되지 않습니다. 0은 무제한 동작을 유지합니다. 용량을 기다리는 호출은 60초 후에 실패합니다.
-  disabled_tools:
-    name: 비활성화할 도구(쉼표로 구분)
-    description: '여기에 나열한 도구는 강제로 꺼지고 웹 설정 UI(도구 탭)에서 잠깁니다. 이 옵션을 먼저 해제하지 않으면 거기서
-      다시 켤 수 없습니다. 소수의 필수 도구(ha_search, ha_get_overview, ha_get_state, ha_report_issue,
-      ha_manage_backup)는 비활성화할 수 없으며 여기에 적어도 계속 동작합니다. ha_get_skill_guide는 엄격 모범 사례
-      모드(enable_strict_mandatory_bps)가 꺼져 있을 때만 비활성화할 수 있습니다. 도구 이름을 쉼표로 구분해 입력하세요(예:
-      ha_call_event,ha_eval_template).'
-  pinned_tools:
-    name: 고정할 도구(쉼표로 구분)
-    description: 여기에 나열한 도구는 고정 상태로 잠깁니다. 도구 탭 맨 위에 표시되며, 이 옵션을 먼저 해제하지 않으면 웹 설정 UI에서
-      고정을 해제할 수 없습니다. 도구 검색과 함께 쓰면 유용합니다. 도구 이름을 쉼표로 구분해 입력하세요.
   enable_auto_backup:
     name: 편집 자동 백업 사용
     description: 래핑된 쓰기·파괴적 MCP 도구 호출(자동화, 스크립트, 장면, 헬퍼, 대시보드, 대시보드 리소스, 라벨, 카테고리,
@@ -102,6 +92,14 @@ configuration:
       ha_write_file, ha_delete_file, ha_config_set_yaml은 스냅숏을 전제 조건으로 취급하므로, 이 옵션이
       꺼져 있으면 해당 도구를 통한 쓰기가 거부되고 스냅숏 생성이 실패해도 쓰기가 차단됩니다. 기본값은 켜짐이며, 체크를 해제하면 최선 노력
       스냅숏을 포기하는 동시에 파일 도구와 원시 YAML 도구도 사용할 수 없게 됩니다. 적용하려면 다시 시작해야 합니다.
+  auto_backup_throttle_minutes:
+    name: 자동 백업 제한 간격(분)
+    description: 엔티티별 제한 간격입니다. 0(기본값)은 래핑된 쓰기마다 스냅숏을 남깁니다. N>0은 엔티티당 N분에 최대 한 번만
+      남깁니다. 범위 0~1440.
+  auto_backup_retain_per_entity:
+    name: 자동 백업 보관 개수(엔티티당)
+    description: 엔티티당 보관하는 최대 스냅숏 수입니다. 이 상한을 넘는 오래된 스냅숏은 새로 저장할 때마다 밀려납니다. 기본값 100,
+      범위 1~10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -119,14 +117,6 @@ configuration:
       equivalent backup services and commands in ha_call_service. Automatic pre-edit
       backups continue, and human actions in the web Settings UI remain available.
       Off by default; requires restart in the app.
-  auto_backup_throttle_minutes:
-    name: 자동 백업 제한 간격(분)
-    description: 엔티티별 제한 간격입니다. 0(기본값)은 래핑된 쓰기마다 스냅숏을 남깁니다. N>0은 엔티티당 N분에 최대 한 번만
-      남깁니다. 범위 0~1440.
-  auto_backup_retain_per_entity:
-    name: 자동 백업 보관 개수(엔티티당)
-    description: 엔티티당 보관하는 최대 스냅숏 수입니다. 이 상한을 넘는 오래된 스냅숏은 새로 저장할 때마다 밀려납니다. 기본값 100,
-      범위 1~10000.
   enable_snapshot_delete:
     name: 스냅숏 삭제 허용
     description: ha_manage_backup이 HA 전체 스냅숏 tarball을 삭제할 수 있게 합니다(scope='snapshot',
@@ -136,9 +126,19 @@ configuration:
     name: 삭제 가능한 최소 스냅숏 보관 기간(일)
     description: 스냅숏은 최소 이 기간이 지나야 삭제할 수 있습니다. 범위 0~365이며, 0이면 이 하한이 해제됩니다(최신 스냅숏과
       예약 백업 보호는 그대로 적용됩니다). 기본값 7.
-  verify_ssl:
-    name: TLS 인증서 검증
-    description: Home Assistant 서버의 TLS 인증서를 검증합니다. 앱(애드온)은 Supervisor 프록시를 통해 연결하므로
-      보통 아무 영향이 없으며 켜 두는 것이 좋습니다. 자체 서명 인증서나 호스트 이름이 일치하지 않는 공개 HTTPS 호스트 이름으로 HA에
-      접속하도록 앱(애드온)을 다시 구성한 경우에만 끄세요. 끄면 전송 구간 보안이 약해지므로, 반드시 필요한 경우가 아니면 켜 두세요. 적용하려면
-      다시 시작해야 합니다.
+  disabled_tools:
+    name: 비활성화할 도구(쉼표로 구분)
+    description: '여기에 나열한 도구는 강제로 꺼지고 웹 설정 UI(도구 탭)에서 잠깁니다. 이 옵션을 먼저 해제하지 않으면 거기서
+      다시 켤 수 없습니다. 소수의 필수 도구(ha_search, ha_get_overview, ha_get_state, ha_report_issue,
+      ha_manage_backup)는 비활성화할 수 없으며 여기에 적어도 계속 동작합니다. ha_get_skill_guide는 엄격 모범 사례
+      모드(enable_strict_mandatory_bps)가 꺼져 있을 때만 비활성화할 수 있습니다. 도구 이름을 쉼표로 구분해 입력하세요(예:
+      ha_call_event,ha_eval_template).'
+  pinned_tools:
+    name: 고정할 도구(쉼표로 구분)
+    description: 여기에 나열한 도구는 고정 상태로 잠깁니다. 도구 탭 맨 위에 표시되며, 이 옵션을 먼저 해제하지 않으면 웹 설정 UI에서
+      고정을 해제할 수 없습니다. 도구 검색과 함께 쓰면 유용합니다. 도구 이름을 쉼표로 구분해 입력하세요.
+  secret_path:
+    name: 비밀 경로 재정의
+    description: 'MCP 서버에 사용할 사용자 지정 HTTP 경로입니다(선택). 자동 생성된 안전한 경로를 쓰려면 비워 두세요.
+
+      '

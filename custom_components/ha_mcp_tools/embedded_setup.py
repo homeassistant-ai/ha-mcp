@@ -776,9 +776,9 @@ async def _async_fetch_shipped_component_version(
     """Return the component version shipped at server release ``vX.Y.Z``.
 
     Reads the component manifest as committed at the release's git tag (raw
-    GitHub URL). Stable tags exist before the PyPI publish; a dev tag only
-    appears after its binary builds finish, so a fresh dev version can 404
-    here for some minutes — see COMPONENT_MANIFEST_AT_TAG_URL. Returns None
+    GitHub URL). Stable tags exist before the PyPI publish; a dev tag is
+    created in parallel with the PyPI publish, so a fresh dev version can
+    briefly 404 here — see COMPONENT_MANIFEST_AT_TAG_URL. Returns None
     on any failure; the caller treats that as "nothing to hold on"
     (fail-open).
     """

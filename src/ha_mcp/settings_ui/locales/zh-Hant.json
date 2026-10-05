@@ -16,7 +16,6 @@
     "footer.installation": "安裝方式：{method}",
     "footer.deployment.addon": "應用程式/附加元件",
     "footer.deployment.docker": "容器/Docker",
-    "footer.deployment.pyinstaller": "獨立二進位檔",
     "footer.deployment.git": "原始碼簽出",
     "footer.deployment.pypi": "Python 套件",
     "footer.deployment.unknown": "未知",

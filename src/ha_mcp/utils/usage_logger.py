@@ -273,7 +273,11 @@ def _redact_parameters(value: Any, _depth: int = 0) -> Any:
         }
     if isinstance(value, (list, tuple)):
         return [_redact_parameters(item, _depth + 1) for item in value]
-    return value
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    # Entries are dumped as JSON (log file, ha_report_issue); keep odd objects
+    # from breaking that.
+    return repr(value)
 
 
 @dataclass

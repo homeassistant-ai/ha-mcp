@@ -16,7 +16,6 @@
     "footer.installation": "installazione: {method}",
     "footer.deployment.addon": "app/add-on",
     "footer.deployment.docker": "container/docker",
-    "footer.deployment.pyinstaller": "eseguibile standalone",
     "footer.deployment.git": "checkout del codice sorgente",
     "footer.deployment.pypi": "pacchetto python",
     "footer.deployment.unknown": "sconosciuto",

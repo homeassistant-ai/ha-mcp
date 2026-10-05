@@ -16,7 +16,6 @@
     "footer.installation": "quraşdırma: {method}",
     "footer.deployment.addon": "tətbiq/əlavə",
     "footer.deployment.docker": "konteyner/docker",
-    "footer.deployment.pyinstaller": "müstəqil ikili fayl",
     "footer.deployment.git": "mənbə kodunun lokal nüsxəsi",
     "footer.deployment.pypi": "python paketi",
     "footer.deployment.unknown": "naməlum",

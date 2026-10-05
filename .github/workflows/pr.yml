@@ -396,7 +396,7 @@ jobs:
 
     - name: Run ruff check
       if: success() || failure()
-      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ packaging/ scripts/
+      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ scripts/
 
     - name: Run ruff format check on changed Python files
       if: success() || failure()

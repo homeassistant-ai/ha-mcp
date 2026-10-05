@@ -3,6 +3,21 @@
 # src/ha_mcp/settings_ui/locales/nl.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: TLS-certificaat verifiëren
+    description: Verifieer het TLS-certificaat van de Home Assistant-server. De app
+      (add-on) maakt verbinding via de Supervisor-proxy, dus dit heeft normaal gesproken
+      geen effect en moet ingeschakeld blijven. Schakel dit alleen uit als je de app
+      (add-on) zo hebt geconfigureerd dat deze via een openbare HTTPS-hostnaam met
+      een zelfondertekend certificaat of een niet-overeenkomende hostnaam met HA communiceert.
+      Uitschakelen verzwakt de transportbeveiliging — laat ingeschakeld tenzij je
+      zeker weet dat je het nodig hebt. Vereist een herstart om van kracht te worden.
+  ha_tool_concurrency:
+    name: Home Assistant tool concurrency
+    description: Optionele limiet voor uiterste Home Assistant-toolaanroepen over
+      alle sessies. Interne REST-, WebSocket- en per-tool fan-out gelijktijdigheid
+      blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit
+      mislukt na 60 seconden.
   backup_hint:
     name: Suggestieniveau voor volledige HA-snapshot (LLM-gericht)
     description: 'Stem de formulering af van de hint die de LLM ziet in de
@@ -24,12 +39,6 @@ configuration:
 
       enz., gebruik de afzonderlijke schakelaar **Automatische back-up van bewerkingen
       inschakelen** hieronder.'
-  secret_path:
-    name: Overschrijving van geheim pad
-    description: 'Optioneel aangepast HTTP-pad voor de MCP-server. Laat leeg om het
-      automatisch gegenereerde veilige pad te gebruiken.
-
-      '
   enable_tool_search:
     name: Schakel tool-zoekfunctie in
     description: 'Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking.
@@ -121,28 +130,6 @@ configuration:
       van de bevestigingssleutel. Onderdeel van de optie "Koppel best-practice vaardigheden
       aan schrijfbewerkingen" hierboven en inactief zolang die ouder uitgeschakeld
       is. Vereist een herstart om van kracht te worden.'
-  ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optionele limiet voor uiterste Home Assistant-toolaanroepen over
-      alle sessies. Interne REST-, WebSocket- en per-tool fan-out gelijktijdigheid
-      blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit
-      mislukt na 60 seconden.
-  disabled_tools:
-    name: Uitgeschakelde tools (komma-gescheiden)
-    description: Tools die hier worden vermeld, zijn geforceerd uitgeschakeld en vergrendeld
-      in de webinstellingen-UI (tabblad 'Tools') — ze kunnen daar niet opnieuw worden
-      ingeschakeld zonder eerst deze optie ongedaan te maken. Een kleine set verplichte
-      tools (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
-      kan niet worden uitgeschakeld en blijft actief, zelfs als ze hier worden vermeld.
-      ha_get_skill_guide kan alleen worden uitgeschakeld als de strikte best-practices-modus
-      (enable_strict_mandatory_bps) is uitgeschakeld. Door komma's gescheiden toolnamen
-      (bijv. ha_call_event,ha_eval_template).
-  pinned_tools:
-    name: Vastgezette tools (komma-gescheiden)
-    description: Tools die hier worden vermeld, zijn vastgezet — ze verschijnen bovenaan
-      het tabblad 'Tools' en kunnen niet worden losgemaakt vanuit de webinstellingen-UI
-      zonder eerst deze optie ongedaan te maken. Handig in combinatie met Tool Search.
-      Door komma's gescheiden toolnamen.
   enable_auto_backup:
     name: Automatische back-up van bewerkingen inschakelen
     description: 'Maakt een per-entiteit momentopname vóór elke omwikkelde schrijf-/destructieve
@@ -162,6 +149,16 @@ configuration:
       deze. Standaard ingeschakeld; uitschakelen annuleert de ''best-effort'' momentopnamen
       en schakelt de bestand- en ruwe-YAML-tools hiermee uit. Vereist een herstart
       om van kracht te worden.'
+  auto_backup_throttle_minutes:
+    name: Automatische back-up vertraging (minuten)
+    description: Vertragingsvenster per entiteit. 0 (standaard) maakt een snapshot
+      bij elke omwikkelde schrijfbewerking. N>0 maakt maximaal één snapshot per N
+      minuten per entiteit. Bereik 0–1440.
+  auto_backup_retain_per_entity:
+    name: Automatische back-up retentie (per entiteit)
+    description: Maximaal aantal snapshots per entiteit. Oudere snapshots die deze
+      limiet overschrijden, worden verwijderd bij elke succesvolle opname. Standaard
+      100, bereik 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -179,16 +176,6 @@ configuration:
       equivalent backup services and commands in ha_call_service. Automatic pre-edit
       backups continue, and human actions in the web Settings UI remain available.
       Off by default; requires restart in the app.
-  auto_backup_throttle_minutes:
-    name: Automatische back-up vertraging (minuten)
-    description: Vertragingsvenster per entiteit. 0 (standaard) maakt een snapshot
-      bij elke omwikkelde schrijfbewerking. N>0 maakt maximaal één snapshot per N
-      minuten per entiteit. Bereik 0–1440.
-  auto_backup_retain_per_entity:
-    name: Automatische back-up retentie (per entiteit)
-    description: Maximaal aantal snapshots per entiteit. Oudere snapshots die deze
-      limiet overschrijden, worden verwijderd bij elke succesvolle opname. Standaard
-      100, bereik 1–10000.
   enable_snapshot_delete:
     name: Snapshotverwijdering toestaan
     description: Laat ha_manage_backup volledige HA snapshot tarballs verwijderen
@@ -202,12 +189,25 @@ configuration:
     description: Een snapshot moet minstens zo oud zijn voordat het kan worden verwijderd.
       Bereik 0–365; 0 schakelt de ondergrens uit (de nieuwste-snapshot en geplande-back-up
       beschermingen blijven van toepassing). Standaard 7.
-  verify_ssl:
-    name: TLS-certificaat verifiëren
-    description: Verifieer het TLS-certificaat van de Home Assistant-server. De app
-      (add-on) maakt verbinding via de Supervisor-proxy, dus dit heeft normaal gesproken
-      geen effect en moet ingeschakeld blijven. Schakel dit alleen uit als je de app
-      (add-on) zo hebt geconfigureerd dat deze via een openbare HTTPS-hostnaam met
-      een zelfondertekend certificaat of een niet-overeenkomende hostnaam met HA communiceert.
-      Uitschakelen verzwakt de transportbeveiliging — laat ingeschakeld tenzij je
-      zeker weet dat je het nodig hebt. Vereist een herstart om van kracht te worden.
+  disabled_tools:
+    name: Uitgeschakelde tools (komma-gescheiden)
+    description: Tools die hier worden vermeld, zijn geforceerd uitgeschakeld en vergrendeld
+      in de webinstellingen-UI (tabblad 'Tools') — ze kunnen daar niet opnieuw worden
+      ingeschakeld zonder eerst deze optie ongedaan te maken. Een kleine set verplichte
+      tools (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      kan niet worden uitgeschakeld en blijft actief, zelfs als ze hier worden vermeld.
+      ha_get_skill_guide kan alleen worden uitgeschakeld als de strikte best-practices-modus
+      (enable_strict_mandatory_bps) is uitgeschakeld. Door komma's gescheiden toolnamen
+      (bijv. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Vastgezette tools (komma-gescheiden)
+    description: Tools die hier worden vermeld, zijn vastgezet — ze verschijnen bovenaan
+      het tabblad 'Tools' en kunnen niet worden losgemaakt vanuit de webinstellingen-UI
+      zonder eerst deze optie ongedaan te maken. Handig in combinatie met Tool Search.
+      Door komma's gescheiden toolnamen.
+  secret_path:
+    name: Overschrijving van geheim pad
+    description: 'Optioneel aangepast HTTP-pad voor de MCP-server. Laat leeg om het
+      automatisch gegenereerde veilige pad te gebruiken.
+
+      '

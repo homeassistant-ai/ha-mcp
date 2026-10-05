@@ -16,7 +16,6 @@
     "footer.installation": "installation: {method}",
     "footer.deployment.addon": "app/tillägg",
     "footer.deployment.docker": "behållare/docker",
-    "footer.deployment.pyinstaller": "fristående binärfil",
     "footer.deployment.git": "källkodsutcheckning",
     "footer.deployment.pypi": "python-paket",
     "footer.deployment.unknown": "okänd",

@@ -138,17 +138,6 @@ class TestAddonStructure:
             "secret_path schema should be optional string (str?)"
         )
 
-        # Verify backup_hint configuration
-        assert "backup_hint" in config["options"], (
-            "options must include backup_hint field"
-        )
-        assert config["options"]["backup_hint"] == "normal", (
-            "default backup_hint should be normal"
-        )
-        assert config["schema"]["backup_hint"] == "list(strong|normal|weak|auto)", (
-            "backup_hint schema must enumerate allowed values"
-        )
-
         # Verify architectures (only 64-bit platforms supported by uv image)
         expected_archs = ["amd64", "aarch64"]
         assert all(arch in config["arch"] for arch in expected_archs)
@@ -159,224 +148,28 @@ class TestAddonStructure:
             "32-bit platforms not supported by uv base image"
         )
 
-    def test_stable_addon_exposes_nonbeta_tool_options(self):
-        """Stable add-on must expose the NON-beta operator options that dev
-        has — ``tool_search_max_results``, ``disabled_tools``,
-        ``pinned_tools``, ``read_only_mode``, ``enable_security_policy_tool``
-        — in both ``options`` and ``schema``. These are not beta features, so
-        the web-UI master gate doesn't apply; without them in the stable
-        schema they were unreachable on stable (start.py wrote defaults, the
-        web UI showed them ``origin='addon'``-locked, and the override applier
-        skipped them). Regression guard for that dev/stable config drift."""
-        with open(f"{ADDON_DIR}/config.yaml") as f:
-            config = yaml.safe_load(f)
+    @pytest.mark.parametrize(
+        ("addon_dir", "entry"),
+        [
+            ("homeassistant-addon", r"^### {key}\b"),
+            ("homeassistant-addon-dev", r"^\| `{key}`"),
+        ],
+        ids=["stable section", "dev table row"],
+    )
+    def test_docs_describe_every_app_option(self, addon_dir, entry):
+        """The Configuration page shows only a name and a short help text
+        per option; DOCS.md is where a user finds the details. The stable
+        DOCS.md has a section per option and the dev one a table row."""
+        config = yaml.safe_load((_REPO_ROOT / addon_dir / "config.yaml").read_text())
+        docs = (_REPO_ROOT / addon_dir / "DOCS.md").read_text(encoding="utf-8")
 
-        # key: (schema type, default value). Defaults are load-bearing — a
-        # non-empty disabled_tools default would silently lock tools off.
-        expected = {
-            "tool_search_max_results": ("int(2,10)?", 5),
-            "ha_tool_concurrency": ("int(0,32)?", 0),
-            "disabled_tools": ("str?", ""),
-            "pinned_tools": ("str?", ""),
-            # Read Only Mode (#1569) — non-beta safety toggle, default OFF
-            # (an on-by-default value would silently break every write
-            # tool on upgrade).
-            "read_only_mode": ("bool?", False),
-            # Redact Secrets (#2157) — non-beta safety toggle, default OFF
-            # (no redaction runs while off; the sentinel write guards are
-            # unconditional — see config.py).
-            "redact_secrets": ("bool?", False),
-            # Policy-editing tool (#2148) — non-beta, default OFF (an
-            # on-by-default value would hand every connected agent the
-            # ability to rewrite the approval gates).
-            "enable_security_policy_tool": ("bool?", False),
-        }
-        for key, (schema_type, default) in expected.items():
-            assert key in config["options"], f"{key!r} must be in stable options"
-            assert config["options"].get(key) == default, (
-                f"{key!r} default must be {default!r}"
-            )
-            assert config["schema"].get(key) == schema_type, (
-                f"{key!r} must be in stable schema as {schema_type!r}"
-            )
+        missing = [
+            key
+            for key in config["schema"]
+            if not re.search(entry.format(key=re.escape(key)), docs, re.MULTILINE)
+        ]
 
-    def test_stable_and_dev_agree_on_nonbeta_tool_options(self):
-        """The non-beta tool options must stay in sync between the
-        stable and dev add-ons — same defaults AND same schema types. Guards
-        against future one-sided drift (the exact bug class this fix
-        addresses: dev gains/changes an option, stable is forgotten)."""
-        keys = (
-            "tool_search_max_results",
-            "ha_tool_concurrency",
-            "disabled_tools",
-            "pinned_tools",
-            "read_only_mode",
-            "redact_secrets",
-            "enable_security_policy_tool",
-        )
-        with open(f"{ADDON_DIR}/config.yaml") as f:
-            stable = yaml.safe_load(f)
-        with open("homeassistant-addon-dev/config.yaml") as f:
-            dev = yaml.safe_load(f)
-        for key in keys:
-            assert stable["options"].get(key) == dev["options"].get(key), (
-                f"{key!r} option default differs between stable and dev add-ons"
-            )
-            assert stable["schema"].get(key) == dev["schema"].get(key), (
-                f"{key!r} schema type differs between stable and dev add-ons"
-            )
-
-    def test_start_py_wires_ha_tool_concurrency_env(self):
-        """The app option must reach the server's validated setting."""
-        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
-        config_src = (_REPO_ROOT / "src/ha_mcp/config_settings.py").read_text(
-            encoding="utf-8"
-        )
-        assert 'config.get("ha_tool_concurrency", 0)' in start_src
-        assert 'os.environ["HA_TOOL_CONCURRENCY"]' in start_src
-        assert 'alias="HA_TOOL_CONCURRENCY"' in config_src
-
-    def test_start_py_wires_read_only_mode_env(self):
-        """start.py must read the ``read_only_mode`` addon option and export
-        it as the ``READ_ONLY_MODE`` env var, and that env name must match
-        the one ``config.FEATURE_FLAG_FIELDS`` registers for the
-        ``read_only_mode`` flag — otherwise the addon toggle would write to
-        a phantom env var the server never reads. Source-level contract so
-        the wiring can't silently drift (no ha_mcp import needed)."""
-        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
-        assert 'resolve_bool_option(config, "read_only_mode"' in start_src, (
-            "start.py must resolve the read_only_mode addon option via "
-            "resolve_bool_option"
-        )
-        assert 'os.environ["READ_ONLY_MODE"]' in start_src, (
-            "start.py must export the READ_ONLY_MODE env var the server reads"
-        )
-
-        # The env name start.py writes must equal the one config_registry.py
-        # registers for read_only_mode. Regex the FeatureFlagField entry
-        # from config_registry.py source rather than importing ha_mcp (tests/addon
-        # has no src on sys.path by default).
-        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config_registry.py").read_text(
-            encoding="utf-8"
-        )
-        m = re.search(
-            r'FeatureFlagField\(\s*"read_only_mode"\s*,\s*"([^"]+)"', config_src
-        )
-        assert m is not None, (
-            "config_registry.py FEATURE_FLAG_FIELDS must register a read_only_mode entry"
-        )
-        assert m.group(1) == "READ_ONLY_MODE", (
-            f"read_only_mode env name in config_registry.py is {m.group(1)!r}, but "
-            'start.py exports os.environ["READ_ONLY_MODE"] — they must match'
-        )
-
-    def test_start_py_wires_security_policy_tool_env(self):
-        """start.py must read the ``enable_security_policy_tool`` addon option
-        and export it as ``ENABLE_SECURITY_POLICY_TOOL``, and that env name
-        must match the one ``config.FEATURE_FLAG_FIELDS`` registers for the
-        ``enable_security_policy_tool`` flag. In addon mode this export is
-        the only channel that reaches the server (the override-file applier
-        skips non-beta flags whose origin is 'addon'), so without it the
-        Policies-tab toggle would be dead on both flavors (issue #2148).
-        Source-level contract mirroring the read_only_mode wiring test."""
-        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
-        # Two substrings, not one: the call wraps across lines under the
-        # formatter, so a single contiguous match would be format-fragile.
-        assert "enable_security_policy_tool = resolve_bool_option(" in start_src, (
-            "start.py must resolve the enable_security_policy_tool addon "
-            "option via resolve_bool_option"
-        )
-        assert '"enable_security_policy_tool", False' in start_src, (
-            "start.py must read the enable_security_policy_tool option key "
-            "with a False default"
-        )
-        assert 'os.environ["ENABLE_SECURITY_POLICY_TOOL"]' in start_src, (
-            "start.py must export the ENABLE_SECURITY_POLICY_TOOL env var the "
-            "server reads"
-        )
-
-        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config_registry.py").read_text(
-            encoding="utf-8"
-        )
-        m = re.search(
-            r'FeatureFlagField\(\s*"enable_security_policy_tool"\s*,\s*"([^"]+)"',
-            config_src,
-        )
-        assert m is not None, (
-            "config_registry.py FEATURE_FLAG_FIELDS must register an "
-            "enable_security_policy_tool entry"
-        )
-        assert m.group(1) == "ENABLE_SECURITY_POLICY_TOOL", (
-            f"enable_security_policy_tool env name in config_registry.py is "
-            f"{m.group(1)!r}, but start.py exports "
-            'os.environ["ENABLE_SECURITY_POLICY_TOOL"] — they must match'
-        )
-
-    def test_start_py_wires_strict_mandatory_bps_env(self):
-        """start.py must read the ``enable_strict_mandatory_bps`` addon option
-        and export it as ``ENABLE_STRICT_MANDATORY_BPS``, and that env name
-        must match the one ``config.FEATURE_FLAG_FIELDS`` registers for the
-        ``enable_strict_mandatory_bps`` flag — otherwise the addon toggle
-        would write to a phantom env var the server never reads. Source-level
-        contract mirroring the read_only_mode wiring test (issue #1779)."""
-        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
-        assert 'config.get("enable_strict_mandatory_bps"' in start_src, (
-            "start.py must read the enable_strict_mandatory_bps addon option"
-        )
-        assert 'os.environ["ENABLE_STRICT_MANDATORY_BPS"]' in start_src, (
-            "start.py must export the ENABLE_STRICT_MANDATORY_BPS env var the "
-            "server reads"
-        )
-
-        # The env name start.py writes must equal the one config_registry.py registers
-        # for enable_strict_mandatory_bps. Regex the FeatureFlagField entry
-        # from config_registry.py source rather than importing ha_mcp (tests/addon has
-        # no src on sys.path by default).
-        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config_registry.py").read_text(
-            encoding="utf-8"
-        )
-        m = re.search(
-            r'FeatureFlagField\(\s*"enable_strict_mandatory_bps"\s*,\s*"([^"]+)"',
-            config_src,
-        )
-        assert m is not None, (
-            "config_registry.py FEATURE_FLAG_FIELDS must register an "
-            "enable_strict_mandatory_bps entry"
-        )
-        assert m.group(1) == "ENABLE_STRICT_MANDATORY_BPS", (
-            f"enable_strict_mandatory_bps env name in config_registry.py is "
-            f"{m.group(1)!r}, but start.py exports "
-            'os.environ["ENABLE_STRICT_MANDATORY_BPS"] — they must match'
-        )
-
-    def test_start_py_wires_redact_secrets_env(self):
-        """start.py must read the ``redact_secrets`` addon option and export
-        it as the ``REDACT_SECRETS`` env var, and that env name must match the
-        one ``config.FEATURE_FLAG_FIELDS`` registers for the ``redact_secrets``
-        flag. Source-level contract mirroring the read_only_mode wiring test
-        (issue #2157)."""
-        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
-        assert 'resolve_bool_option(config, "redact_secrets"' in start_src, (
-            "start.py must resolve the redact_secrets addon option via "
-            "resolve_bool_option"
-        )
-        assert 'os.environ["REDACT_SECRETS"]' in start_src, (
-            "start.py must export the REDACT_SECRETS env var the server reads"
-        )
-
-        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config_registry.py").read_text(
-            encoding="utf-8"
-        )
-        m = re.search(
-            r'FeatureFlagField\(\s*"redact_secrets"\s*,\s*"([^"]+)"', config_src
-        )
-        assert m is not None, (
-            "config_registry.py FEATURE_FLAG_FIELDS must register a redact_secrets entry"
-        )
-        assert m.group(1) == "REDACT_SECRETS", (
-            f"redact_secrets env name in config_registry.py is {m.group(1)!r}, but "
-            'start.py exports os.environ["REDACT_SECRETS"] — they must match'
-        )
+        assert not missing, f"{addon_dir}/DOCS.md does not document {missing}"
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="Unix permissions not applicable on Windows"

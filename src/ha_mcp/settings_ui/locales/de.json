@@ -16,7 +16,6 @@
     "footer.installation": "Installation: {method}",
     "footer.deployment.addon": "App/Add-on",
     "footer.deployment.docker": "Container/Docker",
-    "footer.deployment.pyinstaller": "Eigenständige Binärdatei",
     "footer.deployment.git": "Quellcode-Checkout",
     "footer.deployment.pypi": "Python-Paket",
     "footer.deployment.unknown": "unbekannt",

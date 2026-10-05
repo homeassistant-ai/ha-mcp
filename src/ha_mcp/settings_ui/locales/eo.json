@@ -16,7 +16,6 @@
     "footer.installation": "instalo: {method}",
     "footer.deployment.addon": "aplikaĵo/aldonaĵo",
     "footer.deployment.docker": "ujo/docker",
-    "footer.deployment.pyinstaller": "sendependa duumaĵo",
     "footer.deployment.git": "fontkoda elŝuto",
     "footer.deployment.pypi": "pitona pakaĵo",
     "footer.deployment.unknown": "nekonata",

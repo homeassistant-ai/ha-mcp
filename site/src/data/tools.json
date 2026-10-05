@@ -240,7 +240,7 @@
   {
     "name": "ha_set_area_or_floor",
     "title": "Create or Update Area or Floor",
-    "description": "Create or update a Home Assistant area or floor.\n\nPass kind='area' (with optional floor_id, picture, labels, temperature_entity_id,\nhumidity_entity_id) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", labels=[\"site_home\"])\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", temperature_entity_id=\"sensor.kitchen_temp\", humidity_entity_id=\"\")\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)",
+    "description": "Create or update a Home Assistant area or floor.\n\nPass kind='area' (with optional floor_id, picture, labels, temperature_entity_id,\nhumidity_entity_id) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", labels=[\"site_home\"])\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", temperature_entity_id=\"sensor.kitchen_temp\", humidity_entity_id=None)\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)",
     "inputSchema": {
       "properties": {
         "kind": {
@@ -259,8 +259,7 @@
         },
         "floor_id": {
           "type": "str | None",
-          "description": "Floor assignment when kind='area' (use empty string to clear).",
-          "default": null
+          "description": "Floor assignment when kind='area' (null or empty string to clear; omit to leave unchanged)."
         },
         "level": {
           "type": "int | None",
@@ -269,8 +268,7 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:sofa', 'mdi:home-floor-1', empty string to remove)",
-          "default": null
+          "description": "Material Design Icon (e.g., 'mdi:sofa', 'mdi:home-floor-1'; null or empty string to remove; omit to leave unchanged)"
         },
         "aliases": {
           "type": "str | list[str] | None",
@@ -279,8 +277,7 @@
         },
         "picture": {
           "type": "str | None",
-          "description": "Picture URL when kind='area' (empty string to remove).",
-          "default": null
+          "description": "Picture URL when kind='area' (null or empty string to remove; omit to leave unchanged)."
         },
         "labels": {
           "type": "str | list[str] | None",
@@ -289,13 +286,11 @@
         },
         "temperature_entity_id": {
           "type": "str | None",
-          "description": "Sensor the area reports temperature from, when kind='area' (a sensor.* entity with device_class temperature; empty string to clear). Omit to leave unchanged.",
-          "default": null
+          "description": "Sensor the area reports temperature from, when kind='area' (a sensor.* entity with device_class temperature; null or empty string to clear). Omit to leave unchanged."
         },
         "humidity_entity_id": {
           "type": "str | None",
-          "description": "Sensor the area reports humidity from, when kind='area' (a sensor.* entity with device_class humidity; empty string to clear). Omit to leave unchanged.",
-          "default": null
+          "description": "Sensor the area reports humidity from, when kind='area' (a sensor.* entity with device_class humidity; null or empty string to clear). Omit to leave unchanged."
         }
       },
       "required": [
@@ -2206,7 +2201,7 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it",
+          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, set at creation or by ha_set_zone; ha_get_zone shows it), which cannot be removed",
           "default": null
         },
         "area_id": {

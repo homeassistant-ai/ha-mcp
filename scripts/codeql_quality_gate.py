@@ -259,22 +259,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/unused-import",
-        "packaging/binary/pyinstaller_hooks/runtime_hook.py",
-        "idna",
-        "",
-        "Intentional side-effect import: registers the idna codec at startup and "
-        "forces PyInstaller to bundle it. Rewriting it risks the binary build.",
-    ),
-    (
-        "py/unused-import",
-        "packaging/binary/pyinstaller_hooks/runtime_hook.py",
-        "encodings",
-        "",
-        "Intentional side-effect import: registers the stdlib encodings.idna "
-        "codec at startup. Rewriting it risks the binary build.",
-    ),
-    (
-        "py/unused-import",
         "tests/src/e2e/conftest.py",
         "_collection_data_dir",
         "",
