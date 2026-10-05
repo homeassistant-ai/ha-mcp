@@ -13,8 +13,12 @@ e.g. fields populated from package metadata).
 """
 
 import ast
+import json
 import sys
 from pathlib import Path
+
+import pytest
+from pydantic.fields import FieldInfo
 
 from ha_mcp.config import (
     ADVANCED_SETTINGS_FIELDS,
@@ -22,6 +26,8 @@ from ha_mcp.config import (
     FEATURE_FLAG_FIELDS,
     Settings,
 )
+from ha_mcp.config_meta import AppOption, Setting
+from ha_mcp.config_registry import _check_setting
 
 # Fields with no panel home by design. Adding to this list requires a
 # one-line reason. Reviewer enforces.
@@ -66,110 +72,45 @@ def test_every_env_aliased_setting_is_surfaced_or_allowlisted() -> None:
     )
 
 
-def test_advanced_section_values_are_in_known_set() -> None:
-    """Section strings are consumed by the UI to pick a render
-    container. A typo (e.g. ``"connetion"``) would silently render the
-    row into nothing. Lock the closed set."""
-    known = {
-        "connection",
-        "search",
-        "operations",
-        "diagnostics",
-        "tools_surface",
-        "sidecar",
-        "beta_codemode",
-        "beta_yamlkeys",
-        "developer",
-    }
-    seen = {row[3] for row in ADVANCED_SETTINGS_FIELDS}
-    bad = seen - known
-    assert not bad, (
-        f"ADVANCED_SETTINGS_FIELDS has unknown section values: {sorted(bad)}. "
-        f"Known set: {sorted(known)}."
-    )
-
-
-def test_validate_registries_rejects_phantom_field(monkeypatch) -> None:
-    """``_validate_registries`` must raise when a row references a
-    Settings field that does not exist on the model. Confidence-add for
-    the validator function itself; the production registries pass it on
-    every import, so this proves the *negative* path.
-    """
-    import pytest
-
-    from ha_mcp import config as cfg
-
-    phantom = cfg.FeatureFlagField("field_that_does_not_exist", "PHANTOM_ENV", bool)
-    patched = (*cfg.FEATURE_FLAG_FIELDS, phantom)
-    monkeypatch.setattr(cfg, "FEATURE_FLAG_FIELDS", patched)
-    with pytest.raises(RuntimeError, match="references fields not on Settings"):
-        cfg._validate_registries()
-
-
-def test_validate_registries_rejects_overlap_between_registries(monkeypatch) -> None:
-    """Two registries can't both apply the same field — they'd coerce
-    via potentially divergent type policies."""
-    import pytest
-
-    from ha_mcp import config as cfg
-
-    # Pick a real flag field and inject it into BACKUP_OVERRIDE_FIELDS too.
-    flag = cfg.FEATURE_FLAG_FIELDS[0]
-    dupe = cfg.BackupOverrideField(flag.field, "DUPE_ENV", flag.ftype)
-    patched = (*cfg.BACKUP_OVERRIDE_FIELDS, dupe)
-    monkeypatch.setattr(cfg, "BACKUP_OVERRIDE_FIELDS", patched)
-    with pytest.raises(RuntimeError, match="Registry overlap between"):
-        cfg._validate_registries()
-
-
-def test_validate_registries_rejects_bounds_on_non_numeric_field(
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("annotation", "setting", "problem"),
+    [
+        (str, Setting(range=(1, 10)), "a range on a non-numeric field"),
+        (int, Setting(choices=("a", "b")), "choices on a non-str field"),
+        (int, Setting(off_value=0), "an off value without a range"),
+        (int, Setting(lenient=True), "lenient parsing with nothing to check"),
+        (int, Setting(surface="advanced"), "an advanced setting without one"),
+        (int, Setting(surface="feature", section="search"), "a section on"),
+        (
+            bool,
+            Setting(surface="advanced", section="search", beta=True),
+            "a beta flag that is not a bool feature flag",
+        ),
+        (
+            bool,
+            Setting(surface="feature", beta=True),
+            "a beta flag that is not a dev-only app option",
+        ),
+        (
+            bool,
+            Setting(surface="feature", app=AppOption(flavors=("dev",))),
+            "a dev-only app option that is not a beta flag",
+        ),
+        (float, Setting(app=AppOption()), "an app option of a type"),
+        (list, Setting(surface="backup"), "a web UI surface on a type"),
+    ],
+)
+def test_impossible_setting_metadata_fails_at_import(
+    annotation: type, setting: Setting, problem: str
 ) -> None:
-    """``_ADVANCED_SETTINGS_BOUNDS`` entries must point at numeric advanced
-    fields — a bounds rule on a bool/str field is a programming error."""
-    import pytest
+    """Metadata the registries and start.py cannot act on would be a silent
+    no-op at runtime: a range nothing reads, a UI row rendered into no
+    section, a beta flag the master gate cannot reach, an app option
+    start.py cannot check. Import must fail instead."""
+    field = FieldInfo(annotation=annotation, default=0, alias="SOME_ENV")
 
-    from ha_mcp import config as cfg
-
-    # Find a real str-typed advanced field and pretend bounds apply to it.
-    str_field = next(f for f in cfg.ADVANCED_SETTINGS_FIELDS if f.ftype is str)
-    patched_bounds = {**cfg._ADVANCED_SETTINGS_BOUNDS, str_field.field: (1, 10)}
-    monkeypatch.setattr(cfg, "_ADVANCED_SETTINGS_BOUNDS", patched_bounds)
-    with pytest.raises(RuntimeError, match="non-numeric"):
-        cfg._validate_registries()
-
-
-def test_validate_registries_rejects_choices_on_non_string_field(monkeypatch) -> None:
-    """``_ADVANCED_SETTINGS_CHOICES`` entries must point at str advanced
-    fields — choices on a numeric/bool field is a programming error."""
-    import pytest
-
-    from ha_mcp import config as cfg
-
-    int_field = next(f for f in cfg.ADVANCED_SETTINGS_FIELDS if f.ftype is int)
-    patched_choices = {
-        **cfg._ADVANCED_SETTINGS_CHOICES,
-        int_field.field: ("a", "b"),
-    }
-    monkeypatch.setattr(cfg, "_ADVANCED_SETTINGS_CHOICES", patched_choices)
-    with pytest.raises(RuntimeError, match="non-str"):
-        cfg._validate_registries()
-
-
-def test_validate_registries_rejects_beta_field_not_in_feature_flags(
-    monkeypatch,
-) -> None:
-    """Every BETA_FEATURE_FIELDS entry must also be in FEATURE_FLAG_FIELDS
-    — the master gate writes through ``setattr`` so a phantom beta name
-    would silently land on extras with no runtime effect."""
-    import pytest
-
-    from ha_mcp import config as cfg
-
-    patched_beta = (*cfg.BETA_FEATURE_FIELDS, "phantom_beta_field")
-    monkeypatch.setattr(cfg, "BETA_FEATURE_FIELDS", patched_beta)
-    with pytest.raises(RuntimeError, match="BETA_FEATURE_FIELDS contains names not in"):
-        cfg._validate_registries()
+    with pytest.raises(RuntimeError, match=problem):
+        _check_setting("some_field", field, setting)
 
 
 # ---------------------------------------------------------------------------
@@ -487,3 +428,24 @@ def test_advanced_registries_are_name_disjoint() -> None:
         "Each field must be in exactly one of ADVANCED_SETTINGS_FIELDS, "
         "FEATURE_FLAG_FIELDS, or BACKUP_OVERRIDE_FIELDS."
     )
+
+
+@pytest.mark.asyncio
+async def test_get_advanced_tells_the_ui_which_saves_need_a_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The UI shows the restart banner from this flag. The log level is set
+    once at startup; the screenshot engine URL is read per capture."""
+    from unittest.mock import MagicMock
+
+    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.settings_ui import build_settings_handlers
+
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    _reset_global_settings()
+    handlers = build_settings_handlers(server=None)
+    body = json.loads((await handlers["get_advanced_settings"](MagicMock())).body)
+    rows = {row["field"]: row for row in body["fields"]}
+
+    assert rows["log_level"]["restart_required"] is True
+    assert rows["dashboard_screenshot_engine_url"]["restart_required"] is False

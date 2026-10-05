@@ -3,6 +3,14 @@
 # src/ha_mcp/settings_ui/locales/zh-Hant.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: 驗證 TLS 憑證
+    description: 驗證 Home Assistant 伺服器的 TLS 憑證。應用程式（附加元件）透過 Supervisor Proxy 連線，因此通常沒有影響，應保持啟用狀態。僅在您已將應用程式（附加元件）重新設定為透過具有自我簽署憑證或主機名稱不符的公開
+      HTTPS 主機名稱與 Home Assistant 通訊時才予以停用。停用會削弱傳輸安全性 — 除非您確定需要，否則請保持開啟。需要重新啟動才能生效。
+  ha_tool_concurrency:
+    name: Home Assistant 工具併發數
+    description: 跨所有工作階段對外部 Home Assistant 工具呼叫的選填限制。內部的 REST、WebSocket 和每個工具的扇出併發數保持不變。0
+      表示維持無限行為。等待容量的呼叫會在 60 秒後失敗。
   backup_hint:
     name: 完整 HA 快照建議層級（面向 LLM）
     description: '調整 LLM 在 `ha_manage_backup(scope=''snapshot'')` 工具說明中看到的提示詞措辭，以決定何時在執行有風險的操作（例如大量刪除裝置）之前建議完整的
@@ -10,11 +18,6 @@ configuration:
 
 
       如需自動化 / 腳本 / 輔助程式等的每次編輯自動快照，請使用下方獨立的 **Enable auto-backup of edits** 開關。'
-  secret_path:
-    name: 密鑰路徑覆寫
-    description: 'MCP 伺服器的選用自訂 HTTP 路徑。保持空白以使用自動產生的安全路徑。
-
-      '
   enable_tool_search:
     name: 啟用工具搜尋
     description: 使用基於搜尋的探索來取代完整的工具目錄。可將閒置上下文減少約 90%，降至約 5K 個 Token。⚠️ 如果用戶端本身具有內建工具搜尋／延遲工具功能（claude.ai、Claude
@@ -53,17 +56,6 @@ configuration:
     description: 嚴格模式：防止用戶端在證明其已閱讀最佳做法之前使用該工具。啟用後，六個最佳做法寫入工具（automations、scripts、scenes、helpers、dashboards、raw
       YAML）將被封鎖並傳回錯誤，指示用戶端透過 ha_get_skill_guide 閱讀最佳做法技能並傳回其在該處獲得的確認金鑰。啟用後，ha_get_skill_guide
       工具將被鎖定為啟用狀態——它是確認金鑰的唯一發布者。上方「Attach best-practice skills on writes」選項的子選項，當該父選項關閉時處於非作用中狀態。需要重新啟動才能生效。
-  ha_tool_concurrency:
-    name: Home Assistant 工具併發數
-    description: 跨所有工作階段對外部 Home Assistant 工具呼叫的選填限制。內部的 REST、WebSocket 和每個工具的扇出併發數保持不變。0
-      表示維持無限行為。等待容量的呼叫會在 60 秒後失敗。
-  disabled_tools:
-    name: 停用的工具（以逗號分隔）
-    description: 此處列出的工具會被強制關閉並在網頁設定 UI（「工具」分頁）中鎖定 — 若不先取消此選項，將無法在該處重新啟用。一小組強制性工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）無法停用，即使列在此處也會繼續執行。ha_get_skill_guide
-      僅能在嚴格最佳實務模式（enable_strict_mandatory_bps）關閉時停用。以逗號分隔的工具名稱（例如 ha_call_event,ha_eval_template）。
-  pinned_tools:
-    name: 固定的工具（以逗號分隔）
-    description: 此處列出的工具會被鎖定固定 — 牠們會顯示在「工具」分頁的最上方，若不先取消此選項，將無法從網頁設定 UI 取消固定。結合「工具搜尋」使用非常實用。以逗號分隔的工具名稱。
   enable_auto_backup:
     name: 啟用編輯自動備份
     description: 在每次封裝的寫入/破壞性 MCP 工具呼叫（自動化、腳本、場景、輔助程式、儀表板、儀表板資源、標籤、類別、群組、區域、範圍、行事曆、待辦事項、實體、裝置、整合，以及同級移除/刪除工具）之前，擷取每個實體的快照。自動備禦節流限制了這種情況發生的頻率：0（預設）在每次此類呼叫時擷取，N>0
@@ -72,6 +64,12 @@ configuration:
       — 失敗會記錄 WARNING 且寫入會繼續進行。檔案和原始 YAML 工具是特例：ha_write_file、ha_delete_file 和 ha_config_set_yaml
       將快照視為先決條件，因此在關閉此功能時透過它們進行的寫入將被拒絕，而擷取失敗也會阻止寫入。預設為開啟；取消勾選則會退出盡力而為的擷取，並同時停用檔案和原始
       YAML 工具。需要重新啟動才能生效。
+  auto_backup_throttle_minutes:
+    name: 自動備份節流（分鐘）
+    description: 每個實體的節流視窗。0（預設）在每次封裝的寫入時擷取快照。N>0 每隔 N 分鐘每個實體最多擷取一個快照。範圍 0–1440。
+  auto_backup_retain_per_entity:
+    name: 自動備份保留數量（每個實體）
+    description: 每個實體保留的最大快照數。超出此上限的較舊快照會在每次成功擷取時被輪替清除。預設 100，範圍 1–10000。
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -89,12 +87,6 @@ configuration:
       equivalent backup services and commands in ha_call_service. Automatic pre-edit
       backups continue, and human actions in the web Settings UI remain available.
       Off by default; requires restart in the app.
-  auto_backup_throttle_minutes:
-    name: 自動備份節流（分鐘）
-    description: 每個實體的節流視窗。0（預設）在每次封裝的寫入時擷取快照。N>0 每隔 N 分鐘每個實體最多擷取一個快照。範圍 0–1440。
-  auto_backup_retain_per_entity:
-    name: 自動備份保留數量（每個實體）
-    description: 每個實體保留的最大快照數。超出此上限的較舊快照會在每次成功擷取時被輪替清除。預設 100，範圍 1–10000。
   enable_snapshot_delete:
     name: 允許刪除快照
     description: 允許 ha_manage_backup 刪除完整的 Home Assistant 快照 tarball（scope='snapshot'，action='delete'）。預設為關閉
@@ -102,7 +94,15 @@ configuration:
   snapshot_delete_min_age_days:
     name: 可刪除的最小快照天數（天）
     description: 快照必須達到此年齡才能被刪除。範圍 0–365；0 表示停用下限（最新快照和排程備份保護仍然適用）。預設 7。
-  verify_ssl:
-    name: 驗證 TLS 憑證
-    description: 驗證 Home Assistant 伺服器的 TLS 憑證。應用程式（附加元件）透過 Supervisor Proxy 連線，因此通常沒有影響，應保持啟用狀態。僅在您已將應用程式（附加元件）重新設定為透過具有自我簽署憑證或主機名稱不符的公開
-      HTTPS 主機名稱與 Home Assistant 通訊時才予以停用。停用會削弱傳輸安全性 — 除非您確定需要，否則請保持開啟。需要重新啟動才能生效。
+  disabled_tools:
+    name: 停用的工具（以逗號分隔）
+    description: 此處列出的工具會被強制關閉並在網頁設定 UI（「工具」分頁）中鎖定 — 若不先取消此選項，將無法在該處重新啟用。一小組強制性工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）無法停用，即使列在此處也會繼續執行。ha_get_skill_guide
+      僅能在嚴格最佳實務模式（enable_strict_mandatory_bps）關閉時停用。以逗號分隔的工具名稱（例如 ha_call_event,ha_eval_template）。
+  pinned_tools:
+    name: 固定的工具（以逗號分隔）
+    description: 此處列出的工具會被鎖定固定 — 牠們會顯示在「工具」分頁的最上方，若不先取消此選項，將無法從網頁設定 UI 取消固定。結合「工具搜尋」使用非常實用。以逗號分隔的工具名稱。
+  secret_path:
+    name: 密鑰路徑覆寫
+    description: 'MCP 伺服器的選用自訂 HTTP 路徑。保持空白以使用自動產生的安全路徑。
+
+      '

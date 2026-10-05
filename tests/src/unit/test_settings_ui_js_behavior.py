@@ -4352,6 +4352,7 @@ class TestBetaBlockRendersAtBottom:
             "section": "diagnostics",
             "origin": "default",
             "editable": True,
+            "restart_required": True,
             "choices": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         }
         fetches = {
@@ -4400,8 +4401,7 @@ class TestBetaBlockRendersAtBottom:
         assert body.get("log_level") == "DEBUG", (
             f"auto-save POST body missing the edited value: {body}"
         )
-        # log_level IS in ADVANCED_RESTART_REQUIRED, so this pins the
-        # restart branch: exact toast text + banner shown + cross-tab broadcast.
+        # log_level needs a restart: pins the toast, banner and broadcast.
         m = re.search(r'data-toast="([^"]*)"', result.dom)
         assert m and "Saved. Restart required." in m.group(1), (
             f"expected restart-required success toast; got {m.group(1) if m else None}"
@@ -4671,7 +4671,7 @@ class TestBetaBlockRendersAtBottom:
     def test_advanced_autosave_no_restart_field_plain_saved(
         self, settings_script: str
     ) -> None:
-        """A field NOT in ADVANCED_RESTART_REQUIRED saves with a plain
+        """A field without restart_required saves with a plain
         "Saved." toast and does NOT raise the restart banner — pins the
         no-restart branch (dashboard_screenshot_engine_url is resolved live)."""
         adv_field = {

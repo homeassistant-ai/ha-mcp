@@ -3,6 +3,7 @@ component-routed writes, and the component-aware catalog (issue #2479)."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from copy import deepcopy
 from typing import Annotated, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -98,7 +99,7 @@ class _Captured:
 
 
 @pytest.fixture
-def capture_create():
+def capture_create() -> Iterator[_Captured]:
     captured = _Captured()
     with (
         patch.object(tch, "_execute_create_simple_helper", captured),
@@ -114,7 +115,9 @@ async def _call(mcp: FastMCP, **arguments: Any) -> Any:
         return await client.call_tool("ha_config_set_helper", arguments)
 
 
-async def test_flat_and_config_fields_reach_create_identically(capture_create) -> None:
+async def test_flat_and_config_fields_reach_create_identically(
+    capture_create: _Captured,
+) -> None:
     mcp, _ = await _registered_tool()
     base = {"helper_type": "input_number", "name": "Target", "action": "create"}
     await _call(mcp, **base, min_value=1, max_value="9", step=2)
@@ -124,7 +127,7 @@ async def test_flat_and_config_fields_reach_create_identically(capture_create) -
     assert (folded["min_value"], folded["max_value"], folded["step"]) == (1, 9, 2)
 
 
-async def test_config_accepts_core_names_and_name(capture_create) -> None:
+async def test_config_accepts_core_names_and_name(capture_create: _Captured) -> None:
     mcp, _ = await _registered_tool()
     await _call(
         mcp,
@@ -138,7 +141,7 @@ async def test_config_accepts_core_names_and_name(capture_create) -> None:
     assert capture_create.args[0][2:4] == ("Laps", "mdi:run")
 
 
-async def test_core_value_types_pass_through(capture_create) -> None:
+async def test_core_value_types_pass_through(capture_create: _Captured) -> None:
     """Core takes seconds for a timer and a fractional number initial."""
     mcp, _ = await _registered_tool()
     base = {"action": "create", "name": "T"}
@@ -151,7 +154,9 @@ async def test_core_value_types_pass_through(capture_create) -> None:
     assert boolean["initial"] is True
 
 
-async def test_config_rejects_unknown_and_conflicting_keys(capture_create) -> None:
+async def test_config_rejects_unknown_and_conflicting_keys(
+    capture_create: _Captured,
+) -> None:
     mcp, _ = await _registered_tool()
     base = {"helper_type": "input_number", "name": "T", "action": "create"}
     with pytest.raises(ToolError, match="Extra inputs are not permitted"):
@@ -466,7 +471,9 @@ async def test_empty_category_clears_via_the_component() -> None:
     assert write.call_args.kwargs["registry"] == {"category": ""}
 
 
-async def test_blank_clears_and_quote_only_is_rejected(capture_create) -> None:
+async def test_blank_clears_and_quote_only_is_rejected(
+    capture_create: _Captured,
+) -> None:
     mcp, _ = await _registered_tool()
     base = {"helper_type": "input_boolean", "name": "B", "action": "create"}
     await _call(mcp, **base, area_id="  ", icon=" ", category="")
@@ -670,7 +677,7 @@ async def test_write_falls_back_to_websocket_when_component_unavailable() -> Non
 
 class TestCatalogTransform:
     @pytest.fixture
-    def available(self, monkeypatch):
+    def available(self, monkeypatch: pytest.MonkeyPatch) -> None:
         caps = ComponentCaps(1, "2.2.2", frozenset({"helper_schemas", "helper_item",
                                                     "helper_write"}), {})  # fmt: skip
         monkeypatch.setattr(
@@ -683,7 +690,7 @@ class TestCatalogTransform:
         )
 
     async def test_registration_advertises_core_fields_and_keeps_wait(
-        self, available
+        self, available: None
     ) -> None:
         # The helper tools' registration installs the transform.
         _, tool = await _registered_tool()
@@ -697,7 +704,9 @@ class TestCatalogTransform:
         )
         assert "pattern" not in description
 
-    async def test_static_contract_without_component(self, monkeypatch):
+    async def test_static_contract_without_component(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from ha_mcp.transforms.component_helpers import ComponentHelperSchemaTransform
 
         monkeypatch.setattr(

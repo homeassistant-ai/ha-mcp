@@ -3,6 +3,21 @@
 # src/ha_mcp/settings_ui/locales/fr.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Vérifier le certificat TLS
+    description: Vérifier le certificat TLS du serveur Home Assistant. L'application
+      (add-on) se connecte via le proxy du Supervisor, cela n'a donc normalement aucun
+      effet et doit rester activé. Désactivez uniquement si vous avez reconfiguré
+      l'application (add-on) pour communiquer avec HA via un nom d'hôte HTTPS public
+      avec un certificat auto-signé ou une non-correspondance de nom d'hôte. La désactivation
+      affaiblit la sécurité du transport — laissez activé sauf si vous savez que vous
+      en avez besoin. Nécessite un redémarrage pour prendre effet.
+  ha_tool_concurrency:
+    name: Concurrence des outils Home Assistant
+    description: Limite optionnelle sur les appels d'outils Home Assistant externes
+      pour toutes les sessions. La concurrence interne pour REST, WebSocket et par
+      outil reste inchangée. 0 conserve un comportement illimité. Un appel en attente
+      de capacité échoue après 60 secondes.
   backup_hint:
     name: Niveau d'indication d'instantané HA complet (côté LLM)
     description: 'Ajuste le libellé de l''invite que le LLM voit dans la description
@@ -22,12 +37,6 @@ configuration:
       scripts / assistants / etc., utilisez le bouton **Activer la sauvegarde
 
       automatique des modifications** séparé ci-dessous.'
-  secret_path:
-    name: Remplacement du chemin secret
-    description: 'Chemin HTTP personnalisé optionnel pour le serveur MCP. Laissez
-      vide pour utiliser le chemin sécurisé généré automatiquement.
-
-      '
   enable_tool_search:
     name: Activer la recherche d'outils
     description: 'Remplacer le catalogue complet d''outils par une découverte basée
@@ -124,28 +133,6 @@ configuration:
       éditeur de la clé d''accusé de réception. Enfant de l''option « Attacher les
       compétences de bonnes pratiques aux écritures » ci-dessus et inerte lorsque
       ce parent est désactivé. Nécessite un redémarrage pour prendre effet.'
-  ha_tool_concurrency:
-    name: Concurrence des outils Home Assistant
-    description: Limite optionnelle sur les appels d'outils Home Assistant externes
-      pour toutes les sessions. La concurrence interne pour REST, WebSocket et par
-      outil reste inchangée. 0 conserve un comportement illimité. Un appel en attente
-      de capacité échoue après 60 secondes.
-  disabled_tools:
-    name: Outils désactivés (séparés par des virgules)
-    description: Les outils listés ici sont forcément désactivés et verrouillés dans
-      l'interface Web des paramètres (onglet Outils) — ils ne peuvent pas être réactivés
-      là-bas sans d'abord supprimer cette option. Un petit ensemble d'outils obligatoires
-      (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
-      ne peut pas être désactivé et continue de fonctionner même s'il est listé ici.
-      ha_get_skill_guide ne peut être désactivé que lorsque le mode strict de bonnes
-      pratiques (enable_strict_mandatory_bps) est désactivé. Noms d'outils séparés
-      par des virgules (p. ex. ha_call_event,ha_eval_template).
-  pinned_tools:
-    name: Outils épinglés (séparés par des virgules)
-    description: Les outils listés ici sont verrouillés épinglés — ils apparaissent
-      en haut de l'onglet Outils et ne peuvent pas être retirés de l'interface Web
-      des paramètres sans d'abord supprimer cette option. Utile en combinaison avec
-      la recherche d'outils. Noms d'outils séparés par des virgules.
   enable_auto_backup:
     name: Activer la sauvegarde automatique des modifications
     description: 'Capture un instantané par entité avant chaque appel d''outil MCP
@@ -165,6 +152,16 @@ configuration:
       option est désactivée, et une capture échouée la bloque. Activé par défaut ;
       désactiver cette option annule les captures au mieux et désactive les outils
       de fichier et raw-YAML avec elles. Nécessite un redémarrage pour prendre effet.'
+  auto_backup_throttle_minutes:
+    name: Limitation de la sauvegarde automatique (minutes)
+    description: Fenêtre de limitation par entité. 0 (par défaut) capture un instantané
+      à chaque écriture encapsulée. N>0 capture au plus un instantané par N minutes
+      par entité. Plage 0–1440.
+  auto_backup_retain_per_entity:
+    name: Conservation de la sauvegarde automatique (par entité)
+    description: Nombre maximum d'instantanés conservés par entité. Les instantanés
+      plus anciens au-delà de cette limite sont retirés à chaque capture réussie.
+      Par défaut 100, plage 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -182,16 +179,6 @@ configuration:
       equivalent backup services and commands in ha_call_service. Automatic pre-edit
       backups continue, and human actions in the web Settings UI remain available.
       Off by default; requires restart in the app.
-  auto_backup_throttle_minutes:
-    name: Limitation de la sauvegarde automatique (minutes)
-    description: Fenêtre de limitation par entité. 0 (par défaut) capture un instantané
-      à chaque écriture encapsulée. N>0 capture au plus un instantané par N minutes
-      par entité. Plage 0–1440.
-  auto_backup_retain_per_entity:
-    name: Conservation de la sauvegarde automatique (par entité)
-    description: Nombre maximum d'instantanés conservés par entité. Les instantanés
-      plus anciens au-delà de cette limite sont retirés à chaque capture réussie.
-      Par défaut 100, plage 1–10000.
   enable_snapshot_delete:
     name: Autoriser la suppression d'instantanés
     description: Permet à ha_manage_backup de supprimer des instantanés HA complets
@@ -205,12 +192,25 @@ configuration:
     description: Un instantané doit avoir au moins cet âge avant de pouvoir être supprimé.
       Plage 0–365 ; 0 désactive le seuil (les protections de l'instantané le plus
       récent et de la sauvegarde planifiée s'appliquent toujours). Par défaut 7.
-  verify_ssl:
-    name: Vérifier le certificat TLS
-    description: Vérifier le certificat TLS du serveur Home Assistant. L'application
-      (add-on) se connecte via le proxy du Supervisor, cela n'a donc normalement aucun
-      effet et doit rester activé. Désactivez uniquement si vous avez reconfiguré
-      l'application (add-on) pour communiquer avec HA via un nom d'hôte HTTPS public
-      avec un certificat auto-signé ou une non-correspondance de nom d'hôte. La désactivation
-      affaiblit la sécurité du transport — laissez activé sauf si vous savez que vous
-      en avez besoin. Nécessite un redémarrage pour prendre effet.
+  disabled_tools:
+    name: Outils désactivés (séparés par des virgules)
+    description: Les outils listés ici sont forcément désactivés et verrouillés dans
+      l'interface Web des paramètres (onglet Outils) — ils ne peuvent pas être réactivés
+      là-bas sans d'abord supprimer cette option. Un petit ensemble d'outils obligatoires
+      (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      ne peut pas être désactivé et continue de fonctionner même s'il est listé ici.
+      ha_get_skill_guide ne peut être désactivé que lorsque le mode strict de bonnes
+      pratiques (enable_strict_mandatory_bps) est désactivé. Noms d'outils séparés
+      par des virgules (p. ex. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Outils épinglés (séparés par des virgules)
+    description: Les outils listés ici sont verrouillés épinglés — ils apparaissent
+      en haut de l'onglet Outils et ne peuvent pas être retirés de l'interface Web
+      des paramètres sans d'abord supprimer cette option. Utile en combinaison avec
+      la recherche d'outils. Noms d'outils séparés par des virgules.
+  secret_path:
+    name: Remplacement du chemin secret
+    description: 'Chemin HTTP personnalisé optionnel pour le serveur MCP. Laissez
+      vide pour utiliser le chemin sécurisé généré automatiquement.
+
+      '

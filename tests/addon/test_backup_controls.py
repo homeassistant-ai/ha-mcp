@@ -70,8 +70,8 @@ def _boot_until_server_import(
         ({"enable_snapshot_actions": True, "backup_read_only": False}, "true", "false"),
         (
             {"enable_snapshot_actions": "false", "backup_read_only": "true"},
-            "false",
             "true",
+            "false",
         ),
         ("{invalid json", "true", "false"),
     ],
@@ -93,93 +93,4 @@ def test_app_startup_exports_backup_controls(
     )
     assert len(warnings) == (2 if malformed else 0)
     if isinstance(options, str):
-        message = " ".join(errors)
-        assert (
-            "Backup options apply only after parsing reaches their section" in message
-        )
-        assert "enable_snapshot_actions=true" in message
-        assert "backup_read_only=false" in message
-
-
-@pytest.mark.parametrize("failed_field", ["read_only_mode", "verify_ssl"])
-def test_app_option_error_preserves_when_backup_values_were_loaded(
-    failed_field: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    addon = _load_addon_start()
-    original_resolver = addon.resolve_bool_option
-
-    def fail_selected_field(config: dict[str, Any], key: str, default: bool) -> bool:
-        if key == failed_field:
-            raise ValueError("option read failed")
-        return original_resolver(config, key, default)
-
-    monkeypatch.setattr(addon, "resolve_bool_option", fail_selected_field)
-    options = {
-        "enable_auto_backup": False,
-        "auto_backup_throttle_minutes": 12,
-        "auto_backup_retain_per_entity": 50,
-        "enable_snapshot_delete": True,
-        "snapshot_delete_min_age_days": 20,
-        "enable_snapshot_actions": False,
-        "backup_read_only": True,
-    }
-    errors, _warnings = _boot_until_server_import(options, tmp_path, monkeypatch)
-    assert any("option read failed" in message for message in errors)
-    loaded = failed_field == "verify_ssl"
-    expected = {
-        "ENABLE_AUTO_BACKUP": "false" if loaded else "true",
-        "AUTO_BACKUP_THROTTLE_MINUTES": "12" if loaded else "0",
-        "AUTO_BACKUP_RETAIN_PER_ENTITY": "50" if loaded else "100",
-        "ENABLE_SNAPSHOT_DELETE": "true" if loaded else "false",
-        "SNAPSHOT_DELETE_MIN_AGE_DAYS": "20" if loaded else "7",
-        "ENABLE_SNAPSHOT_ACTIONS": "false" if loaded else "true",
-        "BACKUP_READ_ONLY": "true" if loaded else "false",
-    }
-    assert {env: os.environ[env] for env in expected} == expected
-
-
-@pytest.mark.parametrize("invalid", ["false", "true", 0, 1, None, [], {}])
-def test_malformed_app_backup_controls_warn_and_restrict_ai_actions(
-    invalid: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    addon = _load_addon_start()
-    monkeypatch.setattr(addon.os, "environ", dict(os.environ))
-    warnings: list[str] = []
-    monkeypatch.setattr(addon, "log_warning", warnings.append)
-    addon._apply_backup_env(
-        {"enable_snapshot_actions": invalid, "backup_read_only": invalid}
-    )
-
-    assert os.environ["ENABLE_SNAPSHOT_ACTIONS"] == "false"
-    assert os.environ["BACKUP_READ_ONLY"] == "true"
-    assert len(warnings) == 2
-    assert "enable_snapshot_actions" in warnings[0]
-    assert "False" in warnings[0]
-    assert "backup_read_only" in warnings[1]
-    assert "True" in warnings[1]
-
-
-def test_existing_app_backup_options_survive_startup_extraction(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    addon = _load_addon_start()
-    monkeypatch.setattr(addon.os, "environ", dict(os.environ))
-    expected = {
-        "ENABLE_AUTO_BACKUP": "false",
-        "AUTO_BACKUP_THROTTLE_MINUTES": "12",
-        "AUTO_BACKUP_RETAIN_PER_ENTITY": "50",
-        "ENABLE_SNAPSHOT_DELETE": "true",
-        "SNAPSHOT_DELETE_MIN_AGE_DAYS": "20",
-    }
-    for env in expected:
-        monkeypatch.setenv(env, "previous-value")
-    addon._apply_backup_env(
-        {
-            "enable_auto_backup": False,
-            "auto_backup_throttle_minutes": 12,
-            "auto_backup_retain_per_entity": 50,
-            "enable_snapshot_delete": True,
-            "snapshot_delete_min_age_days": 20,
-        }
-    )
-    assert {env: os.environ[env] for env in expected} == expected
+        assert "reverts to its addon-schema default" in " ".join(errors)

@@ -26,92 +26,70 @@ discovery:
 homeassistant_api: true
 host_network: true
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch}"
+# options and schema are generated from ha_mcp.config_settings by
+# scripts/generate_app_options.py. Do not edit them here.
 options:
+  verify_ssl: true
+  ha_tool_concurrency: 0
   backup_hint: "normal"
+  enable_beta_features: true
   enable_tool_search: false
+  tool_search_max_results: 5
   enable_tool_security_policies: false
-  # Registers ha_manage_security_policy, which can rewrite the policies the
-  # option above enforces. Declared here (not beta) because the web UI's
-  # Policies-tab toggle routes its save through Supervisor in add-on mode,
-  # which rejects any option the schema does not declare.
   enable_security_policy_tool: false
   read_only_mode: false
   redact_secrets: false
-  # Master beta gate — also dev-only (stable's schema does not declare
-  # this key; the stable web UI master remains the gate there). Default
-  # ON in dev so the master is pre-unlocked; the user only has to
-  # opt into individual sub-tools below to activate them.
-  enable_beta_features: true
-  # Beta sub-flags default OFF — each one is a separate opt-in that
-  # writes to the user's HA system, and shipping them on by default
-  # would risk damage on a fresh install. The master above being on
-  # just means "you can enable these from here," not "they are on."
+  enable_mandatory_bps: true
+  enable_strict_mandatory_bps: true
   enable_yaml_config_editing: false
-  # Per-key sub-gates of enable_yaml_config_editing — independently allow
-  # the automation / script / scene keys inside packages/*.yaml. Default
-  # OFF (opt-in per key); only meaningful when the parent
-  # enable_yaml_config_editing is on.
+  enable_yaml_edit_confirm: true
   enable_yaml_packages_automation: false
   enable_yaml_packages_script: false
   enable_yaml_packages_scene: false
-  # Two-step confirm flow for ha_config_set_yaml (#1720). Default ON — the
-  # first edit call returns a diff preview + confirm token and writes
-  # nothing; the edit lands only when repeated with that token. Sub-toggle
-  # of enable_yaml_config_editing; turn off only to save a round-trip.
-  enable_yaml_edit_confirm: true
-  enable_filesystem_tools: false
-  enable_dashboard_screenshot: false
-  enable_code_mode: false
   enable_lite_docstrings: false
-  enable_mandatory_bps: true
-  enable_strict_mandatory_bps: true
-  ha_tool_concurrency: 0
+  enable_filesystem_tools: false
+  enable_code_mode: false
+  enable_dashboard_screenshot: false
   enable_auto_backup: true
-  enable_snapshot_actions: true
-  backup_read_only: false
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
-  # Off by default (#1861) — an agent deleting a full HA snapshot is
-  # categorically riskier than the lightweight edits-scope auto-backups
-  # above (a snapshot may be the last recovery point after the agent
-  # itself broke something). A human opts in here, not the agent.
+  enable_snapshot_actions: true
+  backup_read_only: false
   enable_snapshot_delete: false
   snapshot_delete_min_age_days: 7
-  tool_search_max_results: 5
   disabled_tools: ""
   pinned_tools: ""
-  verify_ssl: true
 schema:
+  verify_ssl: bool?
+  ha_tool_concurrency: int(0,32)?
   backup_hint: list(strong|normal|weak|auto)
-  secret_path: str?
+  enable_beta_features: bool?
   enable_tool_search: bool?
+  tool_search_max_results: int(2,10)?
   enable_tool_security_policies: bool?
   enable_security_policy_tool: bool?
   read_only_mode: bool?
   redact_secrets: bool?
-  enable_beta_features: bool?
+  enable_mandatory_bps: bool?
+  enable_strict_mandatory_bps: bool?
   enable_yaml_config_editing: bool?
+  enable_yaml_edit_confirm: bool?
   enable_yaml_packages_automation: bool?
   enable_yaml_packages_script: bool?
   enable_yaml_packages_scene: bool?
-  enable_yaml_edit_confirm: bool?
-  enable_code_mode: bool?
   enable_lite_docstrings: bool?
-  enable_mandatory_bps: bool?
-  enable_strict_mandatory_bps: bool?
-  ha_tool_concurrency: int(0,32)?
   enable_filesystem_tools: bool?
+  enable_code_mode: bool?
   enable_dashboard_screenshot: bool?
   enable_auto_backup: bool?
-  enable_snapshot_actions: bool?
-  backup_read_only: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?
+  enable_snapshot_actions: bool?
+  backup_read_only: bool?
   enable_snapshot_delete: bool?
   snapshot_delete_min_age_days: int(0,365)?
-  tool_search_max_results: int(2,10)?
   disabled_tools: str?
   pinned_tools: str?
-  verify_ssl: bool?
+  secret_path: str?
 ports:
   9583/tcp: 9583

@@ -20,11 +20,22 @@ flavor: the `update-addon-config` job owns the version, and
 `semver-release.yml`'s `Copy changelog to addon directory` step owns the
 changelog. It does not synchronize functional configuration. When a non-beta
 capability should exist in both flavors, edit both `config.yaml` files in the
-same pull request. This includes `ingress`, `ports`, `host_network`,
-`options`, and `schema`. Beta-only keys are the documented exception; see
-[`docs/beta.md`](../beta.md) and the note in the app configuration.
+same pull request. This includes `ingress`, `ports` and `host_network`.
 Issue #2083 is the precedent: assuming the release pipeline would mirror
 functional configuration left `ingress` off the stable app.
+
+The `options:` and `schema:` blocks of both `config.yaml` files and
+`homeassistant-addon/app_options.json` are generated from the `Settings`
+model: a field whose `Setting` metadata carries an `AppOption` is an app
+option, and `AppOption.flavors` says which flavors declare it. To add or
+change an option, edit the field in `src/ha_mcp/config_settings.py`, then run
+`python scripts/generate_app_options.py` and
+`python scripts/generate_locales.py`. `start.py` exports each option from
+`app_options.json`; it cannot import `ha_mcp` for it, because importing the
+package builds the server's settings before the options are exported. Every
+option needs a section in the stable `DOCS.md` and a row in the dev
+`DOCS.md` table. Beta-only keys are declared in the dev flavor only; see
+[`docs/beta.md`](../beta.md).
 
 Both app flavors select architecture-specific images through explicit
 `version:` pins. Do not infer their state from the general server container's
