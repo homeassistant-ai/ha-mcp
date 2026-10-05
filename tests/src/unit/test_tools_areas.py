@@ -7,6 +7,7 @@ covers both cheaply.
 """
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -818,7 +819,7 @@ class TestClearableParamsThroughMcp:
     these drive the registered tool the way a client does."""
 
     @pytest.fixture
-    async def tool(self):
+    async def tool(self) -> tuple[Any, MagicMock]:
         from ha_mcp._vendor.fastmcp import FastMCP
         from ha_mcp.tools.tools_areas import register_area_tools
 
@@ -842,7 +843,9 @@ class TestClearableParamsThroughMcp:
         "humidity_entity_id",
     )
 
-    async def test_schema_advertises_null_and_omission_without_a_default(self, tool):
+    async def test_schema_advertises_null_and_omission_without_a_default(
+        self, tool: tuple[Any, MagicMock]
+    ) -> None:
         tool, _ = tool
         props = tool.parameters["properties"]
         for name in self._CLEARABLE:
@@ -850,7 +853,9 @@ class TestClearableParamsThroughMcp:
             assert {"type": "null"} in props[name]["anyOf"], name
             assert name not in tool.parameters.get("required", []), name
 
-    async def test_omitted_params_are_absent_from_the_write(self, tool):
+    async def test_omitted_params_are_absent_from_the_write(
+        self, tool: tuple[Any, MagicMock]
+    ) -> None:
         tool, client = tool
         await tool.run({"kind": "area", "id": "kitchen", "name": "K2"})
         sent = client.send_websocket_message.call_args.args[0]
@@ -860,7 +865,9 @@ class TestClearableParamsThroughMcp:
             "name": "K2",
         }
 
-    async def test_explicit_null_clears_every_clearable_param(self, tool):
+    async def test_explicit_null_clears_every_clearable_param(
+        self, tool: tuple[Any, MagicMock]
+    ) -> None:
         tool, client = tool
         await tool.run(
             {"kind": "area", "id": "kitchen", **dict.fromkeys(self._CLEARABLE)}
@@ -869,13 +876,15 @@ class TestClearableParamsThroughMcp:
         for name in self._CLEARABLE:
             assert name in sent and sent[name] is None, name
 
-    async def test_empty_string_still_clears(self, tool):
+    async def test_empty_string_still_clears(self, tool: tuple[Any, MagicMock]) -> None:
         tool, client = tool
         await tool.run({"kind": "area", "id": "kitchen", "temperature_entity_id": ""})
         sent = client.send_websocket_message.call_args.args[0]
         assert sent["temperature_entity_id"] is None
 
-    async def test_omitted_params_do_not_leak_the_sentinel_into_usage_logs(self, tool):
+    async def test_omitted_params_do_not_leak_the_sentinel_into_usage_logs(
+        self, tool: tuple[Any, MagicMock]
+    ) -> None:
         """log_tool_usage records the call's kwargs, and ha_report_issue returns
         those entries as structured content, so the UNSET default must serialize."""
         from ha_mcp.utils.usage_logger import get_recent_logs
