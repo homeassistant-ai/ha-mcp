@@ -874,7 +874,7 @@ class TestWithAutoBackupDecorator:
                 entity_id: str,
                 *,
                 tool_name: str | None = None,
-                mandatory: bool = False,
+                **_kwargs: Any,
             ) -> None:
                 calls.append((domain, entity_id, tool_name))
 
@@ -3168,7 +3168,7 @@ class TestBlueprintDecoratorWiring:
                 entity_id: str,
                 *,
                 tool_name: str | None = None,
-                mandatory: bool = False,
+                **_kwargs: Any,
             ) -> None:
                 calls.append((domain, entity_id, tool_name))
 
