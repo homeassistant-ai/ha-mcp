@@ -137,7 +137,7 @@ async def test_restore_refuses_a_changed_option_the_form_cannot_set(
     client = _options_flow(["source", "periodically_resetting"])
     stored["cycle"] = "monthly"
     handler = bm._make_flow_helper_handler("utility_meter")
-    with pytest.raises(bm.BackupRestoreError, match="identity changed") as caught:
+    with pytest.raises(bm.BackupRestoreError, match="no restore form offers") as caught:
         await handler.restore(
             client, "meter-entry", {"entry_id": "meter-entry", "options": dict(_METER)}
         )

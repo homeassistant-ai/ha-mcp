@@ -606,7 +606,7 @@ async def test_restore_refusal_retains_actionable_reason(
         )
         assert "Nothing was changed" in rendered.alerts[0]
         assert "unit_of_measurement" in rendered.alerts[0]
-        assert "only be set when the helper is created" in rendered.alerts[0]
+        assert "not offered by any restore form" in rendered.alerts[0]
         assert "secret-marker" not in rendered.alerts[0]
 
 

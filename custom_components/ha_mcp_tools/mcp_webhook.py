@@ -125,7 +125,7 @@ _ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream", "text/plain")
 _CLIENT_TIMEOUT = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
 
 # The in-process server closes an idle keep-alive connection after 5 s
-# (``embedded_server.SERVER_KEEPALIVE_SECONDS``); aiohttp pools one for 15 s. A
+# (``const.SERVER_KEEPALIVE_SECONDS``); aiohttp pools one for 15 s. A
 # request sent as the server closes a pooled connection fails with a connection
 # reset (502), so idle relay connections are dropped first.
 _RELAY_KEEPALIVE_SECONDS = 3

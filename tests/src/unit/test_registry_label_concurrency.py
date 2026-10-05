@@ -503,7 +503,9 @@ async def test_template_restore_releases_both_ids_on_failure(
     monkeypatch.setattr("ha_mcp.backup_manager._created_entity", created)
     monkeypatch.setattr("ha_mcp.backup_manager._check_entity_collision", collision)
     client = SimpleNamespace(send_websocket_message=send)
-    with pytest.raises(error):
+    # A transient error is reported as a restore outcome; cancellation passes.
+    expected = BackupRestoreError if error is TimeoutError else error
+    with pytest.raises(expected):
         await _restore_entity_ids(client, "entry", "entry", [_saved(target)])
     results = await asyncio.wait_for(
         asyncio.gather(

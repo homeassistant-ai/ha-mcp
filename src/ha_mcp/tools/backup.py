@@ -52,6 +52,7 @@ from .backup_access import (
 from .backup_access import (
     require_backup_param as _require,
 )
+from .backup_on_demand import capture_on_demand
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -1844,48 +1845,7 @@ async def _edits_create(
                 ],
             )
         )
-    try:
-        # Mandatory: a fetch that fails is reported as such, not as a missing
-        # entity (a flow helper the component cannot read, an old component
-        # without subentry data).
-        path = await mgr.maybe_snapshot(
-            dom,
-            eid,
-            tool_name="ha_manage_backup.edits.create",
-            force=True,
-            mandatory=True,
-        )
-    except MandatoryBackupError as err:
-        cause = err.__cause__
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.BACKUP_CAPTURE_FAILED,
-                f"Could not snapshot {dom}:{eid}: "
-                + (
-                    err.safe_detail
-                    or f"its current configuration could not be read "
-                    f"({type(cause).__name__ if cause else 'capture failed'})"
-                ),
-                context={"domain": dom, "entity_id": eid},
-                suggestions=err.suggestions
-                or ["Check the server log for the capture failure"],
-            )
-        )
-    if path is None:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                f"Could not snapshot {dom}:{eid} — entity not found "
-                + "or fetch returned no config",
-                context={"domain": dom, "entity_id": eid},
-                suggestions=[
-                    "Verify the entity exists via the matching "
-                    + "ha_config_get_* tool first",
-                    "For helpers, pass domain='helper_<helper_type>' "
-                    + "(e.g. 'helper_input_boolean')",
-                ],
-            )
-        )
+    path = await capture_on_demand(mgr, dom, eid)
     # The id the snapshot is stored under: a flow helper's config entry id
     # when the caller passed an entity_id alias, else the id as given.
     eid = await asyncio.to_thread(mgr._payload_entity_id, path) or eid

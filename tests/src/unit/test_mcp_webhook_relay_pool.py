@@ -13,10 +13,8 @@ install()
 import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK_ID,
-    WEBHOOK_AUTH_NONE,
-)
-from custom_components.ha_mcp_tools.embedded_server import (  # noqa: E402
     SERVER_KEEPALIVE_SECONDS,
+    WEBHOOK_AUTH_NONE,
 )
 
 

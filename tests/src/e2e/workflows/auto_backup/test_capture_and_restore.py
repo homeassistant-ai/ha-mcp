@@ -848,7 +848,7 @@ class TestTemplateHelperCaptureRestore:
                         "entity_id": missing_id,
                     },
                 )
-                assert snapshot["error"]["code"] == "RESOURCE_NOT_FOUND"
+                assert snapshot["error"]["code"] == "BACKUP_CAPTURE_FAILED"
                 listing = await mcp.call_tool_success(
                     "ha_manage_backup",
                     {
