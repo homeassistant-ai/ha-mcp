@@ -12,7 +12,7 @@ configuration:
       wszystkich sesjach. Wewnętrzna współbieżność REST, WebSocket oraz rozgałęziania
       dla poszczególnych narzędzi pozostaje bez zmian. Wartość 0 zachowuje zachowanie
       bez limitu. Wywołanie oczekujące na wolne zasoby kończy się niepowodzeniem po
-      60 sekundach. Zakres 0–32. Wymagany restart.
+      60 sekundach. Zakres 0–32. Wymagany restart. Range 0–32.
   backup_hint:
     name: Poziom podpowiedzi o kopii zapasowej
     description: Kontroluje, jak silnie LLM jest zachęcany do wykonania pełnej migawki
@@ -54,7 +54,8 @@ configuration:
       ha_search_tools, gdy wyszukiwanie narzędzi jest włączone; przypisane narzędzie,
       które mieści się w tym limicie, jest dodawane jako krótki wpis zawierający tylko
       nazwę na jego początku. Niższe wartości (2-3) oszczędzają tokeny kontekstu,
-      ale mogą pominąć odpowiednie narzędzia. Zakres: 2-10. Wymaga ponownego uruchomienia.'
+      ale mogą pominąć odpowiednie narzędzia. Zakres: 2-10. Wymaga ponownego uruchomienia.
+      Range 2–10.'
   enable_tool_security_policies:
     name: Włącz zasady bezpieczeństwa narzędzi (zaawansowane)
     description: Zabezpiecz wywołania narzędzi wysokiego ryzyka (kontrola zamków/alarmów,
@@ -235,11 +236,11 @@ configuration:
   auto_backup_throttle_minutes:
     name: Ograniczenie (minuty)
     description: Ograniczenie na encję. 0 = każdy zapis; N > 0 = co najwyżej jedna
-      kopia zapasowa na N minut. Zakres 0–1440.
+      kopia zapasowa na N minut. Zakres 0–1440. Range 0–1440.
   auto_backup_retain_per_entity:
     name: Zachowaj na encję
     description: Maksymalna liczba migawek przechowywanych na encję (1–10000). Starsze
-      są usuwane.
+      są usuwane. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -262,7 +263,7 @@ configuration:
   snapshot_delete_min_age_days:
     name: Minimalny wiek migawki do usunięcia (dni)
     description: Migawka musi mieć co najmniej tyle lat, zanim zostanie usunięta.
-      Zakres 0–365.
+      Zakres 0–365. Range 0–365.
   disabled_tools:
     name: Wyłączone narzędzia (oddzielone przecinkami)
     description: Narzędzia wymienione tutaj są wymuszone na wyłączone i zablokowane

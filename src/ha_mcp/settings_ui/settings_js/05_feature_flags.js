@@ -13,7 +13,7 @@ const FEATURE_META = {
   },
   tool_search_max_results: {
     label: "Tool search max results",
-    help: "Maximum number of hidden tools returned per ha_search_tools call when tool search is enabled; a pinned tool that ranks inside that top count is added as a short name-only entry on top of it. Lower values (2-3) save context tokens but may miss relevant tools. Range: 2-10. Requires restart.",
+    help: "Maximum number of hidden tools returned per ha_search_tools call when tool search is enabled; a pinned tool that ranks inside that top count is added as a short name-only entry on top of it. Lower values (2-3) save context tokens but may miss relevant tools. Requires restart.",
   },
   enable_tool_security_policies: {
     label: "Enable Tool Security Policies (advanced)",
@@ -252,7 +252,7 @@ function renderFeatureFlags(flags) {
       : '';
     info.innerHTML =
       `<div class="feature-name" id="label-feature-${escapeHtml(fieldName)}">${escapeHtml(meta.label)}</div>` +
-      `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
+      `<div class="feature-help">${escapeHtml(helpWithFacts(meta.help, f))}</div>` +
       lockedNote + infoNote;
 
     const control = document.createElement('div');
@@ -433,7 +433,7 @@ function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByG
       : '';
     info.innerHTML =
       `<div class="feature-name" id="label-feature-${escapeHtml(fieldName)}">${escapeHtml(meta.label)}</div>` +
-      `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
+      `<div class="feature-help">${escapeHtml(helpWithFacts(meta.help, f))}</div>` +
       lockedNote + infoNote;
 
     const control = document.createElement('div');
@@ -520,7 +520,7 @@ function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
     }
     info.innerHTML =
       `<div class="feature-name" id="label-feature-${escapeHtml(f.field)}">${escapeHtml(meta.label)}</div>` +
-      `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
+      `<div class="feature-help">${escapeHtml(helpWithFacts(meta.help, f))}</div>` +
       lockedNote;
 
     const control = document.createElement('div');
@@ -535,7 +535,7 @@ function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
       inputEl = document.createElement('input');
       inputEl.type = 'number';
       inputEl.value = f.value;
-      if (typeof f.min === 'number') inputEl.min = f.min;
+      if (typeof f.min === 'number') inputEl.min = f.off_value ?? f.min;
       if (typeof f.max === 'number') inputEl.max = f.max;
       if (f.type === 'float') inputEl.step = '0.1';
     } else {

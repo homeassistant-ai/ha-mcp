@@ -7,13 +7,13 @@ configuration:
     name: Verify TLS certificates
     description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
       only on a trusted network, for a self-signed certificate or a hostname mismatch:
-      it weakens transport security. Restart required.'
+      it weakens transport security.'
   ha_tool_concurrency:
     name: Home Assistant tool concurrency
     description: Optional limit on outer Home Assistant tool calls across all sessions.
       Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
       unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
-      0–32. Restart required.
+      0–32.
   backup_hint:
     name: Backup hint level
     description: How strongly AI assistants are told to suggest a full Home Assistant
@@ -39,10 +39,10 @@ configuration:
       after changing any setting here.'
   tool_search_max_results:
     name: Tool search max results
-    description: 'Maximum number of hidden tools returned per ha_search_tools call
+    description: Maximum number of hidden tools returned per ha_search_tools call
       when tool search is enabled; a pinned tool that ranks inside that top count
       is added as a short name-only entry on top of it. Lower values (2-3) save context
-      tokens but may miss relevant tools. Range: 2-10. Requires restart.'
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
   enable_tool_security_policies:
     name: Enable Tool Security Policies (advanced)
     description: Gate high-stakes tool calls (lock/alarm control, automation writes,

@@ -13,7 +13,7 @@ configuration:
       eyni vaxtda icrası üçün istəyə bağlı limit. Daxili REST, WebSocket və hər alətin
       daxilində şaxələnən çağırışların paralel icrası dəyişmir. 0 məhdudiyyətsiz davranışı
       saxlayır. İcra üçün boş yer gözləyən çağırış 60 saniyədən sonra uğursuz olur.
-      Aralıq 0–32. Yenidən başlatmaq tələb olunur.
+      Aralıq 0–32. Yenidən başlatmaq tələb olunur. Range 0–32.
   backup_hint:
     name: Ehtiyat nüsxə tövsiyəsinin səviyyəsi
     description: Riskli yazma əməliyyatlarından əvvəl HA-nın tam anlıq nüsxəsini yaratmaq
@@ -45,7 +45,7 @@ configuration:
       gizli alətlərin maksimum sayı; həmin yuxarı sayda yer alan bərkidilmiş alət
       onun üzərinə qısa yalnız ad daxiletməsi kimi əlavə edilir. Aşağı qiymətlər (2-3)
       kontekst tokenlərinə qənaət edir, lakin uyğun alətləri qaçıra bilər. Aralıq:
-      2-10. Yenidən başladılmasını tələb edir.'
+      2-10. Yenidən başladılmasını tələb edir. Range 2–10.'
   enable_tool_security_policies:
     name: Alətlərin təhlükəsizlik siyasətlərini aktivləşdir (qabaqcıl)
     description: Ciddi nəticələr doğura bilən alət çağırışları (kilid/siqnalizasiya
@@ -118,11 +118,11 @@ configuration:
   auto_backup_throttle_minutes:
     name: Tezlik məhdudiyyəti (dəqiqə)
     description: Hər obyekt üzrə tezlik məhdudiyyəti. 0 = hər yazmada; N > 0 = hər
-      N dəqiqədə ən çox bir ehtiyat nüsxə. Aralıq 0–1440.
+      N dəqiqədə ən çox bir ehtiyat nüsxə. Aralıq 0–1440. Range 0–1440.
   auto_backup_retain_per_entity:
     name: Hər obyekt üçün saxlanılan nüsxə sayı
     description: Hər obyekt üçün saxlanılan anlıq nüsxələrin maksimum sayı (1–10000).
-      Köhnələri növbə ilə silinir.
+      Köhnələri növbə ilə silinir. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -146,7 +146,7 @@ configuration:
   snapshot_delete_min_age_days:
     name: Silmək üçün anlıq nüsxənin minimum yaşı (gün)
     description: Anlıq nüsxənin silinməsi üçün yaradılmasından ən azı bu qədər vaxt
-      keçməlidir. Aralıq 0–365.
+      keçməlidir. Aralıq 0–365. Range 0–365.
   disabled_tools:
     name: Deaktiv alətlər (vergüllə ayrılmış)
     description: Burada sadalanan alətlər məcburi söndürülür və veb Parametrlər interfeysində

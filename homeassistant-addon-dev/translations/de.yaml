@@ -13,6 +13,7 @@ configuration:
       Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit
       bleibt unverändert. 0 behält das unbegrenzte Verhalten bei. Ein auf Kapazität
       wartender Aufruf schlägt nach 60 Sekunden fehl. Bereich 0–32. Neustart erforderlich.
+      Range 0–32.
   backup_hint:
     name: Backup-Hinweis-Level
     description: Steuert, wie stark das LLM aufgefordert wird, einen vollständigen
@@ -53,7 +54,8 @@ configuration:
       zurückgegeben werden, wenn die Tool-Suche aktiviert ist; ein angepinntes Tool,
       das in diesen oberen Bereich fällt, wird zusätzlich als kurzer Eintrag mit nur
       dem Namen oben hinzugefügt. Niedrigere Werte (2-3) sparen Kontexte-Tokens, können
-      aber relevante Tools verfehlen. Bereich: 2-10. Erfordert einen Neustart.'
+      aber relevante Tools verfehlen. Bereich: 2-10. Erfordert einen Neustart. Range
+      2–10.'
   enable_tool_security_policies:
     name: Tool-Sicherheitsrichtlinien aktivieren (erweitert)
     description: Gating kritischer Tool-Aufrufe (Schloss-/Alarmsteuerung, Automatisierungsschreibvorgänge
@@ -234,11 +236,11 @@ configuration:
   auto_backup_throttle_minutes:
     name: Drosselung (Minuten)
     description: Drosselung pro Entität. 0 = jeder Schreibvorgang; N > 0 = höchstens
-      ein Backup pro N Minuten. Bereich 0-1440.
+      ein Backup pro N Minuten. Bereich 0-1440. Range 0–1440.
   auto_backup_retain_per_entity:
     name: Behalten pro Entität
     description: Maximale Snapshots, die pro Entität behalten werden (1-10000). Ältere
-      rotieren heraus.
+      rotieren heraus. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -261,7 +263,7 @@ configuration:
   snapshot_delete_min_age_days:
     name: Mindestalter des Snapshots zum Löschen (Tage)
     description: Ein Snapshot muss mindestens so alt sein, bevor er gelöscht wird.
-      Bereich 0-365.
+      Bereich 0-365. Range 0–365.
   disabled_tools:
     name: Deaktivierte Tools (kommagetrennt)
     description: Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI

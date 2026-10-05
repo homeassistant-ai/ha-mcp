@@ -10,7 +10,7 @@ configuration:
     name: Home Assistant 도구 동시성
     description: 모든 세션에 걸친 외부 Home Assistant 도구 호출에 대한 선택적 제한입니다. 내부 REST, WebSocket
       및 도구별 팬아웃 동시성은 변경되지 않습니다. 0은 무제한 동작을 유지합니다. 용량을 기다리는 호출은 60초 후에 실패합니다. 범위는 0~32입니다.
-      다시 시작이 필요합니다.
+      다시 시작이 필요합니다. Range 0–32.
   backup_hint:
     name: 백업 권유 강도
     description: 위험한 쓰기 작업 전에 HA 전체 스냅숏을 만들도록 LLM에 얼마나 강하게 권유할지 정합니다.
@@ -35,7 +35,7 @@ configuration:
     name: 도구 검색 최대 결과 수
     description: '도구 검색이 활성화된 경우 ha_search_tools 호출당 반환되는 숨겨진 도구의 최대 개수입니다. 해당 상위
       개수에 포함된 고정(pinned) 도구는 그 위에 이름만 있는 짧은 항목으로 추가됩니다. 낮은 값(2-3)은 컨텍스트 토큰을 절약하지만
-      관련 도구를 누락할 수 있습니다. 범위: 2-10. 다시 시작해야 합니다.'
+      관련 도구를 누락할 수 있습니다. 범위: 2-10. 다시 시작해야 합니다. Range 2–10.'
   enable_tool_security_policies:
     name: 도구 보안 정책 사용(고급)
     description: 위험도가 높은 도구 호출(잠금·경보 제어, 자동화 쓰기 등)에 사용자 승인을 요구합니다. 보호된 도구가 호출되면 에이전트는
@@ -147,10 +147,11 @@ configuration:
       지나지 않았으면 캡처를 건너뛰며, 필수 모드에서도 쓰기는 계속 진행됩니다.
   auto_backup_throttle_minutes:
     name: 제한 간격(분)
-    description: 엔티티별 제한 간격입니다. 0 = 쓰기마다, N > 0 = N분당 최대 한 번 백업. 범위 0~1440.
+    description: 엔티티별 제한 간격입니다. 0 = 쓰기마다, N > 0 = N분당 최대 한 번 백업. 범위 0~1440. Range
+      0–1440.
   auto_backup_retain_per_entity:
     name: 엔티티당 보관 개수
-    description: 엔티티당 보관하는 최대 스냅숏 수(1~10000)입니다. 오래된 것부터 밀려납니다.
+    description: 엔티티당 보관하는 최대 스냅숏 수(1~10000)입니다. 오래된 것부터 밀려납니다. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -172,7 +173,7 @@ configuration:
       지 얼마 되지 않은 스냅숏은 계속 보호합니다.
   snapshot_delete_min_age_days:
     name: 삭제 가능한 최소 스냅숏 보관 기간(일)
-    description: 스냅숏은 최소 이 기간이 지나야 삭제할 수 있습니다. 범위 0~365.
+    description: 스냅숏은 최소 이 기간이 지나야 삭제할 수 있습니다. 범위 0~365. Range 0–365.
   disabled_tools:
     name: 비활성화할 도구(쉼표로 구분)
     description: '여기에 나열한 도구는 강제로 꺼지고 웹 설정 UI(도구 탭)에서 잠깁니다. 이 옵션을 먼저 해제하지 않으면 거기서

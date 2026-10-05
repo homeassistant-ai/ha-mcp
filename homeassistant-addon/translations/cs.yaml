@@ -11,7 +11,7 @@ configuration:
     description: Volitelný limit pro vnější volání nástrojů Home Assistant napříč
       všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé
       nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající
-      na kapacitu selže po 60 sekundách. Rozsah 0–32. Vyžadován restart.
+      na kapacitu selže po 60 sekundách. Rozsah 0–32. Vyžadován restart. Range 0–32.
   backup_hint:
     name: Úroveň nápovědy k zálohování
     description: Určuje, jak silně je LLM vyzváno k vytvoření úplného snímku HA před
@@ -41,7 +41,7 @@ configuration:
       když je vyhledávání nástrojů povolené; připnutý nástroj, který se umisťuje v
       rámci tohoto horního počtu, je přidán jako krátká položka obsahující pouze název
       navrch. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou minout relevantní
-      nástroje. Rozsah: 2-10. Vyžaduje restart.'
+      nástroje. Rozsah: 2-10. Vyžaduje restart. Range 2–10.'
   enable_tool_security_policies:
     name: Povolit zásady zabezpečení nástrojů (pokročilé)
     description: Podmiňuje vysoce rizikové volání nástrojů (ovládání zámků/alarmů,
@@ -111,11 +111,11 @@ configuration:
   auto_backup_throttle_minutes:
     name: Omezení (minuty)
     description: Omezení na entitu. 0 = každý zápis; N > 0 = maximálně jedna záloha
-      za N minut. Rozsah 0–1440.
+      za N minut. Rozsah 0–1440. Range 0–1440.
   auto_backup_retain_per_entity:
     name: Zachovat na entitu
     description: Maximální počet snímků uchovávaných na entitu (1–10000). Starší se
-      postupně odstraňují.
+      postupně odstraňují. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -138,6 +138,7 @@ configuration:
   snapshot_delete_min_age_days:
     name: Minimální stáří snímku pro smazání (dny)
     description: Snímek musí být před smazáním alespoň takto starý. Rozsah 0–365.
+      Range 0–365.
   disabled_tools:
     name: Zakázané nástroje (oddělené čárkami)
     description: Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém

@@ -12,6 +12,7 @@ configuration:
       in tutte le sessioni. La concorrenza interna di REST, WebSocket e fan-out per
       strumento rimane invariata. 0 mantiene il comportamento illimitato. Una chiamata
       in attesa di capacità fallisce dopo 60 secondi. Intervallo 0–32. Riavvio necessario.
+      Range 0–32.
   backup_hint:
     name: Livello del suggerimento di backup
     description: Controlla con quanta insistenza l'LLM viene invitato a creare uno
@@ -54,7 +55,7 @@ configuration:
       fissato che rientra in quel conteggio massimo viene aggiunto come voce breve
       con solo il nome in cima. Valori più bassi (2-3) fanno risparmiare token di
       contesto ma potrebbero perdere strumenti rilevanti. Intervallo: 2-10. Richiede
-      il riavvio.'
+      il riavvio. Range 2–10.'
   enable_tool_security_policies:
     name: Attiva i criteri di sicurezza degli strumenti (avanzato)
     description: Subordina all'approvazione dell'utente le chiamate agli strumenti
@@ -242,11 +243,11 @@ configuration:
   auto_backup_throttle_minutes:
     name: Limite di frequenza (minuti)
     description: Limite per singola entità. 0 = a ogni scrittura; N > 0 = al massimo
-      un backup ogni N minuti. Intervallo 0–1440.
+      un backup ogni N minuti. Intervallo 0–1440. Range 0–1440.
   auto_backup_retain_per_entity:
     name: Snapshot conservati per entità
     description: Numero massimo di snapshot conservati per entità (1–10000). I più
-      vecchi vengono eliminati a rotazione.
+      vecchi vengono eliminati a rotazione. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -270,7 +271,7 @@ configuration:
   snapshot_delete_min_age_days:
     name: Età minima dello snapshot per l'eliminazione (giorni)
     description: Uno snapshot deve avere almeno questa età prima di poter essere eliminato.
-      Intervallo 0–365.
+      Intervallo 0–365. Range 0–365.
   disabled_tools:
     name: Strumenti disattivati (separati da virgole)
     description: 'Gli strumenti elencati qui vengono forzatamente disattivati e bloccati

@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
@@ -135,6 +136,31 @@ class TestResolveText:
             )
             == "stable-specific English"
         )
+
+    def test_app_page_states_the_schema_range_in_the_reader_language(
+        self,
+    ) -> None:
+        """The catalog sentences leave ranges out, so the app Configuration
+        page would show none without this."""
+        english = {
+            "common.range": "Range {min}–{max}.",
+            "addon.limit.name": "Limit",
+            "addon.limit.description": "How many.",
+            "addon.flag.name": "Flag",
+            "addon.flag.description": "On or off.",
+        }
+        german = {"common.range": "Bereich {min}–{max}."}
+        configuration = yaml.safe_load(
+            generate_locales.addon_yaml(
+                "stable",
+                {"limit": "int(0,32)?", "flag": "bool?"},
+                german,
+                english,
+                "de",
+            )
+        )["configuration"]
+        assert configuration["limit"]["description"] == "How many. Bereich 0–32."
+        assert configuration["flag"]["description"] == "On or off."
 
     def test_missing_canonical_string_names_the_key_to_add(self) -> None:
         with pytest.raises(SystemExit, match=r"addon\.opt\.name"):

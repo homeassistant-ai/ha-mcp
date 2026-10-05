@@ -12,7 +12,8 @@ configuration:
     description: Limite optionnelle sur les appels d'outils Home Assistant externes
       pour toutes les sessions. La concurrence interne pour REST, WebSocket et par
       outil reste inchangée. 0 conserve un comportement illimité. Un appel en attente
-      de capacité échoue après 60 secondes. Plage de 0 à 32. Redémarrage requis.
+      de capacité échoue après 60 secondes. Plage de 0 à 32. Redémarrage requis. Range
+      0–32.
   backup_hint:
     name: Niveau d'indication de sauvegarde
     description: Contrôle la force avec laquelle le LLM est invité à effectuer un
@@ -45,7 +46,8 @@ configuration:
       lorsque la recherche d''outils est activée ; un outil épinglé qui se classe
       dans ce nombre maximal est ajouté en tant qu''entrée courte avec uniquement
       le nom en plus. Des valeurs plus faibles (2-3) économisent des jetons de contexte
-      mais peuvent manquer des outils pertinents. Plage : 2-10. Nécessite un redémarrage.'
+      mais peuvent manquer des outils pertinents. Plage : 2-10. Nécessite un redémarrage.
+      Range 2–10.'
   enable_tool_security_policies:
     name: Activer les politiques de sécurité des outils (avancé)
     description: Contrôle les appels d'outils à enjeux élevés (contrôle des serrures/alarmes,
@@ -120,11 +122,11 @@ configuration:
   auto_backup_throttle_minutes:
     name: Limitation (minutes)
     description: Limitation par entité. 0 = chaque écriture ; N > 0 = au plus une
-      sauvegarde par N minutes. Plage 0–1440.
+      sauvegarde par N minutes. Plage 0–1440. Range 0–1440.
   auto_backup_retain_per_entity:
     name: Conserver par entité
     description: Nombre maximum d'instantanés conservés par entité (1–10000). Les
-      plus anciens sont retirés.
+      plus anciens sont retirés. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -148,7 +150,7 @@ configuration:
   snapshot_delete_min_age_days:
     name: Âge minimum de l'instantané pour suppression (jours)
     description: Un instantané doit avoir au moins cet âge avant d'être supprimé.
-      Plage 0–365.
+      Plage 0–365. Range 0–365.
   disabled_tools:
     name: Outils désactivés (séparés par des virgules)
     description: Les outils listés ici sont forcément désactivés et verrouillés dans

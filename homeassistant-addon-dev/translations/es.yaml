@@ -13,7 +13,7 @@ configuration:
       en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución
       por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una
       llamada que espera capacidad falla después de 60 segundos. Rango de 0 a 32.
-      Requiere reinicio.
+      Requiere reinicio. Range 0–32.
   backup_hint:
     name: Nivel de la indicación de copia de seguridad
     description: Controla con cuánta insistencia se pide al LLM que haga una instantánea
@@ -56,7 +56,7 @@ configuration:
       fijada que se encuentre dentro de ese recuento superior se añade como una entrada
       breve de solo nombre además de este. Los valores más bajos (2-3) ahorran tokens
       de contexto, pero pueden omitir herramientas relevantes. Rango: 2-10. Requiere
-      reinicio.'
+      reinicio. Range 2–10.'
   enable_tool_security_policies:
     name: Activar las políticas de seguridad de herramientas (avanzado)
     description: Somete a aprobación del usuario las llamadas a herramientas de alto
@@ -244,11 +244,11 @@ configuration:
   auto_backup_throttle_minutes:
     name: Limitación (minutos)
     description: Limitación por entidad. 0 = en cada escritura; N > 0 = como mucho
-      una copia cada N minutos. Rango 0–1440.
+      una copia cada N minutos. Rango 0–1440. Range 0–1440.
   auto_backup_retain_per_entity:
     name: Conservar por entidad
     description: Número máximo de instantáneas conservadas por entidad (1–10000).
-      Las más antiguas se rotan.
+      Las más antiguas se rotan. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -271,7 +271,7 @@ configuration:
   snapshot_delete_min_age_days:
     name: Antigüedad mínima de la instantánea para eliminarla (días)
     description: Una instantánea debe tener al menos esta antigüedad para poder eliminarse.
-      Rango 0–365.
+      Rango 0–365. Range 0–365.
   disabled_tools:
     name: Herramientas desactivadas (separadas por comas)
     description: 'Las herramientas indicadas aquí quedan forzadas a desactivadas y

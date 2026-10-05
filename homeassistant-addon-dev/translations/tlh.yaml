@@ -11,7 +11,7 @@ configuration:
     description: Optional limit on outer Home Assistant tool calls across all sessions.
       Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
       unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
-      0–32. Restart required.
+      0–32.
   backup_hint:
     name: polqa'meH De' chup HoS
     description: Qobbogh ghItlhmeH mIwmey qaSpa' HA Dotlh mIllogh naQ chenmoH LLM
@@ -40,7 +40,7 @@ configuration:
     name: jan nej mI' jenqu'
     description: jan nej chu'lu'taHvIS ha_search_tools nobbogh janmey mI' jenqu'.
       mI' mach (2-3) wIvlu'chugh context tokenmey pol, 'ach janmey lI' 'op leghbe'laH.
-      veH 2-10. QapchoHmeH add-on Dataghqa'moHnIS.
+      veH 2-10. QapchoHmeH add-on Dataghqa'moHnIS. Range 2–10.
   enable_tool_security_policies:
     name: jan Hung chutmey tIQotlhHa' ('Itlh)
     description: 'jan Qob lo''lu''DI'' (ngaQ/alarm SeH, automation ghItlh, latlh)
@@ -181,11 +181,11 @@ configuration:
   auto_backup_throttle_minutes:
     name: poH veH (tupmey)
     description: 'Dol HochvaD poH. 0 = Hoch ghItlhlu''DI''; N > 0 = N tupmey HochDaq
-      wa'' polqa''meH De'' neH. poQbogh mI''mey: 0–1440.'
+      wa'' polqa''meH De'' neH. poQbogh mI''mey: 0–1440. Range 0–1440.'
   auto_backup_retain_per_entity:
     name: Dol HochvaD pol
     description: Dol HochvaD polbogh Dotlh mIlloghmey 'aqroS (1–10000). ngo'bogh mIlloghmey
-      teqlu'.
+      teqlu'. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -207,7 +207,8 @@ configuration:
       'ach ghunbogh, chu'qu'bogh, ngo'be'bogh je mIlloghmey Qan.
   snapshot_delete_min_age_days:
     name: Qaw'lu'pa' Dotlh mIllogh ngo'nISbogh 'ar (jajmey)
-    description: 'Qaw''lu''pa'' ngo''nIS Dotlh mIllogh. poQbogh mI''mey: 0–365.'
+    description: 'Qaw''lu''pa'' ngo''nIS Dotlh mIllogh. poQbogh mI''mey: 0–365. Range
+      0–365.'
   disabled_tools:
     name: janmey luQotlhlu'bogh (comma-mey)
     description: naDev lutetlhlu'bogh janmey luchu'Ha'lu' 'ej web DuHmey UI (janmey

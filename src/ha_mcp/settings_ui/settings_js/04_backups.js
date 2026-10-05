@@ -47,12 +47,10 @@ function renderBackupConfig() {
       // Path / freeform string fields (auto_backup_dir).
       controlHtml = `<input type="text" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-labelledby="label-backup-${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
     } else {
-      let min = 1;
-      let max = 10000;
-      if (f.field === 'auto_backup_throttle_minutes') { min = 0; max = 1440; }
-      else if (f.field === 'auto_backup_calendar_lookahead_days') { min = 1; max = 365; }
-      else if (f.field === 'snapshot_delete_min_age_days') { min = 0; max = 365; }
-      controlHtml = `<input type="number" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-labelledby="label-backup-${escapeHtml(f.field)}" value="${Number(f.value)}" min="${min}" max="${max}" ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="number" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-labelledby="label-backup-${escapeHtml(f.field)}" value="${Number(f.value)}" ` +
+        (typeof f.min === 'number' ? `min="${f.min}" ` : '') +
+        (typeof f.max === 'number' ? `max="${f.max}" ` : '') +
+        `${f.editable ? '' : 'disabled'}>`;
     }
     let originMsg;
     if (f.origin === 'env') {
@@ -61,12 +59,13 @@ function renderBackupConfig() {
       originMsg = BACKUP_ORIGIN_LABELS[f.origin] || '';
     }
     const lockedBadge = f.editable ? '' : `<span class="backup-field-locked">${escapeHtml(t('common.env_locked', {}, 'env-locked'))}</span>`;
-    const originSeparator = meta.help && !/[.!?…]$/.test(meta.help.trim()) ? '. ' : ' ';
+    const help = helpWithFacts(meta.help, f);
+    const originSeparator = help && !/[.!?…]$/.test(help.trim()) ? '. ' : ' ';
     row.innerHTML =
       `<span class="backup-field-label" id="label-backup-${escapeHtml(f.field)}">${escapeHtml(meta.label)}</span>` +
       `<span class="backup-field-control">${controlHtml}</span>` +
       lockedBadge +
-      `<span class="backup-field-help">${escapeHtml(meta.help)}${originMsg ? originSeparator + originMsg : ''}</span>`;
+      `<span class="backup-field-help">${escapeHtml(help)}${originMsg ? originSeparator + originMsg : ''}</span>`;
     formEl.appendChild(row);
   });
 }

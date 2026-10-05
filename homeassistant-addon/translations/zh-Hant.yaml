@@ -9,7 +9,7 @@ configuration:
   ha_tool_concurrency:
     name: Home Assistant 工具並行數
     description: 跨所有工作階段對外部 Home Assistant 工具呼叫的選擇性限制。內部 REST、WebSocket 及每個工具的分發並行數保持不變。0
-      表示維持無限制行為。等待容量的呼叫會在 60 秒後失敗。範圍 0–32。需要重新啟動。
+      表示維持無限制行為。等待容量的呼叫會在 60 秒後失敗。範圍 0–32。需要重新啟動。 Range 0–32.
   backup_hint:
     name: 備份提示層級
     description: 控制在進行有風險的寫入之前，提示 LLM 進行完整 HA 快照的強度。
@@ -24,7 +24,7 @@ configuration:
   tool_search_max_results:
     name: 工具搜尋最大結果數
     description: 啟用工具搜尋時，每次 ha_search_tools 呼叫所傳回的隱藏工具最大數量；排名在前幾名之內的釘選工具會以僅顯示名稱的簡短條目形式額外加入最上方。較低的值
-      (2-3) 可節省上下文符記，但可能會漏掉相關工具。範圍：2-10。需要重新啟動。
+      (2-3) 可節省上下文符記，但可能會漏掉相關工具。範圍：2-10。需要重新啟動。 Range 2–10.
   enable_tool_security_policies:
     name: 啟用工具安全性策略（進階）
     description: 將高風險工具呼叫（鎖定／警報控制、自動化寫入等）限制在使用者核准之後。當呼叫受保護的工具時，代理程式會指示使用者在網頁 UI 中開啟「工具安全性策略」分頁並點擊「核准」，然後呼叫才會繼續。具備選用引數條件的個別工具規則可在「工具安全性策略」分頁中進行設定。預設為關閉。需要重新啟動才能生效。
@@ -56,10 +56,10 @@ configuration:
     description: 在每個包裝的寫入或破壞性工具呼叫之前擷取快照。
   auto_backup_throttle_minutes:
     name: 節流（分鐘）
-    description: 每個實體的節流。0 = 每次寫入；N > 0 = 每 N 分鐘最多一次備份。範圍 0–1440。
+    description: 每個實體的節流。0 = 每次寫入；N > 0 = 每 N 分鐘最多一次備份。範圍 0–1440。 Range 0–1440.
   auto_backup_retain_per_entity:
     name: 每個實體保留數量
-    description: 每個實體保留的最大快照數（1–10000）。較舊的快照將會被輪替清除。
+    description: 每個實體保留的最大快照數（1–10000）。較舊的快照將會被輪替清除。 Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -80,7 +80,7 @@ configuration:
     description: 允許 ha_manage_backup 刪除完整的 HA 快照，同時保持排程、最新以及過於年輕的快照受到保護。
   snapshot_delete_min_age_days:
     name: 允許刪除的最小快照天數（天）
-    description: 快照必須達到此最低天數才能被刪除。範圍 0–365。
+    description: 快照必須達到此最低天數才能被刪除。範圍 0–365。 Range 0–365.
   disabled_tools:
     name: 停用的工具（以逗號分隔）
     description: 此處列出的工具會被強制關閉並在網頁設定 UI（「工具」分頁）中鎖定 — 若不先取消此選項，將無法在該處重新啟用。一小組強制性工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）無法停用，即使列在此處也會繼續執行。ha_get_skill_guide

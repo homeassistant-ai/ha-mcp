@@ -132,7 +132,7 @@ function renderAdvancedSection(containerId, fields) {
       controlHtml = `<input type="checkbox" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-labelledby="label-adv-${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
     } else if (f.type === 'int' || f.type === 'float') {
       controlHtml = `<input type="number" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-labelledby="label-adv-${escapeHtml(f.field)}" value="${Number(f.value)}" ` +
-        (f.min !== undefined ? `min="${f.min}" ` : '') +
+        (f.min !== undefined ? `min="${f.off_value ?? f.min}" ` : '') +
         (f.max !== undefined ? `max="${f.max}" ` : '') +
         (f.type === 'float' ? 'step="0.1" ' : '') +
         (f.editable ? '' : 'disabled') + '>';
@@ -149,7 +149,7 @@ function renderAdvancedSection(containerId, fields) {
     row.innerHTML =
       `<div class="adv-info">` +
         `<div class="adv-name" id="label-adv-${escapeHtml(f.field)}">${escapeHtml(meta.label)}</div>` +
-        `<div class="adv-help">${escapeHtml(meta.help)}</div>` +
+        `<div class="adv-help">${escapeHtml(helpWithFacts(meta.help, f))}</div>` +
         (originMsg ? `<div class="adv-locked-note">${originMsg}</div>` : '') +
       `</div>` +
       `<div class="adv-control">${controlHtml}</div>`;

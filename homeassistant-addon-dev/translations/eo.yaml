@@ -11,7 +11,7 @@ configuration:
     description: Laŭvola limo pri eksteraj vokoj al Home Assistant-iloj tra ĉiuj sesioj.
       Interna REST-, WebSocket-, kaj perila disbranĉiĝa konkureco restas neŝanĝita.
       0 tenas la senliman konduton. Voko atendanta je kapablo malsukcesas post 60
-      sekundoj. Intervalo 0–32. Postiĝas restartigo.
+      sekundoj. Intervalo 0–32. Postiĝas restartigo. Range 0–32.
   backup_hint:
     name: Nivelo de rezerva sugesto
     description: Regulas kiom forte la LLM estas instigita fari plenan HA-momentfoton
@@ -50,7 +50,7 @@ configuration:
       kiam ilserĉado estas ebligita; alpinglita ilo kiu altas en tiu pinta nombro
       estas aldonita kiel mallonga nur-noma eniro super ĝi. Pli malaltaj valoroj (2-3)
       ŝparas kuntekstajn signojn, sed povas maltrafi signifajn ilojn. Intervalo: 2-10.
-      Postulas restartigon.'
+      Postulas restartigon. Range 2–10.'
   enable_tool_security_policies:
     name: Ebligi Ilo-Sekurecajn Politikojn (altnivela)
     description: Gardu alt-riskajn ilo-vokojn (seruro/alarmo-kontrolo, aŭtomatigo-skriboj,
@@ -215,11 +215,11 @@ configuration:
   auto_backup_throttle_minutes:
     name: Limigo (minutoj)
     description: Limigo por ento. 0 = ĉiu skribo; N > 0 = maksimume unu sekurkopio
-      po N minutoj. Intervalo 0–1440.
+      po N minutoj. Intervalo 0–1440. Range 0–1440.
   auto_backup_retain_per_entity:
     name: Konservi po ento
     description: Maksimumaj momentfotoj konservitaj po ento (1–10000). Pli malnovaj
-      elrotacias.
+      elrotacias. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
@@ -242,6 +242,7 @@ configuration:
   snapshot_delete_min_age_days:
     name: Minimuma aĝo de momentfoto por forigi (tagoj)
     description: Momentfoto devas esti almenaŭ tiom aĝa antaŭ forigo. Intervalo 0–365.
+      Range 0–365.
   disabled_tools:
     name: Malaktivigitaj iloj (disigitaj per komoj)
     description: Iloj listigitaj ĉi tie estas devige malŝaltitaj kaj ŝlositaj en la

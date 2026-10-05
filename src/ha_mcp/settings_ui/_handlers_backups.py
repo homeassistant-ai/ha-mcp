@@ -332,15 +332,17 @@ def backup_config_fields() -> list[dict[str, Any]]:
     fields: list[dict[str, Any]] = []
     for field_name, env_name, _ftype in BACKUP_OVERRIDE_FIELDS:
         origin = get_backup_setting_origin(env_name)
-        fields.append(
-            {
-                "field": field_name,
-                "env_var": env_name,
-                "value": getattr(settings, field_name),
-                "origin": origin,
-                "editable": origin in ("addon", "file", "default"),
-            }
-        )
+        row: dict[str, Any] = {
+            "field": field_name,
+            "env_var": env_name,
+            "value": getattr(settings, field_name),
+            "origin": origin,
+            "editable": origin in ("addon", "file", "default"),
+        }
+        bounds = SETTING_BOUNDS.get(field_name)
+        if bounds is not None:
+            row["min"], row["max"] = bounds
+        fields.append(row)
     return fields
 
 
