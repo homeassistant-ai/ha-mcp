@@ -28,7 +28,6 @@ config_get was withdrawn pre-release). Highlights:
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import logging
 import sys
@@ -38,6 +37,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+from ._component_ws_fakes import (
+    _FakeConnection,
+    _FakeWSApi,
+    _Unauthorized,
+)
 
 # Force the REAL voluptuous into sys.modules (sibling unit modules stub it with
 # a MagicMock at import time). Captured for the schema / registration tests,
@@ -1853,61 +1858,6 @@ class TestMatchTypeTaxonomy:
 # =============================================================================
 # registration, admin gate, malformed params (functional decorators)
 # =============================================================================
-class _Unauthorized(Exception):
-    pass
-
-
-class _FakeUser:
-    def __init__(self, is_admin):
-        self.is_admin = is_admin
-
-
-class _FakeConnection:
-    def __init__(self, is_admin=True, has_user=True):
-        self.user = _FakeUser(is_admin) if has_user else None
-        self.results = {}
-
-    def send_result(self, msg_id, result):
-        self.results[msg_id] = result
-
-
-class _FakeWSApi:
-    """Functional stand-in for homeassistant.components.websocket_api."""
-
-    def __init__(self):
-        self.registered = {}
-
-    def websocket_command(self, schema):
-        command = next(v for k, v in schema.items() if str(k) == "type")
-
-        def decorate(func):
-            func._ws_command = command
-            func._ws_schema = schema
-            return func
-
-        return decorate
-
-    def require_admin(self, func):
-        @functools.wraps(func)
-        def wrapper(hass, connection, msg):
-            user = connection.user
-            if user is None or not user.is_admin:
-                raise _Unauthorized()
-            return func(hass, connection, msg)
-
-        return wrapper
-
-    def async_response(self, func):
-        @functools.wraps(func)
-        def wrapper(hass, connection, msg):
-            # The handler is a coroutine (it awaits the search prep's executor
-            # offload); drive it to completion the way the WS layer would.
-            asyncio.run(func(hass, connection, msg))
-
-        return wrapper
-
-    def async_register_command(self, hass, handler):
-        self.registered[handler._ws_command] = handler
 
 
 @pytest.fixture

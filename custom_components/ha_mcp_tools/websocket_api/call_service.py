@@ -156,6 +156,7 @@ async def _call_service_prep(
             dict(service_data),
             blocking=True,
             return_response=return_response,
+            context=msg.get("ha_mcp_context"),
         )
         dispatched = True
         # ``evt`` is None when nothing was worth waiting on (should_confirm was
