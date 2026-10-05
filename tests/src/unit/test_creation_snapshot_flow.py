@@ -15,6 +15,7 @@ from ha_mcp.tools.config_entry_flow import CreationFlowError, create_flow_helper
 def _form() -> dict[str, Any]:
     return {
         "type": "form",
+        "last_step": True,
         "flow_id": "create-flow",
         "step_id": "sensor",
         "data_schema": [
@@ -105,7 +106,11 @@ async def test_complete_recreation_reports_native_outcomes_without_retry(
     elif scenario == "menu_create":
         replies = [created]
     elif scenario == "missing_flow":
-        client.start_config_flow.return_value = {"type": "form", "data_schema": []}
+        client.start_config_flow.return_value = {
+            "type": "form",
+            "last_step": True,
+            "data_schema": [],
+        }
     elif scenario == "initial_unknown":
         client.start_config_flow.return_value = {
             "type": "private-step",

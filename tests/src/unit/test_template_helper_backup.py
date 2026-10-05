@@ -39,11 +39,14 @@ def manager(tmp_path):
     return bm.get_backup_manager(SimpleNamespace(), settings)
 
 
+_template_fetch = bm._make_flow_helper_handler("template").fetch
+
+
 @pytest.fixture(autouse=True)
 def empty_entity_registry(monkeypatch):
     # Registry capture and recreation have dedicated coverage in
     # test_template_deleted_recovery; these cases exercise options restoration.
-    monkeypatch.setattr(bm, "_template_entity_registry", AsyncMock(return_value=[]))
+    monkeypatch.setattr(bm, "_entity_registry_rows", AsyncMock(return_value=[]))
 
 
 @pytest.mark.parametrize("target", ["template-entry", "sensor.renamed_example"])
@@ -82,7 +85,7 @@ async def test_capture_complete_options_without_opening_flow(
         {"covered_types": ["template"], "helpers": None},
         {"covered_types": "template", "helpers": [_record()]},
         {"covered_types": ["template"], "helpers": [None]},
-        _response(_record({"state": "{{ 12 }}"})),
+        _response(_record({})),
         _response(
             _record(
                 {"name": "Example", "template_type": "sensor", "state": "<redacted>"}
@@ -134,6 +137,7 @@ async def test_restore_submits_snapshot_and_clears_later_optional_values(
         start_options_flow=AsyncMock(
             return_value={
                 "type": "form",
+                "last_step": True,
                 "flow_id": "restore-flow",
                 "step_id": "sensor",
                 "data_schema": [
@@ -258,6 +262,7 @@ async def test_restore_clears_nested_optional_section(manager, monkeypatch):
         start_options_flow=AsyncMock(
             return_value={
                 "type": "form",
+                "last_step": True,
                 "flow_id": "restore-flow",
                 "step_id": "sensor",
                 "data_schema": [
@@ -298,7 +303,7 @@ async def test_restore_clears_nested_optional_section(manager, monkeypatch):
 
 async def test_target_mismatch_never_starts_restore(manager, monkeypatch):
     current = {"entry_id": "template-entry", "options": _record()["options"]}
-    monkeypatch.setattr(bm, "_fetch_template_helper", AsyncMock(return_value=current))
+    monkeypatch.setattr(bm, "_fetch_flow_helper", AsyncMock(return_value=current))
     client = SimpleNamespace(start_options_flow=AsyncMock())
     handler = manager.handler_for("helper_template")
     assert handler is not None
@@ -334,9 +339,7 @@ async def test_manager_safety_capture_follows_entry_after_rename_and_bypasses_to
     manager._settings.auto_backup_throttle_minutes = 30
     manager._last_snapshot["helper_template:template-entry"] = time.monotonic()
     restore = AsyncMock(return_value={"success": True})
-    manager.register(
-        bm.DomainHandler("helper_template", bm._fetch_template_helper, restore)
-    )
+    manager.register(bm.DomainHandler("helper_template", _template_fetch, restore))
     result = await manager.restore_snapshot(name)
     assert result["entity_id"] == "template-entry"
     assert result["safety_backup"] is not None
@@ -352,9 +355,7 @@ async def test_manager_safety_capture_failure_blocks_restore(manager, monkeypatc
         bm, "_ws_send", AsyncMock(side_effect=HomeAssistantError("offline"))
     )
     restore = AsyncMock()
-    manager.register(
-        bm.DomainHandler("helper_template", bm._fetch_template_helper, restore)
-    )
+    manager.register(bm.DomainHandler("helper_template", _template_fetch, restore))
     with pytest.raises(bm.BackupRestoreError) as caught:
         await manager.restore_snapshot(name)
     assert caught.value.outcome["apply_status"] == "not_applied"
@@ -367,9 +368,7 @@ async def test_manager_preserves_safety_filename_on_restore_error(manager, monke
     restore = AsyncMock(
         side_effect=HomeAssistantError("applied but verification unavailable")
     )
-    manager.register(
-        bm.DomainHandler("helper_template", bm._fetch_template_helper, restore)
-    )
+    manager.register(bm.DomainHandler("helper_template", _template_fetch, restore))
     with pytest.raises(bm.BackupRestoreError) as caught:
         await manager.restore_snapshot(name)
     safety_name = caught.value.outcome["safety_backup"]
@@ -421,6 +420,7 @@ async def test_button_restore_clears_press_without_submitting_creation_only_devi
         start_options_flow=AsyncMock(
             return_value={
                 "type": "form",
+                "last_step": True,
                 "flow_id": "button-restore",
                 "step_id": "button",
                 "data_schema": [
@@ -450,6 +450,8 @@ async def test_button_restore_clears_press_without_submitting_creation_only_devi
 async def test_changed_creation_only_device_class_refused_before_apply(
     manager, monkeypatch, template_type
 ):
+    """These types' options form does not offer device_class, so a snapshot
+    whose device_class differs from the stored one cannot be restored."""
     original = {
         "name": "Example",
         "template_type": template_type,
@@ -464,12 +466,26 @@ async def test_changed_creation_only_device_class_refused_before_apply(
             )
         ),
     )
-    client = SimpleNamespace(start_options_flow=AsyncMock())
+    client = SimpleNamespace(
+        get_config_entry=AsyncMock(return_value={"domain": "template"}),
+        start_options_flow=AsyncMock(
+            return_value={
+                "type": "form",
+                "flow_id": "restore",
+                "step_id": template_type,
+                "data_schema": [{"name": "state", "required": False}],
+                "last_step": True,
+            }
+        ),
+        submit_options_flow_step=AsyncMock(),
+        abort_options_flow=AsyncMock(),
+    )
     handler = manager.handler_for("helper_template")
-    with pytest.raises(HomeAssistantError, match="identity changed"):
+    with pytest.raises(HomeAssistantError, match="no restore form offers"):
         await handler.restore(
             client,
             "template-entry",
             {"entry_id": "template-entry", "options": original},
         )
-    client.start_options_flow.assert_not_awaited()
+    client.submit_options_flow_step.assert_not_awaited()
+    client.abort_options_flow.assert_awaited_once_with("restore")

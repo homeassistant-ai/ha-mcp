@@ -13,16 +13,17 @@ from ..component_helper_collections import fetch_helper_schemas
 from ..helpers import clear_or_keep, hidden_param_names, raise_tool_error
 from .schemas import (
     _CORE_HELPER_SCHEMAS,
-    _TYPE_TYPED_PARAMS,
     SIMPLE_HELPER_TYPES,
     _simple_helper_error_context,
 )
-from .validation import _validate_applicable_params
+from .validation import _reject_storage_params_on_flow_helper
 
 
 @functools.cache
 def _simple_config_model() -> type[BaseModel]:
-    """Validate SIMPLE-helper `config` keys exactly as the hidden tool params are."""
+    """Coerce known SIMPLE-helper `config` keys exactly as the hidden tool params
+    are; other keys are kept for Core, which rejects them and suggests the
+    closest field."""
     from ..tools_config_helpers import HelperConfigTools  # the tool imports this module
 
     tool_fn = HelperConfigTools.ha_config_set_helper
@@ -31,21 +32,20 @@ def _simple_config_model() -> type[BaseModel]:
     keys = hidden_param_names(tool_fn) | {"name", "icon"}
     fields: dict[str, Any] = {name: (params[name].annotation, None) for name in keys}
     return create_model(
-        "SimpleHelperConfig", __config__=ConfigDict(extra="forbid"), **fields
+        "SimpleHelperConfig", __config__=ConfigDict(extra="allow"), **fields
     )
 
 
 def _merge_simple_helper_config(
     helper_type: str, config: Any, values: dict[str, Any]
-) -> dict[str, Any]:
-    """Fold SIMPLE-helper fields passed inside `config` into the typed params."""
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Fold SIMPLE-helper fields passed inside `config` into the typed params.
+
+    Returns the merged typed values and the keys the tool does not declare,
+    which go to Core unchanged.
+    """
     if config in (None, {}, ""):
-        return values
-    valid_keys = sorted(_TYPE_TYPED_PARAMS.get(helper_type, frozenset()) | {"name"})
-    suggestions = [
-        f"Valid config keys for {helper_type}: {', '.join(valid_keys)}",
-        "area_id, labels and category are top-level parameters, not config keys",
-    ]
+        return values, {}
     try:
         fields = _simple_config_model().model_validate(config)
     except ValidationError as e:
@@ -58,11 +58,16 @@ def _merge_simple_helper_config(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"Invalid config for helper_type='{helper_type}': {problems}",
                 context=_simple_helper_error_context(helper_type),
-                suggestions=suggestions,
+                suggestions=[
+                    f"ha_config_list_helpers({helper_type!r}, describe=True) lists "
+                    "the fields",
+                    "area_id, labels and category are top-level parameters, not "
+                    "config keys",
+                ],
             )
         )
     merged = dict(values)
-    for key in fields.model_fields_set:
+    for key in fields.model_fields_set - set(fields.model_extra or {}):
         value = getattr(fields, key)
         if value is None:
             continue
@@ -77,7 +82,7 @@ def _merge_simple_helper_config(
                 )
             )
         merged[key] = value
-    return merged
+    return merged, dict(fields.model_extra or {})
 
 
 def _prepare_typed_params(
@@ -86,18 +91,22 @@ def _prepare_typed_params(
     name: str | None,
     icon: str | None,
     type_kw: dict[str, Any],
-) -> tuple[str | None, str | None, dict[str, Any]]:
-    """Fold a SIMPLE helper's `config` into its typed params, then reject
-    params that don't apply to the type (Bug 4b/7c/10/14, issue #1150)."""
-    if helper_type in SIMPLE_HELPER_TYPES:
-        merged = _merge_simple_helper_config(
-            helper_type, config, {"name": name, "icon": icon, **type_kw}
-        )
-        name, icon = merged.pop("name"), merged.pop("icon")
-        icon = clear_or_keep(icon, "icon")  # a config icon too
-        type_kw = merged
-    _validate_applicable_params(helper_type, {"icon": icon, **type_kw})
-    return name, icon, type_kw
+) -> tuple[str | None, str | None, dict[str, Any], dict[str, Any]]:
+    """Fold a SIMPLE helper's `config` into its typed params.
+
+    Returns name, icon, the typed values and the undeclared `config` keys.
+    A flow helper takes its fields in `config`, so storage-helper parameters
+    passed top-level are rejected for it.
+    """
+    if helper_type not in SIMPLE_HELPER_TYPES:
+        _reject_storage_params_on_flow_helper(helper_type, type_kw)
+        return name, icon, type_kw, {}
+    merged, passthrough = _merge_simple_helper_config(
+        helper_type, config, {"name": name, "icon": icon, **type_kw}
+    )
+    name, icon = merged.pop("name"), merged.pop("icon")
+    icon = clear_or_keep(icon, "icon")  # a config icon too
+    return name, icon, merged, passthrough
 
 
 @contextlib.asynccontextmanager

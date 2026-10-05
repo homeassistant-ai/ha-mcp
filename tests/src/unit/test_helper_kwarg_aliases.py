@@ -109,7 +109,8 @@ class TestSchemaSurfacesCanonicalNames:
         for name in ("min_value", "max_value", "unit_of_measurement", "min", "unit"):
             assert name not in props
         config = props["config"]["description"]
-        for name in ("min_value", "max_value", "unit_of_measurement"):
+        # Home Assistant's own field names (#2632): what its errors name too.
+        for name in ("min", "max", "minimum", "maximum", "unit_of_measurement"):
             assert name in config
 
 

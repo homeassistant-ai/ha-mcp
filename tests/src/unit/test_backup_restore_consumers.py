@@ -349,6 +349,7 @@ def template_runtime(tmp_path, monkeypatch):
         start_options_flow=AsyncMock(
             return_value={
                 "type": "form",
+                "last_step": True,
                 "flow_id": "offline-options",
                 "step_id": "sensor",
                 "data_schema": [
@@ -566,6 +567,9 @@ async def test_restore_refusal_retains_actionable_reason(
     )
     assert snapshot is not None
     runtime.state.options["state"] = "{{ 99 }}"
+    # The options form does not offer the unit: changed since the snapshot,
+    # the restore cannot bring it back.
+    runtime.state.options["unit_of_measurement"] = "secret-marker-changed"
 
     if consumer == "settings":
         response = response_for(monkeypatch, runtime.manager, snapshot.name)
@@ -586,7 +590,7 @@ async def test_restore_refusal_retains_actionable_reason(
     assert payload["success"] is False
     assert payload["data"]["apply_status"] == "not_applied"
     assert payload["data"]["verification_status"] == "not_run"
-    assert payload["data"]["reason"] == "unsupported_fields"
+    assert payload["data"]["reason"] == "identity_changed"
     assert payload["data"]["fields"] == ["unit_of_measurement"]
     assert "unit_of_measurement" in payload["error"]["message"]
     assert "secret-marker" not in json.dumps(payload)
@@ -602,7 +606,7 @@ async def test_restore_refusal_retains_actionable_reason(
         )
         assert "Nothing was changed" in rendered.alerts[0]
         assert "unit_of_measurement" in rendered.alerts[0]
-        assert "not accepted" in rendered.alerts[0]
+        assert "not offered by any restore form" in rendered.alerts[0]
         assert "secret-marker" not in rendered.alerts[0]
 
 

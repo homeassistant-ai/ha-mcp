@@ -818,8 +818,7 @@ def empty_view(monkeypatch):
 class TestInfo:
     def test_shape(self):
         """Advertise the complete component capability contract."""
-        # Drift guard: info must advertise EVERY shipped capability (the server
-        # gates each consumer on membership) and mirror CAPABILITIES exactly.
+        # Drift guard: info advertises EVERY shipped capability, as CAPABILITIES.
         info = wsapi._do_info(FakeHass(config=FakeConfig(time_zone="America/New_York")))
         assert info["schema_version"] == 1
         assert info["component_version"] == COMPONENT_VERSION
@@ -838,6 +837,7 @@ class TestInfo:
             "entity_enrich",
             "exposure",
             "config_entries",
+            "config_entries_subentry_data",
             "registry_lookup",
             "system_snapshot",
             "entity_lookup",
@@ -2187,9 +2187,8 @@ class TestNewCommandSchemas:
         out = schema({"type": wsapi.WS_CONFIG_ENTRIES, "domain": "mqtt"})
         assert out["domain"] == "mqtt"
         # Both filters are optional (a no-filter call lists every entry).
-        assert schema({"type": wsapi.WS_CONFIG_ENTRIES}) == {
-            "type": wsapi.WS_CONFIG_ENTRIES
-        }
+        defaults = {"type": wsapi.WS_CONFIG_ENTRIES, "include_subentry_data": False}
+        assert schema({"type": wsapi.WS_CONFIG_ENTRIES}) == defaults
 
     @pytest.mark.parametrize(
         "bad",

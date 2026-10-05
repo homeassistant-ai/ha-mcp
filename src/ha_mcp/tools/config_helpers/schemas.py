@@ -8,10 +8,8 @@ from ..config_write_helpers import attach_skill_content
 __all__ = [
     "SIMPLE_HELPER_SCHEMAS",
     "SIMPLE_HELPER_TYPES",
-    "_ALL_TYPED_PARAMS",
     "_HELPER_SKILL_FILES",
     "_SIMPLE_CONFIG_KEYS_DESCRIPTION",
-    "_TYPE_TYPED_PARAMS",
     "HelperResponse",
     "_attach_helper_skill",
     "_helper_response",
@@ -68,82 +66,6 @@ _INITIAL_DISABLES_RESTORE_DESCRIPTION = (
     "value on every HA restart. Omit unless you want the helper to reset to this "
     "value on every restart instead of restoring its last state."
 )
-
-
-# Bug 4b/7c/10/14 (issue #1150): per-helper-type allowlists of typed
-# parameters. Inapplicable params are rejected at the top of the tool
-# instead of being silently dropped. Cross-cutting params (helper_type,
-# name, helper_id, area_id, labels, category, wait, config) are always
-# accepted and not listed here. `icon` is included where it applies.
-_TYPE_TYPED_PARAMS: dict[str, frozenset[str]] = {
-    # Simple helpers
-    "input_button": frozenset({"icon"}),
-    "input_boolean": frozenset({"icon", "initial"}),
-    "input_select": frozenset({"icon", "options", "initial"}),
-    "input_number": frozenset(
-        {
-            "icon",
-            "min_value",
-            "max_value",
-            "step",
-            "unit_of_measurement",
-            "mode",
-            "initial",
-        }
-    ),
-    "input_text": frozenset(
-        {
-            "icon",
-            "min_value",
-            "max_value",
-            "mode",
-            "initial",
-            "unit_of_measurement",
-            "pattern",
-        }
-    ),
-    "input_datetime": frozenset({"icon", "has_date", "has_time", "initial"}),
-    "counter": frozenset(
-        {
-            "icon",
-            "initial",
-            "min_value",
-            "max_value",
-            "step",
-            "restore",
-        }
-    ),
-    "timer": frozenset({"icon", "duration", "restore"}),
-    "schedule": frozenset(
-        {
-            "icon",
-            "monday",
-            "tuesday",
-            "wednesday",
-            "thursday",
-            "friday",
-            "saturday",
-            "sunday",
-        }
-    ),
-    "zone": frozenset(
-        {
-            "icon",
-            "latitude",
-            "longitude",
-            "radius",
-            "passive",
-        }
-    ),
-    "person": frozenset({"user_id", "device_trackers", "picture"}),  # NO icon
-    "tag": frozenset({"tag_id", "description"}),  # NO icon
-    # Flow types: only `config` (handled separately — see _validate_applicable_params).
-}
-
-
-# Set of typed params that are simple-helper-specific (used to reject when a
-# flow type was requested but a simple-helper param was passed).
-_ALL_TYPED_PARAMS: frozenset[str] = frozenset().union(*_TYPE_TYPED_PARAMS.values())
 
 
 class _HelperFieldSpecBase(TypedDict):
@@ -259,19 +181,16 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "description": "Display name.",
         },
         {
-            "name": "min_value",
-            "required": False,
+            "name": "min",
+            "required": True,
             "selector": {"number": {}},
-            "description": (
-                "Minimum value. Also accepts shorthand `min`. HA defaults if "
-                "omitted but supplying both bounds is recommended."
-            ),
+            "description": "Minimum value.",
         },
         {
-            "name": "max_value",
-            "required": False,
+            "name": "max",
+            "required": True,
             "selector": {"number": {}},
-            "description": "Maximum value. Also accepts shorthand `max`.",
+            "description": "Maximum value.",
         },
         {
             "name": "step",
@@ -309,16 +228,16 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "description": "Display name.",
         },
         {
-            "name": "min_value",
+            "name": "min",
             "required": False,
             "selector": {"number": {}},
-            "description": "Minimum length (0–255). Also accepts `min`.",
+            "description": "Minimum length (0–255).",
         },
         {
-            "name": "max_value",
+            "name": "max",
             "required": False,
             "selector": {"number": {}},
-            "description": "Maximum length (0–255). Also accepts `max`.",
+            "description": "Maximum length (1–255).",
         },
         {
             "name": "mode",
@@ -394,16 +313,16 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             ),
         },
         {
-            "name": "min_value",
+            "name": "minimum",
             "required": False,
             "selector": {"number": {}},
-            "description": "Minimum value. Also accepts `min`.",
+            "description": "Minimum value.",
         },
         {
-            "name": "max_value",
+            "name": "maximum",
             "required": False,
             "selector": {"number": {}},
-            "description": "Maximum value. Also accepts `max`.",
+            "description": "Maximum value.",
         },
         {
             "name": "step",
@@ -594,7 +513,7 @@ def get_simple_helper_schema(helper_type: str) -> list[_HelperFieldSpec] | None:
     Callers attach the result to validation-error context as ``data_schema``
     so the LLM sees field shape inline with a 4xx response, matching the
     auto-attach pattern already in use for flow helpers (see
-    ``fetch_helper_flow_info`` in ``config_entry_flow_walker``).
+    ``fetch_helper_flow_info`` in ``config_entry_flow_introspect``).
     Returns ``None`` for any helper_type not in ``SIMPLE_HELPER_SCHEMAS``,
     so callers can write a single uniform ``if schema is not None: …`` branch.
     """
@@ -683,16 +602,18 @@ def _helper_response(
     return resp
 
 
-# Per-type `config` keys for SIMPLE helpers, published in the `config` description.
+# Per-type `config` keys for SIMPLE helpers, published in the `config` description
+# (replaced by Core's own field list when the component serves helper writes).
+# Home Assistant validates these fields itself and names any mistake.
 _SIMPLE_CONFIG_KEYS_DESCRIPTION = (
     "input_select: options (list, required), initial. "
-    "input_number: min_value, max_value, step, unit_of_measurement, "
+    "input_number: min, max (required), step, unit_of_measurement, "
     "mode ('box'/'slider'), initial. "
-    "input_text: min_value, max_value (length), mode ('text'/'password'), initial, "
+    "input_text: min, max (length), mode ('text'/'password'), initial, "
     "unit_of_measurement, pattern (regex the value must match). "
     "input_datetime: has_date, has_time, initial. "
     "input_boolean: initial. "
-    "counter: initial (starting value), min_value, max_value, step, "
+    "counter: initial (starting value), minimum, maximum, step, "
     "restore (default true). "
     "timer: duration ('HH:MM:SS' or seconds), restore (default false). "
     "schedule: monday..sunday, each a list of {'from': 'HH:MM', 'to': 'HH:MM'} "
@@ -702,7 +623,8 @@ _SIMPLE_CONFIG_KEYS_DESCRIPTION = (
     "person: user_id, device_trackers (device_tracker entity IDs), picture (URL). "
     "tag: tag_id (omit on create to auto-generate), description. "
     "On input_* types, `initial` — even false/0 — disables last-state restore "
-    "and forces that value on every HA restart."
+    "and forces that value on every HA restart. "
+    "ha_config_list_helpers(helper_type, describe=True) lists a type's fields."
 )
 
 
@@ -714,31 +636,10 @@ _CORE_HELPER_SCHEMAS: ContextVar[tuple[dict[str, Any], str] | None] = ContextVar
 )
 
 
-# Core's field names that differ from this tool's parameter names.
-_CORE_FIELD_ALIASES: dict[str, str] = {
-    "min": "min_value",
-    "max": "max_value",
-    "minimum": "min_value",
-    "maximum": "max_value",
-}
-
-
-def supported_core_fields(
-    helper_type: str, fields: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Core's fields for ``helper_type`` that this tool accepts in ``config``."""
-    accepted = _TYPE_TYPED_PARAMS.get(helper_type, frozenset()) | {"name"}
-    return [
-        field
-        for field in fields
-        if _CORE_FIELD_ALIASES.get(field.get("name", ""), field.get("name")) in accepted
-    ]
-
-
 def _core_helper_fields(helper_type: str) -> list[dict[str, Any]] | None:
     current = _CORE_HELPER_SCHEMAS.get()
     if current is None:
         return None
     schemas, action = current
     fields = (schemas.get(helper_type) or {}).get(action)
-    return supported_core_fields(helper_type, fields) if fields else None
+    return fields or None
