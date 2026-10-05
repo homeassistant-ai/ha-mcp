@@ -836,8 +836,7 @@ class TestTemplateHelperCaptureRestore:
                     "ha_config_list_helpers", {"helper_type": "template"}
                 )
                 assert unavailable["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-                # Nothing is created here; a capture of a made-up id is refused
-                # (component cannot read: capture failed; it answers: not found).
+                # A made-up id's capture is refused either way; nothing is saved.
                 missing_id = uuid.uuid4().hex
                 snapshot = await mcp.call_tool_failure(
                     "ha_manage_backup",
