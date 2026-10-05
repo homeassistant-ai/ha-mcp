@@ -11,6 +11,22 @@ from typing import Any
 
 from pydantic import BeforeValidator
 
+
+class _Unset:
+    """Default for params where omitted must differ from an explicit null.
+
+    Used as ``Field(default_factory=lambda: UNSET)`` so FastMCP hands the
+    tool ``UNSET`` for an omitted argument and ``None`` for JSON ``null``.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET: Any = _Unset()
+
 # Strips ANSI terminal escape codes from container/log output.
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
