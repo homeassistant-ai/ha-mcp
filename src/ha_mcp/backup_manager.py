@@ -3855,7 +3855,8 @@ async def _recreate_config_subentry(
     if recreated:
         raise BackupRestoreError(
             f"Config subentry {subentry_id} is gone, but {entry_id}/{recreated} "
-            "already holds this snapshot's data; a second copy was not created",
+            "already holds this snapshot's data and title; a second copy was not "
+            "created",
             reason="already_recreated",
             entity_id=f"{entry_id}/{recreated}",
         )

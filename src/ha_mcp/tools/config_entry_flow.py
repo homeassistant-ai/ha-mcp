@@ -196,7 +196,10 @@ class _OptionsFlowProgress:
             raise
         except HomeAssistantAPIError as err:
             if err.status_code is not None and 400 <= err.status_code < 500:
+                # HA rejected the submission (a malformed or missing field)
+                # without applying it; say so rather than refusing nameless.
                 self.apply_status = "not_applied"
+                self.reason = "validation_failed"
             raise
         self.record_reply(result)
         return result

@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.config_entry_flow import OptionsFlowError, update_config_entry_options
 
 
@@ -36,6 +39,7 @@ def flow_client():
         ("initial_validation", "validation_failed", ("state",), False),
         ("submit_validation", "validation_failed", ("state",), True),
         ("abort", "flow_aborted", (), True),
+        ("rejected", "validation_failed", (), True),
         ("connection", None, (), True),
     ],
 )
@@ -69,6 +73,11 @@ async def test_restore_reason_never_echoes_values_or_unknown_keys(
             "type": "abort",
             "reason": "secret-marker-abort",
         }
+    elif scenario == "rejected":
+        # HA answers a malformed submission with a 400, nothing applied.
+        flow_client.submit_options_flow_step.side_effect = HomeAssistantAPIError(
+            "User input malformed: secret-marker-value", status_code=400
+        )
     else:
         flow_client.submit_options_flow_step.side_effect = HomeAssistantConnectionError(
             "secret-marker-transport"
