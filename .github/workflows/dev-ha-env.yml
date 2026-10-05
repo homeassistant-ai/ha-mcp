@@ -197,8 +197,9 @@ jobs:
           DEVENV_MINUTES: ${{ inputs.minutes }}
           DEVENV_TARGETS: ${{ github.workspace }}/targets.json
           # A prefix cache hit restored an image baked with another commit's
-          # component; the holder applies the branch's copy at boot.
-          DEVENV_COMPONENT_STALE: ${{ (inputs.platform == 'haos' && steps.restore-cache.outputs.cache-matched-key != '' && steps.restore-cache.outputs.cache-matched-key != steps.key.outputs.cache-key) && '1' || '' }}
+          # component (neither the exact nor the current devenv key matched);
+          # the holder applies the branch's copy at boot.
+          DEVENV_COMPONENT_STALE: ${{ (inputs.platform == 'haos' && steps.restore-cache.outputs.cache-matched-key != '' && steps.restore-cache.outputs.cache-matched-key != steps.key.outputs.cache-key && steps.restore-cache.outputs.cache-matched-key != steps.key.outputs.devenv-key) && '1' || '' }}
         run: |
           [ "$DEVENV_MINUTES" -le 330 ] 2>/dev/null || DEVENV_MINUTES=330
           export DEVENV_MINUTES
