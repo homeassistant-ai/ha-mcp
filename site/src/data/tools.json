@@ -775,7 +775,7 @@
   {
     "name": "ha_get_camera_image",
     "title": "Get Camera Image",
-    "description": "Get a snapshot image from a Home Assistant camera entity.\n\nFetches the current camera image and returns it directly for visual\nanalysis (security checks, delivery verification, confirming a garage\ndoor actually closed). Only cameras exposed to Home Assistant are\naccessible; images come back in their native format (JPEG, PNG, or GIF).\nUse width/height on high-resolution cameras to reduce token usage.\n\nEXAMPLE: ha_get_camera_image(entity_id=\"camera.backyard\", width=640, height=480)",
+    "description": "Get a snapshot image from a Home Assistant camera entity.\n\nFetches the current camera image and returns it directly for\nvisual analysis (security checks, delivery verification,\nconfirming a garage door actually closed), in the format Home\nAssistant serves (JPEG, PNG, or GIF), alongside a short text\nblock stating the served snapshot's size and retrieval time in\nHome Assistant local time.\n\nDo not use it to inspect the camera's state or attributes — use\nha_search or ha_get_state for those; it returns an image, not\nstate. Use it when you need to see the current scene, and on\nhigh-resolution cameras pass width and height to reduce token\nusage.\n\nEXAMPLE: ha_get_camera_image(entity_id=\"camera.backyard\", width=640, height=480)",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -784,12 +784,12 @@
         },
         "width": {
           "type": "int | None",
-          "description": "Width to resize the image to",
+          "description": "Width for the resized image. Home Assistant rescales only when both width and height are given and the camera serves JPEG.",
           "default": null
         },
         "height": {
           "type": "int | None",
-          "description": "Height to resize the image to",
+          "description": "Height for the resized image. Home Assistant rescales only when both width and height are given and the camera serves JPEG.",
           "default": null
         }
       },
