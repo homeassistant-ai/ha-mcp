@@ -836,8 +836,8 @@ class TestTemplateHelperCaptureRestore:
                     "ha_config_list_helpers", {"helper_type": "template"}
                 )
                 assert unavailable["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-                # No helper is created or edited in this topology. A capture
-                # cannot substitute entity state for unreadable persisted options.
+                # Nothing is created here; a capture of a made-up id is refused
+                # (component cannot read: capture failed; it answers: not found).
                 missing_id = uuid.uuid4().hex
                 snapshot = await mcp.call_tool_failure(
                     "ha_manage_backup",
@@ -848,14 +848,8 @@ class TestTemplateHelperCaptureRestore:
                         "entity_id": missing_id,
                     },
                 )
-                # Both are honest refusals: without the component's WebSocket
-                # surface the capture cannot read the options (capture failed);
-                # where the component still answers (HAOS without its tools
-                # entry) the made-up id is simply not found. Neither saves.
-                assert snapshot["error"]["code"] in {
-                    "BACKUP_CAPTURE_FAILED",
-                    "RESOURCE_NOT_FOUND",
-                }
+                refused = {"BACKUP_CAPTURE_FAILED", "RESOURCE_NOT_FOUND"}
+                assert snapshot["error"]["code"] in refused
                 listing = await mcp.call_tool_success(
                     "ha_manage_backup",
                     {
