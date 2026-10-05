@@ -75,6 +75,7 @@ from .backup_diff import (
     _summarize_patch_counts,
 )
 from .backup_entity_ids import _restore_entity_ids
+from .backup_tags import restore_tag, tag_snapshot
 from .client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
@@ -2764,7 +2765,7 @@ async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
     object_id = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
     for item in items:
         if item.get("id") == object_id or item.get("id") == entity_id:
-            return item
+            return await tag_snapshot(client, item) if helper_type == "tag" else item
     # Fallback for renamed helpers: after an entity_id rename the object_id
     # no longer equals the storage collection id (which stays the original
     # create-time id == the registry unique_id), so the direct match above
@@ -2792,7 +2793,9 @@ async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
     if unique_id:
         for item in items:
             if str(item.get("id")) == str(unique_id):
-                return item
+                return (
+                    await tag_snapshot(client, item) if helper_type == "tag" else item
+                )
     return None
 
 
@@ -2815,6 +2818,8 @@ async def _restore_helper(
     payload = _strip_readonly(config, "id")
     payload["type"] = f"{helper_type}/update"
     payload[f"{helper_type}_id"] = config.get("id", entity_id)
+    if helper_type == "tag":
+        return await restore_tag(client, payload["tag_id"], payload)
     return await _ws_send(client, payload)
 
 

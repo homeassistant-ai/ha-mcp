@@ -147,19 +147,30 @@ async def _listed_item(mcp: MCPAssertions, helper_type: str, item_id: str) -> di
 
 @pytest.mark.helper
 @pytest.mark.cleanup
-async def test_tag_edit_is_backed_up_and_restored(mcp_client: Client) -> None:
+@pytest.mark.parametrize("named", [True, False], ids=["named", "unnamed"])
+async def test_tag_edit_is_backed_up_and_restored(
+    mcp_client: Client, ha_client: Any, named: bool
+) -> None:
     """A real tag item carries more than the tool's fields (last_scanned,
-    device_id); the whole item must round-trip through tag/update."""
+    device_id); the whole item must round-trip through tag/update. A tag that
+    was never named (scanned, or created in the UI) keeps no registry name:
+    tag/list reports its "Tag <id>" default, which a restore must not pin."""
     tag_id = f"e2e-backup-tag-{uuid.uuid4().hex[:8]}"
     async with MCPAssertions(mcp_client) as mcp:
-        await mcp.call_tool_success(
-            "ha_config_set_helper",
-            {
-                "helper_type": "tag",
-                "name": "E2E Backup Tag",
-                "config": {"tag_id": tag_id, "description": "front door"},
-            },
-        )
+        if named:
+            await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "tag",
+                    "name": "E2E Backup Tag",
+                    "config": {"tag_id": tag_id, "description": "front door"},
+                },
+            )
+        else:
+            created = await ha_client.send_websocket_message(
+                {"type": "tag/create", "tag_id": tag_id, "description": "front door"}
+            )
+            assert created.get("success"), created
         try:
             await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
             await mcp.call_tool_success(
@@ -176,6 +187,11 @@ async def test_tag_edit_is_backed_up_and_restored(mcp_client: Client) -> None:
             await _restore(mcp, backup_name)
             item = await _listed_item(mcp, "tag", tag_id)
             assert item["description"] == "front door"
+            rows = await ha_client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            )
+            (entity,) = [r for r in rows["result"] if r.get("unique_id") == tag_id]
+            assert entity["name"] == ("E2E Backup Tag" if named else None)
         finally:
             await safe_call_tool(
                 mcp_client,
