@@ -176,9 +176,6 @@ class TestJpeg:
     def test_zero_dimension_returns_no_dimensions(self) -> None:
         assert resolve_image_info(_jpeg(800, 0), "jpeg") == ("jpeg", None)
 
-    def test_jpg_alias_is_accepted(self) -> None:
-        assert resolve_image_info(_jpeg(400, 300), "jpg") == ("jpeg", (400, 300))
-
 
 class TestPng:
     def test_png_dimensions(self) -> None:

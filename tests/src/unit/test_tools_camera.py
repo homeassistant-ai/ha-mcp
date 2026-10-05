@@ -150,7 +150,8 @@ class TestHaGetCameraImage:
             + b"\x08"
             + (600).to_bytes(2, "big")
             + (800).to_bytes(2, "big")
-            + b"\x01\x01"
+            + b"\x01"
+            + b"\x01\x11\x00"
         )
         mock_response.content = b"\xff\xd8" + sof0 + b"\xff\xd9"
         mock_response.headers = {"content-type": "image/jpeg"}
