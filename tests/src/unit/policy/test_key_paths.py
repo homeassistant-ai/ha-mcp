@@ -7,6 +7,7 @@ A scene's ``config.entities`` names the entities it touches by key
 """
 
 import pytest
+from pydantic import ValidationError
 
 from ha_mcp.policy.evaluator import (
     MISSING,
@@ -55,22 +56,46 @@ class TestIterPathKeys:
         assert sorted(iter_path_values({"a": 1, "b": 2}, "args.*~")) == ["a", "b"]
 
 
-class TestRequireApprovalListOnSceneKeys:
-    policy = Policy(rules=[SCENE_KEYS])
+BLOCK_LIST = Policy(rules=[SCENE_KEYS])
 
-    @pytest.mark.parametrize(
-        "entities",
-        [
-            {"lock.front": "unlocked"},
-            {"light.living": "on", "siren.patio": "off"},
-            {"alarm_control_panel.home": {"state": "disarmed"}},
-            {"Lock.Front": "unlocked"},
+
+def _allow_list(regex: str) -> Policy:
+    return Policy(
+        rule_effect="allow",
+        rules=[
+            Rule(
+                tool_name="ha_config_set_scene",
+                when=[
+                    Predicate(path="args.config.entities.*~", op="regex", value=regex)
+                ],
+            )
         ],
     )
-    def test_scene_with_a_sensitive_entity_needs_approval(self, entities):
-        verdict = evaluate("ha_config_set_scene", _scene(entities), self.policy)
-        assert verdict == Verdict.REQUIRE_APPROVAL
 
+
+LIGHTS_ONLY = _allow_list(r"^light\.")
+
+
+@pytest.mark.parametrize(
+    ("policy", "entities"),
+    [
+        (BLOCK_LIST, {"lock.front": "unlocked"}),
+        (BLOCK_LIST, {"light.living": "on", "siren.patio": "off"}),
+        (BLOCK_LIST, {"alarm_control_panel.home": {"state": "disarmed"}}),
+        (BLOCK_LIST, {"Lock.Front": "unlocked"}),
+        (LIGHTS_ONLY, {"light.living": "on", "lock.front": "unlocked"}),
+        (LIGHTS_ONLY, {}),
+        (LIGHTS_ONLY, [{"entity_id": "light.living"}]),
+        # Unanchored, so only the whitespace check can refuse the padded key.
+        (_allow_list(r"light\."), {" light.living": "on"}),
+    ],
+)
+def test_scene_needs_approval(policy, entities):
+    verdict = evaluate("ha_config_set_scene", _scene(entities), policy)
+    assert verdict == Verdict.REQUIRE_APPROVAL
+
+
+class TestRequireApprovalListOnSceneKeys:
     @pytest.mark.parametrize(
         "args",
         [
@@ -82,44 +107,36 @@ class TestRequireApprovalListOnSceneKeys:
         ],
     )
     def test_other_scenes_run(self, args):
-        assert evaluate("ha_config_set_scene", args, self.policy) == Verdict.ALLOW
+        assert evaluate("ha_config_set_scene", args, BLOCK_LIST) == Verdict.ALLOW
 
     def test_stringified_config_is_inspected(self):
         args = normalize_stringified_containers(
             {"scene_id": "movie", "config": '{"entities": {"lock.front": "unlocked"}}'}
         )
-        verdict = evaluate("ha_config_set_scene", args, self.policy)
+        verdict = evaluate("ha_config_set_scene", args, BLOCK_LIST)
         assert verdict == Verdict.REQUIRE_APPROVAL
 
 
 class TestAllowListOnSceneKeys:
-    policy = Policy(
-        rule_effect="allow",
-        rules=[
-            Rule(
-                tool_name="ha_config_set_scene",
-                when=[
-                    Predicate(
-                        path="args.config.entities.*~", op="regex", value=r"^light\."
-                    )
-                ],
-            )
-        ],
-    )
-
     def test_scene_of_only_listed_entities_runs(self):
         args = _scene({"light.living": "on", "light.hall": "off"})
-        assert evaluate("ha_config_set_scene", args, self.policy) == Verdict.ALLOW
+        assert evaluate("ha_config_set_scene", args, LIGHTS_ONLY) == Verdict.ALLOW
 
+    def test_padded_key_matches_an_unanchored_regex(self):
+        # Guards the case above: without the whitespace check it would run.
+        assert list(
+            iter_path_values(_scene({" light.living": "on"}), "args.config.entities.*~")
+        ) == [" light.living"]
+
+
+class TestKeysSegmentMustBeLast:
     @pytest.mark.parametrize(
-        "entities",
-        [
-            {"light.living": "on", "lock.front": "unlocked"},
-            {},
-            [{"entity_id": "light.living"}],
-            {" light.living": "on"},
-        ],
+        "path", ["args.config.entities.*~.state", "args.*~.entity_id", "*~.*"]
     )
-    def test_anything_else_needs_approval(self, entities):
-        verdict = evaluate("ha_config_set_scene", _scene(entities), self.policy)
-        assert verdict == Verdict.REQUIRE_APPROVAL
+    def test_segment_after_keys_is_rejected(self, path):
+        with pytest.raises(ValidationError, match="last segment"):
+            Predicate(path=path, op="exists")
+
+    @pytest.mark.parametrize("path", ["args.config.entities.*~", "args.*~", "*~"])
+    def test_keys_as_last_segment_is_accepted(self, path):
+        assert Predicate(path=path, op="exists").path == path

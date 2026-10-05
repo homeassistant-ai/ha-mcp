@@ -108,17 +108,20 @@ def iter_path_values(
     The leading ``args`` segment is implicit and stripped. A ``*`` segment
     fans out across the current node — across dict values for dicts,
     across items for lists — so ``args.*`` yields every top-level
-    argument, ``args.config.*`` yields every leaf of the ``config``
-    sub-dict, and so on. A ``*~`` segment (JSONPath-Plus syntax) fans out
-    across a dict's KEYS instead, for arguments keyed by what they act on:
+    argument, ``args.config.*`` yields each immediate value of ``config``,
+    and so on. A ``*~`` segment (JSONPath-Plus syntax) fans out across a
+    dict's KEYS instead, for arguments keyed by what they act on:
     ``args.config.entities.*~`` yields every entity ID in a scene, where
-    ``*`` would yield only their target states. Empty iterator = no match.
+    ``*`` would yield only their target states. ``*~`` yields strings, so it
+    is only valid as the last segment (``Predicate`` rejects it elsewhere).
+    Empty iterator = no match.
 
     A branch that cannot continue (a missing key, a named segment on a value
-    that is not a dict, or a ``*`` on a scalar) is skipped, unless
-    ``report_missing``, which yields ``MISSING`` for it instead and also for a
-    ``*`` over an empty container. Allow mode needs that: an operation without
-    the constrained field is a value the predicate never saw.
+    that is not a dict, a ``*`` on a scalar, or a ``*~`` on a list or a
+    scalar) is skipped, unless ``report_missing``, which yields ``MISSING``
+    for it instead and also for a ``*`` or ``*~`` over an empty container.
+    Allow mode needs that: an operation without the constrained field is a
+    value the predicate never saw.
     """
     parts = path.split(".")
     if parts[0] == "args":
