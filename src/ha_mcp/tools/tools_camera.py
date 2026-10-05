@@ -249,13 +249,16 @@ class CameraTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error retrieving camera image from {entity_id}: {e}")
-            exception_to_structured_error(
+            # The default raise_error=True path raises inside the helper and
+            # never returns; the surrounding raise keeps that termination
+            # explicit so no path through this function falls off the end.
+            raise exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id},
                 suggestions=["Ensure the camera is online and accessible"],
-            )
+            ) from e
 
 
 def register_camera_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
