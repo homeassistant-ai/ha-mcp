@@ -244,18 +244,21 @@ class TestFormatSniffFallback:
 
 
 class TestRandomPayloadsNeverRaise:
-    """ "Parsers run on untrusted network bytes: never raise.
+    """Parsers run on untrusted network bytes: never raise.
 
     The seeded loops feed each magic prefix a fresh batch of pseudo-random
-    bytes. They guard the bounds handling — a regression that let a corrupt
-    segment length index past the end of the buffer would surface here —
-    while the zero-dimension tests above pin the other half of the contract:
-    when dimensions are reported, both are positive.
+    bytes. The JPEG payloads carry a guaranteed ``FF`` after the SOI so
+    every seed enters the segment walker — the first random byte is then the
+    segment's marker and the next two its length, so a corrupt SOF length
+    that indexed past the end of the buffer surfaces here. The
+    zero-dimension tests above pin the other half of the contract: when
+    dimensions are reported, both are positive.
     """
 
     def test_jpeg_prefix_random_bytes(self) -> None:
         for seed in range(32):
-            data = b"\xff\xd8" + random.Random(seed).randbytes(1024)
+            # The extra FF (not a typo) puts every seed inside the walker.
+            data = b"\xff\xd8\xff" + random.Random(seed).randbytes(1024)
             fmt, dims = resolve_image_info(data, "jpeg")
             assert fmt == "jpeg"
             assert dims is None or (dims[0] > 0 and dims[1] > 0), f"seed {seed}"
