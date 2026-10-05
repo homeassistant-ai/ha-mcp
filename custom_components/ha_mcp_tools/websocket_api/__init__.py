@@ -478,6 +478,7 @@ def _build_handler(schema: dict[Any, Any], do_fn: Any, prep: Any = None) -> Any:
     async def _handler(
         hass: HomeAssistant, connection: Any, msg: dict[str, Any]
     ) -> None:
+        msg["ha_mcp_context"] = connection.context(msg)
         extra = await prep(hass, msg) if prep is not None else {}
         connection.send_result(msg["id"], do_fn(hass, msg, **extra))
 
