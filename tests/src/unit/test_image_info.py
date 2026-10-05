@@ -246,11 +246,14 @@ class TestFormatSniffFallback:
 class TestRandomPayloadsNeverRaise:
     """Parsers run on untrusted network bytes: never raise.
 
-    The seeded loops feed each magic prefix a fresh batch of pseudo-random
-    bytes. The JPEG payloads carry a guaranteed ``FF`` after the SOI so
-    every seed enters the segment walker — the first random byte is then the
-    segment's marker and the next two its length, so a corrupt SOF length
-    that indexed past the end of the buffer surfaces here. The
+    Each loop carries just enough scaffolding that the parser's working
+    code runs on random data. The JPEG payloads start with ``FF`` after the
+    SOI so every seed enters the segment walker — the first random byte is
+    then the segment's marker and the next two its length, so a corrupt SOF
+    length indexing past the end of the buffer surfaces here. The PNG
+    payloads start with the signature plus an IHDR header, so the random
+    bytes are the width/height fields themselves. The GIF header ends where
+    the dimensions begin, so its random bytes already are them. The
     zero-dimension tests above pin the other half of the contract: when
     dimensions are reported, both are positive.
     """
@@ -265,7 +268,14 @@ class TestRandomPayloadsNeverRaise:
 
     def test_png_prefix_random_bytes(self) -> None:
         for seed in range(32):
-            data = b"\x89PNG\r\n\x1a\n" + random.Random(seed).randbytes(512)
+            # Signature + IHDR header (not a typo): puts the random bytes
+            # on the width/height fields the parser reads.
+            data = (
+                b"\x89PNG\r\n\x1a\n"
+                + (13).to_bytes(4, "big")
+                + b"IHDR"
+                + random.Random(seed).randbytes(512)
+            )
             fmt, dims = resolve_image_info(data, "png")
             assert fmt == "png"
             assert dims is None or (dims[0] > 0 and dims[1] > 0), f"seed {seed}"
