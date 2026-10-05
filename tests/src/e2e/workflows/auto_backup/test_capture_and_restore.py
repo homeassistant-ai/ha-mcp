@@ -848,7 +848,14 @@ class TestTemplateHelperCaptureRestore:
                         "entity_id": missing_id,
                     },
                 )
-                assert snapshot["error"]["code"] == "BACKUP_CAPTURE_FAILED"
+                # Both are honest refusals: without the component's WebSocket
+                # surface the capture cannot read the options (capture failed);
+                # where the component still answers (HAOS without its tools
+                # entry) the made-up id is simply not found. Neither saves.
+                assert snapshot["error"]["code"] in {
+                    "BACKUP_CAPTURE_FAILED",
+                    "RESOURCE_NOT_FOUND",
+                }
                 listing = await mcp.call_tool_success(
                     "ha_manage_backup",
                     {

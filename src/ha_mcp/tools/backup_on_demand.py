@@ -46,10 +46,9 @@ async def capture_on_demand(mgr: BackupManager, domain: str, entity_id: str) -> 
                 "or fetch returned no config",
                 context={"domain": domain, "entity_id": entity_id},
                 suggestions=[
-                    "Verify the entity exists via the matching "
-                    "ha_config_get_* tool first",
-                    "For helpers, pass domain='helper_<helper_type>' "
-                    "(e.g. 'helper_input_boolean')",
+                    "Verify the entity exists via the matching ha_config_get_* tool",
+                    "For helpers, pass domain='helper_<helper_type>', e.g. "
+                    + "'helper_input_boolean'",
                 ],
             )
         )
