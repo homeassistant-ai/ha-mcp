@@ -502,7 +502,7 @@
     "advanced.extra_yaml_write_keys.label": "Extra YAML write keys",
     "advanced.extra_yaml_write_keys.help": "Extra top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Enter one key per line or separate keys with commas. Keys that redefine Home Assistant's own trust boundary can never be added and are ignored. Requires custom component 1.2.4 or newer.",
     "advanced.sidecar_pin_port.label": "Settings UI sidecar port",
-    "advanced.sidecar_pin_port.help": "0 picks a free port on first start and keeps it for later restarts; any other value pins a preferred port (falls back to a free one if taken).",
+    "advanced.sidecar_pin_port.help": "0 picks a free port on first start and keeps it for later restarts; a port in the range pins a preferred port (falls back to a free one if taken).",
     "advanced.enable_dev_mode.label": "Developer mode",
     "advanced.enable_dev_mode.help": "⚠ Registers hidden tools that can change settings and replace the running server. Development and testing only.",
     "advanced.dev_tools_security_policy_access.label": "Dev tools security policy access",

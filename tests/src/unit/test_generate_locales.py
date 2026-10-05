@@ -162,6 +162,28 @@ class TestResolveText:
         assert configuration["limit"]["description"] == "How many. Bereich 0–32."
         assert configuration["flag"]["description"] == "On or off."
 
+    def test_no_app_option_has_a_second_english_text(self) -> None:
+        """An ``addon.<key>.*`` text for an option the settings UI also shows
+        is a second English text: the two drift apart, and every locale
+        translates both."""
+        english = generate_locales.load_catalogs()["en"]
+        shown_in_ui = {
+            key.split(".")[-2]
+            for key in english
+            if key.endswith(".label")
+            and key.startswith(("features.", "advanced.", "backup.fields."))
+        }
+        duplicates = sorted(
+            key
+            for key in english
+            if key.startswith("addon.") and key.split(".")[1] in shown_in_ui
+        )
+        assert not duplicates, (
+            f"en.json carries app texts the settings UI text already covers: "
+            f"{duplicates}. Edit the UI text instead; generate_locales.py "
+            "projects it onto the app page."
+        )
+
     def test_missing_canonical_string_names_the_key_to_add(self) -> None:
         with pytest.raises(SystemExit, match=r"addon\.opt\.name"):
             generate_locales.resolve_text({}, {}, "dev", "opt", "name")
