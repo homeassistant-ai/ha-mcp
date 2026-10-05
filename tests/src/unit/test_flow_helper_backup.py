@@ -103,6 +103,32 @@ async def test_restore_submits_what_the_options_form_offers(
     )
 
 
+async def test_unmarked_last_form_is_applied_and_judged_by_readback(
+    stored: dict[str, Any],
+) -> None:
+    """A flow that never marks its last form (``last_step`` None) cannot be
+    checked before it applies: the forms are submitted, and a snapshot option
+    no form offers that differs is reported by the readback, not refused."""
+    client = _options_flow(["source", "periodically_resetting"])
+    client.start_options_flow.return_value["last_step"] = None
+    stored["cycle"] = "monthly"
+
+    async def applied(flow_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        stored.update(payload)
+        return {"type": "create_entry", "result": {}}
+
+    client.submit_options_flow_step.side_effect = applied
+    handler = bm._make_flow_helper_handler("utility_meter")
+    with pytest.raises(bm.BackupRestoreError) as caught:
+        await handler.restore(
+            client, "meter-entry", {"entry_id": "meter-entry", "options": dict(_METER)}
+        )
+    assert caught.value.outcome["apply_status"] == "applied"
+    assert caught.value.outcome["verification_status"] == "mismatched"
+    client.submit_options_flow_step.assert_awaited_once()
+    assert stored["cycle"] == "monthly"
+
+
 async def test_restore_refuses_a_changed_option_the_form_cannot_set(
     stored: dict[str, Any],
 ) -> None:
@@ -157,6 +183,41 @@ async def test_recreation_answers_the_menu_from_the_snapshot() -> None:
     ]
 
 
+async def test_recreation_picks_the_branch_key_over_a_matching_option_value() -> None:
+    """A template binary_sensor with device_class "light" holds two values that
+    name template branches; template_type is the branch, not device_class."""
+    client = _creation_client(
+        {
+            "type": "form",
+            "flow_id": "create",
+            "step_id": "binary_sensor",
+            "data_schema": [{"name": n} for n in ("name", "state", "device_class")],
+            "last_step": True,
+        },
+        _CREATED,
+        first={
+            "type": "menu",
+            "flow_id": "create",
+            "menu_options": ["binary_sensor", "light", "sensor"],
+        },
+    )
+    options = {
+        "template_type": "binary_sensor",
+        "device_class": "light",
+        "name": "Hall light",
+        "state": "{{ 1 }}",
+    }
+    result = await create_flow_helper(
+        client, "template", options, complete_snapshot=True
+    )
+    assert result["entry_id"] == "new-entry"
+    assert [c.args[1] for c in client.submit_config_flow_step.await_args_list] == [
+        {"next_step_id": "binary_sensor"},
+        {"device_class": "light", "name": "Hall light", "state": "{{ 1 }}"},
+    ]
+    assert "warnings" not in result
+
+
 async def test_recreation_fills_every_form_of_a_multi_step_flow() -> None:
     """statistics asks for its characteristic on a second form."""
     form = {"type": "form", "flow_id": "create", "last_step": False}
@@ -189,6 +250,42 @@ async def test_recreation_fills_every_form_of_a_multi_step_flow() -> None:
         {"state_characteristic": "mean"},
         {"sampling_size": 20},
     ]
+
+
+async def test_entities_renamed_before_a_later_one_fails_are_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A utility meter with tariffs recreates several entities; when the second
+    cannot be found, the outcome still names the first's rename."""
+    row = {"entity_id": "sensor.energy_2", "unique_id": "new-entry", "name": None}
+
+    async def created(client: Any, entry_id: str, unique_id: str) -> dict[str, Any]:
+        if unique_id == "new-entry_peak":
+            raise bm.HomeAssistantError("Recreated entity mapping is ambiguous")
+        return dict(row)
+
+    async def rename(client: Any, message: dict[str, Any]) -> None:
+        row["entity_id"] = message["new_entity_id"]
+
+    monkeypatch.setattr(bm, "_created_entity", created)
+    monkeypatch.setattr(bm, "_check_entity_collision", AsyncMock())
+    monkeypatch.setattr(bm, "_ws_send", rename)
+    saved = [
+        {"entity_id": "sensor.energy", "unique_id": "old-entry", "name": None},
+        {
+            "entity_id": "sensor.energy_peak",
+            "unique_id": "old-entry_peak",
+            "name": None,
+        },
+    ]
+
+    with pytest.raises(bm.BackupRestoreError) as caught:
+        await bm._restore_entity_ids(None, "new-entry", "old-entry", saved)
+
+    assert caught.value.outcome["entity_id_mapping"] == [
+        {"created_entity_id": "sensor.energy_2", "restored_entity_id": "sensor.energy"}
+    ]
+    assert caught.value.outcome["verification_status"] == "unavailable"
 
 
 async def test_recreation_refuses_a_snapshot_key_no_form_takes() -> None:

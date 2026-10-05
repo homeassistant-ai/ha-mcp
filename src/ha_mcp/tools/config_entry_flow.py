@@ -67,8 +67,8 @@ OptionsRestoreReason = Literal[
 _RESTORE_REASON_MESSAGES: dict[OptionsRestoreReason, str] = {
     "unsupported_form": "Options restore requires an authoritative options form",
     "unsupported_fields": "Snapshot fields are not accepted by the options form",
-    "identity_changed": "Helper identity changed since the snapshot (options its "
-    "options form does not offer differ); restore refused",
+    "identity_changed": "Snapshot fields no restore form offers differ from the "
+    "stored ones (set at creation); restore refused",
     "validation_failed": "Home Assistant rejected the restored options as invalid",
     "flow_aborted": "Home Assistant aborted the options restore",
 }
@@ -208,6 +208,10 @@ class _OptionsFlowProgress:
 
     def start(self, step: dict[str, Any]) -> None:
         """Accept the options flow's first reply only as a clean form."""
+        if step.get("type") == _FlowType.ABORT:
+            # HA refused to open the flow (a second Forecast.Solar plane
+            # without an API key aborts as api_key_required).
+            self.refuse("flow_aborted")
         if step.get("type") != _FlowType.FORM:
             self.refuse("unsupported_form")
         self._refuse_form_errors(step)
@@ -220,7 +224,13 @@ class _OptionsFlowProgress:
             )
 
     def check_form(self, step: dict[str, Any]) -> None:
-        """Before submitting a form, settle the snapshot fields it leaves."""
+        """Before submitting a form, settle the snapshot fields it leaves.
+
+        The leftover check runs only on the form HA marks as last
+        (``last_step: True``). A flow that never marks one (``None``, the
+        ``async_show_form`` default) is submitted as it comes, and its result
+        is verified by readback after it has been applied.
+        """
         schema = step.get("data_schema")
         if not isinstance(schema, list):
             self.refuse("unsupported_form")
@@ -265,7 +275,7 @@ class _OptionsFlowProgress:
             and previous.get("last_step") is not True
         ):
             # The next form of the flow: nothing is committed before
-            # CREATE_ENTRY, and check_form fills it from the snapshot.
+            # CREATE_ENTRY; check_form settles it and the walker fills it.
             self.apply_status = "not_applied"
         else:
             # A complete snapshot cannot choose a menu branch mid-flow, nor
@@ -306,7 +316,8 @@ def _unknown_snapshot_fields(
 
 
 class _CreationFlowProgress(_OptionsFlowProgress):
-    """Require the creation forms to consume a complete snapshot."""
+    """Fill the creation forms from a complete snapshot; a key no form takes
+    is refused before the form HA marks as last."""
 
     error_type = CreationFlowError
     operation = "Helper recreation"
@@ -357,7 +368,9 @@ async def _create_snapshot_helper(
         if not progress.flow_id:
             raise progress.failure()
         if initial_step.get("type") == _FlowType.MENU:
-            config = _answer_menu_from_snapshot(progress, initial_step, config)
+            config = _answer_menu_from_snapshot(
+                progress, initial_step, config, helper_type
+            )
         result = await _handle_flow_steps(
             client,
             progress.flow_id,
@@ -383,20 +396,38 @@ async def _create_snapshot_helper(
         raise failure from err
 
 
+# The option a menu-rooted helper stores its creation branch under.
+_MENU_BRANCH_KEYS = {
+    "template": "template_type",
+    "group": "group_type",
+    "random": "entity_type",
+}
+
+
 def _answer_menu_from_snapshot(
-    progress: _CreationFlowProgress, menu: dict[str, Any], config: dict[str, Any]
+    progress: _CreationFlowProgress,
+    menu: dict[str, Any],
+    config: dict[str, Any],
+    helper_type: str,
 ) -> dict[str, Any]:
     """Pick the creation menu's branch the snapshot names.
 
     A menu-rooted helper stores its branch among its options (template's
-    ``template_type``, group's ``group_type``): the one snapshot value that is
-    a menu option selects it, and no creation form takes that key.
+    ``template_type``, group's ``group_type``); that key selects it, and no
+    creation form takes it. Other option values can also be menu names (a
+    template binary_sensor's ``device_class`` "light"), so the branch key is
+    looked up by helper type first and matched by value only for a type
+    without a known key.
     """
     if "next_step_id" in config:
         return config
     options = menu.get("menu_options")
     choices = options if isinstance(options, list) else list(options or {})
-    keys = [key for key, value in config.items() if value in choices]
+    branch_key = _MENU_BRANCH_KEYS.get(helper_type)
+    if branch_key is not None and config.get(branch_key) in choices:
+        keys = [branch_key]
+    else:
+        keys = [key for key, value in config.items() if value in choices]
     if len(keys) != 1:
         progress.refuse("unsupported_form")
     progress.config.pop(keys[0])
@@ -744,7 +775,9 @@ async def update_config_entry_options(
     A complete options snapshot restore passes ``keep_current_values=False``
     so current values absent from the snapshot are not copied into the payload,
     and ``fixed_options``, the entry's stored options: a snapshot field none of
-    the options forms offers must still hold its stored value. The caller must
+    the options forms offers must still hold its stored value, checked before
+    the form HA marks as last (a flow that marks none is verified by readback
+    after it applied). The caller must
     ensure the integration replaces its options only when its flow returns
     CREATE_ENTRY. The restore requires authoritative forms and raises
     ``OptionsFlowError`` with apply knowledge on failure; uncertain or

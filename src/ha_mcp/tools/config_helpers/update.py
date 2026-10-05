@@ -1,9 +1,10 @@
 """Update path for simple (non-flow) helper types.
 
-Core's storage-collection update replaces the whole item, so every update is
-the stored item plus the caller's changes (:func:`merged_update`), validated by
-Core itself. The component writes it in-process; without the component the
-item is read from ``<type>/list`` and sent to ``<type>/update``.
+The input_*, counter and timer collections replace the whole item on update
+(zone, person and tag merge into it), so every update is the stored item plus
+the caller's changes (:func:`merged_update`), validated by Core itself. The
+component writes it in-process; without the component the item is read from
+``<type>/list`` and sent to ``<type>/update``.
 """
 
 from typing import Any
@@ -72,7 +73,7 @@ async def _execute_legacy_update(
     """Update through Core's ``<type>/update`` WS command (no component)."""
     stored = await _stored_item(client, helper_type, entity_id, unique_id)
     body = merged_update(helper_type, stored, name, icon, fields, entity_id)
-    check_core_gaps(helper_type, body)
+    check_core_gaps(helper_type, body, changed=fields)
     result = await client.send_websocket_message(
         {**body, "type": f"{helper_type}/update", f"{helper_type}_id": unique_id}
     )
@@ -320,7 +321,7 @@ async def _update_via_component(
     if item is None:
         return None
     body = merged_update(helper_type, item["item"], name, icon, fields, entity_id)
-    check_core_gaps(helper_type, body)
+    check_core_gaps(helper_type, body, changed=fields)
     registry = {
         key: value
         for key, value in (

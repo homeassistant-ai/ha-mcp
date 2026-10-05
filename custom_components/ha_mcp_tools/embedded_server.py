@@ -167,6 +167,11 @@ _PENDING_INSTALL_WAIT_SECONDS = 600.0
 # constraints and must never enter the worker thread.
 MIN_EMBEDDED_SERVER_VERSION = "7.10.0"
 
+# How long the listener keeps an idle keep-alive connection (uvicorn's default).
+# The webhook relay's pool drops its idle connections sooner than this, or a
+# request sent as the listener closes one fails with a reset (``mcp_webhook``).
+SERVER_KEEPALIVE_SECONDS = 5
+
 
 def _derive_loopback_url(hass: HomeAssistant) -> tuple[str, bool | None]:
     """Resolve the loopback base URL for HA core from the http integration.
@@ -1809,6 +1814,7 @@ class EmbeddedServerManager:
             # Leave Home Assistant's logging untouched — do not let uvicorn
             # reconfigure the root logger from this thread.
             log_config=None,
+            timeout_keep_alive=SERVER_KEEPALIVE_SECONDS,
         )
         uv_server = uvicorn.Server(config)
 

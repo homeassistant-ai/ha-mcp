@@ -184,11 +184,12 @@ async def _raise_flow_api_error(
     ``errors`` map), attaches a ``data_schema`` so the caller has actionable
     information.
 
-    ``is_reconfigure`` changes two things. The schema comes from the live
-    reconfigure step rather than a fresh introspection flow (``helper_type``
-    carries the integration domain there and reaches no schema fetch), and
-    the prose names the integration instead of a helper, because this path
-    also serves ``ha_set_integration(reconfigure=True)``.
+    The schema is the live step's own whenever it carries one, so a later
+    form's rejection shows that form; a fresh introspection flow is the
+    fallback for a schema-less step. ``is_reconfigure`` skips that fallback
+    too (``helper_type`` carries the integration domain there) and makes the
+    prose name the integration instead of a helper, because this path also
+    serves ``ha_set_integration(reconfigure=True)``.
 
     Always raises ``ToolError`` — never returns.
     """
@@ -216,9 +217,9 @@ async def _raise_flow_api_error(
             current_schema = step_schema
 
     if current_schema is not None or is_reconfigure:
-        # The live step is the form HA rejected: in a multi-step flow a fresh
-        # introspection would show the first form instead, and for an options
-        # or reconfigure flow a setup form, a different contract.
+        # The live step is the form HA rejected: a fresh introspection would
+        # show the helper's first setup form instead, a different form in a
+        # multi-step, options or reconfigure flow.
         schema = current_schema
     else:
         info = await fetch_helper_flow_info(client, helper_type, menu_choice)
@@ -707,12 +708,12 @@ async def _handle_flow_steps(
         submit_fn: Async function to submit a step. Defaults to
             client.submit_config_flow_step (create). Pass
             client.submit_options_flow_step for options (update) flows.
-        helper_type: Optional helper type (e.g. ``"statistics"``). When
-            provided outside reconfigure mode, surfaces the helper's
-            data_schema in error context for unstructured HA 4xx responses so
-            the caller can react. Under ``is_reconfigure`` no schema is
-            fetched (the live step already carries the right one) and the
-            value is used only to name the integration in error prose.
+        helper_type: Optional helper type (e.g. ``"statistics"``). An
+            unstructured HA 4xx carries the rejected step's own data_schema
+            in its error context; when that step has none, the helper's
+            setup form is introspected under this type (never under
+            ``is_reconfigure``, where the value only names the integration
+            in error prose).
         keep_current_values: Whether this flow edits an existing object
             (options, reconfigure, subentry reconfigure) rather than creating
             one. Its steps arrive pre-filled with the stored values and the HA
@@ -730,7 +731,10 @@ async def _handle_flow_steps(
             "consumed at least one caller key" test below nor satisfy the
             reconfigure "consumed EVERY key" one.
         complete_snapshot: A backup restore or recreation, whose ``submit_fn``
-            accounts for every snapshot key; skips the no-key-consumed check.
+            checks the snapshot keys no form took before the form HA marks as
+            last (``_OptionsFlowProgress``); skips the no-key-consumed check
+            and the leftover-key warnings and reconfigure error, since a
+            flow without a marked last form is verified by readback instead.
         is_reconfigure: Whether this is the official reconfigure flow — the
             same mode HA uses for reauth, so both ``reconfigure_successful``
             and ``reauth_successful`` count as its success aborts. In this
@@ -763,7 +767,7 @@ async def _handle_flow_steps(
     consumed_menu_selection_keys: list[str] = []
     ignored_config_keys: set[str] = set()
     reuse_state = _ReuseState()
-    # A snapshot's submit_fn settles every key itself (_OptionsFlowProgress),
+    # A snapshot's submit_fn checks the keys no form took (_OptionsFlowProgress),
     # and may legitimately submit no form field.
     supplied_keys = (
         []
@@ -778,6 +782,8 @@ async def _handle_flow_steps(
         result_type = current_step.get("type")
 
         if result_type == _FlowType.CREATE_ENTRY:
+            # A snapshot's keys no form took are its fixed options (name, a
+            # template's type), checked by submit_fn, not ignored input.
             return _handle_flow_create_entry(
                 flow_id,
                 current_step,
@@ -785,13 +791,12 @@ async def _handle_flow_steps(
                 supplied_keys=supplied_keys,
                 saw_form_step=saw_form_step,
                 any_form_key_consumed=any_form_key_consumed,
-                ignored_config_keys=ignored_config_keys,
-                remaining_config=remaining_config,
+                ignored_config_keys=set() if complete_snapshot else ignored_config_keys,
+                remaining_config={} if complete_snapshot else remaining_config,
                 reuse_state=reuse_state,
             )
 
         if result_type == _FlowType.ABORT:
-            # A snapshot's submit_fn has already settled the keys no form took.
             return _handle_abort_step(
                 flow_id,
                 current_step,

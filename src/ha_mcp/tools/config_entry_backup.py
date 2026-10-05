@@ -40,7 +40,8 @@ def skip_unless_flow_helper(kwargs: dict[str, Any]) -> bool:
 async def resolve_config_entry_backup_domain(
     client: Any, kwargs: dict[str, Any], domain: str, entry_id: str
 ) -> str:
-    """Capture a flow helper's options for generic options edits and entry deletion."""
+    """Snapshot a flow helper as ``helper_<type>`` (its options) when a generic
+    options edit or entry deletion targets its config entry."""
     if domain != "integration" or "." in entry_id:
         return domain
     edits_options = kwargs.get("config") is not None and kwargs.get("enabled") is None

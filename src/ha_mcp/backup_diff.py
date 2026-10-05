@@ -1,7 +1,7 @@
 """Snapshot diffs for the backup manager: a JSON patch for config snapshots
 and a unified diff for text (file/YAML) snapshots.
 
-Split out of ``backup_manager``; it re-exports the names it uses.
+Split out of ``backup_manager``, which imports what it uses from here.
 """
 
 from __future__ import annotations
@@ -209,7 +209,7 @@ def _diff_node(
     # let a bool/int type swap pass silently even though it represents
     # a different state for HA toggles. The different-type branch
     # forces a replace unconditionally. No post-append length guard here
-    # (unlike the loop sites above): this append is terminal, and
+    # (unlike the loop sites in the dict/list walkers below): this append is terminal, and
     # ``_compute_json_patch`` budgets ``max_ops + 1`` precisely to absorb
     # one final overflow op before trimming.
     out.append({"op": "replace", "path": path or "", "value": stored})

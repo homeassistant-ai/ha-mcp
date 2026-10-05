@@ -65,7 +65,7 @@ def entry_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
         return {
             "type": "form",
             "flow_id": "edit-flow",
-            "step_id": options["template_type"],
+            "step_id": options.get("template_type", "init"),
             "data_schema": [
                 {"name": "state", "required": True, "selector": {"template": {}}}
             ],
@@ -145,6 +145,33 @@ async def test_generic_template_mutation_captures_options_before_write(
         "options": original,
         "entities": [entry_backup.entity],
     }
+
+
+@pytest.mark.parametrize("operation", ["options", "delete"])
+async def test_generic_mutation_of_any_flow_helper_captures_its_options(
+    entry_backup: SimpleNamespace, operation: str
+) -> None:
+    """The routing is by the entry's domain, not a template-only rule (#2632)."""
+    entry_backup.entry["domain"] = "utility_meter"
+    entry_backup.options.clear()
+    entry_backup.options.update(
+        {"name": "Energy", "source": "sensor.power", "cycle": "daily"}
+    )
+    original = deepcopy(entry_backup.options)
+    if operation == "options":
+        result = await entry_backup.tools.ha_set_integration(
+            entry_id="template-entry", config={"source": "sensor.other"}
+        )
+    else:
+        result = await entry_backup.tools.ha_remove_helpers_integrations(
+            target="template-entry", confirm=True
+        )
+
+    assert result["success"] is True
+    (mutation,) = entry_backup.mutations
+    (snapshot,) = mutation["snapshots"]
+    assert snapshot["domain"] == "helper_utility_meter"
+    assert snapshot["config"]["options"] == original
 
 
 async def test_explicit_flow_entry_id_is_rejected_without_capture(

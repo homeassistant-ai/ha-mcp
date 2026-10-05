@@ -203,7 +203,7 @@ async def test_existing_flow_helper_with_a_later_options_form_says_so(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("menu", "expected"),
-    [(["a", 1, None], ["a"]), (None, None), ([2], None)],
+    [(["a", 1, None], ["a"]), (None, None), ([2], None), ({"a": "Label"}, ["a"])],
 )
 async def test_options_flow_menu_lists_only_string_choices(
     client: AsyncMock, menu: Any, expected: list[str] | None
@@ -221,6 +221,48 @@ async def test_options_flow_menu_lists_only_string_choices(
     assert result.get("menu_options") == expected
     assert result["note"]
     client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_flow_that_cannot_be_read_is_an_error_not_an_empty_field_list(
+    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mistyped menu_choice makes HA reject the branch; the agent must not be
+    told the helper has no fields."""
+    monkeypatch.setattr(mod, "fetch_helper_flow_info", AsyncMock(return_value={}))
+
+    with pytest.raises(ToolError, match="menu_choice 'sensors'"):
+        await mod.describe_helper(client, "template", menu_choice="sensors")
+    with pytest.raises(ToolError, match="no setup form for derivative"):
+        await mod.describe_helper(client, "derivative")
+
+
+@pytest.mark.asyncio
+async def test_options_flow_that_does_not_open_with_a_form_is_an_error(
+    client: AsyncMock,
+) -> None:
+    client.get_config_entry.return_value = {"domain": "group"}
+    client.start_options_flow.return_value = {
+        "type": "abort",
+        "flow_id": "f1",
+        "reason": "not_loaded",
+    }
+
+    with pytest.raises(ToolError, match="abort: not_loaded"):
+        await mod.describe_helper(client, "group", helper_id="entry1")
+
+    client.abort_options_flow.assert_awaited_once_with("f1")
+
+
+@pytest.mark.asyncio
+async def test_describe_only_parameters_are_refused_without_describe() -> None:
+    from unittest.mock import MagicMock
+
+    from ha_mcp.tools.tools_config_helpers import HelperConfigTools
+
+    tools = HelperConfigTools(MagicMock())
+    with pytest.raises(ToolError, match="apply only with describe=True"):
+        await tools.ha_config_list_helpers(helper_type="counter", helper_id="c1")
 
 
 @pytest.mark.asyncio

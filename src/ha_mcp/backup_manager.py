@@ -232,6 +232,8 @@ def _flow_failure_reason(step: str, error: BaseException) -> str:
 def _flow_safe_failure_detail(step: str, error: BaseException) -> str | None:
     if isinstance(error, MandatoryBackupError):
         return error.safe_detail
+    if isinstance(error, _FlowHelperReadError):
+        return str(error)  # locally authored, names no option values
     # The safety stage wraps remote fetch failures in MandatoryBackupError;
     # a raw OSError here comes from retained-file I/O. Other stages call HA.
     if step == "safety_backup" and isinstance(error, OSError):
@@ -844,7 +846,8 @@ class BackupManager:
             if mandatory:
                 raise MandatoryBackupError(
                     f"could not read the current state of {key} to back "
-                    f"it up: {type(err).__name__}: {err}"
+                    f"it up: {type(err).__name__}: {err}",
+                    safe_detail=_flow_safe_failure_detail("capture", err),
                 ) from err
             logger.warning(
                 "Auto-backup: fetch failed for %s — %s: %s",
@@ -1041,8 +1044,9 @@ class BackupManager:
         read stops at the ``config:`` line and never parses the body: every
         listing row opens its file, and an unfiltered listing of hundreds of
         whole-file snapshots has to stay a header read per row. Flow-helper
-        snapshots are the exception: older headers used aliases, so their
-        stable identity must be read from config.entry_id.
+        snapshots are the exception: template snapshots from before #2632
+        used entity aliases as headers, so the stable identity of every
+        flow-helper snapshot is read from config.entry_id.
         """
         domain = path.name.split(".", 1)[0]
         if _is_flow_helper_domain(domain):
@@ -1138,7 +1142,8 @@ class BackupManager:
     ) -> None:
         candidates: set[Path] = set()
         if _is_flow_helper_domain(domain):
-            # Older snapshots used the entity alias as their filename/header.
+            # Template snapshots from before #2632 used the entity alias as
+            # their filename/header.
             candidates.update(self._dir.glob(f"{domain}.*.yaml"))
             names = {path.name for path in candidates}
             with self._entry_identity_lock:
@@ -1446,9 +1451,11 @@ class BackupManager:
         step = "safety_preflight"
         try:
             needs_safety = await self._restore_needs_safety(handler, entity_id, config)
-            # Existing flow helpers always require a fresh recovery point.
+            # Existing flow helpers and subentries always require a fresh
+            # recovery point: their flows can apply a restore partly.
             is_flow = _is_flow_helper_domain(domain)
-            if needs_safety and (is_flow or take_safety_backup):
+            flow_driven = is_flow or domain == "helper_config_subentry"
+            if needs_safety and (flow_driven or take_safety_backup):
                 step = "safety_backup"
                 safety_path = await self._capture_restore_safety(domain, entity_id)
                 if safety_path is not None:
@@ -2709,25 +2716,11 @@ _HELPER_LIST_TYPES = {
 
 
 async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
-    """Fetch a helper's full config from its collection list.
+    """Fetch a storage helper's full config from its ``<helper_type>/list``.
 
-    Only the storage-backed (``<helper_type>/list``) types are supported;
-    flow-helper types (template, group, utility_meter, ...) live in
-    config entries with a totally different shape and a separate
-    update API. Returning a partial entity-state stub for those types
-    would make restore re-POST it to ``/api/states/<id>``, which sets a
-    state attribute rather than the helper's config — silently wrong.
-    For unsupported types we return None so the capture-pipeline treats
-    it as "entity didn't exist" rather than writing a bogus snapshot.
+    Registered for ``_KNOWN_HELPER_TYPES`` only; flow helpers (config
+    entries) have their own handler family (``_make_flow_helper_handler``).
     """
-    if helper_type not in _HELPER_LIST_TYPES:
-        logger.debug(
-            "Auto-backup: helper_type %r is config-entry-backed; "
-            "snapshot/restore via /<type>/list is not supported. "
-            "Capture skipped to avoid producing an unrestorable backup.",
-            helper_type,
-        )
-        return None
     listed = await _ws_send(client, {"type": f"{helper_type}/list"})
     if helper_type == "person" and isinstance(listed, dict):
         listed = listed.get("storage")  # YAML-defined persons are not editable
@@ -3306,11 +3299,13 @@ async def _apply_and_verify(
         result = await apply()
     except OptionsFlowError as err:
         logger.warning(
-            "Flow helper restore step=flow failed: %s apply_status=%s reason=%s fields=%s",
+            "Flow helper restore step=flow failed: %s apply_status=%s reason=%s "
+            "fields=%s cause=%s",
             type(err).__name__,
             err.apply_status,
             err.reason,
             list(err.fields),
+            type(err.__cause__).__name__ if err.__cause__ else None,
         )
         if err.apply_status == "not_applied":
             raise BackupRestoreError(
@@ -3506,65 +3501,92 @@ async def _created_entity(client: Any, entry_id: str, unique_id: str) -> dict[st
 async def _restore_entity_ids(
     client: Any, entry_id: str, original_entry_id: str, saved_rows: list[dict[str, Any]]
 ) -> list[dict[str, str]]:
-    """Give each recreated entity its saved ID/name, guarded by ownership."""
+    """Give each recreated entity its saved ID/name, guarded by ownership.
+
+    A failure part-way reports the entities already restored, so the outcome
+    names every rename that did happen.
+    """
     mapping: list[dict[str, str]] = []
-    for saved in saved_rows:
-        unique_id = _recreated_unique_id(saved, original_entry_id, entry_id)
-        row = await _created_entity(client, entry_id, unique_id)
-        source, target = row["entity_id"], saved["entity_id"]
-        locked_ids = {source, target}
-        async with AsyncExitStack() as locks:
-            # A rename changes the lock key; hold both IDs in a stable order.
-            for entity_id in sorted(locked_ids):
-                await locks.enter_async_context(
-                    registry_update_lock("entity", entity_id)
-                )
-            row = await _created_entity(client, entry_id, unique_id)
-            source = row["entity_id"]
-            if source not in locked_ids:
-                raise BackupRestoreError(
-                    "Recreated entity ID changed while waiting to restore it",
-                    reason="entity_identity_mismatch",
-                    verification_status="mismatched",
-                )
-            if source.split(".")[0] != target.split(".")[0]:
-                raise BackupRestoreError(
-                    "Recreated entity has an unexpected domain",
-                    reason="entity_identity_mismatch",
-                    verification_status="mismatched",
-                )
-            await _check_entity_collision(client, target, owned_entry_id=entry_id)
-            update: dict[str, Any] = {
-                "type": "config/entity_registry/update",
-                "entity_id": source,
-            }
-            if source != target:
-                update["new_entity_id"] = target
-            if row.get("name") != saved.get("name"):
-                update["name"] = saved.get("name")
-            if len(update) > 2:
-                try:
-                    await _ws_send(client, update)
-                except _CAPTURE_TRANSIENT_ERRORS as err:
-                    _log_flow_helper_failure("entity_rename", err)
-                    raise BackupRestoreError(
-                        "The recreated helper's entity rename outcome is unknown",
-                        reason="entity_rename_outcome_unknown",
-                        entity_id_mapping=[
-                            *mapping,
-                            {"created_entity_id": source, "target_entity_id": target},
-                        ],
-                        verification_status="unavailable",
-                    ) from err
-            actual = await _created_entity(client, entry_id, unique_id)
-            if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
-                raise BackupRestoreError(
-                    "Recreated entity identity did not match",
-                    reason="entity_identity_mismatch",
-                    verification_status="mismatched",
-                )
-            mapping.append({"created_entity_id": source, "restored_entity_id": target})
+    try:
+        for saved in saved_rows:
+            await _restore_entity_id(
+                client, entry_id, original_entry_id, saved, mapping
+            )
+    except BackupRestoreError as err:
+        err.outcome.setdefault("entity_id_mapping", mapping)
+        raise
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        _log_flow_helper_failure("entity_rename", err)
+        raise BackupRestoreError(
+            "A recreated entity could not be found or restored",
+            reason="upstream_error",
+            entity_id_mapping=mapping,
+            verification_status="unavailable",
+        ) from err
     return mapping
+
+
+async def _restore_entity_id(
+    client: Any,
+    entry_id: str,
+    original_entry_id: str,
+    saved: dict[str, Any],
+    mapping: list[dict[str, str]],
+) -> None:
+    """Rename one recreated entity to its saved ID/name and record it."""
+    unique_id = _recreated_unique_id(saved, original_entry_id, entry_id)
+    row = await _created_entity(client, entry_id, unique_id)
+    source, target = row["entity_id"], saved["entity_id"]
+    locked_ids = {source, target}
+    async with AsyncExitStack() as locks:
+        # A rename changes the lock key; hold both IDs in a stable order.
+        for entity_id in sorted(locked_ids):
+            await locks.enter_async_context(registry_update_lock("entity", entity_id))
+        row = await _created_entity(client, entry_id, unique_id)
+        source = row["entity_id"]
+        if source not in locked_ids:
+            raise BackupRestoreError(
+                "Recreated entity ID changed while waiting to restore it",
+                reason="entity_identity_mismatch",
+                verification_status="mismatched",
+            )
+        if source.split(".")[0] != target.split(".")[0]:
+            raise BackupRestoreError(
+                "Recreated entity has an unexpected domain",
+                reason="entity_identity_mismatch",
+                verification_status="mismatched",
+            )
+        await _check_entity_collision(client, target, owned_entry_id=entry_id)
+        update: dict[str, Any] = {
+            "type": "config/entity_registry/update",
+            "entity_id": source,
+        }
+        if source != target:
+            update["new_entity_id"] = target
+        if row.get("name") != saved.get("name"):
+            update["name"] = saved.get("name")
+        if len(update) > 2:
+            try:
+                await _ws_send(client, update)
+            except _CAPTURE_TRANSIENT_ERRORS as err:
+                _log_flow_helper_failure("entity_rename", err)
+                raise BackupRestoreError(
+                    "The recreated helper's entity rename outcome is unknown",
+                    reason="entity_rename_outcome_unknown",
+                    entity_id_mapping=[
+                        *mapping,
+                        {"created_entity_id": source, "target_entity_id": target},
+                    ],
+                    verification_status="unavailable",
+                ) from err
+        actual = await _created_entity(client, entry_id, unique_id)
+        if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
+            raise BackupRestoreError(
+                "Recreated entity identity did not match",
+                reason="entity_identity_mismatch",
+                verification_status="mismatched",
+            )
+        mapping.append({"created_entity_id": source, "restored_entity_id": target})
 
 
 async def _recreate_flow_helper(
@@ -3710,16 +3732,22 @@ def _subentry_data(data: Any) -> dict[str, Any]:
     return data
 
 
-async def _fetch_config_subentry(client: Any, entity_id: str) -> Any:
-    """Read a config subentry's data through the component.
+async def _list_config_subentries(client: Any, entry_id: str) -> list[dict[str, Any]]:
+    """The entry's subentries with their data, through the component.
 
     Core lists subentries without their data, so an older component that
-    cannot return it is an error, never a partial snapshot.
+    cannot return it is an error, never a partial snapshot. A parent entry
+    that no longer exists is an error too, not an entry without subentries.
     """
     from .tools.component_api import component_supports, get_component_caps
 
-    entry_id, subentry_id = _subentry_target(entity_id)
     caps = await get_component_caps(client)
+    if caps is None:
+        raise _FlowHelperReadError(
+            "The ha_mcp_tools component is not installed or did not answer, so "
+            "subentry data cannot be read",
+            "component_unavailable",
+        )
     if not component_supports(caps, "config_entries_subentry_data"):
         raise _FlowHelperReadError(
             "Backing up subentry edits needs an ha_mcp_tools component that can "
@@ -3742,31 +3770,51 @@ async def _fetch_config_subentry(client: Any, entity_id: str) -> Any:
             "Config subentry secret scrub is degraded; capture is unsafe",
             "secret_scrub_degraded",
         )
-    matches = [
+    entries = _require_list(result.get("entries"), "config_entries.entries")
+    if not entries:
+        raise _FlowHelperReadError(
+            f"Config entry {entry_id} no longer exists", "parent_entry_missing"
+        )
+    return [
         sub
-        for entry in _require_list(result.get("entries"), "config_entries.entries")
+        for entry in entries
         for sub in _require_list(
             _require_dict(entry, "config entry").get("subentries") or [],
             "config_entries.subentries",
         )
-        if isinstance(sub, dict) and sub.get("subentry_id") == subentry_id
+        if isinstance(sub, dict)
     ]
-    if not matches:
+
+
+def _subentry_row(
+    subentries: list[dict[str, Any]], entry_id: str, subentry_id: str
+) -> dict[str, Any] | None:
+    match = next((s for s in subentries if s.get("subentry_id") == subentry_id), None)
+    if match is None:
         return None
     return {
         "entry_id": entry_id,
         "subentry_id": subentry_id,
-        "subentry_type": matches[0].get("subentry_type"),
-        "title": matches[0].get("title"),
-        "data": _subentry_data(matches[0].get("data")),
+        "subentry_type": match.get("subentry_type"),
+        "title": match.get("title"),
+        "data": _subentry_data(match.get("data")),
     }
+
+
+async def _fetch_config_subentry(client: Any, entity_id: str) -> Any:
+    """Read a config subentry's data through the component."""
+    entry_id, subentry_id = _subentry_target(entity_id)
+    subentries = await _list_config_subentries(client, entry_id)
+    return _subentry_row(subentries, entry_id, subentry_id)
 
 
 async def _restore_config_subentry(client: Any, entity_id: str, config: Any) -> Any:
     """Restore a subentry's data through its reconfigure flow.
 
     A snapshot field none of the reconfigure forms offers must still match the
-    stored one, or the restore is refused unapplied.
+    stored one. When Home Assistant marks the last form (``last_step``) that
+    is checked before anything is submitted; otherwise the forms are applied
+    and the readback reports the mismatch.
     """
     from .tools.config_subentry_restore import restore_config_subentry
 
@@ -3787,14 +3835,21 @@ async def _restore_config_subentry(client: Any, entity_id: str, config: Any) -> 
             f"Config subentry snapshot is invalid: {err}", reason="invalid_snapshot"
         ) from err
     try:
-        current = await _fetch_config_subentry(client, entity_id)
+        subentries = await _list_config_subentries(client, entry_id)
+        current = _subentry_row(subentries, entry_id, subentry_id)
     except _CAPTURE_TRANSIENT_ERRORS as err:
         _log_flow_helper_failure("subentry_preflight", err)
+        detail = _flow_safe_failure_detail("subentry_preflight", err)
         raise BackupRestoreError(
-            "Config subentry could not be checked; restore was not attempted"
+            "Config subentry could not be checked"
+            + (f" ({detail})" if detail else "")
+            + "; restore was not attempted",
+            reason=_flow_failure_reason("subentry_preflight", err),
         ) from err
     if current is None:
-        return await _recreate_config_subentry(client, entity_id, snapshot, data)
+        return await _recreate_config_subentry(
+            client, entity_id, snapshot, data, subentries
+        )
     return await _apply_and_verify(
         "Config subentry",
         partial(
@@ -3816,13 +3871,38 @@ async def _restore_config_subentry(client: Any, entity_id: str, config: Any) -> 
 
 
 async def _recreate_config_subentry(
-    client: Any, entity_id: str, snapshot: dict[str, Any], data: dict[str, Any]
+    client: Any,
+    entity_id: str,
+    snapshot: dict[str, Any],
+    data: dict[str, Any],
+    siblings: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Create a deleted subentry again from its snapshot; it gets a new id."""
+    """Create a deleted subentry again from its snapshot; it gets a new id.
+
+    ``siblings`` are the entry's current subentries: one of the snapshot's type
+    that already holds its data is an earlier recreation, so restoring the
+    same snapshot twice does not add a second copy.
+    """
     from .tools.config_entry_flow import OptionsFlowError
     from .tools.config_subentry_restore import recreate_config_subentry
 
     entry_id, subentry_id = _subentry_target(entity_id)
+    recreated = next(
+        (
+            sub.get("subentry_id")
+            for sub in siblings
+            if sub.get("subentry_type") == snapshot["subentry_type"]
+            and sub.get("data") == data
+        ),
+        None,
+    )
+    if recreated:
+        raise BackupRestoreError(
+            f"Config subentry {subentry_id} is gone, but {entry_id}/{recreated} "
+            "already holds this snapshot's data; a second copy was not created",
+            reason="already_recreated",
+            entity_id=f"{entry_id}/{recreated}",
+        )
     try:
         result = await recreate_config_subentry(
             client, entry_id, snapshot["subentry_type"], data
@@ -3874,9 +3954,9 @@ def _make_helper_handler(helper_type: str) -> DomainHandler:
 
 # --------------------------- registry assembly ------------------------------
 
-# Helper types ha_config_set_helper's decorator snapshots as ``helper_<type>``:
-# storage collections through ``<helper_type>/list`` and ``<type>/update``,
-# flow helpers (config entries) through their options and options flow.
+# The storage-collection helper types, snapshotted as ``helper_<type>`` through
+# ``<type>/list`` and restored through ``<type>/update``. Flow helpers (config
+# entries) are registered separately from ``_flow_helper_types()``.
 _KNOWN_HELPER_TYPES = sorted(_HELPER_LIST_TYPES)
 
 

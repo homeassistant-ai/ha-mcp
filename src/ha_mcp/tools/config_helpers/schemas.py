@@ -182,16 +182,13 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
         },
         {
             "name": "min",
-            "required": False,
+            "required": True,
             "selector": {"number": {}},
-            "description": (
-                "Minimum value. HA defaults if omitted but supplying both "
-                "bounds is recommended."
-            ),
+            "description": "Minimum value.",
         },
         {
             "name": "max",
-            "required": False,
+            "required": True,
             "selector": {"number": {}},
             "description": "Maximum value.",
         },
@@ -240,7 +237,7 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "name": "max",
             "required": False,
             "selector": {"number": {}},
-            "description": "Maximum length (0–255).",
+            "description": "Maximum length (1–255).",
         },
         {
             "name": "mode",

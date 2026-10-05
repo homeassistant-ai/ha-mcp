@@ -38,20 +38,6 @@ async def _restore(mcp: MCPAssertions, backup_name: str) -> dict:
 @pytest.mark.cleanup
 async def test_utility_meter_edit_is_backed_up_and_restored(mcp_client: Client) -> None:
     async with MCPAssertions(mcp_client) as mcp:
-        if not component_surface_available():
-            # The options are read through the component; without it the
-            # capture refuses rather than saving an entity-state stand-in.
-            refused = await mcp.call_tool_failure(
-                "ha_manage_backup",
-                {
-                    "scope": "edits",
-                    "action": "create",
-                    "domain": "helper_utility_meter",
-                    "entity_id": uuid.uuid4().hex,
-                },
-            )
-            assert refused["error"]["code"] == "RESOURCE_NOT_FOUND"
-            return
         created = await mcp.call_tool_success(
             "ha_config_set_helper",
             {
@@ -74,6 +60,22 @@ async def test_utility_meter_edit_is_backed_up_and_restored(mcp_client: Client) 
                     "config": {"periodically_resetting": False},
                 },
             )
+            if not component_surface_available():
+                # The options are read through the component; without it the
+                # edit goes ahead, nothing partial is saved, and an explicit
+                # capture says why it failed rather than "not found".
+                target = {"domain": "helper_utility_meter", "entity_id": entry_id}
+                listed = await mcp.call_tool_success(
+                    "ha_manage_backup", {"scope": "edits", "action": "list", **target}
+                )
+                assert not listed.get("backups")
+                refused = await mcp.call_tool_failure(
+                    "ha_manage_backup",
+                    {"scope": "edits", "action": "create", **target},
+                )
+                assert refused["error"]["code"] == "BACKUP_CAPTURE_FAILED"
+                assert "utility_meter" in refused["error"]["message"]
+                return
             backup_name = await _wait_for_backup(
                 mcp_client, domain="helper_utility_meter", entity_id=entry_id
             )
@@ -133,6 +135,91 @@ async def test_zone_edit_is_backed_up_and_restored(mcp_client: Client) -> None:
                 mcp_client,
                 "ha_remove_helpers_integrations",
                 {"target": entity_id, "helper_type": "zone", "confirm": True},
+            )
+
+
+async def _listed_item(mcp: MCPAssertions, helper_type: str, item_id: str) -> dict:
+    listed = await mcp.call_tool_success(
+        "ha_config_list_helpers", {"helper_type": helper_type}
+    )
+    return next(h for h in listed["helpers"] if h.get("id") == item_id)
+
+
+@pytest.mark.helper
+@pytest.mark.cleanup
+async def test_tag_edit_is_backed_up_and_restored(mcp_client: Client) -> None:
+    """A real tag item carries more than the tool's fields (last_scanned,
+    device_id); the whole item must round-trip through tag/update."""
+    tag_id = f"e2e-backup-tag-{uuid.uuid4().hex[:8]}"
+    async with MCPAssertions(mcp_client) as mcp:
+        await mcp.call_tool_success(
+            "ha_config_set_helper",
+            {
+                "helper_type": "tag",
+                "name": "E2E Backup Tag",
+                "config": {"tag_id": tag_id, "description": "front door"},
+            },
+        )
+        try:
+            await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
+            await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "tag",
+                    "helper_id": tag_id,
+                    "config": {"description": "back door"},
+                },
+            )
+            backup_name = await _wait_for_backup(
+                mcp_client, domain="helper_tag", entity_id=tag_id
+            )
+            await _restore(mcp, backup_name)
+            item = await _listed_item(mcp, "tag", tag_id)
+            assert item["description"] == "front door"
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": tag_id, "helper_type": "tag", "confirm": True},
+            )
+
+
+@pytest.mark.helper
+@pytest.mark.cleanup
+async def test_person_edit_is_backed_up_and_restored(mcp_client: Client) -> None:
+    async with MCPAssertions(mcp_client) as mcp:
+        created = await mcp.call_tool_success(
+            "ha_config_set_helper",
+            {
+                "helper_type": "person",
+                "name": f"E2E Backup Person {uuid.uuid4().hex[:6]}",
+                "config": {"picture": "/local/before.png"},
+            },
+        )
+        entity_id = created["entity_id"]
+        try:
+            await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
+            await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "person",
+                    "helper_id": entity_id,
+                    "config": {"picture": "/local/after.png"},
+                },
+            )
+            backup_name = await _wait_for_backup(
+                mcp_client, domain="helper_person", entity_id=entity_id
+            )
+            await _restore(mcp, backup_name)
+            state = await mcp.call_tool_success(
+                "ha_get_state", {"entity_id": entity_id}
+            )
+            assert state["data"]["attributes"]["entity_picture"] == "/local/before.png"
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entity_id, "helper_type": "person", "confirm": True},
             )
 
 

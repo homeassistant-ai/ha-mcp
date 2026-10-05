@@ -138,8 +138,8 @@ class HelperConfigTools:
             Field(
                 description=(
                     "Instead of listing, return the fields ha_config_set_helper "
-                    "accepts in config for helper_type, read live from Home "
-                    "Assistant (the same form the HA UI shows)."
+                    "accepts in config for helper_type, as Home Assistant "
+                    "reports them (the form the HA UI shows)."
                 )
             ),
         ] = False,
@@ -194,9 +194,9 @@ class HelperConfigTools:
         lists all types): without the ha_mcp_tools component it returns a
         COMPONENT_NOT_INSTALLED error rather than a partial or empty list.
 
-        With describe=True, nothing is listed: the result is the field list
-        for helper_type (name, type, required, options, defaults), taken from
-        the running HA instance rather than from documentation. Call it before
+        describe=True returns each field's name, type, required flag, options,
+        default and (with helper_id) current value, or the menu_options a
+        menu-based helper needs a menu_choice from. Call it before
         ha_config_set_helper to learn the config keys for a type.
 
         EXAMPLES:
@@ -208,9 +208,9 @@ class HelperConfigTools:
 
         For detailed helper documentation, use ha_get_skill_guide.
         """
-        if describe:
+        if describe or menu_choice is not None or helper_id is not None:
             return await describe_helper_response(
-                self._client, helper_type, menu_choice, helper_id
+                self._client, helper_type, menu_choice, helper_id, describe=describe
             )
         # All-types mode: one merged component listing across every helper type.
         # No legacy equivalent exists (no single WS command enumerates all

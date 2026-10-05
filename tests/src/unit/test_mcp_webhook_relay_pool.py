@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import inspect
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-
-import uvicorn
 
 from ._embedded_stubs import FakeSession, install
 
@@ -17,6 +14,9 @@ import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK_ID,
     WEBHOOK_AUTH_NONE,
+)
+from custom_components.ha_mcp_tools.embedded_server import (  # noqa: E402
+    SERVER_KEEPALIVE_SECONDS,
 )
 
 
@@ -43,8 +43,6 @@ async def test_relay_never_reuses_a_connection_the_server_has_closed(
         auth_mode=WEBHOOK_AUTH_NONE,
     )
 
-    server_idle = (
-        inspect.signature(uvicorn.Config).parameters["timeout_keep_alive"].default
-    )
-    assert sessions[0]["connector"].keepalive_timeout < server_idle
+    # The value the in-process server passes to uvicorn, not uvicorn's default.
+    assert sessions[0]["connector"].keepalive_timeout < SERVER_KEEPALIVE_SECONDS
     await mw.async_unregister_webhook(hass)

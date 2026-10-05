@@ -277,6 +277,8 @@ async def test_multi_form_restore_fills_each_form_from_the_snapshot() -> None:
         {"cold_tolerance": 0.5},
         {"away_temp": 16},
     ]
+    # ``name`` is a fixed option no form offers, not ignored input.
+    assert "warnings" not in result
 
 
 async def test_option_no_form_offers_must_still_match_or_nothing_applies() -> None:

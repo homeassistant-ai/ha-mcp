@@ -10,6 +10,7 @@ module only adds what Core does not do itself.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 from typing import Any
 
 from ...errors import ErrorCode, create_error_response
@@ -118,15 +119,22 @@ def _reject(helper_type: str, message: str, **context: Any) -> None:
     )
 
 
-def check_core_gaps(helper_type: str, body: dict[str, Any]) -> None:
+def check_core_gaps(
+    helper_type: str, body: dict[str, Any], changed: Collection[str] | None = None
+) -> None:
     """Reject the few unusable configurations Core accepts.
 
     Core enforces every other rule this tool used to check by hand; these three
-    it stores as given, producing a counter or slider that cannot work.
+    it stores as given, producing a counter or slider that cannot work. On an
+    update ``changed`` names the caller's fields: a range Core already stores
+    is judged only when one of its bounds or the step is among them, so a
+    rename or an icon change of such a helper is not refused.
     """
     if helper_type not in ("counter", "input_number"):
         return
     low_key, high_key = _RANGE_KEYS.get(helper_type, _DEFAULT_RANGE_KEYS)
+    if changed is not None and not {low_key, high_key, "step"} & set(changed):
+        return
     low, high, step = body.get(low_key), body.get(high_key), body.get("step")
     if helper_type == "counter":
         if low is not None and high is not None and low >= high:

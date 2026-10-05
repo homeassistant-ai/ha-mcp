@@ -423,7 +423,7 @@ function backupRestoreOutcomeMessage(outcome = {}) {
   const reasons = {
     unsupported_form: t('backup.restore.reason.unsupported_form', {}, 'Home Assistant did not provide a form suitable for this restore.'),
     unsupported_fields: t('backup.restore.reason.unsupported_fields', {}, 'Some snapshot fields are not accepted by the current form.'),
-    identity_changed: t('backup.restore.reason.identity_changed', {}, 'Some snapshot fields can only be set when the helper is created, and they changed since the backup.'),
+    identity_changed: t('backup.restore.reason.identity_changed', {}, 'Some snapshot fields are not offered by any restore form (they are set at creation), and they changed since the backup.'),
     validation_failed: t('backup.restore.reason.validation_failed', {}, 'Home Assistant rejected the restored configuration as invalid.'),
     flow_aborted: t('backup.restore.reason.flow_aborted', {}, 'Home Assistant aborted the restore flow.'),
   };

@@ -115,3 +115,36 @@ def test_usable_or_core_checked_ranges_pass(
     helper_type: str, body: dict[str, Any]
 ) -> None:
     check_core_gaps(helper_type, body)
+
+
+def test_stored_range_is_judged_only_when_the_update_changes_it() -> None:
+    """Core stores a slider whose step is wider than its range; renaming it
+    is not refused, changing its step is."""
+    body = {"name": "Dial", "min": 0, "max": 1, "step": 5}
+    check_core_gaps("input_number", body, changed={"name"})
+    with pytest.raises(ToolError):
+        check_core_gaps("input_number", body, changed={"step"})
+
+
+async def test_update_path_refuses_an_unusable_range_before_writing() -> None:
+    from unittest.mock import AsyncMock
+
+    from ha_mcp.tools.config_helpers.update import _execute_legacy_update
+
+    stored = {"id": "c1", "name": "Count", "minimum": 0, "maximum": 10, "step": 1}
+    client = AsyncMock()
+    client.send_websocket_message.return_value = {"success": True, "result": [stored]}
+
+    with pytest.raises(ToolError, match="step must be > 0"):
+        await _execute_legacy_update(
+            client, "counter", "counter.count", "c1", None, None, {"step": 0}
+        )
+    sent = [c.args[0]["type"] for c in client.send_websocket_message.await_args_list]
+    assert sent == ["counter/list"]
+
+    stored.update(minimum=5, maximum=5)  # unusable, but Core already stores it
+    await _execute_legacy_update(
+        client, "counter", "counter.count", "c1", "Renamed", None, {}
+    )
+    update = client.send_websocket_message.await_args.args[0]
+    assert update["type"] == "counter/update" and update["name"] == "Renamed"

@@ -220,7 +220,25 @@ async def _describe_flow(
                 "menu_options": info["menu_options"],
                 "note": "Pass menu_choice to describe one of these sub-types.",
             }
-        return {"source": "unavailable", "fields": []}
+        # The flow could not be started or read: a menu_choice HA rejects, an
+        # integration that fails to load, a timeout. Never "no fields".
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER
+                if menu_choice
+                else ErrorCode.SERVICE_CALL_FAILED,
+                f"Home Assistant returned no setup form for {helper_type}"
+                + (f" with menu_choice {menu_choice!r}" if menu_choice else "")
+                + ".",
+                context={"helper_type": helper_type, "menu_choice": menu_choice},
+                suggestions=[
+                    f"ha_config_list_helpers({helper_type!r}, describe=True) "
+                    "without menu_choice lists the sub-types"
+                ]
+                if menu_choice
+                else ["Check the Home Assistant log for the integration's setup"],
+            )
+        )
 
     await config_entry_of_domain(client, entry_id, helper_type)
     flow_id: str | None = None
@@ -235,6 +253,15 @@ async def _describe_flow(
                 "note": "This helper's options flow opens with a menu; its forms "
                 "are not described.",
             }
+        if result.get("type") != "form":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"The options flow of {entry_id} did not open with a form "
+                    f"({result.get('type')}: {result.get('reason')}).",
+                    context={"helper_type": helper_type, "helper_id": entry_id},
+                )
+            )
         return {
             "source": "options_flow",
             "fields": await _describe_form(client, helper_type, "options", result),
@@ -326,9 +353,27 @@ async def describe_helper(
 
 
 async def describe_helper_response(
-    client: Any, helper_type: str, menu_choice: str | None, helper_id: str | None
+    client: Any,
+    helper_type: str,
+    menu_choice: str | None,
+    helper_id: str | None,
+    *,
+    describe: bool = True,
 ) -> dict[str, Any]:
-    """``ha_config_list_helpers(describe=True)``: the tool response."""
+    """``ha_config_list_helpers(describe=True)``: the tool response.
+
+    Also reached when a describe-only parameter is passed without describe,
+    which is refused rather than silently listing.
+    """
+    if not describe:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "menu_choice and helper_id apply only with describe=True.",
+                context={"helper_type": helper_type},
+                suggestions=["Pass describe=True, or drop these parameters"],
+            )
+        )
     if helper_type == "all":
         raise_tool_error(
             create_error_response(

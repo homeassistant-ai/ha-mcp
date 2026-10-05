@@ -124,9 +124,10 @@ _ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream", "text/plain")
 # long-lived streams fails a new request in 30 s instead of hanging it forever.
 _CLIENT_TIMEOUT = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
 
-# uvicorn closes an idle keep-alive connection after 5 s; aiohttp pools one for
-# 15 s. A request sent as the server closes a pooled connection fails with a
-# connection reset (502), so idle relay connections are dropped first.
+# The in-process server closes an idle keep-alive connection after 5 s
+# (``embedded_server.SERVER_KEEPALIVE_SECONDS``); aiohttp pools one for 15 s. A
+# request sent as the server closes a pooled connection fails with a connection
+# reset (502), so idle relay connections are dropped first.
 _RELAY_KEEPALIVE_SECONDS = 3
 
 # Anonymous CIMD lookups get a separate, deliberately small connection pool.

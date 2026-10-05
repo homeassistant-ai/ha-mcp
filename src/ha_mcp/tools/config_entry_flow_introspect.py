@@ -1,8 +1,9 @@
 """Read-only introspection of a helper's config flow.
 
-Starts a flow only to read its first form (or its menu) and always aborts it.
-Feeds ``describe`` and the ``data_schema`` attached to flow errors; split out
-of ``config_entry_flow_walker``, which drives flows to completion.
+Starts a flow only to read its first form (or its menu, or the branch form a
+``menu_choice`` picks) and always aborts it. Feeds ``describe`` and the
+``data_schema`` attached to flow errors; split out of
+``config_entry_flow_walker``, which drives flows to completion.
 """
 
 import asyncio
@@ -66,8 +67,11 @@ async def _process_menu_flow_result(
 
 
 def menu_choices(step: dict[str, Any]) -> list[str]:
-    """A MENU step's options that name a branch (strings); malformed ones drop."""
+    """A MENU step's branch names: a list of step ids, or the keys of a
+    ``{step_id: label}`` dict (HA allows both); malformed ones drop."""
     options = step.get("menu_options")
+    if isinstance(options, dict):
+        options = list(options)
     if not isinstance(options, list):
         return []
     return [opt for opt in options if isinstance(opt, str)]
@@ -87,15 +91,16 @@ async def fetch_helper_flow_info(
     ``_handle_flow_helper``) and the menu-sub-types path (used when a
     menu-rooted helper has no branch chosen yet — issue #1186).
 
-    Behaviour:
+    Behaviour (``describe`` is the main caller):
 
-    - FORM at top: ``{"schema": [...], "step_id": ...}``
-    - MENU at top with ``menu_choice``: submits and returns the branch
-      form schema as ``{"schema": [...]}`` (no ``menu_options`` since
-      the caller already picked a branch)
+    - FORM at top: ``{"schema": [...], "step_id": ..., "last_step": ...}``
+    - MENU at top with ``menu_choice``: submits and returns the branch form
+      in the same shape (no ``menu_options`` since the caller already picked
+      a branch)
     - MENU at top without ``menu_choice``: ``{"menu_options": [...]}``
-    - any failure or unparseable shape: ``{}`` (callers branch on
-      ``"schema" in info`` / ``"menu_options" in info``)
+    - any failure or unparseable shape, including a ``menu_choice`` HA
+      rejects: ``{}`` (callers branch on ``"schema" in info`` /
+      ``"menu_options" in info``)
     """
     info: dict[str, Any] = {}
     if not helper_type or client is None:

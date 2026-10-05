@@ -94,7 +94,9 @@ async def restore_config_subentry(
     """Reconfigure the subentry to ``data``; ``stored`` is its current data.
 
     A snapshot field none of the reconfigure forms offers must still equal the
-    stored value, or the restore is refused before anything is submitted.
+    stored value. When Home Assistant marks the last form (``last_step``) that
+    is checked before anything is submitted; a flow that marks none (most
+    subentry flows) is applied and verified by readback.
     Raises :class:`OptionsFlowError` with apply knowledge on failure.
     """
     progress = _SubentryFlowProgress(entry_id, config=dict(data), fixed=stored)
@@ -105,7 +107,8 @@ async def restore_config_subentry(
 async def recreate_config_subentry(
     client: Any, entry_id: str, subentry_type: str, data: dict[str, Any]
 ) -> dict[str, Any]:
-    """Create a deleted subentry again; every snapshot field must find a form."""
+    """Create a deleted subentry again from its data; a field no form takes is
+    refused before a form Home Assistant marks as last."""
     progress = _SubentryFlowProgress(entry_id, config=dict(data), fixed={})
     async with _SUBENTRY_CREATE_LOCKS[entry_id]:
         before = await _subentry_ids(client, entry_id)

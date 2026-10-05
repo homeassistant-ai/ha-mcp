@@ -1844,12 +1844,33 @@ async def _edits_create(
                 ],
             )
         )
-    path = await mgr.maybe_snapshot(
-        dom,
-        eid,
-        tool_name="ha_manage_backup.edits.create",
-        force=True,
-    )
+    try:
+        # Mandatory: a fetch that fails is reported as such, not as a missing
+        # entity (a flow helper the component cannot read, an old component
+        # without subentry data).
+        path = await mgr.maybe_snapshot(
+            dom,
+            eid,
+            tool_name="ha_manage_backup.edits.create",
+            force=True,
+            mandatory=True,
+        )
+    except MandatoryBackupError as err:
+        cause = err.__cause__
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.BACKUP_CAPTURE_FAILED,
+                f"Could not snapshot {dom}:{eid}: "
+                + (
+                    err.safe_detail
+                    or f"its current configuration could not be read "
+                    f"({type(cause).__name__ if cause else 'capture failed'})"
+                ),
+                context={"domain": dom, "entity_id": eid},
+                suggestions=err.suggestions
+                or ["Check the server log for the capture failure"],
+            )
+        )
     if path is None:
         raise_tool_error(
             create_error_response(
@@ -1865,7 +1886,8 @@ async def _edits_create(
                 ],
             )
         )
-    # The id the snapshot is stored under: a flow helper's config entry.
+    # The id the snapshot is stored under: a flow helper's config entry id
+    # when the caller passed an entity_id alias, else the id as given.
     eid = await asyncio.to_thread(mgr._payload_entity_id, path) or eid
     return {
         "success": True,
