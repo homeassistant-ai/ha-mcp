@@ -410,6 +410,14 @@ def test_hold_dev_ha_env(ha_container_with_fresh_config: dict[str, Any]) -> None
     inst.start_server()
     Path(os.environ["DEVENV_TARGETS"]).write_text(json.dumps(inst.targets()))
     sha = git("rev-parse", "HEAD")
+    if inst.haos and os.environ.get("DEVENV_COMPONENT_STALE") == "1":
+        # The restored image was baked from another commit's component (a
+        # prefix cache hit): apply the branch's copy as a push would, so a
+        # component-only change costs a Core restart, not an image rebuild.
+        log(sha=sha, backend=inst.backend, ready=False, updating=["component"])
+        errors = apply_updates(inst, sha, {"component": 0})
+        if errors:
+            log(sha=sha, backend=inst.backend, ready=False, errors=errors)
     try:
         inst.wait_server()
         log(sha=sha, backend=inst.backend, ready=True)

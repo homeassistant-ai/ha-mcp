@@ -100,18 +100,24 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Compute HAOS image cache key
+      - name: Compute HAOS image cache keys
         if: inputs.platform == 'haos'
         id: key
         working-directory: src
         run: |
-          hash=$(git ls-tree -r HEAD \
-            tests/haos_image_build \
-            tests/initial_test_state \
-            custom_components/ha_mcp_tools \
-            homeassistant-addon-webhook-proxy \
-            | grep -v '\.md$' | sha256sum | cut -d' ' -f1 | head -c16)
-          echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
+          # The exact key is the e2e lanes' (an image primed on master is
+          # reused as is). The component is baked into the image but the
+          # holder can replace it live, so a component-only change falls back
+          # to any image with the same base inputs (prefix) and the holder
+          # applies the branch's component at boot instead of a rebuild.
+          tree() { git ls-tree -r HEAD "$@" | grep -v '\.md$' | sha256sum | cut -d' ' -f1 | head -c16; }
+          exact=$(tree tests/haos_image_build tests/initial_test_state \
+            custom_components/ha_mcp_tools homeassistant-addon-webhook-proxy)
+          base=$(tree tests/haos_image_build tests/initial_test_state homeassistant-addon-webhook-proxy)
+          component=$(tree custom_components/ha_mcp_tools)
+          echo "cache-key=haos-image-$exact" >> "$GITHUB_OUTPUT"
+          echo "base-prefix=haos-image-devenv-$base-" >> "$GITHUB_OUTPUT"
+          echo "devenv-key=haos-image-devenv-$base-$component" >> "$GITHUB_OUTPUT"
       - name: Restore HAOS image from cache
         if: inputs.platform == 'haos'
         id: restore-cache
@@ -119,6 +125,9 @@ jobs:
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
+          restore-keys: |
+            ${{ steps.key.outputs.devenv-key }}
+            ${{ steps.key.outputs.base-prefix }}
       - name: Install QEMU + OVMF + libguestfs
         if: inputs.platform == 'haos'
         run: |
@@ -131,7 +140,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Build HAOS image (cache miss)
-        if: inputs.platform == 'haos' && steps.restore-cache.outputs.cache-hit != 'true'
+        if: inputs.platform == 'haos' && steps.restore-cache.outputs.cache-matched-key == ''
         working-directory: src
         run: |
           sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc \
@@ -142,11 +151,20 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
       - name: Save HAOS image to this fork's cache
-        if: inputs.platform == 'haos' && steps.restore-cache.outputs.cache-hit != 'true'
+        if: inputs.platform == 'haos' && steps.restore-cache.outputs.cache-matched-key == ''
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
+      - name: Save HAOS image under its base key too
+        # Also after an exact hit, so the image an e2e prime left is reachable
+        # by prefix once this branch's component changes. Never after a prefix
+        # hit: that image carries another commit's component.
+        if: inputs.platform == 'haos' && (steps.restore-cache.outputs.cache-matched-key == '' || steps.restore-cache.outputs.cache-matched-key == steps.key.outputs.cache-key)
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: /tmp/haos-test-image.qcow2
+          key: ${{ steps.key.outputs.devenv-key }}
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
@@ -174,6 +192,9 @@ jobs:
           HA_IMAGE: ${{ inputs.ha_image }}
           DEVENV_MINUTES: ${{ inputs.minutes }}
           DEVENV_TARGETS: ${{ github.workspace }}/targets.json
+          # A prefix cache hit restored an image baked with another commit's
+          # component; the holder applies the branch's copy at boot.
+          DEVENV_COMPONENT_STALE: ${{ (inputs.platform == 'haos' && steps.restore-cache.outputs.cache-matched-key != '' && steps.restore-cache.outputs.cache-matched-key != steps.key.outputs.cache-key) && '1' || '' }}
         run: |
           [ "$DEVENV_MINUTES" -le 330 ] 2>/dev/null || DEVENV_MINUTES=330
           export DEVENV_MINUTES
