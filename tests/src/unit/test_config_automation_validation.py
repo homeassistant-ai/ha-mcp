@@ -215,6 +215,22 @@ class TestValidateRequiredFields:
         assert "config['alias']" in error["message"]
         assert "config={" not in error["message"]
 
+    def test_sequence_misroute_on_transform_points_at_transform(self) -> None:
+        """A transform producing 'sequence' gets transform-expression guidance,
+        not config={...} (which write modes would reject)."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"sequence": [{"action": "light.turn_off"}]},
+                identifier="automation.x",
+                source="python_transform",
+            )
+        error = _error_from_tool_error(exc_info.value)
+        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
+        all_text = json.dumps(error)
+        assert "python_transform expression" in all_text
+        assert "config['alias']" in all_text
+        assert "config={" not in all_text
+
     def test_enabled_in_config_alone_still_rejected(self) -> None:
         """The standalone runtime-only rejection is unchanged when it is the
         only problem."""

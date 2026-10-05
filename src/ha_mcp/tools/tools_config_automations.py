@@ -1856,7 +1856,7 @@ class AutomationConfigTools:
             required_fields = ["alias", "triggers", "actions"]
 
         missing_fields = [f for f in required_fields if f not in config_dict]
-        reject_sequence_misroute(config_dict, missing_fields, identifier)
+        reject_sequence_misroute(config_dict, missing_fields, identifier, source)
         reject_invalid_config_inputs(config_dict, missing_fields, identifier, source)
 
         # Issue #1169: see _check_scene_create_misroute

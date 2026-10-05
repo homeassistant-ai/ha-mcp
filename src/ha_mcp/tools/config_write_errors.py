@@ -76,6 +76,7 @@ def reject_sequence_misroute(
     config_dict: dict[str, Any],
     missing_fields: list[str],
     identifier: str | None,
+    source: str = "config",
 ) -> None:
     """Raise when a 'sequence' key shows the config is really a script.
 
@@ -93,14 +94,24 @@ def reject_sequence_misroute(
     if identifier:
         context["identifier"] = identifier
     message = f"Missing required fields: {', '.join(missing_fields)}"
-    automation_fix = (
-        "For an automation, replace 'sequence' with 'actions' and add 'triggers'."
-    )
-    if "alias" in missing_fields:
-        automation_fix += (
-            " Put 'alias' inside `config` too, e.g. "
-            f"{_missing_fields_shape(is_blueprint=False)}."
+    if source == "python_transform":
+        automation_fix = (
+            "In the python_transform expression, replace 'sequence' with "
+            "'actions' and add 'triggers'."
         )
+        if "alias" in missing_fields:
+            automation_fix += (
+                " Set 'alias' in the expression too, e.g. config['alias'] = '...'."
+            )
+    else:
+        automation_fix = (
+            "For an automation, replace 'sequence' with 'actions' and add 'triggers'."
+        )
+        if "alias" in missing_fields:
+            automation_fix += (
+                " Put 'alias' inside `config` too, e.g. "
+                f"{_missing_fields_shape(is_blueprint=False)}."
+            )
     suggestions = [
         "Did you mean ha_config_set_script? Scripts use 'sequence' directly.",
         automation_fix,
