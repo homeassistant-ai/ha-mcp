@@ -40,7 +40,7 @@
     scope its author picked.
 -#}
 {%- macro touches_user_files(commit) -%}
-{%- set user_prefixes = ['src/ha_mcp/', 'custom_components/', 'homeassistant-addon', 'packaging/', 'scripts/install', 'docs/', 'site/'] -%}
+{%- set user_prefixes = ['src/ha_mcp/', 'custom_components/', 'homeassistant-addon', 'scripts/install', 'docs/', 'site/'] -%}
 {%- set user_files = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'Dockerfile', 'pyproject.toml', 'uv.lock', 'hacs.json', 'server.json', '.env.example', '.github/integration-mirror-readme-prefix.md'] -%}
 {%- set ns = namespace(hit=false) -%}
 {%- for path in commit.commit.stats.files if not ns.hit -%}

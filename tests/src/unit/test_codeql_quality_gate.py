@@ -510,9 +510,9 @@ def test_suppressed_findings_are_reported_to_stdout(tmp_path: Path, capsys) -> N
         [
             _result(
                 "py/unused-import",
-                "packaging/binary/pyinstaller_hooks/runtime_hook.py",
+                "tests/src/e2e/conftest.py",
                 7,
-                "Import of 'idna' is not used.",
+                "Import of '_collection_data_dir' is not used.",
             ),
         ],
     )

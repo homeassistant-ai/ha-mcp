@@ -387,7 +387,6 @@ dev = [
     "mcp>=1.26.0,<2",
     "mypy>=1.17.0",
     "openai>=1.0.0",
-    "pyinstaller>=6.0.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",
     "pytest-timeout>=2.3.0",
@@ -453,5 +452,6 @@ exclude_commit_patterns = [
 
 # Publish configuration (v10 syntax)
 [tool.semantic_release.publish]
-# GitHub release is created by build-binary.yml workflow to include binaries
+# semver-release.yml creates the GitHub release itself, with notes cut from
+# CHANGELOG.md.
 upload_to_vcs_release = false

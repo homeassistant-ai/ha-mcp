@@ -16,7 +16,6 @@
     "footer.installation": "installation : {method}",
     "footer.deployment.addon": "application/add-on",
     "footer.deployment.docker": "conteneur/docker",
-    "footer.deployment.pyinstaller": "binaire autonome",
     "footer.deployment.git": "extraction des sources",
     "footer.deployment.pypi": "paquet python",
     "footer.deployment.unknown": "inconnu",

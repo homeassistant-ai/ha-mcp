@@ -151,7 +151,6 @@ function _applyVersionFooter(info) {
     sidecar: 'sidecar',
     addon: t('footer.deployment.addon', {}, 'app/add-on'),
     docker: t('footer.deployment.docker', {}, 'container/docker'),
-    pyinstaller: t('footer.deployment.pyinstaller', {}, 'standalone binary'),
     git: t('footer.deployment.git', {}, 'source checkout'),
     pypi: t('footer.deployment.pypi', {}, 'python package'),
     unknown: t('footer.deployment.unknown', {}, 'unknown'),

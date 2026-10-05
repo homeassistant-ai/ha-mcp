@@ -229,7 +229,8 @@ def _radio_write(args: dict[str, Any]) -> str | None:
     action = args.get("action")
     # Reads (allowed): per-node diagnostics, the integration/network summary,
     # the active reachability probe, a single Zigbee cluster-attribute read, and
-    # the Thread dataset listing. Everything else is a write — commission/add,
+    # the Thread dataset listing, and Z-Wave configuration-parameter reads
+    # (cache or explicit device request). Everything else is a write — commission/add,
     # remove, reinterview, firmware, fabric/credential/channel/network changes,
     # plus the two actions that LOOK read-ish but are not: zigbee network_backup
     # (creates a backup artifact + key material, like ha_manage_backup's blocked
@@ -241,6 +242,8 @@ def _radio_write(args: dict[str, Any]) -> str | None:
         "ping",
         "cluster_read",
         "list_datasets",
+        "get_config_params",
+        "get_config_param",
     ):
         return None
     return f"action={action!r}"
@@ -251,7 +254,8 @@ def _radio_write(args: dict[str, Any]) -> str | None:
 # APIs; energy prefs and assist pipelines are reachable only through
 # these tools; edit-backup listing exists nowhere else; the saved-tools
 # cache is only listable here; ha_manage_radio's 'ping' probe, 'cluster_read'
-# and 'list_datasets' have no pure-read duplicate elsewhere, while its
+# 'list_datasets', 'get_config_params' and 'get_config_param' have no pure-read
+# duplicate elsewhere, while its
 # 'diagnostics'/'network_status' reads mirror ha_get_device /
 # ha_get_system_health but stay reachable here mid-management;
 # ha_manage_security_policy's policy read is duplicated only by the
@@ -300,7 +304,8 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
         "node diagnostics ('diagnostics'), the integration/network summary "
         "('network_status'), the active reachability probe ('ping'), a Zigbee "
         "cluster-attribute read ('cluster_read'), and the Thread dataset "
-        "listing ('list_datasets')",
+        "listing ('list_datasets'), and Z-Wave parameter reads "
+        "('get_config_params' / 'get_config_param', including explicit refresh)",
     ),
     # Update listing/details exist only here — ha_get_updates was merged
     # into this tool (issue #1726), so hiding it would remove the read

@@ -6,6 +6,9 @@ non-interactive inclusion / exclusion, re-interview, mesh route rebuilds,
 configuration-parameter writes, firmware install, and the network-wiping
 controller hard reset.
 
+Configuration-parameter reads use the node's Z-Wave JS values, independently
+of enabled Home Assistant entities.
+
 Node-scoped actions key on ``device_id``; controller-scoped actions resolve the
 single ``zwave_js`` config entry via ``resolve_entry_id``. Interactive S2 secure
 inclusion (the read-the-PIN handshake) is *not* scriptable here — provide
@@ -18,6 +21,7 @@ from typing import Any
 
 from ...errors import ErrorCode, create_error_response
 from ..helpers import raise_tool_error
+from . import zwave_parameters
 from .base import (
     ActionSpec,
     integration_not_found,
@@ -83,6 +87,17 @@ SUPPORTED: dict[str, ActionSpec] = {
         "Set a Z-Wave configuration parameter on a node.",
         required=("device_id", "property", "value"),
     ),
+    "get_config_params": ActionSpec(
+        "List cached configuration parameters and metadata, including endpoints "
+        "and partial parameters, without requiring configuration entities.",
+        required=("device_id",),
+    ),
+    "get_config_param": ActionSpec(
+        "Read a cached parameter (params.property, optional endpoint/property_key). "
+        "params.refresh=True requests a raw device read of a full root parameter; "
+        "endpoint/partial refresh is not supported by HA's raw-read API.",
+        required=("device_id", "property"),
+    ),
     "firmware_update": ActionSpec(
         "Install a pending firmware update for a Z-Wave node via its update entity.",
         long_running=True,
@@ -104,6 +119,9 @@ async def _zwave_entry_id(client: Any) -> str | None:
 async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, Any]:
     """Execute one Z-Wave action (validation/confirm already applied by caller)."""
     device_id = args.get("device_id")
+
+    if action in ("get_config_params", "get_config_param"):
+        return await zwave_parameters.read(client, action, args)
 
     if action == "diagnostics":
         node = (

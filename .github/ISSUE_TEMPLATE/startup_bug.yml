@@ -104,7 +104,6 @@ body:
         - "uv pip install ha-mcp"
         - "Docker (ghcr.io/homeassistant-ai/ha-mcp)"
         - "Home Assistant Add-on"
-        - "Binary download (GitHub releases)"
         - "Git clone + uv sync"
         - "Other (specify below)"
     validations:

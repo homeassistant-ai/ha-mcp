@@ -679,7 +679,7 @@ class HelperConfigTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it",
+                description="Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, set at creation or by ha_set_zone; ha_get_zone shows it), which cannot be removed",
                 default=None,
             ),
         ] = None,

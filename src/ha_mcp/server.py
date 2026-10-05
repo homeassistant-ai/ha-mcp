@@ -16,8 +16,6 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 from pydantic import Field
 
-from ha_mcp._vendor.mcp.types import Icon
-
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
 from .http_transport import HttpTransportFastMCP as FastMCP
@@ -79,21 +77,6 @@ _SKILL_GUIDE_MANDATORYBPS_HINT = (
 )
 
 
-# Server icon configuration using GitHub-hosted images
-# These icons are bundled in packaging/mcpb/ and also available via GitHub raw URLs
-SERVER_ICONS = [
-    Icon(
-        src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon.svg",
-        mime_type="image/svg+xml",
-    ),
-    Icon(
-        src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon-128.png",
-        mime_type="image/png",
-        sizes=["128x128"],
-    ),
-]
-
-
 class HomeAssistantSmartMCPServer:
     """Home Assistant MCP Server with smart tools and fuzzy search.
 
@@ -134,11 +117,9 @@ class HomeAssistantSmartMCPServer:
 
         instructions = self._build_instructions()
 
-        # Create FastMCP server with Home Assistant icons for client UI display
         self.mcp = FastMCP(
             name=server_name,
             version=server_version,
-            icons=SERVER_ICONS,
             instructions=instructions,
             lifespan=server_lifespan,
         )

@@ -104,14 +104,13 @@ try:
 except OSError as exc:  # pragma: no cover - packaging guard
     raise ImportError(
         f"settings_js/ missing at {_SETTINGS_JS_DIR}. It must ship in "
-        "the wheel, the sdist and the PyInstaller datas (binary) -- this is a "
-        "packaging bug, not a usage error."
+        "the wheel and the sdist -- this is a packaging bug, not a usage error."
     ) from exc
 if not _settings_js_template:  # pragma: no cover - packaging guard
     raise ImportError(
         f"settings_js/ at {_SETTINGS_JS_DIR} holds no .js parts. They must "
-        "ship in the wheel, the sdist and the PyInstaller datas (binary) -- "
-        "this is a packaging bug, not a usage error."
+        "ship in the wheel and the sdist -- this is a packaging bug, not a "
+        "usage error."
     )
 # str.replace() silently no-ops on an absent token, and a *renamed* sentinel
 # (e.g. PINNED_DEFAULTS) slips past both the "__HA_MCP_" not-in test and the
@@ -146,8 +145,7 @@ try:
 except OSError as exc:  # pragma: no cover - packaging guard
     raise ImportError(
         f"settings.css missing at {_SETTINGS_CSS_PATH}. It must ship in "
-        "the wheel, the sdist and the PyInstaller datas (binary) -- this is a "
-        "packaging bug, not a usage error."
+        "the wheel and the sdist -- this is a packaging bug, not a usage error."
     ) from exc
 
 
@@ -161,8 +159,8 @@ except OSError as exc:  # pragma: no cover - packaging guard
 #   __HA_MCP_I18N__        -> selected merged translation catalog JSON
 #   __HA_MCP_LANG__        -> selected locale code for the html lang attribute
 #   __HA_MCP_DIR__         -> selected catalog text direction (ltr / rtl)
-# Same import-time packaging dependency as settings_js/css (wheel, sdist,
-# PyInstaller datas) and the same OSError guard -- but this loader
+# Same import-time packaging dependency as settings_js/css (wheel and
+# sdist) and the same OSError guard -- but this loader
 # raises RuntimeError, not the ImportError that settings_js/css raise.
 _SETTINGS_HTML_PATH = Path(__file__).parent / "settings.html"
 try:
@@ -170,8 +168,7 @@ try:
 except OSError as exc:  # pragma: no cover - packaging guard
     raise RuntimeError(
         f"settings.html missing at {_SETTINGS_HTML_PATH}. It must ship in "
-        "the wheel, the sdist and the PyInstaller datas (binary) -- this is a "
-        "packaging bug, not a usage error."
+        "the wheel and the sdist -- this is a packaging bug, not a usage error."
     ) from exc
 
 # Fail fast if a marker was renamed in settings.html but not here (or vice

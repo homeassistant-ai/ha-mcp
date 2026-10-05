@@ -155,28 +155,24 @@ def _detect_installation_method() -> str:
     """
     Detect how ha-mcp was installed.
 
-    Returns one of: pyinstaller, embedded, addon, docker, git, pypi, unknown
+    Returns one of: embedded, addon, docker, git, pypi, unknown
     """
-    # 1. PyInstaller binary
-    if getattr(sys, "frozen", False):
-        return "pyinstaller"
-
-    # 2. In-process server inside HA core (the ha_mcp_tools custom
+    # 1. In-process server inside HA core (the ha_mcp_tools custom
     #    component's "server" entry). Checked BEFORE the docker probe: the
     #    HA core container carries /.dockerenv, so without this branch
     #    embedded installs misreport as plain docker.
     if is_embedded():
         return "embedded"
 
-    # 3. Home Assistant Add-on (has supervisor token)
+    # 2. Home Assistant Add-on (has supervisor token)
     if is_running_in_addon():
         return "addon"
 
-    # 4. Docker container (non-addon)
+    # 3. Docker container (non-addon)
     if Path("/.dockerenv").exists():
         return "docker"
 
-    # 5. Git clone - check for .git directory relative to package
+    # 4. Git clone - check for .git directory relative to package
     try:
         # Go up from tools_bug_report.py -> tools -> ha_mcp -> src -> project_root
         project_root = Path(__file__).parent.parent.parent.parent
@@ -187,7 +183,7 @@ def _detect_installation_method() -> str:
         # fall through to the next detection heuristic.
         pass
 
-    # 6. PyPI install - marker file exists in package
+    # 5. PyPI install - marker file exists in package
     try:
         marker_path = Path(__file__).parent.parent / "_pypi_marker"
         if marker_path.exists():
@@ -197,7 +193,7 @@ def _detect_installation_method() -> str:
         # fall through to the default "unknown" result.
         pass
 
-    # 7. Default - unknown
+    # 6. Default - unknown
     return "unknown"
 
 
