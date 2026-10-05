@@ -410,22 +410,25 @@ def test_hold_dev_ha_env(ha_container_with_fresh_config: dict[str, Any]) -> None
     inst.start_server()
     Path(os.environ["DEVENV_TARGETS"]).write_text(json.dumps(inst.targets()))
     sha = git("rev-parse", "HEAD")
+    # Update kind -> failed attempts, retried on each poll up to MAX_TRIES.
+    pending: dict[str, int] = {}
     if inst.haos and os.environ.get("DEVENV_COMPONENT_STALE") == "1":
         # The restored image was baked from another commit's component (a
         # prefix cache hit): apply the branch's copy as a push would, so a
         # component-only change costs a Core restart, not an image rebuild.
+        # A failure stays pending, so the poll loop retries it and the
+        # instance is not reported ready with the wrong component.
+        pending["component"] = 0
         log(sha=sha, backend=inst.backend, ready=False, updating=["component"])
-        errors = apply_updates(inst, sha, {"component": 0})
+        errors = apply_updates(inst, sha, pending)
         if errors:
             log(sha=sha, backend=inst.backend, ready=False, errors=errors)
     try:
         inst.wait_server()
-        log(sha=sha, backend=inst.backend, ready=True)
+        log(sha=sha, backend=inst.backend, ready=not pending)
     except Exception as err:  # noqa: BLE001
         # HA is up; a push that fixes the server is picked up below.
         log(sha=sha, backend=inst.backend, ready=False, error=str(err))
-    # Update kind -> failed attempts, retried on each poll up to MAX_TRIES.
-    pending: dict[str, int] = {}
     end = time.monotonic() + 60 * int(os.environ.get("DEVENV_MINUTES", "340"))
     while time.monotonic() < end:
         time.sleep(POLL_S)

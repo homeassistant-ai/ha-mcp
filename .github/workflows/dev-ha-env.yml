@@ -110,12 +110,16 @@ jobs:
           # holder can replace it live, so a component-only change falls back
           # to any image with the same base inputs (prefix) and the holder
           # applies the branch's component at boot instead of a rebuild.
+          hash=$(git ls-tree -r HEAD \
+            tests/haos_image_build \
+            tests/initial_test_state \
+            custom_components/ha_mcp_tools \
+            homeassistant-addon-webhook-proxy \
+            | grep -v '\.md$' | sha256sum | cut -d' ' -f1 | head -c16)
+          echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
           tree() { git ls-tree -r HEAD "$@" | grep -v '\.md$' | sha256sum | cut -d' ' -f1 | head -c16; }
-          exact=$(tree tests/haos_image_build tests/initial_test_state \
-            custom_components/ha_mcp_tools homeassistant-addon-webhook-proxy)
           base=$(tree tests/haos_image_build tests/initial_test_state homeassistant-addon-webhook-proxy)
           component=$(tree custom_components/ha_mcp_tools)
-          echo "cache-key=haos-image-$exact" >> "$GITHUB_OUTPUT"
           echo "base-prefix=haos-image-devenv-$base-" >> "$GITHUB_OUTPUT"
           echo "devenv-key=haos-image-devenv-$base-$component" >> "$GITHUB_OUTPUT"
       - name: Restore HAOS image from cache
