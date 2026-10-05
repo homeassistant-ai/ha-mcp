@@ -37,7 +37,9 @@ _COMPONENT_VERSION = re.compile(r'^COMPONENT_VERSION = "[^"]*"$', re.MULTILINE)
 
 def _is_server_requirement(requirement: str) -> bool:
     match = _REQUIREMENT_NAME.match(requirement)
-    return bool(match) and match.group(1).lower().replace("_", "-") in SERVER_DISTS
+    if match is None:
+        return False
+    return match.group(1).lower().replace("_", "-") in SERVER_DISTS
 
 
 def stamp(component_dir: Path, version: str, pin: str, dist: str = "ha-mcp") -> None:
