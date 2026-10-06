@@ -238,6 +238,14 @@ exceptions. Its `context` is functional: an `entity_id` can produce
 Flag HIGH severity when a tool returns a plain error, swallows `ToolError`, or
 bypasses the shared structured-error helpers.
 
+Guidance that earns its keep in the suggestions:
+
+- A rejection for a missing or misplaced field says where the field goes
+  (e.g. a config root key passed as a top-level argument is told it belongs
+  inside `config`).
+- When one call breaks several independent input rules, the rejection reports
+  all of them in one response instead of one round trip each.
+
 
 ## Code Conventions
 
