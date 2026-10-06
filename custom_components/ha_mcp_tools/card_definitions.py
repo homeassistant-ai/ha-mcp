@@ -530,8 +530,10 @@ def async_warm_up(hass: HomeAssistant) -> None:
         _start()
     elif (bus := getattr(hass, "bus", None)) is not None:
         from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+        from homeassistant.core import callback
 
-        bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _start)
+        # A plain listener runs on a worker thread; the task must start on the loop.
+        bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, callback(_start))
 
 
 async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> list[str]:

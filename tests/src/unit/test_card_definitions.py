@@ -377,6 +377,12 @@ async def test_definitions_and_custom_cards_warm_up_once_home_assistant_runs(
         "homeassistant.const",
         SimpleNamespace(EVENT_HOMEASSISTANT_STARTED="homeassistant_started"),
     )
+    marked = []
+    monkeypatch.setitem(
+        sys.modules,
+        "homeassistant.core",
+        SimpleNamespace(callback=lambda func: marked.append(func) or func),
+    )
     started, scheduled = [], []
     hass = MagicMock(is_running=False)
     hass.bus.async_listen_once.side_effect = lambda event, cb: started.append(cb)
@@ -386,6 +392,7 @@ async def test_definitions_and_custom_cards_warm_up_once_home_assistant_runs(
 
     cd.async_warm_up(hass)
     assert loaded == [] and len(started) == 1
+    assert marked == started  # runs on the event loop, not a worker thread
 
     started[0](None)
     await scheduled[0]
