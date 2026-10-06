@@ -45,6 +45,13 @@ run time to contain a broken card, not an adversarial one. The DOM library it
 runs on (linkedom) is fetched from the npm registry at a pinned version and
 checked against its integrity hash before use.
 
+Inspection starts on the first relevant request, never at HA startup. QuickJS
+is an optional, exact-version dependency installed through HA's requirements
+manager under Core's constraints. An existing incompatible provider or
+dependency conflict disables this advice without replacing the provider or
+preventing the integration from loading. The shared `quickjs` module name
+means `quickjs` and `quickjs-ng` must not be installed over each other.
+
 ### Local network is the trusted zone for standard mode
 
 The HTTP entrypoint (`ha-mcp-web`) authenticates by URL-path

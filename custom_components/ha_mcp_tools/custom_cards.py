@@ -548,9 +548,10 @@ async def _async_resource_files(hass: HomeAssistant) -> dict[Path, bool]:
         return {}
     await resources.async_get_info()  # loads a storage collection on first use
     items = resources.async_items()
-    return await hass.async_add_executor_job(
+    files: dict[Path, bool] = await hass.async_add_executor_job(
         _resource_files, Path(hass.config.config_dir), list(items or [])
     )
+    return files
 
 
 def _resource_files(config_dir: Path, items: list[dict[str, Any]]) -> dict[Path, bool]:

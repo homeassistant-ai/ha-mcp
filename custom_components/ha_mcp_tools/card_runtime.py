@@ -85,7 +85,8 @@ async def async_ensure_runtime(hass: Any) -> bool:
                 [QUICKJS_REQUIREMENT],
                 is_built_in=False,
             )
-        return await hass.async_add_executor_job(_provider_state) == "ready"
+        installed: str = await hass.async_add_executor_job(_provider_state)
+        return installed == "ready"
     except Exception:
         _LOGGER.warning(
             "Dashboard card advice is unavailable: compatible QuickJS could not be loaded",
