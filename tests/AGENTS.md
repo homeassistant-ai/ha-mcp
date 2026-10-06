@@ -151,6 +151,9 @@ tests against them.
    leftovers. Code that reads the clock takes `now` as a parameter, unless
    the test harness already controls the clock (the JSDOM harness below
    does). See **Config-dir isolation** below.
+   Installing a pinned dependency during job setup is not test network
+   access. Do not commit third-party or generated files to satisfy this
+   rule.
 7. **Name the defect.** The test name, and its docstring or the
    framework's own description, say what breaks for the user, not the
    function name.
