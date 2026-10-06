@@ -421,7 +421,7 @@ def _explain_message(tag: str, message: str) -> str | None:
         return (
             None if key in _ACCEPTED_EXTRAS else f"'{key}' is not a {tag} card option"
         )
-    return re.sub(r"^At path: (\S+) -- ", r": ", message)
+    return re.sub(r"^At path: (\S+) -- ", r"\1: ", message)
 
 
 def _schema_expressions(body: str) -> list[str]:
