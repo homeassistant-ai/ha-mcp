@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import sys
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -164,6 +162,11 @@ def test_entrypoint_dependencies_load_without_browser_startup(tmp_path) -> None:
         "var url=import.meta.url;start();",
         encoding="utf-8",
     )
+    (frontend / "cards.js").write_text(
+        'export const __webpack_modules__={8(e){(0,e.EM)("hui-tile-card")},'
+        '9(e){(0,e.EM)("hui-entities-card")}};',
+        encoding="utf-8",
+    )
     definitions = cd.CardDefinitions(tmp_path)
     result = definitions._evaluate("schema", "var x=r(7);", "[{name:x.field}]")
     assert result == [{"name": "entity"}]
@@ -175,6 +178,11 @@ def test_failed_module_is_not_reused_as_partial_exports(tmp_path) -> None:
     (frontend / "chunk.js").write_text(
         'export const __webpack_modules__={7(e,t){t.field="partial";'
         'throw new Error("dependency unavailable")}};',
+        encoding="utf-8",
+    )
+    (frontend / "cards.js").write_text(
+        'export const __webpack_modules__={8(e){(0,e.EM)("hui-tile-card")},'
+        '9(e){(0,e.EM)("hui-entities-card")}};',
         encoding="utf-8",
     )
     definitions = cd.CardDefinitions(tmp_path)
@@ -300,7 +308,6 @@ async def test_describe_unknown_card_type_lists_the_real_ones(
     assert "VALIDATION_INVALID_PARAMETER" in str(err.value)
     assert "tile, grid" in str(err.value)
     assert "not a known card type" in str(err.value)
-    assert "registered as a dashboard resource" in str(err.value)
 
 
 @pytest.mark.asyncio
@@ -476,45 +483,31 @@ def test_oversized_card_files_are_not_run(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_definitions_and_custom_cards_warm_up_once_home_assistant_runs(
-    monkeypatch,
-) -> None:
-    loaded: list[str] = []
-    monkeypatch.setattr(
-        cd,
-        "async_get_definitions",
-        AsyncMock(side_effect=lambda h: loaded.append("built-in") or object()),
-    )
-    monkeypatch.setattr(
-        cd,
-        "async_get_custom_cards",
-        AsyncMock(side_effect=lambda h: loaded.append("custom")),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "homeassistant.const",
-        SimpleNamespace(EVENT_HOMEASSISTANT_STARTED="homeassistant_started"),
-    )
-    marked = []
-    monkeypatch.setitem(
-        sys.modules,
-        "homeassistant.core",
-        SimpleNamespace(callback=lambda func: marked.append(func) or func),
-    )
-    started, scheduled = [], []
-    hass = MagicMock(is_running=False)
-    hass.bus.async_listen_once.side_effect = lambda event, cb: started.append(cb)
-    hass.async_create_background_task.side_effect = lambda coro, name: scheduled.append(
-        coro
-    )
+async def test_first_use_shares_one_background_index_build(monkeypatch):
+    release = asyncio.Event()
+    definitions = object()
+    runtime = AsyncMock(return_value=True)
 
-    cd.async_warm_up(hass)
-    assert loaded == [] and len(started) == 1
-    assert marked == started  # runs on the event loop, not a worker thread
+    async def build(fn):
+        await release.wait()
+        return definitions
 
-    started[0](None)
-    assert await scheduled[0] is None
-    assert loaded == ["built-in", "custom"]
+    monkeypatch.setattr(cd, "_definitions", None)
+    monkeypatch.setattr(cd, "_build_task", None)
+    monkeypatch.setattr(cd, "async_ensure_runtime", runtime)
+    hass = MagicMock()
+    hass.async_create_background_task = lambda coro, name: asyncio.create_task(coro)
+    hass.async_add_executor_job = AsyncMock(side_effect=build)
+    try:
+        assert await cd.async_get_definitions(hass, timeout=0.01) is None
+        assert await cd.async_get_definitions(hass, timeout=0.01) is None
+        runtime.assert_awaited_once()
+        release.set()
+        assert await cd.async_get_definitions(hass, timeout=1) is definitions
+        hass.async_add_executor_job.assert_awaited_once()
+    finally:
+        release.set()
+        await cd._build_task
 
 
 @pytest.mark.asyncio
@@ -551,7 +544,8 @@ async def test_slow_custom_refresh_preserves_builtin_describe(monkeypatch) -> No
     monkeypatch.setattr(cd, "async_get_custom_cards", slow)
     prep = cd.command_specs(vol)[0][2]
     result = await asyncio.wait_for(prep(MagicMock(), {}), 0.5)
-    assert result["result"] == {"success": True, "card_types": [{"type": "tile"}]}
+    assert result["result"]["success"] is True
+    assert result["result"]["card_types"] == [{"type": "tile"}]
 
 
 def test_bundle_admission_reserves_room_for_later_heap_growth(

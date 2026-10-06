@@ -21,7 +21,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .custom_cards import CustomCards, async_get_custom_cards
+from .card_runtime import async_ensure_runtime
+from .custom_cards import CustomCards, async_get_custom_cards, custom_load_status
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -215,6 +216,8 @@ class CardDefinitions:
         self._card_types: set[str] = set()
         self._struct_keys: dict[str, list[str] | None] = {}
         self._index()
+        if not {"entities", "tile"} <= self._card_types:
+            raise ValueError("Frontend card index is incomplete")
         self._strings = _load_strings(root)
         self._engine = quickjs.Function("engine", _ENGINE_JS, own_executor=True)
         self._engine._threadpool.submit(
@@ -406,15 +409,19 @@ class CardDefinitions:
         warnings: list[str] = []
         checked: _Queued = []
         customs: _Queued = []
-        for path, card in _cards(config):
+        partial: set[str] = set()
+        for path, card in _cards(config, partial):
             card_type = card.get("type")
             if not isinstance(card_type, str):
                 warnings.append(f"{path}: no card type configured")
             elif card_type.startswith("custom:"):
-                customs.append((path, card_type, card))
+                if path not in partial:
+                    customs.append((path, card_type, card))
+            elif path in partial and ("${" in card_type or "[[[" in card_type):
+                continue
             elif card_type not in self._card_types:
                 warnings.append(f"{path}: unknown card type '{card_type}'")
-            elif self._struct_ready(card_type):
+            elif path not in partial and self._struct_ready(card_type):
                 checked.append((path, card_type, card))
         return warnings, checked, customs
 
@@ -440,7 +447,13 @@ def _custom_warnings(custom: CustomCards, customs: _Queued) -> list[str]:
         if time.monotonic() >= deadline:
             break
         tag = card_type[len("custom:") :]
-        explained = (_explain_message(tag, m) for m in custom.check(tag, card) or [])
+        messages = custom.check(tag, card)
+        if messages is None and custom.status().get("state") == "ready":
+            found.append(
+                f"{path} ({card_type}): not found in dashboard resources; "
+                "check the type spelling or whether it loads through extra JavaScript."
+            )
+        explained = (_explain_message(tag, m) for m in messages or [])
         found.extend(f"{path} ({card_type}): {e}" for e in explained if e is not None)
     return found
 
@@ -486,21 +499,40 @@ def _walk_card(
     depth: int = 0,
     *,
     container: bool = False,
+    partial: bool = False,
+    type_only: set[str] | None = None,
 ) -> None:
     if not isinstance(card, dict) or depth > 50:
         return
     if not container or "type" in card:
         found.append((path, card))
+        if partial and type_only is not None:
+            type_only.add(path)
+    nested_partial = partial or str(card.get("type", "")).startswith("custom:")
     children = card.get("cards")
     for i, child in enumerate(children if isinstance(children, list) else []):
-        _walk_card(f"{path}.cards[{i}]", child, found, depth + 1)
+        _walk_card(
+            f"{path}.cards[{i}]",
+            child,
+            found,
+            depth + 1,
+            partial=nested_partial,
+            type_only=type_only,
+        )
     # entity-filter's ``card`` holds options for its rows, not a card.
     if (
         card.get("type") == "conditional"
         or str(card.get("type", "")).startswith("custom:")
         or container
     ):
-        _walk_card(f"{path}.card", card.get("card"), found, depth + 1)
+        _walk_card(
+            f"{path}.card",
+            card.get("card"),
+            found,
+            depth + 1,
+            partial=nested_partial,
+            type_only=type_only,
+        )
     # Match the search walk's named containers; field wrappers are not cards.
     for key in ("custom_fields", "states"):
         named = card.get(key)
@@ -513,10 +545,14 @@ def _walk_card(
                         found,
                         depth + 1,
                         container=key == "custom_fields",
+                        partial=nested_partial,
+                        type_only=type_only,
                     )
 
 
-def _cards(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+def _cards(
+    config: dict[str, Any], type_only: set[str] | None = None
+) -> list[tuple[str, dict[str, Any]]]:
     """Every card position the frontend renders, nested stacks included."""
     found: list[tuple[str, dict[str, Any]]] = []
     views = config.get("views")
@@ -525,13 +561,23 @@ def _cards(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
             continue
         header = view.get("header")
         if isinstance(header, dict):
-            _walk_card(f"views[{v}].header.card", header.get("card"), found)
+            _walk_card(
+                f"views[{v}].header.card",
+                header.get("card"),
+                found,
+                type_only=type_only,
+            )
         for i, card in enumerate(view.get("cards") or []):
-            _walk_card(f"views[{v}].cards[{i}]", card, found)
+            _walk_card(f"views[{v}].cards[{i}]", card, found, type_only=type_only)
         for s, section in enumerate(view.get("sections") or []):
             cards = section.get("cards") if isinstance(section, dict) else None
             for i, card in enumerate(cards or []):
-                _walk_card(f"views[{v}].sections[{s}].cards[{i}]", card, found)
+                _walk_card(
+                    f"views[{v}].sections[{s}].cards[{i}]",
+                    card,
+                    found,
+                    type_only=type_only,
+                )
     return found
 
 
@@ -560,6 +606,8 @@ async def async_get_definitions(
     if task is None:
 
         async def _run() -> CardDefinitions | None:
+            if not await async_ensure_runtime(hass):
+                return None
             built: CardDefinitions | None = await hass.async_add_executor_job(_build)
             return built
 
@@ -571,30 +619,6 @@ async def async_get_definitions(
     except TimeoutError:
         return None
     return _definitions
-
-
-def async_warm_up(hass: HomeAssistant) -> None:
-    """Load the card definitions once Home Assistant has started.
-
-    A first dashboard write after a restart would otherwise pay the index
-    build and custom-card loading, and drop the checks that missed its wait.
-    """
-
-    async def _warm() -> None:
-        if await async_get_definitions(hass) is not None:
-            await async_get_custom_cards(hass)
-
-    def _start(_event: Any = None) -> None:
-        hass.async_create_background_task(_warm(), "ha_mcp_tools card warm-up")
-
-    if getattr(hass, "is_running", False) is True:
-        _start()
-    elif (bus := getattr(hass, "bus", None)) is not None:
-        from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
-        from homeassistant.core import callback
-
-        # A plain listener runs on a worker thread; the task must start on the loop.
-        bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, callback(_start))
 
 
 async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> list[str]:
@@ -622,43 +646,69 @@ async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> li
         return []
 
 
+async def _describe(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    definitions = await async_get_definitions(hass)
+    if definitions is None:
+        return {"result": {"success": False, "error": "unavailable"}}
+    card_type = msg.get("card_type") or None
+    custom = (
+        await async_get_custom_cards(hass, timeout=_CUSTOM_WAIT_SECONDS)
+        if card_type is None or card_type.startswith("custom:")
+        else None
+    )
+    card_types = definitions.card_types() + (custom.card_types() if custom else [])
+    status = custom_load_status(custom)
+    if card_type is None:
+        return {
+            "result": {
+                "success": True,
+                "card_types": card_types,
+                "custom_status": status,
+            }
+        }
+    if card_type.startswith("custom:"):
+        if status["state"] == "loading":
+            return {
+                "result": {
+                    "success": False,
+                    "error": "custom_cards_loading",
+                    "custom_status": status,
+                }
+            }
+        describe = custom.describe if custom else lambda _tag: None
+        described = await hass.async_add_executor_job(
+            describe, card_type[len("custom:") :]
+        )
+    else:
+        described = await hass.async_add_executor_job(definitions.describe, card_type)
+    if described is None:
+        if card_type.startswith("custom:"):
+            return {
+                "result": {
+                    "success": False,
+                    "error": "custom_card_not_inspected",
+                    "custom_status": status,
+                }
+            }
+        return {
+            "result": {
+                "success": False,
+                "error": "unknown_card_type",
+                "card_types": [c["type"] for c in card_types],
+            }
+        }
+    return {"result": {"success": True, **described}}
+
+
 def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
     """``dashboard_cards``: the card type list, or one card type's form."""
 
     async def prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         try:
             async with asyncio.timeout(_CARD_WORK_SECONDS):
-                return await describe(hass, msg)
+                return await _describe(hass, msg)
         except TimeoutError:
             return {"result": {"success": False, "error": "unavailable"}}
-
-    async def describe(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
-        definitions = await async_get_definitions(hass)
-        if definitions is None:
-            return {"result": {"success": False, "error": "unavailable"}}
-        custom = await async_get_custom_cards(hass, timeout=_CUSTOM_WAIT_SECONDS)
-        card_types = definitions.card_types() + (custom.card_types() if custom else [])
-        card_type = msg.get("card_type")
-        if card_type is None:
-            return {"result": {"success": True, "card_types": card_types}}
-        if card_type.startswith("custom:"):
-            describe = custom.describe if custom else lambda _tag: None
-            described = await hass.async_add_executor_job(
-                describe, card_type[len("custom:") :]
-            )
-        else:
-            described = await hass.async_add_executor_job(
-                definitions.describe, card_type
-            )
-        if described is None:
-            return {
-                "result": {
-                    "success": False,
-                    "error": "unknown_card_type",
-                    "card_types": [c["type"] for c in card_types],
-                }
-            }
-        return {"result": {"success": True, **described}}
 
     def do(
         hass: HomeAssistant, msg: dict[str, Any], *, result: dict[str, Any]

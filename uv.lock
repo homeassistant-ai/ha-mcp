@@ -768,7 +768,7 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.3.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "python-semantic-release", specifier = "==10.6.2" },
-    { name = "quickjs-ng", specifier = ">=0.17.0" },
+    { name = "quickjs-ng", specifier = "==0.17.0.1" },
     { name = "requests", specifier = ">=2.25.0" },
     { name = "ruamel-yaml", specifier = ">=0.18.0" },
     { name = "ruff", specifier = ">=0.12.12" },

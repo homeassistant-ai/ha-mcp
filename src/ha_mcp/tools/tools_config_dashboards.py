@@ -123,21 +123,27 @@ class _DashboardScreenshotOptions:
     render_timeout_seconds: float = DEFAULT_RENDER_TIMEOUT_SECONDS
 
 
-# Card types and fields come from ha_config_get_dashboard(describe=True), so
-# only the layout guide ships with a write.
+# Live card fields replace the static reference only on capable components.
 _DASHBOARD_SKILL_FILES: tuple[str, ...] = ("references/dashboard-guide.md",)
 
 
-def _attach_dashboard_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
+async def _attach_dashboard_skill(
+    response: dict[str, Any], MandatoryBPS: bool, client: Any
+) -> None:
     """In-place attach skill_content to a dashboard response when applicable.
 
     Delegates to the shared :func:`attach_skill_content` so the
     missing-vendor-warning path is consistent across every write tool.
     """
+    files = _DASHBOARD_SKILL_FILES
+    if MandatoryBPS and not component_supports(
+        await get_component_caps(client), "dashboard_cards"
+    ):
+        files += ("references/dashboard-cards.md",)
     attach_skill_content(
         response,
         MandatoryBPS=MandatoryBPS,
-        canonical_files=_DASHBOARD_SKILL_FILES,
+        canonical_files=files,
         referenced_files=None,
     )
 
@@ -3386,7 +3392,7 @@ class DashboardConfigTools:
             result["message"] = f"Dashboard {url_path} unchanged"
         if edit["post_write_verified"]:
             _attach_dashboard_render_paths(result, url_path, edit["config"])
-        _attach_dashboard_skill(result, MandatoryBPS)
+        await _attach_dashboard_skill(result, MandatoryBPS, self._client)
         return await _maybe_attach_screenshot(
             result,
             url_path,
@@ -3952,7 +3958,7 @@ class DashboardConfigTools:
         render_config = await self._attach_dashboard_write_result(
             result_dict, url_path, render_config, native_result
         )
-        _attach_dashboard_skill(result_dict, MandatoryBPS)
+        await _attach_dashboard_skill(result_dict, MandatoryBPS, self._client)
         return await _maybe_attach_screenshot(
             result_dict,
             url_path,

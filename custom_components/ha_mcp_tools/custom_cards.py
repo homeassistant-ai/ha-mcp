@@ -269,7 +269,7 @@ class _Bundle:
         del self.engine._context
 
     def _context_call(self, method: str, *args: Any) -> Any:
-        # quickjs-ng 0.17 dispatches Function calls, but its context methods
+        # The tested quickjs-ng wrapper dispatches Function calls, but its context methods
         # run on the caller. Use the SAME executor that created its runtime.
         target = self.engine._context if method == "module" else self.engine
         return self.engine._threadpool.submit(getattr(target, method), *args).result()
@@ -330,6 +330,8 @@ class CustomCards:
         self._lock = threading.Lock()
         self._refresh_deadline: float | None = None
         self._card_types: list[dict[str, Any]] = []
+        self._skipped: dict[Path, str] = {}
+        self._status: dict[str, Any] = {"state": "ready", "resources": []}
 
     def refresh(self, files: list[Path], modules: set[Path] | None = None) -> None:
         """Load new or changed resource files; drop removed ones."""
@@ -348,6 +350,13 @@ class CustomCards:
                     if isinstance(card.get("type"), str)
                 ]
                 self._refresh_deadline = None
+                self._status = {
+                    "state": "partial" if self._skipped else "ready",
+                    "resources": [
+                        {"resource": str(p), "reason": reason}
+                        for p, reason in self._skipped.items()
+                    ],
+                }
 
     def _drop(self, path: Path) -> None:
         removed = self._bundles.pop(path, None)
@@ -362,18 +371,22 @@ class CustomCards:
         self._modules = set(module_paths)
         self._capacity_skipped.intersection_update(files)
         self._budget_deferred.intersection_update(files)
+        self._skipped = {p: r for p, r in self._skipped.items() if p in files}
         for gone in set(self._bundles) - set(files):
             self._drop(gone)
         attempted = 0
         for path in sorted(files, key=lambda p: p not in self._budget_deferred):
             if time.monotonic() >= self._refresh_deadline:
-                break
+                if path not in self._bundles:
+                    self._skipped[path] = "refresh budget; awaiting a later request"
+                continue
             try:
                 stat = path.stat()
             except OSError:
                 self._drop(path)
                 self._capacity_skipped.discard(path)
                 self._budget_deferred.discard(path)
+                self._skipped[path] = "resource file is missing or unreadable"
                 continue
             if (
                 path in self._bundles
@@ -393,20 +406,24 @@ class CustomCards:
                 # first next time; failure with a full budget stays cached.
                 self._bundles.pop(path)
                 self._budget_deferred.add(path)
+                self._skipped[path] = "refresh budget; awaiting a later request"
             attempted += 1
 
     def _load(self, path: Path, size: int) -> _Bundle | None:
         self._capacity_skipped.discard(path)
+        self._skipped.pop(path, None)
         # Reserve each runtime's full allowance, including heap growth in later
         # check/form calls. Measuring current heaps only cannot enforce the cap.
         reserved = sum(
             _BUNDLE_MEMORY for _, b in self._bundles.values() if b is not None
         )
         if size > _MAX_SOURCE_BYTES:
+            self._skipped[path] = "source size limit"
             _LOGGER.debug("Custom card bundle %s skipped: source size cap", path)
             return None
         if reserved + _BUNDLE_MEMORY > _TOTAL_MEMORY:
             self._capacity_skipped.add(path)
+            self._skipped[path] = "memory limit"
             _LOGGER.debug("Custom card bundle %s skipped: memory cap", path)
             return None
         try:
@@ -417,6 +434,7 @@ class CustomCards:
                 deadline=self._refresh_deadline,
             )
         except Exception:
+            self._skipped[path] = "bundle could not run in the inspection sandbox"
             _LOGGER.debug("Custom card bundle %s did not load", path, exc_info=True)
             return None
 
@@ -437,6 +455,13 @@ class CustomCards:
         # the lock held by native work in an executor.
         return [dict(card) for card in self._card_types]
 
+    def status(self) -> dict[str, Any]:
+        """Published resource coverage; no wait on the native runtime lock."""
+        return {
+            "state": self._status["state"],
+            "resources": [dict(r) for r in self._status["resources"]],
+        }
+
     def describe(self, tag: str) -> dict[str, Any] | None:
         with self._lock:
             bundle = self._owner(tag)
@@ -455,6 +480,21 @@ _dom_failed_at: float | None = None
 _custom: CustomCards | None = None
 _REFRESH_LOCK = asyncio.Lock()
 _refresh_task: asyncio.Task[CustomCards | None] | None = None
+_resource_error: str | None = None
+_unsupported_resources: list[dict[str, str]] = []
+
+
+def custom_load_status(custom: CustomCards | None) -> dict[str, Any]:
+    status = (
+        custom.status()
+        if custom is not None
+        else {"state": "unavailable", "resources": []}
+    )
+    if _refresh_task is not None and not _refresh_task.done():
+        status["state"] = "loading"
+    elif _resource_error:
+        status.update(state="unavailable", reason=_resource_error)
+    return status
 
 
 async def _async_dom(hass: HomeAssistant) -> str | None:
@@ -504,22 +544,37 @@ async def _async_resource_files(hass: HomeAssistant) -> dict[Path, bool]:
 
     resources = getattr(_lovelace_container(hass), "resources", None)
     if resources is None:
+        _unsupported_resources.clear()
         return {}
     await resources.async_get_info()  # loads a storage collection on first use
     items = resources.async_items()
-    config_dir = Path(hass.config.config_dir)
+    return await hass.async_add_executor_job(
+        _resource_files, Path(hass.config.config_dir), list(items or [])
+    )
+
+
+def _resource_files(config_dir: Path, items: list[dict[str, Any]]) -> dict[Path, bool]:
+    """Resolve paths off the event loop, including symlink/filesystem checks."""
     files = {}
+    _unsupported_resources.clear()
     for item in items or []:
         if item.get("type") in ("module", "js") and isinstance(item.get("url"), str):
             if (path := resource_path(config_dir, item["url"])) is not None:
                 files[path] = item["type"] == "module"
+            else:
+                _unsupported_resources.append(
+                    {
+                        "resource": item["url"],
+                        "reason": "only local JavaScript resources can be inspected",
+                    }
+                )
     return files
 
 
 async def async_get_custom_cards(
     hass: HomeAssistant, timeout: float | None = None
 ) -> CustomCards | None:
-    """The current resources' custom cards; ``None`` without linkedom or in time.
+    """Current resources, retaining published metadata during a slow refresh.
 
     Callers share a refresh that outlives their timeout instead of queuing more.
     """
@@ -531,24 +586,35 @@ async def async_get_custom_cards(
     try:
         return await asyncio.wait_for(asyncio.shield(_refresh_task), timeout)
     except TimeoutError:
-        return None
+        return _custom
 
 
 async def _async_refresh(hass: HomeAssistant) -> CustomCards | None:
-    global _custom
+    global _custom, _resource_error
     async with _REFRESH_LOCK:
         try:
             files = await _async_resource_files(hass)
-            if _custom is None:
-                dom = await _async_dom(hass) if files else None
+            _resource_error = None
+            if _custom is None or (files and not _custom._dom):
+                dom = await _async_dom(hass) if files else ""
                 if dom is None:
-                    return None
+                    _resource_error = "linkedom could not be downloaded or loaded"
+                    return _custom
                 _custom = CustomCards(dom)
             await hass.async_add_executor_job(
                 _custom.refresh,
                 list(files),
                 {path for path, module in files.items() if module},
             )
+            if _unsupported_resources:
+                _custom._status = {
+                    "state": "partial",
+                    "resources": [
+                        *_custom.status()["resources"],
+                        *_unsupported_resources,
+                    ],
+                }
         except Exception:
+            _resource_error = "dashboard resources could not be inspected"
             _LOGGER.debug("Custom cards are unavailable", exc_info=True)
         return _custom

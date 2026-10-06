@@ -304,7 +304,10 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "ha_config_set_dashboard(patch=..., config_hash=...). (4) "
         "describe — `describe=True` with `card_type` returns that "
         "card's fields from Home Assistant's card editor; omit "
-        "`card_type` to list the card types."
+        "`card_type` to list the card types. Describe requires the "
+        "ha_mcp_tools component with dashboard-card support. Without it, "
+        "use ha_get_skill_guide(file='references/dashboard-cards.md') "
+        "for card-selection guidance."
     ),
     "ha_config_set_dashboard": (
         "Create or update a Home Assistant dashboard.\n\n"

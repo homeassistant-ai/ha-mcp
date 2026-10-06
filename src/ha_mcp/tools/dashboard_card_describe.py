@@ -44,6 +44,7 @@ def _flatten(schema: list[Any]) -> list[dict[str, Any]]:
 
 async def describe_card_response(client: Any, card_type: str | None) -> dict[str, Any]:
     """The card type list, or one card type's fields as its UI editor defines them."""
+    card_type = card_type or None
     caps = await get_component_caps(client)
     if not component_supports(caps, "dashboard_cards"):
         raise_tool_error(
@@ -77,6 +78,28 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
         result = {}
     if result.get("success") is not True:
         error = result.get("error")
+        if error in ("custom_cards_loading", "custom_card_not_inspected"):
+            status = result.get("custom_status", {})
+            loading = error == "custom_cards_loading"
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Custom card inspection is still loading; retry shortly."
+                    if loading
+                    else "This custom card could not be inspected from dashboard resources.",
+                    suggestions=["Retry after resource loading finishes"]
+                    if loading
+                    else [
+                        "Check the resource inspection status and type spelling",
+                        "Cards loaded through extra JavaScript may work in the browser without appearing in dashboard resources",
+                    ],
+                    context={
+                        "action": "describe",
+                        "card_type": card_type,
+                        "custom_status": status,
+                    },
+                )
+            )
         if error == "unknown_card_type":
             raise_tool_error(
                 create_error_response(
@@ -84,8 +107,6 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
                     f"'{card_type}' is not a known card type.",
                     suggestions=[
                         "Use one of: " + ", ".join(result.get("card_types", [])),
-                        "A custom: card must be registered as a dashboard resource "
-                        "(HACS or /local) before it can be described",
                     ],
                     context={"action": "describe", "card_type": card_type},
                 )
@@ -99,7 +120,15 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
             )
         )
     if card_type is None:
-        return {"success": True, "card_types": result.get("card_types", [])}
+        return {
+            "success": True,
+            "card_types": result.get("card_types", []),
+            **(
+                {"custom_status": result["custom_status"]}
+                if "custom_status" in result
+                else {}
+            ),
+        }
     fields = result.get("fields")
     response: dict[str, Any] = {
         "success": True,
@@ -112,7 +141,10 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
     }
     if response["fields"] is None:
         response["note"] = (
-            "Home Assistant's editor for this card has no field form; stack, "
+            "The custom card's editor fields could not be inspected; "
+            "the card may still work in the browser."
+            if card_type.startswith("custom:")
+            else "Home Assistant's editor for this card has no field form; stack, "
             "grid and conditional cards nest other cards under cards or card."
         )
     return response

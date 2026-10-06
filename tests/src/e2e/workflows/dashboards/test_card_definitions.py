@@ -11,6 +11,7 @@ import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 from ...utilities.topology import component_surface_available
+from ...utilities.wait_helpers import wait_for_tool_result
 
 
 @pytest.mark.asyncio
@@ -35,6 +36,10 @@ async def test_card_fields_come_from_the_card_editor(mcp_client):
 
     listed = await mcp.call_tool_success("ha_config_get_dashboard", {"describe": True})
     assert {"tile", "grid", "heading"} <= {c["type"] for c in listed["card_types"]}
+    blank = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"describe": True, "card_type": ""}
+    )
+    assert "tile" in {c["type"] for c in blank["card_types"]}
 
     failure = await mcp.call_tool_failure(
         "ha_config_get_dashboard",
@@ -55,6 +60,14 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
         {"type": "tile", "entity": "light.bed_light", "colour": "red"},
         {"type": "no-such-card"},
         {"type": "vertical-stack", "cards": [{"type": "button", "entitty": "x"}]},
+        {
+            "type": "custom:config-template-card",
+            "card": {
+                "type": "tile",
+                "entity": '${"light.bed_light"}',
+                "vertical": "${true}",
+            },
+        },
     ]
     try:
         result = await mcp.call_tool_success(
@@ -110,6 +123,7 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
         assert "no-such-field-card" in warnings
         assert "no-such-state-card" in warnings
         assert "no card type configured" not in warnings  # Field wrappers are metadata.
+        assert "cards[4].card" not in warnings  # A template is not the final config.
     finally:
         await safe_call_tool(
             mcp_client, "ha_config_delete_dashboard", {"url_path": path}
@@ -133,8 +147,18 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
         {"url": "/local/e2e-custom-card.js", "resource_type": "module"},
     )
     try:
-        listed = await mcp.call_tool_success(
-            "ha_config_get_dashboard", {"describe": True}
+        # No preseeded DOM cache: wait for the user's first-use download,
+        # integrity verification and resource loading to complete.
+        listed = await wait_for_tool_result(
+            mcp_client,
+            "ha_config_get_dashboard",
+            {"describe": True},
+            lambda data: (
+                "custom:e2e-custom-card"
+                in {c["type"] for c in data.get("card_types", [])}
+            ),
+            timeout=90,
+            description="custom card production first-use loading",
         )
         assert "custom:e2e-custom-card" in {c["type"] for c in listed["card_types"]}
         card = await mcp.call_tool_success(
@@ -171,4 +195,26 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
             mcp_client,
             "ha_config_delete_dashboard_resource",
             {"resource_id": resource["resource_id"]},
+        )
+
+
+@pytest.mark.asyncio
+async def test_componentless_writes_keep_static_card_guidance(mcp_client):
+    if component_surface_available():
+        return  # The no-component lane exercises the fallback contract.
+    mcp = MCPAssertions(mcp_client)
+    path = "card-guide-" + uuid4().hex[:8]
+    try:
+        result = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": path,
+                "config": {"views": [{"title": "Guide", "path": "guide", "cards": []}]},
+                "MandatoryBPS": True,
+            },
+        )
+        assert "references/dashboard-cards.md" in result.get("skill_content", {})
+    finally:
+        await safe_call_tool(
+            mcp_client, "ha_config_delete_dashboard", {"url_path": path}
         )
