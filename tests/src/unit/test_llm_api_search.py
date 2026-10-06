@@ -176,9 +176,13 @@ async def test_tools_hop_does_not_reveal_that_a_hidden_tool_exists(
     )
 
     hidden, missing = result["results"]
-    assert "error" in hidden
     assert "input_schema" not in hidden
-    assert {**hidden, "name": ""} == {**missing, "name": ""}
+    assert "suggestion" in hidden
+
+    def blank(entry: dict[str, str], name: str) -> dict[str, str]:
+        return {k: v.replace(name, "<n>") for k, v in entry.items()}
+
+    assert blank(hidden, "ha_restart") == blank(missing, "ha_totally_made_up")
 
 
 @pytest.mark.parametrize("args", [{}, {"query": "  "}], ids=["empty", "blank"])

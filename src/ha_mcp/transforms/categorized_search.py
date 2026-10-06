@@ -331,7 +331,11 @@ def _param_type(schema: Any) -> str:
     """Type label for one parameter; enum values are spelled out inline."""
     if not isinstance(schema, dict):
         return _schema_type(schema)
-    branches = schema.get("anyOf") or schema.get("oneOf") or [schema]
+    kind = schema.get("type")
+    if isinstance(kind, list):
+        branches: list[Any] = [{**schema, "type": k} for k in kind]
+    else:
+        branches = schema.get("anyOf") or schema.get("oneOf") or [schema]
     labels: dict[str, None] = {}
     nullable = False
     for branch in branches:

@@ -17,7 +17,10 @@ from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
-from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
+from ha_mcp.transforms.categorized_search import (
+    CategorizedSearchTransform,
+    _compact_params,
+)
 
 from .test_search_pinned_results import _tool
 from .test_search_pinned_results import toolsearch_server as toolsearch_server
@@ -73,6 +76,18 @@ async def _typed_params() -> str:
 )
 async def test_params_name_each_parameter_with_its_type(fragment: str) -> None:
     assert fragment in (await _typed_params()).split("; ")
+
+
+def test_list_valued_type_renders_each_type() -> None:
+    """Draft 2020-12 nullability as ``type: [..., "null"]`` is a valid form
+    an external tool can carry; it must not collapse to ``any``."""
+    schema = {
+        "properties": {
+            "limit": {"type": ["integer", "null"]},
+            "ids": {"type": ["string", "array"], "items": {"type": "string"}},
+        }
+    }
+    assert _compact_params(schema) == "limit (integer?); ids (string|string[])"
 
 
 @pytest.mark.anyio

@@ -29,8 +29,8 @@ SEARCH_TOOL_DESCRIPTION = (
     "   - ha_call_read_tool \u2014 readOnlyHint tools (safe, no side effects)\n"
     "   - ha_call_write_tool \u2014 destructiveHint tools that create/update\n"
     "   - ha_call_delete_tool \u2014 destructiveHint tools that remove/delete\n"
-    "Once you know a tool name, call it directly \u2014 no need to search "
-    "again.\n\n"
+    "Once you hold a tool's full schema, call it directly \u2014 no need to "
+    "repeat the keyword search or the schema lookup.\n\n"
     "If using proxies, call with TWO top-level params:\n"
     '   ha_call_read_tool(name="ha_search", arguments={"query": "..."})\n'
     "   Do NOT nest name/arguments inside the arguments param.\n"
@@ -44,8 +44,9 @@ SEARCH_TOOL_DESCRIPTION = (
 TOOL_DISCOVERY_INSTRUCTIONS = (
     "\n\n## Tool Discovery\n"
     "Tools already in your tool list are callable directly — "
-    "do not search for them. Once you know any tool’s name, "
-    "call it directly; never search for the same tool twice.\n\n"
+    "do not search for them. Once you hold a tool’s full schema, "
+    "call it directly; repeat neither the keyword search nor the "
+    "schema lookup for the same tool.\n\n"
     "Most other tools are NOT listed directly — use "
     "ha_search_tools to find them.\n\n"
     "WORKFLOW:\n"

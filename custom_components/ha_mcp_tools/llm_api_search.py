@@ -25,7 +25,9 @@ if TYPE_CHECKING:
 SEARCH_TOOL_NAME = "ha_search_tools"
 CALL_TOOL_NAME = "ha_call_tool"
 _SEARCH_RESULT_LIMIT = 8
-_NOT_FOUND = "Tool not found; search by task words to find the right name."
+_NOT_FOUND_SUGGESTION = (
+    f"Use {SEARCH_TOOL_NAME}(query=...) to discover available tools."
+)
 
 
 def _literal_values(node: dict[str, Any]) -> list[Any]:
@@ -131,7 +133,12 @@ class HaMcpSearchTool(llm.Tool):
             return tool_result(
                 {
                     "results": [
-                        by_name.get(n) or {"name": n, "error": _NOT_FOUND}
+                        by_name.get(n)
+                        or {
+                            "name": n,
+                            "error": f"Unknown tool '{n}'.",
+                            "suggestion": _NOT_FOUND_SUGGESTION,
+                        }
                         for n in names
                     ]
                 },
