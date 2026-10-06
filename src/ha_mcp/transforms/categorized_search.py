@@ -641,8 +641,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
                             ),
                             suggestions=[
                                 "ha_search_tools(query='create helper') finds tools.",
-                                "ha_search_tools(tools=['<name>']) returns a "
-                                "tool's full input schema.",
+                                "ha_search_tools(tools=['<name>']) returns a tool's full schema.",
                             ],
                         )
                     ),
