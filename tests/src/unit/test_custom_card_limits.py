@@ -51,6 +51,10 @@ def test_all_quickjs_context_operations_use_the_creating_thread(
     assert bundle.check("a-card", {}) == []
     bundle.form("a-card")
     assert bundle.memory > 0
+    bundle.close()
+    assert not hasattr(bundle.engine, "_context")
+    with pytest.raises(RuntimeError, match="shutdown"):
+        bundle.engine._threadpool.submit(lambda: None)
     assert len(set(calls)) == 1
 
 

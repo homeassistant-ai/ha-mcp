@@ -13,7 +13,9 @@ import pytest
 from .test_card_definitions import cc
 
 
-def test_replacement_disposes_runtime_after_its_last_reader(tmp_path, monkeypatch):
+def test_replacement_disposes_runtime_after_its_last_reader(
+    tmp_path, monkeypatch
+) -> None:
     path = tmp_path / "card.js"
     path.write_text("first")
     entered, release, replacement = (threading.Event() for _ in range(3))
@@ -64,7 +66,7 @@ def test_replacement_disposes_runtime_after_its_last_reader(tmp_path, monkeypatc
 
 def test_refresh_stops_starting_bundles_when_total_budget_expires(
     tmp_path, monkeypatch
-):
+) -> None:
     files = [tmp_path / f"broken-{i}.js" for i in range(10)]
     for path in files:
         path.write_text("broken")
@@ -87,7 +89,7 @@ def test_refresh_stops_starting_bundles_when_total_budget_expires(
 
 
 @pytest.mark.asyncio
-async def test_timed_out_callers_share_one_background_refresh(monkeypatch):
+async def test_timed_out_callers_share_one_background_refresh(monkeypatch) -> None:
     release = asyncio.Event()
     result = object()
 
@@ -118,3 +120,28 @@ async def test_timed_out_callers_share_one_background_refresh(monkeypatch):
     finally:
         release.set()
         await asyncio.gather(*tasks)
+
+
+def test_partial_budget_failure_gets_a_full_budget_before_being_cached(
+    tmp_path, monkeypatch
+) -> None:
+    files = [tmp_path / f"card-{i}.js" for i in range(2)]
+    for i, path in enumerate(files):
+        path.write_text(str(i))
+    clock = [0.0]
+    attempts = []
+
+    def load(dom, source, **kwargs):
+        attempts.append(source)
+        clock[0] += cc._REFRESH_SECONDS * 0.6
+        if clock[0] >= kwargs["deadline"]:
+            raise TimeoutError("partial budget")
+        return MagicMock()
+
+    monkeypatch.setattr(cc.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cc, "_Bundle", load)
+    custom = cc.CustomCards("dom")
+    custom.refresh(files)
+    custom.refresh(files)
+    assert attempts == ["0", "1", "1"]
+    assert all(custom._bundles[path][1] is not None for path in files)

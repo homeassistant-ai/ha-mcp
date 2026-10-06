@@ -462,7 +462,8 @@ def test_failed_resources_stay_cached_but_type_changes_reload(
     assert factory.call_count == 1  # Do not retry broken code on every request.
     custom.refresh([path], {path})
     assert factory.call_count == 2
-    assert factory.call_args.kwargs == {"module": True}
+    assert factory.call_args.kwargs["module"] is True
+    assert factory.call_args.kwargs["deadline"] is not None
 
 
 def test_oversized_card_files_are_not_run(tmp_path, monkeypatch) -> None:

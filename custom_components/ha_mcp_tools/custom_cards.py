@@ -22,6 +22,7 @@ import io
 import logging
 import re
 import tarfile
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -45,6 +46,7 @@ _MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _MAX_DOM_DOWNLOAD_BYTES = 2 * 1024 * 1024
 _CALL_SECONDS = 5
 _PREPARE_SECONDS = 15.0
+_REFRESH_SECONDS = 10.0
 _SETTLE_JOBS = 20_000
 _SETTLE_SECONDS = 5.0
 _RESOURCE_PREFIXES = (("/hacsfiles/", "www/community"), ("/local/", "www"))
@@ -207,7 +209,14 @@ def dom_script(tarball: bytes) -> str:
 class _Bundle:
     """One resource file running in its own sandbox."""
 
-    def __init__(self, dom: str, source: str, *, module: bool = False) -> None:
+    def __init__(
+        self,
+        dom: str,
+        source: str,
+        *,
+        module: bool = False,
+        deadline: float | None = None,
+    ) -> None:
         import quickjs
 
         self.engine = quickjs.Function(
@@ -215,9 +224,19 @@ class _Bundle:
             _RUNTIME_JS.replace("__SANDBOX", repr(list(_SANDBOX_ERRORS))),
             own_executor=True,
         )
+        self._prepare_deadline = min(
+            time.monotonic() + _PREPARE_SECONDS,
+            deadline if deadline is not None else float("inf"),
+        )
+        try:
+            self._prepare(dom, source, module)
+        except BaseException:
+            self.close()
+            raise
+
+    def _prepare(self, dom: str, source: str, module: bool) -> None:
         self._context_call("set_memory_limit", _BUNDLE_MEMORY)
         self._context_call("set_time_limit", _CALL_SECONDS)
-        self._prepare_deadline = time.monotonic() + _PREPARE_SECONDS
         for step, payload in (("eval", dom), ("boot", None)):
             self._limit_preparation()
             error = self.engine(step, payload).get("error")
@@ -229,6 +248,7 @@ class _Bundle:
         elif error := self.engine("eval", source).get("error"):
             raise ValueError(error)
         self._settle()
+        self._limit_preparation()
         listed = self.engine("cards", None)["value"]
         self.tags: list[str] = listed["tags"]
         self.cards: list[dict[str, Any]] = listed["cards"]
@@ -238,6 +258,15 @@ class _Bundle:
         self._settle()
         self._context_call("set_time_limit", _CALL_SECONDS)
         self._unresponsive: set[str] = set()
+
+    def close(self) -> None:
+        """Dispose native objects on their creating thread before releasing capacity."""
+        self.engine._threadpool.submit(self._dispose).result()
+        self.engine._threadpool.shutdown(wait=True)
+
+    def _dispose(self) -> None:
+        del self.engine._f
+        del self.engine._context
 
     def _context_call(self, method: str, *args: Any) -> Any:
         # quickjs-ng 0.17 dispatches Function calls, but its context methods
@@ -297,22 +326,54 @@ class CustomCards:
         self._bundles: dict[Path, tuple[float, _Bundle | None]] = {}
         self._modules: set[Path] = set()
         self._capacity_skipped: set[Path] = set()
+        self._budget_deferred: set[Path] = set()
+        self._lock = threading.Lock()
+        self._refresh_deadline: float | None = None
+        self._card_types: list[dict[str, Any]] = []
 
     def refresh(self, files: list[Path], modules: set[Path] | None = None) -> None:
         """Load new or changed resource files; drop removed ones."""
+        # Readers retain a runtime until their native call finishes. Replacement
+        # must wait, then dispose it before its heap reservation can be reused.
+        with self._lock:
+            self._refresh_deadline = time.monotonic() + _REFRESH_SECONDS
+            try:
+                self._refresh(files, modules)
+            finally:
+                self._card_types = [
+                    {**card, "type": f"custom:{card['type']}"}
+                    for _, bundle in self._bundles.values()
+                    if bundle is not None
+                    for card in bundle.cards
+                    if isinstance(card.get("type"), str)
+                ]
+                self._refresh_deadline = None
+
+    def _drop(self, path: Path) -> None:
+        removed = self._bundles.pop(path, None)
+        if removed is not None and removed[1] is not None:
+            removed[1].close()
+
+    def _refresh(self, files: list[Path], modules: set[Path] | None) -> None:
+        assert self._refresh_deadline is not None
         module_paths = modules or set()
         for changed in self._modules ^ module_paths:
-            self._bundles.pop(changed, None)
+            self._drop(changed)
         self._modules = set(module_paths)
         self._capacity_skipped.intersection_update(files)
+        self._budget_deferred.intersection_update(files)
         for gone in set(self._bundles) - set(files):
-            del self._bundles[gone]
-        for path in files:
+            self._drop(gone)
+        attempted = 0
+        for path in sorted(files, key=lambda p: p not in self._budget_deferred):
+            if time.monotonic() >= self._refresh_deadline:
+                break
             try:
                 stat = path.stat()
             except OSError:
-                self._bundles.pop(path, None)
+                self._drop(path)
                 self._capacity_skipped.discard(path)
+                self._budget_deferred.discard(path)
                 continue
             if (
                 path in self._bundles
@@ -320,8 +381,19 @@ class CustomCards:
                 and path not in self._capacity_skipped
             ):
                 continue
-            self._bundles.pop(path, None)
+            self._drop(path)
+            self._budget_deferred.discard(path)
             self._bundles[path] = (stat.st_mtime, self._load(path, stat.st_size))
+            if (
+                attempted
+                and self._bundles[path][1] is None
+                and time.monotonic() >= self._refresh_deadline
+            ):
+                # A late bundle got only the remainder of this pass. Retry it
+                # first next time; failure with a full budget stays cached.
+                self._bundles.pop(path)
+                self._budget_deferred.add(path)
+            attempted += 1
 
     def _load(self, path: Path, size: int) -> _Bundle | None:
         self._capacity_skipped.discard(path)
@@ -342,6 +414,7 @@ class CustomCards:
                 self._dom,
                 path.read_text(encoding="utf-8"),
                 module=path in self._modules,
+                deadline=self._refresh_deadline,
             )
         except Exception:
             _LOGGER.debug("Custom card bundle %s did not load", path, exc_info=True)
@@ -355,34 +428,33 @@ class CustomCards:
 
     def check(self, tag: str, config: dict[str, Any]) -> list[str] | None:
         """Problems the card reports, or ``None`` when no loaded bundle defines it."""
-        bundle = self._owner(tag)
-        return None if bundle is None else bundle.check(tag, config)
+        with self._lock:
+            bundle = self._owner(tag)
+            return None if bundle is None else bundle.check(tag, config)
 
     def card_types(self) -> list[dict[str, Any]]:
-        return [
-            {**card, "type": f"custom:{card['type']}"}
-            for _, bundle in self._bundles.values()
-            if bundle is not None
-            for card in bundle.cards
-            if isinstance(card.get("type"), str)
-        ]
+        # Called on HA's event loop: use published metadata without waiting for
+        # the lock held by native work in an executor.
+        return [dict(card) for card in self._card_types]
 
     def describe(self, tag: str) -> dict[str, Any] | None:
-        bundle = self._owner(tag)
-        if bundle is None:
-            return None
-        listed = next((c for c in bundle.cards if c.get("type") == tag), {})
-        return {
-            "type": f"custom:{tag}",
-            "name": listed.get("name"),
-            "description": listed.get("description"),
-            "fields": bundle.form(tag),
-        }
+        with self._lock:
+            bundle = self._owner(tag)
+            if bundle is None:
+                return None
+            listed = next((c for c in bundle.cards if c.get("type") == tag), {})
+            return {
+                "type": f"custom:{tag}",
+                "name": listed.get("name"),
+                "description": listed.get("description"),
+                "fields": bundle.form(tag),
+            }
 
 
 _dom_failed_at: float | None = None
 _custom: CustomCards | None = None
 _REFRESH_LOCK = asyncio.Lock()
+_refresh_task: asyncio.Task[CustomCards | None] | None = None
 
 
 async def _async_dom(hass: HomeAssistant) -> str | None:
@@ -449,13 +521,15 @@ async def async_get_custom_cards(
 ) -> CustomCards | None:
     """The current resources' custom cards; ``None`` without linkedom or in time.
 
-    A refresh that outlives ``timeout`` keeps running, so the next call has it.
+    Callers share a refresh that outlives their timeout instead of queuing more.
     """
-    task = hass.async_create_background_task(
-        _async_refresh(hass), "ha_mcp_tools custom cards"
-    )
+    global _refresh_task
+    if _refresh_task is None or _refresh_task.done():
+        _refresh_task = hass.async_create_background_task(
+            _async_refresh(hass), "ha_mcp_tools custom cards"
+        )
     try:
-        return await asyncio.wait_for(asyncio.shield(task), timeout)
+        return await asyncio.wait_for(asyncio.shield(_refresh_task), timeout)
     except TimeoutError:
         return None
 
