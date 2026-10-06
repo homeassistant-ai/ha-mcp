@@ -8,6 +8,8 @@ turns its verdicts into warnings.
 from __future__ import annotations
 
 import importlib
+import sys
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -353,3 +355,38 @@ def test_oversized_card_files_are_not_run(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cc, "_Bundle", MagicMock(side_effect=AssertionError("ran")))
 
     assert cc.CustomCards("dom")._load(card_file, card_file.stat().st_size) is None
+
+
+@pytest.mark.asyncio
+async def test_definitions_and_custom_cards_warm_up_once_home_assistant_runs(
+    monkeypatch,
+) -> None:
+    loaded: list[str] = []
+    monkeypatch.setattr(
+        cd,
+        "async_get_definitions",
+        AsyncMock(side_effect=lambda h: loaded.append("built-in") or object()),
+    )
+    monkeypatch.setattr(
+        cd,
+        "async_get_custom_cards",
+        AsyncMock(side_effect=lambda h: loaded.append("custom")),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "homeassistant.const",
+        SimpleNamespace(EVENT_HOMEASSISTANT_STARTED="homeassistant_started"),
+    )
+    started, scheduled = [], []
+    hass = MagicMock(is_running=False)
+    hass.bus.async_listen_once.side_effect = lambda event, cb: started.append(cb)
+    hass.async_create_background_task.side_effect = lambda coro, name: scheduled.append(
+        coro
+    )
+
+    cd.async_warm_up(hass)
+    assert loaded == [] and len(started) == 1
+
+    started[0](None)
+    await scheduled[0]
+    assert loaded == ["built-in", "custom"]

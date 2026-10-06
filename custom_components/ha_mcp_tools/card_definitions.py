@@ -512,6 +512,28 @@ async def async_get_definitions(
     return _definitions
 
 
+def async_warm_up(hass: HomeAssistant) -> None:
+    """Load the card definitions once Home Assistant has started.
+
+    A first dashboard write after a restart would otherwise pay the index
+    build and custom-card loading, and drop the checks that missed its wait.
+    """
+
+    async def _warm() -> None:
+        if await async_get_definitions(hass) is not None:
+            await async_get_custom_cards(hass)
+
+    def _start(_event: Any = None) -> None:
+        hass.async_create_background_task(_warm(), "ha_mcp_tools card warm-up")
+
+    if getattr(hass, "is_running", False) is True:
+        _start()
+    elif (bus := getattr(hass, "bus", None)) is not None:
+        from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+
+        bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _start)
+
+
 async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> list[str]:
     """Advisory warnings for a saved dashboard; never fails the write."""
     try:
