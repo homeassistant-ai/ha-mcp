@@ -522,7 +522,7 @@ async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> li
             str(card.get("type", "")).startswith("custom:")
             for _, card in _cards(config)
         )
-        custom = await async_get_custom_cards(hass) if uses_custom else None
+        custom = await async_get_custom_cards(hass, timeout=15) if uses_custom else None
         warnings: list[str] = await hass.async_add_executor_job(
             definitions.validate, config, custom
         )

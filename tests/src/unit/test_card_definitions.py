@@ -330,3 +330,26 @@ def test_custom_cards_report_their_own_problems_and_unknown_ones_none() -> None:
     assert warnings == [
         "views[0].cards[1] (custom:picky-card): picky-card needs an entity"
     ]
+
+
+def test_removed_resources_are_unloaded(tmp_path, monkeypatch) -> None:
+    card_file = tmp_path / "a-card.js"
+    card_file.write_text("// card")
+    custom = cc.CustomCards("dom")
+    monkeypatch.setattr(
+        custom, "_load", lambda path, size: MagicMock(tags=["a-card"], memory=0)
+    )
+
+    custom.refresh([card_file])
+    assert custom.check("a-card", {"type": "custom:a-card"}) is not None
+    custom.refresh([])
+    assert custom.check("a-card", {"type": "custom:a-card"}) is None
+
+
+def test_oversized_card_files_are_not_run(tmp_path, monkeypatch) -> None:
+    card_file = tmp_path / "huge-card.js"
+    card_file.write_text("x" * 64)
+    monkeypatch.setattr(cc, "_MAX_SOURCE_BYTES", 32)
+    monkeypatch.setattr(cc, "_Bundle", MagicMock(side_effect=AssertionError("ran")))
+
+    assert cc.CustomCards("dom")._load(card_file, card_file.stat().st_size) is None

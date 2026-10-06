@@ -15,6 +15,7 @@ pinned version, checked against the registry's integrity hash, and cached in
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import io
@@ -329,6 +330,7 @@ class CustomCards:
 
 _dom_failed_at: float | None = None
 _custom: CustomCards | None = None
+_REFRESH_LOCK = asyncio.Lock()
 
 
 async def _async_dom(hass: HomeAssistant) -> str | None:
@@ -386,19 +388,33 @@ async def _async_resource_files(hass: HomeAssistant) -> list[Path]:
     return files
 
 
-async def async_get_custom_cards(hass: HomeAssistant) -> CustomCards | None:
-    """The custom cards of the current dashboard resources; ``None`` without linkedom."""
-    global _custom
+async def async_get_custom_cards(
+    hass: HomeAssistant, timeout: float | None = None
+) -> CustomCards | None:
+    """The current resources' custom cards; ``None`` without linkedom or in time.
+
+    A refresh that outlives ``timeout`` keeps running, so the next call has it.
+    """
+    task = hass.async_create_background_task(
+        _async_refresh(hass), "ha_mcp_tools custom cards"
+    )
     try:
-        files = await _async_resource_files(hass)
-        if not files:
-            return _custom
-        if _custom is None:
-            dom = await _async_dom(hass)
-            if dom is None:
-                return None
-            _custom = CustomCards(dom)
-        await hass.async_add_executor_job(_custom.refresh, files)
-    except Exception:
-        _LOGGER.debug("Custom cards are unavailable", exc_info=True)
-    return _custom
+        return await asyncio.wait_for(asyncio.shield(task), timeout)
+    except TimeoutError:
+        return None
+
+
+async def _async_refresh(hass: HomeAssistant) -> CustomCards | None:
+    global _custom
+    async with _REFRESH_LOCK:
+        try:
+            files = await _async_resource_files(hass)
+            if _custom is None:
+                dom = await _async_dom(hass) if files else None
+                if dom is None:
+                    return None
+                _custom = CustomCards(dom)
+            await hass.async_add_executor_job(_custom.refresh, files)
+        except Exception:
+            _LOGGER.debug("Custom cards are unavailable", exc_info=True)
+        return _custom
