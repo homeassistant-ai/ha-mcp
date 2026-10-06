@@ -11,6 +11,76 @@ from .test_card_definitions import _definitions, cc, cd, describe_mod
 from .test_card_definitions import component as component
 
 
+def test_malformed_select_options_do_not_abort_description():
+    from ha_mcp.tools.config_helpers.describe import compact_field
+
+    assert compact_field(
+        {"name": "classes", "selector": {"select": {"options": False}}}
+    ) == {"name": "classes", "type": "select"}
+
+
+def test_named_grid_and_flattened_section_follow_stored_shape():
+    from ha_mcp.tools.config_helpers.describe import compact_field
+
+    schema = [
+        {
+            "name": "content",
+            "type": "expandable",
+            "flatten": True,
+            "schema": [{"name": "entity", "selector": {"entity": {}}}],
+        },
+        {
+            "name": "limits",
+            "type": "grid",
+            "schema": [
+                {"name": "min", "selector": {"number": {}}},
+                {"name": "max", "selector": {"number": {}}},
+            ],
+        },
+    ]
+    assert [compact_field(f) for f in describe_mod._flatten(schema)] == [
+        {"name": "entity", "type": "entity"},
+        {
+            "name": "limits",
+            "type": "section",
+            "fields": [
+                {"name": "min", "type": "number"},
+                {"name": "max", "type": "number"},
+            ],
+        },
+    ]
+
+
+def test_editor_only_fields_and_types_are_reconciled_with_stored_struct():
+    fields = [
+        {
+            "name": "content",
+            "type": "expandable",
+            "flatten": True,
+            "schema": [
+                {
+                    "name": "content_layout",
+                    "selector": {"select": {"options": ["vertical"]}},
+                },
+                {"name": "detail", "selector": {"boolean": {}}, "default": True},
+                {"name": "entity", "selector": {"entity": {}}},
+            ],
+        }
+    ]
+    result = cd._stored_fields(
+        fields,
+        {
+            "vertical": {"type": "boolean"},
+            "detail": {"type": "number"},
+            "entity": {"type": "string"},
+        },
+    )
+    assert result[0]["schema"] == [
+        {"name": "detail", "selector": {"number": {}}},
+        {"name": "entity", "selector": {"entity": {}}},
+    ]
+
+
 def test_custom_wrapper_children_are_not_validated_as_final_configs():
     definitions = _definitions({"tile"}, {"tile": ["entity", "vertical"]})
     config = {

@@ -279,15 +279,9 @@ async def test_describe_compacts_the_editor_form(component: AsyncMock) -> None:
     assert result["fields"] == [
         {"name": "entity", "type": "entity"},
         {
-            "name": "content",
-            "type": "section",
-            "fields": [
-                {
-                    "name": "color",
-                    "type": "ui_color",
-                    "description": "Inactive state is not colored.",
-                }
-            ],
+            "name": "color",
+            "type": "ui_color",
+            "description": "Inactive state is not colored.",
         },
     ]
 

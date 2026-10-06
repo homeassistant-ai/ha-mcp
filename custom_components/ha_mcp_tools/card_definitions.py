@@ -124,12 +124,28 @@ function engine(op, p) {
       var first = new Proxy(localize, {
         get: function (t, k) { return k === 'localize' ? localize : ANY; },
       });
-      var v = typeof fn === 'function' ? fn(first, false, false, false) : fn;
+      var v = typeof fn === 'function' ? fn(first) : fn;
       return { value: plain(v) };
     }
     if (op === 'struct') {
       STRUCTS[p.key] = build(p.src, p.bindings);
       return { value: Object.keys(STRUCTS[p.key].schema || {}) };
+    }
+    if (op === 'field_types') {
+      function fields(s, depth) {
+        var out = {};
+        if (!s || !s.schema || depth > 4) return out;
+        Object.keys(s.schema).forEach(function (key) {
+          var child = s.schema[key];
+          if (!child || typeof child.type !== 'string') return;
+          out[key] = { type: child.type };
+          if (child.type === 'object' || child.type === 'type') {
+            out[key].schema = fields(child, depth + 1);
+          }
+        });
+        return out;
+      }
+      return { value: fields(STRUCTS[p.key], 0) };
     }
     if (op === 'validate') {
       return { value: p.cards.map(function (c) {
@@ -201,6 +217,37 @@ def _local_definition(body: str, name: str) -> str | None:
     if not m:
         return None
     return body[m.end() : _expr_end(body, m.end())]
+
+
+def _stored_fields(
+    fields: list[Any], types: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    """Use raw-config struct metadata where editor fields need translation."""
+    result = []
+    primitive = {"boolean": "boolean", "number": "number", "string": "text"}
+    for original in fields:
+        if not isinstance(original, dict):
+            continue
+        field = dict(original)
+        name = field.get("name")
+        children = field.get("schema")
+        layout = isinstance(children, list) and (not name or field.get("flatten"))
+        if types is not None and name and not layout and name not in types:
+            continue  # Editor-only values are not accepted in stored config.
+        expected = (types or {}).get(name, {})
+        if isinstance(children, list):
+            field["schema"] = _stored_fields(
+                children, types if layout else expected.get("schema")
+            )
+        else:
+            selector = field.get("selector", {})
+            kind = next(iter(selector), None) if isinstance(selector, dict) else None
+            stored_kind = primitive.get(expected.get("type"))
+            if kind in primitive.values() and stored_kind and kind != stored_kind:
+                field["selector"] = {stored_kind: {}}
+                field.pop("default", None)  # The editor default has the old type.
+        result.append(field)
+    return result
 
 
 class CardDefinitions:
@@ -347,7 +394,14 @@ class CardDefinitions:
             except ValueError:
                 continue
             if isinstance(value, list):
-                result["fields"] = self._with_help(card_type, value)
+                types = (
+                    self._engine("field_types", {"key": card_type}).get("value")
+                    if self._struct_ready(card_type)
+                    else None
+                )
+                result["fields"] = self._with_help(
+                    card_type, _stored_fields(value, types)
+                )
                 break
         return result
 

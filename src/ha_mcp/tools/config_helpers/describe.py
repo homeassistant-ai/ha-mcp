@@ -69,18 +69,18 @@ def compact_field(field: dict[str, Any]) -> dict[str, Any]:
         kind, cfg = next(iter(field["selector"].items()))
         cfg = cfg if isinstance(cfg, dict) else {}
         out["type"] = kind
-        if "options" in cfg:
+        if isinstance(cfg.get("options"), list | tuple):
             out["options"] = _option_values(cfg["options"])
         out.update(
             {k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)}
         )
-    elif field.get("type") == "expandable":
+    elif field.get("type") in {"expandable", "grid"}:
         out["type"] = "section"
         out["fields"] = [compact_field(f) for f in field.get("schema", [])]
     else:
         if "type" in field:
             out["type"] = field["type"]
-        if "options" in field:
+        if isinstance(field.get("options"), list | tuple):
             out["options"] = _option_values(field["options"])
         out.update({k: field[k] for k in _SERIALIZED_KEYS if k in field})
     if field.get("default") is not None:

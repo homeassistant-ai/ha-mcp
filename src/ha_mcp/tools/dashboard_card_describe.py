@@ -23,17 +23,13 @@ WS_DASHBOARD_CARDS = "ha_mcp_tools/dashboard_cards"
 
 
 def _flatten(schema: list[Any]) -> list[dict[str, Any]]:
-    """Drop the form's layout-only nodes (grids, dividers), keep its sections."""
+    """Match ha-form storage: named nodes nest unless explicitly flattened."""
     fields: list[dict[str, Any]] = []
     for node in schema:
         if not isinstance(node, dict) or node.get("type") == "divider":
             continue
         children = node.get("schema") if isinstance(node.get("schema"), list) else None
-        if (
-            children is not None
-            and node.get("type") == "expandable"
-            and node.get("name")
-        ):
+        if children is not None and node.get("name") and not node.get("flatten"):
             fields.append({**node, "schema": _flatten(children)})
         elif children is not None:
             fields.extend(_flatten(children))

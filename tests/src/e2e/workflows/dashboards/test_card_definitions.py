@@ -280,3 +280,62 @@ async def test_common_card_coverage_tracks_the_installed_frontend(
         await safe_call_tool(
             mcp_client, "ha_config_delete_dashboard", {"url_path": path}
         )
+
+
+@pytest.mark.asyncio
+async def test_described_fields_match_stored_card_configuration(mcp_client):
+    """Forms must describe stored config, including editor-translated fields."""
+    if not component_surface_available():
+        return
+    mcp = MCPAssertions(mcp_client)
+    descriptions = {}
+    for card_type in ("area", "statistics-graph", "tile", "shortcut", "sensor"):
+        result = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"describe": True, "card_type": card_type}
+        )
+        assert result["fields"], card_type
+        descriptions[card_type] = {field["name"]: field for field in result["fields"]}
+    for card_type in ("tile", "shortcut"):
+        assert (
+            not {"content", "interactions", "content_layout"}
+            & descriptions[card_type].keys()
+        )
+        assert "tap_action" in descriptions[card_type]
+    sensor = descriptions["sensor"]
+    assert sensor["detail"]["type"] == "number"
+    assert "min" not in sensor and "max" not in sensor
+    assert {field["name"] for field in sensor["limits"]["fields"]} == {"min", "max"}
+    path = "card-fields-" + uuid4().hex[:8]
+    try:
+        result = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": path,
+                "config": {
+                    "views": [
+                        {
+                            "title": "Fields",
+                            "cards": [
+                                {
+                                    "type": "tile",
+                                    "entity": "light.bed_light",
+                                    "tap_action": {"action": "none"},
+                                },
+                                {
+                                    "type": "sensor",
+                                    "entity": "sensor.test",
+                                    "detail": 2,
+                                    "limits": {"min": 0, "max": 100},
+                                },
+                            ],
+                        }
+                    ]
+                },
+                "MandatoryBPS": False,
+            },
+        )
+        assert not result.get("warnings"), result
+    finally:
+        await safe_call_tool(
+            mcp_client, "ha_config_delete_dashboard", {"url_path": path}
+        )
