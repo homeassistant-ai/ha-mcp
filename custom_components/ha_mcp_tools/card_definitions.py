@@ -473,7 +473,8 @@ async def async_get_definitions(
     if task is None:
 
         async def _run() -> CardDefinitions | None:
-            return await hass.async_add_executor_job(_build)
+            built: CardDefinitions | None = await hass.async_add_executor_job(_build)
+            return built
 
         task = _build_task = hass.async_create_background_task(
             _run(), "ha_mcp_tools card definitions"
@@ -491,7 +492,10 @@ async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> li
         definitions = await async_get_definitions(hass, timeout=15)
         if definitions is None:
             return []
-        return await hass.async_add_executor_job(definitions.validate, config)
+        warnings: list[str] = await hass.async_add_executor_job(
+            definitions.validate, config
+        )
+        return warnings
     except Exception:
         _LOGGER.debug("Card validation failed", exc_info=True)
         return []

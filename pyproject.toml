@@ -156,8 +156,10 @@ ignore_errors = true
 module = [
     "homeassistant.*",
     "awesomeversion",
+    "hass_frontend",
     "jsonschema",
     "psutil",
+    "quickjs",
 ]
 ignore_missing_imports = true
 
