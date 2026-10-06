@@ -28,6 +28,7 @@ async def _typed(
     name: str,
     action: Literal["create", "update"] | None = None,
     labels: list[str] | None = None,
+    height: int | Literal["auto"] = 800,
 ) -> str:
     return "ok"
 
@@ -66,6 +67,8 @@ async def _typed_params() -> str:
         # A nullable enum keeps its values and marks the null branch.
         "action (create|update?)",
         "labels (string[]?)",
+        # A literal next to a plain type keeps both branches (Codex, #2670).
+        "height (integer|auto)",
     ],
 )
 async def test_params_name_each_parameter_with_its_type(fragment: str) -> None:
@@ -99,7 +102,9 @@ async def test_unknown_name_returns_an_error_entry() -> None:
     [entry] = await _call({"tools": ["ha_no_such_tool"]})
     assert entry["name"] == "ha_no_such_tool"
     assert "inputSchema" not in entry
-    assert "search" in entry["error"]
+    assert entry["success"] is False
+    assert entry["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert "search" in entry["error"]["suggestion"].lower()
 
 
 @pytest.mark.anyio
@@ -145,6 +150,20 @@ async def test_compact_page_is_smaller_than_the_full_definitions(
     hits, full = await _hits_and_full(toolsearch_server, "create helper")
     assert hits
     assert len(json.dumps(hits)) < len(json.dumps(full))
+
+
+@pytest.mark.anyio
+async def test_full_definition_hop_matches_the_compact_hit(
+    toolsearch_server: server_module.HomeAssistantSmartMCPServer,
+) -> None:
+    """On the real catalog, naming a hit returns the schema the compact
+    entry omitted, under the same name and proxy hint."""
+    hits, full = await _hits_and_full(toolsearch_server, "energy dashboard preferences")
+    by_name = {entry["name"]: entry for entry in full}
+    for hit in hits:
+        entry = by_name[hit["name"]]
+        assert "properties" in entry["inputSchema"], hit["name"]
+        assert entry["execute_via"] == hit["execute_via"], hit["name"]
 
 
 @pytest.mark.anyio

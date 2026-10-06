@@ -107,7 +107,7 @@ SEARCH_TOOLS_DESCRIPTION = (
     "'query' is ignored when this is given."
 )
 
-_TOOL_NOT_FOUND = "Tool not found; search by English keywords to find the right name."
+_TOOL_NOT_FOUND = "Search by English keywords to find the right tool name."
 
 # ``manage`` names one interface that intentionally combines several
 # operations (.gemini/styleguide.md, Tool Naming Convention). Such a tool is
@@ -332,21 +332,30 @@ def _param_type(schema: Any) -> str:
     if not isinstance(schema, dict):
         return _schema_type(schema)
     branches = schema.get("anyOf") or schema.get("oneOf") or [schema]
-    values: list[Any] = []
+    labels: dict[str, None] = {}
     nullable = False
     for branch in branches:
         if not isinstance(branch, dict):
             continue
-        nullable = nullable or branch.get("type") == "null"
-        values.extend(branch.get("enum") or [])
+        values = branch.get("enum") or []
         if "const" in branch:
-            values.append(branch["const"])
-    if not values:
+            values = [*values, branch["const"]]
+        if values:
+            nullable = nullable or None in values
+            labels.update(
+                dict.fromkeys(
+                    v if isinstance(v, str) else json.dumps(v)
+                    for v in values
+                    if v is not None
+                )
+            )
+        elif branch.get("type") == "null":
+            nullable = True
+        else:
+            labels[_schema_type(branch)] = None
+    if not labels:
         return _schema_type(schema)
-    labels = dict.fromkeys(
-        v if isinstance(v, str) else json.dumps(v) for v in values if v is not None
-    )
-    return "|".join(labels) + ("?" if nullable or None in values else "")
+    return "|".join(labels) + ("?" if nullable else "")
 
 
 def _compact_params(schema: dict[str, Any]) -> str:
@@ -728,7 +737,17 @@ class CategorizedSearchTransform(BM25SearchTransform):
         for name in names:
             tool = by_name.get(name)
             if tool is None:
-                results.append({"name": name, "error": _TOOL_NOT_FOUND})
+                results.append(
+                    {
+                        "name": name,
+                        **create_error_response(
+                            code=ErrorCode.RESOURCE_NOT_FOUND,
+                            message=f"Tool '{name}' not found.",
+                            suggestions=[_TOOL_NOT_FOUND],
+                            context={"tool_name": name},
+                        ),
+                    }
+                )
             elif tool.name in self._always_visible:
                 results.append(self._pinned_stub(tool))
             else:

@@ -28,6 +28,14 @@ _SEARCH_RESULT_LIMIT = 8
 _NOT_FOUND = "Tool not found; search by task words to find the right name."
 
 
+def _literal_values(node: dict[str, Any]) -> list[Any]:
+    """The values an ``enum`` and/or ``const`` schema admits; empty otherwise."""
+    values = list(node.get("enum") or [])
+    if "const" in node:
+        values.append(node["const"])
+    return values
+
+
 def compact_params(schema: Any) -> str:
     """Render an input schema as ``name (type[, required])`` joined by ``; ``."""
 
@@ -36,8 +44,8 @@ def compact_params(schema: Any) -> str:
             return "any"
         kind = node.get("type")
         kinds = kind if isinstance(kind, list) else [kind]
-        enum = node.get("enum")
-        if isinstance(enum, list):
+        enum = _literal_values(node)
+        if enum:
             nullable = "?" if None in enum or "null" in kinds else ""
             return "|".join(str(v) for v in enum if v is not None) + nullable
         if isinstance(kind, list):

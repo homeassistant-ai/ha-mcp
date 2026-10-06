@@ -98,13 +98,27 @@ async def _search(
         ),
         ({"config": {"$ref": "#/$defs/Config"}}, [], "config (object)"),
         (
+            {"height": {"anyOf": [{"type": "integer"}, {"const": "auto"}]}},
+            [],
+            "height (integer | auto)",
+        ),
+        (
             {"name": {"type": "string"}, "limit": {"type": "integer"}},
             [],
             "name (string); limit (integer)",
         ),
         ({}, [], "none"),
     ],
-    ids=["enum-required", "nullable", "enum-branch", "array", "ref", "two", "none"],
+    ids=[
+        "enum-required",
+        "nullable",
+        "enum-branch",
+        "array",
+        "ref",
+        "literal-next-to-type",
+        "two",
+        "none",
+    ],
 )
 async def test_search_hit_tells_the_agent_each_param_in_one_line(
     monkeypatch: pytest.MonkeyPatch,
