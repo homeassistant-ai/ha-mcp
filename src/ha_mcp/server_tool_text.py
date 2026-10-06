@@ -290,7 +290,7 @@ LITE_DOCSTRINGS: dict[str, str] = {
     "ha_config_get_dashboard": (
         "Get Home Assistant dashboard info (list mode, search "
         "mode, or full config).\n\n"
-        "Three modes: (1) list — `list_only=True` returns all "
+        "Four modes: (1) list — `list_only=True` returns all "
         "storage-mode dashboards with metadata. (2) search — pass "
         "any of `entity_id`, `card_type`, `heading` to find cards "
         "(including nested ones, with a `python_path`) inside a "

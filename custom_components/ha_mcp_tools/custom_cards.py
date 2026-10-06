@@ -42,7 +42,9 @@ _RETRY_AFTER_S = 600.0
 _BUNDLE_MEMORY = 32 * 1024 * 1024
 _TOTAL_MEMORY = 128 * 1024 * 1024
 _MAX_SOURCE_BYTES = 8 * 1024 * 1024
+_MAX_DOM_DOWNLOAD_BYTES = 2 * 1024 * 1024
 _CALL_SECONDS = 5
+_PREPARE_SECONDS = 15.0
 _SETTLE_JOBS = 20_000
 _SETTLE_SECONDS = 5.0
 _RESOURCE_PREFIXES = (("/hacsfiles/", "www/community"), ("/local/", "www"))
@@ -209,11 +211,15 @@ class _Bundle:
         import quickjs
 
         self.engine = quickjs.Function(
-            "card", _RUNTIME_JS.replace("__SANDBOX", repr(list(_SANDBOX_ERRORS)))
+            "card",
+            _RUNTIME_JS.replace("__SANDBOX", repr(list(_SANDBOX_ERRORS))),
+            own_executor=True,
         )
-        self.engine.set_memory_limit(_BUNDLE_MEMORY)
-        self.engine.set_time_limit(_CALL_SECONDS)
+        self._context_call("set_memory_limit", _BUNDLE_MEMORY)
+        self._context_call("set_time_limit", _CALL_SECONDS)
+        self._prepare_deadline = time.monotonic() + _PREPARE_SECONDS
         for step, payload in (("eval", dom), ("boot", None), ("eval", source)):
+            self._limit_preparation()
             error = self.engine(step, payload).get("error")
             if error:
                 raise ValueError(error)
@@ -222,23 +228,39 @@ class _Bundle:
         self.tags: list[str] = listed["tags"]
         self.cards: list[dict[str, Any]] = listed["cards"]
         for tag in self.tags:
+            self._limit_preparation()
             self.engine("prepare", {"tag": tag})
         self._settle()
+        self._context_call("set_time_limit", _CALL_SECONDS)
         self._unresponsive: set[str] = set()
+
+    def _context_call(self, method: str, *args: Any) -> Any:
+        # quickjs-ng 0.17 dispatches Function calls, but its context methods
+        # run on the caller. Use the SAME executor that created its runtime.
+        return self.engine._threadpool.submit(
+            getattr(self.engine, method), *args
+        ).result()
+
+    def _limit_preparation(self) -> None:
+        remaining = self._prepare_deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Custom card preparation exceeded its budget")
+        self._context_call("set_time_limit", min(_CALL_SECONDS, remaining))
 
     def _settle(self) -> None:
         """Run the bundle's queued promises and timers (lazy editors load here)."""
         deadline = time.monotonic() + _SETTLE_SECONDS
         jobs = 0
         while jobs < _SETTLE_JOBS and time.monotonic() < deadline:
-            if self.engine.execute_pending_job():
+            self._limit_preparation()
+            if self._context_call("execute_pending_job"):
                 jobs += 1
             elif not self.engine("pump", None).get("value"):
                 return
 
     @property
     def memory(self) -> int:
-        return int(self.engine.memory().get("memory_used_size", 0))
+        return int(self._context_call("memory").get("memory_used_size", 0))
 
     def check(self, tag: str, config: dict[str, Any]) -> list[str]:
         """The card's own objections; none (from then on) once it times out."""
@@ -285,8 +307,12 @@ class CustomCards:
             self._bundles[path] = (stat.st_mtime, self._load(path, stat.st_size))
 
     def _load(self, path: Path, size: int) -> _Bundle | None:
-        used = sum(b.memory for _, b in self._bundles.values() if b is not None)
-        if size > _MAX_SOURCE_BYTES or used >= _TOTAL_MEMORY:
+        # Reserve each runtime's full allowance, including heap growth in later
+        # check/form calls. Measuring current heaps only cannot enforce the cap.
+        reserved = sum(
+            _BUNDLE_MEMORY for _, b in self._bundles.values() if b is not None
+        )
+        if size > _MAX_SOURCE_BYTES or reserved + _BUNDLE_MEMORY > _TOTAL_MEMORY:
             _LOGGER.debug("Custom card bundle %s skipped: size or memory cap", path)
             return None
         try:
@@ -351,8 +377,12 @@ async def _async_dom(hass: HomeAssistant) -> str | None:
 
         async with async_get_clientsession(hass).get(LINKEDOM_URL, timeout=30) as resp:
             resp.raise_for_status()
-            tarball = await resp.read()
-        dom = await hass.async_add_executor_job(dom_script, tarball)
+            tarball = bytearray()
+            async for chunk in resp.content.iter_chunked(64 * 1024):
+                if len(tarball) + len(chunk) > _MAX_DOM_DOWNLOAD_BYTES:
+                    raise ValueError("linkedom download exceeded its size limit")
+                tarball.extend(chunk)
+        dom = await hass.async_add_executor_job(dom_script, bytes(tarball))
         await hass.async_add_executor_job(_write_cache, cache, dom)
     except Exception:
         _LOGGER.warning(

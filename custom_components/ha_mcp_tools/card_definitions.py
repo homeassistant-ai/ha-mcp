@@ -17,6 +17,7 @@ import difflib
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +33,8 @@ CAPABILITIES = ("dashboard_cards",)
 
 # A module factory takes (module, exports, require), trailing ones omitted when unused.
 _MOD_RE = re.compile(r"[{,](\d+)\([\w$]+(?:,[\w$]+){0,2}\)\{")
+# Entrypoints end their registry with the module cache and require function.
+_ENTRYPOINT_END_RE = re.compile(r"\},[\w$]+=\{\};function [\w$]+\(")
 # The element registration, ``(0,x.EM)("hui-tile-card")``; never a createElement.
 _TAG_RE = re.compile(r'\)\("(hui-[a-z0-9-]+-card(?:-editor)?)"\)')
 _EDITOR_REF_RE = re.compile(r'"(hui-[a-z0-9-]+-card-editor)"')
@@ -47,6 +50,9 @@ _SCHEMA_CONST_RE = re.compile(r"\.schema=\$\{([\w$]+)\}")
 _REF_ERROR_RE = re.compile(r"ReferenceError: ([\w$]+) is not defined")
 _I18N = "ui.panel.lovelace.editor.card."
 _MAX_WARNINGS = 20
+# Leave room for save/readback and transport within the 30-second command wait.
+_CARD_WORK_SECONDS = 20.0
+_CUSTOM_WAIT_SECONDS = 5.0
 _Queued = list[tuple[str, str, dict[str, Any]]]
 # Keys a card ignores but an installed plugin reads (card-mod); the editor
 # rejects them only because it cannot show them.
@@ -70,7 +76,7 @@ function load(id) {
       var mods = holder.__webpack_modules__ || {};
       for (var k in mods) if (!REG[k]) REG[k] = mods[k];
     }
-    // Browser polyfills (core-js) have no place here.
+    // An absent module cannot provide browser-only dependencies.
     if (!REG[id]) REG[id] = function () {};
   }
 }
@@ -79,7 +85,8 @@ function req(id) {
   if (CACHE[id]) return CACHE[id].exports;
   load(id);
   var module = (CACHE[id] = { exports: {} });
-  REG[id](module, module.exports, req);
+  try { REG[id](module, module.exports, req); }
+  catch (e) { delete CACHE[id]; throw e; }
   return module.exports;
 }
 req.d = function (e, getters, values) {
@@ -89,12 +96,13 @@ req.d = function (e, getters, values) {
 req.r = function () {};
 req.n = function (m) { return function () { return m; }; };
 req.o = function (o, k) { return Object.prototype.hasOwnProperty.call(o, k); };
+req.g = globalThis;
 function build(src, bindings) {
   var names = Object.keys(bindings);
   var values = names.map(function (n) {
     var b = bindings[n];
     if (b === 'any') return ANY;
-    try { return req(b); } catch (e) { throw new Error('require-failed ' + n); }
+    try { return req(b); } catch (e) { throw new Error('require-failed ' + n + ' module ' + b + ': ' + e); }
   });
   // Editor forms may read this.hass; an inert stand-in keeps them pure.
   return Function.apply(null, names.concat([src])).apply(ANY, values);
@@ -209,15 +217,17 @@ class CardDefinitions:
         self._index()
         self._strings = _load_strings(root)
         self._engine = quickjs.Function("engine", _ENGINE_JS, own_executor=True)
-        self._engine.set_memory_limit(256 * 1024 * 1024)
-        self._engine.add_callable("__chunk", self._chunk_source)
+        self._engine._threadpool.submit(
+            self._engine.set_memory_limit, 256 * 1024 * 1024
+        ).result()
+        self._engine._threadpool.submit(
+            self._engine.add_callable, "__chunk", self._chunk_source
+        ).result()
 
     def _index(self) -> None:
         files = sorted(self._dir.glob("*.js"), key=lambda p: p.stat().st_size)
         for path in files:
             text = path.read_text(encoding="utf-8")
-            if "__webpack_modules__=" not in text:
-                continue
             starts = [(m.start(), m.group(1)) for m in _MOD_RE.finditer(text)]
             for _, module_id in starts:
                 self._module_file.setdefault(module_id, path)
@@ -252,7 +262,24 @@ class CardDefinitions:
         path = self._module_file.get(module_id)
         if path is None:
             return None
-        return path.read_text(encoding="utf-8").replace("export const ", "exports_.")
+        text = path.read_text(encoding="utf-8")
+        if "__webpack_modules__=" in text:
+            return text.replace("export const ", "exports_.")
+        # core/app entrypoints keep dependencies in a local registry instead
+        # of exporting a chunk. Capture that object without executing startup.
+        factories = list(_MOD_RE.finditer(text))
+        if not factories or text[factories[0].start()] != "{":
+            return None
+        end = _ENTRYPOINT_END_RE.search(text, factories[-1].end())
+        if end is None:
+            return None
+        # Exclude runtime code entirely: its import.meta is module-only syntax,
+        # even when an early return would prevent browser startup execution.
+        return (
+            "exports_.__webpack_modules__="
+            + text[factories[0].start() : end.start() + 1]
+            + ";"
+        )
 
     def _evaluate(self, op: str, body: str, expr: str, key: str = "") -> Any:
         """Run ``expr`` from ``body``, binding the module's imports and locals."""
@@ -349,8 +376,10 @@ class CardDefinitions:
             if definition:
                 try:
                     keys = self._evaluate("struct", body, definition, key=card_type)
-                except ValueError:
-                    _LOGGER.debug("No validator for card type %s", card_type)
+                except ValueError as exc:
+                    _LOGGER.debug(
+                        "Card validator %s is unavailable: %s", card_type, exc
+                    )
             self._struct_keys[card_type] = keys
         return self._struct_keys[card_type] is not None
 
@@ -406,7 +435,10 @@ class CardDefinitions:
 def _custom_warnings(custom: CustomCards, customs: _Queued) -> list[str]:
     """What each custom card says about its own config."""
     found: list[str] = []
+    deadline = time.monotonic() + _CUSTOM_WAIT_SECONDS
     for path, card_type, card in customs:
+        if time.monotonic() >= deadline:
+            break
         tag = card_type[len("custom:") :]
         explained = (_explain_message(tag, m) for m in custom.check(tag, card) or [])
         found.extend(f"{path} ({card_type}): {e}" for e in explained if e is not None)
@@ -539,18 +571,23 @@ def async_warm_up(hass: HomeAssistant) -> None:
 async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> list[str]:
     """Advisory warnings for a saved dashboard; never fails the write."""
     try:
-        definitions = await async_get_definitions(hass, timeout=15)
-        if definitions is None:
-            return []
-        uses_custom = any(
-            str(card.get("type", "")).startswith("custom:")
-            for _, card in _cards(config)
-        )
-        custom = await async_get_custom_cards(hass, timeout=15) if uses_custom else None
-        warnings: list[str] = await hass.async_add_executor_job(
-            definitions.validate, config, custom
-        )
-        return warnings
+        async with asyncio.timeout(_CARD_WORK_SECONDS):
+            definitions = await async_get_definitions(hass, timeout=15)
+            if definitions is None:
+                return []
+            uses_custom = any(
+                str(card.get("type", "")).startswith("custom:")
+                for _, card in _cards(config)
+            )
+            custom = (
+                await async_get_custom_cards(hass, timeout=_CUSTOM_WAIT_SECONDS)
+                if uses_custom
+                else None
+            )
+            warnings: list[str] = await hass.async_add_executor_job(
+                definitions.validate, config, custom
+            )
+            return warnings
     except Exception:
         _LOGGER.debug("Card validation failed", exc_info=True)
         return []
@@ -560,10 +597,17 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
     """``dashboard_cards``: the card type list, or one card type's form."""
 
     async def prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+        try:
+            async with asyncio.timeout(_CARD_WORK_SECONDS):
+                return await describe(hass, msg)
+        except TimeoutError:
+            return {"result": {"success": False, "error": "unavailable"}}
+
+    async def describe(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         definitions = await async_get_definitions(hass)
         if definitions is None:
             return {"result": {"success": False, "error": "unavailable"}}
-        custom = await async_get_custom_cards(hass)
+        custom = await async_get_custom_cards(hass, timeout=_CUSTOM_WAIT_SECONDS)
         card_types = definitions.card_types() + (custom.card_types() if custom else [])
         card_type = msg.get("card_type")
         if card_type is None:

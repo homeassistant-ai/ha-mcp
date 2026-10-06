@@ -7,6 +7,7 @@ turns its verdicts into warnings.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
 from types import SimpleNamespace
@@ -20,7 +21,7 @@ from ha_mcp.tools import dashboard_card_describe as describe_mod
 from ha_mcp.tools.component_api import ComponentCaps
 
 # The sibling module installs the homeassistant.* stubs the component needs.
-from .test_component_ws_search import wsapi  # noqa: F401
+importlib.import_module(".test_component_ws_search", __package__)
 
 cd = importlib.import_module("custom_components.ha_mcp_tools.card_definitions")
 
@@ -113,6 +114,35 @@ def test_editor_registration_is_found_and_imports_resolve() -> None:
         "_": "20541",
         "m": "80140",
     }
+
+
+def test_entrypoint_dependencies_load_without_browser_startup(tmp_path) -> None:
+    """HA 2026.10 card structs import core-js helpers held in core/app bundles."""
+    frontend = tmp_path / "frontend_latest"
+    frontend.mkdir()
+    (frontend / "core.js").write_text(
+        'var e,t,r={7(e,t,r){r.d(t,{},{field:"entity"})}},cache={};'
+        'function start(){throw new Error("browser startup must not run")}'
+        "var url=import.meta.url;start();",
+        encoding="utf-8",
+    )
+    definitions = cd.CardDefinitions(tmp_path)
+    result = definitions._evaluate("schema", "var x=r(7);", "[{name:x.field}]")
+    assert result == [{"name": "entity"}]
+
+
+def test_failed_module_is_not_reused_as_partial_exports(tmp_path) -> None:
+    frontend = tmp_path / "frontend_latest"
+    frontend.mkdir()
+    (frontend / "chunk.js").write_text(
+        'export const __webpack_modules__={7(e,t){t.field="partial";'
+        'throw new Error("dependency unavailable")}};',
+        encoding="utf-8",
+    )
+    definitions = cd.CardDefinitions(tmp_path)
+    for _ in range(2):
+        with pytest.raises(ValueError, match="require-failed"):
+            definitions._evaluate("struct", "var x=r(7);", "x.field")
 
 
 def test_local_definition_stops_at_the_top_level_comma() -> None:
@@ -231,6 +261,8 @@ async def test_describe_unknown_card_type_lists_the_real_ones(
         await describe_mod.describe_card_response(MagicMock(), "tyle")
     assert "VALIDATION_INVALID_PARAMETER" in str(err.value)
     assert "tile, grid" in str(err.value)
+    assert "not a known card type" in str(err.value)
+    assert "registered as a dashboard resource" in str(err.value)
 
 
 @pytest.mark.asyncio
@@ -395,5 +427,73 @@ async def test_definitions_and_custom_cards_warm_up_once_home_assistant_runs(
     assert marked == started  # runs on the event loop, not a worker thread
 
     started[0](None)
-    await scheduled[0]
+    assert await scheduled[0] is None
     assert loaded == ["built-in", "custom"]
+
+
+@pytest.mark.asyncio
+async def test_card_validation_executor_cannot_hold_a_saved_write(monkeypatch) -> None:
+    monkeypatch.setattr(cd, "_CARD_WORK_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(
+        cd, "async_get_definitions", AsyncMock(return_value=MagicMock())
+    )
+    hass = MagicMock()
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda *args: None)
+
+    async def stuck(*args):
+        await asyncio.Event().wait()
+
+    hass.async_add_executor_job.side_effect = stuck
+    assert await asyncio.wait_for(cd.async_card_warnings(hass, {}), 0.5) == []
+
+
+@pytest.mark.asyncio
+async def test_slow_custom_refresh_preserves_builtin_describe(monkeypatch) -> None:
+    import voluptuous as vol
+
+    definitions = MagicMock()
+    definitions.card_types.return_value = [{"type": "tile"}]
+    monkeypatch.setattr(
+        cd, "async_get_definitions", AsyncMock(return_value=definitions)
+    )
+    monkeypatch.setattr(cd, "_CUSTOM_WAIT_SECONDS", 0.01, raising=False)
+
+    async def slow(hass, timeout=None):
+        if timeout is None:
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(cd, "async_get_custom_cards", slow)
+    prep = cd.command_specs(vol)[0][2]
+    result = await asyncio.wait_for(prep(MagicMock(), {}), 0.5)
+    assert result["result"] == {"success": True, "card_types": [{"type": "tile"}]}
+
+
+def test_bundle_admission_reserves_room_for_later_heap_growth(
+    tmp_path, monkeypatch
+) -> None:
+    custom = cc.CustomCards("dom")
+    monkeypatch.setattr(cc, "_TOTAL_MEMORY", 100)
+    monkeypatch.setattr(cc, "_BUNDLE_MEMORY", 40)
+    custom._bundles = {tmp_path / str(i): (0, MagicMock(memory=1)) for i in range(2)}
+    card_file = tmp_path / "new.js"
+    card_file.write_text("// card")
+    load = MagicMock()
+    monkeypatch.setattr(cc, "_Bundle", load)
+    assert custom._load(card_file, 7) is None
+    load.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_describe_drops_stale_capabilities_after_unknown_command(
+    component, monkeypatch
+) -> None:
+    from ha_mcp.tools import component_api
+
+    client = MagicMock()
+    component_api._CAPS_CACHE[client] = _caps("dashboard_cards")
+    error = RuntimeError("removed command")
+    error.code = "unknown_command"
+    component.send_command.side_effect = error
+    with pytest.raises(ToolError):
+        await describe_mod.describe_card_response(client, "tile")
+    assert client not in component_api._CAPS_CACHE

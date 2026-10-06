@@ -1787,7 +1787,7 @@ class DashboardConfigTools:
     @tool(
         name="ha_config_get_dashboard",
         tags={"Dashboards"},
-        annotations=read_only_hints("Get Dashboard", open_world=False),
+        annotations=read_only_hints("Get Dashboard", open_world=True),
     )
     @log_tool_usage
     async def ha_config_get_dashboard(
@@ -2717,7 +2717,7 @@ class DashboardConfigTools:
             "Create or Update Dashboard",
             destructive=True,
             idempotent=False,
-            open_world=False,
+            open_world=True,
         ),
     )
     @with_auto_backup(domain="dashboard", id_param="url_path")

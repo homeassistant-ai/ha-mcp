@@ -10,7 +10,12 @@ from typing import Any
 
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
-from .component_api import component_supports, get_component_caps
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .config_helpers.describe import compact_field
 from .helpers import exception_to_structured_error, raise_tool_error
 
@@ -62,6 +67,8 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
         kwargs = {"card_type": card_type} if card_type else {}
         raw = await ws.send_command(WS_DASHBOARD_CARDS, **kwargs)
     except Exception as exc:  # noqa: BLE001
+        if is_unknown_command(exc):
+            invalidate_caps(client)
         exception_to_structured_error(
             exc, context={"action": "describe", "card_type": card_type}
         )
@@ -74,10 +81,11 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"'{card_type}' is not a built-in card type.",
+                    f"'{card_type}' is not a known card type.",
                     suggestions=[
                         "Use one of: " + ", ".join(result.get("card_types", [])),
-                        "Custom cards (custom:...) are not described here",
+                        "A custom: card must be registered as a dashboard resource "
+                        "(HACS or /local) before it can be described",
                     ],
                     context={"action": "describe", "card_type": card_type},
                 )

@@ -17,11 +17,11 @@ from ...utilities.topology import component_surface_available
 async def test_card_fields_come_from_the_card_editor(mcp_client):
     mcp = MCPAssertions(mcp_client)
     if not component_surface_available():
-        await mcp.call_tool_failure(
+        failure = await mcp.call_tool_failure(
             "ha_config_get_dashboard",
             {"card_type": "tile", "describe": True},
-            expected_error="COMPONENT_NOT_INSTALLED",
         )
+        assert failure["error"]["code"] == "COMPONENT_NOT_INSTALLED"
         return
 
     tile = await mcp.call_tool_success(
@@ -36,11 +36,13 @@ async def test_card_fields_come_from_the_card_editor(mcp_client):
     listed = await mcp.call_tool_success("ha_config_get_dashboard", {"describe": True})
     assert {"tile", "grid", "heading"} <= {c["type"] for c in listed["card_types"]}
 
-    await mcp.call_tool_failure(
+    failure = await mcp.call_tool_failure(
         "ha_config_get_dashboard",
         {"card_type": "no-such-card", "describe": True},
-        expected_error="tile",
+        expected_error="no-such-card",
     )
+    assert failure["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "tile" in " ".join(failure["error"]["suggestions"])
 
 
 @pytest.mark.asyncio
@@ -82,11 +84,11 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
     """A card from a dashboard resource answers for itself, like a HACS card."""
     mcp = MCPAssertions(mcp_client)
     if not component_surface_available():
-        await mcp.call_tool_failure(
+        failure = await mcp.call_tool_failure(
             "ha_config_get_dashboard",
             {"card_type": "custom:e2e-custom-card", "describe": True},
-            expected_error="COMPONENT_NOT_INSTALLED",
         )
+        assert failure["error"]["code"] == "COMPONENT_NOT_INSTALLED"
         return
     path = "custom-card-checks-" + uuid4().hex[:8]
     resource = await mcp.call_tool_success(
