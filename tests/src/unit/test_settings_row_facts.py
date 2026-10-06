@@ -4,15 +4,20 @@ The catalog sentences carry no ranges and no "Restart required": those facts
 come from the setting metadata, so a changed range changes no translation.
 """
 
+import json
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+from ha_mcp.settings_ui._handlers_advanced import _get_advanced_settings
 from ha_mcp.settings_ui._handlers_backups import (
     _coerce_int_field,
     backup_config_fields,
 )
+from ha_mcp.tools.tools_dev import DevTools
 
 from ._js_harness import run_script
 from .test_settings_ui_js_behavior import (
@@ -60,7 +65,7 @@ def test_advanced_row_states_range_and_restart_and_reaches_its_off_value(
 
     helps = re.findall(r'<div class="adv-help">([^<]*)</div>', result.dom)
     assert "Range 0–100. Restart required." in helps
-    assert "Range 1,024–65,535, or 0. Restart required." in helps
+    assert "Range 1024–65535, or 0. Restart required." in helps
     inputs = {
         field: " ".join(
             re.findall(rf'<input[^>]*data-adv-field="{field}"[^>]*>', result.dom)
@@ -93,7 +98,7 @@ def test_advanced_row_states_range_and_restart_and_reaches_its_off_value(
             },
             "await loadBackupConfig(); await new Promise(r => setTimeout(r, 100));",
             r'<span class="backup-field-help">([^<]*)</span>',
-            "Range 0–1,440.",
+            "Range 0–1440.",
         ),
         (
             "/api/settings/features",
@@ -154,3 +159,26 @@ def test_backup_rows_show_the_bounds_the_save_enforces() -> None:
         assert _coerce_int_field(row["field"], row["max"])[1] is None
         for outside in (row["min"] - 1, row["max"] + 1):
             assert _coerce_int_field(row["field"], outside)[1] is not None
+
+
+async def _settings_page_rows() -> list[dict[str, Any]]:
+    response = await _get_advanced_settings(None, MagicMock())
+    rows: list[dict[str, Any]] = json.loads(bytes(response.body))["fields"]
+    return rows
+
+
+async def _dev_tool_rows() -> list[dict[str, Any]]:
+    return DevTools(MagicMock())._settings_rows()
+
+
+@pytest.mark.parametrize("rows_of", [_settings_page_rows, _dev_tool_rows])
+async def test_an_off_value_is_reported_beside_the_range_not_as_its_minimum(
+    rows_of: Callable[[], Awaitable[list[dict[str, Any]]]],
+) -> None:
+    """With the off value stored in ``min``, the port row reads "Range 0 to
+    65,535" and an agent reading the dev tool takes ports 1 to 1023 as
+    valid."""
+    with_off_value = [row for row in await rows_of() if "off_value" in row]
+    assert with_off_value
+    for row in with_off_value:
+        assert not row["min"] <= row["off_value"] <= row["max"], row

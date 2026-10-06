@@ -228,8 +228,9 @@ _ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
 }
 
 # Values outside the range that mean "off" (sidecar_pin_port: 0 = ephemeral).
-# The UI emits min=off value so the number input can still express it; the
-# override-apply and UI-POST paths accept the off value OR the range.
+# Row payloads report it as ``off_value`` beside the range, and the settings
+# script lets the number input reach it; the override-apply and UI-POST paths
+# accept the off value OR the range.
 _ADVANCED_SETTINGS_SENTINELS: dict[str, int] = {
     name: setting.off_value
     for name, _field, setting in _settings_of("advanced")

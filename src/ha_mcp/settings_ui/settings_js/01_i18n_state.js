@@ -52,22 +52,14 @@ function localizeMeta(section, field, meta) {
   };
 }
 
-function _localeNumber(value) {
-  try {
-    return Number(value).toLocaleString(I18N_PAYLOAD.locale);
-  } catch (_err) {
-    return String(value);
-  }
-}
-
 // A row's help text plus the facts its payload carries (range, off value,
 // restart), rendered here so the catalog sentences never repeat them.
 function helpWithFacts(help, row) {
   const parts = help ? [help] : [];
   if (typeof row.min === 'number' && typeof row.max === 'number') {
-    const range = {min: _localeNumber(row.min), max: _localeNumber(row.max)};
+    const range = {min: row.min, max: row.max};
     parts.push(typeof row.off_value === 'number'
-      ? t('common.range_or_value', {...range, value: _localeNumber(row.off_value)}, 'Range {min}–{max}, or {value}.')
+      ? t('common.range_or_value', {...range, value: row.off_value}, 'Range {min}–{max}, or {value}.')
       : t('common.range', range, 'Range {min}–{max}.'));
   }
   if (row.restart_required) parts.push(t('common.restart_required', {}, 'Restart required.'));

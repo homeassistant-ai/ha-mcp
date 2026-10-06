@@ -360,8 +360,6 @@
     "advanced.timeout.label": "HA-Daq rI'lu'DI' poH 'eb Qav (lup)",
     "advanced.max_retries.label": "HA-Daq rI'lu'DI' nIDqa'ghach 'aqroS",
     "advanced.fuzzy_threshold.label": "fuzzy nejwI' veH",
-    "advanced.entity_search_limit.label": "Dolmey luSamlu'bogh 'aqroS",
-    "advanced.entity_search_limit.help": "<code>ha_search_entities</code> Dolmey nobbogh 'aqroS. poQbogh mI'mey: 1–1000.",
     "advanced.automation_config_time_budget.label": "automation chermeH De' poH chaw' (lup)",
     "advanced.script_config_time_budget.label": "script chermeH De' poH chaw' (lup)",
     "advanced.scene_config_time_budget.label": "scene chermeH De' poH chaw' (lup)",
