@@ -47,7 +47,7 @@ async def test_card_fields_come_from_the_card_editor(mcp_client):
         expected_error="no-such-card",
     )
     assert failure["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert "tile" in " ".join(failure["error"]["suggestions"])
+    assert "tile" in failure["error"]["suggestion"]
 
 
 @pytest.mark.asyncio

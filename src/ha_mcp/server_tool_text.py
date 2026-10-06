@@ -503,7 +503,7 @@ LITE_DOCSTRING_DESTINATIONS: dict[str, str] = {
     "ha_config_set_scene": "references/scenes.md",
     "ha_config_list_helpers": "references/helper-selection.md",
     "ha_config_set_helper": "references/helper-selection.md",
-    "ha_config_get_dashboard": "self-contained",
+    "ha_config_get_dashboard": "references/dashboard-cards.md",
     "ha_config_set_dashboard": "references/dashboard-guide.md",
     "ha_call_service": "references/domain-docs.md",
     "ha_config_set_yaml": "references/yaml-only-integrations.md",
