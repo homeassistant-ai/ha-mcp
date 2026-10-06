@@ -393,12 +393,16 @@ class TestEmbeddedAuthHints:
         )
         return response["error"]["suggestions"]
 
-    def test_the_token_fix_comes_before_the_tool_hints(self, monkeypatch):
+    def test_the_token_fix_comes_before_the_tool_hints(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
         suggestions = self._suggestions()
         assert "HA-MCP Server" in suggestions[0]
         assert suggestions[-1] == self.TOOL_HINTS[0]
 
-    def test_other_deployments_keep_the_tool_hints(self, monkeypatch):
+    def test_other_deployments_keep_the_tool_hints(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
         assert self._suggestions() == list(self.TOOL_HINTS)

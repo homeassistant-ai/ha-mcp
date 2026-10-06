@@ -7,6 +7,7 @@ Assistant origin is an open redirector.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import pytest
 
@@ -107,7 +108,9 @@ class TestEffectiveAllowlist:
         # Removing every entry must not bring the default back.
         assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: []}) == []
 
-    def test_a_malformed_stored_list_refuses_every_callback(self, caplog) -> None:
+    def test_a_malformed_stored_list_refuses_every_callback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         # Falling back to the default would widen a security setting silently.
         with caplog.at_level(logging.WARNING):
             assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: CLAUDE}) == []
@@ -165,7 +168,9 @@ async def test_none_mode_refuses_an_unlisted_callback_without_redirecting(
     assert "Location" not in resp.headers
 
 
-async def test_none_mode_refusal_is_logged(unified_view_client_factory, caplog):
+async def test_none_mode_refusal_is_logged(
+    unified_view_client_factory: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     """Whoever reads the log can tell why a client keeps failing to sign in."""
     client = await unified_view_client_factory(mode="none")
     with caplog.at_level(logging.WARNING):

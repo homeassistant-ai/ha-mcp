@@ -176,15 +176,26 @@ jobs:
 
       - name: Resolve the release this run publishes
         id: release
+        env:
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           case "$CHANNEL" in
             stable)
-              # The newest vX.Y.Z tag is the release semantic-release just cut;
-              # its commit carries the stamped manifest. Snapshot THAT commit's
-              # component, not master's tip, so later merges never ride a
-              # stable tag. A separate worktree keeps this workflow's own
+              # The release semantic-release cut from the triggering commit is
+              # the first stable tag that contains it; the newest tag could be
+              # a later release when this run waited in the queue. A recovery
+              # dispatch has no trigger and re-tags the newest. That commit
+              # carries the stamped manifest: snapshot ITS component, not
+              # master's tip. A separate worktree keeps this workflow's own
               # scripts: a recovery dispatch may target an older tag.
-              VER=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+              stable_tags() { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V; }
+              VER=""
+              if [ -n "$TRIGGER_SHA" ]; then
+                VER=$(git tag -l 'v*' --contains "$TRIGGER_SHA" | stable_tags | head -n 1)
+              fi
+              if [ -z "$VER" ]; then
+                VER=$(git tag -l 'v*' | stable_tags | tail -n 1)
+              fi
               VER="${VER#v}"
               SRC="$RUNNER_TEMP/release-src"
               git worktree add --quiet --detach "$SRC" "v${VER}"

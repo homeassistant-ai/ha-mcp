@@ -107,7 +107,9 @@ class TestOAuthCallbackEditor:
         )
         assert status and "http://lan.example/cb" in status.group(1)
 
-    def test_restore_default_asks_the_server_to_reset(self, settings_script):
+    def test_restore_default_asks_the_server_to_reset(
+        self, settings_script: str
+    ) -> None:
         result = _oauth_run(
             settings_script,
             {**_OAUTH_STATE, "customized": True},
@@ -125,8 +127,8 @@ class TestOAuthCallbackEditor:
         assert posts == [{"reset": True}]
 
     def test_a_list_that_cannot_load_says_so_instead_of_vanishing(
-        self, settings_script
-    ):
+        self, settings_script: str
+    ) -> None:
         # An expired panel session or a proxy error must not hide the editor
         # without a word.
         result = run_script(
@@ -144,7 +146,7 @@ class TestOAuthCallbackEditor:
         assert not _section_hidden(result.dom)
         assert "HTTP 401" in result.dom
 
-    def test_a_proxy_error_page_reports_its_status(self, settings_script):
+    def test_a_proxy_error_page_reports_its_status(self, settings_script: str) -> None:
         result = _oauth_run(
             settings_script,
             _OAUTH_STATE,

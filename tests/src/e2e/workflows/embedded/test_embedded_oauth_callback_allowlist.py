@@ -9,6 +9,8 @@ answers, with no restart in between.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 import requests
 
@@ -35,8 +37,8 @@ def _authorize(base_url: str, callback: str) -> requests.Response:
 
 
 async def test_a_saved_callback_is_honoured_by_the_next_sign_in(
-    ha_client, ha_container_with_fresh_config
-):
+    ha_client: Any, ha_container_with_fresh_config: dict[str, Any]
+) -> None:
     base_url = ha_container_with_fresh_config["base_url"]
     refused = _authorize(base_url, _CALLBACK)
     assert refused.status_code == 400, refused.text[:200]

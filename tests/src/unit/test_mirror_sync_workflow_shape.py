@@ -106,6 +106,64 @@ class TestMirrorSyncShape:
         assert "git checkout" not in resolve["run"]
         assert '"$SRC/custom_components/ha_mcp_tools"' in stage["run"]
 
+    @pytest.mark.parametrize(
+        ("trigger", "expected"), [("release-of-c0", "1.0.0"), ("", "1.1.0")]
+    )
+    def test_stable_leg_syncs_the_release_its_trigger_cut(
+        self, tmp_path: Path, trigger: str, expected: str
+    ) -> None:
+        # Runs queue: a run for release 1.0.0 that waits while 1.1.0 lands must
+        # still tag 1.0.0. A recovery dispatch (no trigger) re-tags the newest.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repo),
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    *args,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        git("init", "-q", "-b", "master")
+        shas = []
+        for n, tag in enumerate(["", "v1.0.0", "", "v1.1.0"]):
+            git("commit", "-q", "--allow-empty", "-m", str(n))
+            shas.append(git("rev-parse", "HEAD"))
+            if tag:
+                git("tag", tag)
+        resolve = next(
+            s
+            for s in _workflow(_MIRROR)["jobs"]["sync"]["steps"]
+            if s.get("name") == "Resolve the release this run publishes"
+        )
+        output = tmp_path / "out"
+        result = subprocess.run(
+            ["bash", "-e", "-c", resolve["run"]],
+            cwd=repo,
+            env={
+                "PATH": "/usr/bin:/bin",
+                "CHANNEL": "stable",
+                "TRIGGER_SHA": shas[0] if trigger else "",
+                "RUNNER_TEMP": str(tmp_path),
+                "GITHUB_OUTPUT": str(output),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert f"version={expected}" in output.read_text().splitlines()
+
     def test_snapshot_is_stamped(self) -> None:
         stage = next(
             step
