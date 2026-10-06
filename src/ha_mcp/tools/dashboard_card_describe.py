@@ -144,7 +144,8 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
             "The custom card's editor fields could not be inspected; "
             "the card may still work in the browser."
             if card_type.startswith("custom:")
-            else "Home Assistant's editor for this card has no field form; stack, "
-            "grid and conditional cards nest other cards under cards or card."
+            else "No inspectable field form was found for this card."
         )
+        if card_type in {"grid", "horizontal-stack", "vertical-stack", "conditional"}:
+            response["note"] += " This card nests other cards under cards or card."
     return response

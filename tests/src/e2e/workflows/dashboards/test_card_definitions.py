@@ -218,3 +218,65 @@ async def test_componentless_writes_keep_static_card_guidance(mcp_client):
         await safe_call_tool(
             mcp_client, "ha_config_delete_dashboard", {"url_path": path}
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "card_type,options",
+    [
+        ("tile", {"entity": "light.bed_light"}),
+        ("button", {"entity": "light.bed_light"}),
+        ("sensor", {"entity": "sensor.test"}),
+        ("light", {"entity": "light.bed_light"}),
+        ("thermostat", {"entity": "climate.test"}),
+        ("history-graph", {"entities": ["sensor.test"]}),
+        ("picture-entity", {"entity": "light.bed_light"}),
+    ],
+)
+async def test_common_card_coverage_tracks_the_installed_frontend(
+    mcp_client, card_type, options
+):
+    """Stable and nightly beta lanes catch per-editor parser regressions."""
+    if not component_surface_available():
+        return
+    mcp = MCPAssertions(mcp_client)
+    described = await mcp.call_tool_success(
+        "ha_config_get_dashboard",
+        {
+            "describe": True,
+            "card_type": card_type,
+        },
+    )
+    assert described["fields"], f"{card_type} editor form coverage regressed"
+    path = "card-coverage-" + uuid4().hex[:8]
+    try:
+        saved = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": path,
+                "config": {
+                    "views": [
+                        {
+                            "title": "Coverage",
+                            "path": "coverage",
+                            "cards": [
+                                {
+                                    "type": card_type,
+                                    **options,
+                                    "e2e_unknown_option": True,
+                                },
+                            ],
+                        }
+                    ]
+                },
+                "MandatoryBPS": False,
+            },
+        )
+        assert any(
+            f"'e2e_unknown_option' is not a {card_type} card option" in warning
+            for warning in saved.get("warnings", [])
+        ), saved
+    finally:
+        await safe_call_tool(
+            mcp_client, "ha_config_delete_dashboard", {"url_path": path}
+        )

@@ -188,3 +188,17 @@ def test_conflicting_installed_consumer_disables_optional_runtime(monkeypatch):
     )
     with pytest.raises(ValueError, match="another installed package"):
         runtime._check_consumers()
+
+
+def test_core_constraints_cannot_be_overridden_by_the_optional_runtime(
+    tmp_path, monkeypatch
+):
+    import homeassistant
+    from custom_components.ha_mcp_tools import card_runtime as runtime
+
+    monkeypatch.setattr(
+        homeassistant, "__file__", str(tmp_path / "__init__.py"), raising=False
+    )
+    (tmp_path / "package_constraints.txt").write_text("quickjs-ng==0.0.0\n")
+    with pytest.raises(ValueError, match="Home Assistant requires"):
+        runtime._check_core_constraints()
