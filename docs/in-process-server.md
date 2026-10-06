@@ -134,7 +134,8 @@ local:
 The **Conversation-agent tool exposure** option picks the shape agents get:
 
 - **Tool search** (default): a compact API — the pinned tools directly, plus
-  `ha_search_tools` (find tools for a task) and `ha_call_tool` (run one).
+  `ha_search_tools` (finds tools for a task and returns a tool's full schema
+  by name) and `ha_call_tool` (run one).
   Keeps the agent's context small; works with modest local models.
 - **Full catalog**: every exposed tool listed directly with its schema.
   Better tool selection for large-context models, at ~10× the prompt cost.

@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.server.context import Context
 from ha_mcp._vendor.fastmcp.server.transforms import Transform
+from ha_mcp._vendor.fastmcp.server.transforms.search.base import _schema_type
 from ha_mcp._vendor.fastmcp.server.transforms.search.bm25 import BM25SearchTransform
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
@@ -99,6 +100,14 @@ SEARCH_QUERY_DESCRIPTION = (
     "'create automation'. Translate other languages to English first; "
     "entity, area and device names keep their original spelling."
 )
+
+SEARCH_TOOLS_DESCRIPTION = (
+    "Exact tool names whose FULL definition (input schema, annotations) to "
+    "return — the second hop before calling a tool found by query. "
+    "'query' is ignored when this is given."
+)
+
+_TOOL_NOT_FOUND = "Tool not found; search by English keywords to find the right name."
 
 # ``manage`` names one interface that intentionally combines several
 # operations (.gemini/styleguide.md, Tool Naming Convention). Such a tool is
@@ -318,6 +327,41 @@ def _execute_via(proxy: str, tool_name: str) -> str:
     )
 
 
+def _param_type(schema: Any) -> str:
+    """Type label for one parameter; enum values are spelled out inline."""
+    if not isinstance(schema, dict):
+        return _schema_type(schema)
+    branches = schema.get("anyOf") or schema.get("oneOf") or [schema]
+    values: list[Any] = []
+    nullable = False
+    for branch in branches:
+        if not isinstance(branch, dict):
+            continue
+        nullable = nullable or branch.get("type") == "null"
+        values.extend(branch.get("enum") or [])
+        if "const" in branch:
+            values.append(branch["const"])
+    if not values:
+        return _schema_type(schema)
+    labels = dict.fromkeys(
+        v if isinstance(v, str) else json.dumps(v) for v in values if v is not None
+    )
+    return "|".join(labels) + ("?" if nullable or None in values else "")
+
+
+def _compact_params(schema: dict[str, Any]) -> str:
+    """One line naming every parameter with its type and required marker."""
+    props = schema.get("properties") or {}
+    required = set(schema.get("required") or [])
+    return (
+        "; ".join(
+            f"{name} ({_param_type(field)}{', required' if name in required else ''})"
+            for name, field in props.items()
+        )
+        or "none"
+    )
+
+
 def _read_only_mode() -> bool:
     """Whether Read Only Mode is on — consulted per request, like its filter."""
     from ..read_only import is_read_only
@@ -472,9 +516,10 @@ class CategorizedSearchTransform(BM25SearchTransform):
     The unified ``ha_search_tools`` searches across ALL tools regardless of
     category, pinned ones included (issue #2576: a pinned tool vanishing
     from search reads as "no such capability" to a small model). Hidden
-    hits carry their full definition and annotations so the LLM can pick a
-    proxy; pinned hits are rendered as a name-only stub pointing back at the
-    tool list, and never consume one of the ``max_results`` slots.
+    hits are compact (description, one-line params, proxy hint), and
+    ``tools=[...]`` returns their full definitions. Pinned hits are rendered
+    as a name-only stub pointing back at the tool list, and never consume
+    one of the ``max_results`` slots.
     """
 
     def __init__(
@@ -573,15 +618,36 @@ class CategorizedSearchTransform(BM25SearchTransform):
         transform = self
 
         async def search_tools(
-            query: Annotated[str, SEARCH_QUERY_DESCRIPTION],
+            query: Annotated[str, SEARCH_QUERY_DESCRIPTION] = "",
+            tools: Annotated[list[str] | None, SEARCH_TOOLS_DESCRIPTION] = None,
             ctx: Context = None,  # type: ignore[assignment]
         ) -> list[dict[str, Any]]:
             """Search for tools using English keywords.
 
-            Returns matching tool definitions ranked by relevance,
-            in the same format as list_tools.
+            Returns compact matches ranked by relevance; pass ``tools`` to
+            get the full definitions of named tools.
             """
             catalog = await transform.get_tool_catalog(ctx)
+            if tools:
+                return transform._render_full(catalog, tools)
+            if not query.strip():
+                raise ToolError(
+                    json.dumps(
+                        create_error_response(
+                            code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            message=(
+                                "Pass 'query' (English keywords) or 'tools' "
+                                "(exact tool names)."
+                            ),
+                            suggestions=[
+                                "ha_search_tools(query='create helper') finds tools.",
+                                "ha_search_tools(tools=['<name>']) returns a "
+                                "tool's full input schema.",
+                            ],
+                        )
+                    ),
+                    log_level=TOOL_ERROR_LOG_LEVEL,
+                )
             results = await transform._search(catalog, query)
             return await transform._render_results(results)
 
@@ -610,44 +676,68 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 slots -= 1
         return results
 
-    async def _render_results(self, tools: Sequence[Tool]) -> list[dict[str, Any]]:
-        """Serialize search results with ``execute_via`` hints."""
+    def _execute_via_hint(self, tool: Tool) -> str:
+        """Call form(s) for *tool* through every proxy that reaches it."""
         proxy_map: dict[Capability, str] = {
             "read": self._call_read_name,
             "write": self._call_write_name,
             "delete": self._call_delete_name,
         }
-        results = []
-        for tool in tools:
-            if tool.name in self._always_visible:
-                # The client already holds this tool's full definition —
-                # repeating a 5-9KB schema here is what overflows small
-                # context windows (#2576).
-                results.append(
-                    {
-                        "name": tool.name,
-                        "pinned": True,
-                        "execute_via": (
-                            f"{tool.name} is already in your tool list — "
-                            "call it directly with the schema you have; "
-                            "no search or proxy needed."
-                        ),
-                    }
-                )
-                continue
-            data = tool.to_mcp_tool().model_dump(
-                mode="json", exclude_none=True, by_alias=True
-            )
-            routes = _advertised_routes(tool.name, _categorize_tool(tool))
-            if len(routes) == 1:
-                data["execute_via"] = _execute_via(proxy_map[routes[0]], tool.name)
+        routes = _advertised_routes(tool.name, _categorize_tool(tool))
+        if len(routes) == 1:
+            return _execute_via(proxy_map[routes[0]], tool.name)
+        hint = "; ".join(
+            f"{route} actions: {_execute_via(proxy_map[route], tool.name)}"
+            for route in routes
+        )
+        return hint[:1].upper() + hint[1:]
+
+    @staticmethod
+    def _pinned_stub(tool: Tool) -> dict[str, Any]:
+        # The client already holds this tool's full definition — repeating a
+        # 5-9KB schema here is what overflows small context windows (#2576).
+        return {
+            "name": tool.name,
+            "pinned": True,
+            "execute_via": (
+                f"{tool.name} is already in your tool list — "
+                "call it directly with the schema you have; "
+                "no search or proxy needed."
+            ),
+        }
+
+    async def _render_results(self, tools: Sequence[Tool]) -> list[dict[str, Any]]:
+        """Serialize search hits as compact entries with ``execute_via`` hints."""
+        return [
+            self._pinned_stub(tool)
+            if tool.name in self._always_visible
+            else {
+                "name": tool.name,
+                "description": tool.description or "",
+                "params": _compact_params(tool.parameters),
+                "execute_via": self._execute_via_hint(tool),
+            }
+            for tool in tools
+        ]
+
+    def _render_full(
+        self, catalog: Sequence[Tool], names: list[str]
+    ) -> list[dict[str, Any]]:
+        """Full definitions of *names* from *catalog*, in the order given."""
+        by_name = {tool.name: tool for tool in catalog}
+        results: list[dict[str, Any]] = []
+        for name in names:
+            tool = by_name.get(name)
+            if tool is None:
+                results.append({"name": name, "error": _TOOL_NOT_FOUND})
+            elif tool.name in self._always_visible:
+                results.append(self._pinned_stub(tool))
             else:
-                hint = "; ".join(
-                    f"{route} actions: {_execute_via(proxy_map[route], tool.name)}"
-                    for route in routes
+                data = tool.to_mcp_tool().model_dump(
+                    mode="json", exclude_none=True, by_alias=True
                 )
-                data["execute_via"] = hint[:1].upper() + hint[1:]
-            results.append(data)
+                data["execute_via"] = self._execute_via_hint(tool)
+                results.append(data)
         return results
 
     def _make_categorized_proxy(

@@ -222,13 +222,13 @@ class TestRenderResults:
         assert "ha_remove_area_or_floor" in results[0]["execute_via"]
 
     @pytest.mark.anyio
-    async def test_preserves_standard_fields(self, transform):
-        """Should preserve name, description, annotations, inputSchema."""
+    async def test_hit_is_compact(self, transform):
+        """A hit carries name, description, params and proxy, no schema."""
         tools = [_make_tool("ha_get_state", read_only=True, description="Get state")]
         results = await transform._render_results(tools)
-        assert results[0]["name"] == "ha_get_state"
-        assert "description" in results[0]
-        assert "inputSchema" in results[0]
+        assert set(results[0]) == {"name", "description", "params", "execute_via"}
+        assert results[0]["description"] == "Get state"
+        assert "inputSchema" not in results[0]
 
     @pytest.mark.anyio
     async def test_multiple_tools(self, transform):

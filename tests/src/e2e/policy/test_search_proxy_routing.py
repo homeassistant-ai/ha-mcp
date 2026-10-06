@@ -160,3 +160,28 @@ async def test_delete_proxy_runs_a_manage_tools_read_action(toolsearch_mcp):
         {"name": "ha_manage_energy_prefs", "arguments": {"mode": "get"}},
     )
     assert body.get("success") is True, body
+
+
+@pytest.mark.asyncio
+async def test_full_definition_hop_returns_the_schema_the_compact_hit_omits(
+    toolsearch_mcp,
+):
+    """A keyword hit is compact; ``tools=[...]`` returns the real tool's
+    full schema with the same three-proxy hint."""
+    hits = parse_mcp_result(
+        await toolsearch_mcp.call_tool(
+            "ha_search_tools", {"query": "energy dashboard preferences"}
+        )
+    )
+    hit = next(e for e in hits if e.get("name") == "ha_manage_energy_prefs")
+    assert "params" in hit and "inputSchema" not in hit, hit
+
+    body = parse_mcp_result(
+        await toolsearch_mcp.call_tool(
+            "ha_search_tools", {"tools": ["ha_manage_energy_prefs"]}
+        )
+    )
+    assert isinstance(body, list) and len(body) == 1, body
+    [entry] = body
+    assert "mode" in entry["inputSchema"]["properties"], entry
+    assert entry["execute_via"] == hit["execute_via"]

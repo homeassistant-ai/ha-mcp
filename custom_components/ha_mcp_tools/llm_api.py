@@ -13,7 +13,8 @@ registered; default is tool-search only):
 
 * **tool search** — the agent gets a tiny catalog: the server's pinned tools
   mirrored directly, plus two meta-tools synthesized here: ``ha_search_tools``
-  (find tools by task) and ``ha_call_tool`` (execute a discovered tool). This
+  (find tools by task, then fetch one's full schema by name; see
+  :mod:`llm_api_search`) and ``ha_call_tool`` (execute a discovered tool). This
   keeps per-turn context small — the shape context-limited models need.
 * **full** — every exposed tool is mirrored directly into the agent's tool
   list, one schema each.
@@ -73,6 +74,9 @@ from .const import (
     EXPOSURE_TOOL_SEARCH,
     OPT_LLM_API_EXPOSURE,
 )
+from .llm_api_search import CALL_TOOL_NAME as _CALL_TOOL_NAME
+from .llm_api_search import SEARCH_TOOL_NAME as _SEARCH_TOOL_NAME
+from .llm_api_search import HaMcpSearchTool
 from .llm_tool_exposure import partition_tools
 from .llm_tool_metadata import declare_metadata, tool_hints, tool_result, tool_title
 
@@ -94,15 +98,6 @@ _LIST_TOOLS_TIMEOUT_SECONDS = 10.0
 # remote-server integration would allow. The conversation agent shows a spinner
 # for the duration, so err generous rather than kill a legitimate slow tool.
 _CALL_TOOL_TIMEOUT_SECONDS = 300.0
-
-
-# Names of the meta-tools synthesized for the tool-search mode. ha_search_tools
-# deliberately matches the server's own tool-search terminology; if the server
-# itself runs ENABLE_TOOL_SEARCH its identically-named tool is excluded from
-# mirroring/search results to avoid duplicates.
-_SEARCH_TOOL_NAME = "ha_search_tools"
-_CALL_TOOL_NAME = "ha_call_tool"
-_SEARCH_RESULT_LIMIT = 8
 
 
 @cache
@@ -349,10 +344,13 @@ _TOOL_SEARCH_PROMPT = (
     "This assistant uses search-based tool discovery: most tools are NOT "
     "listed directly.\n"
     f"1. Call {_SEARCH_TOOL_NAME}(query=...) to find tools for the task; "
-    "results include each tool's name, description, and input schema.\n"
-    f"2. Execute a discovered tool with {_CALL_TOOL_NAME}(name=..., "
-    "arguments={...}) — discovered tools are NOT directly callable here.\n"
-    "3. The few tools listed directly can be called as usual.\n"
+    "results are compact: each tool's name, description, and params.\n"
+    f"2. Call {_SEARCH_TOOL_NAME}(tools=[...]) for the full input schema of "
+    "the tool you will call — required before calling: compact params omit "
+    "nested fields, defaults, and descriptions.\n"
+    f"3. Execute it with {_CALL_TOOL_NAME}(name=..., arguments={{...}}) — "
+    "discovered tools are NOT directly callable here.\n"
+    "4. The few tools listed directly can be called as usual.\n"
     "Search once per task, not per call — tool names stay valid all "
     "conversation."
 )
@@ -646,81 +644,6 @@ def _tool_input_schema(tool: Any) -> Any:
     if schema is None:
         schema = getattr(tool, "inputSchema", None)
     return schema
-
-
-def _search_score(query_words: list[str], name: str, description: str) -> int:
-    """Score a tool against the query (simple word overlap + substring)."""
-    haystack = f"{name} {description}".lower()
-    name_lower = name.lower()
-    score = 0
-    for word in query_words:
-        if word in name_lower:
-            score += 3
-        elif word in haystack:
-            score += 1
-    return score
-
-
-class HaMcpSearchTool(llm.Tool):
-    """Meta-tool: find ha-mcp tools relevant to a task (tool-search mode).
-
-    Searches only the EXPOSED catalog snapshot taken at instance build, so a
-    hidden tool can never appear in results.
-    """
-
-    name = _SEARCH_TOOL_NAME
-    description = (
-        "Search the Home Assistant MCP toolset for tools relevant to a task. "
-        "Returns each match's name, description, and input schema. Execute "
-        f"matches with {_CALL_TOOL_NAME}."
-    )
-    parameters = vol.Schema({vol.Required("query"): str})
-
-    def __init__(self, catalog: list[dict[str, Any]]) -> None:
-        """Hold the exposed-catalog snapshot (name/description/schema dicts)."""
-        self._catalog = catalog
-        declare_metadata(
-            self,
-            title="Search HA-MCP Tools",
-            hints={
-                "readOnlyHint": True,
-                "destructiveHint": False,
-                "idempotentHint": True,
-                "openWorldHint": False,
-            },
-        )
-
-    async def async_call(
-        self,
-        hass: HomeAssistant,
-        tool_input: llm.ToolInput,
-        llm_context: llm.LLMContext,
-    ) -> JsonObjectType:
-        """Return the top-scoring exposed tools for the query."""
-        query_words = [
-            w for w in str(tool_input.tool_args.get("query", "")).lower().split() if w
-        ]
-        scored = sorted(
-            (
-                (_search_score(query_words, t["name"], t["description"]), t)
-                for t in self._catalog
-            ),
-            key=lambda pair: pair[0],
-            reverse=True,
-        )
-        results = [t for score, t in scored[:_SEARCH_RESULT_LIMIT] if score > 0]
-        if not results:
-            return tool_result(
-                {
-                    "results": [],
-                    "message": (
-                        "No matching tools. Try different task words (e.g. "
-                        "'automation', 'light', 'history', 'dashboard')."
-                    ),
-                },
-                error=False,
-            )
-        return tool_result({"results": results}, error=False)
 
 
 class HaMcpCallTool(llm.Tool):
