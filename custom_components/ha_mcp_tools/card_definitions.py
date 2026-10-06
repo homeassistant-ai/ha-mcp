@@ -234,7 +234,7 @@ def _stored_fields(
         layout = isinstance(children, list) and (not name or field.get("flatten"))
         if types is not None and name and not layout and name not in types:
             continue  # Editor-only values are not accepted in stored config.
-        expected = (types or {}).get(name, {})
+        expected = (types or {}).get(name, {}) if isinstance(name, str) else {}
         if isinstance(children, list):
             field["schema"] = _stored_fields(
                 children, types if layout else expected.get("schema")

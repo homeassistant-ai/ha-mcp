@@ -30,8 +30,7 @@ async def test_card_fields_come_from_the_card_editor(mcp_client):
     )
     fields = {f["name"]: f for f in tile["fields"]}
     assert fields["entity"]["type"] == "entity"
-    content = {f["name"]: f for f in fields["content"]["fields"]}
-    assert content["color"]["description"], content["color"]
+    assert fields["color"]["description"], fields["color"]
     assert tile["description"]
 
     listed = await mcp.call_tool_success("ha_config_get_dashboard", {"describe": True})
@@ -315,6 +314,7 @@ async def test_described_fields_match_stored_card_configuration(mcp_client):
                     "views": [
                         {
                             "title": "Fields",
+                            "path": "fields",
                             "cards": [
                                 {
                                     "type": "tile",
