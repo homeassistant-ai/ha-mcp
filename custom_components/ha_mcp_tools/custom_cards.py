@@ -35,6 +35,15 @@ LINKEDOM_VERSION = "0.18.13"
 LINKEDOM_INTEGRITY = "sha512-ES/o9qotMpzpN2MHs+Iq/JcVoOj8Fa5wiQYrTdFpvAnwXL0g66XHHUc9WUMk6nAlBtGsFQ24ne+SYnvnaQ2FSw=="
 LINKEDOM_URL = f"https://registry.npmjs.org/linkedom/-/linkedom-{LINKEDOM_VERSION}.tgz"
 _RETRY_AFTER_S = 600.0
+# A card file is the user's own installed frontend code, but it still runs in
+# Home Assistant's process: each sandbox and the whole set are capped, and a
+# card that spins (endless promises or timers) is cut off rather than awaited.
+_BUNDLE_MEMORY = 32 * 1024 * 1024
+_TOTAL_MEMORY = 128 * 1024 * 1024
+_MAX_SOURCE_BYTES = 8 * 1024 * 1024
+_CALL_SECONDS = 5
+_SETTLE_JOBS = 20_000
+_SETTLE_SECONDS = 5.0
 _RESOURCE_PREFIXES = (("/hacsfiles/", "www/community"), ("/local/", "www"))
 # Errors a card raises on purpose are Error or StructError; these come from a
 # browser API the sandbox lacks, so they say nothing about the config.
@@ -201,8 +210,8 @@ class _Bundle:
         self.engine = quickjs.Function(
             "card", _RUNTIME_JS.replace("__SANDBOX", repr(list(_SANDBOX_ERRORS)))
         )
-        self.engine.set_memory_limit(256 * 1024 * 1024)
-        self.engine.set_time_limit(10)
+        self.engine.set_memory_limit(_BUNDLE_MEMORY)
+        self.engine.set_time_limit(_CALL_SECONDS)
         for step, payload in (("eval", dom), ("boot", None), ("eval", source)):
             error = self.engine(step, payload).get("error")
             if error:
@@ -214,22 +223,41 @@ class _Bundle:
         for tag in self.tags:
             self.engine("prepare", {"tag": tag})
         self._settle()
+        self._unresponsive: set[str] = set()
 
     def _settle(self) -> None:
         """Run the bundle's queued promises and timers (lazy editors load here)."""
-        for _ in range(50):
-            while self.engine.execute_pending_job():
-                pass
-            if not self.engine("pump", None).get("value"):
+        deadline = time.monotonic() + _SETTLE_SECONDS
+        jobs = 0
+        while jobs < _SETTLE_JOBS and time.monotonic() < deadline:
+            if self.engine.execute_pending_job():
+                jobs += 1
+            elif not self.engine("pump", None).get("value"):
                 return
 
+    @property
+    def memory(self) -> int:
+        return int(self.engine.memory().get("memory_used_size", 0))
+
     def check(self, tag: str, config: dict[str, Any]) -> list[str]:
-        return list(
-            self.engine("check", {"tag": tag, "config": config}).get("value") or []
-        )
+        """The card's own objections; none (from then on) once it times out."""
+        if tag in self._unresponsive:
+            return []
+        try:
+            answer = self.engine("check", {"tag": tag, "config": config})
+        except Exception:
+            _LOGGER.debug("Custom card %s did not answer", tag, exc_info=True)
+            self._unresponsive.add(tag)
+            return []
+        return list(answer.get("value") or [])
 
     def form(self, tag: str) -> list[Any] | None:
-        value = self.engine("form", {"tag": tag, "config": {"type": f"custom:{tag}"}})
+        try:
+            value = self.engine(
+                "form", {"tag": tag, "config": {"type": f"custom:{tag}"}}
+            )
+        except Exception:  # noqa: BLE001
+            return None
         form = value.get("value")
         return form if isinstance(form, list) else None
 
@@ -242,21 +270,29 @@ class CustomCards:
         self._bundles: dict[Path, tuple[float, _Bundle | None]] = {}
 
     def refresh(self, files: list[Path]) -> None:
+        """Load new or changed resource files; drop removed ones."""
+        for gone in set(self._bundles) - set(files):
+            del self._bundles[gone]
         for path in files:
             try:
-                mtime = path.stat().st_mtime
+                stat = path.stat()
             except OSError:
                 continue
-            if path in self._bundles and self._bundles[path][0] == mtime:
+            if path in self._bundles and self._bundles[path][0] == stat.st_mtime:
                 continue
-            try:
-                bundle: _Bundle | None = _Bundle(
-                    self._dom, path.read_text(encoding="utf-8")
-                )
-            except Exception:
-                _LOGGER.debug("Custom card bundle %s did not load", path, exc_info=True)
-                bundle = None
-            self._bundles[path] = (mtime, bundle)
+            self._bundles.pop(path, None)
+            self._bundles[path] = (stat.st_mtime, self._load(path, stat.st_size))
+
+    def _load(self, path: Path, size: int) -> _Bundle | None:
+        used = sum(b.memory for _, b in self._bundles.values() if b is not None)
+        if size > _MAX_SOURCE_BYTES or used >= _TOTAL_MEMORY:
+            _LOGGER.debug("Custom card bundle %s skipped: size or memory cap", path)
+            return None
+        try:
+            return _Bundle(self._dom, path.read_text(encoding="utf-8"))
+        except Exception:
+            _LOGGER.debug("Custom card bundle %s did not load", path, exc_info=True)
+            return None
 
     def _owner(self, tag: str) -> _Bundle | None:
         for _, bundle in self._bundles.values():
