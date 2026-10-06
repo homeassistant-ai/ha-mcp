@@ -1893,9 +1893,7 @@ _ALL_COMMANDS = [
 ]
 
 # Minimal well-formed message body per command (Required fields) so the admin
-# gate / async_response wrappers reach the pure handler. ``states`` requires
-# ``entity_ids``; ``blueprint_get`` requires ``domain`` + ``path``; ``device_get``
-# requires ``device_id``.
+# gate / async_response wrappers reach the pure handler.
 _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     "ha_mcp_tools/states": {"entity_ids": []},
     "ha_mcp_tools/blueprint_get": {"domain": "automation", "path": "x.yaml"},
