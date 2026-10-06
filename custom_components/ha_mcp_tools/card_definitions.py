@@ -242,7 +242,7 @@ def _stored_fields(
         else:
             selector = field.get("selector", {})
             kind = next(iter(selector), None) if isinstance(selector, dict) else None
-            stored_kind = primitive.get(expected.get("type"))
+            stored_kind = primitive.get(expected.get("type", ""))
             if kind in primitive.values() and stored_kind and kind != stored_kind:
                 field["selector"] = {stored_kind: {}}
                 field.pop("default", None)  # The editor default has the old type.
