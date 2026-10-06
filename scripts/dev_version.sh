@@ -26,7 +26,7 @@ else
 fi
 
 # renovate: datasource=pypi depName=python-semantic-release
-PSR_VERSION="10.6.2"
+PSR_VERSION="10.7.0"
 
 # semantic-release logs to stderr; keep it for the failure messages only.
 psr_log=$(mktemp)

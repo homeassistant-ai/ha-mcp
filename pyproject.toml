@@ -415,7 +415,7 @@ dev = [
     # Renders templates/CHANGELOG.md.j2 in test_changelog_template.py. Keep the
     # version equal to the action pinned in .github/workflows/semver-release.yml,
     # so the test renders with the release that writes the real notes.
-    "python-semantic-release==10.6.2",
+    "python-semantic-release==10.7.0",
     # Provides `uv run hamcp-test-env` without shipping it in the ha-mcp wheel.
     "hamcp-test-env",
 ]
