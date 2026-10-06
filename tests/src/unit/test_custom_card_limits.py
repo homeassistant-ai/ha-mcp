@@ -12,7 +12,10 @@ import pytest
 from .test_card_definitions import cc
 
 
-def test_all_quickjs_context_operations_use_the_creating_thread(monkeypatch) -> None:
+@pytest.mark.parametrize("module", [False, True])
+def test_all_quickjs_context_operations_use_the_creating_thread(
+    monkeypatch, module
+) -> None:
     import quickjs
 
     context_type = quickjs.Context
@@ -37,10 +40,15 @@ def test_all_quickjs_context_operations_use_the_creating_thread(monkeypatch) -> 
         Path(__file__).parents[2]
         / "initial_test_state/.storage/ha_mcp_tools/linkedom-0.18.13.js"
     ).read_text(encoding="utf-8")
-    bundle = cc._Bundle(
-        dom, "customElements.define('a-card', class extends HTMLElement {});"
+    source = (
+        "globalThis.modeOK = this === "
+        + ("undefined;" if module else "globalThis;")
+        + ("void import.meta; export " if module else "")
+        + "class Card extends HTMLElement {setConfig(c) {if (!modeOK) throw new Error('wrong mode');}}"
+        + "customElements.define('a-card', Card);"
     )
-    bundle.check("a-card", {})
+    bundle = cc._Bundle(dom, source, module=module)
+    assert bundle.check("a-card", {}) == []
     bundle.form("a-card")
     assert bundle.memory > 0
     assert len(set(calls)) == 1

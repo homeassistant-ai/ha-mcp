@@ -70,6 +70,44 @@ def test_missing_and_unknown_types_are_flagged() -> None:
     ]
 
 
+def test_header_and_custom_children_exclude_non_card_metadata() -> None:
+    config = {
+        "views": [
+            {
+                "header": {"card": {"type": "markdown"}},
+                "cards": [
+                    {
+                        "type": "custom:button-card",
+                        "custom_fields": {
+                            "label": "plain text",
+                            "nested": {
+                                "card": {
+                                    "type": "custom:state-switch",
+                                    "states": {
+                                        "on": {
+                                            "type": "tile",
+                                            "features": [{"type": "light-brightness"}],
+                                        },
+                                    },
+                                }
+                            },
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    cards = cd._cards(config)
+    assert [card["type"] for _, card in cards] == [
+        "markdown",
+        "custom:button-card",
+        "custom:state-switch",
+        "tile",
+    ]
+    assert cards[0][0] == "views[0].header.card"
+    assert cards[-1][0] == 'views[0].cards[0].custom_fields["nested"].card.states["on"]'
+
+
 def test_warnings_are_capped() -> None:
     definitions = _definitions(set(), {})
     cards = [{"type": f"t{i}"} for i in range(25)]
@@ -378,6 +416,53 @@ def test_removed_resources_are_unloaded(tmp_path, monkeypatch) -> None:
     assert custom.check("a-card", {"type": "custom:a-card"}) is not None
     custom.refresh([])
     assert custom.check("a-card", {"type": "custom:a-card"}) is None
+
+
+def test_deleted_resource_files_are_evicted(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "deleted.js"
+    path.write_text("// card")
+    custom = cc.CustomCards("dom")
+    monkeypatch.setattr(
+        cc, "_Bundle", MagicMock(return_value=MagicMock(tags=["a-card"]))
+    )
+    custom.refresh([path])
+    assert custom._owner("a-card") is not None
+    path.unlink()
+    custom.refresh([path])  # The resource registration still exists.
+    assert custom._owner("a-card") is None
+
+
+def test_capacity_skipped_resources_retry_without_file_changes(
+    tmp_path, monkeypatch
+) -> None:
+    files = [tmp_path / f"card-{i}.js" for i in range(2)]
+    for path in files:
+        path.write_text("// card")
+    monkeypatch.setattr(cc, "_TOTAL_MEMORY", cc._BUNDLE_MEMORY)
+    factory = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(cc, "_Bundle", factory)
+    custom = cc.CustomCards("dom")
+    custom.refresh(files)
+    assert custom._bundles[files[1]][1] is None
+    custom.refresh(files[1:])
+    assert custom._bundles[files[1]][1] is not None
+    assert factory.call_count == 2
+
+
+def test_failed_resources_stay_cached_but_type_changes_reload(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "broken.js"
+    path.write_text("invalid code")
+    factory = MagicMock(side_effect=ValueError("bad script"))
+    monkeypatch.setattr(cc, "_Bundle", factory)
+    custom = cc.CustomCards("dom")
+    custom.refresh([path])
+    custom.refresh([path])
+    assert factory.call_count == 1  # Do not retry broken code on every request.
+    custom.refresh([path], {path})
+    assert factory.call_count == 2
+    assert factory.call_args.kwargs == {"module": True}
 
 
 def test_oversized_card_files_are_not_run(tmp_path, monkeypatch) -> None:

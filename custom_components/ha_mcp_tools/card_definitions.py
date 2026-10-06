@@ -479,15 +479,41 @@ def _load_strings(root: Path) -> dict[str, str]:
     return {}
 
 
-def _walk_card(path: str, card: Any, found: list[tuple[str, dict[str, Any]]]) -> None:
-    if not isinstance(card, dict):
+def _walk_card(
+    path: str,
+    card: Any,
+    found: list[tuple[str, dict[str, Any]]],
+    depth: int = 0,
+    *,
+    container: bool = False,
+) -> None:
+    if not isinstance(card, dict) or depth > 50:
         return
-    found.append((path, card))
-    for i, child in enumerate(card.get("cards") or []):
-        _walk_card(f"{path}.cards[{i}]", child, found)
+    if not container or "type" in card:
+        found.append((path, card))
+    children = card.get("cards")
+    for i, child in enumerate(children if isinstance(children, list) else []):
+        _walk_card(f"{path}.cards[{i}]", child, found, depth + 1)
     # entity-filter's ``card`` holds options for its rows, not a card.
-    if card.get("type") == "conditional":
-        _walk_card(f"{path}.card", card.get("card"), found)
+    if (
+        card.get("type") == "conditional"
+        or str(card.get("type", "")).startswith("custom:")
+        or container
+    ):
+        _walk_card(f"{path}.card", card.get("card"), found, depth + 1)
+    # Match the search walk's named containers; field wrappers are not cards.
+    for key in ("custom_fields", "states"):
+        named = card.get(key)
+        if isinstance(named, dict):
+            for name, child in named.items():
+                if isinstance(name, str):
+                    _walk_card(
+                        f"{path}.{key}[{json.dumps(name)}]",
+                        child,
+                        found,
+                        depth + 1,
+                        container=key == "custom_fields",
+                    )
 
 
 def _cards(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
@@ -497,6 +523,9 @@ def _cards(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     for v, view in enumerate(views if isinstance(views, list) else []):
         if not isinstance(view, dict):
             continue
+        header = view.get("header")
+        if isinstance(header, dict):
+            _walk_card(f"views[{v}].header.card", header.get("card"), found)
         for i, card in enumerate(view.get("cards") or []):
             _walk_card(f"views[{v}].cards[{i}]", card, found)
         for s, section in enumerate(view.get("sections") or []):

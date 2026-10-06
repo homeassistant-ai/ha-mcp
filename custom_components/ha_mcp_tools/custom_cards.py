@@ -207,7 +207,7 @@ def dom_script(tarball: bytes) -> str:
 class _Bundle:
     """One resource file running in its own sandbox."""
 
-    def __init__(self, dom: str, source: str) -> None:
+    def __init__(self, dom: str, source: str, *, module: bool = False) -> None:
         import quickjs
 
         self.engine = quickjs.Function(
@@ -218,11 +218,16 @@ class _Bundle:
         self._context_call("set_memory_limit", _BUNDLE_MEMORY)
         self._context_call("set_time_limit", _CALL_SECONDS)
         self._prepare_deadline = time.monotonic() + _PREPARE_SECONDS
-        for step, payload in (("eval", dom), ("boot", None), ("eval", source)):
+        for step, payload in (("eval", dom), ("boot", None)):
             self._limit_preparation()
             error = self.engine(step, payload).get("error")
             if error:
                 raise ValueError(error)
+        self._limit_preparation()
+        if module:
+            self._context_call("module", source)
+        elif error := self.engine("eval", source).get("error"):
+            raise ValueError(error)
         self._settle()
         listed = self.engine("cards", None)["value"]
         self.tags: list[str] = listed["tags"]
@@ -237,9 +242,8 @@ class _Bundle:
     def _context_call(self, method: str, *args: Any) -> Any:
         # quickjs-ng 0.17 dispatches Function calls, but its context methods
         # run on the caller. Use the SAME executor that created its runtime.
-        return self.engine._threadpool.submit(
-            getattr(self.engine, method), *args
-        ).result()
+        target = self.engine._context if method == "module" else self.engine
+        return self.engine._threadpool.submit(getattr(target, method), *args).result()
 
     def _limit_preparation(self) -> None:
         remaining = self._prepare_deadline - time.monotonic()
@@ -291,32 +295,54 @@ class CustomCards:
     def __init__(self, dom: str) -> None:
         self._dom = dom
         self._bundles: dict[Path, tuple[float, _Bundle | None]] = {}
+        self._modules: set[Path] = set()
+        self._capacity_skipped: set[Path] = set()
 
-    def refresh(self, files: list[Path]) -> None:
+    def refresh(self, files: list[Path], modules: set[Path] | None = None) -> None:
         """Load new or changed resource files; drop removed ones."""
+        module_paths = modules or set()
+        for changed in self._modules ^ module_paths:
+            self._bundles.pop(changed, None)
+        self._modules = set(module_paths)
+        self._capacity_skipped.intersection_update(files)
         for gone in set(self._bundles) - set(files):
             del self._bundles[gone]
         for path in files:
             try:
                 stat = path.stat()
             except OSError:
+                self._bundles.pop(path, None)
+                self._capacity_skipped.discard(path)
                 continue
-            if path in self._bundles and self._bundles[path][0] == stat.st_mtime:
+            if (
+                path in self._bundles
+                and self._bundles[path][0] == stat.st_mtime
+                and path not in self._capacity_skipped
+            ):
                 continue
             self._bundles.pop(path, None)
             self._bundles[path] = (stat.st_mtime, self._load(path, stat.st_size))
 
     def _load(self, path: Path, size: int) -> _Bundle | None:
+        self._capacity_skipped.discard(path)
         # Reserve each runtime's full allowance, including heap growth in later
         # check/form calls. Measuring current heaps only cannot enforce the cap.
         reserved = sum(
             _BUNDLE_MEMORY for _, b in self._bundles.values() if b is not None
         )
-        if size > _MAX_SOURCE_BYTES or reserved + _BUNDLE_MEMORY > _TOTAL_MEMORY:
-            _LOGGER.debug("Custom card bundle %s skipped: size or memory cap", path)
+        if size > _MAX_SOURCE_BYTES:
+            _LOGGER.debug("Custom card bundle %s skipped: source size cap", path)
+            return None
+        if reserved + _BUNDLE_MEMORY > _TOTAL_MEMORY:
+            self._capacity_skipped.add(path)
+            _LOGGER.debug("Custom card bundle %s skipped: memory cap", path)
             return None
         try:
-            return _Bundle(self._dom, path.read_text(encoding="utf-8"))
+            return _Bundle(
+                self._dom,
+                path.read_text(encoding="utf-8"),
+                module=path in self._modules,
+            )
         except Exception:
             _LOGGER.debug("Custom card bundle %s did not load", path, exc_info=True)
             return None
@@ -401,20 +427,20 @@ def _write_cache(cache: Path, dom: str) -> None:
     partial.replace(cache)
 
 
-async def _async_resource_files(hass: HomeAssistant) -> list[Path]:
+async def _async_resource_files(hass: HomeAssistant) -> dict[Path, bool]:
     from .websocket_api.dashboards import _lovelace_container
 
     resources = getattr(_lovelace_container(hass), "resources", None)
     if resources is None:
-        return []
+        return {}
     await resources.async_get_info()  # loads a storage collection on first use
     items = resources.async_items()
     config_dir = Path(hass.config.config_dir)
-    files = []
+    files = {}
     for item in items or []:
         if item.get("type") in ("module", "js") and isinstance(item.get("url"), str):
             if (path := resource_path(config_dir, item["url"])) is not None:
-                files.append(path)
+                files[path] = item["type"] == "module"
     return files
 
 
@@ -444,7 +470,11 @@ async def _async_refresh(hass: HomeAssistant) -> CustomCards | None:
                 if dom is None:
                     return None
                 _custom = CustomCards(dom)
-            await hass.async_add_executor_job(_custom.refresh, files)
+            await hass.async_add_executor_job(
+                _custom.refresh,
+                list(files),
+                {path for path, module in files.items() if module},
+            )
         except Exception:
             _LOGGER.debug("Custom cards are unavailable", exc_info=True)
         return _custom

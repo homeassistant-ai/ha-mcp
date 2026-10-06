@@ -61,7 +61,40 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
             "ha_config_set_dashboard",
             {
                 "url_path": path,
-                "config": {"views": [{"title": "Checks", "cards": cards}]},
+                "config": {
+                    "views": [
+                        {"title": "Checks", "cards": cards},
+                        {
+                            "title": "Nested",
+                            "type": "sections",
+                            "header": {"card": {"type": "no-such-header"}},
+                            "sections": [
+                                {
+                                    "type": "grid",
+                                    "cards": [
+                                        {
+                                            "type": "custom:button-card",
+                                            "custom_fields": {
+                                                "nested": {
+                                                    "card": {
+                                                        "type": "no-such-field-card"
+                                                    }
+                                                },
+                                                "text": "Not a card",
+                                            },
+                                        },
+                                        {
+                                            "type": "custom:state-switch",
+                                            "states": {
+                                                "on": {"type": "no-such-state-card"},
+                                            },
+                                        },
+                                    ],
+                                }
+                            ],
+                        },
+                    ]
+                },
                 "MandatoryBPS": False,
             },
         )
@@ -73,6 +106,10 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
         assert "'colour' is not a tile card option; did you mean 'color'?" in warnings
         assert "views[0].cards[2]: unknown card type 'no-such-card'" in warnings
         assert "views[0].cards[3].cards[0] (button): 'entitty'" in warnings
+        assert "views[1].header.card: unknown card type 'no-such-header'" in warnings
+        assert "no-such-field-card" in warnings
+        assert "no-such-state-card" in warnings
+        assert "no card type configured" not in warnings  # Field wrappers are metadata.
     finally:
         await safe_call_tool(
             mcp_client, "ha_config_delete_dashboard", {"url_path": path}
