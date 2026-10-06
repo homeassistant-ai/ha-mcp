@@ -7,7 +7,6 @@ tool's full input schema before the agent executes it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
@@ -26,6 +25,7 @@ from ._llm_api_helpers import (  # noqa: E402
     make_hass,
     tool_entry,
 )
+from .test_llm_tool_metadata import _CoreToolResult  # noqa: E402
 
 _FULL_SCHEMA = {
     "type": "object",
@@ -38,14 +38,6 @@ _FULL_SCHEMA = {
     },
     "required": ["config"],
 }
-
-
-@dataclass
-class _CoreToolResult:
-    """Shape of Core 2026.10's ``llm.ToolResult``."""
-
-    data: Any
-    error: bool = False
 
 
 def _tool(name: str, schema: dict[str, Any], *, exposed: bool = True) -> Any:
