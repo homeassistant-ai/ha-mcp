@@ -405,7 +405,7 @@ class CardDefinitions:
 
 def _custom_warnings(custom: CustomCards, customs: _Queued) -> list[str]:
     """What each custom card says about its own config."""
-    found = []
+    found: list[str] = []
     for path, card_type, card in customs:
         tag = card_type[len("custom:") :]
         explained = (_explain_message(tag, m) for m in custom.check(tag, card) or [])

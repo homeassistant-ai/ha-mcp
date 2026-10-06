@@ -230,7 +230,8 @@ class _Bundle:
 
     def form(self, tag: str) -> list[Any] | None:
         value = self.engine("form", {"tag": tag, "config": {"type": f"custom:{tag}"}})
-        return value.get("value")
+        form = value.get("value")
+        return form if isinstance(form, list) else None
 
 
 class CustomCards:
