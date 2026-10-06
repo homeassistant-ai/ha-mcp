@@ -123,12 +123,9 @@ class _DashboardScreenshotOptions:
     render_timeout_seconds: float = DEFAULT_RENDER_TIMEOUT_SECONDS
 
 
-# dashboard-guide.md + dashboard-cards.md cover layout patterns and the
-# card-type taxonomy — both relevant on every dashboard write.
-_DASHBOARD_SKILL_FILES: tuple[str, ...] = (
-    "references/dashboard-guide.md",
-    "references/dashboard-cards.md",
-)
+# Card types and fields come from ha_config_get_dashboard(describe=True), so
+# only the layout guide ships with a write.
+_DASHBOARD_SKILL_FILES: tuple[str, ...] = ("references/dashboard-guide.md",)
 
 
 def _attach_dashboard_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
@@ -1934,6 +1931,7 @@ class DashboardConfigTools:
         - List all dashboards: ha_config_get_dashboard(list_only=True)
         - Get one view only: ha_config_get_dashboard(url_path="lovelace-mobile", view_path="office")
         - Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path="my-dash", entity_id="sensor.temperature_*")
+        - Find heading: ha_config_get_dashboard(url_path="my-dash", heading="Climate", card_type="heading")
         - Which dashboards use an entity: ha_config_get_dashboard(mode="search", query="light.bedroom")
         - Fields of a card type before writing one (omit card_type to list types):
           ha_config_get_dashboard(card_type="tile", describe=True)
@@ -2074,12 +2072,7 @@ class DashboardConfigTools:
         return list_result
 
     async def _fetch_search_dashboard_config(
-        self,
-        url_path: str | None,
-        *,
-        entity_id: str | None,
-        card_type: str | None,
-        heading: str | None,
+        self, url_path: str | None
     ) -> tuple[dict[str, Any], str | None, str | None]:
         """Fetch + resolve the dashboard config for search mode.
 
@@ -2272,9 +2265,7 @@ class DashboardConfigTools:
             config,
             url_path,
             search_resolved_from,
-        ) = await self._fetch_search_dashboard_config(
-            url_path, entity_id=entity_id, card_type=card_type, heading=heading
-        )
+        ) = await self._fetch_search_dashboard_config(url_path)
         # Surface the canonicalized url_path to the caller's scope now, so
         # an unexpected exception from the search/hashing below still
         # reports the resolved identifier (see ha_config_get_dashboard's
@@ -2835,8 +2826,8 @@ class DashboardConfigTools:
         """Create or update a Home Assistant dashboard.
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
-        `dashboard-guide.md` and `dashboard-cards.md` ship under `skill_content`
-        by default.
+        `dashboard-guide.md` ships under `skill_content` by default. A card's
+        fields: ha_config_get_dashboard(card_type=..., describe=True).
 
         MODES (pick one):
         - patch: edit known paths with literal values using JSON Patch

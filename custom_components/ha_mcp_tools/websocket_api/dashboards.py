@@ -125,12 +125,23 @@ async def _dashboards_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str
 
 
 def _lovelace_dashboards_map(hass: HomeAssistant) -> Mapping[Any, Any] | None:
-    """The ``{url_path|None: LovelaceConfig}`` map, or ``None`` if lovelace is absent.
+    """The ``{url_path|None: LovelaceConfig}`` map, or ``None`` if lovelace is absent."""
+    container = _lovelace_container(hass)
+    if container is None:
+        return None
+    dashboards = getattr(container, "dashboards", None)
+    if dashboards is None and isinstance(container, Mapping):
+        dashboards = container.get("dashboards")
+    return dashboards if isinstance(dashboards, Mapping) else None
 
-    Reads ``hass.data[LOVELACE_DATA].dashboards`` via a function-local import of
-    core's key (older cores keyed ``hass.data["lovelace"]``, so both are tried),
-    guarded so a missing key / core drift degrades to ``None`` (the server keeps
-    its legacy path) rather than raising.
+
+def _lovelace_container(hass: HomeAssistant) -> Any:
+    """``hass.data[LOVELACE_DATA]``, or ``None`` if lovelace is absent.
+
+    Uses a function-local import of core's key (older cores keyed
+    ``hass.data["lovelace"]``, so both are tried), guarded so a missing key /
+    core drift degrades to ``None`` (the server keeps its legacy path) rather
+    than raising.
     """
     try:
         from homeassistant.components.lovelace import LOVELACE_DATA
@@ -144,12 +155,7 @@ def _lovelace_dashboards_map(hass: HomeAssistant) -> Mapping[Any, Any] | None:
     container = data.get(key)
     if container is None and key != "lovelace":
         container = data.get("lovelace")
-    if container is None:
-        return None
-    dashboards = getattr(container, "dashboards", None)
-    if dashboards is None and isinstance(container, Mapping):
-        dashboards = container.get("dashboards")
-    return dashboards if isinstance(dashboards, Mapping) else None
+    return container
 
 
 def _dashboard_list_rows(dashboards_map: Mapping[Any, Any]) -> list[dict[str, Any]]:

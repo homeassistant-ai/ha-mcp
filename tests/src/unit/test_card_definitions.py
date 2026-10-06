@@ -239,3 +239,94 @@ async def test_describe_without_the_component_says_so(monkeypatch) -> None:
     with pytest.raises(ToolError) as err:
         await describe_mod.describe_card_response(MagicMock(), "tile")
     assert "COMPONENT_NOT_INSTALLED" in str(err.value)
+
+
+# --- custom cards ------------------------------------------------------------
+
+cc = importlib.import_module("custom_components.ha_mcp_tools.custom_cards")
+
+
+def test_resource_urls_map_to_files_inside_www(tmp_path) -> None:
+    www = tmp_path / "www"
+    assert cc.resource_path(tmp_path, "/hacsfiles/mushroom/mushroom.js?hacstag=1") == (
+        (www / "community" / "mushroom" / "mushroom.js").resolve()
+    )
+    assert cc.resource_path(tmp_path, "/local/cards/my%20card.js") == (
+        (www / "cards" / "my card.js").resolve()
+    )
+    for url in (
+        "/local/../secrets.yaml",
+        "/hacsfiles/../../configuration.js",
+        "/local/styles.css",
+        "https://cdn.example.com/card.js",
+    ):
+        assert cc.resource_path(tmp_path, url) is None, url
+
+
+def _tarball(worker: str) -> bytes:
+    import io
+    import tarfile
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        data = worker.encode()
+        info = tarfile.TarInfo("package/worker.js")
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
+
+
+def test_linkedom_is_checked_and_made_a_scoped_script(monkeypatch) -> None:
+    import base64
+    import hashlib
+
+    tarball = _tarball(
+        "export const shared = 1;\n"
+        "function parseHTML() {}\nclass GlobalEvent {}\n"
+        "export { parseHTML, GlobalEvent as Event };\n"
+    )
+    digest = base64.b64encode(hashlib.sha512(tarball).digest()).decode()
+    monkeypatch.setattr(cc, "LINKEDOM_INTEGRITY", f"sha512-{digest}")
+
+    script = cc.dom_script(tarball)
+
+    assert script.startswith("(function () {\nconst shared = 1;")
+    assert script.endswith(
+        "globalThis.__linkedom = {parseHTML: parseHTML, Event: GlobalEvent};\n})();"
+    )
+    monkeypatch.setattr(cc, "LINKEDOM_INTEGRITY", "sha512-other")
+    with pytest.raises(ValueError, match="integrity"):
+        cc.dom_script(tarball)
+
+
+def test_custom_card_messages_read_plainly() -> None:
+    never = "At path: colour -- Expected a value of type `never`, but received: `1`"
+    assert (
+        cd._explain_message("my-card", never) == "'colour' is not a my-card card option"
+    )
+    assert cd._explain_message("my-card", never.replace("colour", "card_mod")) is None
+    assert (
+        cd._explain_message("my-card", "At path: size -- Expected a number")
+        == "size: Expected a number"
+    )
+    assert cd._explain_message("my-card", "value.series is missing") == (
+        "value.series is missing"
+    )
+
+
+def test_custom_cards_report_their_own_problems_and_unknown_ones_none() -> None:
+    answers = {"good-card": [], "picky-card": ["picky-card needs an entity"]}
+    custom = MagicMock()
+    custom.check.side_effect = lambda tag, card: answers.get(tag)
+    definitions = _definitions(set(), {})
+    cards = [
+        {"type": "custom:good-card"},
+        {"type": "custom:picky-card"},
+        {"type": "custom:not-installed-card"},
+    ]
+
+    warnings = definitions.validate({"views": [{"cards": cards}]}, custom)
+
+    assert warnings == [
+        "views[0].cards[1] (custom:picky-card): picky-card needs an entity"
+    ]

@@ -20,6 +20,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .custom_cards import CustomCards, async_get_custom_cards
+
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
@@ -28,7 +30,8 @@ _LOGGER = logging.getLogger(__name__)
 WS_DASHBOARD_CARDS = "ha_mcp_tools/dashboard_cards"
 CAPABILITIES = ("dashboard_cards",)
 
-_MOD_RE = re.compile(r"[{,](\d+)\([\w$]+,[\w$]+,[\w$]+\)\{")
+# A module factory takes (module, exports, require), trailing ones omitted when unused.
+_MOD_RE = re.compile(r"[{,](\d+)\([\w$]+(?:,[\w$]+){0,2}\)\{")
 # The element registration, ``(0,x.EM)("hui-tile-card")``; never a createElement.
 _TAG_RE = re.compile(r'\)\("(hui-[a-z0-9-]+-card(?:-editor)?)"\)')
 _EDITOR_REF_RE = re.compile(r'"(hui-[a-z0-9-]+-card-editor)"')
@@ -44,6 +47,7 @@ _SCHEMA_CONST_RE = re.compile(r"\.schema=\$\{([\w$]+)\}")
 _REF_ERROR_RE = re.compile(r"ReferenceError: ([\w$]+) is not defined")
 _I18N = "ui.panel.lovelace.editor.card."
 _MAX_WARNINGS = 20
+_Queued = list[tuple[str, str, dict[str, Any]]]
 # Keys a card ignores but an installed plugin reads (card-mod); the editor
 # rejects them only because it cannot show them.
 _ACCEPTED_EXTRAS = frozenset({"card_mod"})
@@ -350,9 +354,13 @@ class CardDefinitions:
             self._struct_keys[card_type] = keys
         return self._struct_keys[card_type] is not None
 
-    def validate(self, config: dict[str, Any]) -> list[str]:
+    def validate(
+        self, config: dict[str, Any], custom: CustomCards | None = None
+    ) -> list[str]:
         """One warning per problem the frontend would flag in a stored card."""
-        warnings, checked = self._triage(config)
+        warnings, checked, customs = self._triage(config)
+        if custom is not None:
+            warnings.extend(_custom_warnings(custom, customs))
         if checked:
             payload = [{"key": t, "config": c} for _, t, c in checked]
             results = self._engine("validate", {"cards": payload}).get("value") or []
@@ -364,23 +372,22 @@ class CardDefinitions:
             warnings = [*warnings[:_MAX_WARNINGS], f"...and {more} more card problems"]
         return warnings
 
-    def _triage(
-        self, config: dict[str, Any]
-    ) -> tuple[list[str], list[tuple[str, str, dict[str, Any]]]]:
+    def _triage(self, config: dict[str, Any]) -> tuple[list[str], _Queued, _Queued]:
         """Flag missing or unknown types; queue the cards a validator can check."""
         warnings: list[str] = []
-        checked: list[tuple[str, str, dict[str, Any]]] = []
+        checked: _Queued = []
+        customs: _Queued = []
         for path, card in _cards(config):
             card_type = card.get("type")
             if not isinstance(card_type, str):
                 warnings.append(f"{path}: no card type configured")
             elif card_type.startswith("custom:"):
-                continue
+                customs.append((path, card_type, card))
             elif card_type not in self._card_types:
                 warnings.append(f"{path}: unknown card type '{card_type}'")
             elif self._struct_ready(card_type):
                 checked.append((path, card_type, card))
-        return warnings, checked
+        return warnings, checked, customs
 
     def _explain(self, card_type: str, failure: dict[str, Any]) -> str | None:
         path = ".".join(str(p) for p in failure.get("path") or [])
@@ -394,6 +401,27 @@ class CardDefinitions:
             return f"{message}; did you mean '{close[0]}'?" if close else message
         message = re.sub(r"^At path: \S+ -- ", "", failure.get("message", ""))
         return f"{path}: {message}" if path else message
+
+
+def _custom_warnings(custom: CustomCards, customs: _Queued) -> list[str]:
+    """What each custom card says about its own config."""
+    found = []
+    for path, card_type, card in customs:
+        tag = card_type[len("custom:") :]
+        explained = (_explain_message(tag, m) for m in custom.check(tag, card) or [])
+        found.extend(f"{path} ({card_type}): {e}" for e in explained if e is not None)
+    return found
+
+
+def _explain_message(tag: str, message: str) -> str | None:
+    """A custom card's own error, with a struct's unknown-key wording made plain."""
+    unknown = re.match(r"At path: (\w+) -- Expected a value of type `never`", message)
+    if unknown:
+        key = unknown.group(1)
+        return (
+            None if key in _ACCEPTED_EXTRAS else f"'{key}' is not a {tag} card option"
+        )
+    return re.sub(r"^At path: (\S+) -- ", r": ", message)
 
 
 def _schema_expressions(body: str) -> list[str]:
@@ -490,8 +518,13 @@ async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> li
         definitions = await async_get_definitions(hass, timeout=15)
         if definitions is None:
             return []
+        uses_custom = any(
+            str(card.get("type", "")).startswith("custom:")
+            for _, card in _cards(config)
+        )
+        custom = await async_get_custom_cards(hass) if uses_custom else None
         warnings: list[str] = await hass.async_add_executor_job(
-            definitions.validate, config
+            definitions.validate, config, custom
         )
         return warnings
     except Exception:
@@ -506,16 +539,26 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
         definitions = await async_get_definitions(hass)
         if definitions is None:
             return {"result": {"success": False, "error": "unavailable"}}
+        custom = await async_get_custom_cards(hass)
+        card_types = definitions.card_types() + (custom.card_types() if custom else [])
         card_type = msg.get("card_type")
         if card_type is None:
-            return {"result": {"success": True, "card_types": definitions.card_types()}}
-        described = await hass.async_add_executor_job(definitions.describe, card_type)
+            return {"result": {"success": True, "card_types": card_types}}
+        if card_type.startswith("custom:"):
+            describe = custom.describe if custom else lambda _tag: None
+            described = await hass.async_add_executor_job(
+                describe, card_type[len("custom:") :]
+            )
+        else:
+            described = await hass.async_add_executor_job(
+                definitions.describe, card_type
+            )
         if described is None:
             return {
                 "result": {
                     "success": False,
                     "error": "unknown_card_type",
-                    "card_types": [c["type"] for c in definitions.card_types()],
+                    "card_types": [c["type"] for c in card_types],
                 }
             }
         return {"result": {"success": True, **described}}

@@ -301,9 +301,10 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "returns the full Lovelace config plus a stable "
         "`config_hash`. Use `url_path='default'` for the main "
         "dashboard. For known JSON Pointer paths, use "
-        "ha_config_set_dashboard(patch=..., config_hash=...).\n\n"
-        "For card-type taxonomy and search workflow examples, see "
-        "ha_get_skill_guide."
+        "ha_config_set_dashboard(patch=..., config_hash=...). (4) "
+        "describe — `describe=True` with `card_type` returns that "
+        "card's fields from Home Assistant's card editor; omit "
+        "`card_type` to list the card types."
     ),
     "ha_config_set_dashboard": (
         "Create or update a Home Assistant dashboard.\n\n"
@@ -499,7 +500,7 @@ LITE_DOCSTRING_DESTINATIONS: dict[str, str] = {
     "ha_config_set_scene": "references/scenes.md",
     "ha_config_list_helpers": "references/helper-selection.md",
     "ha_config_set_helper": "references/helper-selection.md",
-    "ha_config_get_dashboard": "references/dashboard-cards.md",
+    "ha_config_get_dashboard": "self-contained",
     "ha_config_set_dashboard": "references/dashboard-guide.md",
     "ha_call_service": "references/domain-docs.md",
     "ha_config_set_yaml": "references/yaml-only-integrations.md",
