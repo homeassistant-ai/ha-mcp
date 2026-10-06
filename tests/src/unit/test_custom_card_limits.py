@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -36,10 +35,16 @@ def test_all_quickjs_context_operations_use_the_creating_thread(
             return tracked
 
     monkeypatch.setattr(quickjs, "Context", TrackedContext)
-    dom = (
-        Path(__file__).parents[2]
-        / "initial_test_state/.storage/ha_mcp_tools/linkedom-0.18.13.js"
-    ).read_text(encoding="utf-8")
+    # This test covers native thread ownership; the real DOM is fetched through
+    # the production cold-cache path in E2E, never vendored into fixtures.
+    dom = """
+    globalThis.__linkedom = {
+      HTMLElement: class HTMLElement {},
+      parseHTML: function () { return {
+        document: {}, customElements: {define: function () {}}
+      }; }
+    };
+    """
     source = (
         "globalThis.modeOK = this === "
         + ("undefined;" if module else "globalThis;")
