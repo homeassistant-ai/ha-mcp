@@ -20,8 +20,6 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import voluptuous as vol
-
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
@@ -501,7 +499,7 @@ async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> li
         return []
 
 
-def command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
+def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
     """``dashboard_cards``: the card type list, or one card type's form."""
 
     async def prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:

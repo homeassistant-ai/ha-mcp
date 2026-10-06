@@ -462,7 +462,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         ),
         (_template_diagnose_schema(), _do_template_diagnose, _template_diagnose_prep),
         *helper_collections.command_specs(vol, er),
-        *card_definitions.command_specs(),
+        *card_definitions.command_specs(vol),
     ]
 
 
