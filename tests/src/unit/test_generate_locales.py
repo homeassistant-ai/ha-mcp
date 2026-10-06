@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
@@ -77,11 +78,15 @@ def test_invalid_best_effort_entries_warn_and_preserve_valid_messages(
 
 
 class TestResolveText:
-    def test_override_order_is_flavor_then_features_then_addon(self) -> None:
+    def test_override_order_is_flavor_then_features_then_addon_then_ui_rows(
+        self,
+    ) -> None:
         messages = {
             "addon_stable.opt.description": "stable wording",
             "features.opt.help": "shared wording",
             "addon.opt.description": "addon wording",
+            "advanced.opt.help": "advanced row wording",
+            "backup.fields.opt.help": "backup row wording",
         }
         assert (
             generate_locales.resolve_text(messages, {}, "stable", "opt", "description")
@@ -96,6 +101,16 @@ class TestResolveText:
         assert (
             generate_locales.resolve_text(messages, {}, "stable", "opt", "description")
             == "addon wording"
+        )
+        del messages["addon.opt.description"]
+        assert (
+            generate_locales.resolve_text(messages, {}, "stable", "opt", "description")
+            == "advanced row wording"
+        )
+        del messages["advanced.opt.help"]
+        assert (
+            generate_locales.resolve_text(messages, {}, "stable", "opt", "description")
+            == "backup row wording"
         )
 
     def test_locale_falls_back_to_english(self) -> None:
@@ -120,6 +135,53 @@ class TestResolveText:
                 messages, english, "stable", "opt", "description"
             )
             == "stable-specific English"
+        )
+
+    def test_app_page_states_the_schema_range_in_the_reader_language(
+        self,
+    ) -> None:
+        """The catalog sentences leave ranges out, so the app Configuration
+        page would show none without this."""
+        english = {
+            "common.range": "Range {min}–{max}.",
+            "addon.limit.name": "Limit",
+            "addon.limit.description": "How many.",
+            "addon.flag.name": "Flag",
+            "addon.flag.description": "On or off.",
+        }
+        german = {"common.range": "Bereich {min}–{max}."}
+        configuration = yaml.safe_load(
+            generate_locales.addon_yaml(
+                "stable",
+                {"limit": "int(0,32)?", "flag": "bool?"},
+                german,
+                english,
+                "de",
+            )
+        )["configuration"]
+        assert configuration["limit"]["description"] == "How many. Bereich 0–32."
+        assert configuration["flag"]["description"] == "On or off."
+
+    def test_no_app_option_has_a_second_english_text(self) -> None:
+        """An ``addon.<key>.*`` text for an option the settings UI also shows
+        is a second English text: the two drift apart, and every locale
+        translates both."""
+        english = generate_locales.load_catalogs()["en"]
+        shown_in_ui = {
+            key.split(".")[-2]
+            for key in english
+            if key.endswith(".label")
+            and key.startswith(("features.", "advanced.", "backup.fields."))
+        }
+        duplicates = sorted(
+            key
+            for key in english
+            if key.startswith("addon.") and key.split(".")[1] in shown_in_ui
+        )
+        assert not duplicates, (
+            f"en.json carries app texts the settings UI text already covers: "
+            f"{duplicates}. Edit the UI text instead; generate_locales.py "
+            "projects it onto the app page."
         )
 
     def test_missing_canonical_string_names_the_key_to_add(self) -> None:

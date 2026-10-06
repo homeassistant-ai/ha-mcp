@@ -2,45 +2,6 @@
 let backupEntries = [];
 let backupConfigFields = [];
 
-const BACKUP_FIELD_LABELS = {
-  enable_snapshot_actions: {
-    label: 'Allow full HA snapshot actions',
-    help: 'Allow AI assistants to manage full Home Assistant snapshots through ha_manage_backup. Turning this off blocks every snapshot action, including listing. Snapshot deletion also requires Allow snapshot deletion. Edit backups and human actions in this page remain available.',
-  },
-  backup_read_only: {
-    label: 'Make backup management read-only',
-    help: 'Allow AI assistants to list, view, and diff edit backups, and list full HA snapshots when snapshot actions are enabled. Block manual backup create, restore (including edit restores), and delete. Automatic pre-edit backups continue. Human actions in this page remain available.',
-  },
-  enable_auto_backup: {
-    label: 'Auto-backup edits',
-    help: 'Capture a snapshot before every wrapped write/destructive tool call.',
-  },
-  auto_backup_throttle_minutes: {
-    label: 'Throttle (minutes)',
-    help: 'Per-entity throttle. 0 = backup every write; N>0 = at most one per N minutes per entity. Range 0–1440.',
-  },
-  auto_backup_retain_per_entity: {
-    label: 'Retain per entity',
-    help: 'Maximum snapshots kept per entity (1–10000). Older ones rotate out.',
-  },
-  auto_backup_dir: {
-    label: 'Backup directory override',
-    help: 'Leave empty for the default: /data/ha_mcp_backups in the App (add-on), otherwise the backups/ subdirectory of the ha-mcp data directory; an install that already holds snapshots under the earlier default keeps using it. The directory in use is shown in the backup status. Or enter an absolute path.',
-  },
-  auto_backup_calendar_lookahead_days: {
-    label: 'Calendar lookahead (days)',
-    help: 'How far ahead to query for calendar events when capturing pre-edit snapshots. Range 1–365.',
-  },
-  enable_snapshot_delete: {
-    label: 'Allow snapshot deletion',
-    help: 'Lets ha_manage_backup delete full HA snapshot tarballs. Off by default: a snapshot may be the last recovery point after a mistaken change. Even when on, scheduled backups, the newest remaining snapshot, and anything younger than the age floor below stay protected.',
-  },
-  snapshot_delete_min_age_days: {
-    label: 'Minimum snapshot age to delete (days)',
-    help: 'A snapshot must be at least this old before it can be deleted. Range 0–365; 0 disables the floor (the newest-snapshot and scheduled-backup protections still apply).',
-  },
-};
-
 const BACKUP_ORIGIN_LABELS = {
   addon: escapeHtml(t('backup.origins.addon', {}, 'Synced to Supervisor. Restart required after save.')),
   env: null,  // banner generated dynamically with the env var name
@@ -76,11 +37,7 @@ function renderBackupConfig() {
   const formEl = document.getElementById('backupConfigForm');
   formEl.innerHTML = '';
   backupConfigFields.forEach(f => {
-    const meta = localizeMeta(
-      'backup.fields',
-      f.field,
-      BACKUP_FIELD_LABELS[f.field] || { label: f.field, help: '' }
-    );
+    const meta = localizeMeta('backup.fields', f.field, {});
     const row = document.createElement('div');
     row.className = 'backup-field';
     let controlHtml;
@@ -90,12 +47,10 @@ function renderBackupConfig() {
       // Path / freeform string fields (auto_backup_dir).
       controlHtml = `<input type="text" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-labelledby="label-backup-${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
     } else {
-      let min = 1;
-      let max = 10000;
-      if (f.field === 'auto_backup_throttle_minutes') { min = 0; max = 1440; }
-      else if (f.field === 'auto_backup_calendar_lookahead_days') { min = 1; max = 365; }
-      else if (f.field === 'snapshot_delete_min_age_days') { min = 0; max = 365; }
-      controlHtml = `<input type="number" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-labelledby="label-backup-${escapeHtml(f.field)}" value="${Number(f.value)}" min="${min}" max="${max}" ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="number" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-labelledby="label-backup-${escapeHtml(f.field)}" value="${Number(f.value)}" ` +
+        (typeof f.min === 'number' ? `min="${f.min}" ` : '') +
+        (typeof f.max === 'number' ? `max="${f.max}" ` : '') +
+        `${f.editable ? '' : 'disabled'}>`;
     }
     let originMsg;
     if (f.origin === 'env') {
@@ -104,12 +59,13 @@ function renderBackupConfig() {
       originMsg = BACKUP_ORIGIN_LABELS[f.origin] || '';
     }
     const lockedBadge = f.editable ? '' : `<span class="backup-field-locked">${escapeHtml(t('common.env_locked', {}, 'env-locked'))}</span>`;
-    const originSeparator = meta.help && !/[.!?…]$/.test(meta.help.trim()) ? '. ' : ' ';
+    const help = helpWithFacts(meta.help, f);
+    const originSeparator = help && !/[.!?…]$/.test(help.trim()) ? '. ' : ' ';
     row.innerHTML =
       `<span class="backup-field-label" id="label-backup-${escapeHtml(f.field)}">${escapeHtml(meta.label)}</span>` +
       `<span class="backup-field-control">${controlHtml}</span>` +
       lockedBadge +
-      `<span class="backup-field-help">${escapeHtml(meta.help)}${originMsg ? originSeparator + originMsg : ''}</span>`;
+      `<span class="backup-field-help">${escapeHtml(help)}${originMsg ? originSeparator + originMsg : ''}</span>`;
     formEl.appendChild(row);
   });
 }

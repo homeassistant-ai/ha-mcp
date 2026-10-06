@@ -15,7 +15,9 @@ e.g. fields populated from package metadata).
 import ast
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic.fields import FieldInfo
@@ -28,6 +30,15 @@ from ha_mcp.config import (
 )
 from ha_mcp.config_meta import AppOption, Setting
 from ha_mcp.config_registry import _check_setting
+
+_EN_CATALOG = (
+    Path(__file__).resolve().parents[3]
+    / "src"
+    / "ha_mcp"
+    / "settings_ui"
+    / "locales"
+    / "en.json"
+)
 
 # Fields with no panel home by design. Adding to this list requires a
 # one-line reason. Reviewer enforces.
@@ -350,50 +361,24 @@ def test_scanner_detects_all_direct_read_forms() -> None:
     }
 
 
-def test_every_advanced_field_has_a_settings_js_label() -> None:
-    """The Advanced GET handler is data-driven over ADVANCED_SETTINGS_FIELDS,
-    but the settings script looks up each row's label/help in ``ADVANCED_FIELD_META``
-    (falling back to the raw snake_case field name). A row added to config.py
-    without a matching JS entry silently degrades the UI — guard against that
-    drift (issue #1538 added three rows that initially lacked entries)."""
-    import re
-
-    from ha_mcp.settings_ui import _settings_js_template as js
-
-    m = re.search(r"const ADVANCED_FIELD_META = \{(.*?)\n\};", js, re.S)
-    assert m, "ADVANCED_FIELD_META object not found in settings_js/"
-    meta_keys = set(
-        re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{", m.group(1), re.M)
+@pytest.mark.parametrize(
+    ("section", "fields"),
+    [("advanced", ADVANCED_SETTINGS_FIELDS), ("backup.fields", BACKUP_OVERRIDE_FIELDS)],
+)
+def test_every_settings_row_has_an_english_label_and_help(
+    section: str, fields: Sequence[Any]
+) -> None:
+    """A row without ``<section>.<field>.label`` and ``.help`` in ``en.json``
+    renders its raw snake_case field name and no help text: the settings
+    script has no other English copy to fall back on."""
+    english = json.loads(_EN_CATALOG.read_text(encoding="utf-8"))["messages"]
+    missing = sorted(
+        f"{section}.{f.field}.{part}"
+        for f in fields
+        for part in ("label", "help")
+        if not english.get(f"{section}.{f.field}.{part}")
     )
-    missing = sorted({f.field for f in ADVANCED_SETTINGS_FIELDS} - meta_keys)
-    assert not missing, (
-        "ADVANCED_SETTINGS_FIELDS rows missing an ADVANCED_FIELD_META entry in "
-        f"settings_js/ (they would render with a raw field-name label): {missing}."
-    )
-
-
-def test_every_backup_override_field_has_a_settings_js_label() -> None:
-    """The Backups-tab GET handler is data-driven over BACKUP_OVERRIDE_FIELDS,
-    but the settings script looks up each row's label/help in ``BACKUP_FIELD_LABELS``
-    (falling back to the raw snake_case field name). A row added to config.py
-    without a matching JS entry silently degrades the UI — same drift class
-    as ADVANCED_FIELD_META (issue #1538); caught here for #1861's
-    enable_snapshot_delete / snapshot_delete_min_age_days after they
-    initially shipped without entries."""
-    import re
-
-    from ha_mcp.settings_ui import _settings_js_template as js
-
-    m = re.search(r"const BACKUP_FIELD_LABELS = \{(.*?)\n\};", js, re.S)
-    assert m, "BACKUP_FIELD_LABELS object not found in settings_js/"
-    label_keys = set(
-        re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{", m.group(1), re.M)
-    )
-    missing = sorted({f.field for f in BACKUP_OVERRIDE_FIELDS} - label_keys)
-    assert not missing, (
-        "BACKUP_OVERRIDE_FIELDS rows missing a BACKUP_FIELD_LABELS entry in "
-        f"settings_js/ (they would render with a raw field-name label): {missing}."
-    )
+    assert not missing, f"en.json lacks these settings row strings: {missing}"
 
 
 def test_screenshot_engine_url_is_surfaced_as_editable_advanced_field() -> None:

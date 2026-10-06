@@ -1,37 +1,24 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/en.json (keys addon.*, features.*,
-# addon_dev.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/en.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Verify TLS certificate
-    description: Verify the Home Assistant server's TLS certificate. The app (add-on)
-      connects via the Supervisor proxy, so this normally has no effect and should
-      stay enabled. Disable only if you've reconfigured the app (add-on) to talk to
-      HA over a public HTTPS hostname with a self-signed certificate or hostname mismatch.
-      Disabling weakens transport security — leave on unless you know you need it.
-      Requires restart to take effect.
+    name: Verify TLS certificates
+    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
+      only on a trusted network, for a self-signed certificate or a hostname mismatch:
+      it weakens transport security.'
   ha_tool_concurrency:
     name: Home Assistant tool concurrency
     description: Optional limit on outer Home Assistant tool calls across all sessions.
       Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
+      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
+      0–32.
   backup_hint:
-    name: Full-HA snapshot suggestion level (LLM-facing)
-    description: 'Tunes the wording of the hint the LLM sees in the
-
-      `ha_manage_backup(scope=''snapshot'')` tool description for when to
-
-      suggest a full Home Assistant tarball backup before risky operations
-
-      (e.g. mass device deletes). Affects ONLY this one LLM-facing prompt
-
-      sentence.
-
-
-      For per-edit automatic snapshots of automations / scripts / helpers /
-
-      etc., use the separate **Enable auto-backup of edits** toggle below.'
+    name: Backup hint level
+    description: How strongly AI assistants are told to suggest a full Home Assistant
+      backup before risky changes. It changes only this hint; automatic edit backups
+      have their own setting.
   enable_beta_features:
     name: Enable beta features (master)
     description: ⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant
@@ -60,10 +47,10 @@ configuration:
       Requires restart to take effect.'
   tool_search_max_results:
     name: Tool search max results
-    description: 'Maximum number of hidden tools returned per ha_search_tools call
+    description: Maximum number of hidden tools returned per ha_search_tools call
       when tool search is enabled; a pinned tool that ranks inside that top count
       is added as a short name-only entry on top of it. Lower values (2-3) save context
-      tokens but may miss relevant tools. Range: 2-10. Requires restart.'
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
   enable_tool_security_policies:
     name: Enable Tool Security Policies (advanced)
     description: Gate high-stakes tool calls (lock/alarm control, automation writes,
@@ -215,60 +202,45 @@ configuration:
       in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless
       of its value here.
   enable_auto_backup:
-    name: Enable auto-backup of edits
-    description: 'Captures a per-entity snapshot before every wrapped write/destructive
-      MCP tool call (automation, script, scene, helper, dashboard, dashboard resource,
-      label, category, group, zone, area, calendar, todo, entity, device, integration,
-      and sibling remove/delete tools). The auto-backup throttle bounds how often
-      that happens: 0 (default) captures on every such call, N>0 at most one snapshot
-      per N minutes per entity. Snapshots are saved as YAML files under /data/ha_mcp_backups/
-      (override via HAMCP_BACKUP_DIR) and listed, restored, or deleted via the Backups
-      tab in the web settings UI or via ha_manage_backup(scope=''edits'', ...). For
-      those domains the capture is best-effort — a failure logs a WARNING and the
-      write proceeds. The file and raw-YAML tools are the exception: ha_write_file,
-      ha_delete_file and ha_config_set_yaml treat the snapshot as a precondition,
-      so a write through them is refused while this is off, and a failed capture blocks
-      it. On by default; unchecking opts out of the best-effort captures and takes
-      the file and raw-YAML tools out of service with them. Requires restart to take
-      effect.'
+    name: Auto-backup edits
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
   auto_backup_throttle_minutes:
     name: Auto-backup throttle (minutes)
-    description: Per-entity throttle window. 0 (default) captures a snapshot on every
-      wrapped write. N>0 captures at most one snapshot per N minutes per entity. Range
-      0–1440.
+    description: How often auto-backup may capture the same entity. 0 captures on
+      every write; N above 0 captures at most one snapshot per N minutes per entity.
+      Range 0–1440.
   auto_backup_retain_per_entity:
     name: Auto-backup retention (per entity)
-    description: Maximum number of snapshots kept per entity. Older snapshots beyond
-      this cap are rotated out on each successful capture. Default 100, range 1–10000.
+    description: The most snapshots kept per entity. Each new capture removes the
+      oldest snapshots above this number. Range 1–10000.
   enable_snapshot_actions:
     name: Allow full HA snapshot actions
     description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Allow snapshot deletion
-    description: Lets ha_manage_backup delete full HA snapshot tarballs (scope='snapshot',
-      action='delete'). Off by default — a snapshot may be the last recovery point
-      after a mistaken change, so a human must opt in here. Even when on, scheduled
-      backups, the newest remaining snapshot, and anything younger than the age floor
-      below stay protected.
+    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
+      snapshot may be the last way back after a mistaken change, so a person must
+      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
+      the minimum age stay protected.
   snapshot_delete_min_age_days:
     name: Minimum snapshot age to delete (days)
-    description: A snapshot must be at least this old before it can be deleted. Range
-      0–365; 0 disables the floor (the newest-snapshot and scheduled-backup protections
-      still apply). Default 7.
+    description: How old a snapshot must be, in days, before it can be deleted. 0
+      turns off the age limit; the newest snapshot and scheduled backups stay protected.
+      Range 0–365.
   disabled_tools:
     name: Disabled tools (comma-separated)
     description: Tools listed here are forced off and locked in the web Settings UI

@@ -1,23 +1,24 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/zh-Hans.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/zh-Hans.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: 验证 TLS 证书
-    description: 验证 Home Assistant 服务器的 TLS 证书。应用（add-on）通过 Supervisor 代理连接，因此此设置通常无效，应保持启用状态。仅当您重新配置了应用（add-on），使其通过具有自签名证书或主机名不匹配的公共
-      HTTPS 主机名与 HA 通信时，才可以禁用。禁用会削弱传输安全性 — 除非您确有需要，否则请保持开启。需要重启才能生效。
+    name: Verify TLS certificates
+    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
+      only on a trusted network, for a self-signed certificate or a hostname mismatch:
+      it weakens transport security.'
   ha_tool_concurrency:
     name: Home Assistant 工具并发数
-    description: 对所有会话中外部 Home Assistant 工具调用的可选限制。内部的 REST、WebSocket 以及每个工具的扇出并发保持不变。设置为
-      0 则保持无限制。等待容量的调用将在 60 秒后失败。
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
+      0–32.
   backup_hint:
-    name: 完整 HA 快照建议级别（面向 LLM）
-    description: '调整 LLM 在 `ha_manage_backup(scope=''snapshot'')` 工具描述中看到的提示措辞，即在执行高风险操作（例如批量删除设备）之前何时建议创建完整的
-      Home Assistant tarball 备份。仅影响这一句面向 LLM 的提示文本。
-
-
-      如需在每次编辑自动化 / 脚本 / 辅助元素等之前自动创建快照，请使用下方单独的 **启用编辑自动备份** 开关。'
+    name: Backup hint level
+    description: How strongly AI assistants are told to suggest a full Home Assistant
+      backup before risky changes. It changes only this hint; automatic edit backups
+      have their own setting.
   enable_tool_search:
     name: 启用工具搜索
     description: 将完整的工具目录替换为基于搜索的发现。可将空闲上下文减少约 90%，至大约 5K 个 token。⚠️ 请勿在具有内置工具搜索/延迟工具功能的客户端（claude.ai、Claude
@@ -28,8 +29,10 @@ configuration:
       MCP 服务器以重新加载工具列表。仅重启应用（add-on）并不会刷新客户端缓存的工具列表；这在更改此处的任何设置后适用。
   tool_search_max_results:
     name: 工具搜索最大结果数
-    description: 启用工具搜索时，每次 ha_search_tools 调用返回的隐藏工具的最大数量；排在该上限内的置顶工具将作为仅含简短名称的条目额外添加在顶部。较低的值（2-3）可节省上下文
-      Token，但可能会漏掉相关工具。范围：2-10。需要重启。
+    description: Maximum number of hidden tools returned per ha_search_tools call
+      when tool search is enabled; a pinned tool that ranks inside that top count
+      is added as a short name-only entry on top of it. Lower values (2-3) save context
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
   enable_tool_security_policies:
     name: 启用工具安全策略（高级）
     description: 将高风险工具调用（锁具/报警控制、自动化写入等）置于用户审批之后。当调用受保护工具时，智能体会提示用户打开 Web UI 中的工具安全策略选项卡并点击批准，调用才会继续。逐工具规则及可选的参数条件在工具安全策略选项卡中配置。默认关闭。需要重启才能生效。
@@ -57,36 +60,45 @@ configuration:
       YAML）会被阻止并返回错误，指引客户端通过 ha_get_skill_guide 阅读最佳实践技能并回传在那里获得的确认密钥。开启时，ha_get_skill_guide
       工具被锁定启用——它是确认密钥的唯一发布方。为上方“写入时附加最佳实践技能”选项的子项，当其父项关闭时无效。需要重启才能生效。
   enable_auto_backup:
-    name: 启用编辑自动备份
-    description: 在每次封装的写入/破坏性 MCP 工具调用（自动化、脚本、场景、辅助、仪表盘、仪表盘资源、标签、类别、组、区域、日历、待办事项、实体、设备、集成以及相关的移除/删除工具）之前，捕获每个实体的快照。自动备份节流限制了发生频率：0（默认）表示每次此类调用都捕获，N>0
-      表示每个实体每 N 分钟最多捕获一个快照。快照以 YAML 文件形式保存在 /data/ha_mcp_backups/ 下（可通过 HAMCP_BACKUP_DIR
-      覆盖），并通过网页设置 UI 中的“Backups”选项卡或 ha_manage_backup(scope='edits', ...) 进行列出、恢复或删除。对于这些领域，捕获是尽力而为的
-      — 失败会记录 WARNING 并继续写入。文件和原始 YAML 工具是例外：ha_write_file、ha_delete_file 和 ha_config_set_yaml
-      将快照视为先决条件，因此当此功能关闭时，通过它们进行的写入将被拒绝，并且捕获失败也会阻止写入。默认开启；取消勾选将退出尽力而为的捕获，并使文件和原始 YAML
-      工具随之失效。需要重启才能生效。
+    name: 自动备份编辑
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
   auto_backup_throttle_minutes:
-    name: 自动备份节流（分钟）
-    description: 按实体的节流窗口。0（默认）表示每次被封装的写入都捕获快照。N>0 表示每个实体每 N 分钟最多捕获一次快照。范围 0–1440。
+    name: Auto-backup throttle (minutes)
+    description: How often auto-backup may capture the same entity. 0 captures on
+      every write; N above 0 captures at most one snapshot per N minutes per entity.
+      Range 0–1440.
   auto_backup_retain_per_entity:
-    name: 自动备份保留数量（每个实体）
-    description: 每个实体保留的最大快照数量。超出该上限的较旧快照会在每次成功捕获时被轮换清除。默认 100，范围 1–10000。
+    name: Auto-backup retention (per entity)
+    description: The most snapshots kept per entity. Each new capture removes the
+      oldest snapshots above this number. Range 1–10000.
   enable_snapshot_actions:
     name: 允许完整的 Home Assistant 快照操作
-    description: 允许 AI 助手通过 ha_manage_backup(scope='snapshot') 以及 ha_call_service
-      中的等效备份服务和命令来管理完整的 Home Assistant 快照。关闭此项将阻止所有快照操作（包括列出快照），同时编辑备份仍然可用。快照删除仅可通过
-      ha_manage_backup 进行，还需启用 enable_snapshot_delete，且其保护措施依然有效。默认开启。请更改此选项或使用网页设置
-      UI 的“备份”标签页；在应用中需要重启。
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: 将备份管理设为只读
-    description: 限制 ha_manage_backup 仅能列出、查看和对比编辑备份，并在启用快照操作时列出完整的 Home Assistant
-      快照。阻止手动创建、恢复（包括编辑恢复）和删除备份，包括 ha_call_service 中的等效备份服务和命令。自动编辑前备份将继续进行，网页设置 UI
-      中的人工操作将保持可用。默认关闭；在应用中需要重启。
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: 允许删除快照
-    description: 允许 ha_manage_backup 删除完整的 HA 快照 tarball（scope='snapshot', action='delete'）。默认关闭——快照可能是错误更改之后最后的恢复点，因此必须由人工在此主动开启。即使开启，计划备份、最新剩余的快照，以及比下方年龄下限更新的快照仍受保护。
+    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
+      snapshot may be the last way back after a mistaken change, so a person must
+      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
+      the minimum age stay protected.
   snapshot_delete_min_age_days:
     name: 可删除快照的最小年龄（天）
-    description: 快照至少要达到此天数才能被删除。范围 0–365；0 表示禁用该下限（最新快照和计划备份的保护仍然有效）。默认 7。
+    description: How old a snapshot must be, in days, before it can be deleted. 0
+      turns off the age limit; the newest snapshot and scheduled backups stay protected.
+      Range 0–365.
   disabled_tools:
     name: 已禁用的工具（以逗号分隔）
     description: 此处列出的工具会被强制关闭，并在网页设置界面（“工具”选项卡）中锁定——在取消此选项之前无法在那里重新启用。少数必备工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）无法禁用，即使列在此处也会继续运行。ha_get_skill_guide

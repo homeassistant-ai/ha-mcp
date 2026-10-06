@@ -114,12 +114,11 @@ def _advanced_field_row(
     bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
     if bounds is not None:
         row["min"], row["max"] = bounds
-        # Sentinel fields (e.g. sidecar_pin_port: 0 = off) need the number
-        # input to reach below the bounded range, so expose the sentinel
-        # as the UI minimum.
+        # A value outside the range with its own meaning (sidecar_pin_port:
+        # 0 picks a free port); the UI lets the number input reach it.
         sentinel = _ADVANCED_SETTINGS_SENTINELS.get(fname)
         if sentinel is not None:
-            row["min"] = sentinel
+            row["off_value"] = sentinel
     choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
     if choices is not None:
         row["choices"] = list(choices)

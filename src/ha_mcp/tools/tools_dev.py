@@ -630,7 +630,7 @@ class DevTools:
                 row["min"], row["max"] = bounds
                 sentinel = _ADVANCED_SETTINGS_SENTINELS.get(fname)
                 if sentinel is not None:
-                    row["min"] = sentinel
+                    row["off_value"] = sentinel
             choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
             if choices is not None:
                 row["choices"] = list(choices)

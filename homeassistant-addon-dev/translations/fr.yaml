@@ -1,42 +1,24 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/fr.json (keys addon.*, features.*,
-# addon_dev.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/fr.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Vérifier le certificat TLS
-    description: Vérifier le certificat TLS du serveur Home Assistant. L'application
-      (add-on) se connecte via le proxy du Supervisor, cela n'a donc normalement aucun
-      effet et doit rester activé. Désactivez uniquement si vous avez reconfiguré
-      l'application (add-on) pour communiquer avec HA via un nom d'hôte HTTPS public
-      avec un certificat auto-signé ou une non-correspondance de nom d'hôte. La désactivation
-      affaiblit la sécurité du transport — laissez activé sauf si vous savez que vous
-      en avez besoin. Nécessite un redémarrage pour prendre effet.
+    name: Verify TLS certificates
+    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
+      only on a trusted network, for a self-signed certificate or a hostname mismatch:
+      it weakens transport security.'
   ha_tool_concurrency:
     name: Concurrence des outils Home Assistant
-    description: Limite optionnelle sur les appels d'outils Home Assistant externes
-      pour toutes les sessions. La concurrence interne pour REST, WebSocket et par
-      outil reste inchangée. 0 conserve un comportement illimité. Un appel en attente
-      de capacité échoue après 60 secondes.
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
+      0–32.
   backup_hint:
-    name: Niveau d'indication d'instantané HA complet (côté LLM)
-    description: 'Ajuste le libellé de l''invite que le LLM voit dans la description
-      de
-
-      l''outil `ha_manage_backup(scope=''snapshot'')` pour suggérer une sauvegarde
-
-      complète de Home Assistant avant les opérations risquées (p. ex.
-
-      suppressions groupées d''appareils). Concerne UNIQUEMENT cet ensemble
-
-      d''invites côté LLM.
-
-
-      Pour les instantanés automatiques par modification d''automatisations /
-
-      scripts / assistants / etc., utilisez le bouton **Activer la sauvegarde
-
-      automatique des modifications** séparé ci-dessous.'
+    name: Backup hint level
+    description: How strongly AI assistants are told to suggest a full Home Assistant
+      backup before risky changes. It changes only this hint; automatic edit backups
+      have their own setting.
   enable_beta_features:
     name: Activer les fonctionnalités bêta (principal)
     description: ⚠ DANGER — ces outils peuvent ENDOMMAGER DÉFINITIVEMENT votre installation
@@ -71,11 +53,10 @@ configuration:
       pour prendre effet.'
   tool_search_max_results:
     name: Résultats max. de la recherche d'outils
-    description: 'Nombre maximal d''outils cachés renvoyés par appel ha_search_tools
-      lorsque la recherche d''outils est activée ; un outil épinglé qui se classe
-      dans ce nombre maximal est ajouté en tant qu''entrée courte avec uniquement
-      le nom en plus. Des valeurs plus faibles (2-3) économisent des jetons de contexte
-      mais peuvent manquer des outils pertinents. Plage : 2-10. Nécessite un redémarrage.'
+    description: Maximum number of hidden tools returned per ha_search_tools call
+      when tool search is enabled; a pinned tool that ranks inside that top count
+      is added as a short name-only entry on top of it. Lower values (2-3) save context
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
   enable_tool_security_policies:
     name: Activer les politiques de sécurité des outils (avancé)
     description: Contrôle les appels d'outils à enjeux élevés (contrôle des serrures/alarmes,
@@ -255,69 +236,45 @@ configuration:
       dans l'interface Web) soit activé — sinon ce sous-paramètre est ignoré à l'exécution
       quelle que soit sa valeur ici.
   enable_auto_backup:
-    name: Activer la sauvegarde automatique des modifications
-    description: 'Capture un instantané par entité avant chaque appel d''outil MCP
-      d''écriture/destructif encapsulé (automation, script, scene, helper, dashboard,
-      ressource de dashboard, label, category, group, zone, area, calendar, todo,
-      entity, device, integration, et les outils de suppression/effacement associés).
-      La limitation de la sauvegarde automatique détermine la fréquence de ces captures
-      : 0 (par défaut) capture à chaque appel de ce type, N>0 au maximum un instantané
-      toutes les N minutes par entité. Les instantanés sont enregistrés en tant que
-      fichiers YAML sous /data/ha_mcp_backups/ (à remplacer via HAMCP_BACKUP_DIR)
-      et peuvent être listés, restaurés ou supprimés via l''onglet Backups dans l''interface
-      utilisateur des paramètres web ou via ha_manage_backup(scope=''edits'', ...).
-      Pour ces domaines, la capture est faite au mieux — un échec enregistre un WARNING
-      et l''écriture se poursuit. Les outils de fichier et raw-YAML sont l''exception
-      : ha_write_file, ha_delete_file et ha_config_set_yaml traitent l''instantané
-      comme une précondition, donc une écriture via ces outils est refusée si cette
-      option est désactivée, et une capture échouée la bloque. Activé par défaut ;
-      désactiver cette option annule les captures au mieux et désactive les outils
-      de fichier et raw-YAML avec elles. Nécessite un redémarrage pour prendre effet.'
+    name: Sauvegardes automatiques des modifications
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
   auto_backup_throttle_minutes:
-    name: Limitation de la sauvegarde automatique (minutes)
-    description: Fenêtre de limitation par entité. 0 (par défaut) capture un instantané
-      à chaque écriture encapsulée. N>0 capture au plus un instantané par N minutes
-      par entité. Plage 0–1440.
+    name: Auto-backup throttle (minutes)
+    description: How often auto-backup may capture the same entity. 0 captures on
+      every write; N above 0 captures at most one snapshot per N minutes per entity.
+      Range 0–1440.
   auto_backup_retain_per_entity:
-    name: Conservation de la sauvegarde automatique (par entité)
-    description: Nombre maximum d'instantanés conservés par entité. Les instantanés
-      plus anciens au-delà de cette limite sont retirés à chaque capture réussie.
-      Par défaut 100, plage 1–10000.
+    name: Auto-backup retention (per entity)
+    description: The most snapshots kept per entity. Each new capture removes the
+      oldest snapshots above this number. Range 1–10000.
   enable_snapshot_actions:
     name: Autoriser les actions d'instantané complet de Home Assistant
-    description: Permettre aux assistants IA de gérer les instantanés complets de
-      Home Assistant via ha_manage_backup(scope='snapshot') ainsi que les services
-      et commandes de sauvegarde équivalents dans ha_call_service. Désactiver cette
-      option bloque toutes les actions d'instantané, y compris le listage, tandis
-      que les sauvegardes de modification restent disponibles. La suppression d'instantanés
-      n'est possible que via ha_manage_backup, nécessite également enable_snapshot_delete,
-      et ses protections s'appliquent toujours. Activé par défaut. Modifiez cette
-      option ou utilisez l'onglet Backups de l'interface des paramètres web ; nécessite
-      un redémarrage dans l'application.
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Rendre la gestion des sauvegardes en lecture seule
-    description: Restreindre ha_manage_backup au listage, à l'affichage et à la comparaison
-      des sauvegardes de modification, ainsi qu'au listage des instantanés complets
-      de Home Assistant lorsque les actions d'instantané sont activées. Bloque la
-      création, la restauration (y compris les restaurations de modification) et la
-      suppression manuelles de sauvegardes, ainsi que les services et commandes de
-      sauvegarde équivalents dans ha_call_service. Les sauvegardes automatiques avant
-      modification continuent, et les actions humaines dans l'interface des paramètres
-      web restent disponibles. Désactivé par défaut ; nécessite un redémarrage dans
-      l'application.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Autoriser la suppression d'instantanés
-    description: Permet à ha_manage_backup de supprimer des instantanés HA complets
-      (scope='snapshot', action='delete'). Désactivé par défaut — un instantané pourrait
-      être le dernier point de restauration après une modification défectueuse, donc
-      un humain doit activement l'activer ici. Même lorsque activé, les sauvegardes
-      planifiées, l'instantané restant le plus récent et tout ce qui est plus récent
-      que le seuil d'âge ci-dessous restent protégés.
+    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
+      snapshot may be the last way back after a mistaken change, so a person must
+      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
+      the minimum age stay protected.
   snapshot_delete_min_age_days:
     name: Âge minimum de l'instantané pour suppression (jours)
-    description: Un instantané doit avoir au moins cet âge avant de pouvoir être supprimé.
-      Plage 0–365 ; 0 désactive le seuil (les protections de l'instantané le plus
-      récent et de la sauvegarde planifiée s'appliquent toujours). Par défaut 7.
+    description: How old a snapshot must be, in days, before it can be deleted. 0
+      turns off the age limit; the newest snapshot and scheduled backups stay protected.
+      Range 0–365.
   disabled_tools:
     name: Outils désactivés (séparés par des virgules)
     description: Les outils listés ici sont forcément désactivés et verrouillés dans

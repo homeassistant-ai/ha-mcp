@@ -1,40 +1,24 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/eo.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/eo.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Kontroli TLS-atestilon
-    description: Kontrolu la TLS-atestilon de la servilo Home Assistant. La programo
-      (aldonaĵo) konektiĝas per la provkuratora prokurservilo (Supervisor proxy),
-      do ĉi tio kutime havas neniun efikon kaj devas resti ebligita. Malŝaltu nur
-      se vi reagordis la programon (aldonaĵo) por komuniki kun HA per publika HTTPS-gastnomo
-      kun memsubskribita atestilo aŭ malkongruo de gastnomo. Malŝalto malfortigas
-      transportan sekurecon — lasu ebligita krom se vi scias, ke vi bezonas tion.
-      Postulas restartigon por ekvalidi.
+    name: Verify TLS certificates
+    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
+      only on a trusted network, for a self-signed certificate or a hostname mismatch:
+      it weakens transport security.'
   ha_tool_concurrency:
     name: Konkureco de hejmaŭtomatigaj iloj de Home Assistant
-    description: Laŭvola limo pri eksteraj vokoj al Home Assistant-iloj tra ĉiuj sesioj.
-      Interna REST-, WebSocket-, kaj perila disbranĉiĝa konkureco restas neŝanĝita.
-      0 tenas la senliman konduton. Voko atendanta je kapablo malsukcesas post 60
-      sekundoj.
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
+      0–32.
   backup_hint:
-    name: Nivelo de sugesto por plena HA-momentfoto (por LLM)
-    description: 'Agordas la vortumon de la sugesto, kiun la LLM vidas en la
-
-      `ha_manage_backup(scope=''snapshot'')` ilpriskribo pri kiam
-
-      sugesti plenan Home Assistant tarball-sekurkopion antaŭ riskaj operacioj
-
-      (ekz. amasa forigo de aparatoj). Influas NUR ĉi tiun unu LLM-alfrontan promptan
-
-      frazon.
-
-
-      Por aŭtomataj momentfotoj por ĉiu redakto de aŭtomatigoj / skriptoj / helpiloj
-      /
-
-      ktp., uzu la apartan ŝaltilon **Ebligi aŭtomatan sekurkopion de redaktoj** sube.'
+    name: Backup hint level
+    description: How strongly AI assistants are told to suggest a full Home Assistant
+      backup before risky changes. It changes only this hint; automatic edit backups
+      have their own setting.
   enable_tool_search:
     name: Ebligi ilo-serĉon
     description: 'Anstataŭigu la plenan il-katalogon per serĉ-bazita malkovro. Reduktas
@@ -57,11 +41,10 @@ configuration:
       agordo ĉi tie.'
   tool_search_max_results:
     name: Maksimumaj rezultoj de ilo-serĉo
-    description: 'Maksimuma nombro de kaŝitaj iloj redonitaj po voko de ha_search_tools
-      kiam ilserĉado estas ebligita; alpinglita ilo kiu altas en tiu pinta nombro
-      estas aldonita kiel mallonga nur-noma eniro super ĝi. Pli malaltaj valoroj (2-3)
-      ŝparas kuntekstajn signojn, sed povas maltrafi signifajn ilojn. Intervalo: 2-10.
-      Postulas restartigon.'
+    description: Maximum number of hidden tools returned per ha_search_tools call
+      when tool search is enabled; a pinned tool that ranks inside that top count
+      is added as a short name-only entry on top of it. Lower values (2-3) save context
+      tokens but may miss relevant tools. Requires restart. Range 2–10.
   enable_tool_security_policies:
     name: Ebligi Ilo-Sekurecajn Politikojn (altnivela)
     description: Gardu alt-riskajn ilo-vokojn (seruro/alarmo-kontrolo, aŭtomatigo-skriboj,
@@ -122,64 +105,45 @@ configuration:
       praktikajn kapablojn ĉe skriboj” supre kaj inerta dum tiu gepatro estas malŝaltita.
       Postulas restartigon por ekvalidi.'
   enable_auto_backup:
-    name: Ebligi aŭtomatan sekurkopion de redaktoj
-    description: 'Kaptas momentfoton por ĉiu ento antaŭ ĉiu ĉirkaŭvolvita skriba/detrua
-      MCP-ilvoko (aŭtomatigo, skripto, sceno, helpilo, panelo, panelresurso, etikedo,
-      kategorio, grupo, zono, areo, kalendaro, farendaĵo, ento, aparato, integriĝo,
-      kaj parencaj forigaj/detruaj iloj). La aŭtomata sekurkopia limigo difinas kiom
-      ofte tio okazas: 0 (defaŭlte) kaptas ĉe ĉiu tia voko, N>0 maksimume unu momentfoton
-      po N minutoj por ĉiu ento. Momentfotoj estas konservitaj kiel YAML-dosieroj
-      sub /data/ha_mcp_backups/ (anstataŭigebla per HAMCP_BACKUP_DIR) kaj listigitaj,
-      restarigitaj, aŭ forigitaj per la langeto ''Sekurkopioj'' en la reta agorda
-      UI aŭ per ha_manage_backup(scope=''edits'', ...). Por tiuj domajnoj la kapto
-      estas plejbone klopoda — malsukceso registras AVERTON kaj la skribo daŭras.
-      La dosieraj kaj krud-YAML-iloj estas la escepto: ha_write_file, ha_delete_file
-      kaj ha_config_set_yaml traktas la momentfoton kiel antaŭkondiĉon, do skribo
-      tra ili estas rifuzita dum ĉi tio estas malŝaltita, kaj malsukcesa kapto blokas
-      ĝin. Defaŭlte ŝaltita; malmarkado malaktivigas la plejbone klopodajn kaptojn
-      kaj malfunkciigas la dosierajn kaj krud-YAML-ilojn kun ili. Postulas restartigon
-      por efektiviĝi.'
+    name: Aŭtomataj sekurkopioj de redaktoj
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
   auto_backup_throttle_minutes:
-    name: Aŭtomata sekurkopia limigo (minutoj)
-    description: Limiga fenestro por ĉiu ento. 0 (defaŭlte) kaptas momentfoton ĉe
-      ĉiu ĉirkaŭvolvita skribo. N>0 kaptas maksimume unu momentfoton po N minutoj
-      por ĉiu ento. Gamo 0–1440.
+    name: Auto-backup throttle (minutes)
+    description: How often auto-backup may capture the same entity. 0 captures on
+      every write; N above 0 captures at most one snapshot per N minutes per entity.
+      Range 0–1440.
   auto_backup_retain_per_entity:
-    name: Aŭtomata sekurkopia reteno (por ĉiu ento)
-    description: Maksimuma nombro de momentfotoj konservitaj por ĉiu ento. Pli malnovaj
-      momentfotoj preter ĉi tiu limo estas forigitaj ĉe ĉiu sukcesa kapto. Defaŭlte
-      100, gamo 1–10000.
+    name: Auto-backup retention (per entity)
+    description: The most snapshots kept per entity. Each new capture removes the
+      oldest snapshots above this number. Range 1–10000.
   enable_snapshot_actions:
     name: Permesi plenajn akompanajn agojn de HA-momentfotoj
-    description: Permesi al AI-asistantoj administri plenajn momentfotojn de Home
-      Assistant per ha_manage_backup(scope='snapshot') kaj la ekvivalentaj rezervaj
-      servoj kaj komandoj en ha_call_service. Malŝalti ĉi tion blokas ĉiun momentfotan
-      agon, inkluzive de listigado, dum redaktaj rezervoj restas disponeblaj. Forigo
-      de momentfotoj nur disponeblas per ha_manage_backup, ankaŭ postulas enable_snapshot_delete,
-      kaj ĝiaj protektoj ankoraŭ validas. Ŝaltita defaŭlte. Ŝanĝu ĉi tiun agordon
-      aŭ uzu la retpaĝan Agordan UI-rigardeton Backups; postulas restartigon en la
-      aplikaĵo.
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Igi rezervadministradon nur-legebla
-    description: Limigi ha_manage_backup al listigado, rigardado kaj komparado de
-      redaktaj rezervoj, kaj listigado de plenaj HA-momentfotoj kiam momentfotaj agoj
-      estas ebligitaj. Blokas manan kreadon de rezervoj, restarigon (inkluzive de
-      redaktaj restarigoj), kaj forigon, inkluzive de la ekvivalentaj rezervaj servoj
-      kaj komandoj en ha_call_service. Aŭtomataj antaŭredaktaj rezervoj daŭras, kaj
-      homaj agoj en la reta Agorda UI restas disponeblaj. Malŝaltita defaŭlte; postulas
-      restartigon en la aplikaĵo.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
   enable_snapshot_delete:
     name: Permesi forigon de momentfotoj
-    description: Permesas al ha_manage_backup forigi plenajn HA-momentfotajn tarball-ojn
-      (scope='snapshot', action='delete'). Malŝaltita defaŭlte — momentfoto povas
-      esti la lasta reakira punkto post erara ŝanĝo, do homo devas elekti ĉi tie.
-      Eĉ kiam ŝaltita, planitaj sekurkopioj, la plej nova restanta momentfoto, kaj
-      io ajn pli juna ol la suba aĝlimo restas protektitaj.
+    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
+      snapshot may be the last way back after a mistaken change, so a person must
+      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
+      the minimum age stay protected.
   snapshot_delete_min_age_days:
-    name: Minimuma aĝo de momentfoto por forigo (tagoj)
-    description: Momentfoto devas esti almenaŭ tiom aĝa antaŭ ol ĝi povas esti forigita.
-      Gamo 0–365; 0 malaktivigas la limon (la protektoj de la plej nova momentfoto
-      kaj planitaj sekurkopioj ankoraŭ validas). Defaŭlte 7.
+    name: Minimuma aĝo de momentfoto por forigi (tagoj)
+    description: How old a snapshot must be, in days, before it can be deleted. 0
+      turns off the age limit; the newest snapshot and scheduled backups stay protected.
+      Range 0–365.
   disabled_tools:
     name: Malaktivigitaj iloj (disigitaj per komoj)
     description: Iloj listigitaj ĉi tie estas devige malŝaltitaj kaj ŝlositaj en la

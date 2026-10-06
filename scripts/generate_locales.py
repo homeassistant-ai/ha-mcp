@@ -3,7 +3,8 @@
 The canonical store is ``src/ha_mcp/settings_ui/locales/<code>.json`` — one
 file per language holding every translatable string, including the add-on
 option strings under ``addon.<key>.*`` / ``addon_stable.<key>.*`` and the
-shared feature strings under ``features.<key>.*``. The derived catalogs stay
+strings shared with the settings UI under ``features.<key>.*``,
+``advanced.<key>.*`` and ``backup.fields.<key>.*``. The derived catalogs stay
 committed at the fixed paths Supervisor and the web UI read them from:
 
 - ``homeassistant-addon/translations/<code>.yaml``
@@ -18,9 +19,13 @@ key and field the text is resolved in override order:
 1. ``addon_<flavor>.<key>.<name|description>`` — flavor-specific wording
 2. ``features.<key>.<label|help>`` — strings shared with the settings UI
 3. ``addon.<key>.<name|description>`` — add-on-only options
+4. ``advanced.<key>.<label|help>`` and ``backup.fields.<key>.<label|help>`` —
+   the settings UI's own rows for an option it also shows
 
 A locale that lacks a key falls back to English, mirroring the settings UI's
 own per-key fallback, so every generated catalog is structurally complete.
+An option whose schema type carries a range (``int(0,32)``) gets
+``common.range`` appended to its description.
 
 Best-effort locales are still generated when their canonical catalog is valid.
 If one is invalid, generation uses an empty override map (therefore English
@@ -65,6 +70,7 @@ FEATURE_META_BEGIN = "// FEATURE_META:BEGIN GENERATED (scripts/generate_locales.
 FEATURE_META_END = "// FEATURE_META:END GENERATED"
 
 _FEATURE_KEY_RE = re.compile(r"^features\.([a-z0-9_]+)\.label$")
+_SCHEMA_RANGE_RE = re.compile(r"^(?:int|float)\(([^,]+),([^)]+)\)\??$")
 
 
 def _validate_best_effort_messages(
@@ -125,10 +131,30 @@ def load_catalogs() -> dict[str, dict[str, str]]:
     return catalogs
 
 
+def schema(addon_dir: Path) -> dict[str, str]:
+    """One flavor's ``config.yaml`` ``schema:``, in schema order."""
+    config = yaml.safe_load((addon_dir / "config.yaml").read_text(encoding="utf-8"))
+    return {key: str(value) for key, value in config["schema"].items()}
+
+
 def schema_keys(addon_dir: Path) -> list[str]:
     """The option keys of one flavor's ``config.yaml``, in schema order."""
-    config = yaml.safe_load((addon_dir / "config.yaml").read_text(encoding="utf-8"))
-    return list(config["schema"])
+    return list(schema(addon_dir))
+
+
+def range_sentence(
+    messages: dict[str, str], english: dict[str, str], schema_type: str
+) -> str:
+    """``common.range`` filled from an ``int(min,max)`` schema type, or "".
+
+    The catalog sentences leave ranges out; the settings UI renders them
+    from the same metadata the schema is generated from.
+    """
+    match = _SCHEMA_RANGE_RE.match(schema_type)
+    if match is None:
+        return ""
+    template = messages.get("common.range", english["common.range"])
+    return template.replace("{min}", match.group(1)).replace("{max}", match.group(2))
 
 
 def feature_keys_in_order(english: dict[str, str]) -> list[str]:
@@ -153,6 +179,8 @@ def resolve_text(
         f"addon_{flavor}.{key}.{field}",
         f"features.{key}.{ui_field}",
         f"addon.{key}.{field}",
+        f"advanced.{key}.{ui_field}",
+        f"backup.fields.{key}.{ui_field}",
     )
     # Locale-then-English per candidate, not all-locale-then-all-English: a
     # flavor override that the locale has not translated yet must fall back
@@ -166,13 +194,14 @@ def resolve_text(
             return english[candidate]
     raise SystemExit(
         f"no canonical string for add-on option {key!r} field {field!r} — add "
-        f"addon.{key}.{field} (or features.{key}.{ui_field}) to en.json"
+        f"addon.{key}.{field} (or features.{key}.{ui_field}, "
+        f"advanced.{key}.{ui_field} or backup.fields.{key}.{ui_field}) to en.json"
     )
 
 
 def addon_yaml(
     flavor: str,
-    keys: list[str],
+    option_schema: dict[str, str],
     messages: dict[str, str],
     english: dict[str, str],
     code: str,
@@ -181,9 +210,16 @@ def addon_yaml(
     configuration = {
         key: {
             "name": resolve_text(messages, english, flavor, key, "name"),
-            "description": resolve_text(messages, english, flavor, key, "description"),
+            "description": " ".join(
+                part
+                for part in (
+                    resolve_text(messages, english, flavor, key, "description"),
+                    range_sentence(messages, english, schema_type),
+                )
+                if part
+            ),
         }
-        for key in keys
+        for key, schema_type in option_schema.items()
     }
     body: str = yaml.safe_dump(
         {"configuration": configuration},
@@ -195,9 +231,9 @@ def addon_yaml(
         "---\n"
         f"# GENERATED FILE — do not edit. Translations live in\n"
         f"# src/ha_mcp/settings_ui/locales/{code}.json (keys addon.*, "
-        "features.*,\n"
-        f"# addon_{flavor}.*); regenerate with: python scripts/generate_locales.py\n"
-        + body
+        "features.*, advanced.*,\n"
+        f"# backup.fields.*, addon_{flavor}.*); regenerate with: "
+        "python scripts/generate_locales.py\n" + body
     )
 
 
@@ -251,10 +287,10 @@ def generated_files() -> dict[Path, str]:
     english = catalogs["en"]
     outputs: dict[Path, str] = {}
     for flavor, addon_dir in ADDON_FLAVORS.items():
-        keys = schema_keys(addon_dir)
+        option_schema = schema(addon_dir)
         for code, messages in catalogs.items():
             outputs[addon_dir / "translations" / f"{code}.yaml"] = addon_yaml(
-                flavor, keys, messages, english, code
+                flavor, option_schema, messages, english, code
             )
     outputs[SETTINGS_JS] = settings_js_with_block(feature_meta_block(english))
     return outputs
