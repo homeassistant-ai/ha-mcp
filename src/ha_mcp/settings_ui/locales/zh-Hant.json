@@ -303,6 +303,7 @@
     "backup.restore.safety": "安全備份：{name}。在還原此安全備份以恢復先前的狀態之前，請先檢查目前的設定。",
     "backup.restore.reason.unsupported_form": "Home Assistant 未提供適合此還原的表單。",
     "backup.restore.reason.unsupported_fields": "目前的表單不接受某些快照欄位。",
+    "backup.restore.reason.identity_changed": "某些快照欄位未由任何還原表單提供（它們是在建立時設定的），且自備份以來這些欄位已變更。",
     "backup.restore.reason.validation_failed": "Home Assistant 拒絕已還原的設定，因為設定無效。",
     "backup.restore.reason.flow_aborted": "Home Assistant 已中止還原流程。",
     "backup.restore.fields": "欄位：{fields}",

@@ -480,6 +480,7 @@
     "messages.backup.restore.mismatched": "8f84b76c28ef3eaa",
     "messages.backup.restore.not_applied": "5db652ef5abcd254",
     "messages.backup.restore.reason.flow_aborted": "4f480eb469b9ded6",
+    "messages.backup.restore.reason.identity_changed": "f6f1424b84fa5bff",
     "messages.backup.restore.reason.unsupported_fields": "8ecd8f6bc116834c",
     "messages.backup.restore.reason.unsupported_form": "4548b6f3720f5bf1",
     "messages.backup.restore.reason.validation_failed": "caf4bafa6ee35e33",

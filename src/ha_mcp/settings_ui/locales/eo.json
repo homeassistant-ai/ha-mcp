@@ -303,6 +303,7 @@
     "backup.restore.safety": "Sekureca sekurkopio: {name}. Inspektu la nunan agordon antaŭ restarigi ĉi tiun sekurecan sekurkopion por rekuperi la antaŭan staton.",
     "backup.restore.reason.unsupported_form": "Home Assistant ne provizis taŭgan formularon por ĉi tiu restarigo.",
     "backup.restore.reason.unsupported_fields": "Kelkaj kampoj de la momentfoto ne estas akceptitaj de la nuna formularo.",
+    "backup.restore.reason.identity_changed": "Iuj konservoskopaj kampoj ne estas ofertataj de iu ajn restaŭra formularo (ili estas agorditaj dum kreado), kaj ili ŝanĝiĝis ekde la sekurkopio.",
     "backup.restore.reason.validation_failed": "Home Assistant malakceptis la restarigitan agordon kiel malvalidan.",
     "backup.restore.reason.flow_aborted": "Home Assistant ĉesigis la restarigan fluon.",
     "backup.restore.fields": "Kampoj: {fields}",

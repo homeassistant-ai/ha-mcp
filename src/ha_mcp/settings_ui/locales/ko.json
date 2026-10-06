@@ -303,6 +303,7 @@
     "backup.restore.safety": "안전 백업: {name}. 이전 상태로 복구하기 위해 이 안전 백업을 복원하기 전에 현재 설정을 검토하세요.",
     "backup.restore.reason.unsupported_form": "Home Assistant가 이 복원에 적합한 양식을 제공하지 않았습니다.",
     "backup.restore.reason.unsupported_fields": "일부 스냅샷 필드가 현재 양식에서 허용되지 않습니다.",
+    "backup.restore.reason.identity_changed": "일부 스냅샷 필드는 복원 폼에서 제공되지 않으며(생성 시 설정됨) 백업 이후 변경되었습니다.",
     "backup.restore.reason.validation_failed": "Home Assistant가 복원된 설정이 잘못되었다고 거부했습니다.",
     "backup.restore.reason.flow_aborted": "Home Assistant가 복원 흐름을 중단했습니다.",
     "backup.restore.fields": "필드: {fields}",

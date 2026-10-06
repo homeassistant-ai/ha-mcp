@@ -303,6 +303,7 @@
     "backup.restore.safety": "Veiligheidsreservekopie: {name}. Inspecteer de huidige configuratie voordat je deze veiligheidsreservekopie terugzet om de vorige staat te herstellen.",
     "backup.restore.reason.unsupported_form": "Home Assistant heeft geen formulier geleverd dat geschikt is voor deze terugzetting.",
     "backup.restore.reason.unsupported_fields": "Sommige snapshotvelden worden niet geaccepteerd door het huidige formulier.",
+    "backup.restore.reason.identity_changed": "Sommige snapshotvelden worden door geen enkel herstelformulier aangeboden (deze worden ingesteld bij het aanmaken) en zijn gewijzigd sinds de backup.",
     "backup.restore.reason.validation_failed": "Home Assistant heeft de teruggezette configuratie afgewezen als ongeldig.",
     "backup.restore.reason.flow_aborted": "Home Assistant heeft het terugzetproces afgebroken.",
     "backup.restore.fields": "Velden: {fields}",

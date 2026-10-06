@@ -303,6 +303,7 @@
     "backup.restore.safety": "Kopia zapasowa zabezpieczająca: {name}. Sprawdź bieżącą konfigurację przed przywróceniem tej kopii zabezpieczającej, aby odzyskać poprzedni stan.",
     "backup.restore.reason.unsupported_form": "Home Assistant nie udostępnił formularza odpowiedniego do tego przywracania.",
     "backup.restore.reason.unsupported_fields": "Niektóre pola migawki nie są akceptowane przez bieżący formularz.",
+    "backup.restore.reason.identity_changed": "Niektóre pola kopii zapasowej nie są obsługiwane przez żaden formularz przywracania (są ustawiane podczas tworzenia) i uległy zmianie od czasu utworzenia kopii zapasowej.",
     "backup.restore.reason.validation_failed": "Home Assistant odrzucił przywróconą konfigurację jako nieprawidłową.",
     "backup.restore.reason.flow_aborted": "Home Assistant przerwał proces przywracania.",
     "backup.restore.fields": "Pola: {fields}",

@@ -303,6 +303,7 @@
     "backup.restore.safety": "Bezpečnostní záloha: {name}. Před obnovením této bezpečnostní zálohy za účelem obnovení předchozího stavu zkontrolujte aktuální konfiguraci.",
     "backup.restore.reason.unsupported_form": "Home Assistant neposkytl formulář vhodný pro toto obnovení.",
     "backup.restore.reason.unsupported_fields": "Některá pole snímku nejsou aktuálním formulářem akceptována.",
+    "backup.restore.reason.identity_changed": "Některá pole snímku nejsou v žádném formuláři pro obnovení k dispozici (jsou nastavena při vytvoření) a od vytvoření zálohy se změnila.",
     "backup.restore.reason.validation_failed": "Home Assistant odmítl obnovenou konfiguraci jako neplatnou.",
     "backup.restore.reason.flow_aborted": "Home Assistant přerušil proces obnovení.",
     "backup.restore.fields": "Pole: {fields}",

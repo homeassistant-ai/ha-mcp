@@ -303,6 +303,7 @@
     "backup.restore.safety": "Qoruyucu ehtiyat nüsxə: {name}. Əvvəlki vəziyyətə qayıtmaq üçün bu qoruyucu ehtiyat nüsxəni bərpa etməzdən əvvəl cari konfiqurasiyanı yoxlayın.",
     "backup.restore.reason.unsupported_form": "Home Assistant bu bərpa üçün uyğun forma təqdim etmədi.",
     "backup.restore.reason.unsupported_fields": "Anlıq nüsxənin bəzi sahələri cari forma tərəfindən qəbul edilmir.",
+    "backup.restore.reason.identity_changed": "Bəzi ehtiyat nüsxə sahələri heç bir bərpa forması tərəfindən təklif olunmur (onlar yaradılarkən təyin edilir) və onlar ehtiyat nüsxəsi yaradıldıqdan sonra dəyişdirilib.",
     "backup.restore.reason.validation_failed": "Home Assistant bərpa edilmiş konfiqurasiyanı etibarsız hesab edərək rədd etdi.",
     "backup.restore.reason.flow_aborted": "Home Assistant bərpa prosesini dayandırdı.",
     "backup.restore.fields": "Sahələr: {fields}",

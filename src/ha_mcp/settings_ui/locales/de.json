@@ -303,6 +303,7 @@
     "backup.restore.safety": "Sicherheitsbackup: {name}. Überprüfe die aktuelle Konfiguration, bevor du dieses Sicherheitsbackup wiederherstellst, um den vorherigen Zustand wiederherzustellen.",
     "backup.restore.reason.unsupported_form": "Home Assistant hat kein für diese Wiederherstellung geeignetes Formular bereitgestellt.",
     "backup.restore.reason.unsupported_fields": "Einige Snapshot-Felder werden vom aktuellen Formular nicht akzeptiert.",
+    "backup.restore.reason.identity_changed": "Einige Snapshot-Felder werden von keinem Wiederherstellungsformular angeboten (sie werden bei der Erstellung festgelegt) und haben sich seit dem Backup geändert.",
     "backup.restore.reason.validation_failed": "Home Assistant hat die wiederhergestellte Konfiguration als ungültig abgelehnt.",
     "backup.restore.reason.flow_aborted": "Home Assistant hat den Wiederherstellungsvorgang abgebrochen.",
     "backup.restore.fields": "Felder: {fields}",

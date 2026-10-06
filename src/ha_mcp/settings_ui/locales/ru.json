@@ -303,6 +303,7 @@
     "backup.restore.safety": "Резервная копия безопасности: {name}. Проверьте текущую конфигурацию перед восстановлением этой резервной копии безопасности, чтобы вернуть предыдущее состояние.",
     "backup.restore.reason.unsupported_form": "Home Assistant не предоставил форму, подходящую для этого восстановления.",
     "backup.restore.reason.unsupported_fields": "Некоторые поля снимка не принимаются текущей формой.",
+    "backup.restore.reason.identity_changed": "Некоторые поля резервной копии не поддерживаются ни одной формой восстановления (они задаются при создании) и изменились с момента создания бэкапа.",
     "backup.restore.reason.validation_failed": "Home Assistant отклонил восстановленную конфигурацию как недействительную.",
     "backup.restore.reason.flow_aborted": "Home Assistant прервал процесс восстановления.",
     "backup.restore.fields": "Поля: {fields}",

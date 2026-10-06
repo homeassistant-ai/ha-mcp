@@ -303,6 +303,7 @@
     "backup.restore.safety": "Säkerhetskopia: {name}. Inspektera den aktuella konfigurationen innan du återställer denna säkerhetskopia för att återställa det föregående tillståndet.",
     "backup.restore.reason.unsupported_form": "Home Assistant tillhandahöll inte ett formulär som passar för denna återställning.",
     "backup.restore.reason.unsupported_fields": "Vissa fält i ögonblicksbilden accepteras inte av det aktuella formuläret.",
+    "backup.restore.reason.identity_changed": "Vissa fält i ögonblicksbilden erbjuds inte av någon återställningsformulär (de ställs in vid skapandet), och de har ändrats sedan säkerhetskopieringen.",
     "backup.restore.reason.validation_failed": "Home Assistant avvisade den återställda konfigurationen som ogiltig.",
     "backup.restore.reason.flow_aborted": "Home Assistant avbröt återställningsflödet.",
     "backup.restore.fields": "Fält: {fields}",

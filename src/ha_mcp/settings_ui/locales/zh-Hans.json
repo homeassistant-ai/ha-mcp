@@ -303,6 +303,7 @@
     "backup.restore.safety": "安全备份：{name}。在恢复此安全备份以恢复先前的状态之前，请检查当前配置。",
     "backup.restore.reason.unsupported_form": "Home Assistant 未提供适合此恢复的表单。",
     "backup.restore.reason.unsupported_fields": "当前表单不接受某些快照字段。",
+    "backup.restore.reason.identity_changed": "某些备份字段不由任何还原表单提供（它们在创建时设置），并且它们在备份后已更改。",
     "backup.restore.reason.validation_failed": "Home Assistant 拒绝了恢复的配置，因为其无效。",
     "backup.restore.reason.flow_aborted": "Home Assistant 中止了恢复流程。",
     "backup.restore.fields": "字段：{fields}",

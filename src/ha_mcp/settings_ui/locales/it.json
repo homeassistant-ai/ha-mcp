@@ -303,6 +303,7 @@
     "backup.restore.safety": "Backup di sicurezza: {name}. Ispeziona la configurazione corrente prima di ripristinare questo backup di sicurezza per recuperare lo stato precedente.",
     "backup.restore.reason.unsupported_form": "Home Assistant non ha fornito un modulo adatto per questo ripristino.",
     "backup.restore.reason.unsupported_fields": "Alcuni campi dello snapshot non sono accettati dal modulo corrente.",
+    "backup.restore.reason.identity_changed": "Alcuni campi dello snapshot non sono offerti da alcun modulo di ripristino (vengono impostati alla creazione) e sono cambiati rispetto al backup.",
     "backup.restore.reason.validation_failed": "Home Assistant ha rifiutato la configurazione ripristinata in quanto non valida.",
     "backup.restore.reason.flow_aborted": "Home Assistant ha interrotto il flusso di ripristino.",
     "backup.restore.fields": "Campi: {fields}",

@@ -303,6 +303,7 @@
     "backup.restore.safety": "Copia de seguridad de seguridad: {name}. Inspecciona la configuración actual antes de restaurar esta copia para recuperar el estado anterior.",
     "backup.restore.reason.unsupported_form": "Home Assistant no proporcionó un formulario adecuado para esta restauración.",
     "backup.restore.reason.unsupported_fields": "El formulario actual no acepta algunos campos de la instantánea.",
+    "backup.restore.reason.identity_changed": "Algunos campos de la copia de seguridad no son ofrecidos por ningún formulario de restauración (se establecen en la creación) y han cambiado desde el respaldo.",
     "backup.restore.reason.validation_failed": "Home Assistant rechazó la configuración restaurada por no ser válida.",
     "backup.restore.reason.flow_aborted": "Home Assistant canceló el proceso de restauración.",
     "backup.restore.fields": "Campos: {fields}",
