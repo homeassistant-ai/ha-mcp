@@ -55,7 +55,7 @@ def test_card_positions_cover_stacks_sections_and_conditional_cards() -> None:
     ]
 
 
-def test_missing_and_unknown_types_are_flagged_and_custom_cards_skipped() -> None:
+def test_missing_and_unknown_types_are_flagged() -> None:
     definitions = _definitions({"tile"}, {"tile": None})
     cards = [{"entity": "light.x"}, {"type": "tyle"}, {"type": "custom:x-card"}]
 

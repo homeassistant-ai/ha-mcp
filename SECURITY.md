@@ -32,6 +32,19 @@ Consequences:
   [python_sandbox.py](src/ha_mcp/utils/python_sandbox.py) for the explicit
   "not a security boundary" note.
 
+### Custom dashboard cards are the user's own code
+
+To describe and check `custom:` cards, the `ha_mcp_tools` component runs the
+JavaScript files the user registered as dashboard resources (`/hacsfiles/...`,
+`/local/...`) in a QuickJS sandbox inside Home Assistant. ha-mcp installs no
+card; it only runs cards the user chose to install, the same files their
+browsers already run with a logged-in Home Assistant session. Deciding which
+cards are safe to install is the user's responsibility. The sandbox exposes no
+network, filesystem or process APIs, and caps each card's memory, file size and
+run time to contain a broken card, not an adversarial one. The DOM library it
+runs on (linkedom) is fetched from the npm registry at a pinned version and
+checked against its integrity hash before use.
+
 ### Local network is the trusted zone for standard mode
 
 The HTTP entrypoint (`ha-mcp-web`) authenticates by URL-path
