@@ -26,7 +26,7 @@ else
 fi
 
 # renovate: datasource=pypi depName=python-semantic-release
-PSR_VERSION="10.6.2"
+PSR_VERSION="10.7.0"
 
 next=$(uvx --quiet --from "python-semantic-release==${PSR_VERSION}" \
   semantic-release --noop version --print 2>/dev/null | tail -n 1)
