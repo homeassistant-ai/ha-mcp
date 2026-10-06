@@ -25,8 +25,15 @@ async def test_card_fields_come_from_the_card_editor(mcp_client):
         assert failure["error"]["code"] == "COMPONENT_NOT_INSTALLED"
         return
 
-    tile = await mcp.call_tool_success(
-        "ha_config_get_dashboard", {"card_type": "tile", "describe": True}
+    # Lazy installation/indexing can outlast one bounded describe request on
+    # a cold HAOS runner. Retry the production path, without preinstalling it.
+    tile = await wait_for_tool_result(
+        mcp_client,
+        "ha_config_get_dashboard",
+        {"card_type": "tile", "describe": True},
+        lambda data: bool(data.get("fields")),
+        timeout=90,
+        description="built-in card production first-use initialization",
     )
     fields = {f["name"]: f for f in tile["fields"]}
     assert fields["entity"]["type"] == "entity"
