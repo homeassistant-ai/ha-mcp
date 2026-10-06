@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .. import helper_collections
+from .. import card_definitions, helper_collections
 
 __all__ = [
     "ALL_SEARCH_TYPES",
@@ -172,6 +172,7 @@ CAPABILITIES: list[str] = [
     # this is advertised; without it the error is returned as Core reported it.
     "template_diagnose",
     *helper_collections.CAPABILITIES,
+    *card_definitions.CAPABILITIES,
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates

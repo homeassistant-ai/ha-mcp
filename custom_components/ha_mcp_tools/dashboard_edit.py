@@ -14,6 +14,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from .card_definitions import async_card_warnings
 from .dashboard_patch import apply_dashboard_patch
 
 if TYPE_CHECKING:
@@ -206,7 +207,8 @@ async def async_edit_dashboard(
             "post_write_verified": False,
             "warnings": [
                 "Dashboard save completed, but its current config could not be verified. "
-                "Read the dashboard before editing it again."
+                "Read the dashboard before editing it again.",
+                *await async_card_warnings(hass, fallback),
             ],
         }
     return {
@@ -216,4 +218,11 @@ async def async_edit_dashboard(
         "previous_config_size": previous_config_size,
         "write_committed": True,
         "post_write_verified": True,
+        **await _card_warnings(hass, config),
     }
+
+
+async def _card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> dict[str, Any]:
+    """The saved cards' problems as the frontend would flag them, if any."""
+    warnings = await async_card_warnings(hass, config)
+    return {"warnings": warnings} if warnings else {}

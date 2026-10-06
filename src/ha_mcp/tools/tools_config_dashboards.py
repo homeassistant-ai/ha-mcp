@@ -67,6 +67,7 @@ from .config_write_helpers import (
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
 )
+from .dashboard_card_describe import describe_card_response
 from .dashboard_edit_errors import (
     raise_dashboard_edit_error,
     raise_dashboard_edit_fetch_error,
@@ -1874,6 +1875,10 @@ class DashboardConfigTools:
                 "find across all storage-mode dashboards. Ignored otherwise."
             ),
         ] = None,
+        describe: Annotated[
+            bool,
+            Field(description="Return card_type's fields from HA's card editor"),
+        ] = False,
     ) -> "dict[str, Any] | ToolResult":
         """Get dashboard info - list all dashboards, get config, or search for cards.
 
@@ -1929,17 +1934,12 @@ class DashboardConfigTools:
         - List all dashboards: ha_config_get_dashboard(list_only=True)
         - Get one view only: ha_config_get_dashboard(url_path="lovelace-mobile", view_path="office")
         - Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path="my-dash", entity_id="sensor.temperature_*")
-        - Find heading: ha_config_get_dashboard(url_path="my-dash", heading="Climate", card_type="heading")
         - Which dashboards use an entity: ha_config_get_dashboard(mode="search", query="light.bedroom")
-
-        SEARCH WORKFLOW EXAMPLE:
-        1. find = ha_config_get_dashboard(url_path="my-dash", entity_id="light.bedroom")
-        2. ha_config_set_dashboard(
-               url_path="my-dash",
-               config_hash=find["config_hash"],
-               python_transform=f'config{find["matches"][0]["python_path"]}["icon"] = "mdi:lamp"'
-           )
+        - Fields of a card type before writing one (omit card_type to list types):
+          ha_config_get_dashboard(card_type="tile", describe=True)
         """
+        if describe:
+            return await describe_card_response(self._client, card_type)
         screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
         search_mode = (
             entity_id is not None or card_type is not None or heading is not None
