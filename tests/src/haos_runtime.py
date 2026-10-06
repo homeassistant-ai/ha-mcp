@@ -1274,7 +1274,7 @@ def stage_home_assistant_tls_in_qcow2(image_path: Path) -> Path:
 
 def stage_embedded_server_feature_flags_in_qcow2(
     image_path: Path,
-    feature_flags: dict[str, bool],
+    feature_flags: dict[str, bool | str],
     *,
     filename: str = "feature_flags.json",
 ) -> None:
