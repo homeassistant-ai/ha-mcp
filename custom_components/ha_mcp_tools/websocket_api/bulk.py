@@ -89,6 +89,8 @@ async def _bulk_call_service_prep(
 
     # 2. Normalize + pre-state capture (synchronous in-memory reads) per op.
     ops = [_bulk_op_record(hass, op, wait=wait) for op in operations]
+    for record in ops:
+        record["context"] = msg.get("ha_mcp_context")
 
     # 3. Register-before-fire (D5): every confirmable op's listener is registered in
     #    one synchronous pass BEFORE any dispatch; ALL unsubs torn down in finally.
@@ -181,6 +183,7 @@ async def _bulk_dispatch_one(hass: HomeAssistant, op: dict[str, Any]) -> None:
         dict(op["service_data"]),
         blocking=True,
         return_response=False,
+        context=op.get("context"),
     )
     op["dispatched"] = True
 

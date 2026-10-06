@@ -37,6 +37,7 @@ from ..errors import (
     create_validation_error,
 )
 from ..utils.usage_logger import log_tool_call
+from .coercion import UNSET
 
 logger = logging.getLogger(__name__)
 
@@ -672,7 +673,9 @@ def log_tool_usage(func: Any) -> Any:
             execution_time_ms = (time.time() - start_time) * 1000
             log_tool_call(
                 tool_name=tool_name,
-                parameters=kwargs,
+                # UNSET means the caller omitted the argument; ha_report_issue
+                # returns these entries as JSON, so the sentinel must not land.
+                parameters={k: v for k, v in kwargs.items() if v is not UNSET},
                 execution_time_ms=execution_time_ms,
                 success=success,
                 error_message=error_message,

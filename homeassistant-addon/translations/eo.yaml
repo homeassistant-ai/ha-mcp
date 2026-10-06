@@ -3,6 +3,21 @@
 # src/ha_mcp/settings_ui/locales/eo.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Kontroli TLS-atestilon
+    description: Kontrolu la TLS-atestilon de la servilo Home Assistant. La programo
+      (aldonaĵo) konektiĝas per la provkuratora prokurservilo (Supervisor proxy),
+      do ĉi tio kutime havas neniun efikon kaj devas resti ebligita. Malŝaltu nur
+      se vi reagordis la programon (aldonaĵo) por komuniki kun HA per publika HTTPS-gastnomo
+      kun memsubskribita atestilo aŭ malkongruo de gastnomo. Malŝalto malfortigas
+      transportan sekurecon — lasu ebligita krom se vi scias, ke vi bezonas tion.
+      Postulas restartigon por ekvalidi.
+  ha_tool_concurrency:
+    name: Konkureco de hejmaŭtomatigaj iloj de Home Assistant
+    description: Laŭvola limo pri eksteraj vokoj al Home Assistant-iloj tra ĉiuj sesioj.
+      Interna REST-, WebSocket-, kaj perila disbranĉiĝa konkureco restas neŝanĝita.
+      0 tenas la senliman konduton. Voko atendanta je kapablo malsukcesas post 60
+      sekundoj.
   backup_hint:
     name: Nivelo de sugesto por plena HA-momentfoto (por LLM)
     description: 'Agordas la vortumon de la sugesto, kiun la LLM vidas en la
@@ -20,12 +35,6 @@ configuration:
       /
 
       ktp., uzu la apartan ŝaltilon **Ebligi aŭtomatan sekurkopion de redaktoj** sube.'
-  secret_path:
-    name: Anstataŭigo de sekreta vojo
-    description: 'Laŭvola kutima HTTP-vojo por la MCP-servilo. Lasu malplena por uzi
-      la aŭtomate generitan sekuran vojon.
-
-      '
   enable_tool_search:
     name: Ebligi ilo-serĉon
     description: 'Anstataŭigu la plenan il-katalogon per serĉ-bazita malkovro. Reduktas
@@ -112,27 +121,6 @@ configuration:
       la sola eldonanto de la agnoska ŝlosilo. Infano de la opcio „Aligi plejbonajn
       praktikajn kapablojn ĉe skriboj” supre kaj inerta dum tiu gepatro estas malŝaltita.
       Postulas restartigon por ekvalidi.'
-  ha_tool_concurrency:
-    name: Konkureco de hejmaŭtomatigaj iloj de Home Assistant
-    description: Laŭvola limo pri eksteraj vokoj al Home Assistant-iloj tra ĉiuj sesioj.
-      Interna REST-, WebSocket-, kaj perila disbranĉiĝa konkureco restas neŝanĝita.
-      0 tenas la senliman konduton. Voko atendanta je kapablo malsukcesas post 60
-      sekundoj.
-  disabled_tools:
-    name: Malaktivigitaj iloj (disigitaj per komoj)
-    description: Iloj listigitaj ĉi tie estas devige malŝaltitaj kaj ŝlositaj en la
-      reta Agorda UI (langeto 'Iloj') — ili ne povas esti re-ebligitaj tie sen unue
-      malaktivigi ĉi tiun opcion. Malgranda aro de devigaj iloj (ha_search, ha_get_overview,
-      ha_get_state, ha_report_issue, ha_manage_backup) ne povas esti malaktivigitaj
-      kaj daŭre funkcias eĉ se listigitaj ĉi tie. ha_get_skill_guide povas esti malaktivigita
-      nur dum la strikta plejbonaj praktikoj reĝimo (enable_strict_mandatory_bps)
-      estas malŝaltita. Ilnomoj disigitaj per komoj (ekz. ha_call_event,ha_eval_template).
-  pinned_tools:
-    name: Fiksitaj iloj (disigitaj per komoj)
-    description: Iloj listigitaj ĉi tie estas ŝlositaj fiksitaj — ili aperas ĉe la
-      supro de la langeto 'Iloj' kaj ne povas esti malfiksitaj de la reta Agorda UI
-      sen unue malaktivigi ĉi tiun opcion. Utila kombine kun 'Ilo-Serĉo'. Ilnomoj
-      disigitaj per komoj.
   enable_auto_backup:
     name: Ebligi aŭtomatan sekurkopion de redaktoj
     description: 'Kaptas momentfoton por ĉiu ento antaŭ ĉiu ĉirkaŭvolvita skriba/detrua
@@ -151,23 +139,6 @@ configuration:
       ĝin. Defaŭlte ŝaltita; malmarkado malaktivigas la plejbone klopodajn kaptojn
       kaj malfunkciigas la dosierajn kaj krud-YAML-ilojn kun ili. Postulas restartigon
       por efektiviĝi.'
-  enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
-  backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Aŭtomata sekurkopia limigo (minutoj)
     description: Limiga fenestro por ĉiu ento. 0 (defaŭlte) kaptas momentfoton ĉe
@@ -178,6 +149,25 @@ configuration:
     description: Maksimuma nombro de momentfotoj konservitaj por ĉiu ento. Pli malnovaj
       momentfotoj preter ĉi tiu limo estas forigitaj ĉe ĉiu sukcesa kapto. Defaŭlte
       100, gamo 1–10000.
+  enable_snapshot_actions:
+    name: Permesi plenajn akompanajn agojn de HA-momentfotoj
+    description: Permesi al AI-asistantoj administri plenajn momentfotojn de Home
+      Assistant per ha_manage_backup(scope='snapshot') kaj la ekvivalentaj rezervaj
+      servoj kaj komandoj en ha_call_service. Malŝalti ĉi tion blokas ĉiun momentfotan
+      agon, inkluzive de listigado, dum redaktaj rezervoj restas disponeblaj. Forigo
+      de momentfotoj nur disponeblas per ha_manage_backup, ankaŭ postulas enable_snapshot_delete,
+      kaj ĝiaj protektoj ankoraŭ validas. Ŝaltita defaŭlte. Ŝanĝu ĉi tiun agordon
+      aŭ uzu la retpaĝan Agordan UI-rigardeton Backups; postulas restartigon en la
+      aplikaĵo.
+  backup_read_only:
+    name: Igi rezervadministradon nur-legebla
+    description: Limigi ha_manage_backup al listigado, rigardado kaj komparado de
+      redaktaj rezervoj, kaj listigado de plenaj HA-momentfotoj kiam momentfotaj agoj
+      estas ebligitaj. Blokas manan kreadon de rezervoj, restarigon (inkluzive de
+      redaktaj restarigoj), kaj forigon, inkluzive de la ekvivalentaj rezervaj servoj
+      kaj komandoj en ha_call_service. Aŭtomataj antaŭredaktaj rezervoj daŭras, kaj
+      homaj agoj en la reta Agorda UI restas disponeblaj. Malŝaltita defaŭlte; postulas
+      restartigon en la aplikaĵo.
   enable_snapshot_delete:
     name: Permesi forigon de momentfotoj
     description: Permesas al ha_manage_backup forigi plenajn HA-momentfotajn tarball-ojn
@@ -190,12 +180,24 @@ configuration:
     description: Momentfoto devas esti almenaŭ tiom aĝa antaŭ ol ĝi povas esti forigita.
       Gamo 0–365; 0 malaktivigas la limon (la protektoj de la plej nova momentfoto
       kaj planitaj sekurkopioj ankoraŭ validas). Defaŭlte 7.
-  verify_ssl:
-    name: Kontroli TLS-atestilon
-    description: Kontrolu la TLS-atestilon de la servilo Home Assistant. La programo
-      (aldonaĵo) konektiĝas per la provkuratora prokurservilo (Supervisor proxy),
-      do ĉi tio kutime havas neniun efikon kaj devas resti ebligita. Malŝaltu nur
-      se vi reagordis la programon (aldonaĵo) por komuniki kun HA per publika HTTPS-gastnomo
-      kun memsubskribita atestilo aŭ malkongruo de gastnomo. Malŝalto malfortigas
-      transportan sekurecon — lasu ebligita krom se vi scias, ke vi bezonas tion.
-      Postulas restartigon por ekvalidi.
+  disabled_tools:
+    name: Malaktivigitaj iloj (disigitaj per komoj)
+    description: Iloj listigitaj ĉi tie estas devige malŝaltitaj kaj ŝlositaj en la
+      reta Agorda UI (langeto 'Iloj') — ili ne povas esti re-ebligitaj tie sen unue
+      malaktivigi ĉi tiun opcion. Malgranda aro de devigaj iloj (ha_search, ha_get_overview,
+      ha_get_state, ha_report_issue, ha_manage_backup) ne povas esti malaktivigitaj
+      kaj daŭre funkcias eĉ se listigitaj ĉi tie. ha_get_skill_guide povas esti malaktivigita
+      nur dum la strikta plejbonaj praktikoj reĝimo (enable_strict_mandatory_bps)
+      estas malŝaltita. Ilnomoj disigitaj per komoj (ekz. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Fiksitaj iloj (disigitaj per komoj)
+    description: Iloj listigitaj ĉi tie estas ŝlositaj fiksitaj — ili aperas ĉe la
+      supro de la langeto 'Iloj' kaj ne povas esti malfiksitaj de la reta Agorda UI
+      sen unue malaktivigi ĉi tiun opcion. Utila kombine kun 'Ilo-Serĉo'. Ilnomoj
+      disigitaj per komoj.
+  secret_path:
+    name: Anstataŭigo de sekreta vojo
+    description: 'Laŭvola kutima HTTP-vojo por la MCP-servilo. Lasu malplena por uzi
+      la aŭtomate generitan sekuran vojon.
+
+      '

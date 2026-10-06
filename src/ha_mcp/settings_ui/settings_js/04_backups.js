@@ -423,6 +423,7 @@ function backupRestoreOutcomeMessage(outcome = {}) {
   const reasons = {
     unsupported_form: t('backup.restore.reason.unsupported_form', {}, 'Home Assistant did not provide a form suitable for this restore.'),
     unsupported_fields: t('backup.restore.reason.unsupported_fields', {}, 'Some snapshot fields are not accepted by the current form.'),
+    identity_changed: t('backup.restore.reason.identity_changed', {}, 'Some snapshot fields are not offered by any restore form (they are set at creation), and they changed since the backup.'),
     validation_failed: t('backup.restore.reason.validation_failed', {}, 'Home Assistant rejected the restored configuration as invalid.'),
     flow_aborted: t('backup.restore.reason.flow_aborted', {}, 'Home Assistant aborted the restore flow.'),
   };
@@ -438,11 +439,14 @@ function backupRestoreOutcomeMessage(outcome = {}) {
     if (entryId) {
       message += '\n\n' + t('backup.restore.recreated_entry', {entry_id: entryId}, 'Recreated config entry: ' + entryId);
     }
-    const mapping = outcome.entity_id_mapping || result.entity_id_mapping || {};
-    if (mapping.restored_entity_id) {
-      message += '\n' + t('backup.restore.entity_mapping', {created: mapping.created_entity_id, restored: mapping.restored_entity_id}, 'Entity ID: ' + mapping.created_entity_id + ' → ' + mapping.restored_entity_id);
-    } else if (mapping.target_entity_id) {
-      message += '\n' + t('backup.restore.entity_mapping_unknown', {created: mapping.created_entity_id, target: mapping.target_entity_id}, 'Entity rename could not be confirmed: ' + mapping.created_entity_id + ' → ' + mapping.target_entity_id + '. Inspect the new entry before retrying.');
+    // One pair per recreated entity (a single pair from older servers).
+    const mappings = [].concat(outcome.entity_id_mapping || result.entity_id_mapping || []);
+    for (const mapping of mappings) {
+      if (mapping.restored_entity_id) {
+        message += '\n' + t('backup.restore.entity_mapping', {created: mapping.created_entity_id, restored: mapping.restored_entity_id}, 'Entity ID: ' + mapping.created_entity_id + ' → ' + mapping.restored_entity_id);
+      } else if (mapping.target_entity_id) {
+        message += '\n' + t('backup.restore.entity_mapping_unknown', {created: mapping.created_entity_id, target: mapping.target_entity_id}, 'Entity rename could not be confirmed: ' + mapping.created_entity_id + ' → ' + mapping.target_entity_id + '. Inspect the new entry before retrying.');
+      }
     }
     if (result.entity_ids_restored === false) {
       message += '\n' + t('backup.restore.mapping_unavailable', {}, 'This snapshot has no entity mapping; the recreated helper may have a new entity ID.');

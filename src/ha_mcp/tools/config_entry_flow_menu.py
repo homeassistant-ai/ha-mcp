@@ -183,3 +183,44 @@ def _flow_step_budget(config: dict[str, Any]) -> int:
         elif value is not None:
             selections += 1
     return 10 + 2 * selections
+
+
+# The option a menu-rooted helper stores its creation branch under.
+_MENU_BRANCH_KEYS = {
+    "template": "template_type",
+    "group": "group_type",
+    "random": "entity_type",
+}
+
+
+def answer_menu_from_snapshot(
+    progress: Any,
+    menu: dict[str, Any],
+    config: dict[str, Any],
+    helper_type: str,
+) -> dict[str, Any]:
+    """Pick the creation menu's branch the snapshot names.
+
+    A menu-rooted helper stores its branch among its options (template's
+    ``template_type``, group's ``group_type``); that key selects it, and no
+    creation form takes it. Other option values can also be menu names (a
+    template binary_sensor's ``device_class`` "light"), so the branch key is
+    looked up by helper type first and matched by value only for a type
+    without a known key.
+    """
+    if "next_step_id" in config:
+        return config
+    options = menu.get("menu_options")
+    choices = options if isinstance(options, list) else list(options or {})
+    branch_key = _MENU_BRANCH_KEYS.get(helper_type)
+    if branch_key is not None and config.get(branch_key) in choices:
+        keys = [branch_key]
+    else:
+        keys = [key for key, value in config.items() if value in choices]
+    if len(keys) != 1:
+        progress.refuse("unsupported_form")
+    progress.config.pop(keys[0])
+    return {
+        **{key: value for key, value in config.items() if key != keys[0]},
+        "next_step_id": config[keys[0]],
+    }

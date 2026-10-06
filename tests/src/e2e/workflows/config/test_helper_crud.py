@@ -518,22 +518,6 @@ class TestInputSelectCRUD:
         )
         logger.info("Input select cleanup complete")
 
-    async def test_input_select_requires_options(self, mcp_client):
-        """Test that input_select requires options."""
-        logger.info("Testing input_select without options (should fail)")
-
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_config_set_helper",
-            {
-                "helper_type": "input_select",
-                "name": "E2E No Options Select",
-                # Missing required options
-            },
-        )
-        assert data.get("success") is False, f"Should fail without options: {data}"
-        logger.info("Input select properly requires options")
-
 
 @pytest.mark.asyncio
 @pytest.mark.config
@@ -1814,7 +1798,10 @@ class TestTagCRUD:
 @pytest.mark.config
 @pytest.mark.helper
 class TestSetHelperNegativeInputs:
-    """Negative-input tests for ha_config_set_helper pre-flight guards."""
+    """Negative-input tests for ha_config_set_helper pre-flight guards.
+
+    Field values Home Assistant judges itself are in test_helper_core_validation.py.
+    """
 
     async def test_create_requires_name(self, mcp_client) -> None:
         """Rejects a create call when name is empty.
@@ -1826,62 +1813,6 @@ class TestSetHelperNegativeInputs:
             mcp_client,
             "ha_config_set_helper",
             {"helper_type": "input_boolean", "name": ""},
-        )
-        assert result["success"] is False
-        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-
-    async def test_input_number_invalid_range(self, mcp_client) -> None:
-        """Rejects input_number when min_value > max_value.
-
-        Guard: config_helpers/validation.py — raises VALIDATION_INVALID_PARAMETER
-        when min_value is greater than max_value.
-        """
-        result = await safe_call_tool(
-            mcp_client,
-            "ha_config_set_helper",
-            {
-                "helper_type": "input_number",
-                "name": "Invalid Range",
-                "min_value": 100,
-                "max_value": 0,
-            },
-        )
-        assert result["success"] is False
-        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-
-    async def test_input_datetime_both_date_and_time_false(self, mcp_client) -> None:
-        """Rejects input_datetime when both has_date and has_time are False.
-
-        Guard: config_helpers/validation.py — raises VALIDATION_INVALID_PARAMETER
-        when both fields are explicitly False.
-        """
-        result = await safe_call_tool(
-            mcp_client,
-            "ha_config_set_helper",
-            {
-                "helper_type": "input_datetime",
-                "name": "Invalid DateTime",
-                "has_date": False,
-                "has_time": False,
-            },
-        )
-        assert result["success"] is False
-        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-
-    async def test_input_select_requires_options(self, mcp_client) -> None:
-        """Rejects input_select when options is absent.
-
-        Guard: config_helpers/validation.py — raises VALIDATION_INVALID_PARAMETER
-        before any WebSocket I/O when helper_type is "input_select" and
-        options is falsy.
-        """
-        result = await safe_call_tool(
-            mcp_client,
-            "ha_config_set_helper",
-            {
-                "helper_type": "input_select",
-                "name": "Missing Options",
-            },
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

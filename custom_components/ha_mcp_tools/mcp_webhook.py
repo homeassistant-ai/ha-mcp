@@ -125,6 +125,12 @@ _ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream", "text/plain")
 # long-lived streams fails a new request in 30 s instead of hanging it forever.
 _CLIENT_TIMEOUT = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
 
+# The in-process server closes an idle keep-alive connection after 5 s
+# (``const.SERVER_KEEPALIVE_SECONDS``); aiohttp pools one for 15 s. A
+# request sent as the server closes a pooled connection fails with a connection
+# reset (502), so idle relay connections are dropped first.
+_RELAY_KEEPALIVE_SECONDS = 3
+
 # Anonymous CIMD lookups get a separate, deliberately small connection pool.
 # The relay session may hold long-lived SSE connections; public metadata fetches
 # must never consume that authenticated forwarding capacity.
@@ -852,7 +858,10 @@ async def async_register_webhook(
     # Runs before the session opens so a raise here cannot leak it.
     _unregister_webhook(hass, webhook_id)
     target_url = f"http://127.0.0.1:{port}{secret_path}"
-    session = aiohttp.ClientSession(timeout=_CLIENT_TIMEOUT)
+    session = aiohttp.ClientSession(
+        timeout=_CLIENT_TIMEOUT,
+        connector=aiohttp.TCPConnector(keepalive_timeout=_RELAY_KEEPALIVE_SECONDS),
+    )
     cimd_session: aiohttp.ClientSession | None = None
     if register_endpoint and auth_mode == WEBHOOK_AUTH_HA:
         try:

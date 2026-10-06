@@ -43,11 +43,8 @@ def recovery(tmp_path, monkeypatch):
 
     async def create(client, helper_type, options, *, complete_snapshot=False):
         assert helper_type == "template"
-        assert options == {
-            "name": "Example",
-            "next_step_id": "sensor",
-            "state": "{{ 12 }}",
-        }
+        # The creation flow answers its menu from template_type itself.
+        assert options == OPTIONS
         state.entries.append({"entry_id": "new-entry", "domain": "template"})
         state.records.append(
             {
@@ -192,7 +189,9 @@ async def test_capture_persists_only_entity_recovery_metadata(recovery):
             "device_id": "not-needed",
         }
     ]
-    snapshot = await bm._fetch_template_helper(recovery.manager._client, "old-entry")
+    snapshot = await bm._fetch_flow_helper(
+        recovery.manager._client, "old-entry", "template"
+    )
     assert snapshot["entities"] == [ENTITY]
 
 
@@ -308,11 +307,11 @@ async def test_entry_reappearing_after_absence_check_is_never_updated(
     recovery, monkeypatch
 ):
     fetch = AsyncMock(return_value=None)
-    monkeypatch.setattr(bm, "_fetch_template_helper", fetch)
+    monkeypatch.setattr(bm, "_fetch_flow_helper", fetch)
     # The manager's handler already captured the original function; replace it
     # to model absence during the safety decision and a reappearing native entry.
     recovery.manager.register(
-        bm.DomainHandler("helper_template", fetch, bm._restore_template_helper)
+        bm.DomainHandler("helper_template", fetch, bm._restore_flow_helper)
     )
     recovery.state.entries = [{"entry_id": "old-entry", "domain": "template"}]
     updater = AsyncMock()
@@ -328,8 +327,8 @@ async def test_entry_reappearing_after_absence_check_is_never_updated(
     "mapping",
     [
         [ENTITY, ENTITY],
-        [{**ENTITY, "unique_id": "other"}],
-        [{**ENTITY, "entity_id": "switch.other"}],
+        [{**ENTITY, "unique_id": "other"}],  # not derived from the entry
+        [{**ENTITY, "name": 5}],
     ],
 )
 async def test_unsupported_snapshot_entity_mapping_refuses_creation(recovery, mapping):
@@ -361,6 +360,7 @@ async def test_recreation_drives_native_template_menu_and_form(recovery, monkeyp
             assert payload == {"next_step_id": "sensor"}
             return {
                 "type": "form",
+                "last_step": True,
                 "flow_id": "create-flow",
                 "step_id": "sensor",
                 "data_schema": [
@@ -369,11 +369,7 @@ async def test_recreation_drives_native_template_menu_and_form(recovery, monkeyp
                 ],
             }
         assert payload == {"name": "Example", "state": "{{ 12 }}"}
-        await recovery.create.side_effect(
-            client,
-            "template",
-            {"name": "Example", "next_step_id": "sensor", "state": "{{ 12 }}"},
-        )
+        await recovery.create.side_effect(client, "template", OPTIONS)
         return {
             "type": "create_entry",
             "result": {"entry_id": "new-entry", "title": "Example"},
@@ -402,6 +398,7 @@ def _native_recreation_flow(recovery, monkeypatch, schema, *, submit_error=None)
     )
     form = {
         "type": "form",
+        "last_step": True,
         "flow_id": "create-flow",
         "step_id": "sensor",
         "data_schema": schema,
@@ -412,11 +409,8 @@ def _native_recreation_flow(recovery, monkeypatch, schema, *, submit_error=None)
             return deepcopy(form)
         if submit_error is not None:
             raise submit_error
-        await recovery.create.side_effect(
-            client,
-            "template",
-            {"name": "Example", "state": "{{ 12 }}", "next_step_id": "sensor"},
-        )
+        # Registers the entry HA created, with the fixture's stored options.
+        await recovery.create.side_effect(client, "template", OPTIONS)
         return {
             "type": "create_entry",
             "result": {"entry_id": "new-entry", "title": "Example"},

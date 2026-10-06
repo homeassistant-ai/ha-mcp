@@ -3,6 +3,21 @@
 # src/ha_mcp/settings_ui/locales/es.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Verificar el certificado TLS
+    description: Verifica el certificado TLS del servidor de Home Assistant. La app
+      (add-on) se conecta a través del proxy del Supervisor, por lo que normalmente
+      esto no tiene efecto y debe permanecer habilitado. Desactívalo solo si has reconfigurado
+      la app (add-on) para comunicarse con HA a través de un nombre de host HTTPS
+      público con un certificado autofirmado o un error de coincidencia en el nombre
+      de host. Desactivarlo debilita la seguridad del transporte; déjalo activado
+      a menos que sepas que lo necesitas. Requiere reiniciar para aplicar los cambios.
+  ha_tool_concurrency:
+    name: Concurrencia de herramientas de Home Assistant
+    description: Límite opcional en las llamadas externas a herramientas de Home Assistant
+      en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución
+      por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una
+      llamada que espera capacidad falla después de 60 segundos.
   backup_hint:
     name: Nivel de sugerencia de instantánea completa de HA (para el LLM)
     description: 'Ajusta la redacción de la indicación que el LLM ve en la descripción
@@ -22,12 +37,6 @@ configuration:
       auxiliares / etc., usa la opción independiente **Activar copia de
 
       seguridad automática de las ediciones** que aparece más abajo.'
-  secret_path:
-    name: Ruta secreta personalizada
-    description: 'Ruta HTTP personalizada opcional para el servidor MCP. Déjala vacía
-      para usar la ruta segura generada automáticamente.
-
-      '
   enable_tool_search:
     name: Activar la búsqueda de herramientas
     description: 'Reemplaza el catálogo completo de herramientas por un descubrimiento
@@ -128,28 +137,6 @@ configuration:
       es la única que publica esa clave de confirmación. Depende de la opción "Adjuntar
       skills de buenas prácticas en las escrituras" de arriba y es inerte mientras
       esa opción principal esté desactivada. Requiere reiniciar para que surta efecto.'
-  ha_tool_concurrency:
-    name: Concurrencia de herramientas de Home Assistant
-    description: Límite opcional en las llamadas externas a herramientas de Home Assistant
-      en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución
-      por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una
-      llamada que espera capacidad falla después de 60 segundos.
-  disabled_tools:
-    name: Herramientas desactivadas (separadas por comas)
-    description: 'Las herramientas indicadas aquí quedan forzadas a desactivadas y
-      bloqueadas en la interfaz web de ajustes (pestaña Herramientas): no se pueden
-      volver a activar allí sin quitar antes esta opción. Un pequeño conjunto de herramientas
-      obligatorias (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
-      no se puede desactivar y sigue funcionando aunque se indique aquí. ha_get_skill_guide
-      solo se puede desactivar mientras el modo estricto de buenas prácticas (enable_strict_mandatory_bps)
-      esté desactivado. Nombres de herramientas separados por comas (p. ej. ha_call_event,ha_eval_template).'
-  pinned_tools:
-    name: Herramientas fijadas (separadas por comas)
-    description: 'Las herramientas indicadas aquí quedan fijadas de forma bloqueada:
-      aparecen en la parte superior de la pestaña Herramientas y no se pueden desfijar
-      desde la interfaz web de ajustes sin quitar antes esta opción. Resulta útil
-      en combinación con la búsqueda de herramientas. Nombres de herramientas separados
-      por comas.'
   enable_auto_backup:
     name: Activar copia de seguridad automática de las ediciones
     description: 'Captura una instantánea por entidad antes de cada llamada envuelta
@@ -171,23 +158,6 @@ configuration:
       desactiva las capturas de "mejor esfuerzo" y deja fuera de servicio las herramientas
       de archivo y YAML sin procesar con ellas. Requiere un reinicio para que surta
       efecto.'
-  enable_snapshot_actions:
-    name: Allow full HA snapshot actions
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup(scope='snapshot') and the equivalent backup services and commands
-      in ha_call_service. Turning this off blocks every snapshot action, including
-      listing, while edit backups remain available. Snapshot deletion is only available
-      through ha_manage_backup, also requires enable_snapshot_delete, and its protections
-      still apply. On by default. Change this option or use the web Settings UI Backups
-      tab; requires restart in the app.
-  backup_read_only:
-    name: Make backup management read-only
-    description: Restrict ha_manage_backup to listing, viewing, and diffing edit backups,
-      and listing full HA snapshots when snapshot actions are enabled. Blocks manual
-      backup create, restore (including edit restores), and delete, including the
-      equivalent backup services and commands in ha_call_service. Automatic pre-edit
-      backups continue, and human actions in the web Settings UI remain available.
-      Off by default; requires restart in the app.
   auto_backup_throttle_minutes:
     name: Limitación de la copia automática (minutos)
     description: Ventana de limitación por entidad. 0 (predeterminado) captura una
@@ -198,6 +168,27 @@ configuration:
     description: Número máximo de instantáneas conservadas por entidad. Las instantáneas
       más antiguas que superen este límite se rotan en cada captura correcta. Predeterminado
       100, rango 1–10000.
+  enable_snapshot_actions:
+    name: Permitir acciones de instantáneas completas de HA
+    description: Permitir a los asistentes de IA gestionar instantáneas completas
+      de Home Assistant mediante ha_manage_backup(scope='snapshot') y los servicios
+      y comandos de copia de seguridad equivalentes en ha_call_service. Desactivar
+      esto bloquea todas las acciones de instantáneas, incluida su lista, mientras
+      que las copias de seguridad de edición siguen estando disponibles. La eliminación
+      de instantáneas solo está disponible a través de ha_manage_backup, también requiere
+      enable_snapshot_delete y sus protecciones siguen aplicándose. Activado por defecto.
+      Cambia esta opción o utiliza la pestaña Copias de seguridad de la interfaz web
+      de configuración; requiere reiniciar en la aplicación.
+  backup_read_only:
+    name: Hacer que la gestión de copias de seguridad sea de solo lectura
+    description: Restringir ha_manage_backup a listar, ver y comparar copias de seguridad
+      de edición, y listar instantáneas completas de HA cuando las acciones de instantáneas
+      estén habilitadas. Bloquea la creación, restauración (incluidas las restauraciones
+      de edición) y eliminación manuales de copias de seguridad, incluidos los servicios
+      y comandos de copia de seguridad equivalentes en ha_call_service. Las copias
+      de seguridad automáticas previas a la edición continúan y las acciones humanas
+      en la interfaz web de configuración siguen estando disponibles. Desactivado
+      por defecto; requiere reiniciar en la aplicación.
   enable_snapshot_delete:
     name: Permitir la eliminación de instantáneas
     description: 'Permite que ha_manage_backup elimine archivos tarball de instantáneas
@@ -212,12 +203,25 @@ configuration:
     description: Una instantánea debe tener al menos esta antigüedad para poder eliminarse.
       Rango 0–365; 0 desactiva el mínimo (las protecciones de la instantánea más reciente
       y de las copias programadas siguen aplicándose). Predeterminado 7.
-  verify_ssl:
-    name: Verificar el certificado TLS
-    description: Verifica el certificado TLS del servidor de Home Assistant. La app
-      (add-on) se conecta a través del proxy del Supervisor, por lo que normalmente
-      esto no tiene efecto y debe permanecer habilitado. Desactívalo solo si has reconfigurado
-      la app (add-on) para comunicarse con HA a través de un nombre de host HTTPS
-      público con un certificado autofirmado o un error de coincidencia en el nombre
-      de host. Desactivarlo debilita la seguridad del transporte; déjalo activado
-      a menos que sepas que lo necesitas. Requiere reiniciar para aplicar los cambios.
+  disabled_tools:
+    name: Herramientas desactivadas (separadas por comas)
+    description: 'Las herramientas indicadas aquí quedan forzadas a desactivadas y
+      bloqueadas en la interfaz web de ajustes (pestaña Herramientas): no se pueden
+      volver a activar allí sin quitar antes esta opción. Un pequeño conjunto de herramientas
+      obligatorias (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      no se puede desactivar y sigue funcionando aunque se indique aquí. ha_get_skill_guide
+      solo se puede desactivar mientras el modo estricto de buenas prácticas (enable_strict_mandatory_bps)
+      esté desactivado. Nombres de herramientas separados por comas (p. ej. ha_call_event,ha_eval_template).'
+  pinned_tools:
+    name: Herramientas fijadas (separadas por comas)
+    description: 'Las herramientas indicadas aquí quedan fijadas de forma bloqueada:
+      aparecen en la parte superior de la pestaña Herramientas y no se pueden desfijar
+      desde la interfaz web de ajustes sin quitar antes esta opción. Resulta útil
+      en combinación con la búsqueda de herramientas. Nombres de herramientas separados
+      por comas.'
+  secret_path:
+    name: Ruta secreta personalizada
+    description: 'Ruta HTTP personalizada opcional para el servidor MCP. Déjala vacía
+      para usar la ruta segura generada automáticamente.
+
+      '

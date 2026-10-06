@@ -210,6 +210,9 @@ jobs:
 
       - name: Install QEMU + OVMF + libguestfs
         run: |
+          # The runner image ships a packages.microsoft.com list that nothing
+          # here installs from; a 403 from that mirror failed the whole update.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools sshpass
@@ -442,6 +445,9 @@ jobs:
 
       - name: Install QEMU + OVMF + libguestfs
         run: |
+          # The runner image ships a packages.microsoft.com list that nothing
+          # here installs from; a 403 from that mirror failed the whole update.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools sshpass
@@ -673,6 +679,9 @@ jobs:
 
       - name: Install QEMU + OVMF + libguestfs
         run: |
+          # The runner image ships a packages.microsoft.com list that nothing
+          # here installs from; a 403 from that mirror failed the whole update.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools sshpass
@@ -934,6 +943,9 @@ jobs:
 
       - name: Install QEMU + OVMF + libguestfs
         run: |
+          # The runner image ships a packages.microsoft.com list that nothing
+          # here installs from; a 403 from that mirror failed the whole update.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools sshpass
@@ -1132,6 +1144,9 @@ jobs:
 
       - name: Install QEMU + OVMF + libguestfs
         run: |
+          # The runner image ships a packages.microsoft.com list that nothing
+          # here installs from; a 403 from that mirror failed the whole update.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools sshpass
@@ -1371,6 +1386,9 @@ jobs:
 
       - name: Install QEMU + OVMF + libguestfs
         run: |
+          # The runner image ships a packages.microsoft.com list that nothing
+          # here installs from; a 403 from that mirror failed the whole update.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools sshpass

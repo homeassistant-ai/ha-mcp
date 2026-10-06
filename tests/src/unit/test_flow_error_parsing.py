@@ -70,32 +70,16 @@ class TestStructuredFieldErrors:
         surface the field errors via the wrapping ToolError, and (issue
         #1149) ALSO attach the data_schema so the LLM has both "what
         failed" and "what's accepted" available."""
-        # The introspection flow fired by the new schema-attach branch is a
-        # second call to start_config_flow; sequence both.
-        intro_schema = [
+        live_schema = [
             {"name": "entity_id", "required": True, "selector": {"entity": {}}},
-            {
-                "name": "filter",
-                "required": True,
-                "selector": {"select": {"options": ["lowpass", "outlier"]}},
-            },
         ]
-        start_calls: list[str] = []
 
         async def start_flow(handler: str) -> dict[str, Any]:
-            start_calls.append(handler)
-            if len(start_calls) == 1:
-                return {
-                    "type": "form",
-                    "flow_id": "flow-1",
-                    "step_id": "user",
-                    "data_schema": [{"name": "entity_id"}],
-                }
             return {
                 "type": "form",
-                "flow_id": "intro-flow",
+                "flow_id": "flow-1",
                 "step_id": "user",
-                "data_schema": intro_schema,
+                "data_schema": live_schema,
             }
 
         client = AsyncMock()
@@ -118,11 +102,10 @@ class TestStructuredFieldErrors:
         # Field errors are exposed at the top level (via context).
         assert body.get("field_errors") == {"entity_id": "not_a_sensor"}
         assert body.get("status_code") == 400
-        # Issue #1149: the data_schema is now attached even when
-        # structured field_errors are present — the LLM gets both
-        # "what failed" and "what's accepted" to self-correct.
-        assert body.get("data_schema") == intro_schema
-        # The original-flow + introspection-flow were both aborted.
+        # Issue #1149: the data_schema is attached even when structured
+        # field_errors are present — the LLM gets both "what failed" and
+        # "what's accepted" to self-correct. It is the rejected form's.
+        assert body.get("data_schema") == live_schema
         client.abort_config_flow.assert_called()
 
 
@@ -135,35 +118,21 @@ class TestUnstructuredErrorAttachesSchema:
     """When HA returns only a ``message`` (or nothing useful), the tool
     fetches the helper's data_schema and attaches it to the error."""
 
-    async def test_create_flow_with_unstructured_400_attaches_data_schema(
+    async def test_unstructured_400_on_a_later_form_attaches_that_forms_schema(
         self,
     ) -> None:
-        # State machine for start_config_flow:
-        # call 1 -> the real create flow's initial form
-        # call 2 -> the introspection flow used to fetch the schema for
-        #           the error context (post-failure).
-        intro_schema = [
-            {"name": "entity_id", "required": True},
-            {"name": "state_characteristic", "required": True},
-        ]
+        """A statistics flow fails on its second form: the error shows that
+        form's fields, not the first form's again (#2632)."""
+        second_schema = [{"name": "state_characteristic", "required": True}]
         start_calls: list[str] = []
 
         async def start_flow(handler: str) -> dict[str, Any]:
             start_calls.append(handler)
-            if len(start_calls) == 1:
-                # Real flow: form with one field, will be submitted and 400.
-                return {
-                    "type": "form",
-                    "flow_id": "real-flow",
-                    "step_id": "user",
-                    "data_schema": [{"name": "entity_id"}],
-                }
-            # Introspection flow used by error context.
             return {
                 "type": "form",
-                "flow_id": "intro-flow",
+                "flow_id": "real-flow",
                 "step_id": "user",
-                "data_schema": intro_schema,
+                "data_schema": [{"name": "entity_id"}],
             }
 
         api_err = HomeAssistantAPIError(
@@ -172,27 +141,33 @@ class TestUnstructuredErrorAttachesSchema:
             # No "errors" map — only a vague message.
             response_data={"message": "Bad Request"},
         )
+        second_form = {
+            "type": "form",
+            "flow_id": "real-flow",
+            "step_id": "state_characteristic",
+            "data_schema": second_schema,
+        }
 
         client = AsyncMock()
         client.start_config_flow = AsyncMock(side_effect=start_flow)
-        client.submit_config_flow_step = AsyncMock(side_effect=api_err)
+        client.submit_config_flow_step = AsyncMock(side_effect=[second_form, api_err])
         client.abort_config_flow = AsyncMock(return_value={})
 
         with pytest.raises(ToolError) as exc_info:
-            await create_flow_helper(client, "statistics", {"entity_id": "sensor.foo"})
+            await create_flow_helper(
+                client,
+                "statistics",
+                {"entity_id": "sensor.foo", "state_characteristic": "bogus"},
+            )
 
         body = _parse_tool_error(exc_info.value)
-        assert body["success"] is False
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        # No structured field_errors because the body had none.
         assert "field_errors" not in body
-        # data_schema must be attached so the LLM can correct itself.
-        assert body.get("data_schema") == intro_schema
-        # The error message should mention HA rejecting the request, with status.
+        assert body.get("data_schema") == second_schema
+        assert body.get("step_id") == "state_characteristic"
         assert "400" in body["error"]["message"]
-        # Two start_config_flow calls: one for the real flow, one for
-        # introspection during error-handling.
-        assert start_calls == ["statistics", "statistics"]
+        # The live form answers it: no second, introspection flow.
+        assert start_calls == ["statistics"]
 
     async def test_parse_falls_back_to_exception_message(self) -> None:
         """When response_data is None or empty, parser still returns the
@@ -278,23 +253,7 @@ class TestHandleFlowStepsOptionsFlowError:
             "data_schema": [{"name": "window_size"}],
         }
 
-        # Issue #1149: the structured-error branch now also tries to fetch
-        # the data_schema for context. Wire the client mock so the
-        # introspection flow (`start_config_flow` -> a form with a usable
-        # `flow_id`) succeeds, and the matching `abort_config_flow` is
-        # awaitable. Without an explicit return value AsyncMock surfaces
-        # auto-generated coroutines that never await cleanly.
         client = AsyncMock()
-        intro_schema = [{"name": "window_size", "selector": {"number": {}}}]
-        client.start_config_flow = AsyncMock(
-            return_value={
-                "type": "form",
-                "flow_id": "intro-opt",
-                "step_id": "init",
-                "data_schema": intro_schema,
-            }
-        )
-        client.abort_config_flow = AsyncMock(return_value={})
 
         with pytest.raises(ToolError) as exc_info:
             await _handle_flow_steps(
@@ -310,8 +269,10 @@ class TestHandleFlowStepsOptionsFlowError:
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert body.get("field_errors") == {"window_size": "value_too_small"}
         assert body.get("status_code") == 400
-        # Issue #1149: data_schema is now attached alongside field_errors.
-        assert body.get("data_schema") == intro_schema
+        # Issue #1149: data_schema is attached alongside field_errors: the
+        # options form's own, never a setup flow's (a different contract).
+        assert body.get("data_schema") == initial_step["data_schema"]
+        client.start_config_flow.assert_not_called()
         assert body.get("flow_id") == "opt-flow"
 
     async def test_reconfigure_error_uses_active_schema_without_new_setup_flow(

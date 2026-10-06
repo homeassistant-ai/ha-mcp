@@ -93,6 +93,9 @@ def has_dynamic_selector_targets(name: str, args: dict[str, Any]) -> bool:
     return name == "ha_bulk_control" and args.get("selector") is not None
 
 
+KEYS_SEGMENT = "*~"
+"""Path segment that fans out over a dict's keys (see ``iter_path_values``)."""
+
 MISSING = object()
 """What ``iter_path_values(..., report_missing=True)`` yields for a dead end."""
 
@@ -105,14 +108,20 @@ def iter_path_values(
     The leading ``args`` segment is implicit and stripped. A ``*`` segment
     fans out across the current node — across dict values for dicts,
     across items for lists — so ``args.*`` yields every top-level
-    argument, ``args.config.*`` yields every leaf of the ``config``
-    sub-dict, and so on. Empty iterator = no match.
+    argument, ``args.config.*`` yields each immediate value of ``config``,
+    and so on. A ``*~`` segment (JSONPath-Plus syntax) fans out across a
+    dict's KEYS instead, for arguments keyed by what they act on:
+    ``args.config.entities.*~`` yields every entity ID in a scene, where
+    ``*`` would yield only their target states. ``*~`` yields strings, so it
+    is only valid as the last segment (``Predicate`` rejects it elsewhere).
+    Empty iterator = no match.
 
     A branch that cannot continue (a missing key, a named segment on a value
-    that is not a dict, or a ``*`` on a scalar) is skipped, unless
-    ``report_missing``, which yields ``MISSING`` for it instead and also for a
-    ``*`` over an empty container. Allow mode needs that: an operation without
-    the constrained field is a value the predicate never saw.
+    that is not a dict, a ``*`` on a scalar, or a ``*~`` on a list or a
+    scalar) is skipped, unless ``report_missing``, which yields ``MISSING``
+    for it instead and also for a ``*`` or ``*~`` over an empty container.
+    Allow mode needs that: an operation without the constrained field is a
+    value the predicate never saw.
     """
     parts = path.split(".")
     if parts[0] == "args":
@@ -123,8 +132,8 @@ def iter_path_values(
             yield cur
             return
         head, tail = rest[0], rest[1:]
-        if head == "*":
-            children = _children(cur)
+        if head in ("*", KEYS_SEGMENT):
+            children = _children(cur, keys=head == KEYS_SEGMENT)
             if report_missing and not children:
                 # An empty container is a dead end too: the branch holds no
                 # value the predicate could examine.
@@ -143,11 +152,14 @@ def iter_path_values(
     yield from walk(args, parts)
 
 
-def _children(node: Any) -> Iterable[Any] | None:
-    """What a ``*`` segment fans out over; None for a scalar."""
+def _children(node: Any, *, keys: bool = False) -> Iterable[Any] | None:
+    """What a ``*`` (or, with ``keys``, ``*~``) segment fans out over.
+
+    None for a scalar, and for a list under ``keys``: a list has no keys.
+    """
     if isinstance(node, dict):
-        return node.values()
-    if isinstance(node, (list, tuple)):
+        return list(node) if keys else node.values()
+    if isinstance(node, (list, tuple)) and not keys:
         return node
     return None
 

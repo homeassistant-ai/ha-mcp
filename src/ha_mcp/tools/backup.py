@@ -52,6 +52,7 @@ from .backup_access import (
 from .backup_access import (
     require_backup_param as _require,
 )
+from .backup_on_demand import capture_on_demand
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -1596,7 +1597,7 @@ def register_backup_tools(
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
 | `edits` | `view` | Read one auto-backup file by name; returns YAML and parsed `config`. |
 | `edits` | `diff` | Compare one auto-backup against the entity's current config. RFC 6902 JSON-Patch + add/remove/replace counts; bounded output. Read-only — fetches the live config, makes no changes. |
-| `edits` | `restore` | Re-apply one auto-backup. Existing Template helpers require a fresh safety snapshot; other domains follow auto-backup settings and may proceed without one. A deleted Template helper is recreated with a new config-entry ID; its saved entity ID is restored if unoccupied. **No HA restart.** |
+| `edits` | `restore` | Re-apply one auto-backup. Existing flow helpers (template, group, utility_meter, …) and config subentries require a fresh safety snapshot; other domains follow auto-backup settings and may proceed without one. A deleted flow helper is recreated with a new config-entry ID and its saved entity IDs are restored if unoccupied; a deleted subentry is recreated with a new subentry ID. **No HA restart.** |
 | `edits` | `delete` | Delete one auto-backup by `backup_name`, or bulk-delete by filter. |
 
 **When to use which scope:**
@@ -1618,7 +1619,7 @@ survives an agent's own mistakes.
 
 **`enable_auto_backup` and `scope="edits"`:** the automatic-on-write capture (every wrapped tool call) is gated by `enable_auto_backup=true` — if the listing is empty, check the toggle (web settings UI or `ENABLE_AUTO_BACKUP=true` env var). The explicit `(edits, create)` action bypasses the toggle since the request is explicit; `list` / `view` / `restore` / `delete` operate on whatever's already on disk regardless of the toggle's current state.
 
-**Template filters:** `edits.create` accepts a Template entity ID and returns its stable config-entry ID as `entity_id`. Use that returned ID for `edits.list` and bulk `edits.delete`; those filters do not resolve entity aliases. After recreation, the restore result reports the replacement config-entry ID and `entity_id_mapping` separately.
+**Flow-helper filters:** `edits.create` accepts a flow helper's entity ID and returns its stable config-entry ID as `entity_id`. Use that returned ID for `edits.list` and bulk `edits.delete`; those filters do not resolve entity aliases. After recreation, the restore result reports the replacement config-entry ID and `entity_id_mapping` separately.
 
 **Examples:**
 - Snapshot before risky op: `ha_manage_backup(scope="snapshot", action="create", name="Before_Big_Change")`
@@ -1844,30 +1845,10 @@ async def _edits_create(
                 ],
             )
         )
-    path = await mgr.maybe_snapshot(
-        dom,
-        eid,
-        tool_name="ha_manage_backup.edits.create",
-        force=True,
-    )
-    if path is None:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                f"Could not snapshot {dom}:{eid} — entity not found "
-                + "or fetch returned no config",
-                context={"domain": dom, "entity_id": eid},
-                suggestions=[
-                    "Verify the entity exists via the matching "
-                    + "ha_config_get_* tool first",
-                    "For helpers, pass domain='helper_<helper_type>' "
-                    + "(e.g. 'helper_input_boolean')",
-                ],
-            )
-        )
-    if dom == "helper_template":
-        snapshot = await asyncio.to_thread(mgr.read_snapshot, path.name)
-        eid = snapshot["entity_id"]
+    path = await capture_on_demand(mgr, dom, eid)
+    # The id the snapshot is stored under: a flow helper's config entry id
+    # when the caller passed an entity_id alias, else the id as given.
+    eid = await asyncio.to_thread(mgr._payload_entity_id, path) or eid
     return {
         "success": True,
         "data": {
@@ -2027,7 +2008,7 @@ async def _edits_restore(
     action: str,
     backup_name: str | None,
 ) -> dict[str, Any]:
-    """Re-apply an edit backup, or recreate a deleted Template helper."""
+    """Re-apply an edit backup, or recreate a deleted flow helper or subentry."""
     bname = _require("backup_name", backup_name, scope, action)
     try:
         result = await mgr.restore_snapshot(bname)

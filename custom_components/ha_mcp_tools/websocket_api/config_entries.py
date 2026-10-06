@@ -60,8 +60,10 @@ def _do_config_entries(
     list item, or scalar whose ``str()`` form) that exactly equals a ``secrets.yaml``
     value becomes ``"**redacted**"`` (``secret_values`` loaded off the loop by
     :func:`_config_entries_prep`). ``subentries`` carries identity fields only
-    (``subentry_id`` / ``subentry_type`` / ``title`` / ``unique_id``) — never a
-    subentry's ``data``; a core version without subentries degrades to ``[]``.
+    (``subentry_id`` / ``subentry_type`` / ``title`` / ``unique_id``) and a
+    subentry's ``data`` only on request (``include_subentry_data``, for backups),
+    under the same scrub as ``options``; a core version without subentries
+    degrades to ``[]``.
 
     The scrub is BEST-EFFORT: a present-but-unreadable ``secrets.yaml`` degrades it
     to a no-op (options emitted unredacted). That degradation is signalled to the
@@ -85,7 +87,12 @@ def _do_config_entries(
         if domain:
             entries = [e for e in entries if getattr(e, "domain", None) == domain]
     result: dict[str, Any] = {
-        "entries": [_config_entry_row(e, secret_values) for e in entries]
+        "entries": [
+            _config_entry_row(
+                e, secret_values, params.get("include_subentry_data", False)
+            )
+            for e in entries
+        ]
     }
     if secret_scrub_degraded:
         result["secret_scrub_degraded"] = True
@@ -125,7 +132,9 @@ def _config_entry_by_id(hass: HomeAssistant, entry_id: str) -> Any:
         return None
 
 
-def _config_entry_row(entry: Any, secret_values: frozenset[str]) -> dict[str, Any]:
+def _config_entry_row(
+    entry: Any, secret_values: frozenset[str], include_subentry_data: bool = False
+) -> dict[str, Any]:
     """One config entry as the ``config_entries/get`` row (options scrubbed)."""
     raw_options = getattr(entry, "options", None)
     options = _plainify(dict(raw_options)) if isinstance(raw_options, Mapping) else {}
@@ -178,25 +187,36 @@ def _config_entry_row(entry: Any, secret_values: frozenset[str]) -> dict[str, An
         ),
         "num_subentries": len(_mapping_values(getattr(entry, "subentries", None))),
         "options": options,
-        "subentries": _config_subentries(entry),
+        "subentries": _config_subentries(
+            entry, secret_values if include_subentry_data else None
+        ),
     }
 
 
-def _config_subentries(entry: Any) -> list[dict[str, Any]]:
-    """Identity fields of each config subentry — NEVER the subentry ``data``.
+def _config_subentries(
+    entry: Any, data_secret_values: frozenset[str] | None = None
+) -> list[dict[str, Any]]:
+    """Identity fields of each config subentry; its ``data`` only on request.
 
+    ``data_secret_values`` (the backup capture's opt-in) adds each subentry's
+    ``data`` under the same resolved-``!secret`` scrub as ``options``.
     ``entry.subentries`` is a ``MappingProxyType`` keyed by subentry_id in modern
     core; a version without it (``getattr`` -> ``None``) degrades to ``[]``.
     """
-    return [
-        {
+    rows = []
+    for sub in _mapping_values(getattr(entry, "subentries", None)):
+        row = {
             "subentry_id": getattr(sub, "subentry_id", None),
             "subentry_type": getattr(sub, "subentry_type", None),
             "title": getattr(sub, "title", None),
             "unique_id": getattr(sub, "unique_id", None),
         }
-        for sub in _mapping_values(getattr(entry, "subentries", None))
-    ]
+        if data_secret_values is not None:
+            raw = getattr(sub, "data", None)
+            data = _plainify(dict(raw)) if isinstance(raw, Mapping) else {}
+            row["data"] = _scrub_secret_values(data, data_secret_values)
+        rows.append(row)
+    return rows
 
 
 def _safe_prop(obj: Any, name: str, default: Any = None) -> Any:

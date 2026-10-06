@@ -6,8 +6,26 @@ these are pure functions over the parameters ``ha_set_area_or_floor`` accepts.
 
 from typing import Any
 
+from pydantic.fields import FieldInfo
+
 from ..errors import ErrorCode, create_error_response
+from .coercion import UNSET
 from .helpers import raise_tool_error
+
+
+def resolve_clearable(value: Any) -> str | None:
+    """Map a clearable param onto the builders' convention (None=keep, ""=clear).
+
+    Omitted arrives as ``UNSET`` through FastMCP (``Field(default_factory=...)``)
+    or as the ``FieldInfo`` itself on a direct Python call; an explicit JSON
+    ``null`` arrives as ``None`` and means clear, same as ``""``.
+    """
+    if value is UNSET or isinstance(value, FieldInfo):
+        return None
+    if value is None:
+        return ""
+    return str(value)
+
 
 _AREA_PARAMS = (
     "name, id, floor_id, icon, aliases, picture, labels, "

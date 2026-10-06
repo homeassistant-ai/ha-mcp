@@ -909,3 +909,36 @@ def test_backup_override_min_age_days_accepts_in_range(
 
     _reset_global_settings()
     assert get_global_settings().snapshot_delete_min_age_days == 30
+
+
+@pytest.mark.parametrize(
+    ("env", "value", "field", "default"),
+    [
+        ("HA_TIMEOUT", "900", "timeout", 30),
+        ("ENVIRONMENT", "staging", "environment", "development"),
+    ],
+    ids=["outside the range", "not one of the choices"],
+)
+def test_bad_lenient_env_value_warns_and_keeps_the_default(
+    env: str, value: str, field: str, default: object, caplog
+) -> None:
+    """An env value the web UI would refuse must not stop the server either:
+    the setting keeps its default and the log says which value was ignored."""
+    from ha_mcp.config import Settings
+
+    with caplog.at_level("WARNING", logger="ha_mcp.config"):
+        settings = Settings(_env_file=None, **{env: value})  # type: ignore[arg-type]
+
+    assert getattr(settings, field) == default
+    assert f"{field}={value!r}" in caplog.text
+
+
+def test_unknown_log_level_fails_at_startup() -> None:
+    """A log level the logging module does not know would silently fall back
+    to INFO when applied; startup must name the bad value instead."""
+    import pydantic
+
+    from ha_mcp.config import Settings
+
+    with pytest.raises(pydantic.ValidationError, match="must be one of"):
+        Settings(_env_file=None, LOG_LEVEL="verbose")  # type: ignore[call-arg]

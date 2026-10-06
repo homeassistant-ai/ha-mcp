@@ -291,9 +291,10 @@ class ClientTimeout:
 
 @dataclass(frozen=True)
 class TCPConnector:
-    """Minimal connector stand-in retaining the configured pool limit."""
+    """Minimal connector stand-in retaining the configured pool settings."""
 
     limit: int = 100
+    keepalive_timeout: float = 15.0
 
 
 def _make_fake_aiohttp() -> ModuleType:

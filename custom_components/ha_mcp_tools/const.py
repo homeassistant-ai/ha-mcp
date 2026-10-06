@@ -499,3 +499,8 @@ ISSUE_COMPONENT_OUTDATED = "component_outdated"
 # nor unbind an HTTP view without a full Home Assistant restart, so both
 # transitions need one; see oauth_legacy.bind_legacy_views.
 ISSUE_LEGACY_OAUTH_RESTART = "legacy_oauth_restart"
+
+# How long the in-process server's listener keeps an idle keep-alive connection
+# (uvicorn's default). The webhook relay drops its pooled connections sooner, or
+# a request sent as the listener closes one fails with a reset (mcp_webhook).
+SERVER_KEEPALIVE_SECONDS = 5

@@ -195,6 +195,7 @@ def _config_entries_schema() -> dict[Any, Any]:
         vol.Required("type"): WS_CONFIG_ENTRIES,
         vol.Optional("entry_id"): vol.Any(str, None),
         vol.Optional("domain"): vol.Any(str, None),
+        vol.Optional("include_subentry_data", default=False): bool,
     }
 
 

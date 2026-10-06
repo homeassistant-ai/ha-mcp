@@ -1647,9 +1647,11 @@ def _resolve_local_store_dir(image_path: Path) -> str:
     return "/supervisor/apps/local"
 
 
-# Repo files the dev addon's Dockerfile copies, besides start.py and src/.
-# Must match build_image.DEV_ADDON_REPO_FILES (kept in sync by hand like
+# Files the dev addon's Dockerfile copies from the stable addon dir (staged at
+# the build-context root) and the other repo files it copies, besides src/.
+# Both must match build_image's (kept in sync by hand like
 # HA_MCP_TEST_SECRET_PATH; test_haos_dev_addon_context checks both).
+STABLE_ADDON_FILES = ("start.py", "app_options.json")
 DEV_ADDON_REPO_FILES = (
     "pyproject.toml",
     "uv.lock",
@@ -1704,10 +1706,8 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:  # noqa: PLR091
 
         # Same file-shaping as build_image.stage_dev_addon_source so the
         # build context matches what the cached Docker layers expect.
-        _shutil.copy(
-            repo_root / "homeassistant-addon" / "start.py",
-            staging / "start.py",
-        )
+        for name in STABLE_ADDON_FILES:
+            _shutil.copy(repo_root / "homeassistant-addon" / name, staging / name)
         for name in DEV_ADDON_REPO_FILES:
             (staging / name).parent.mkdir(parents=True, exist_ok=True)
             _shutil.copy(repo_root / name, staging / name)
@@ -1719,12 +1719,12 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:  # noqa: PLR091
 
         # Dockerfile shape fixup (same as bake).
         dockerfile = staging / "Dockerfile"
-        dockerfile.write_text(
-            dockerfile.read_text().replace(
-                "COPY homeassistant-addon/start.py /",
-                "COPY start.py /",
+        patched = dockerfile.read_text()
+        for name in STABLE_ADDON_FILES:
+            patched = patched.replace(
+                f"COPY homeassistant-addon/{name} /", f"COPY {name} /"
             )
-        )
+        dockerfile.write_text(patched)
 
         # Strip image: from config.yaml — Supervisor pulls from GHCR when
         # image: is set, but the per-PR version we bump to below doesn't

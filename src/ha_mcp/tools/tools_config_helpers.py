@@ -29,20 +29,22 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .config_entry_backup import helper_backup_id
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     SUPPORTED_HELPERS,
 )
+from .config_helpers.core_payload import core_fields
 from .config_helpers.create import _execute_create_simple_helper
+from .config_helpers.describe import describe_helper_response
 from .config_helpers.flow import _handle_flow_helper, _handle_set_config_subentry
 from .config_helpers.listing import (
     _component_covers,
     _paginate_helpers_response,
     _raise_all_requires_component,
     _raise_flow_requires_component,
-    _shape_collection_helper_record,
     _shape_component_helpers_response,
-    _shape_flow_helper_record,
+    shape_all_helpers_response,
 )
 from .config_helpers.registry import (
     _check_name_collision,
@@ -52,15 +54,11 @@ from .config_helpers.registry import (
 )
 from .config_helpers.schemas import (
     _SIMPLE_CONFIG_KEYS_DESCRIPTION,
-    SIMPLE_HELPER_TYPES,
     _attach_helper_skill,
 )
 from .config_helpers.typed_config import _core_schema_context, _prepare_typed_params
 from .config_helpers.update import _execute_update_simple_helper
-from .config_helpers.validation import (
-    _validate_pre_dispatch_params,
-    _validate_set_helper_action,
-)
+from .config_helpers.validation import _validate_set_helper_action
 from .config_write_helpers import (
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
@@ -135,6 +133,35 @@ class HelperConfigTools:
                 description="Number of helpers to skip for pagination",
             ),
         ] = 0,
+        describe: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Instead of listing, return the fields ha_config_set_helper "
+                    "accepts in config for helper_type, as Home Assistant "
+                    "reports them (the form the HA UI shows)."
+                )
+            ),
+        ] = False,
+        menu_choice: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "describe only: sub-type of a menu-based helper "
+                    "(template, group), e.g. 'sensor'."
+                )
+            ),
+        ] = None,
+        helper_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "describe only: an existing helper (config entry id for "
+                    "flow helpers, entity_id or id otherwise); each field then "
+                    "carries its current value."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """List Home Assistant helpers of a specific type with their configurations.
 
@@ -167,13 +194,24 @@ class HelperConfigTools:
         lists all types): without the ha_mcp_tools component it returns a
         COMPONENT_NOT_INSTALLED error rather than a partial or empty list.
 
+        describe=True returns each field's name, type, required flag, options,
+        default and (with helper_id) current value, or the menu_options a
+        menu-based helper needs a menu_choice from. Call it before
+        ha_config_set_helper to learn the config keys for a type.
+
         EXAMPLES:
         - List all counters: ha_config_list_helpers("counter")
         - List every helper type at once: ha_config_list_helpers("all")
         - Next page: ha_config_list_helpers("input_boolean", offset=100)
+        - Fields for a template sensor:
+          ha_config_list_helpers("template", describe=True, menu_choice="sensor")
 
         For detailed helper documentation, use ha_get_skill_guide.
         """
+        if describe or menu_choice is not None or helper_id is not None:
+            return await describe_helper_response(
+                self._client, helper_type, menu_choice, helper_id, describe=describe
+            )
         # All-types mode: one merged component listing across every helper type.
         # No legacy equivalent exists (no single WS command enumerates all
         # types), so it is component-only — see ``_list_all_helpers``.
@@ -455,7 +493,9 @@ class HelperConfigTools:
                 invalidate_caps(self._client)
             logger.warning("ha_mcp_tools/helpers_list (all) failed: %r", exc)
             return None
-        return await self._shape_all_helpers_response(raw.get("result") or {})
+        return await shape_all_helpers_response(
+            raw.get("result") or {}, self._legacy_helper_list
+        )
 
     async def _send_component_all_helpers(self) -> dict[str, Any]:
         """Send one all-types ``ha_mcp_tools/helpers_list`` command (no type filter).
@@ -474,92 +514,6 @@ class HelperConfigTools:
             include_flow_helpers=True,
         )
 
-    async def _shape_all_helpers_response(
-        self, result: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Map an all-types ``helpers_list`` result into the merged listing envelope.
-
-        Each record is shaped by kind (flow → ``_shape_flow_helper_record``,
-        collection → ``_shape_collection_helper_record``) and stamped with its
-        own ``helper_type`` so records of different types stay distinguishable in
-        the flat list. Respecting ``covered_types`` (mirroring the single-type
-        path): a simple type the component could not enumerate from the state
-        machine — ``tag`` has no state entity — is fetched per-type via its
-        legacy ``{type}/list`` and merged, so ``all`` never silently drops it.
-        """
-        raw = result.get("helpers")
-        records = raw if isinstance(raw, list) else []
-        helpers: list[dict[str, Any]] = []
-        for rec in records:
-            if not isinstance(rec, dict):
-                continue
-            if rec.get("kind") == "flow":
-                helpers.append(_shape_flow_helper_record(rec))
-            else:
-                shaped = _shape_collection_helper_record(rec)
-                # All-types records span many types, so each self-describes its
-                # type (single-type mode carries it at the envelope top instead).
-                shaped["helper_type"] = rec.get("helper_type")
-                helpers.append(shaped)
-
-        covered = result.get("covered_types")
-        covered_set = set(covered) if isinstance(covered, list) else set()
-        # Flow helper types have no legacy ``{type}/list`` fallback — if the
-        # component did not authoritatively cover one, a "successful" merged
-        # listing would silently omit it. Mirror the single-type taxonomy:
-        # hard error, never a partial inventory reported as complete.
-        uncovered_flow = sorted(FLOW_HELPER_TYPES - covered_set)
-        if uncovered_flow:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.COMPONENT_NOT_INSTALLED,
-                    "The ha_mcp_tools component response did not cover flow "
-                    f"helper type(s): {', '.join(uncovered_flow)} — cannot "
-                    "return a complete all-types listing.",
-                    context={"helper_type": "all", "uncovered": uncovered_flow},
-                    suggestions=[
-                        "Update the ha_mcp_tools custom component",
-                        "List helper types individually instead of 'all'",
-                    ],
-                )
-            )
-        merge_warnings: list[str] = []
-        for helper_type in sorted(SIMPLE_HELPER_TYPES - covered_set):
-            legacy = await self._legacy_helper_list(helper_type)
-            # _legacy_helper_list joins the registry (issue #1945) and, degrade-
-            # open, flags a failed registry read in warnings[]; surface those here
-            # instead of dropping them, else an uncovered type is served stale and
-            # silent during an all-types listing.
-            merge_warnings.extend(legacy.get("warnings", []))
-            skipped = 0
-            for item in legacy.get("helpers", []):
-                if isinstance(item, dict):
-                    row = dict(item)
-                    row.setdefault("helper_type", helper_type)
-                    helpers.append(row)
-                else:
-                    skipped += 1
-            if skipped:
-                # This is how the unflattened person/list dict used to vanish:
-                # iterating it yielded its keys, and each failed the check here.
-                logger.warning(
-                    "Dropped %d unrecognised item(s) from the %s listing while "
-                    "merging all types; the merged listing is incomplete",
-                    skipped,
-                    helper_type,
-                )
-
-        response: dict[str, Any] = {
-            "success": True,
-            "helper_type": "all",
-            "count": len(helpers),
-            "helpers": helpers,
-            "message": f"Found {len(helpers)} helper(s)",
-        }
-        if merge_warnings:
-            response["warnings"] = merge_warnings
-        return response
-
     @tool(
         name="ha_config_set_helper",
         tags={"Helper Entities"},
@@ -572,9 +526,7 @@ class HelperConfigTools:
     )
     @with_auto_backup(
         domain_fn=lambda kw: f"helper_{kw.get('helper_type', 'unknown')}",
-        id_fn=lambda kw: str(
-            kw.get("helper_id") or kw.get("entry_id") or kw.get("subentry_id") or ""
-        ),
+        id_fn=helper_backup_id,
     )
     @log_tool_usage
     async def ha_config_set_helper(
@@ -856,7 +808,7 @@ class HelperConfigTools:
           LIST of successive selections, consumed one per menu encounter.
 
         EXAMPLES:
-        - input_number: ha_config_set_helper(helper_type="input_number", name="Target", config={"min_value": 0, "max_value": 100, "step": 5})
+        - input_number: ha_config_set_helper(helper_type="input_number", name="Target", config={"min": 0, "max": 100, "step": 5})
         - template sensor: ha_config_set_helper(helper_type="template", name="Room Temp", config={"next_step_id": "sensor", "state": "{{ states('sensor.x')|float }}", "unit_of_measurement": "°C"})
         - group: ha_config_set_helper(helper_type="group", name="Kitchen Lights", config={"group_type": "light", "entities": ["light.a", "light.b"]})
         - config subentry: ha_config_set_helper(helper_type="config_subentry", entry_id="01HXYZ...", subentry_type="conversation", config={"name": "Local agent", "model": "gemma3:27b"})
@@ -911,7 +863,7 @@ class HelperConfigTools:
                     "description": description,
                     "pattern": pattern,
                 }
-                name, icon, type_kw = _prepare_typed_params(
+                name, icon, type_kw, passthrough = _prepare_typed_params(
                     helper_type, config, name, icon, type_kw
                 )
 
@@ -958,21 +910,8 @@ class HelperConfigTools:
                     fail_closed=True,
                 )
 
-                # Bug 13/17 (issue #1150): pre-validate per-type schema constraints.
-                _validate_pre_dispatch_params(
-                    helper_type,
-                    type_kw["min_value"],
-                    type_kw["max_value"],
-                    type_kw["step"],
-                    type_kw["options"],
-                    type_kw["monday"],
-                    type_kw["tuesday"],
-                    type_kw["wednesday"],
-                    type_kw["thursday"],
-                    type_kw["friday"],
-                    type_kw["saturday"],
-                    type_kw["sunday"],
-                )
+                # Home Assistant validates the fields itself (#2632).
+                fields = core_fields(helper_type, type_kw, passthrough)
 
                 if action == "create":
                     return await _execute_create_simple_helper(
@@ -985,7 +924,7 @@ class HelperConfigTools:
                         category,
                         wait,
                         MandatoryBPS,
-                        **type_kw,
+                        fields,
                     )
 
                 if action != "update":
@@ -1013,7 +952,7 @@ class HelperConfigTools:
                     category,
                     wait,
                     MandatoryBPS,
-                    **type_kw,
+                    fields,
                 )
 
         except ToolError as te:

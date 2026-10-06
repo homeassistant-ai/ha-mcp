@@ -35,8 +35,9 @@ class TestAreaSensorReferences:
     ) -> None:
         """Set both references on create, replace one, then clear both.
 
-        A partial update must leave the omitted reference and the name untouched;
-        an empty string clears, matching the icon/picture/floor_id convention.
+        A partial update must leave the omitted reference and the name untouched.
+        Both clear spellings are exercised: an empty string (the icon/picture/
+        floor_id convention) and an explicit null (for clients that drop "").
         """
         area_name = generate_unique_name("test_sensor_area")
         area_id = None
@@ -85,7 +86,7 @@ class TestAreaSensorReferences:
                         "kind": "area",
                         "id": area_id,
                         "temperature_entity_id": "",
-                        "humidity_entity_id": "",
+                        "humidity_entity_id": None,
                     },
                 )
             )
