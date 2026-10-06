@@ -448,7 +448,7 @@ def _custom_warnings(custom: CustomCards, customs: _Queued) -> list[str]:
             break
         tag = card_type[len("custom:") :]
         messages = custom.check(tag, card)
-        if messages is None and custom.status().get("state") == "ready":
+        if messages is None and custom_load_status(custom).get("state") == "ready":
             found.append(
                 f"{path} ({card_type}): not found in dashboard resources; "
                 "check the type spelling or whether it loads through extra JavaScript."

@@ -124,6 +124,15 @@ def test_unregistered_custom_type_is_only_a_resource_inventory_advisory():
     assert "extra JavaScript" in warnings[0]
 
 
+def test_failed_refresh_cannot_turn_cached_empty_inventory_into_unknown_warning(
+    monkeypatch,
+):
+    custom = cc.CustomCards("")
+    monkeypatch.setattr(cc, "_resource_error", "DOM download failed")
+    monkeypatch.setattr(cc, "_refresh_task", None)
+    assert cd._custom_warnings(custom, [("card", "custom:installed", {})]) == []
+
+
 @pytest.mark.asyncio
 async def test_static_card_guide_survives_without_capability(monkeypatch):
     from ha_mcp.tools import tools_config_dashboards as dashboards
