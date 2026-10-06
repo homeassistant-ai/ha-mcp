@@ -194,6 +194,7 @@ def test_core_constraints_cannot_be_overridden_by_the_optional_runtime(
     tmp_path, monkeypatch
 ):
     import homeassistant
+
     from custom_components.ha_mcp_tools import card_runtime as runtime
 
     monkeypatch.setattr(

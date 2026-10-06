@@ -140,12 +140,14 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
         else None,
     }
     if response["fields"] is None:
-        response["note"] = (
-            "The custom card's editor fields could not be inspected; "
-            "the card may still work in the browser."
-            if card_type.startswith("custom:")
-            else "No inspectable field form was found for this card."
-        )
-        if card_type in {"grid", "horizontal-stack", "vertical-stack", "conditional"}:
-            response["note"] += " This card nests other cards under cards or card."
+        response["note"] = _no_fields_note(card_type)
     return response
+
+
+def _no_fields_note(card_type: str) -> str:
+    if card_type.startswith("custom:"):
+        return "The custom card's editor fields could not be inspected; the card may still work in the browser."
+    note = "No inspectable field form was found for this card."
+    if card_type in {"grid", "horizontal-stack", "vertical-stack", "conditional"}:
+        note += " This card nests other cards under cards or card."
+    return note
