@@ -24,6 +24,7 @@ def _provider_state() -> str:
         try:
             versions[name] = metadata.version(name)
         except metadata.PackageNotFoundError:
+            # Fresh HA normally has neither provider; only record installed ones.
             pass
     if "quickjs" in versions:
         raise ValueError("the quickjs package already owns the quickjs module")
