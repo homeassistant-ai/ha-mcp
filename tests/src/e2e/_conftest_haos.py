@@ -331,6 +331,7 @@ def _wait_for_haos_tools_entry_loaded(
                 if any(e.get("state") == "loaded" for e in entries):
                     return
         except (requests.exceptions.RequestException, json.JSONDecodeError):
+            # Core may still be restarting its HTTP layer; poll again.
             pass
         time.sleep(1)
     pytest.fail(
