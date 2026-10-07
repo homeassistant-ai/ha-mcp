@@ -9,6 +9,7 @@ from ha_mcp._vendor.fastmcp import Client
 from ha_mcp.client import HomeAssistantClient
 
 from ...utilities.assertions import assert_mcp_success
+from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_tool_result
 
 
@@ -117,10 +118,15 @@ async def test_core_display_conversion_labels_the_converted_values(
                 },
             )
         )
-        assert [
-            r["last_reset"]
-            for r in explicit.get("data", explicit)["entities"][0]["statistics"]
-        ] == [int(reset.timestamp() * 1000)] * 3
+        explicit_entity = explicit.get("data", explicit)["entities"][0]
+        assert [r["last_reset"] for r in explicit_entity["statistics"]] == [
+            int(reset.timestamp() * 1000)
+        ] * 3
+        if component_surface_available():
+            assert explicit_entity["unit_of_measurement"] == display
+            assert explicit_entity["unit_source"] == "core_converter"
+        else:
+            assert explicit_entity["unit_source"] == "unknown"
     finally:
         try:
             if state_created:
