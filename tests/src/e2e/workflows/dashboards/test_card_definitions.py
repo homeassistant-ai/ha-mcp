@@ -189,6 +189,8 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
                 "entity": "light.bed_light",
                 "disabled": True,
             },
+            {"type": "custom:e2e-type-error-card"},
+            {"type": "custom:e2e-type-error-card", "mode": "browser"},
         ]
         result = await mcp.call_tool_success(
             "ha_config_set_dashboard",
@@ -211,6 +213,18 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
         assert (
             "'disabled' is not listed in the e2e-custom-card editor schema" in warnings
         )
+        for index in (3, 4):
+            assert any(
+                f"views[0].cards[{index}]" in warning
+                and "check inconclusive (TypeError:" in warning
+                and "does not establish invalid configuration" in warning
+                for warning in result.get("warnings", [])
+            ), result
+        assert "entity must be a string" in warnings
+        saved = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"url_path": path}
+        )
+        assert saved["config"]["views"][0]["cards"] == cards
         # Each fault must leave time for the following card. Combining every
         # deliberate timeout in one save tests the aggregate cutoff instead.
         for fault in ("slow-verdict", "slow-editor", "broken-editor"):

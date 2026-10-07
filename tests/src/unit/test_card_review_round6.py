@@ -187,6 +187,56 @@ def test_synchronous_editor_form_does_not_drain_unrelated_timers():
         bundle.close()
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "throw new TypeError('entity must be a string')",
+        "config.entities.map(x => x)",
+        "this.attachInternals()",
+    ],
+)
+def test_type_errors_are_inconclusive_instead_of_silently_discarded(body):
+    dom = "globalThis.__linkedom = {HTMLElement: class {}, parseHTML: () => ({document: {}, customElements: {define() {}}})};"
+    source = (
+        "class Card extends HTMLElement {setConfig(config) {"
+        + body
+        + "}} customElements.define('type-error-card', Card);"
+    )
+    bundle = cc._Bundle(dom, source)
+    try:
+        result = bundle.check("type-error-card", {"entities": 5})
+        assert len(result) == 1 and result[0]["source"] == "inspection"
+        assert result[0]["message"].startswith("TypeError: ")
+        warning = cd._explain_message(
+            "type-error-card", result[0]["message"], inconclusive=True
+        )
+        assert (
+            "check inconclusive" in warning
+            and "does not establish invalid configuration" in warning
+        )
+        if body.startswith("throw"):
+            assert "entity must be a string" in warning
+    finally:
+        bundle.close()
+
+
+@pytest.mark.parametrize("source", [b";" * 65, ("é" * 33).encode()])
+def test_source_growth_after_stat_is_bounded_before_runtime_creation(
+    tmp_path, monkeypatch, source
+):
+    path = tmp_path / "growing-card.js"
+    path.write_bytes(b";")
+    earlier_size = path.stat().st_size
+    path.write_bytes(source)
+    monkeypatch.setattr(cc, "_MAX_SOURCE_BYTES", 64)
+    runtime = MagicMock()
+    monkeypatch.setattr(cc, "_Bundle", runtime)
+    cards = cc.CustomCards("unused")
+    assert cards._load(path, earlier_size) is None
+    assert cards._skipped[path] == "source size limit"
+    runtime.assert_not_called()
+
+
 def test_one_editor_cannot_reserve_the_entire_custom_save_budget(monkeypatch):
     bundle = object.__new__(cc._Bundle)
     bundle._prepared = set()

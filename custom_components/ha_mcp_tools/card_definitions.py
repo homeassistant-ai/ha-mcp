@@ -650,15 +650,27 @@ def _custom_warnings(custom: CustomCards, customs: _Queued) -> list[str]:
                 "check the type spelling or whether it loads through extra JavaScript."
             )
         explained = (
-            _explain_message(tag, m["message"], editor=m["source"] == "editor")
+            _explain_message(
+                tag,
+                m["message"],
+                editor=m["source"] == "editor",
+                inconclusive=m["source"] == "inspection",
+            )
             for m in messages or []
         )
         found.extend(f"{path} ({card_type}): {e}" for e in explained if e is not None)
     return found
 
 
-def _explain_message(tag: str, message: str, *, editor: bool = False) -> str | None:
+def _explain_message(
+    tag: str, message: str, *, editor: bool = False, inconclusive: bool = False
+) -> str | None:
     """A custom card's own error, with a struct's unknown-key wording made plain."""
+    if inconclusive:
+        return (
+            f"configuration check inconclusive ({message}); "
+            "this may reflect an unavailable browser API, so it does not establish invalid configuration"
+        )
     unknown = re.match(r"At path: (\w+) -- Expected a value of type `never`", message)
     if unknown:
         key = unknown.group(1)

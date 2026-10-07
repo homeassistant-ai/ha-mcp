@@ -5,8 +5,8 @@ A custom card ships as a JavaScript file registered as a dashboard resource
 its own QuickJS sandbox on top of linkedom, a DOM written for non-browser
 runtimes: no network, no filesystem. The card then answers through the same
 calls the dashboard makes: its editor's and its own ``setConfig`` reject a
-config they cannot show, and its editor's form lists its fields. A sandbox
-crash (a browser API the DOM lacks) is never reported as a card problem.
+config they cannot show, and its editor's form lists its fields. Ambiguous
+TypeErrors produce inconclusive-check advice because browser APIs may be absent.
 
 linkedom is an npm package, so it is fetched once from the npm registry at a
 pinned version, checked against the registry's integrity hash, and cached in
@@ -52,9 +52,9 @@ _REFRESH_SECONDS = 10.0
 _SETTLE_JOBS = 20_000
 _SETTLE_SECONDS = 5.0
 _RESOURCE_PREFIXES = (("/hacsfiles/", "www/community"), ("/local/", "www"))
-# Errors a card raises on purpose are Error or StructError; these come from a
-# browser API the sandbox lacks, so they say nothing about the config.
-_SANDBOX_ERRORS = ("TypeError", "ReferenceError", "RangeError", "SyntaxError")
+# These failures are not configuration verdicts in a partial browser environment.
+# TypeError can also reject real config; preserve it as an inconclusive check.
+_SANDBOX_ERRORS = ("ReferenceError", "RangeError", "SyntaxError")
 
 _RUNTIME_JS = r"""
 var __pending = {};
@@ -111,7 +111,8 @@ var __hass = { localize: function (k) { return k; }, states: {}, entities: {}, d
   callWS: function () { return Promise.resolve({}); }, formatEntityState: function () { return ''; } };
 function __verdict(e) {
   var name = e && e.name;
-  return { sandbox: __SANDBOX.indexOf(name) >= 0, message: String((e && e.message) || e) };
+  return { sandbox: __SANDBOX.indexOf(name) >= 0, ambiguous: name === 'TypeError',
+    message: String((e && e.message) || e) };
 }
 function __plain(v) {
   return JSON.parse(JSON.stringify(v, function (k, x) { return typeof x === 'function' ? undefined : x; }));
@@ -162,8 +163,9 @@ function card(op, p) {
       targets.forEach(function (t) {
         try { t.target.hass = __hass; t.target.setConfig(p.config); }
         catch (e) { var v = __verdict(e);
-          if (!v.sandbox && !problems.some(function (p) { return p.message === v.message; }))
-            problems.push({source: t.source, message: v.message}); }
+          var message = v.ambiguous ? 'TypeError: ' + v.message : v.message;
+          if (!v.sandbox && !problems.some(function (p) { return p.message === message; }))
+            problems.push({source: v.ambiguous ? 'inspection' : t.source, message: message}); }
       });
       return { value: problems };
     }
@@ -490,9 +492,16 @@ class CustomCards:
             _LOGGER.debug("Custom card bundle %s skipped: memory cap", path)
             return None
         try:
+            # The resource may have grown since stat; bound the read itself.
+            with path.open("rb") as stream:
+                source = stream.read(_MAX_SOURCE_BYTES + 1)
+            if len(source) > _MAX_SOURCE_BYTES:
+                self._skipped[path] = "source size limit"
+                _LOGGER.debug("Custom card bundle %s skipped: source size cap", path)
+                return None
             return _Bundle(
                 self._dom,
-                path.read_text(encoding="utf-8"),
+                source.decode("utf-8"),
                 module=path in self._modules,
                 deadline=self._refresh_deadline,
             )

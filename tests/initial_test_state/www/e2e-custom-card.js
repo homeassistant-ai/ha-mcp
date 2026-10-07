@@ -44,6 +44,13 @@ class E2ESlowVerdictCard extends HTMLElement {
 customElements.define("e2e-broken-editor-card", E2EBrokenEditorCard);
 customElements.define("e2e-slow-editor-card", E2ESlowEditorCard);
 customElements.define("e2e-slow-verdict-card", E2ESlowVerdictCard);
+class E2ETypeErrorCard extends HTMLElement {
+  setConfig(config) {
+    if (config.mode === "browser") this.attachInternals();
+    else throw new TypeError("entity must be a string");
+  }
+}
+customElements.define("e2e-type-error-card", E2ETypeErrorCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "e2e-custom-card",
