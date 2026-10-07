@@ -33,9 +33,10 @@ async def test_incomplete_source_is_never_reported_as_valid(
     arguments = {"mode": "set", "config": {"energy_sources": [source]}, "dry_run": True}
     if supported:
         async with MCPAssertions(mcp_client) as mcp:
-            await mcp.call_tool_failure(
-                "ha_manage_energy_prefs", arguments, expected_error="VALIDATION_FAILED"
+            failure = await mcp.call_tool_failure(
+                "ha_manage_energy_prefs", arguments, expected_error="Core rejected"
             )
+            assert failure["error"]["code"] == "VALIDATION_FAILED"
     else:
         raw = assert_mcp_success(
             await mcp_client.call_tool("ha_manage_energy_prefs", arguments)
