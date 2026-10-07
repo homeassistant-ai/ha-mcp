@@ -69,19 +69,26 @@ async def test_core_display_conversion_labels_the_converted_values(
             }
         )
         assert imported["success"], imported
+        # Core acknowledges the queued import before it is committed. Metadata
+        # is read before rows, so the first response can contain only the rows.
         ready = await wait_for_tool_result(
             mcp_client,
             tool_name="ha_get_history",
             arguments=args,
             predicate=lambda d: (
-                len(d.get("data", d).get("entities", [{}])[0].get("statistics", []))
+                len(
+                    (entity := d.get("data", d).get("entities", [{}])[0]).get(
+                        "statistics", []
+                    )
+                )
                 == 3
+                and entity.get("statistics_metadata") is not None
             ),
-            description="imported recorder statistics visible",
+            description="imported recorder statistics and metadata visible",
             timeout=30,
         )
         entity = ready.get("data", ready)["entities"][0]
-        assert entity["unit_of_measurement"] == stored
+        assert entity["unit_of_measurement"] == stored, entity
         assert [r["sum"] for r in entity["statistics"]] == [1.0, 1.25, 1.5]
 
         await ha_client._request(
@@ -98,7 +105,7 @@ async def test_core_display_conversion_labels_the_converted_values(
         state_created = True
         result = assert_mcp_success(await mcp_client.call_tool("ha_get_history", args))
         entity = result.get("data", result)["entities"][0]
-        assert entity["unit_of_measurement"] == display
+        assert entity["unit_of_measurement"] == display, entity
         assert entity["unit_source"] == "recorder_metadata"
         assert entity["statistics_metadata"]["statistics_unit_of_measurement"] == stored
         assert [r["sum"] for r in entity["statistics"]] == pytest.approx(expected)

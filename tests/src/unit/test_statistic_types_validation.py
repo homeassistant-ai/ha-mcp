@@ -169,10 +169,11 @@ class TestStatisticTypesValidation:
     @pytest.mark.asyncio
     async def test_invalid_type_raises(self, history_tool):
         """Native rejection is surfaced; the tool holds no copied type whitelist."""
+        sent_types = []
 
         async def reject(message):
             if message["type"] == "recorder/statistics_during_period":
-                assert message["types"] == ["invalid_type"]
+                sent_types.append(message["types"])
             return {"success": False, "error": "Core rejected invalid_type"}
 
         self._mock_client.send_websocket_message = reject
@@ -186,3 +187,4 @@ class TestStatisticTypesValidation:
             )
         error = json.loads(str(exc_info.value))["error"]
         assert "invalid_type" in error["message"]
+        assert sent_types == [["invalid_type"]]
