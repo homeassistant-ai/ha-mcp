@@ -5026,6 +5026,32 @@ class TestUnauthorizedResponseShape:
                 f"https://legit.example{CURRENT['oauth_base']}/protected-resource" in ww
             )
 
+    @pytest.mark.parametrize("suffix", ["", "/readonly"])
+    async def test_readonly_resource_identity(self, setup, suffix):
+        oauth, provider = setup
+        view = oauth.WellKnownProtectedResourceView(provider)
+        if CURRENT["key"] == "stable" and not getattr(view, "extra_urls", []):
+            pytest.skip("readonly metadata has not been promoted to this flavor")
+        path = f"/api/webhook/{provider.webhook_id}{suffix}"
+        metadata_path = f"/.well-known/oauth-protected-resource{path}"
+        assert metadata_path in [view.url, *getattr(view, "extra_urls", [])]
+        request = _make_view_request(headers={"Host": "ignored"}, path=path)
+        with patch.object(oauth.web, "Response") as response:
+            oauth.build_unauthorized_response(request, provider)
+        assert response.call_args.kwargs["headers"]["WWW-Authenticate"] == (
+            'Bearer realm="MCP Proxy", resource_metadata="https://legit.example'
+            f'{metadata_path}"'
+        )
+        request.path = metadata_path
+        with patch.object(oauth.web, "json_response") as response:
+            await view.get(request)
+        assert response.call_args.args[0] == {
+            "resource": f"https://legit.example{path}",
+            "authorization_servers": [f"https://legit.example{oauth.OAUTH_BASE}"],
+            "bearer_methods_supported": ["header"],
+            "resource_documentation": "https://github.com/homeassistant-ai/ha-mcp",
+        }
+
 
 class TestHaAuthMode:
     """The ha_auth OAuth mode: HA core is the authorization server and the
