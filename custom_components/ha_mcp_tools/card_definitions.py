@@ -677,13 +677,13 @@ def _custom_warnings(
             if explained is not None:
                 found.append(f"{path} ({card_type}): {explained}")
     notices = []
-    for (card_type, message), (path, count) in inconclusive.items():
+    for (card_type, error), (path, count) in inconclusive.items():
         location = (
             f"{path} ({card_type})"
             if count == 1
             else f"{card_type} ({count} cards; first at {path})"
         )
-        explained = _explain_message(card_type, message, inconclusive=True)
+        explained = _explain_message(card_type, error, inconclusive=True)
         notices.append(f"{location}: {explained}")
     return found, notices, unchecked
 
