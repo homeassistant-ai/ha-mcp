@@ -161,7 +161,10 @@ def test_contract_commands_require_admin_before_preparation(
     monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
     preparation = AsyncMock(return_value={"records": []})
     monkeypatch.setattr(wsapi.core_contract, "statistics_metadata", preparation)
-    wsapi.async_register_commands(FakeHass())
+    for schema, execute, prep in wsapi.core_contract.command_specs(_REAL_VOL):
+        fake.async_register_command(
+            FakeHass(), wsapi._build_handler(schema, execute, prep)
+        )
     connection = _FakeConnection(is_admin=is_admin, has_user=has_user)
     params = (
         {"command": "history/history_during_period"}
