@@ -9,6 +9,11 @@ history from before the fork.
 -->
 
 
+## v3.0.4.dev3 (2026-10-07)
+
+- Give `/readonly` connections matching OAuth protected-resource metadata while
+  retaining the same authentication and existing base metadata URL.
+
 ## v3.0.4.dev2 (2026-09-13)
 
 - Add `/api/webhook/<id>/readonly` connections using the existing authentication.

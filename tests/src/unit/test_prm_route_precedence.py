@@ -60,8 +60,9 @@ def real_aiohttp():
 
 
 @pytest.mark.parametrize("dynamic_first", [False, True])
+@pytest.mark.parametrize("suffix", ["", "/readonly"])
 async def test_exact_path_wins_regardless_of_registration_order(
-    real_aiohttp, dynamic_first
+    real_aiohttp, dynamic_first, suffix
 ):
     web, test_utils = real_aiohttp
 
@@ -73,19 +74,19 @@ async def test_exact_path_wins_regardless_of_registration_order(
 
     router = web.UrlDispatcher()
     if dynamic_first:
-        router.add_get(f"{PREFIX}/{{webhook_id}}", dynamic)
-        router.add_get(f"{PREFIX}/{APP_ID}", exact)
+        router.add_get(f"{PREFIX}/{{webhook_id}}{suffix}", dynamic)
+        router.add_get(f"{PREFIX}/{APP_ID}{suffix}", exact)
     else:
-        router.add_get(f"{PREFIX}/{APP_ID}", exact)
-        router.add_get(f"{PREFIX}/{{webhook_id}}", dynamic)
+        router.add_get(f"{PREFIX}/{APP_ID}{suffix}", exact)
+        router.add_get(f"{PREFIX}/{{webhook_id}}{suffix}", dynamic)
 
     match = await router.resolve(
-        test_utils.make_mocked_request("GET", f"{PREFIX}/{APP_ID}")
+        test_utils.make_mocked_request("GET", f"{PREFIX}/{APP_ID}{suffix}")
     )
     assert match.handler is exact
 
     match = await router.resolve(
-        test_utils.make_mocked_request("GET", f"{PREFIX}/{COMPONENT_ID}")
+        test_utils.make_mocked_request("GET", f"{PREFIX}/{COMPONENT_ID}{suffix}")
     )
     assert match.handler is dynamic
     assert match.get("webhook_id") == COMPONENT_ID

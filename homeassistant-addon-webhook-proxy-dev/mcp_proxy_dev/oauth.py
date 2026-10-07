@@ -834,8 +834,7 @@ class AuthorizationServerMetadataView(HomeAssistantView):
 
 
 class WellKnownProtectedResourceView(HomeAssistantView):
-    """RFC 9728 §3.1 path-scoped Protected Resource Metadata — the ONLY
-    protected-resource document this integration serves.
+    """RFC 9728 §3.1 metadata for the webhook and its read-only alias.
 
     Served at the well-known location derived from the webhook resource URL
     (`/.well-known/oauth-protected-resource/api/webhook/<id>`), which is also
@@ -882,6 +881,7 @@ class WellKnownProtectedResourceView(HomeAssistantView):
         self.url = (
             f"/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
         )
+        self.extra_urls = [f"{self.url}/readonly"]
 
     async def get(self, request: web.Request) -> web.Response:
         hass = getattr(self._provider, "_hass", None)
@@ -901,9 +901,12 @@ class WellKnownProtectedResourceView(HomeAssistantView):
         if provider.webhook_id != self._bound_webhook_id:
             return _json_not_found()
         base = provider.base_url_for(request)
+        resource = provider.resource_url(base)
+        if request.path == f"{self.url}/readonly":
+            resource += "/readonly"
         return web.json_response(
             {
-                "resource": provider.resource_url(base),
+                "resource": resource,
                 "authorization_servers": [provider.authorization_server_url(base)],
                 "bearer_methods_supported": ["header"],
                 "resource_documentation": (
@@ -1321,6 +1324,8 @@ def build_unauthorized_response(
     metadata_url = (
         f"{base}/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
     )
+    if request.path == f"/api/webhook/{provider.webhook_id}/readonly":
+        metadata_url += "/readonly"
     return web.Response(
         status=401,
         text="Unauthorized",
