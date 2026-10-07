@@ -167,6 +167,26 @@ def test_looping_editor_cannot_consume_later_cards_budget():
         bundle.close()
 
 
+def test_synchronous_editor_form_does_not_drain_unrelated_timers():
+    dom = "globalThis.__linkedom = {HTMLElement: class {}, parseHTML: () => ({document: {}, customElements: {define() {}}})};"
+    source = """
+      class Card extends HTMLElement {
+        static getConfigForm() {return {schema: [{name: 'entity', selector: {entity: {}}}]};}
+        static getConfigElement() {return {setConfig() {}};}
+      }
+      customElements.define('sync-editor-card', Card);
+    """
+    bundle = cc._Bundle(dom, source)
+    try:
+        bundle._settle = MagicMock(side_effect=TimeoutError("unrelated timer"))
+        assert bundle.form("sync-editor-card") == [
+            {"name": "entity", "selector": {"entity": {}}}
+        ]
+        bundle._settle.assert_not_called()
+    finally:
+        bundle.close()
+
+
 def test_one_editor_cannot_reserve_the_entire_custom_save_budget(monkeypatch):
     bundle = object.__new__(cc._Bundle)
     bundle._prepared = set()

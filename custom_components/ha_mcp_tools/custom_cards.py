@@ -140,9 +140,16 @@ function card(op, p) {
     if (!C) return { error: 'not registered' };
     if (op === 'prepare') {
       var slot = __pending[p.tag] = {};
-      if (C.getConfigForm) Promise.resolve(C.getConfigForm()).then(function (f) { slot.form = f; }, function () {});
-      if (C.getConfigElement) Promise.resolve(C.getConfigElement()).then(function (e) { slot.editor = e; }, function () {});
-      return { value: !!(C.getConfigForm || C.getConfigElement) };
+      var pending = false;
+      function store(key, value) {
+        if (value && typeof value.then === 'function') {
+          pending = true;
+          Promise.resolve(value).then(function (v) { slot[key] = v; }, function () {});
+        } else { slot[key] = value; }
+      }
+      if (C.getConfigForm) store('form', C.getConfigForm());
+      if (C.getConfigElement) store('editor', C.getConfigElement());
+      return { value: pending };
     }
     var slot2 = __pending[p.tag] || {};
     if (op === 'check') {

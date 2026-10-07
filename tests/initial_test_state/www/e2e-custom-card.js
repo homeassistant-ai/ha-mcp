@@ -32,7 +32,7 @@ class E2ESlowEditorCard extends HTMLElement {
   static getConfigElement() {
     const tick = () => setTimeout(tick, 0);
     tick();
-    return { setConfig(config) {} };
+    return Promise.resolve({ setConfig(config) {} });
   }
 }
 class E2ESlowVerdictCard extends HTMLElement {
