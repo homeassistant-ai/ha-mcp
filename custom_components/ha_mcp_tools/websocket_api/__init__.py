@@ -282,6 +282,7 @@ code lives in the submodules:
 * ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries`` and ``dashboards``: the read commands.
 * ``system``: ``info``, ``system_snapshot``, ``backup_prep``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
 * ``call_service`` and ``bulk``: the write commands.
+* ``oauth_callbacks``: read and replace the none-mode OAuth callback allowlist.
 
 Extension point — to add another command later: write ``_do_<name>(hass,
 params)``, append its capability to :data:`CAPABILITIES`, and add one row to
@@ -319,6 +320,7 @@ from .lookups import (
     _do_exposure,
     _do_registry_lookup,
 )
+from .oauth_callbacks import command_specs as _oauth_callback_specs
 from .overview import _do_helpers_list, _do_overview, _do_states, _helpers_list_prep
 from .registries import _do_registries
 from .schemas import (
@@ -462,6 +464,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         ),
         (_template_diagnose_schema(), _do_template_diagnose, _template_diagnose_prep),
         *helper_collections.command_specs(vol, er),
+        *_oauth_callback_specs(),
     ]
 
 

@@ -6,10 +6,11 @@ menu on the first step:
 * ``tools`` — the privileged file / YAML services (the original component).
   A single confirm step creates the entry. Single-instance, keyed on
   ``DOMAIN``.
-* ``server`` — the in-process ha-mcp FastMCP server (issue #1527). A single
-  confirm step creates the entry (entry-exists = the server runs);
+* ``server`` — the in-process ha-mcp FastMCP server (issue #1527). A setup
+  form (administrator token, remote access, network access) creates the
+  entry (entry-exists = the server runs);
   single-instance, keyed on ``DOMAIN-server``. Its options flow tunes the
-  channel / port / bind host / webhook auth / pip spec / server URL.
+  port / bind host / webhook auth / pip spec / server URL.
 
 The two entry types are discriminated by ``entry.data[CONF_ENTRY_TYPE]``; the
 options-flow dispatcher branches on it — the server entry gets the configurable
@@ -45,20 +46,24 @@ from homeassistant.helpers.selector import (
 from homeassistant.loader import async_get_integration
 from packaging.version import InvalidVersion, Version
 
+from . import server_credentials
+from .config_flow_text import (
+    _COMMON_FALLBACKS,
+    _common_strings,
+    _fill,
+    _sentence_prefix,
+)
 from .const import (
     BIND_HOST_ALL,
     BIND_HOST_LOOPBACK,
-    CHANNEL_DEV,
-    CHANNEL_STABLE,
     CONF_ENTRY_TYPE,
+    DATA_ADMIN_TOKEN,
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
-    DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
-    DEFAULT_CHANNEL,
     DEFAULT_ENABLE_LLM_API,
     DEFAULT_LLM_API_EXPOSURE,
     DEFAULT_LOOPBACK_URL,
@@ -73,10 +78,10 @@ from .const import (
     EXPOSURE_FULL,
     EXPOSURE_TOOL_SEARCH,
     LLM_API_DOCS_URL,
+    MAX_OAUTH_CALLBACKS,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
-    OPT_AUTO_UPDATE,
+    OPT_ADMIN_TOKEN_REPLACEMENT,
     OPT_BIND_HOST,
-    OPT_CHANNEL,
     OPT_ENABLE_LLM_API,
     OPT_ENABLE_SIDEBAR_PANEL,
     OPT_ENABLE_STARTUP_NOTIFICATION,
@@ -85,6 +90,7 @@ from .const import (
     OPT_LLM_API_EXPOSURE,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_OAUTH_REGENERATE,
     OPT_PIP_SPEC,
     OPT_REGENERATE_SECRETS,
@@ -93,245 +99,32 @@ from .const import (
     OPT_SERVER_URL,
     OPT_WEBHOOK_AUTH,
     OPT_WEBHOOK_ID_OVERRIDE,
+    SERVER_ENTRY_TITLE,
     TOOLS_ENTRY_TITLE,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
 )
-
-# Title shown for the server entry in the integration tile's entry list; the
-# tools entry's title lives in const.py (setup migration in __init__ needs it).
-_SERVER_ENTRY_TITLE = "HA-MCP Server"
+from .oauth_redirect_allowlist import (
+    effective_allowlist,
+    normalize_allowlist,
+    stored_allowlist,
+)
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
 _SERVER_UNIQUE_ID = f"{DOMAIN}-server"
 
+# Setup-form field for the server entry: whether Home Assistant forwards
+# remote MCP traffic through a webhook, and how clients authenticate there.
+# One choice instead of the options form's checkbox + mode, so the step that
+# decides exposure states it in one place.
+SETUP_REMOTE_ACCESS = "remote_access"
+REMOTE_ACCESS_DISABLED = "disabled"
+SETUP_ADMIN_TOKEN = DATA_ADMIN_TOKEN
+
 
 _LOGGER = logging.getLogger(__name__)
-
-
-# The options form's prose is assembled here rather than in strings.json,
-# because which sentences appear depends on runtime state. Keeping the text
-# itself in the ``common`` catalog means the assembled paragraphs follow the
-# system-configured language instead of being English inside an otherwise
-# translated form. These are the English source strings and the fallback: if
-# the language is unreadable or the catalog cannot be loaded, the form still
-# renders, in English, exactly as it did before.
-#
-# Kept identical to ``strings.json``'s ``common`` block, keys and values —
-# asserted by ``test_common_fallbacks_mirror_strings_json`` in
-# tests/src/unit/test_config_flow.py, because a fallback that has drifted
-# from the source shows different English than every catalog.
-_COMMON_FALLBACKS: dict[str, str] = {
-    "panel_hint": (
-        "Open the [HA-MCP settings panel](/ha-mcp) for tool management and "
-        "server settings."
-    ),
-    "version_line": (
-        "Component {component_version} - "
-        "Server ha-mcp {server_version} ({channel} channel)"
-    ),
-    "version_unknown": "unknown",
-    "version_not_installed": "not installed yet",
-    "tools_module_installed": (
-        "Beta/advanced file & YAML tools module (optional): Installed"
-    ),
-    "tools_module_not_loaded": (
-        "Beta/advanced file & YAML tools module (optional): Installed "
-        'but not loaded — enable or reload the "HA-MCP File & YAML '
-        "Tools\" entry on this integration's page"
-    ),
-    "tools_module_not_installed": (
-        "Beta/advanced file & YAML tools module (optional): Not installed — "
-        'press "Add entry" on this integration\'s page and choose '
-        '"HA-MCP File & YAML Tools" to add it'
-    ),
-    "connect_urls_pending": (
-        "The connect URLs appear here (and in the Home Assistant log) "
-        "once the server has started."
-    ),
-    "connect_urls_label": "Connect URL(s):",
-    "connect_webhook_disabled": (
-        "Remote access via webhook is disabled (local-only mode)."
-    ),
-    "connect_direct_access": "Direct access from the Home Assistant machine: {url}",
-    "connect_remote_url": "Remote connect URL: {url}",
-    "connect_local_lan": 'Local/LAN (when Network access is "Local network"): {url}',
-    "oauth_select_legacy_mode": (
-        "Set Authentication mode to legacy OAuth above and save to "
-        "generate a Client ID and Client Secret."
-    ),
-    "oauth_creds_pending": (
-        "The Client ID and Client Secret appear here once the server has started."
-    ),
-    "oauth_not_serving": (
-        "Legacy OAuth is not serving these yet — restart Home Assistant "
-        "when it asks you to, to activate them."
-    ),
-}
-
-
-def _fill(common: dict[str, str], key: str, /, **values: str) -> str:
-    """Return the ``common`` string ``key`` with ``values`` substituted.
-
-    Placeholder parity is asserted in tests/src/unit/test_locale_parity.py, but
-    a catalog is data: one malformed brace, or a placeholder the parity check
-    cannot see (``{component_version.major}`` reads as no placeholder at all),
-    would otherwise take the whole options form down. The English source is a
-    module constant, so formatting it after a failure needs no second guard.
-    """
-    try:
-        return common[key].format(**values)
-    except Exception as err:  # noqa: BLE001
-        # Names both causes: a catalog string this caller cannot fill, or a
-        # caller passing values the template never declared. The second is our
-        # bug and crashes on the English constant below, so the log line has to
-        # point at the caller rather than blame the translator.
-        _LOGGER.warning(
-            "Unusable %s template (%r) — bad catalog string or wrong caller "
-            "arguments; using the English source: %s",
-            key,
-            common.get(key),
-            err,
-        )
-    return _COMMON_FALLBACKS[key].format(**values)
-
-
-# Scripts that set their own inter-sentence spacing: the full-width punctuation
-# they end on already carries it, so an ASCII space after it renders as a gap.
-#
-# Keyed off the language, not off the last character. Sniffing glyphs got it
-# wrong in both directions: U+201D (”) is Simplified Chinese's closing quote and
-# was removed as "Latin", while 「」『』 are the traditional forms zh-Hans does
-# not use and were kept.
-#
-# ``ko`` is deliberately absent. Korean separates words with ASCII spaces and
-# ends sentences on an ASCII full stop, so a future ``ko`` catalog wants the
-# separator exactly like a Latin one — the full-width rationale above simply
-# does not apply to it.
-_NO_ASCII_SENTENCE_SPACE = frozenset({"zh", "ja"})
-
-
-def _sentence_prefix(sentence: str, language: str, english: str) -> str:
-    """Return ``sentence`` spaced to run into the prose that follows it.
-
-    Two inputs decide this, and each alone has already been wrong once. The
-    language names the script, which the last character cannot. But the
-    language does not promise the text follows it: core loads
-    ``[en, <language>]`` and merges English first as the documented fallback
-    (``helpers/translation.py``), so an instance set to a language this
-    integration does not ship reads these sentences in English — and English
-    needs the ASCII separator whatever ``hass.config.language`` says. The same
-    holds for a shipped language whenever the catalog load degrades.
-
-    ``english`` is the English source for this sentence; when the catalog
-    hands back exactly that, the rendered text is English and gets the space.
-    """
-    if not sentence:
-        return sentence
-    if (
-        language.split("-", maxsplit=1)[0].lower() in _NO_ASCII_SENTENCE_SPACE
-        and sentence != english
-    ):
-        return sentence
-    return f"{sentence} "
-
-
-async def _fetch_common_translations(
-    hass: HomeAssistant, language: str
-) -> dict[str, str]:
-    """core ``async_get_translations(hass, language, "common")``; test seam.
-
-    Mirrors the seam in ``websocket_api.services`` so the lookup can be replaced in
-    tests without reaching into Home Assistant's translation machinery.
-    """
-    from homeassistant.helpers.translation import async_get_translations
-
-    result = await async_get_translations(hass, language, "common", {DOMAIN})
-    # Any Mapping, not just dict: core returns a plain dict today, but the
-    # mirrored seam in ``websocket_api.services`` accepts a Mapping, and narrowing it
-    # here would silently discard a whole catalog on a core-internal change.
-    if isinstance(result, Mapping):
-        return dict(result)
-    # Discarding a whole catalog is the same pure-English outcome as a failed
-    # load, so it gets the same visibility; the type is the only useful clue.
-    _LOGGER.warning(
-        "Ignoring the %s common translations: expected a Mapping, got %s",
-        language,
-        type(result).__name__,
-    )
-    return {}
-
-
-async def _common_strings(hass: HomeAssistant | None) -> tuple[dict[str, str], str]:
-    """Return the ``common`` catalog and the language it was fetched for.
-
-    ``hass.config.language`` is the instance-wide language, not the profile
-    language of the administrator who opened the form — an options flow is
-    handed no requester language (Home Assistant's flow context carries
-    ``source`` and ``entry_id`` only), so where the two differ this prose
-    follows the system setting while the surrounding form follows the user.
-
-    The language is returned rather than left for the caller to read again:
-    the sentence separator needs it, and two independent reads of the same
-    attribute can disagree about which catalog is actually in hand. Here they
-    cannot — this is the only place the attribute is read, and ``en`` is what
-    both the fallback strings and the returned language say when it is
-    unreadable.
-
-    Failure-proof like the hints it feeds: an unreadable language or a
-    failing lookup degrades to the English source strings rather than
-    breaking the options form.
-    """
-    strings = dict(_COMMON_FALLBACKS)
-    configured = getattr(getattr(hass, "config", None), "language", None)
-    if hass is None or not isinstance(configured, str):
-        return strings, "en"
-    language = configured
-    try:
-        loaded = await _fetch_common_translations(hass, language)
-    except Exception as err:
-        # Warning, not debug: this is a degradation an administrator can see
-        # in the form (English paragraphs inside a translated page) and the
-        # broad ``except`` also covers an ImportError from the function-local
-        # core import — a permanent defect nobody would ever notice at debug.
-        # ``exc_info`` because the traceback is the only way to tell the two
-        # apart. Same level the ``websocket_api.services`` seam this mirrors uses.
-        _LOGGER.warning(
-            "Could not load the %s options-form translations, falling back to "
-            "English: %s",
-            language,
-            err,
-            exc_info=True,
-        )
-        return strings, language
-
-    prefix = f"component.{DOMAIN}.common."
-    translated = {
-        key.removeprefix(prefix): value
-        for key, value in loaded.items()
-        if key.startswith(prefix) and isinstance(value, str) and value
-    }
-    if not translated:
-        # Deliberately not ``if loaded and not translated``: core returns a
-        # single-component lookup straight from that component's cache entry
-        # (``_TranslationCache.get_cached``), so a category that was never
-        # built arrives as ``{}`` — which is exactly the developer error worth
-        # seeing, and an empty-``loaded`` condition would skip it. The merge is
-        # a silent no-op either way: the form renders pure English and no other
-        # check notices.
-        # Wording covers both ways to get here: a catalog that carries nothing
-        # under our prefix, and one the seam already discarded and warned about
-        # (where "carries no keys" would be untrue — there was no catalog).
-        _LOGGER.warning(
-            "No usable %s translations under %s, so the options form renders "
-            "its assembled prose in English",
-            language,
-            prefix,
-        )
-    strings.update(translated)
-    return strings, language
 
 
 def _legacy_credentials_active(
@@ -360,7 +153,7 @@ def _legacy_restart_pending(hass: HomeAssistant) -> bool:
 def _installed_server_version() -> str | None:
     """Return the installed ha-mcp server version, or None if not installed.
 
-    Checks both channel distributions (only one is ever installed at a time).
+    Checks both server distributions (only one is ever installed at a time).
     Kept dependency-free (``importlib.metadata``) and swallow-nothing-surprising
     so a read can never break the options form.
     """
@@ -374,6 +167,25 @@ def _installed_server_version() -> str | None:
     return None
 
 
+def _bind_host_selector() -> SelectSelector:
+    """Network-access dropdown shared by the setup step and the options form.
+
+    Inline labels: hassfest forbids dots in translation keys, so the
+    IP-valued options cannot use strings.json selector translations.
+    """
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=[
+                SelectOptionDict(
+                    value=BIND_HOST_LOOPBACK, label="This machine only (loopback)"
+                ),
+                SelectOptionDict(value=BIND_HOST_ALL, label="Local network"),
+            ],
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
 class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     """Handle the config flow for the HA-MCP custom component (both entry types)."""
 
@@ -384,8 +196,8 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         """Return the options flow for this entry type.
 
-        The in-process server entry gets the configurable options flow (channel /
-        port / bind / auth / pip spec / URL). The tools services entry has
+        The in-process server entry gets the configurable options flow
+        (port / bind / auth / pip spec / URL). The tools services entry has
         nothing to configure yet, so it gets a light informational options flow
         instead of aborting.
         """
@@ -434,11 +246,14 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     async def async_step_server(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Confirm and create the single in-process server entry.
+        """Choose remote and network access, then create the server entry.
 
-        Creating the entry starts the in-process server with the defaults (port
-        9584, LAN-reachable like the add-on, secret-URL auth); everything is
-        tunable afterward in the integration options.
+        A new install starts with the webhook off and the server port bound to
+        loopback (#2427): nothing beyond the Home Assistant machine can reach
+        the server until the administrator chooses a remote-access mode or LAN
+        access here or later in the options. The choice is saved explicitly,
+        so entries created before these defaults keep the behaviour they
+        inherit. The server runs with the administrator token entered here.
         """
         try:
             supported = Version(HA_VERSION) >= Version(
@@ -455,16 +270,69 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
                 },
             )
 
-        await self.async_set_unique_id(_SERVER_UNIQUE_ID)
+        # A dialog closed without aborting (tab closed mid-setup) stays open
+        # until Home Assistant restarts and must not block a new setup. This
+        # step runs again on every submit, so the configured check below still
+        # stops a second dialog from replacing a finished entry.
+        await self.async_set_unique_id(_SERVER_UNIQUE_ID, raise_on_progress=False)
         self._abort_if_unique_id_configured()
 
+        errors: dict[str, str] = {}
+        values = user_input or {}
         if user_input is not None:
-            return self.async_create_entry(
-                title=_SERVER_ENTRY_TITLE,
-                data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER},
-                options={},
-            )
-        return self.async_show_form(step_id="server")
+            token = str(user_input.get(SETUP_ADMIN_TOKEN, "")).strip()
+            problem = server_credentials.token_problem(self.hass, token)
+            if problem is not None:
+                errors[SETUP_ADMIN_TOKEN] = problem
+            else:
+                remote = user_input.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED)
+                enabled = remote != REMOTE_ACCESS_DISABLED
+                return self.async_create_entry(
+                    title=SERVER_ENTRY_TITLE,
+                    data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER, DATA_ADMIN_TOKEN: token},
+                    options={
+                        OPT_ENABLE_WEBHOOK: enabled,
+                        # Disabled keeps Home Assistant sign-in queued, so
+                        # enabling the webhook later never lands on the
+                        # secret-URL mode.
+                        OPT_WEBHOOK_AUTH: remote if enabled else WEBHOOK_AUTH_HA,
+                        OPT_BIND_HOST: user_input.get(
+                            OPT_BIND_HOST, BIND_HOST_LOOPBACK
+                        ),
+                    },
+                )
+        return self.async_show_form(
+            step_id="server",
+            errors=errors,
+            data_schema=vol.Schema(
+                {
+                    # The server acts with this account's rights (#2427); the
+                    # component no longer creates an administrator for itself.
+                    vol.Required(SETUP_ADMIN_TOKEN): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
+                    vol.Required(
+                        SETUP_REMOTE_ACCESS,
+                        default=values.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                REMOTE_ACCESS_DISABLED,
+                                WEBHOOK_AUTH_HA,
+                                WEBHOOK_AUTH_LEGACY,
+                                WEBHOOK_AUTH_NONE,
+                            ],
+                            translation_key="server_remote_access",
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    ),
+                    vol.Required(
+                        OPT_BIND_HOST,
+                        default=values.get(OPT_BIND_HOST, BIND_HOST_LOOPBACK),
+                    ): _bind_host_selector(),
+                }
+            ),
+        )
 
 
 class HaMcpToolsInfoOptionsFlow(OptionsFlow):
@@ -544,12 +412,29 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         """Show / apply the server options."""
         opts = self.config_entry.options
         errors: dict[str, str] = {}
+        invalid: list[str] = []
         if user_input is not None:
             errors = self._connect_path_override_errors(user_input)
+            entries, invalid = normalize_allowlist(
+                user_input.get(OPT_OAUTH_REDIRECT_ALLOWLIST) or []
+            )
+            if invalid:
+                errors[OPT_OAUTH_REDIRECT_ALLOWLIST] = "invalid_oauth_callback"
+            elif len(entries) > MAX_OAUTH_CALLBACKS:
+                errors[OPT_OAUTH_REDIRECT_ALLOWLIST] = "too_many_oauth_callbacks"
+            token = str(user_input.get(OPT_ADMIN_TOKEN_REPLACEMENT) or "").strip()
+            if token and (
+                problem := server_credentials.token_problem(self.hass, token)
+            ):
+                errors[OPT_ADMIN_TOKEN_REPLACEMENT] = problem
             if not errors:
-                return self.async_create_entry(
-                    title="", data=self._normalize(user_input)
-                )
+                data = self._normalize(user_input)
+                data.pop(OPT_OAUTH_REDIRECT_ALLOWLIST, None)
+                if (stored := stored_allowlist(opts, entries)) is not None:
+                    data[OPT_OAUTH_REDIRECT_ALLOWLIST] = stored
+                if token:
+                    self._adopt_token(token, data)
+                return self.async_create_entry(title="", data=data)
 
         # A validation failure must re-render the values the user just entered.
         # Required fields fall back to their stored/default values only when a
@@ -578,44 +463,13 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     )
                 ),
                 vol.Required(
-                    OPT_CHANNEL,
-                    default=form_values.get(OPT_CHANNEL, DEFAULT_CHANNEL),
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[CHANNEL_STABLE, CHANNEL_DEV],
-                        translation_key="server_channel",
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
-                ),
-                vol.Required(
-                    OPT_AUTO_UPDATE,
-                    default=bool(form_values.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)),
-                ): bool,
-                vol.Required(
                     OPT_SERVER_PORT,
                     default=form_values.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
                 vol.Required(
                     OPT_BIND_HOST,
                     default=form_values.get(OPT_BIND_HOST, DEFAULT_BIND_HOST),
-                ): SelectSelector(
-                    # Inline labels: hassfest forbids dots in translation
-                    # keys, so the IP-valued options cannot use strings.json
-                    # selector translations.
-                    SelectSelectorConfig(
-                        options=[
-                            SelectOptionDict(
-                                value=BIND_HOST_ALL,
-                                label="Local network (default)",
-                            ),
-                            SelectOptionDict(
-                                value=BIND_HOST_LOOPBACK,
-                                label="This machine only (loopback)",
-                            ),
-                        ],
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
-                ),
+                ): _bind_host_selector(),
                 vol.Optional(
                     OPT_PIP_SPEC,
                     # Pre-fill via suggested_value, NOT a schema default: a
@@ -628,8 +482,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     # optional text field below.) Only a genuinely saved
                     # override is suggested; the normalized "no override" state
                     # renders an EMPTY field — the help text says "Leave empty",
-                    # and pre-filling DEFAULT_PIP_SPEC would show the STABLE dist
-                    # name even on the dev channel.
+                    # and pre-filling DEFAULT_PIP_SPEC would show the stable dist
+                    # name even when a HACS pre-release pins ha-mcp-dev.
                     description={
                         "suggested_value": suggested_values.get(OPT_PIP_SPEC, "")
                     },
@@ -727,6 +581,23 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     OPT_OAUTH_REGENERATE,
                     default=False,
                 ): bool,
+                # Never pre-filled: the stored token stays out of the form.
+                vol.Optional(OPT_ADMIN_TOKEN_REPLACEMENT): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
+                # suggested_value, not default: an emptied list must save as
+                # empty rather than fall back (see the OPT_PIP_SPEC note).
+                vol.Optional(
+                    OPT_OAUTH_REDIRECT_ALLOWLIST,
+                    description={
+                        "suggested_value": suggested_values.get(
+                            OPT_OAUTH_REDIRECT_ALLOWLIST,
+                            effective_allowlist(opts),
+                        )
+                    },
+                ): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.URL, multiple=True)
+                ),
             }
         )
         # The sidebar-panel sentence in the description is only truthful while
@@ -759,8 +630,28 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 "oauth_creds": self._oauth_creds_hint(common),
                 "llm_api_docs_url": LLM_API_DOCS_URL,
                 "panel_hint": panel_hint,
+                "invalid_callbacks": ", ".join(invalid),
+                "max_callbacks": str(MAX_OAUTH_CALLBACKS),
             },
         )
+
+    def _adopt_token(self, token: str, options: Mapping[str, Any]) -> None:
+        """Store the validated replacement token straight into ``entry.data``.
+
+        Like the token repair, it never passes through the options, which
+        ``config_entries/get`` returns. The entry reloads to use it: the update
+        listener reloads only for an options change, so a token-only save
+        schedules the reload here.
+        """
+        from .embedded_entry import _reload_relevant
+
+        entry = self.config_entry
+        self.hass.config_entries.async_update_entry(
+            entry,
+            data=server_credentials.adopt_admin_token(self.hass, entry.data, token),
+        )
+        if _reload_relevant(options) == _reload_relevant(entry.options):
+            self.hass.config_entries.async_schedule_reload(entry.entry_id)
 
     @staticmethod
     def _connect_path_override_errors(
@@ -784,12 +675,11 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         """Normalize the submitted options before they are persisted.
 
         Collapses the pip-spec field to empty when it is empty or equals
-        ``DEFAULT_PIP_SPEC`` (the unpinned ``ha-mcp`` distribution): the field is
-        pre-filled with the saved override or blank, but a user may also type the
-        default dist name, and persisting it verbatim would read as an
-        intentional override and disable the stable channel's automatic updates.
-        Empty means "no override" (track the selected channel); any other string
-        is a genuine override, stored as-is. Also strips the URL / secret
+        ``DEFAULT_PIP_SPEC`` (the bare ``ha-mcp`` distribution): a user may type
+        the default dist name, and persisting it verbatim would read as an
+        intentional override of the server this component release pins.
+        Empty means "no override" (run the paired server); any other string is
+        a genuine override, stored as-is. Also strips the URL / secret
         override fields, and drops a blank ``server_url`` so its default applies.
         """
         cleaned = dict(user_input)
@@ -803,6 +693,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             OPT_OAUTH_CLIENT_SECRET,
         ):
             cleaned[key] = str(cleaned.get(key, "") or "").strip()
+        # The token never reaches the options; see _adopt_token.
+        cleaned[OPT_ADMIN_TOKEN_REPLACEMENT] = ""
         cleaned[OPT_EXTERNAL_URL] = cleaned[OPT_EXTERNAL_URL].rstrip("/")
         # server_url gets no _normalize-forced empty like the fields above; strip
         # it and drop it entirely when blank so a whitespace-only value can't be
@@ -823,13 +715,20 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         """Return a one-line component + server version summary for the form.
 
         Reads the component version from the integration manifest and the
-        installed server version from the channel's distribution metadata.
+        installed server version from the distribution metadata; the source
+        says whether that server is the one this release pins or a pip-spec
+        override.
         Failure-proof like the connect-URL hint: any read error degrades to a
         best-effort string ("unknown" / "not installed yet") rather than
         breaking the options form.
         """
         opts = self.config_entry.options
-        channel = str(opts.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
+        override = str(opts.get(OPT_PIP_SPEC) or "").strip()
+        source = (
+            common["server_source_override"]
+            if override and override != DEFAULT_PIP_SPEC
+            else common["server_source_paired"]
+        )
 
         component_version = common["version_unknown"]
         hass = getattr(self, "hass", None)
@@ -877,7 +776,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             "version_line",
             component_version=component_version,
             server_version=server_version,
-            channel=channel,
+            source=source,
         )
 
     def _tools_module_hint(self, common: dict[str, str]) -> str | None:

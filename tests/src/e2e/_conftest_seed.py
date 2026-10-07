@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -547,7 +548,24 @@ def _seed_yaml_package_scene(config_path: Path) -> None:
     )
 
 
-def _collect_manifest_requirements(config_path: Path) -> list[str]:
+_SERVER_DISTRIBUTIONS = frozenset({"ha-mcp", "ha-mcp-dev"})
+
+
+def is_server_requirement(requirement: str) -> bool:
+    """True for the ha-mcp server pin the component manifest carries (#2427).
+
+    On the embedded lanes the checkout's own wheel supplies the server, so
+    installing the pinned PyPI release first would put released code under
+    test (pip then treats the same-version wheel as already satisfied).
+    """
+    match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", requirement)
+    name = match.group(1).lower().replace("_", "-") if match else ""
+    return name in _SERVER_DISTRIBUTIONS
+
+
+def _collect_manifest_requirements(
+    config_path: Path, *, skip_server: bool = False
+) -> list[str]:
     """Aggregate ``requirements`` from every installed custom-component manifest.
 
     Returns a de-duplicated ordered list of pip-installable requirement
@@ -576,6 +594,9 @@ def _collect_manifest_requirements(config_path: Path) -> list[str]:
             )
             continue
         for req in manifest_data.get("requirements", []):
-            if isinstance(req, str) and req not in reqs:
-                reqs.append(req)
+            if not isinstance(req, str) or req in reqs:
+                continue
+            if skip_server and is_server_requirement(req):
+                continue
+            reqs.append(req)
     return reqs

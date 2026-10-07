@@ -3,10 +3,11 @@
 The mirror's release-on-tag workflow turns each pushed tag into a GitHub
 release, but the deploy key that pushes the tag cannot call the GitHub API
 to set a rich release body -- so the body has to travel inside the annotated
-tag message itself. This script produces that message: a summary of what
-changed in the HACS custom component (custom_components/ha_mcp_tools/) since
-the previous stable server release, so HACS shows real release notes instead
-of a generic stub.
+tag message itself. This script produces that message for a stable release:
+the component and the ha-mcp server it installs share one version (#2427), so
+the notes name that server and summarize what changed in the custom component
+(custom_components/ha_mcp_tools/) since the previous stable release, so HACS
+shows real release notes instead of a generic stub.
 """
 
 from __future__ import annotations
@@ -63,7 +64,6 @@ def _filter_noise_subjects(subjects: list[str]) -> list[str]:
 
 
 def format_release_notes(
-    component_version: str,
     prev_tag: str | None,
     curr_tag: str,
     subjects: list[str],
@@ -71,18 +71,20 @@ def format_release_notes(
     """Render the mirror tag's annotated-tag message as markdown.
 
     `subjects` are commit subject lines touching custom_components/ha_mcp_tools/
-    in the range (prev_tag, curr_tag] of the main repo. `curr_tag` names the
-    server release this notes body was generated from; `component_version` is
-    the mirror's own tag version (the two numbering schemes are unrelated).
+    in the range (prev_tag, curr_tag] of the main repo. `curr_tag` is the
+    release both the component and its server carry.
     """
     subjects = _filter_noise_subjects(subjects)
-    lines = [f"## ha-mcp-tools {component_version}", ""]
-
+    version = curr_tag.removeprefix("v")
+    lines = [
+        f"## HA-MCP Custom Component {version}",
+        "",
+        f"Installs the ha-mcp {version} server released with it; restart Home "
+        "Assistant after updating to run both.",
+        "",
+    ]
     if prev_tag is None:
-        lines.append("Initial component release.")
-    else:
-        lines.append(f"Synced from ha-mcp {curr_tag}.")
-    lines.append("")
+        lines.extend(["Initial component release.", ""])
 
     if subjects:
         since = prev_tag if prev_tag is not None else "this component's introduction"
@@ -90,8 +92,8 @@ def format_release_notes(
         lines.extend(f"- {subject}" for subject in subjects)
     else:
         lines.append(
-            "Component snapshot resync -- no changes to "
-            f"{_COMPONENT_PATH} in this server release."
+            f"No changes to {_COMPONENT_PATH} in this release; it updates the "
+            "server the component installs."
         )
 
     lines.append("")
@@ -138,11 +140,6 @@ def collect_component_subjects(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--component-version",
-        required=True,
-        help="Version from custom_components/ha_mcp_tools/manifest.json",
-    )
-    parser.add_argument(
         "--out",
         type=Path,
         required=True,
@@ -166,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"build_mirror_release_notes: {e}", file=sys.stderr)
         return 1
 
-    notes = format_release_notes(args.component_version, prev_tag, curr_tag, subjects)
+    notes = format_release_notes(prev_tag, curr_tag, subjects)
     args.out.write_text(notes, encoding="utf-8")
     return 0
 

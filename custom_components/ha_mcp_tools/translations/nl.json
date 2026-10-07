@@ -45,8 +45,6 @@
         "title": "HA-MCP Server",
         "description": "Configureer de HA-MCP server. {panel_hint}Wijzigingen hier worden toegepast bij opslaan.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
         "data": {
-          "channel": "Releasekanaal",
-          "auto_update": "Automatische serverupdates",
           "server_port": "Luisterpoort MCP server",
           "bind_host": "Netwerktoegang",
           "webhook_auth": "Authenticatiemodus",
@@ -66,8 +64,6 @@
           "enable_sidebar_panel": "Zijbalk instellingenpaneel"
         },
         "data_description": {
-          "channel": "Stabiel installeert de nieuwste stabiele release; Ontwikkeling installeert de nieuwste ontwikkelingsbuild. Wanneer automatische updates zijn ingeschakeld, installeert een herlaadbeurt of herstart, plus een periodieke controle, de nieuwste build van het geselecteerde kanaal. Een ontwikkelaarspakket overschrijving hieronder heeft voorrang en schakelt automatische updates uit.",
-          "auto_update": "Wanneer ingeschakeld, wordt de nieuwste release van het geselecteerde kanaal automatisch geïnstalleerd - bij een herlaadbeurt of herstart, en via een periodieke controle. Wanneer uitgeschakeld, blijft de server op de momenteel geïnstalleerde versie totdat je dit weer inschakelt. Dit beheert alleen het ha-mcp serverpakket; updates voor de HA-MCP Aangepaste Component zelf komen nog steeds via HACS.",
           "server_port": "De poort waarop deze server luistert. De ha-mcp app (add-on) gebruikt 9583, dus de standaardwaarde is 9584 zodat beide naast elkaar kunnen draaien - als je de app (add-on) niet gebruikt, werkt elke vrije poort.",
           "bind_host": "Wie er rechtstreeks verbinding kan maken met de MCP-serverpoort. De standaardwaarde komt overeen met de app (add-on): bereikbaar op je lokale netwerk, met het geheime pad als inloggegeven. Kies loopback om alleen verbindingen toe te staan vanaf de Home Assistant-machine zelf - de webhook-URL en het zijbalkpaneel werken in beide gevallen.",
           "webhook_auth": "Hoe MCP-clients zich bewijzen bij de webhook-URL. Met de geheime URL is de link zelf de enige referentie - OAuth draait nog steeds voor clients die het gebruiken, maar elke aanmelding wordt automatisch goedgekeurd: geen login en geen Client ID of Secret nodig. Met Home Assistant-aanmelding loggen clients zoals claude.ai in met een Home Assistant-beheerdersaccount (OAuth). Met legacy OAuth draait deze integratie zijn eigen aanmeldingsservice en geeft een Client ID en Secret uit om te plakken in clients die er een nodig hebben - een herstart van Home Assistant kan nodig zijn om het volledig in of uit te schakelen.",
@@ -95,20 +91,11 @@
       "description": "De HA-MCP in-process server kon niet worden gestart binnen Home Assistant:\n\n{detail}\n\nControleer de Home Assistant-logboeken en herlaad vervolgens de integratie (of los het onderliggende probleem op en herlaad) om opnieuw te proberen."
     },
     "server_package_install_failed": {
-      "title": "Het HA-MCP in-process serverpakket kon niet worden geïnstalleerd",
-      "description": "Het installeren van het ha-mcp pakket voor de in-process server is mislukt:\n\n{detail}\n\nLos het hierboven beschreven compatibiliteits- of installatieprobleem op en herlaad vervolgens de integratie om opnieuw te proberen."
+      "title": "Het HA-MCP in-process serverpakket kon niet worden geïnstalleerd"
     },
     "component_outdated": {
       "title": "Update de HA-MCP Custom Component via HACS",
       "description": "De geïnstalleerde ha-mcp server vereist HA-MCP Custom Component {required} of nieuwer, maar je hebt {installed}. Update de component via HACS (open de HA-MCP Custom Component-vermelding en gebruik 'Update informatie' als er nog geen update wordt getoond) en herstart Home Assistant. De server blijft ondertussen draaien, maar sommige nieuwere functies werken mogelijk niet totdat de component is bijgewerkt."
-    },
-    "server_update_held": {
-      "title": "HA-MCP serverupdate wacht op een componentupdate",
-      "description": "ha-mcp server {latest} is beschikbaar, maar die release heeft ook de HA-MCP Custom Component bijgewerkt (naar {shipped}; je draait {running}). Om te voorkomen dat een serverversie wordt gestart waarmee de draaiende component nog nooit is getest, wordt de automatische serverupdate uitgesteld totdat de component is bijgewerkt.\n\nUpdate de component via HACS (open de HA-MCP Custom Component-vermelding en gebruik 'Update informatie' als er nog geen update wordt getoond) en herstart vervolgens Home Assistant - de serverupdate wordt daarna automatisch geïnstalleerd. Om de serverupdate toch te installeren, druk je op Installeren op de HA-MCP serverupdate-entiteit."
-    },
-    "legacy_hacs_source": {
-      "title": "Component geïnstalleerd vanuit de verouderde repository",
-      "description": "HACS volgt de hoofdrepository van de ha-mcp-server voor dit component, dus HACS toont hier de versienummers en releasenotes van de server in plaats van die van het component zelf (2.x). Updates blijven werken, maar blijven op deze manier verkeerd gelabeld. Om dit te verhelpen: verwijder deze repository uit HACS (je integratie-instellingen en configuratie-items blijven behouden), voeg homeassistant-ai/ha-mcp-integration toe als een aangepaste repository, installeer het component opnieuw hiervandaan, en herstart Home Assistant."
     },
     "legacy_oauth_restart": {
       "title": "Herstart Home Assistant om de legacy OAuth-instellingen toe te passen",
@@ -123,12 +110,6 @@
     }
   },
   "selector": {
-    "server_channel": {
-      "options": {
-        "stable": "Stabiel (aanbevolen)",
-        "dev": "Ontwikkeling (laatste build)"
-      }
-    },
     "server_webhook_auth": {
       "options": {
         "none": "Geheime webhook-URL (standaard)",
@@ -141,13 +122,6 @@
         "tool_search": "Tool zoeken (compact, standaard)",
         "full": "Volledige catalogus",
         "both": "Beide (kies per agent)"
-      }
-    }
-  },
-  "entity": {
-    "update": {
-      "server_update": {
-        "name": "Update"
       }
     }
   },

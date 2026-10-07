@@ -183,22 +183,22 @@ async def test_embedded_capability_present_routes_to_component_write() -> None:
         update_result={
             "scheduled": True,
             "entry_id": "srv1",
-            "applying": {"channel": "dev"},
-            "previous": {"channel": "stable", "pip_spec": None},
+            "applying": {"pip_spec": "ha-mcp==2.0.0"},
+            "previous": {"pip_spec": None},
         },
     )
     client = UpdateClient()
 
     with patch_ws(ws, tools_dev):
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
 
     data = result["data"]
     assert data["scheduled"] is True
     assert data["entry_id"] == "srv1"
-    assert data["applying"] == {"channel": "dev"}
-    assert data["previous"] == {"channel": "stable", "pip_spec": None}
+    assert data["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
+    assert data["previous"] == {"pip_spec": None}
     assert data["note"] == (
         "The in-process server will reinstall and restart now; this "
         "connection will drop. Reconnect in 1-5 minutes and verify with "
@@ -213,7 +213,7 @@ async def test_embedded_capability_present_routes_to_component_write() -> None:
     assert client.start_options_flow_calls == []
     assert client.abort_options_flow_calls == []
     # The server_entry_update frame carried EXACTLY the channel delta as kwargs.
-    assert _update_frame_kwargs(ws) == {"channel": "dev"}
+    assert _update_frame_kwargs(ws) == {"pip_spec": "ha-mcp==2.0.0"}
 
 
 @pytest.mark.asyncio
@@ -226,23 +226,23 @@ async def test_embedded_unchanged_reply_maps_without_submit() -> None:
             "scheduled": False,
             "unchanged": True,
             "entry_id": "srv1",
-            "applying": {"channel": "stable"},
-            "previous": {"channel": "stable", "pip_spec": None},
+            "applying": {"pip_spec": ""},
+            "previous": {"pip_spec": None},
         },
     )
     client = UpdateClient()
 
     with patch_ws(ws, tools_dev):
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="stable"
+            action="update_source", pip_spec=""
         )
 
     data = result["data"]
     assert data["scheduled"] is False
     assert data["unchanged"] is True
-    assert data["previous"] == {"channel": "stable", "pip_spec": None}
+    assert data["previous"] == {"pip_spec": None}
     assert data["note"] == (
-        "No change: the requested channel/pip_spec already matches the "
+        "No change: the requested pip_spec already matches the "
         "current in-process server source."
     )
     assert client.submit_calls == []
@@ -259,7 +259,7 @@ async def test_embedded_pip_spec_delta_delivers_pip_spec_kwargs() -> None:
             "scheduled": True,
             "entry_id": "srv1",
             "applying": {"pip_spec": "ha-mcp==2.0.0"},
-            "previous": {"channel": "stable", "pip_spec": None},
+            "previous": {"pip_spec": None},
         },
     )
     client = UpdateClient()
@@ -283,29 +283,6 @@ async def test_embedded_pip_spec_delta_delivers_pip_spec_kwargs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_embedded_channel_and_pip_spec_delta_delivers_both_kwargs() -> None:
-    """channel AND pip_spec set → the frame carries EXACTLY both fields as kwargs."""
-    ws = _update_ws(
-        caps=_CAPS_FULL,
-        update_result={
-            "scheduled": True,
-            "entry_id": "srv1",
-            "applying": {"channel": "dev", "pip_spec": "ha-mcp==2.0.0"},
-            "previous": {"channel": "stable", "pip_spec": None},
-        },
-    )
-    client = UpdateClient()
-
-    with patch_ws(ws, tools_dev):
-        await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev", pip_spec="ha-mcp==2.0.0"
-        )
-
-    assert _update_frame_kwargs(ws) == {"channel": "dev", "pip_spec": "ha-mcp==2.0.0"}
-    assert client.submit_calls == []
-
-
-@pytest.mark.asyncio
 async def test_component_write_succeeds_when_find_would_raise(
     monkeypatch: Any,
 ) -> None:
@@ -317,8 +294,8 @@ async def test_component_write_succeeds_when_find_would_raise(
         update_result={
             "scheduled": True,
             "entry_id": "srv1",
-            "applying": {"channel": "dev"},
-            "previous": {"channel": "stable", "pip_spec": None},
+            "applying": {"pip_spec": "ha-mcp==2.0.0"},
+            "previous": {"pip_spec": None},
         },
     )
     client = UpdateClient()
@@ -330,7 +307,7 @@ async def test_component_write_succeeds_when_find_would_raise(
 
     with patch_ws(ws, tools_dev):
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
 
     assert result["data"]["scheduled"] is True
@@ -354,8 +331,8 @@ async def test_component_write_threads_verify_ssl_into_get_websocket_client() ->
         update_result={
             "scheduled": True,
             "entry_id": "srv1",
-            "applying": {"channel": "dev"},
-            "previous": {"channel": "stable", "pip_spec": None},
+            "applying": {"pip_spec": "ha-mcp==2.0.0"},
+            "previous": {"pip_spec": None},
         },
     )
     client = UpdateClient()
@@ -368,7 +345,7 @@ async def test_component_write_threads_verify_ssl_into_get_websocket_client() ->
         patch.object(tools_dev, "get_websocket_client", write_factory),
     ):
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
 
     assert result["data"]["scheduled"] is True
@@ -387,7 +364,7 @@ async def test_embedded_capability_absent_falls_back_to_options_flow() -> None:
 
     with patch_ws(ws, tools_dev):
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
         assert result["data"]["scheduled"] is True
         assert client.submit_calls == []  # deferred, not yet run
@@ -396,7 +373,7 @@ async def test_embedded_capability_absent_falls_back_to_options_flow() -> None:
     assert len(client.submit_calls) == 1
     flow_id, user_input = client.submit_calls[0]
     assert flow_id == "flow-srv1"
-    assert user_input == {"server_url": "http://ha:8123", "channel": "dev"}
+    assert user_input == {"server_url": "http://ha:8123", "pip_spec": "ha-mcp==2.0.0"}
     # The component write frame was never sent (capability absent).
     sent = [c.args[0] for c in ws.send_command.call_args_list]
     assert "ha_mcp_tools/server_entry_update" not in sent
@@ -433,7 +410,7 @@ async def test_embedded_unknown_command_invalidates_caps_and_falls_back(
 
     with patch_ws(ws, tools_dev):
         await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
         await _drain_background_tasks()
 
@@ -450,7 +427,7 @@ async def test_embedded_command_error_falls_back_without_invalidating() -> None:
 
     with patch_ws(ws, tools_dev):
         await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
         await _drain_background_tasks()
 
@@ -467,7 +444,7 @@ async def test_embedded_connection_error_falls_back() -> None:
 
     with patch_ws(ws, tools_dev):
         await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
         await _drain_background_tasks()
 
@@ -484,7 +461,7 @@ async def test_embedded_malformed_reply_falls_back() -> None:
 
     with patch_ws(ws, tools_dev):
         await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
         await _drain_background_tasks()
 
@@ -513,7 +490,7 @@ async def test_embedded_establishment_failure_falls_back() -> None:
         caps_ws, tools_dev, Exception("Failed to connect to HA WebSocket")
     ):
         await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
         await _drain_background_tasks()
 
@@ -538,7 +515,7 @@ async def test_non_embedded_never_routes_to_component_write(
 
     with patch_ws(ws, tools_dev):
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
 
     # Synchronous legacy submit (non-embedded returns "applied", not "scheduled").
@@ -547,7 +524,7 @@ async def test_non_embedded_never_routes_to_component_write(
     # component's options form carries oauth_client_secret among them — so
     # echoing the whole payload handed a credential back to the client
     # (Codex review, #2256).
-    assert result["data"]["applied"] == {"channel": "dev"}
+    assert result["data"]["applied"] == {"pip_spec": "ha-mcp==2.0.0"}
     assert len(client.submit_calls) == 1
     # ...while the SUBMISSION still carries the preserved override, or the
     # update would clear it.

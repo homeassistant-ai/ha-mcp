@@ -855,6 +855,7 @@ class TestInfo:
             "call_service",
             "bulk_call_service",
             "template_diagnose",
+            "oauth_callbacks",
             *wsapi.helper_collections.CAPABILITIES,
         ]
         assert info["capabilities"] == wsapi.CAPABILITIES
@@ -898,9 +899,8 @@ class TestInfo:
     def test_manifest_version_parity(self):
         """A bump that touches manifest.json but not COMPONENT_VERSION (or the
         reverse) makes ``ha_mcp_tools/info`` report a version HACS did not
-        install. A version lower than the base branch's or behind the
-        released stable is the Component Version Gate's job in pr.yml; WHEN
-        to bump is docs/agents/custom-component.md's version-cycle rule.
+        install. That both equal the server version is the Component Version
+        Gate's job in pr.yml (docs/agents/custom-component.md, Version cycle).
         """
         manifest = json.loads(
             (
@@ -1950,19 +1950,16 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_SERVICES_LIST,
             wsapi.WS_REFERENCE_DATA,
             wsapi.WS_SERVER_ENTRY,
-            # Phase 3 server-entry WRITE capability; its prep + admin-gate coverage
-            # lives in test_component_server_entry_update_contract.py (this set only
-            # guards drift).
+            # This set only guards drift. Prep + admin-gate coverage lives in
+            # test_component_server_entry_update_contract.py (server_entry_update),
+            # test_component_ws_phase2_async.py ((bulk_)call_service), and
+            # test_component_template_diagnose.py / _oauth_callbacks_ws.py.
             wsapi.WS_SERVER_ENTRY_UPDATE,
-            # Phase 3 write capability; its prep + admin-gate coverage lives in
-            # test_component_ws_phase2_async.py (this set only guards drift).
             wsapi.WS_CALL_SERVICE,
-            # Phase 3 batch write capability (D5a); same as above — prep +
-            # admin-gate coverage lives in test_component_ws_phase2_async.py.
             wsapi.WS_BULK_CALL_SERVICE,
-            # Template error location (#2522); prep + admin-gate coverage lives in
-            # test_component_template_diagnose.py (this set only guards drift).
             wsapi.WS_TEMPLATE_DIAGNOSE,
+            wsapi.WS_OAUTH_CALLBACKS,
+            wsapi.WS_OAUTH_CALLBACKS_UPDATE,
             *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py
         }
         # config_get is withdrawn: no handler is registered for it.

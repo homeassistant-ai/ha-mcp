@@ -171,7 +171,7 @@ Tools wait for completion when a reliable signal exists; query and fire-and-forg
 
 ## Custom Component
 
-Before changing `custom_components/ha_mcp_tools/` or a server dependency on it, read the [custom-component guide](docs/agents/custom-component.md). It owns the pending-version cycle, minimum-version gate, backward compatibility, two-entry command surface, and post-merge live-test requirement.
+Before changing `custom_components/ha_mcp_tools/` or a server dependency on it, read the [custom-component guide](docs/agents/custom-component.md). It owns the paired release version cycle, minimum-version gate, backward compatibility, two-entry command surface, and post-merge live-test requirement.
 Functionality used by the embedded server must be registered on the shared
 command surface available from the server entry; never leave it on the tools
 entry alone. Only the privileged filesystem and YAML services remain

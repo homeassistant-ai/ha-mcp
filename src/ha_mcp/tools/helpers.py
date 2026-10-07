@@ -16,6 +16,7 @@ from typing import Any, Literal, NoReturn, overload
 from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from .._version import is_embedded
 from ..client.rest_client import (
     NON_ADMIN_TOKEN_WARNING,
     HomeAssistantAdminRequiredError,
@@ -39,6 +40,8 @@ from ..utils.usage_logger import log_tool_call
 from .coercion import UNSET
 
 logger = logging.getLogger(__name__)
+
+_AUTH_CODES = frozenset({ErrorCode.AUTH_INVALID_TOKEN, ErrorCode.AUTH_EXPIRED})
 
 
 def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
@@ -618,6 +621,12 @@ def exception_to_structured_error(
         # rely on the plural key being present even for single-item caller
         # suggestions. Setting both keeps response consumers on both code
         # paths working.
+        if error_response["error"].get("code") in _AUTH_CODES and is_embedded():
+            # The in-process server's token lives in the HA-MCP Server entry; a
+            # tool's own hints ("check the entity id") cannot fix a refused
+            # token, so the guidance to replace it stays first.
+            auth_hints = list(error_response["error"].get("suggestions") or [])
+            suggestions = auth_hints + [s for s in suggestions if s not in auth_hints]
         error_response["error"]["suggestion"] = suggestions[0]
         error_response["error"]["suggestions"] = suggestions
 

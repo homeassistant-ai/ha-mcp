@@ -22,7 +22,6 @@ chunks without a real event loop.
 
 from __future__ import annotations
 
-import enum
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -122,27 +121,6 @@ class HomeAssistantError(Exception):
     """Stand-in for ``homeassistant.exceptions.HomeAssistantError``."""
 
 
-class Platform(enum.StrEnum):
-    """Stand-in for ``homeassistant.const.Platform`` (only UPDATE is needed)."""
-
-    UPDATE = "update"
-
-
-class CoreState(enum.StrEnum):
-    """Stand-in for ``homeassistant.core.CoreState`` (issue #1760 install-source
-    check gates on ``hass.state == CoreState.running``)."""
-
-    not_running = "NOT_RUNNING"
-    starting = "STARTING"
-    running = "RUNNING"
-    stopping = "STOPPING"
-    final_write = "FINAL_WRITE"
-    stopped = "STOPPED"
-
-
-EVENT_HOMEASSISTANT_STARTED = "homeassistant_started"
-
-
 # ---------------------------------------------------------------------------
 # LLM-API fakes (``homeassistant.helpers.llm``, issue #1745)
 # ---------------------------------------------------------------------------
@@ -219,110 +197,6 @@ def _llm_async_register_api(hass: Any, api: Any) -> Any:
         apis.pop(api.id, None)
 
     return unregister
-
-
-# ---------------------------------------------------------------------------
-# Coordinator / update-entity fakes (issue #1760)
-# ---------------------------------------------------------------------------
-
-
-class UpdateFailed(Exception):
-    """Stand-in for ``homeassistant.helpers.update_coordinator.UpdateFailed``."""
-
-
-class DataUpdateCoordinator[CoordinatorDataT]:
-    """Minimal stand-in for HA's ``DataUpdateCoordinator``.
-
-    Implements just enough for the coordinator/entry unit tests: ``async_refresh``
-    calls ``_async_update_data``, stores the result in ``.data``, and notifies
-    listeners — mirroring real HA's broad "swallow, log, don't raise" handling of
-    a failed update. Does not implement the internal scheduling/debounce
-    machinery (``_schedule_refresh``, auth-failure handling); the tests exercise
-    this component's own scheduling decisions, not HA's coordinator internals.
-    """
-
-    def __init__(
-        self,
-        hass: Any,
-        logger: Any,
-        *,
-        name: str,
-        update_interval: Any = None,
-        config_entry: Any = None,
-    ) -> None:
-        self.hass = hass
-        self.logger = logger
-        self.name = name
-        self.update_interval = update_interval
-        self.config_entry = config_entry
-        self.data: Any = None
-        self.last_update_success = True
-        self.last_exception: BaseException | None = None
-        self._listeners: dict[Any, tuple[Any, Any]] = {}
-
-    async def _async_update_data(self) -> Any:
-        raise NotImplementedError
-
-    async def async_refresh(self) -> None:
-        try:
-            self.data = await self._async_update_data()
-        except Exception as err:  # matches real HA's broad catch-and-log
-            self.last_exception = err
-            self.last_update_success = False
-            self.logger.exception("Error fetching %s data", self.name)
-        else:
-            self.last_update_success = True
-        self.async_update_listeners()
-
-    async def async_config_entry_first_refresh(self) -> None:
-        await self.async_refresh()
-
-    def async_add_listener(self, update_callback: Any, context: Any = None) -> Any:
-        def remove_listener() -> None:
-            self._listeners.pop(remove_listener, None)
-
-        self._listeners[remove_listener] = (update_callback, context)
-        return remove_listener
-
-    def async_update_listeners(self) -> None:
-        for update_callback, _ctx in list(self._listeners.values()):
-            update_callback()
-
-
-class CoordinatorEntity[CoordinatorDataT]:
-    """Minimal stand-in for HA's ``CoordinatorEntity``."""
-
-    def __init__(self, coordinator: Any, context: Any = None) -> None:
-        self.coordinator = coordinator
-        self.hass = getattr(coordinator, "hass", None)
-
-    @property
-    def available(self) -> bool:
-        return bool(getattr(self.coordinator, "last_update_success", True))
-
-    async def async_added_to_hass(self) -> None:
-        return None
-
-    def async_on_remove(self, func: Any) -> None:
-        return None
-
-
-class UpdateEntityFeature(enum.IntFlag):
-    """Stand-in for ``homeassistant.components.update.UpdateEntityFeature``."""
-
-    INSTALL = 1
-    SPECIFIC_VERSION = 2
-    PROGRESS = 4
-    BACKUP = 8
-    RELEASE_NOTES = 16
-
-
-class UpdateEntity:
-    """Minimal stand-in for ``homeassistant.components.update.UpdateEntity``."""
-
-    _attr_has_entity_name = False
-    _attr_translation_key: str | None = None
-    _attr_unique_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -512,11 +386,19 @@ def _install_frontend_and_selector_stubs(
         DROPDOWN = "dropdown"
         LIST = "list"
 
+    class _TextSelectorType:
+        TEXT = "text"
+        PASSWORD = "password"
+        URL = "url"
+
     setmod(
         "homeassistant.helpers.selector",
         SelectSelector=_SelectSelector,
         SelectSelectorConfig=_SelectSelectorConfig,
         SelectSelectorMode=_SelectSelectorMode,
+        TextSelector=_SelectSelector,
+        TextSelectorConfig=_SelectSelectorConfig,
+        TextSelectorType=_TextSelectorType,
     )
 
 
@@ -656,28 +538,7 @@ def install() -> None:
     setmod(
         "homeassistant.const",
         __version__="2026.8.0",
-        Platform=Platform,
-        EVENT_HOMEASSISTANT_STARTED=EVENT_HOMEASSISTANT_STARTED,
     )
-    # CoreState alongside the earlier `callback` fix: a bare MagicMock's
-    # auto-generated attribute would not be a stable, comparable enum, and the
-    # install-source-check gates on `hass.state == CoreState.running` (#1760).
-    sys.modules["homeassistant.core"].CoreState = CoreState
-    # Update-entity chain (issue #1760): coordinator.py / update.py.
-    setmod(
-        "homeassistant.helpers.update_coordinator",
-        DataUpdateCoordinator=DataUpdateCoordinator,
-        CoordinatorEntity=CoordinatorEntity,
-        UpdateFailed=UpdateFailed,
-    )
-    setmod(
-        "homeassistant.components.update",
-        UpdateEntity=UpdateEntity,
-        UpdateEntityFeature=UpdateEntityFeature,
-    )
-    # DeviceInfo is a TypedDict at runtime (a plain dict constructor) — a bare
-    # dict is a behavior-identical stand-in.
-    setmod("homeassistant.helpers.device_registry", DeviceInfo=dict)
 
     aiohttp_mod = _make_fake_aiohttp()
     sys.modules["aiohttp"] = aiohttp_mod

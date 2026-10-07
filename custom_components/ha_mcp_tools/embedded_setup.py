@@ -1,7 +1,7 @@
 """Bring the in-process ha-mcp server up and down for the config entry (#1527).
 
-Orchestration between :mod:`embedded_server` (the server thread + token
-provisioning) and :mod:`mcp_webhook` (the ingress webhook): the bring-up sequence,
+Orchestration between :mod:`embedded_server` (the server thread + its token)
+and :mod:`mcp_webhook` (the ingress webhook): the bring-up sequence,
 repair issues on failure, connect-URL surfacing, and teardown. Kept out of
 ``__init__.py`` so the entry-point wiring stays thin and this logic is
 independently testable.
@@ -20,56 +20,43 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-from aiohttp import ClientError
 from awesomeversion import AwesomeVersion, AwesomeVersionException
 from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
 
 from .const import (
     BIND_HOST_ALL,
-    CHANNEL_DEV,
-    COMPONENT_MANIFEST_AT_TAG_URL,
-    DATA_BRINGUP_TASK,
     DATA_DCR_SIGNING_KEY,
     DATA_MANAGER,
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
-    DATA_PENDING_UPDATE_NOTIFY,
     DATA_SECRET_PATH,
-    DATA_UPDATE_COORDINATOR,
     DATA_WEBHOOK_ID,
-    DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
     DEFAULT_ENABLE_LLM_API,
-    DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
     DOMAIN,
     ISSUE_COMPONENT_OUTDATED,
     ISSUE_LEGACY_OAUTH_RESTART,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
-    ISSUE_UPDATE_HELD,
-    OPT_AUTO_UPDATE,
+    ISSUE_TOKEN_NEEDED,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
     OPT_ENABLE_SIDEBAR_PANEL,
     OPT_ENABLE_STARTUP_NOTIFICATION,
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
-    OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_WEBHOOK_AUTH,
-    UPDATE_HOLD_DOCS_URL,
+    SERVER_UPDATES_DOCS_URL,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
-    channel_for_dist,
 )
 from .embedded_server import EmbeddedServerError, EmbeddedServerManager
-from .hacs_nudge import async_schedule_hacs_nudge
 from .llm_api import async_register_llm_api, async_unregister_llm_api
 from .mcp_webhook import async_register_webhook, async_unregister_webhook
 from .oauth_legacy import legacy_credentials_active
@@ -77,21 +64,10 @@ from .oauth_legacy import legacy_credentials_active
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
-    from .coordinator import ServerVersionInfo
-
 _LOGGER = logging.getLogger(__name__)
 
 _NOTIFICATION_ID = "ha_mcp_tools_server_connect"
-_UPDATE_NOTIFICATION_ID = "ha_mcp_tools_server_updated"
-# ISSUE_UPDATE_HELD is cleared at bring-up start too: any reload that reaches
-# bring-up either bypassed the hold deliberately (the update entity's Install
-# button) or made it moot; if the hold still applies, the coordinator refresh
-# that follows setup re-files it within moments.
-_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED, ISSUE_UPDATE_HELD)
-
-# Per-request timeout for the component-manifest fetch behind the auto-update
-# gate — mirrors the coordinator's PyPI fetch budget; a miss fails open.
-_MANIFEST_FETCH_TIMEOUT_SECONDS = 30
+_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED, ISSUE_TOKEN_NEEDED)
 
 
 async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -153,10 +129,9 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
                 "Webhook access disabled by option - the server is local-only "
                 "(direct port + sidebar panel)"
             )
-        # Only surface cleartext credentials once the bound provider actually
-        # serves them: while a rotation is pending restart, an old-identity
-        # token still validates and can read this log (see
-        # legacy_credentials_active).
+        # Whether the bound provider already serves the configured legacy
+        # credentials (a rotation pending restart does not yet; see
+        # legacy_credentials_active), so the log can say so.
         oauth_creds_active = True
         if webhook_enabled and auth_mode == WEBHOOK_AUTH_LEGACY:
             oauth_creds_active = legacy_credentials_active(
@@ -170,9 +145,6 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
             entry,
             auth_mode,
             webhook_enabled=webhook_enabled,
-            extra_hosts=await async_get_lan_hosts(hass),
-            oauth_client_id=oauth_client_id,
-            oauth_client_secret=oauth_client_secret,
             oauth_creds_active=oauth_creds_active,
             oauth_restart_pending=oauth_restart_needed,
         )
@@ -188,38 +160,42 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
                 "Conversation-agent LLM API disabled by option - the toolset "
                 "will not be offered to Home Assistant conversation agents"
             )
-        await _async_finish_update_cycle(hass)
     except asyncio.CancelledError:
         # Unloaded mid-bring-up: undo whatever partial state exists, then let the
-        # cancellation propagate so the task ends cancelled. The pending
-        # update-notification marker (if any) deliberately survives — it
-        # belongs to a bring-up that has not run yet, not to this one.
+        # cancellation propagate so the task ends cancelled.
         await async_teardown_server(hass)
         raise
     except EmbeddedServerError as err:
-        _LOGGER.error("HA-MCP in-process server failed to start: %s", err)
+        if err.kind == "token":
+            _LOGGER.error(
+                "HA-MCP in-process server has no usable Home Assistant token "
+                "(%s). Enter an administrator's long-lived access token under "
+                "Settings - System - Repairs",
+                err,
+            )
+        else:
+            _LOGGER.error("HA-MCP in-process server failed to start: %s", err)
         # suppress: filing the repair issue must be UNCONDITIONAL (review
         # finding) - a raising teardown would otherwise leave the entry
         # looking healthy with the failure visible only in the log.
         with suppress(Exception):
             await async_teardown_server(hass)
-        _create_issue(hass, err.kind, str(err))
-        # The install did not land: never fire the "updated" notification for
-        # it — the repair issue above is the user-facing signal.
-        _drop_pending_update_notify(hass)
+        if err.kind == "token":
+            _create_token_issue(hass, entry, str(err))
+        else:
+            _create_issue(hass, entry, err.kind, str(err))
     except Exception as err:
         _LOGGER.exception("HA-MCP in-process server: bring-up failed")
         with suppress(Exception):
             await async_teardown_server(hass)
-        _create_issue(hass, "start", str(err))
-        _drop_pending_update_notify(hass)
+        _create_issue(hass, entry, "start", str(err))
 
 
 async def async_teardown_server(hass: HomeAssistant) -> None:
     """Unregister the LLM API + webhook and stop the server thread (reload-safe,
     idempotent).
 
-    Does NOT revoke the provisioned token — a reload must keep it. The ha_auth
+    Does NOT release credentials — a reload must keep them. The ha_auth
     discovery views stay bound (aiohttp can't unregister them until HA restarts);
     they 404 while the entry is not live.
     """
@@ -233,7 +209,7 @@ async def async_teardown_server(hass: HomeAssistant) -> None:
 async def async_revoke_credentials_on_remove(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """Revoke the provisioned credentials when the config entry is removed."""
+    """Release the credentials an older release provisioned when the entry is removed."""
     await EmbeddedServerManager(hass, entry).async_revoke_credentials()
     _clear_issues(hass)
     ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)
@@ -329,10 +305,10 @@ def build_connect_urls(
 ) -> list[str]:
     """Resolve the entry's connect URLs (webhook forms first, then direct).
 
-    Shared by the admin-only surfaces that show real URLs: the Home Assistant
-    log on start-up and the entry's Configure screen (the notification
-    deliberately carries none - it is visible to every signed-in user). Each
-    source is best-effort: a URL that cannot be resolved is omitted.
+    Backs the entry's Configure screen, the one administrator-only surface
+    that shows real URLs (the start-up log and notification deliberately
+    carry none - see ``_surface_connect_urls``). Each source is best-effort:
+    a URL that cannot be resolved is omitted.
 
     ``extra_hosts`` (from :func:`async_get_lan_hosts`) adds one webhook and one
     direct-access URL per additional LAN address, so a multi-interface /
@@ -401,87 +377,56 @@ def _surface_connect_urls(
     auth_mode: str,
     *,
     webhook_enabled: bool = True,
-    extra_hosts: list[str] | None = None,
-    oauth_client_id: str | None = None,
-    oauth_client_secret: str | None = None,
     oauth_creds_active: bool = True,
     oauth_restart_pending: bool = False,
 ) -> None:
-    """Log the connect URLs and (re)create a persistent notification."""
-    urls = build_connect_urls(
-        hass, entry, webhook_enabled=webhook_enabled, extra_hosts=extra_hosts
-    )
+    """Log where to find the connect details and (re)create a notification.
+
+    Neither surface carries a connect URL or a credential. In the secret-URL
+    (``none``) mode the URL IS an admin-equivalent credential, and the log is
+    readable by more than the administrator who set the entry up: the
+    server's own log tools serve it to any connected client, and users paste
+    it into bug reports. The entry's Configure screen is the one
+    administrator-only surface that shows them (``build_connect_urls``).
+    """
     if not webhook_enabled:
         auth_note = "Webhook access is disabled (local-only mode)."
     elif auth_mode == WEBHOOK_AUTH_NONE:
         auth_note = "The webhook URL is the shared secret (no bearer required)."
     elif auth_mode == WEBHOOK_AUTH_LEGACY:
-        # Kept secret-free (unlike the log line below) — see the SECURITY note
-        # on the persistent notification further down, which reuses this text.
-        creds_where = (
-            "the Home Assistant log or the entry's Configure screen"
-            if oauth_creds_active
-            else "the entry's Configure screen"
-        )
         auth_note = (
-            "OAuth (Beta) is ENABLED for this URL (legacy mode) - see "
-            f"{creds_where} for the Client ID and Client Secret to paste "
-            "into your MCP client."
+            "OAuth (Beta) is ENABLED for this URL (legacy mode) - see the "
+            "entry's Configure screen for the Client ID and Client Secret to "
+            "paste into your MCP client."
         )
     else:
         auth_note = "Clients authenticate with your Home Assistant account (ha_auth)."
 
-    url_lines = "\n".join(f"- {url}" for url in urls)
     log_message = (
-        "HA-MCP in-process server is running. "
-        f"Connect URL(s):\n{url_lines}\n{auth_note}"
+        "HA-MCP in-process server is running. The connect URL(s) are on the "
+        "entry's Configure screen (Settings - Devices & Services - HA-MCP "
+        f"Custom Component - HA-MCP Server - Configure). {auth_note}"
     )
     if webhook_enabled and auth_mode == WEBHOOK_AUTH_LEGACY:
-        if oauth_creds_active:
-            # Admin-only log (mirrors the webhook-proxy add-on's own startup
-            # log, start.py). Cleartext credentials — deliberately NOT in the
-            # persistent notification below, which every signed-in user can
-            # see.
+        if not oauth_creds_active:
+            # A rotation is pending the restart: the bound root views still
+            # serve the OLD identity until then (see legacy_credentials_active).
             log_message += (
-                f"\n  OAuth Client ID:     {oauth_client_id}"
-                f"\n  OAuth Client Secret: {oauth_client_secret}"
-            )
-            if oauth_restart_pending:
-                # First-enable mid-session late-binds the root views, so
-                # /authorize is not live until the restart the repair asks
-                # for. The credentials ARE the ones that will be served
-                # (oauth_creds_active is True), but pasting them now gets a
-                # connection that fails until the restart — same caveat the
-                # rotation branch, the options hint, and the oauth_regenerate
-                # help text carry.
-                log_message += (
-                    "\n  Legacy OAuth is not live until the restart Home "
-                    "Assistant is asking for; these credentials work once "
-                    "you restart."
-                )
-            log_message += (
-                "\n  Paste both into your MCP client's OAuth connector setup "
-                "(e.g. Google Gemini Spark: Advanced settings)."
-            )
-        else:
-            # SECURITY (review finding on #1880): while a credential rotation
-            # is pending the restart, the bound root views still serve the OLD
-            # identity, so a token issued under it stays valid — and could
-            # read this log through the server's own log tools. Logging the
-            # NEW credentials here would hand them to exactly the party the
-            # rotation is meant to evict, so they are withheld until the
-            # restart makes them active (which also kills every old token).
-            log_message += (
-                "\n  The OAuth credentials were rotated and take effect after "
+                " The OAuth credentials were rotated and take effect after "
                 "the restart Home Assistant is asking for; until then the "
-                "previous credentials remain active. The new Client ID and "
-                "Client Secret are on the entry's Configure screen."
+                "previous credentials remain active."
+            )
+        elif oauth_restart_pending:
+            # First-enable mid-session late-binds the root views, so
+            # /authorize is not live until the restart the repair asks for.
+            log_message += (
+                " Legacy OAuth is not live until the restart Home Assistant "
+                "is asking for; the credentials work once you restart."
             )
     _LOGGER.info(log_message)
     if not bool(entry.options.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)):
         # Notification suppressed by option: clear any notification created
-        # before the toggle was turned off, then skip creating a fresh one. The
-        # connect URLs still reached the admin-only log above.
+        # before the toggle was turned off, then skip creating a fresh one.
         persistent_notification.async_dismiss(hass, _NOTIFICATION_ID)
         return
     # The sidebar-panel line is included only while the panel is registered:
@@ -497,16 +442,14 @@ def _surface_connect_urls(
     # and /subscribe carry no admin gate. In the default posture the connect
     # URL IS an admin-equivalent credential, so the notification deliberately
     # carries NO secrets: it points at the admin-only surfaces (the sidebar
-    # panel and the entry's Configure screen). The URLs above still go to the
-    # log at INFO, which only admin-gated surfaces expose - the same posture
-    # as the add-on printing its URL to the admin-only add-on log.
+    # panel and the entry's Configure screen).
     message = (
         "The HA-MCP Server is now running inside Home Assistant.\n\n"
         f"{panel_line}"
         "The connect URL is shown on the entry's Configure screen "
         "(Settings - Devices & Services - HA-MCP Custom Component - "
-        "HA-MCP Server - Configure) and in the Home Assistant log - both "
-        "administrator-only, because the URL is the credential.\n\n"
+        "HA-MCP Server - Configure), which only administrators can open, "
+        "because the URL is the credential.\n\n"
         f"{auth_note}\n\n"
         "To disable this notification, uncheck the startup notification box "
         "on that same configuration screen.\n"
@@ -548,13 +491,27 @@ _ISSUE_BY_KIND = {
 }
 
 
-def _create_issue(hass: HomeAssistant, kind: str, detail: str) -> None:
+def _create_issue(
+    hass: HomeAssistant, entry: ConfigEntry, kind: str, detail: str
+) -> None:
     """File the repair issue matching the failure ``kind`` (package / start).
 
     Exhaustive lookup on purpose: an unknown kind is a coding error and must
     raise here rather than silently filing the wrong user-facing repair issue.
+    A package failure is fixable: its fix flow reinstalls the server.
     """
     issue_id = _ISSUE_BY_KIND[kind]
+    if kind == "package":
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=True,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=issue_id,
+            data={"entry_id": entry.entry_id, "detail": detail},
+        )
+        return
     ir.async_create_issue(
         hass,
         DOMAIN,
@@ -566,302 +523,27 @@ def _create_issue(hass: HomeAssistant, kind: str, detail: str) -> None:
     )
 
 
+def _create_token_issue(hass: HomeAssistant, entry: ConfigEntry, reason: str) -> None:
+    """Ask for a replacement administrator token; its fix flow takes one.
+
+    ``reason`` (a ``CredentialNeeded`` reason) lets the fix flow say why the
+    stored token was refused.
+    """
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        ISSUE_TOKEN_NEEDED,
+        is_fixable=True,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key=ISSUE_TOKEN_NEEDED,
+        data={"entry_id": entry.entry_id, "reason": reason},
+    )
+
+
 def _clear_issues(hass: HomeAssistant) -> None:
     """Clear any previously-filed server-bring-up repair issues."""
     for issue_id in _ISSUE_IDS:
         ir.async_delete_issue(hass, DOMAIN, issue_id)
-
-
-# ---------------------------------------------------------------------------
-# Automatic server-version updates (channel auto-update)
-# ---------------------------------------------------------------------------
-
-
-async def async_maybe_auto_update(
-    hass: HomeAssistant, entry: ConfigEntry, info: ServerVersionInfo | None
-) -> None:
-    """Reload the entry when ``info`` shows a newer build AND auto-update is on.
-
-    Called from the :class:`~.coordinator.ServerVersionCoordinator` listener
-    registered by :mod:`embedded_entry` on every refresh (every
-    ``UPDATE_CHECK_INTERVAL``, plus once shortly after setup). The coordinator
-    itself always fetches (see its docstring) so the `update` platform entity
-    stays populated regardless of this option; only the reload decided here is
-    gated on it.
-
-    Skips entirely when: auto-update is off, a pip-spec override is set,
-    either version is unknown (``info`` may still be ``None`` — the
-    coordinator's ``data`` type before its first successful refresh), or a
-    bring-up is still in flight (below).
-
-    A pending update is additionally gated on component compatibility
-    (issues #1783/#1785): when the candidate release also shipped a newer
-    custom component than the one running, the reload is HELD — loudly (a
-    repair issue plus a warning log every check) and escapably (applying the
-    HACS component update — which takes an HA restart, as the issue text
-    says — unblocks the next check; the update entity's Install button never
-    passes through here, so manual installs — like pip-spec overrides above —
-    bypass the hold entirely). Every failure inside the gate fails OPEN so a
-    GitHub hiccup can never wedge updates.
-
-    Best-effort: an incomparable version string (AwesomeVersionException) is
-    logged at debug and skipped; the next refresh retries. Genuine bugs
-    propagate per the repo's no-silent-failure convention.
-    """
-    if hass.config.skip_pip:
-        # The system package manager owns ha-mcp; never reload to mutate it.
-        return
-
-    if not bool(entry.options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)):
-        # Auto-update turned off: stay on the currently-installed version.
-        return
-
-    override = str(entry.options.get(OPT_PIP_SPEC) or "").strip()
-    if override and override != DEFAULT_PIP_SPEC:
-        return
-
-    if info is None or info.installed is None or info.latest is None:
-        # Nothing to compare (not installed yet, or the PyPI fetch failed /
-        # was skipped) - the bring-up path installs the newest build itself.
-        return
-
-    bringup_task = hass.data.get(DOMAIN, {}).get(DATA_BRINGUP_TASK)
-    if bringup_task is not None and not bringup_task.done():
-        # The coordinator's first refresh runs shortly after setup, while the
-        # background bring-up (embedded_entry.async_setup_server_entry) may
-        # still be installing the package for the first time. Reloading here
-        # would cancel that in-flight install (async_unload_server_entry
-        # cancels the bring-up task on unload) and can loop: the reload's own
-        # bring-up starts a fresh install that the NEXT refresh could again
-        # interrupt.
-        return
-
-    try:
-        newer = AwesomeVersion(info.latest) > AwesomeVersion(info.installed)
-    except AwesomeVersionException as err:
-        # Incomparable version strategies (e.g. a non-semver build string) — the
-        # only expected failure here. Real bugs (TypeError, etc.) propagate.
-        _LOGGER.debug("HA-MCP auto-update version compare failed: %s", err)
-        return
-
-    if not newer:
-        # Up to date: a hold that was pending is resolved (the component
-        # update landed and the unblocked reload installed the server).
-        ir.async_delete_issue(hass, DOMAIN, ISSUE_UPDATE_HELD)
-        return
-
-    held = await _async_update_held_by_component(hass, info)
-    if held is not None:
-        shipped, running = held
-        _LOGGER.warning(
-            "HA-MCP server %s is available, but that release also updated the "
-            "custom component (%s; running %s); holding the automatic server "
-            "update until the component is updated via HACS. Press Install on "
-            "the HA-MCP server update entity to install anyway.",
-            info.latest,
-            shipped,
-            running,
-        )
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            ISSUE_UPDATE_HELD,
-            is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_UPDATE_HELD,
-            translation_placeholders={
-                "latest": str(info.latest),
-                "shipped": shipped,
-                "running": running,
-            },
-            learn_more_url=UPDATE_HOLD_DOCS_URL,
-        )
-        # A newer component exists but HACS may not surface it for ~48h; ask
-        # HACS to refresh this repository now so the update becomes visible
-        # promptly. Fire-and-forget + throttled per shipped version; fully
-        # advisory (see hacs_nudge).
-        async_schedule_hacs_nudge(hass, shipped)
-        return
-    ir.async_delete_issue(hass, DOMAIN, ISSUE_UPDATE_HELD)
-
-    channel = channel_for_dist(info.dist)
-    _LOGGER.info(
-        "HA-MCP server update available on the %s channel (%s -> %s); "
-        "reloading the entry to install it.",
-        channel,
-        info.installed,
-        info.latest,
-    )
-    # The "updated" notification must wait for the reloaded entry's bring-up to
-    # actually install and start the new build — async_reload returns when
-    # entry SETUP finishes, while the pip install still runs in the background
-    # and can fail (review finding). Leave a marker for bring-up to pop:
-    # notification on success (_async_finish_update_cycle), silent drop on
-    # failure (the package/start repair issues cover that path).
-    hass.data.setdefault(DOMAIN, {})[DATA_PENDING_UPDATE_NOTIFY] = {
-        "old": info.installed
-    }
-    try:
-        await hass.config_entries.async_reload(entry.entry_id)
-    except Exception:
-        # A raising reload leaves no repair issue behind (those are filed by
-        # bring-up, which never ran), so this ERROR log is the only signal —
-        # it must not be swallowed or left at debug (review finding). The next
-        # coordinator refresh retries the whole cycle.
-        _drop_pending_update_notify(hass)
-        _LOGGER.exception(
-            "HA-MCP auto-update reload failed (%s -> %s on the %s channel)",
-            info.installed,
-            info.latest,
-            channel,
-        )
-
-
-def _drop_pending_update_notify(hass: HomeAssistant) -> None:
-    """Drop the deferred update-notification marker without notifying."""
-    hass.data.get(DOMAIN, {}).pop(DATA_PENDING_UPDATE_NOTIFY, None)
-
-
-async def _async_update_held_by_component(
-    hass: HomeAssistant, info: ServerVersionInfo
-) -> tuple[str, str] | None:
-    """Return ``(shipped, running)`` when the pending update must be held.
-
-    The #1783/#1785 breakage: a server release whose repo state also bumped the
-    custom component auto-installed under the OLD component before HACS had
-    even surfaced the component update. The component version in the manifest
-    at the candidate release's git tag is what shipped with that server build —
-    newer than the running component means the release changed the component
-    too, so the automatic server install waits for the component.
-
-    Fails OPEN (returns None → install proceeds, the pre-gate behavior) on
-    every expected failure: manifest unreachable, component version unreadable,
-    incomparable versions. Blocking updates indefinitely on a transient would
-    be worse than the crash this guards against — and the crash itself is now
-    also survivable server-side (the tools registry skips a failing module).
-    """
-    shipped = await _async_fetch_shipped_component_version(hass, str(info.latest))
-    if shipped is None:
-        return None
-
-    try:
-        integration = await async_get_integration(hass, DOMAIN)
-        if integration.version is None:
-            # None rather than an exception; "None" would then reach
-            # AwesomeVersion and compare as an ordinary string.
-            raise ValueError("the manifest carries no version")
-        running = str(integration.version)
-    except Exception:
-        # Same wide loader surface as _async_check_component_compat: advisory
-        # gate, logged visibly rather than swallowed silently.
-        _LOGGER.warning(
-            "Could not read the HA-MCP component version for the auto-update "
-            "gate; proceeding with the update",
-            exc_info=True,
-        )
-        return None
-
-    try:
-        if AwesomeVersion(running) < AwesomeVersion(shipped):
-            return shipped, running
-    except AwesomeVersionException as err:
-        # Incomparable version strategies only; real bugs propagate.
-        _LOGGER.debug("HA-MCP auto-update gate version compare failed: %s", err)
-    return None
-
-
-async def _async_fetch_shipped_component_version(
-    hass: HomeAssistant, server_version: str
-) -> str | None:
-    """Return the component version shipped at server release ``vX.Y.Z``.
-
-    Reads the component manifest as committed at the release's git tag (raw
-    GitHub URL). Stable tags exist before the PyPI publish; a dev tag is
-    created in parallel with the PyPI publish, so a fresh dev version can
-    briefly 404 here — see COMPONENT_MANIFEST_AT_TAG_URL. Returns None
-    on any failure; the caller treats that as "nothing to hold on"
-    (fail-open).
-    """
-    url = COMPONENT_MANIFEST_AT_TAG_URL.format(version=server_version)
-    try:
-        session = async_get_clientsession(hass)
-        async with asyncio.timeout(_MANIFEST_FETCH_TIMEOUT_SECONDS):
-            async with session.get(url) as resp:
-                resp.raise_for_status()
-                # content_type=None: raw.githubusercontent.com serves
-                # text/plain, which aiohttp's default json() rejects.
-                payload = await resp.json(content_type=None)
-        return str(payload["version"])
-    except (ClientError, TimeoutError, KeyError, TypeError, ValueError) as err:
-        _LOGGER.debug(
-            "HA-MCP shipped-component manifest fetch failed for %s: %s", url, err
-        )
-        return None
-
-
-async def _async_finish_update_cycle(hass: HomeAssistant) -> None:
-    """Refresh the version entity and fire the deferred update notification.
-
-    Runs at the end of a fully successful bring-up. Both halves belong exactly
-    here (review findings): the freshly installed version is only knowable once
-    the install landed — without a refresh the `update` entity keeps showing a
-    stale "update available" for up to UPDATE_CHECK_INTERVAL after a successful
-    install — and the notification deferred by async_maybe_auto_update must
-    only fire for an install that actually happened. Advisory: a failure here
-    must never fail the (already running) server, so it is logged visibly and
-    swallowed. No reload loop: the refresh's listener re-enters
-    async_maybe_auto_update, which no-ops on the still-running bring-up task.
-    """
-    domain_data = hass.data.get(DOMAIN, {})
-    coordinator = domain_data.get(DATA_UPDATE_COORDINATOR)
-    try:
-        if coordinator is not None:
-            await coordinator.async_refresh()
-    except Exception:
-        _LOGGER.warning("HA-MCP: post-install version refresh failed", exc_info=True)
-    marker = domain_data.pop(DATA_PENDING_UPDATE_NOTIFY, None)
-    if marker is None or coordinator is None or coordinator.data is None:
-        return
-    installed = coordinator.data.installed
-    old = marker.get("old")
-    if installed is None or installed == old:
-        # The reload ran but the installed version did not actually move (the
-        # install can legitimately resolve to the same build) — an "updated
-        # to" notification would be false.
-        return
-    _create_update_notification(
-        hass, channel_for_dist(coordinator.data.dist), old, installed
-    )
-
-
-def _create_update_notification(
-    hass: HomeAssistant, channel: str, old_version: str, new_version: str
-) -> None:
-    """Notify that an automatic server update installed and the server is up.
-
-    Only called from :func:`_async_finish_update_cycle` after a successful
-    bring-up, so the versions are the confirmed before/after pair, never a
-    prediction. SECURITY: same posture as ``_surface_connect_urls`` -
-    persistent notifications are visible to every authenticated Home Assistant
-    user, so this carries no secrets or connect URLs, only version numbers and
-    a public GitHub link.
-    """
-    release_url = (
-        "https://github.com/homeassistant-ai/ha-mcp/commits/master"
-        if channel == CHANNEL_DEV
-        else f"https://github.com/homeassistant-ai/ha-mcp/releases/tag/v{new_version}"
-    )
-    message = (
-        f"The HA-MCP server was automatically updated from {old_version} to "
-        f"{new_version} on the {channel} channel.\n\n"
-        f"[Release notes]({release_url})"
-    )
-    persistent_notification.async_create(
-        hass,
-        message,
-        title="HA-MCP Server updated",
-        notification_id=_UPDATE_NOTIFICATION_ID,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -889,11 +571,10 @@ async def _async_check_component_compat(
     """File/clear the component-outdated repair issue for the running server.
 
     The ha-mcp server declares the minimum custom-component version it needs
-    (``MIN_COMPONENT_VERSION``). The server package updates independently of
-    the HACS component (this manager pip-installs new server builds), so the
-    running component can lag what the server expects. When it does, surface a
-    WARNING repair issue pointing at the HACS component update; clear it once
-    the component is new enough.
+    (``MIN_COMPONENT_VERSION``). Each component release pins the server it was
+    built with, so only a pip-spec override can install a server that expects
+    a newer component. When it does, surface a WARNING repair issue pointing
+    at the HACS component update; clear it once the component is new enough.
 
     Advisory only — it must never block or fail server startup, so an
     unexpected error is logged (visible, not silent) and swallowed rather than
@@ -944,12 +625,7 @@ async def _async_check_component_compat(
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_COMPONENT_OUTDATED,
             translation_placeholders={"required": required, "installed": own},
-            learn_more_url=UPDATE_HOLD_DOCS_URL,
+            learn_more_url=SERVER_UPDATES_DOCS_URL,
         )
-        # The server needs a newer component than HACS has surfaced; ask HACS
-        # to refresh this repository now so the required update becomes visible
-        # promptly. Fire-and-forget + throttled per required version; fully
-        # advisory (see hacs_nudge).
-        async_schedule_hacs_nudge(hass, required)
     else:
         ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)

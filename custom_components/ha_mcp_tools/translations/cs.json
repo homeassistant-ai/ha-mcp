@@ -45,8 +45,6 @@
         "title": "Server HA-MCP",
         "description": "Nakonfigurujte server HA-MCP. {panel_hint}Změny zde se použijí po uložení.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
         "data": {
-          "channel": "Kanál vydání",
-          "auto_update": "Automatické aktualizace serveru",
           "server_port": "Naslouchací port serveru MCP",
           "bind_host": "Síťový přístup",
           "webhook_auth": "Režim ověřování",
@@ -66,8 +64,6 @@
           "enable_sidebar_panel": "Panel nastavení postranního panelu"
         },
         "data_description": {
-          "channel": "Stabilní instaluje nejnovější stabilní vydání; Vývoj instaluje nejnovější vývojovou verzi. Když jsou zapnuty automatické aktualizace, opětovné načtení nebo restart, plus pravidelná kontrola, nainstalují nejnovější sestavení vybraného kanálu. Přepsání balíčku vývojáře níže má přednost a zakazuje automatické aktualizace.",
-          "auto_update": "Když je zapnuto, nejnovější vydání vybraného kanálu se nainstaluje automaticky – při opětovném načtení nebo restartu a prostřednictvím pravidelné kontroly. Když je vypnuto, server zůstane na aktuálně nainstalované verzi, dokud to znovu nezapnete. Toto ovládá pouze balíček serveru ha-mcp; aktualizace samotné vlastní komponenty HA-MCP stále přicházejí přes HACS.",
           "server_port": "Port, na kterém tento server naslouchá. Aplikace (doplněk) ha-mcp používá port 9583, takže ve výchozím nastavení je nastaveno 9584, aby mohly oba běžet vedle sebe – pokud aplikaci (doplněk) nepoužíváte, funguje jakýkoliv volný port.",
           "bind_host": "Kdo se může připojit přímo k portu MCP serveru. Výchozí nastavení odpovídá aplikaci (doplněku): dosažitelné ve vaší lokální síti, přičemž přihlašovacím údajem je tajná cesta. Zvolte loopback, chcete-li povolit připojení pouze ze samotného stroje Home Assistant – adresa URL webhooku a panel postranního panelu fungují v obou případech.",
           "webhook_auth": "Jak se klienti MCP ověřují na URL webhooku. S tajnou URL je samotný odkaz jediným pověřením – OAuth stále běží pro klienty, kteří jej používají, ale každé přihlášení je schváleno automaticky: není potřeba žádné přihlášení ani Client ID nebo Secret. S přihlášením Home Assistant se klienti jako claude.ai přihlašují pomocí administrátorského účtu Home Assistant (OAuth). S legacy OAuth tato integrace spouští vlastní přihlašovací službu a vydává Client ID a Secret k vložení do klientů, kteří je vyžadují – k úplnému zapnutí nebo vypnutí může být potřeba restart Home Assistanta.",
@@ -95,20 +91,11 @@
       "description": "Server HA-MCP běžící ve stejném procesu se nepodařilo spustit uvnitř Home Assistanta:\n\n{detail}\n\nZkontrolujte protokoly Home Assistanta a poté znovu načtěte integraci (nebo opravte základní problém a znovu načtěte) pro opakování."
     },
     "server_package_install_failed": {
-      "title": "Balíček serveru HA-MCP běžícího ve stejném procesu se nepodařilo nainstalovat",
-      "description": "Instalace balíčku ha-mcp pro server běžící ve stejném procesu selhala:\n\n{detail}\n\nVyřešte výše popsaný problém s kompatibilitou nebo instalací a poté znovu načtěte integraci pro opakování."
+      "title": "Balíček serveru HA-MCP běžícího ve stejném procesu se nepodařilo nainstalovat"
     },
     "component_outdated": {
       "title": "Aktualizujte vlastní komponentu HA-MCP přes HACS",
       "description": "Nainstalovaný server ha-mcp vyžaduje vlastní komponentu HA-MCP {required} nebo novější, ale máte {installed}. Aktualizujte komponentu přes HACS (otevřete položku „HA-MCP Custom Component“ a použijte „Update information“, pokud se ještě nezobrazuje žádná aktualizace) a restartujte Home Assistanta. Server mezitím zůstane spuštěný, ale některé novější funkce nemusí fungovat, dokud nebude komponenta aktualizována."
-    },
-    "server_update_held": {
-      "title": "Aktualizace serveru HA-MCP čeká na aktualizaci komponenty",
-      "description": "Server ha-mcp {latest} je k dispozici, ale tato verze také aktualizovala vlastní komponentu HA-MCP (na {shipped}; vy používáte {running}). Aby se zabránilo spuštění verze serveru, se kterou spuštěná komponenta nikdy nebyla testována, je automatická aktualizace serveru pozastavena, dokud nebude komponenta aktualizována.\n\nAktualizujte komponentu přes HACS (otevřete položku „HA-MCP Custom Component“ a použijte „Update information“, pokud se ještě nezobrazuje žádná aktualizace), poté restartujte Home Assistanta – aktualizace serveru se poté nainstaluje automaticky. Chcete-li aktualizaci serveru nainstalovat i tak, stiskněte „Install“ na entitě aktualizace serveru HA-MCP."
-    },
-    "legacy_hacs_source": {
-      "title": "Komponenta nainstalovaná z původního repozitáře",
-      "description": "HACS sleduje hlavní repozitář serveru ha-mcp pro tuto komponentu, takže HACS zde zobrazuje čísla verzí a poznámky k vydání serveru namísto vlastních (2.x) komponenty. Aktualizace stále fungují, ale zůstávají takto chybně označeny. Pro opravu: odeberte tento repozitář z HACS (nastavení vaší integrace a konfigurační záznamy zůstanou zachovány), přidejte homeassistant-ai/ha-mcp-integration jako vlastní repozitář, přeinstalujte z něj komponentu a restartujte Home Assistanta."
     },
     "legacy_oauth_restart": {
       "title": "Restartujte Home Assistanta pro použití nastavení legacy OAuth",
@@ -123,12 +110,6 @@
     }
   },
   "selector": {
-    "server_channel": {
-      "options": {
-        "stable": "Stabilní (doporučeno)",
-        "dev": "Vývojová (nejnovější sestavení)"
-      }
-    },
     "server_webhook_auth": {
       "options": {
         "none": "Tajná URL webhooku (výchozí)",
@@ -141,13 +122,6 @@
         "tool_search": "Vyhledávání nástrojů (kompaktní, výchozí)",
         "full": "Úplný katalog",
         "both": "Obě (vyberte pro každého agenta)"
-      }
-    }
-  },
-  "entity": {
-    "update": {
-      "server_update": {
-        "name": "Aktualizovat"
       }
     }
   },

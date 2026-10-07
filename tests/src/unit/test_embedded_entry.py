@@ -1,17 +1,15 @@
-"""Unit tests for the server entry-point wiring (issue #1760: update entity).
+"""Unit tests for the server entry-point wiring.
 
 Focuses on what ``async_setup_server_entry`` / ``async_unload_server_entry``
-wire up around the :class:`~.coordinator.ServerVersionCoordinator`: creating
-it with the right interval, registering its auto-update listener (as a
-background task, never a synchronous reload from inside the listener),
-kicking off an initial (non-blocking) refresh, and forwarding/unloading the
-``update`` platform — plus the ``ha_mcp_tools/*`` WebSocket command surface
-the server entry registers up front (issue #2289).
+wire up: the background bring-up, the sidebar panel, the removal of the
+retired server update entity (the server now arrives with the component
+release, #2427), and the ``ha_mcp_tools/*`` WebSocket command surface the
+server entry registers up front (issue #2289).
 
 Home Assistant / aiohttp are stubbed via ``_embedded_stubs`` (imported first so
 the fakes are installed before the component module binds them). The lazily
-imported ``embedded_setup`` / ``ui_panel`` / ``coordinator`` collaborators are
-replaced with fakes so the entry-point wiring is exercised in isolation.
+imported ``embedded_setup`` / ``ui_panel`` collaborators are replaced with
+fakes so the entry-point wiring is exercised in isolation.
 """
 
 from __future__ import annotations
@@ -32,10 +30,8 @@ import custom_components.ha_mcp_tools.embedded_entry as eentry  # noqa: E402
 from custom_components.ha_mcp_tools import const  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_SECRET_PATH,
-    DATA_UPDATE_COORDINATOR,
     DATA_WEBHOOK_ID,
     DOMAIN,
-    UPDATE_CHECK_INTERVAL,
 )
 
 
@@ -43,7 +39,6 @@ def _make_hass() -> MagicMock:
     hass = MagicMock(name="hass")
     hass.data = {}
     hass.config_entries.async_forward_entry_setups = AsyncMock()
-    hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
 
     background_tasks: list[asyncio.Task] = []
 
@@ -89,9 +84,7 @@ def _make_entry() -> MagicMock:
 
 async def _drain_background_tasks(hass, entry) -> None:
     """Run every background task scheduled so far, including ones a still-
-    draining task schedules itself (the auto-update listener schedules its own
-    hass-owned background task from inside the entry-owned initial-refresh
-    task — hence draining BOTH pools)."""
+    draining task schedules itself (both the entry's and hass's pools)."""
     seen: set[asyncio.Task] = set()
     while True:
         pending = [
@@ -105,54 +98,67 @@ async def _drain_background_tasks(hass, entry) -> None:
         await asyncio.gather(*pending)
 
 
-class _FakeCoordinator:
-    """Real (non-Mock) fake so ``isinstance``/listener wiring behave for real."""
+class _FakeDeviceRegistry:
+    def __init__(self) -> None:
+        self.created: list[dict] = []
 
-    def __init__(self, hass, entry) -> None:
-        self.hass = hass
-        self.entry = entry
-        self.data = None
-        self.update_interval = UPDATE_CHECK_INTERVAL
-        self._listeners: list = []
+    def async_get_or_create(self, **kwargs) -> None:
+        self.created.append(kwargs)
 
-    def async_add_listener(self, update_callback):
-        self._listeners.append(update_callback)
 
-        def _unsub() -> None:
-            self._listeners.remove(update_callback)
+class _FakeEntityRegistry:
+    """Just enough of the entity registry for the retired-entity cleanup."""
 
-        return _unsub
+    def __init__(self, existing: dict[tuple[str, str, str], str]) -> None:
+        self.existing = existing
+        self.removed: list[str] = []
 
-    async def async_refresh(self) -> None:
-        self.data = SimpleNamespace(installed="1.0.0", latest="1.1.0", dist="ha-mcp")
-        for listener in list(self._listeners):
-            listener()
+    def async_get_entity_id(self, domain, platform, unique_id):
+        return self.existing.get((domain, platform, unique_id))
+
+    def async_remove(self, entity_id) -> None:
+        self.removed.append(entity_id)
 
 
 @pytest.fixture
 def fake_collaborators(monkeypatch):
-    """Inject fake ``embedded_setup`` / ``ui_panel`` / ``coordinator`` modules.
+    """Inject fake ``embedded_setup`` / ``ui_panel`` / entity-registry modules.
 
-    ``async_setup_server_entry`` imports ``async_bring_up_server`` /
-    ``async_maybe_auto_update`` from ``embedded_setup``,
-    ``async_register_ui_panel`` from ``ui_panel``, ``ServerVersionCoordinator``
-    from ``coordinator``, and ``async_register_commands`` from
-    ``websocket_api`` at call time; the fakes keep the full HA chain out of
-    this test.
+    ``async_setup_server_entry`` imports ``async_bring_up_server`` from
+    ``embedded_setup``, ``async_register_ui_panel`` from ``ui_panel``,
+    ``async_register_commands`` from ``websocket_api`` and the entity
+    registry at call time; the fakes keep the full HA chain out of this test.
+    The registry holds the update entity a component 2.x install registered.
     """
     fake_setup = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
     fake_setup.async_bring_up_server = MagicMock(
         name="async_bring_up_server", return_value=MagicMock(name="bringup_task_arg")
     )
-    fake_setup.async_maybe_auto_update = AsyncMock(name="async_maybe_auto_update")
     fake_setup.async_teardown_server = AsyncMock(name="async_teardown_server")
 
     fake_panel = ModuleType("custom_components.ha_mcp_tools.ui_panel")
     fake_panel.async_register_ui_panel = AsyncMock(name="async_register_ui_panel")
     fake_panel.async_unregister_ui_panel = MagicMock(name="async_unregister_ui_panel")
 
-    fake_coord_mod = ModuleType("custom_components.ha_mcp_tools.coordinator")
-    fake_coord_mod.ServerVersionCoordinator = _FakeCoordinator
+    registry = _FakeEntityRegistry(
+        {("update", DOMAIN, "entry-1_server_update"): "update.ha_mcp_server_update"}
+    )
+    fake_er = ModuleType("homeassistant.helpers.entity_registry")
+    fake_er.async_get = MagicMock(return_value=registry)
+
+    devices = _FakeDeviceRegistry()
+    fake_dr = ModuleType("homeassistant.helpers.device_registry")
+    fake_dr.async_get = MagicMock(return_value=devices)
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.device_registry", fake_dr)
+    monkeypatch.setattr(
+        sys.modules["homeassistant.helpers"], "device_registry", fake_dr, raising=False
+    )
+    monkeypatch.setattr(
+        sys.modules["homeassistant.loader"],
+        "async_get_integration",
+        AsyncMock(return_value=SimpleNamespace(version="9.0.0")),
+        raising=False,
+    )
 
     fake_wsapi = ModuleType("custom_components.ha_mcp_tools.websocket_api")
     fake_wsapi.async_register_commands = MagicMock(name="async_register_commands")
@@ -163,8 +169,9 @@ def fake_collaborators(monkeypatch):
     monkeypatch.setitem(
         sys.modules, "custom_components.ha_mcp_tools.ui_panel", fake_panel
     )
-    monkeypatch.setitem(
-        sys.modules, "custom_components.ha_mcp_tools.coordinator", fake_coord_mod
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", fake_er)
+    monkeypatch.setattr(
+        sys.modules["homeassistant.helpers"], "entity_registry", fake_er, raising=False
     )
     monkeypatch.setitem(
         sys.modules, "custom_components.ha_mcp_tools.websocket_api", fake_wsapi
@@ -172,13 +179,16 @@ def fake_collaborators(monkeypatch):
     return SimpleNamespace(
         setup=fake_setup,
         panel=fake_panel,
-        coordinator_cls=_FakeCoordinator,
+        registry=registry,
+        devices=devices,
         websocket_api=fake_wsapi,
     )
 
 
 class TestSetup:
-    async def test_creates_coordinator_with_update_interval(self, fake_collaborators):
+    async def test_schedules_bring_up_without_update_platform(self, fake_collaborators):
+        # The server arrives with the component release (#2427): no update
+        # platform, no PyPI poll, no automatic reinstall.
         hass = _make_hass()
         entry = _make_entry()
 
@@ -186,85 +196,42 @@ class TestSetup:
         await _drain_background_tasks(hass, entry)
 
         assert result is True
-        coordinator = hass.data[DOMAIN][DATA_UPDATE_COORDINATOR]
-        assert isinstance(coordinator, fake_collaborators.coordinator_cls)
-        assert coordinator.update_interval == UPDATE_CHECK_INTERVAL
-
-    async def test_registers_listener_cleaned_up_on_unload(self, fake_collaborators):
-        hass = _make_hass()
-        entry = _make_entry()
-
-        await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
-
-        coordinator = hass.data[DOMAIN][DATA_UPDATE_COORDINATOR]
-        assert coordinator._listeners  # the auto-update listener was registered
-        # ...and its unsub handed to async_on_unload for cleanup.
-        unload_args = [c.args[0] for c in entry.async_on_unload.call_args_list]
-        assert any(callable(arg) for arg in unload_args)
-
-    async def test_initial_refresh_runs_as_background_task(self, fake_collaborators):
-        hass = _make_hass()
-        entry = _make_entry()
-
-        await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
-
-        coordinator = hass.data[DOMAIN][DATA_UPDATE_COORDINATOR]
-        # The fake coordinator's async_refresh sets .data - proves it actually
-        # ran (not just constructed) via the background-task path, not an
-        # awaited call inline in async_setup_server_entry.
-        assert coordinator.data is not None
-        assert coordinator.data.installed == "1.0.0"
-
-    async def test_listener_schedules_auto_update_as_background_task(
-        self, fake_collaborators
-    ):
-        hass = _make_hass()
-        entry = _make_entry()
-
-        await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
-
-        fake_collaborators.setup.async_maybe_auto_update.assert_awaited_once()
-        args = fake_collaborators.setup.async_maybe_auto_update.await_args.args
-        assert args[0] is hass
-        assert args[1] is entry
-        assert args[2].installed == "1.0.0"
-        assert args[2].latest == "1.1.0"
-
-    async def test_auto_update_task_is_hass_owned_not_entry_owned(
-        self, fake_collaborators
-    ):
-        # Regression: entry background tasks are cancelled by the very unload
-        # that async_maybe_auto_update's reload performs, so an entry-owned
-        # task would cancel itself mid-reload and leave the entry unloaded
-        # (server down until restart). The auto-update task must be hass-owned.
-        hass = _make_hass()
-        entry = _make_entry()
-
-        await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
-
-        hass_task_names = [
-            c.args[1] for c in hass.async_create_background_task.call_args_list
-        ]
-        assert f"{DOMAIN}_server_auto_update" in hass_task_names
-        entry_task_names = [
-            c.args[2] for c in entry.async_create_background_task.call_args_list
-        ]
-        assert f"{DOMAIN}_server_auto_update" not in entry_task_names
-
-    async def test_forwards_update_platform(self, fake_collaborators):
-        hass = _make_hass()
-        entry = _make_entry()
-
-        await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
-
-        hass.config_entries.async_forward_entry_setups.assert_awaited_once_with(
-            entry, [eentry.Platform.UPDATE]
+        fake_collaborators.setup.async_bring_up_server.assert_called_once_with(
+            hass, entry
         )
+        hass.config_entries.async_forward_entry_setups.assert_not_called()
+        assert hass.async_create_background_task.call_count == 0
+
+    async def test_removes_the_retired_server_update_entity(self, fake_collaborators):
+        hass = _make_hass()
+        entry = _make_entry()
+
+        await eentry.async_setup_server_entry(hass, entry)
+
+        assert fake_collaborators.registry.removed == ["update.ha_mcp_server_update"]
+
+    async def test_server_entry_has_a_current_device(self, fake_collaborators):
+        # The retired update entity used to create the server's device; an
+        # upgraded install must not keep it at its old version, and a new one
+        # must not lack it.
+        hass = _make_hass()
+        entry = _make_entry()
+
+        await eentry.async_setup_server_entry(hass, entry)
+
+        [device] = fake_collaborators.devices.created
+        assert device["config_entry_id"] == entry.entry_id
+        assert device["identifiers"] == {(DOMAIN, entry.entry_id)}
+        assert device["sw_version"] == "9.0.0"
+
+    async def test_no_retired_entity_means_nothing_removed(self, fake_collaborators):
+        fake_collaborators.registry.existing.clear()
+        hass = _make_hass()
+        entry = _make_entry()
+
+        await eentry.async_setup_server_entry(hass, entry)
+
+        assert fake_collaborators.registry.removed == []
 
     async def test_default_registers_ui_panel(self, fake_collaborators):
         # enable_sidebar_panel absent (default on): the admin-only "Open Web UI"
@@ -378,6 +345,19 @@ class TestPrebindOAuthViews:
         # route.
         assert hass.http.register_view.call_count == 10
 
+    def test_unsaved_options_prebind_the_secret_url_surface(self):
+        # An entry that never saved its options runs in the secret-URL mode
+        # bring-up defaults to (embedded_setup), so its OAuth routes must be
+        # bound at boot too, or they never go live until a restart.
+        hass = _make_hass()
+        hass.http = MagicMock()
+        entry = _make_entry()
+        entry.options = {}
+
+        eentry._prebind_oauth_views(hass, entry)
+
+        assert hass.http.register_view.call_count == 10
+
     def test_webhook_disabled_binds_nothing(self):
         hass = _make_hass()
         hass.http = MagicMock()
@@ -469,9 +449,7 @@ class TestEnsureSecretsLegacyWiring:
 
 
 class TestUnload:
-    async def test_unloads_update_platform_and_pops_coordinator(
-        self, fake_collaborators
-    ):
+    async def test_unload_tears_down_the_server(self, fake_collaborators):
         hass = _make_hass()
         entry = _make_entry()
         await eentry.async_setup_server_entry(hass, entry)
@@ -480,30 +458,5 @@ class TestUnload:
         result = await eentry.async_unload_server_entry(hass, entry)
 
         assert result is True
-        hass.config_entries.async_unload_platforms.assert_awaited_once_with(
-            entry, [eentry.Platform.UPDATE]
-        )
-        assert DATA_UPDATE_COORDINATOR not in hass.data.get(DOMAIN, {})
-
-    async def test_platform_unload_happens_before_teardown(self, fake_collaborators):
-        # Ordering matters (see the design note in async_unload_server_entry):
-        # the platform (and the entity it drives) must be gone before the
-        # server/webhook teardown and the bring-up-task cancellation run.
-        hass = _make_hass()
-        entry = _make_entry()
-        await eentry.async_setup_server_entry(hass, entry)
-        await _drain_background_tasks(hass, entry)
-
-        calls: list[str] = []
-        hass.config_entries.async_unload_platforms.side_effect = lambda *a, **k: (
-            calls.append("unload_platforms") or True
-        )
-
-        async def _teardown(*_a, **_k):
-            calls.append("teardown_server")
-
-        fake_collaborators.setup.async_teardown_server.side_effect = _teardown
-
-        await eentry.async_unload_server_entry(hass, entry)
-
-        assert calls == ["unload_platforms", "teardown_server"]
+        fake_collaborators.setup.async_teardown_server.assert_awaited_once_with(hass)
+        fake_collaborators.panel.async_unregister_ui_panel.assert_called_once_with(hass)

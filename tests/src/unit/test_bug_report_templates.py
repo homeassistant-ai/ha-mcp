@@ -85,6 +85,21 @@ class TestSanitizeLogText:
             assert secret not in result, f"{secret!r} leaked in {result!r}"
             assert "[REDACTED]" in result
 
+    def test_a_long_unbroken_log_line_does_not_stall_the_report(self):
+        # A base64 blob or minified payload in a log message once took the
+        # userinfo rule time quadratic in its length: about a minute at this
+        # size, so ha_report_issue appeared to hang. Linear work takes
+        # milliseconds; the bound leaves a wide margin for a slow runner.
+        import time
+
+        started = time.monotonic()
+        _sanitize_log_text("a" * 200_000)
+        assert time.monotonic() - started < 5
+
+    def test_redacts_userinfo_after_a_scheme_glued_to_other_text(self):
+        result = _sanitize_log_text("url=1https://admin:supersecret@ha.local/api")
+        assert "supersecret" not in result
+
     def test_redacts_legacy_oauth_client_secret_log_line(self):
         # The in-process component logs the legacy OAuth Client Secret at INFO,
         # so it reaches home-assistant.log (readable by a trusted MCP client via

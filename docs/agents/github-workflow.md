@@ -185,7 +185,8 @@ summary only when the pull request actually reaches that state.
 | `haos-e2e-tests.yml` | Pull request or manual | Six HAOS lanes against a baked qcow2; required status checks. |
 | `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta OS, Supervisor, and Core; skipped on push and nightly only when all three equal stable. |
 | `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
-| `publish-dev.yml` | Push to `master` | Development `.devN` release. |
+| `publish-dev.yml` | Push to `master` | Development `<next>.devN` release, published as `ha-mcp-dev` (also the HACS pre-release pin, via its `dev-version` artifact). |
+| `sync-integration-mirror.yml` | `workflow_run` after SemVer Release or Publish Dev Channel; docs pushes; manual | HACS mirror releases: the component with its version and server pin (`ha-mcp` stable, `ha-mcp-dev` pre-release), tagged once PyPI serves the pinned build. |
 | `notify-dev-channel.yml` | Push to `master` touching `src/` | Development-testing notices. |
 | `semver-release.yml` | Biweekly or manual | Stable version tag and GitHub release. |
 | `release-publish.yml` | `workflow_run` after SemVer Release, or manual | Stable container images and MCP registry. |

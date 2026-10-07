@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from .. import helper_collections
+from ..const import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
 
 __all__ = [
     "ALL_SEARCH_TYPES",
@@ -21,6 +22,8 @@ __all__ = [
     "HELPERS_LIST_COLLECTION_DOMAINS",
     "HIDDEN_SCORE_PENALTY",
     "LIMITS",
+    "MAX_OAUTH_CALLBACK_LENGTH",
+    "MAX_OAUTH_CALLBACKS",
     "MAX_BODY_BYTES",
     "MAX_RESULTS",
     "REGISTRY_KINDS",
@@ -47,6 +50,8 @@ __all__ = [
     "WS_EXPOSURE",
     "WS_HELPERS_LIST",
     "WS_INFO",
+    "WS_OAUTH_CALLBACKS",
+    "WS_OAUTH_CALLBACKS_UPDATE",
     "WS_OVERVIEW",
     "WS_REFERENCE_DATA",
     "WS_REGISTRIES",
@@ -88,6 +93,8 @@ WS_SERVER_ENTRY_UPDATE = f"{WS_API_PREFIX}/server_entry_update"
 WS_CALL_SERVICE = f"{WS_API_PREFIX}/call_service"
 WS_BULK_CALL_SERVICE = f"{WS_API_PREFIX}/bulk_call_service"
 WS_TEMPLATE_DIAGNOSE = f"{WS_API_PREFIX}/template_diagnose"
+WS_OAUTH_CALLBACKS = f"{WS_API_PREFIX}/oauth_callbacks"
+WS_OAUTH_CALLBACKS_UPDATE = f"{WS_API_PREFIX}/oauth_callbacks_update"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -171,6 +178,9 @@ CAPABILITIES: list[str] = [
     # The server's ha_eval_template asks for a failed template's line only when
     # this is advertised; without it the error is returned as Core reported it.
     "template_diagnose",
+    # Read and replace the none-mode OAuth callback allowlist (#2427); the
+    # settings panel offers the editor only when this is advertised.
+    "oauth_callbacks",
     *helper_collections.CAPABILITIES,
 ]
 
@@ -190,6 +200,7 @@ MAX_BODY_BYTES = 1_000_000
 LIMITS = {"max_results": MAX_RESULTS, "max_body_bytes": MAX_BODY_BYTES}
 
 DEFAULT_LIMIT = 10
+
 
 # ``call_service`` confirmation-wait bounds. The default mirrors the legacy
 # ``ha_call_service`` 10s subscribe-and-sample window; the cap bounds a

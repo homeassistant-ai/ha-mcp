@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
 import requests
 
 # Add src to path for imports
@@ -37,7 +38,7 @@ from haos_runtime import (
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from test_constants import TEST_PASSWORD, TEST_USER
+from test_constants import TEST_PASSWORD, TEST_TOKEN, TEST_USER
 
 from ._conftest_embedded import (
     _EMBEDDED_BACKUP_OVERRIDES,
@@ -168,7 +169,7 @@ def _prepare_haos_image(
     # embedded-server E2E (#1527) exercises the PR's own src/ha_mcp when it
     # enables the entry. Best-effort — a failure only affects that one test.
     # Must run before boot (offline qcow2 edit), like the refreshers above.
-    stage_embedded_server_wheel_in_qcow2(image_path)
+    stage_embedded_server_wheel_in_qcow2(image_path, TEST_TOKEN)
     # haos_embedded lane only: the WHOLE suite runs through the in-process
     # server, so deliver the same settings overrides the container
     # ``embedded`` backend injects — feature flags (yaml editing, filesystem
@@ -308,6 +309,37 @@ def _wait_for_haos_light_ready(base_url: str, haos_headers: dict[str, str]) -> N
         )
 
 
+def _wait_for_haos_tools_entry_loaded(
+    base_url: str, haos_headers: dict[str, str]
+) -> None:
+    """Wait until the ha_mcp_tools File & YAML Tools entry is loaded.
+
+    The suite used to start in the same second the entry finished setting up.
+    A server probe that lands first caches "no component" (300 s) and "no tools
+    services" (30 s) by design, so every component-backed test on that worker
+    failed inside those windows. Unlike the sun/light waits this one fails: a
+    missing entry fails those tests anyway, with a less useful error.
+    """
+    url = f"{base_url}/api/config/config_entries/entry?domain=ha_mcp_tools"
+    deadline = time.monotonic() + 180
+    entries: list[dict] = []
+    while time.monotonic() < deadline:
+        try:
+            resp = requests.get(url, timeout=5, headers=haos_headers)
+            if resp.status_code == 200:
+                entries = [e for e in resp.json() if e.get("domain") == "ha_mcp_tools"]
+                if any(e.get("state") == "loaded" for e in entries):
+                    return
+        except (requests.exceptions.RequestException, json.JSONDecodeError):
+            # Core may still be restarting its HTTP layer; poll again.
+            pass
+        time.sleep(1)
+    pytest.fail(
+        "The ha_mcp_tools tools entry did not load within 180s; "
+        f"entries: {[(e.get('title'), e.get('state')) for e in entries]}"
+    )
+
+
 def _haos_post_boot_setup(base_url: str, request) -> tuple[str, dict]:
     """Post-boot HAOS setup: token, env, readiness waits, blueprint rewrite."""
     token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
@@ -342,6 +374,8 @@ def _haos_post_boot_setup(base_url: str, request) -> tuple[str, dict]:
     haos_headers = {"Authorization": f"Bearer {token}"}
     _wait_for_haos_sun_ready(base_url, haos_headers)
     _wait_for_haos_light_ready(base_url, haos_headers)
+    if not _is_no_tools_entry_selected():
+        _wait_for_haos_tools_entry_loaded(base_url, haos_headers)
     # Set HA Core's default backup-create password via WS so
     # ha_backup_create tests pass without a pre-baked seed. Must
     # run AFTER the sun.sun ready-wait above — sun.sun ready

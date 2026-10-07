@@ -183,6 +183,8 @@ def _seed_config(config_path: Path, wheel_name: str) -> None:
                 "entry_type": "server",
                 "webhook_id": _WEBHOOK_ID,
                 "secret_path": _SECRET_PATH,
+                # The component no longer provisions an administrator (#2427).
+                "admin_token": TEST_TOKEN,
             },
             "disabled_by": None,
             "discovery_keys": {},
@@ -550,8 +552,8 @@ class TestEmbeddedServerEndToEnd:
         ``hacs_refresh_lifespan`` is attached to the server itself, so the
         in-process server runs it too (``embedded_server`` enters
         ``mcp._lifespan_manager()`` around uvicorn). The nudge inside it must
-        return at the ``is_embedded()`` gate: the component ships its own
-        ``hacs_nudge``, and running both would double HACS's GitHub fetches.
+        return at the ``is_embedded()`` gate: the embedded server arrives with
+        the component release HACS delivers, so there is nothing to refresh.
         The negative lanes' positive counterparts live in
         tests/src/e2e/workflows/hacs/test_auto_refresh_startup.py.
 
@@ -596,8 +598,8 @@ class TestEmbeddedServerEndToEnd:
         assert not appeared, (
             "The in-process server wrote a HACS refresh marker "
             f"({[p.name for p in marker_files()]}), but the embedded install "
-            "skips the nudge by design — the component's own hacs_nudge covers "
-            "it, and running both doubles HACS's GitHub fetches. The "
+            "skips the nudge by design — it arrives with the component release "
+            "HACS delivers. The "
             "is_embedded() gate in maybe_refresh_hacs_after_update is what "
             "must hold here."
         )

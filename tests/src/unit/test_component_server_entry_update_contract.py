@@ -1,7 +1,7 @@
 """Unit + contract tests for the ``server_entry_update`` WRITE capability.
 
 The write counterpart of ``server_entry`` (issue #1813 Phase 3): the component
-applies a ``channel`` / ``pip_spec`` delta to its OWN server config entry via
+applies a ``pip_spec`` delta to its OWN server config entry via
 ``hass.config_entries.async_update_entry`` DIRECTLY, DEFERRED on a hass-level
 background task so the WS response flushes before the resulting self-reload tears
 the serving thread down. These pin the load-bearing behaviours:
@@ -94,9 +94,9 @@ def _fast_flush(monkeypatch: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_prep_schedules_merged_update_preserving_other_keys() -> None:
-    """A channel delta schedules async_update_entry with the MERGED options (the
-    server_url override and current pip_spec preserved), returns scheduled:True,
-    and does NOT call async_update_entry synchronously."""
+    """A pip_spec delta schedules async_update_entry with the MERGED options (the
+    server_url override preserved), returns scheduled:True, and does NOT call
+    async_update_entry synchronously."""
     entry = _server_entry(
         options={
             "channel": "stable",
@@ -105,19 +105,16 @@ async def test_prep_schedules_merged_update_preserving_other_keys() -> None:
         }
     )
     hass = _BgHass([entry])
+    frame = {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "ha-mcp==2.0.0"}
 
-    extra = await wsapi._server_entry_update_prep(
-        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "dev"}
-    )
-    result = wsapi._do_server_entry_update(
-        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "dev"}, **extra
-    )
+    extra = await wsapi._server_entry_update_prep(hass, frame)
+    result = wsapi._do_server_entry_update(hass, frame, **extra)
 
     # Pure formatter returns exactly the prep's envelope.
     assert result is extra["result"]
     assert result["scheduled"] is True
     assert result["entry_id"] == "srv1"
-    assert result["applying"] == {"channel": "dev"}
+    assert result["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
     assert result["previous"] == {"channel": "stable", "pip_spec": ""}
     # Deferred-reload crux: NOT applied synchronously.
     assert hass.config_entries.update_calls == []
@@ -128,26 +125,10 @@ async def test_prep_schedules_merged_update_preserving_other_keys() -> None:
     assert len(hass.config_entries.update_calls) == 1
     _applied_entry, applied_options = hass.config_entries.update_calls[0]
     assert applied_options == {
-        "channel": "dev",
-        "pip_spec": "",
+        "channel": "stable",
+        "pip_spec": "ha-mcp==2.0.0",
         "server_url": "http://ha.local:8123",
     }
-
-
-@pytest.mark.asyncio
-async def test_prep_pip_spec_applied_preserves_channel() -> None:
-    """A pip_spec delta preserves the current channel in the merged options."""
-    entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
-    hass = _BgHass([entry])
-
-    extra = await wsapi._server_entry_update_prep(
-        hass,
-        {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "ha-mcp==2.0.0"},
-    )
-    assert extra["result"]["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
-    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
-    _entry, applied = hass.config_entries.update_calls[0]
-    assert applied == {"channel": "dev", "pip_spec": "ha-mcp==2.0.0"}
 
 
 @pytest.mark.asyncio
@@ -155,11 +136,11 @@ async def test_apply_time_merge_preserves_concurrent_change() -> None:
     """TOCTOU: the delta is merged against the LIVE ``entry.options`` at APPLY time,
     so a concurrent change to a DIFFERENT key AFTER prep (but before the deferred
     task runs) survives — it is NOT clobbered by a prep-time options snapshot."""
-    entry = _server_entry(options={"channel": "stable", "pip_spec": ""})
+    entry = _server_entry(options={"pip_spec": ""})
     hass = _BgHass([entry])
 
     extra = await wsapi._server_entry_update_prep(
-        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "dev"}
+        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "ha-mcp==2.0.0"}
     )
     assert extra["result"]["scheduled"] is True
     # A concurrent options write lands in the flush window, adding a key the delta
@@ -171,26 +152,25 @@ async def test_apply_time_merge_preserves_concurrent_change() -> None:
     # The concurrently-added key survived the merge; the delta still applied. A
     # prep-time snapshot would have dropped ``server_url``.
     assert applied == {
-        "channel": "dev",
-        "pip_spec": "",
+        "pip_spec": "ha-mcp==2.0.0",
         "server_url": "http://changed:8123",
     }
 
 
 @pytest.mark.asyncio
 async def test_prep_noop_returns_unchanged_without_scheduling() -> None:
-    """Setting channel to its current value is a no-op: unchanged, nothing
+    """Setting pip_spec to its current value is a no-op: unchanged, nothing
     scheduled, async_update_entry never called."""
-    entry = _server_entry(options={"channel": "dev", "pip_spec": ""})
+    entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
     hass = _BgHass([entry])
 
     extra = await wsapi._server_entry_update_prep(
-        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "dev"}
+        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "ha-mcp==1.0.0"}
     )
     result = extra["result"]
     assert result["scheduled"] is False
     assert result["unchanged"] is True
-    assert result["previous"] == {"channel": "dev", "pip_spec": ""}
+    assert result["previous"] == {"channel": "dev", "pip_spec": "ha-mcp==1.0.0"}
     assert hass.scheduled == []
     assert hass.config_entries.update_calls == []
 
@@ -217,9 +197,8 @@ async def test_prep_no_server_entry_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_prep_requires_at_least_one_field() -> None:
-    """A frame with neither channel nor pip_spec raises (defence-in-depth over the
-    server, which always sends at least one)."""
+async def test_prep_requires_pip_spec() -> None:
+    """A frame without pip_spec raises (defence-in-depth over the server)."""
     hass = _BgHass([_server_entry(options={"channel": "stable"})])
     from homeassistant.exceptions import HomeAssistantError
 
@@ -228,6 +207,42 @@ async def test_prep_requires_at_least_one_field() -> None:
             hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE}
         )
     assert hass.scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_prep_refuses_a_channel_only_frame_with_the_hacs_hint() -> None:
+    """Servers before the paired-release change send ``channel`` alone for
+    ``update_source(channel=...)``. Each component release now pins its server,
+    so the frame is refused with where development builds come from instead."""
+    hass = _BgHass([_server_entry(options={"channel": "stable"})])
+    from homeassistant.exceptions import HomeAssistantError
+
+    with pytest.raises(HomeAssistantError, match="Pre-release"):
+        await wsapi._server_entry_update_prep(
+            hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "dev"}
+        )
+    assert hass.scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_prep_ignores_channel_beside_pip_spec() -> None:
+    """A frame from an older server carrying both fields applies pip_spec only;
+    the channel option is retired and never written."""
+    entry = _server_entry(options={"pip_spec": ""})
+    hass = _BgHass([entry])
+
+    extra = await wsapi._server_entry_update_prep(
+        hass,
+        {
+            "type": wsapi.WS_SERVER_ENTRY_UPDATE,
+            "channel": "dev",
+            "pip_spec": "ha-mcp==2.0.0",
+        },
+    )
+    assert extra["result"]["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
+    assert await hass.scheduled[0] is None
+    _entry, applied = hass.config_entries.update_calls[0]
+    assert applied == {"pip_spec": "ha-mcp==2.0.0"}
 
 
 @pytest.mark.asyncio
@@ -263,8 +278,8 @@ async def test_prep_clearing_existing_pip_spec_override_schedules() -> None:
 @pytest.mark.asyncio
 async def test_prep_normalizes_whitespace_pip_spec_to_empty() -> None:
     """A whitespace-only pip_spec means "no override" — it normalizes to "" (matches
-    the options flow's _normalize) so the channel keeps auto-updating, and both the
-    applied options AND the response envelope reflect the collapsed value."""
+    the options flow's _normalize) so the paired server stays in force, and both
+    the applied options AND the response envelope reflect the collapsed value."""
     entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
     hass = _BgHass([entry])
     extra = await wsapi._server_entry_update_prep(
@@ -281,7 +296,7 @@ async def test_prep_normalizes_whitespace_pip_spec_to_empty() -> None:
 async def test_prep_normalizes_default_dist_pip_spec_to_empty() -> None:
     """pip_spec == DEFAULT_PIP_SPEC (the unpinned dist) means "no override" — it
     persists as "" rather than a verbatim value that would read as an intentional
-    override and disable auto-updates."""
+    override of the paired server."""
     entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
     hass = _BgHass([entry])
     extra = await wsapi._server_entry_update_prep(

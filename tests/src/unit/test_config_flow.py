@@ -96,6 +96,8 @@ class _TextSelector(_SelectSelector):
 
 class _TextSelectorType:
     TEXT = "text"
+    URL = "url"
+    PASSWORD = "password"
 
 
 _sel = MagicMock()
@@ -132,12 +134,16 @@ for _name in [
 sys.modules.pop("custom_components.ha_mcp_tools.config_flow", None)
 
 from custom_components.ha_mcp_tools import config_flow as cf  # noqa: E402
+from custom_components.ha_mcp_tools import (  # noqa: E402
+    config_flow_text as cft,
+)
 from custom_components.ha_mcp_tools import const  # noqa: E402
 
 
 def _make_flow() -> cf.HaMcpToolsConfigFlow:
     """Build a flow with the HA framework methods stubbed to return markers."""
     flow = cf.HaMcpToolsConfigFlow()
+    flow.hass = MagicMock(name="hass")
     flow.async_set_unique_id = AsyncMock(return_value=None)
     flow._abort_if_unique_id_configured = MagicMock(return_value=None)
     flow.async_show_menu = MagicMock(side_effect=lambda **kw: {"type": "menu", **kw})
@@ -211,44 +217,6 @@ class TestToolsBranch:
         # The pre-rename default the setup migration retitles existing installs
         # away from (see _async_setup_tools_entry).
         assert const.TOOLS_ENTRY_LEGACY_TITLE == "HA MCP Tools"
-
-
-class TestServerBranch:
-    def test_server_step_shows_confirm_form(self):
-        flow = _make_flow()
-        form = asyncio.run(flow.async_step_server(None))
-        assert form["type"] == "form"
-        assert form["step_id"] == "server"
-
-    def test_server_step_creates_entry_with_entry_type(self):
-        flow = _make_flow()
-        entry = asyncio.run(flow.async_step_server({}))
-        assert entry["type"] == "entry"
-        assert entry["title"] == cf._SERVER_ENTRY_TITLE
-        assert entry["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER}
-        assert entry["options"] == {}
-
-    def test_server_uses_distinct_unique_id(self):
-        flow = _make_flow()
-        asyncio.run(flow.async_step_server(None))
-        flow.async_set_unique_id.assert_awaited_once_with(cf._SERVER_UNIQUE_ID)
-        flow._abort_if_unique_id_configured.assert_called_once()
-        # Distinct from the tools entry's unique id so both can coexist.
-        assert cf._SERVER_UNIQUE_ID != const.DOMAIN
-
-    def test_server_aborts_on_unsupported_home_assistant(self, monkeypatch):
-        monkeypatch.setattr(cf, "HA_VERSION", "2025.9.4")
-        flow = _make_flow()
-
-        result = asyncio.run(flow.async_step_server(None))
-
-        assert result["type"] == "abort"
-        assert result["reason"] == "unsupported_home_assistant"
-        assert result["description_placeholders"] == {
-            "installed": "2025.9.4",
-            "required": "2026.8.0",
-        }
-        flow.async_set_unique_id.assert_not_awaited()
 
 
 class TestOAuthCredsHint:
@@ -520,7 +488,7 @@ class TestServerOptionsFlow:
         # The Configure form carries a "versions" placeholder that names the
         # component version (from the manifest) and the installed server version.
         flow = _make_options_flow(
-            options={const.OPT_CHANNEL: const.CHANNEL_DEV},
+            options={},
             data={const.DATA_WEBHOOK_ID: "mcp_abc"},
         )
         flow.hass = MagicMock()
@@ -539,7 +507,7 @@ class TestServerOptionsFlow:
         # startswith, not equality: the tools-module status line (#1996) rides
         # the same placeholder below the version line.
         assert versions.startswith(
-            "Component 0.14.0 - Server ha-mcp 7.9.0 (dev channel)"
+            "Component 0.14.0 - Server ha-mcp 7.9.0 (installed with this component release)"
         )
 
     def test_versions_placeholder_is_failure_proof(self, monkeypatch, caplog):
@@ -564,7 +532,7 @@ class TestServerOptionsFlow:
             form = asyncio.run(flow.async_step_init(None))  # must not raise
         versions = form["description_placeholders"]["versions"]
         assert versions.startswith(
-            "Component unknown - Server ha-mcp not installed yet (stable channel)"
+            "Component unknown - Server ha-mcp not installed yet (installed with this component release)"
         )
         assert "Could not read the component version" in caplog.text
         assert "Could not read the server version" in caplog.text
@@ -606,7 +574,7 @@ class TestServerOptionsFlow:
         form = asyncio.run(flow.async_step_init(None))
         versions = form["description_placeholders"]["versions"]
         assert versions.startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
         assert "Not installed" in versions
         assert "Add entry" in versions
@@ -711,7 +679,7 @@ class TestServerOptionsFlow:
         form = asyncio.run(flow.async_step_init(None))  # must not raise
         versions = form["description_placeholders"]["versions"]
         assert versions.startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
         assert "tools module" not in versions
 
@@ -723,24 +691,6 @@ class TestServerOptionsFlow:
         markers = list(form["data_schema"].schema)
         assert markers[0].schema == const.OPT_WEBHOOK_AUTH
 
-    def test_channel_defaults_to_stable(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        channel = next(
-            m for m in form["data_schema"].schema if m.schema == const.OPT_CHANNEL
-        )
-        assert channel.default() == const.CHANNEL_STABLE
-
-    def test_auto_update_defaults_on(self):
-        # The auto-update checkbox is present and defaults on (checked) when the
-        # option has never been saved.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        marker = next(
-            m for m in form["data_schema"].schema if m.schema == const.OPT_AUTO_UPDATE
-        )
-        assert marker.default() is True
-
     def test_form_prefills_every_field_from_saved_options(self):
         # Review gap: the form must show the user's SAVED values, not the
         # defaults, for every field (a regression here silently reverts a
@@ -749,8 +699,6 @@ class TestServerOptionsFlow:
         # (a default there would make them impossible to clear — see
         # test_clearing_an_override_field_sticks).
         saved = {
-            const.OPT_CHANNEL: const.CHANNEL_DEV,
-            const.OPT_AUTO_UPDATE: False,
             const.OPT_SERVER_PORT: 12345,
             const.OPT_BIND_HOST: const.BIND_HOST_LOOPBACK,
             const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
@@ -765,6 +713,7 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE: "/custom_path",
             const.OPT_OAUTH_CLIENT_ID: "hamcp-deadbeef",
             const.OPT_OAUTH_CLIENT_SECRET: "super-secret-value",
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST: ["https://chatgpt.example/cb"],
         }
         flow = _make_options_flow(
             data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=saved
@@ -782,12 +731,16 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE,
             const.OPT_OAUTH_CLIENT_ID,
             const.OPT_OAUTH_CLIENT_SECRET,
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST,
         )
         for key in text_fields:
             assert markers[key].description["suggested_value"] == saved[key]
 
+        # The administrator token is never pre-filled from anything saved.
         defaults = {
-            key: m.default() for key, m in markers.items() if key not in text_fields
+            key: m.default()
+            for key, m in markers.items()
+            if key not in (*text_fields, const.OPT_ADMIN_TOKEN_REPLACEMENT)
         }
         # regenerate_secrets is a one-shot action, never pre-filled True;
         # enable_webhook / enable_startup_notification / enable_sidebar_panel
@@ -822,7 +775,7 @@ class TestServerOptionsFlow:
         assert result["title"] == ""
         # A genuine override is stored verbatim; the channel rides along.
         # _normalize adds the (empty) URL/secret management fields when the
-        # submission omits them.
+        # submission omits them; an omitted callback list is an emptied one.
         assert result["data"] == {
             **user_input,
             const.OPT_EXTERNAL_URL: "",
@@ -830,6 +783,8 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE: "",
             const.OPT_OAUTH_CLIENT_ID: "",
             const.OPT_OAUTH_CLIENT_SECRET: "",
+            const.OPT_ADMIN_TOKEN_REPLACEMENT: "",
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST: [],
         }
 
     def test_default_pip_spec_normalized_to_empty(self):
@@ -1211,14 +1166,14 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(
                 return_value=self._catalog(
                     panel_hint="Öffne das Panel.",
                     version_line=(
                         "Komponente {component_version} - "
-                        "Server ha-mcp {server_version} ({channel}-Kanal)"
+                        "Server ha-mcp {server_version} ({source})"
                     ),
                     tools_module_not_installed="Modul: Nicht installiert",
                 )
@@ -1234,7 +1189,7 @@ class TestOptionsFormTranslations:
         # prose is added by the caller, not carried in the catalog.
         assert placeholders["panel_hint"] == "Öffne das Panel. "
         assert placeholders["versions"].startswith(
-            "Komponente 1.2.4 - Server ha-mcp 7.14.1 (stable-Kanal)"
+            "Komponente 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
         assert "Modul: Nicht installiert" in placeholders["versions"]
 
@@ -1247,7 +1202,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint="Öffne das Panel.")),
         )
@@ -1259,7 +1214,7 @@ class TestOptionsFormTranslations:
 
         assert placeholders["panel_hint"] == "Öffne das Panel. "
         assert placeholders["versions"].startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
 
     def test_failing_lookup_degrades_to_english(self, monkeypatch, caplog):
@@ -1276,7 +1231,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(side_effect=RuntimeError("boom")),
         )
@@ -1294,7 +1249,7 @@ class TestOptionsFormTranslations:
     def test_unreadable_language_skips_the_lookup(self, monkeypatch):
         """No language to ask for means English, not a lookup with a bad key."""
         seam = AsyncMock(return_value={})
-        monkeypatch.setattr(cf, "_fetch_common_translations", seam)
+        monkeypatch.setattr(cft, "_fetch_common_translations", seam)
         monkeypatch.setattr(
             cf,
             "async_get_integration",
@@ -1325,7 +1280,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(version_line="Komponente {nope} {")),
         )
@@ -1337,7 +1292,7 @@ class TestOptionsFormTranslations:
             ]
 
         assert placeholders["versions"].startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
         assert "Unusable version_line template" in caplog.text
 
@@ -1358,7 +1313,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(
                 return_value=self._catalog(
@@ -1373,13 +1328,13 @@ class TestOptionsFormTranslations:
         ]
 
         assert placeholders["versions"].startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (stable channel)"
+            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
         )
 
     def test_the_seam_is_asked_for_the_configured_language(self, monkeypatch):
         """Every test above stays green if the call site hardcodes ``"en"``."""
         seam = AsyncMock(return_value={})
-        monkeypatch.setattr(cf, "_fetch_common_translations", seam)
+        monkeypatch.setattr(cft, "_fetch_common_translations", seam)
         monkeypatch.setattr(
             cf,
             "async_get_integration",
@@ -1405,7 +1360,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint="")),
         )
@@ -1430,7 +1385,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(
                 return_value={"component.other.common.panel_hint": "Öffne das Panel."}
@@ -1467,7 +1422,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
+            cft, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
         )
         flow = self._flow_with_language("de")
 
@@ -1496,7 +1451,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf, "_fetch_common_translations", AsyncMock(return_value={})
+            cft, "_fetch_common_translations", AsyncMock(return_value={})
         )
         flow = self._flow_with_language("de")
 
@@ -1524,7 +1479,7 @@ class TestOptionsFormTranslations:
         )
 
         with caplog.at_level(logging.WARNING):
-            result = asyncio.run(cf._fetch_common_translations(MagicMock(), "de"))
+            result = asyncio.run(cft._fetch_common_translations(MagicMock(), "de"))
 
         assert result == {}
         assert "expected a Mapping, got list" in caplog.text
@@ -1548,7 +1503,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint="打开“设置面板”")),
         )
@@ -1582,7 +1537,7 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         english = cf._COMMON_FALLBACKS["panel_hint"]
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint=english)),
         )
@@ -1610,7 +1565,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint="설정 패널을 여세요.")),
         )
@@ -1636,7 +1591,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint="Öffne das “Panel”")),
         )
@@ -1661,7 +1616,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
+            cft, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
         )
         flow = self._flow_with_language("de")
         flow.hass.config_entries.async_entries = MagicMock(
@@ -1689,7 +1644,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(
                 return_value=self._catalog(

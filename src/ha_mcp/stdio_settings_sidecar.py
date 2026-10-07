@@ -1263,7 +1263,7 @@ def _build_app(
     from starlette.responses import PlainTextResponse
     from starlette.routing import Route
 
-    from .settings_ui import build_settings_handlers
+    from .settings_ui import SETTINGS_ROUTES, build_settings_handlers
 
     handlers = build_settings_handlers(server=None, is_sidecar=True)
 
@@ -1319,195 +1319,17 @@ def _build_app(
 
     secret_prefix = secret_path.rstrip("/")
 
+    # Mount under the secret path; the user's bookmark / overview URL includes
+    # it. A bare GET on / returns a generic 404 because the only way to reach
+    # the page is via the secret path. The table is the shared HTTP surface,
+    # minus the app restart the sidecar cannot perform, so the two never drift.
+    # Policy pending/approve/deny answer 503 here (the ApprovalQueue lives in
+    # the main process); the decision-pin routes must still work, because the
+    # config PUT refuses event-bus decisions without a stored PIN.
     routes = [
-        # Mount under the secret path; the user's bookmark / overview URL
-        # includes it. A bare GET on / returns a generic 404 because the
-        # only way to reach the page is via the secret path.
-        Route(
-            f"{secret_prefix}/settings",
-            handlers["settings_page"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/tools",
-            handlers["get_tools"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/tools",
-            handlers["save_tools"],
-            methods=["POST"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/info",
-            handlers["settings_info"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/features",
-            handlers["get_feature_flags"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/features",
-            handlers["save_feature_flags"],
-            methods=["POST"],
-        ),
-        # Theme / accessibility prefs (#1574 review). The sidecar is the
-        # very mode these exist for: its port (= the localStorage origin)
-        # is stable by default since #2131 but still changes on first
-        # spawn, a lost ui.state, a pin change, or a taken remembered
-        # port — and each change is a fresh empty origin the server-side
-        # copy re-seeds with the user's choices.
-        Route(
-            f"{secret_prefix}/api/settings/theme",
-            handlers["get_theme_prefs"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/theme",
-            handlers["save_theme_prefs"],
-            methods=["POST"],
-        ),
-        # Advanced settings. The stdio-only sidecar-port control is rendered
-        # from this handler, so these routes are required in sidecar mode.
-        Route(
-            f"{secret_prefix}/api/settings/advanced",
-            handlers["get_advanced_settings"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/advanced",
-            handlers["save_advanced_settings"],
-            methods=["POST"],
-        ),
-        # Auto-backup endpoints (#1288). The Backups tab is available in the
-        # shared settings page and must use the same handlers in stdio mode.
-        Route(
-            f"{secret_prefix}/api/settings/backups",
-            handlers["list_backups"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/backups",
-            handlers["delete_backups_bulk"],
-            methods=["DELETE"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/backups/{{name}}",
-            handlers["view_backup"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/backups/{{name}}/diff",
-            handlers["diff_backup"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/backups/{{name}}/restore",
-            handlers["restore_backup"],
-            methods=["POST"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/backups/{{name}}",
-            handlers["delete_backup"],
-            methods=["DELETE"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/backup-config",
-            handlers["get_backup_config"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/backup-config",
-            handlers["save_backup_config"],
-            methods=["POST"],
-        ),
-        # Custom filesystem directories (issue #1567). The sub-form is rendered
-        # in the features panel, so the stdio sidecar must serve these too — its
-        # route list is hand-maintained and does NOT derive from
-        # register_settings_routes. The handler builds a transient HA client
-        # from the inherited env when server is None (sidecar mode).
-        Route(
-            f"{secret_prefix}/api/settings/fs-custom-paths",
-            handlers["get_fs_custom_paths"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/settings/fs-custom-paths",
-            handlers["save_fs_custom_paths"],
-            methods=["POST"],
-        ),
-        # Tool security policies endpoints (#966). Pending/approve/deny
-        # are wired as stubs that return 503 in sidecar mode — the
-        # in-memory ApprovalQueue lives in the main server process, so
-        # only config GET/PUT are usefully reachable here.
-        Route(
-            f"{secret_prefix}/api/policy/config",
-            handlers["policy_get_config"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/policy/config",
-            handlers["policy_put_config"],
-            methods=["PUT"],
-        ),
-        Route(
-            f"{secret_prefix}/api/policy/pending",
-            handlers["policy_get_pending"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/policy/approve",
-            handlers["policy_post_approve"],
-            methods=["POST"],
-        ),
-        Route(
-            f"{secret_prefix}/api/policy/deny",
-            handlers["policy_post_deny"],
-            methods=["POST"],
-        ),
-        # The PIN lives in the data dir, not in the queue, so these are
-        # fully functional here — and they have to be: the config PUT above
-        # refuses to switch event-bus decisions on while no PIN is stored.
-        Route(
-            f"{secret_prefix}/api/policy/decision-pin",
-            handlers["policy_get_decision_pin"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/policy/decision-pin",
-            handlers["policy_post_decision_pin"],
-            methods=["POST"],
-        ),
-        Route(
-            f"{secret_prefix}/api/policy/decision-pin",
-            handlers["policy_delete_decision_pin"],
-            methods=["DELETE"],
-        ),
-        Route(
-            f"{secret_prefix}/api/policy/tool-schema",
-            handlers["policy_get_tool_schema"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/policy/value-source",
-            handlers["policy_get_value_source"],
-            methods=["GET"],
-        ),
-        # Entity visibility filter endpoints. The sidecar owns a hand-maintained
-        # route table (it cannot reuse FastMCP custom-route registration), so
-        # keep this pair in lockstep with settings_ui.register_settings_routes.
-        Route(
-            f"{secret_prefix}/api/visibility/config",
-            handlers["visibility_get_config"],
-            methods=["GET"],
-        ),
-        Route(
-            f"{secret_prefix}/api/visibility/config",
-            handlers["visibility_put_config"],
-            methods=["PUT"],
-        ),
+        Route(f"{secret_prefix}{path}", handlers[key], methods=methods)
+        for path, methods, key in SETTINGS_ROUTES
+        if key != "restart_addon"
     ]
 
     # /shutdown — POST endpoint that drops the disable sentinel and

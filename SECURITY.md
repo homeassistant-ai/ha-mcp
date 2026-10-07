@@ -188,10 +188,13 @@ The consent form explains this revocation path. Reports about token opacity
 The `ha_mcp_tools` component's **in-process MCP server** config entry can run the
 ha-mcp server in-process inside Home Assistant and expose it through a Home
 Assistant webhook (see [docs/in-process-server.md](docs/in-process-server.md)).
-It offers three authentication postures, selected by the **Authentication
-mode** option in the entry options:
+A new entry starts with the webhook disabled and the server port bound to
+loopback; the setup form and the entry options let an administrator enable
+remote access with one of three authentication postures (**Authentication
+mode**), or LAN access to the port. Entries created before setup offered that
+choice keep the webhook on in `none` mode with LAN binding.
 
-- **Secret webhook URL (default, `none`).** The webhook id is a high-entropy
+- **Secret webhook URL (`none`).** The webhook id is a high-entropy
   random string and *is* the credential — the same secret-URL trust model as
   standard mode above, except the URL is designed to be reached remotely through
   Home Assistant's own remote access (Nabu Casa or a TLS-terminating reverse
@@ -201,18 +204,19 @@ mode** option in the entry options:
   documents, an anonymous RFC 7591 registration endpoint, and an auto-approve
   authorization server) purely so OAuth-insisting connector brokers can
   complete a flow: the tokens it issues are cosmetic — bearers are ignored,
-  the webhook URL remains the only credential. The auto-approve endpoint
-  302-redirects to any spec-valid `redirect_uri` (https, or http loopback per
-  RFC 8252; no fragment), which makes the Home Assistant origin usable as a
-  crafted-link redirector — an accepted trade within this trust model
-  (maintainer decision 2026-08-14, superseding the exact-match callback
-  allowlist that shipped in #1976; the webhook-id protections from that PR are
-  unchanged).
+  the webhook URL remains the only credential. Because the auto-approve
+  endpoint is anonymous, it redirects only to a callback on an
+  administrator-editable allowlist (#2427): exact matching, plus the RFC 8252
+  §7.3 any-port rule for a listed `http` loopback callback. Anything else gets
+  a 400 page and no redirect, so the Home Assistant origin is not an open
+  redirector. The list ships with claude.ai's callback. It is stored on the
+  server entry and edited on its Configure screen or in the admin-only
+  sidebar panel; dynamic client registration cannot add to it.
 - **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth
   authorization server: the entry serves the discovery documents and
   validates inbound Bearer tokens against Home Assistant's own auth, so access
   is gated by a Home Assistant login — and restricted to **administrator**
-  users. The server acts with its own provisioned admin token (the caller's
+  users. The server acts with its own administrator token (the caller's
   bearer is never forwarded), so accepting any valid login would grant every
   household member admin-equivalent control; non-admin, inactive, and
   system-generated users are rejected. This is distinct from the beta OAuth mode
@@ -259,8 +263,8 @@ mode** option in the entry options:
   signing key — all persisted in the config entry. Its security properties:
   - **The client secret is the boundary.** Anyone holding the `client_id` +
     `client_secret` can complete the flow and mint tokens; there is no
-    per-user identity. Access is **admin-equivalent** — the same provisioned
-    admin token backs it as the other modes. Keep the secret secret.
+    per-user identity. Access is **admin-equivalent** — the same server
+    administrator token backs it as the other modes. Keep the secret secret.
   - **Self-issued Bearer tokens**, HMAC-signed and stateless, carrying
     `{kind, iat, exp, jti, cid}` — **no** Home Assistant LLAT (unlike the beta
     OAuth mode in "OAuth Bearer token design" above; that section's
@@ -271,8 +275,9 @@ mode** option in the entry options:
     which invalidates every outstanding token — but only once Home Assistant
     restarts, because the root `/authorize`/`/token` views cannot be rebound
     without a restart (a repair issue prompts for it). Until that restart the
-    previous credential keeps working; the startup log withholds the rotated
-    credential during that window so a still-valid old token cannot read it.
+    previous credential keeps working. The credentials are shown only on the
+    entry's Configure screen, never in the startup log, so a still-valid old
+    token cannot read the rotated credential through the server's log tools.
   - **The consent endpoint is unauthenticated** (no HA session) — it is a
     plain human-approval page. This is safe because the authorization code is
     inert without the `client_secret` at the token endpoint (the client is
@@ -311,14 +316,21 @@ entry's **Regenerate connect secrets now** option once.
 
 The connect notification deliberately carries no secrets: Home Assistant
 shows persistent notifications to every authenticated user, so the webhook
-URL (the credential in the default posture) is surfaced only on
-administrator-only surfaces - the entry's Configure screen, the sidebar
-panel, and the log. A local-only option removes the webhook entirely.
+URL (the credential in secret-URL mode) is surfaced only on the
+administrator-only Configure screen of the entry; the log and notifications
+never carry it. New entries start with the
+webhook off, and a local-only option removes it entirely.
 
-The server reaches Home Assistant with a dedicated admin token the component
-provisions and stores in the config entry. The token is handed to the server
-in-memory (never through the Home Assistant process environment); removing the
-entry revokes it, and disabling the config entry stops the server. As with
+The server reaches Home Assistant with an administrator's long-lived access
+token that the administrator enters at setup (#2427); the component never
+creates an account or token itself. Entries created by older releases keep the
+account and token those releases provisioned while both remain valid; a
+missing, revoked or non-administrator credential stops the server and files a
+repair that asks for a replacement, rather than minting a new administrator.
+The token is stored in the config entry and handed to the server in memory
+(never through the Home Assistant process environment). Disabling the config
+entry stops the server; removing it deletes only an account an older release
+created, never the user's own account or token. As with
 standard mode, that token's Home Assistant permissions define what the server can
 do.
 

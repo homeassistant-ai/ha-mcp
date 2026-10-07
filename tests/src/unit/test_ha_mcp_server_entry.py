@@ -28,15 +28,21 @@ install()
 import custom_components.ha_mcp_tools as component  # noqa: E402
 import custom_components.ha_mcp_tools.embedded_entry as pkg  # noqa: E402
 import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
+from custom_components.ha_mcp_tools import server_credentials  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CONF_ENTRY_TYPE,
+    DATA_ADMIN_TOKEN,
     DATA_BRINGUP_TASK,
     DATA_LAST_OPTIONS,
+    DATA_REFRESH_TOKEN_ID,
     DATA_SECRET_PATH,
+    DATA_SERVER_USER_ID,
     DATA_WEBHOOK_ID,
     DOMAIN,
     ENTRY_TYPE_SERVER,
     ENTRY_TYPE_TOOLS,
+    OPT_ADMIN_TOKEN_REPLACEMENT,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
 
 
@@ -64,11 +70,8 @@ def _make_entry(*, options=None, data=None) -> MagicMock:
     entry.data = {} if data is None else dict(data)
 
     def _create_background_task(hass, coro, name):
-        # issue #1760: async_setup_server_entry now ALSO schedules the
-        # coordinator's initial version refresh as a real coroutine here (a
-        # second call, alongside the bring-up). This suite doesn't exercise
-        # coordinator behavior, so just close it to avoid an unawaited-
-        # coroutine warning rather than actually running it.
+        # Close any real coroutine handed in rather than running it, so a
+        # scheduled task cannot leave an unawaited-coroutine warning.
         if asyncio.iscoroutine(coro):
             coro.close()
         return "BRINGUP_TASK"
@@ -108,6 +111,56 @@ class TestEnsureSecrets:
         pkg._ensure_secrets(hass, entry)
         hass.config_entries.async_update_entry.assert_not_called()
         assert entry.data[DATA_WEBHOOK_ID] == "mcp_existing"
+
+    def test_a_replacement_token_takes_over_once_and_is_cleared(self, monkeypatch):
+        # #2427: a token an earlier build parked in the options is consumed into
+        # entry.data on the next setup; the option must not linger.
+        monkeypatch.setattr(
+            server_credentials, "token_problem", MagicMock(return_value=None)
+        )
+        hass = _make_hass()
+        hass.auth.async_get_refresh_token = MagicMock(return_value=None)
+        entry = _make_entry(
+            data={
+                DATA_WEBHOOK_ID: "mcp_keep",
+                DATA_SECRET_PATH: "/private_keep",
+                DATA_SERVER_USER_ID: "old-user",
+                DATA_REFRESH_TOKEN_ID: "old-rt",
+            },
+            options={OPT_ADMIN_TOKEN_REPLACEMENT: "new-token"},
+        )
+
+        pkg._ensure_secrets(hass, entry)
+
+        assert entry.data[DATA_ADMIN_TOKEN] == "new-token"
+        assert DATA_REFRESH_TOKEN_ID not in entry.data
+        assert entry.options[OPT_ADMIN_TOKEN_REPLACEMENT] == ""
+
+    def test_a_parked_token_revoked_since_keeps_the_working_credential(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            server_credentials,
+            "token_problem",
+            MagicMock(return_value="invalid_token"),
+        )
+        hass = _make_hass()
+        hass.auth.async_get_refresh_token = MagicMock(return_value=MagicMock())
+        entry = _make_entry(
+            data={
+                DATA_WEBHOOK_ID: "mcp_keep",
+                DATA_SECRET_PATH: "/private_keep",
+                DATA_REFRESH_TOKEN_ID: "old-rt",
+            },
+            options={OPT_ADMIN_TOKEN_REPLACEMENT: "revoked-token"},
+        )
+
+        pkg._ensure_secrets(hass, entry)
+
+        assert entry.data[DATA_REFRESH_TOKEN_ID] == "old-rt"
+        assert DATA_ADMIN_TOKEN not in entry.data
+        hass.auth.async_remove_refresh_token.assert_not_called()
+        assert entry.options[OPT_ADMIN_TOKEN_REPLACEMENT] == ""
 
     def test_webhook_override_replaces_stored_id(self):
         hass = _make_hass()
@@ -177,20 +230,16 @@ class TestSetupEntry:
         domain_data = hass.data[DOMAIN]
         # Options snapshot taken so data writes don't self-reload.
         assert domain_data[DATA_LAST_OPTIONS] == {"server_port": 9584}
-        # Bring-up AND the coordinator's initial version refresh are both
-        # scheduled as config-entry background tasks (issue #1760).
-        assert entry.async_create_background_task.call_count == 2
+        # Only the bring-up runs in the background: the server arrives with
+        # the component release (#2427), so there is no version refresh.
+        assert entry.async_create_background_task.call_count == 1
         assert domain_data[DATA_BRINGUP_TASK] == "BRINGUP_TASK"
-        # Reload-on-options-change listener AND the coordinator's auto-update
-        # listener are both registered under async_on_unload for cleanup.
+        # The reload-on-options-change listener is registered for cleanup.
         entry.add_update_listener.assert_called_once_with(pkg._async_options_updated)
         unload_args = [c.args[0] for c in entry.async_on_unload.call_args_list]
-        assert "UNSUB" in unload_args  # options-change listener unsub
-        assert len(unload_args) == 2  # + the coordinator listener unsub
-        # The update platform entity is forwarded (issue #1760).
-        hass.config_entries.async_forward_entry_setups.assert_awaited_once_with(
-            entry, [pkg.Platform.UPDATE]
-        )
+        assert unload_args == ["UNSUB"]
+        # No update platform is forwarded any more.
+        hass.config_entries.async_forward_entry_setups.assert_not_called()
 
 
 class TestUnloadEntry:
@@ -245,6 +294,18 @@ class TestOptionsUpdatedListener:
         # firing the same listener — it must NOT reload.
         hass = _make_hass()
         entry = _make_entry(options={"server_port": 9584})
+        hass.data[DOMAIN] = {DATA_LAST_OPTIONS: {"server_port": 9584}}
+
+        await pkg._async_options_updated(hass, entry)
+        hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_callback_allowlist_edit_applies_without_a_reload(self):
+        # The settings panel saves the list through the running server; a
+        # reload would tear that server down mid-request (#2427).
+        hass = _make_hass()
+        entry = _make_entry(
+            options={"server_port": 9584, OPT_OAUTH_REDIRECT_ALLOWLIST: []}
+        )
         hass.data[DOMAIN] = {DATA_LAST_OPTIONS: {"server_port": 9584}}
 
         await pkg._async_options_updated(hass, entry)
@@ -325,7 +386,8 @@ class TestToolsEntrySetupFinalization:
     caller-token Store, the legacy-backup migration, ~10 service registrations,
     and the WebSocket registry), so — like the existing security-regression guard
     on the same function — these assert the wiring at the source level: the
-    rename migration and the tools-entry device registration must stay present.
+    rename migration and the tools-entry device registration must stay present
+    (the device itself is tested in ``test_entry_device.py``).
     A behavioral retitle/preserve test needs the full setup scaffolding no unit
     harness provides.
     """
@@ -344,24 +406,5 @@ class TestToolsEntrySetupFinalization:
         import inspect
 
         src = inspect.getsource(component._async_setup_tools_entry)
-        assert "async_get_or_create" in src
-        assert "config_entry_id=entry.entry_id" in src
+        assert "async_register_entry_device(" in src
         assert "File & YAML editing services" in src
-        assert "homeassistant-ai" in src
-
-    def test_setup_refuses_a_version_less_manifest_for_the_device(self):
-        """The device's ``sw_version`` must never read the literal "None".
-
-        The loader returns ``None`` for a manifest that carries no version
-        rather than raising, so ``str()`` alone would stamp "None" onto the
-        device and the compiled-in fallback beside it would never be reached.
-        Only the explicit guard sends that case down the existing degrade
-        path. Asserted at source level for the reason this class's docstring
-        gives — and it is the guard's *condition* that is asserted, so
-        deleting the guard fails here.
-        """
-        import inspect
-
-        src = inspect.getsource(component._async_setup_tools_entry)
-        assert "integration.version is None" in src
-        assert "component_version = COMPONENT_VERSION" in src

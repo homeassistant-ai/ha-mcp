@@ -3,17 +3,17 @@
 The :class:`EmbeddedServerManager` owns the full lifecycle of the in-process
 ha-mcp server:
 
-* ensures the ``ha-mcp`` package is importable (runtime pip install via
-  Home Assistant's requirements manager, honoring an options-flow pip-spec
-  override for pre-release testing, and forcing a real reinstall when that spec
-  changes),
-* provisions a long-lived Home Assistant admin token the server uses to reach HA
+* ensures the ``ha-mcp`` package is importable (the manifest pin Home
+  Assistant installed, or a runtime pip install honoring an options-flow
+  pip-spec override for pre-release testing, forcing a real reinstall when that
+  spec changes),
+* hands the server the administrator's long-lived token it uses to reach HA
   core over loopback (REST + WebSocket),
 * runs the server on a dedicated thread with its own asyncio loop — uvicorn
   skips signal capture off the main thread and a heavy tool can never stall HA's
   event loop — and
-* tears the thread down cleanly, and revokes the provisioned credentials when
-  the entry is removed.
+* tears the thread down cleanly, and on entry removal deletes the account and
+  token an older release provisioned (never the administrator's own).
 
 Everything the server needs from ha-mcp is imported **inside the worker thread**,
 after the required non-secret environment variables are staged, so importing this
@@ -30,6 +30,7 @@ import asyncio
 import importlib
 import importlib.metadata
 import importlib.util
+import inspect
 import logging
 import os
 import site
@@ -37,15 +38,13 @@ import subprocess
 import sys
 import threading
 from contextlib import suppress
-from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
-from homeassistant.auth.const import GROUP_ID_ADMIN
-from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
+from homeassistant.loader import async_get_integration
 from homeassistant.requirements import (
     RequirementsNotFound,
     async_process_requirements,
@@ -57,16 +56,10 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from .const import (
-    CHANNEL_DEV,
-    DATA_ACCESS_TOKEN,
     DATA_LAST_PIP_SPEC,
-    DATA_PENDING_INSTALL_VERSION,
-    DATA_REFRESH_TOKEN_ID,
+    DATA_REINSTALL_REQUESTED,
     DATA_SECRET_PATH,
-    DATA_SERVER_USER_ID,
-    DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
-    DEFAULT_CHANNEL,
     DEFAULT_ENABLE_LLM_API,
     DEFAULT_LOOPBACK_URL,
     DEFAULT_PIP_SPEC,
@@ -74,19 +67,15 @@ from .const import (
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
     DOMAIN,
+    KNOWN_SERVER_DISTS,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
-    OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
-    OPT_CHANNEL,
     OPT_ENABLE_LLM_API,
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
     SERVER_CONFIG_SUBDIR,
     SERVER_KEEPALIVE_SECONDS,
-    SERVER_TOKEN_CLIENT_NAME,
-    SERVER_USER_NAME,
-    dist_for_channel,
 )
 from .dependency_diagnostics import (
     DependencyViolation,
@@ -97,6 +86,11 @@ from .dependency_diagnostics import (
     requirement_forces_conflict,
     root_import_failure,
 )
+from .server_credentials import (
+    CredentialNeeded,
+    async_release_credentials,
+    async_server_access_token,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -104,11 +98,6 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
-
-# Access-token longevity for the provisioned long-lived token. HA caps nothing
-# here; ten years is effectively "for the life of the install" and is refreshed
-# from the same refresh token on every start regardless.
-_ACCESS_TOKEN_TTL = timedelta(days=3650)
 
 # Readiness probe: fail the bring-up only when there is no observable startup
 # progress (no new modules landing in sys.modules, no phase advance) for this
@@ -217,14 +206,16 @@ class EmbeddedServerError(Exception):
     """Raised when the in-process ha-mcp server could not be installed or started.
 
     ``kind`` classifies the failure so the caller can file the matching repair
-    issue: ``"package"`` for a pip install / import failure, ``"start"`` for
-    everything else (token provisioning, thread crash, readiness timeout).
+    issue: ``"package"`` for a pip install / import failure, ``"token"`` when
+    there is no usable Home Assistant credential (the message is the reason's
+    translation key), ``"start"`` for everything else (thread crash,
+    readiness timeout).
     """
 
     def __init__(
-        self, message: str, *, kind: Literal["package", "start"] = "start"
+        self, message: str, *, kind: Literal["package", "start", "token"] = "start"
     ) -> None:
-        """Store the message and the failure ``kind`` (``package`` / ``start``)."""
+        """Store the message and the failure ``kind``."""
         super().__init__(message)
         self.kind = kind
 
@@ -251,8 +242,8 @@ def _install_log_filters_if_available() -> None:
     """Attach the shared MCP SDK/fastmcp log-noise filters, if this ha-mcp has them.
 
     Mirrors the ``register_browser_landing`` guard just above ``_serve``'s call
-    site: the installed server version is user-controlled (channel choice,
-    pip-spec override), so an older ha-mcp without ``ha_mcp.log_filters`` must
+    site: the installed server version is user-controlled (the HACS component
+    release, a pip-spec override), so an older ha-mcp without ``ha_mcp.log_filters`` must
     keep serving -- the filters are simply absent there, as they are today.
 
     Only a ``ModuleNotFoundError`` for exactly ``ha_mcp.log_filters`` is that
@@ -312,31 +303,23 @@ class EmbeddedServerManager:
             self._server_url: str = _url_override
         else:
             self._server_url, self._loopback_verify_ssl = _derive_loopback_url(hass)
-        self._channel: str = str(options.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
-        # An explicit pip-spec override (the pre-release test channel) wins over
-        # the channel selector. DEFAULT_PIP_SPEC in the field means "no override,
-        # use the channel" — the value moves with each release, so it must never
-        # be treated as an intentional pin (the options flow also normalizes it
-        # away on save; this guard keeps legacy/direct entries correct too).
+        # An explicit pip-spec override (PR / pre-release testing) wins over the
+        # server requirement this component release pins in its manifest.
+        # DEFAULT_PIP_SPEC in the field means "no override" (the options flow
+        # also normalizes it away on save; this guard keeps legacy/direct
+        # entries correct too).
         raw_pip_spec = str(options.get(OPT_PIP_SPEC) or "").strip()
         self._pip_spec_override: str = (
             raw_pip_spec if raw_pip_spec and raw_pip_spec != DEFAULT_PIP_SPEC else ""
         )
-        # Auto-update toggle (default on). Off pins a non-override channel to
-        # the currently-installed version; the periodic PyPI check keeps
-        # running either way (it feeds the update entity — issue #1760), only
-        # the automatic reload is gated on this. Read before
-        # _resolve_pip_spec, which consults it.
-        self._auto_update: bool = bool(
-            options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)
-        )
+        # The ha-mcp requirement in this component release's manifest. Home
+        # Assistant installs it before setup, like any integration requirement;
+        # read in async_start (the loader lookup is async).
+        self._paired_spec: str | None = None
         self._llm_api_enabled: bool = bool(
             options.get(OPT_ENABLE_LLM_API, DEFAULT_ENABLE_LLM_API)
         )
-        # Initial spec without the installed-version read (that would block the
-        # event loop). For an auto-update-off channel this is the bare dist here;
-        # _async_ensure_package re-resolves it with the executor-read version
-        # before installing.
+        # Provisional until async_start reads the manifest pin.
         self._pip_spec: str = self._resolve_pip_spec()
         self._secret_path: str = str(entry.data.get(DATA_SECRET_PATH, ""))
         self._config_dir: str = hass.config.path(SERVER_CONFIG_SUBDIR)
@@ -377,7 +360,7 @@ class EmbeddedServerManager:
     # -- lifecycle ---------------------------------------------------------
 
     async def async_start(self) -> None:
-        """Install the package, provision a token, and start the server thread.
+        """Install the package, resolve the token, and start the server thread.
 
         Raises :class:`EmbeddedServerError` on any failure. The caller is
         responsible for surfacing a repair issue — a failed start must never take
@@ -396,7 +379,8 @@ class EmbeddedServerManager:
                 f"Assistant {HA_VERSION} satisfies its minimum requirement of "
                 f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION}. Install a standard Home "
                 "Assistant release before reloading this integration.",
-                kind="package",
+                # Not "package": reinstalling the server cannot fix this.
+                kind="start",
             ) from err
         if home_assistant_version < Version(MIN_EMBEDDED_HOME_ASSISTANT_VERSION):
             raise EmbeddedServerError(
@@ -404,8 +388,16 @@ class EmbeddedServerManager:
                 f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION} or newer; this instance "
                 f"is running {HA_VERSION}. Update Home Assistant before "
                 "reloading this integration.",
-                kind="package",
+                kind="start",
             )
+
+        self._paired_spec = await _async_paired_server_requirement(self._hass)
+        if self._paired_spec is None and not self._pip_spec_override:
+            _LOGGER.warning(
+                "This component's manifest pins no ha-mcp server; running "
+                "whichever ha-mcp is installed. Reinstall the integration from HACS"
+            )
+        self._pip_spec = self._resolve_pip_spec()
 
         # Read the importer registry BEFORE the package step too: replacing
         # the distribution's files on disk under a live importer corrupts it
@@ -415,7 +407,7 @@ class EmbeddedServerManager:
             defer_mutations=_prune_and_check_importing_workers()
         )
         await self._async_warn_on_dependency_conflicts()
-        access_token = await self._async_provision_token()
+        access_token = await self._async_access_token()
         await self._hass.async_add_executor_job(self._prepare_config_dir)
 
         self._maybe_purge_stale_modules(ready_version)
@@ -452,7 +444,7 @@ class EmbeddedServerManager:
         # code silently.
         if self._running_version:
             installed = await self._hass.async_add_executor_job(
-                _installed_ha_mcp_version, dist_for_channel(self._channel)
+                _installed_ha_mcp_version, self._preferred_dist()
             )
             if installed and installed != self._running_version:
                 _LOGGER.warning(
@@ -468,7 +460,7 @@ class EmbeddedServerManager:
 
         Never blocks Home Assistant shutdown indefinitely: if the thread does not
         exit within the timeout it is logged and left to die with the process.
-        Does NOT revoke the provisioned token — that is reserved for
+        Does NOT release credentials — that is reserved for
         :meth:`async_revoke_credentials` (entry removal) so a reload keeps
         working.
         """
@@ -505,71 +497,60 @@ class EmbeddedServerManager:
         self._running_version = None
 
     async def async_revoke_credentials(self) -> None:
-        """Revoke the provisioned refresh token and remove the server's user.
-
-        Called when the config entry is removed. Best-effort and idempotent:
-        missing ids / already-deleted objects are treated as success.
-        """
-        rt_id = self._entry.data.get(DATA_REFRESH_TOKEN_ID)
-        user_id = self._entry.data.get(DATA_SERVER_USER_ID)
-
-        if rt_id:
-            refresh_token = self._hass.auth.async_get_refresh_token(rt_id)
-            if refresh_token is not None:
-                self._hass.auth.async_remove_refresh_token(refresh_token)
-
-        if user_id:
-            user = await self._hass.auth.async_get_user(user_id)
-            if user is not None:
-                await self._hass.auth.async_remove_user(user)
-
-        remaining = {
-            k: v
-            for k, v in self._entry.data.items()
-            if k not in (DATA_SERVER_USER_ID, DATA_REFRESH_TOKEN_ID, DATA_ACCESS_TOKEN)
-        }
+        """Release the server's credential when the config entry is removed."""
+        remaining = await async_release_credentials(self._hass, self._entry.data)
         if remaining != dict(self._entry.data):
             self._hass.config_entries.async_update_entry(self._entry, data=remaining)
 
     # -- package install ---------------------------------------------------
 
-    def _resolve_pip_spec(self, installed_version: str | None = None) -> str:
-        """Return the effective pip requirement for the configured channel.
+    def _resolve_pip_spec(self) -> str:
+        """Return the effective pip requirement for the server.
 
-        An explicit override wins (any pip requirement string — a version pin, a
-        GitHub tarball URL — the pre-release test channel). Otherwise the channel
-        picks the distribution (``dev`` → ``ha-mcp-dev``, ``stable`` → ``ha-mcp``):
-
-        * auto-update ON (default): the bare, unpinned distribution name, so the
-          newest build of the channel resolves at install time.
-        * auto-update OFF: the distribution pinned to ``installed_version``
-          (``dist==X``), so reloads/restarts keep that exact version; falls back
-          to the unpinned name when ``installed_version`` is None (nothing
-          installed yet — first setup has no version to pin to, so it installs
-          the newest once).
-
-        ``installed_version`` is passed in (never read here) so this stays a pure,
-        non-blocking function: the ``importlib.metadata`` read that discovers it
-        happens on the executor in :meth:`_async_ensure_package`, off the loop.
+        An explicit override wins (any pip requirement string — a version pin,
+        a GitHub tarball URL, a ``file://`` wheel — for PR or pre-release
+        testing). Otherwise the requirement this component release pins in its
+        manifest, so the server that runs is the one HACS delivered with the
+        component. A hand-edited manifest without a pin falls back to the bare
+        ``ha-mcp`` distribution.
         """
         if self._pip_spec_override:
             return self._pip_spec_override
-        dist = dist_for_channel(self._channel)
-        if not self._auto_update and installed_version is not None:
-            return f"{dist}=={installed_version}"
-        return dist
+        return self._paired_spec or DEFAULT_PIP_SPEC
+
+    def _target_dist(self) -> str | None:
+        """Return the known server distribution the effective spec installs.
+
+        The distribution the spec names when that is ``ha-mcp`` or
+        ``ha-mcp-dev``; None for a spec that names another distribution or
+        none at all (a bare URL), whose installed name is unknown here.
+        """
+        try:
+            name = canonicalize_name(Requirement(self._pip_spec).name)
+        except InvalidRequirement:
+            return None
+        for dist_name in KNOWN_SERVER_DISTS:
+            if name == canonicalize_name(dist_name):
+                return dist_name
+        return None
+
+    def _preferred_dist(self) -> str:
+        """Distribution to read the running version from (target, else stable)."""
+        return self._target_dist() or DIST_NAME_STABLE
 
     def _conflicting_dist_name(self) -> str | None:
-        """Return the other channel's distribution name, or None to skip.
+        """Return the other known server distribution, or None to skip.
 
-        ``dev`` installs ``ha-mcp-dev`` (conflicts with ``ha-mcp``) and ``stable``
-        installs ``ha-mcp`` (conflicts with ``ha-mcp-dev``). Returns None for an
-        explicit override, whose distribution name is unknown so nothing is
-        removed.
+        ``ha-mcp`` and ``ha-mcp-dev`` share the ``ha_mcp`` import package, so
+        when the effective spec installs one of them the other must go. Home
+        Assistant installs the manifest pin before setup, so an override on
+        the other distribution (or a component 2.x dev-channel install) leaves
+        both on disk. None when the target is unknown (see _target_dist).
         """
-        if self._pip_spec_override:
+        target = self._target_dist()
+        if target is None:
             return None
-        return DIST_NAME_STABLE if self._channel == CHANNEL_DEV else DIST_NAME_DEV
+        return DIST_NAME_STABLE if target == DIST_NAME_DEV else DIST_NAME_DEV
 
     def _maybe_purge_stale_modules(self, ready_version: str | None) -> None:
         """Purge cached ha_mcp modules unless doing so is unsafe or pointless.
@@ -601,8 +582,8 @@ class EmbeddedServerManager:
         could never recover (#1904). Never skipped under a pip-spec override
         — the one workflow where a reinstall can change the code without
         changing the version string (re-pointed tarball/pin), which a
-        version-keyed skip would serve stale; channel installs mint a
-        distinct version per build.
+        version-keyed skip would serve stale; every released or dev build
+        carries a distinct version.
         """
         orphan = self._orphaned_thread
         if orphan is not None and not orphan.is_alive():
@@ -733,53 +714,36 @@ class EmbeddedServerManager:
     async def _async_ensure_managed_package(
         self, *, defer_mutations: bool = False
     ) -> str | None:
-        """Ensure ``ha-mcp`` is importable, installing the pip spec if needed.
+        """Ensure ``ha-mcp`` is importable at the effective spec, installing if needed.
 
         Returns the installed version that the worker is about to run, for the
         caller's warm-cache purge decision.
 
+        Without an override the spec is the manifest pin, which Home Assistant
+        installed before setup like any integration requirement — so the
+        normal start installs nothing. An install happens only when:
+
+        * an override is set (a URL is always reinstalled; an index pin when
+          the installed version does not match it — Home Assistant puts the
+          manifest pin back on every restart),
+        * the spec changed since the last install in a way the installed
+          version cannot prove (a cleared override that installed the same
+          version string, issue #1914 — see _async_remove_replaced_source),
+        * the other server distribution is installed beside the target (a
+          component 2.x dev-channel install, a HACS pre-release swapping
+          ``ha-mcp`` for ``ha-mcp-dev`` or back, or an override on the other
+          one). It is removed first, and because both distributions own the
+          same ``ha_mcp`` files, that removal deletes the target's files too,
+          so the target is then REINSTALLED rather than upgraded,
+        * the package repair asked for a reinstall (``DATA_REINSTALL_REQUESTED``):
+          even a satisfied pin is reinstalled, and the flag is cleared only
+          once that install succeeds.
+
         ``defer_mutations=True`` (a previous bring-up's worker is still
-        importing) downgrades any would-be uninstall/force-install to the
-        non-mutating fast path: replacing the distribution's files on disk
-        under a live importer corrupts it the same way a sys.modules purge
-        does. The deferred update applies on the next reload or HA restart.
-
-        With auto-update on (the default) both channels install their
-        distribution UNPINNED, so every entry reload / HA restart must pick up
-        the newest build. Such a spec ALWAYS takes the force-install path
-        (``--upgrade-package <dist>``, bypassing the requirements manager's
-        is-installed shortcut) — that is what makes the channel auto-update,
-        and scoping the upgrade to our own distribution is what keeps it
-        from replacing packages Home Assistant ships (#2135/#2146). This runs in a
-        background task, so it never blocks HA startup, and uv no-ops quickly
-        when the newest build is already installed.
-
-        Fast path: reserved for a stable INDEX spec — an explicit pip-spec
-        override that is a version pin, or a channel with auto-update turned OFF
-        (which pins to the installed version, see :meth:`_resolve_pip_spec`).
-        When that spec matches the one last installed and the package imports,
-        delegate the "already satisfied?" decision to Home Assistant's
-        requirements manager; a pinned spec does not move, so there is nothing to
-        upgrade to. A URL override (a tarball or ``file://`` wheel) is
-        deliberately EXCLUDED: HA's is-installed check cannot verify a URL
-        requirement, so delegating one always reaches its bare ``--upgrade``
-        install — see the comment on ``spec_is_stable`` below. A CHANGED spec (a new override, a cleared override, a
-        toggled auto-update, a channel switch) falls through to the
-        force-install path below — and additionally uninstalls the replaced
-        distribution first (:meth:`_async_remove_replaced_source`), because
-        the upgrade flag alone decides by version and a changed SOURCE can
-        keep the version string (issue #1914).
-
-        On a channel switch the other channel's distribution is uninstalled first
-        (:meth:`_async_remove_conflicting_dist`): ``ha-mcp`` and ``ha-mcp-dev``
-        share the ``ha_mcp`` import package, so leaving both installed would make a
-        pinned reinstall a no-op (breaking a dev→stable downgrade) and the reported
-        version ambiguous.
-
-        A one-shot pending-install marker (:data:`DATA_PENDING_INSTALL_VERSION`,
-        set by the update entity's Install button — issue #1760) overrides both
-        the unpinned-channel and auto-update-off pinning above for this single
-        install, regardless of the ``auto_update`` option.
+        importing) downgrades any would-be uninstall/install to the
+        non-mutating path: replacing the distribution's files on disk under a
+        live importer corrupts it the same way a sys.modules purge does. The
+        deferred change applies on the next reload or HA restart.
 
         Never imports ``ha_mcp`` in this (main) process — that happens only inside
         the worker thread.
@@ -787,96 +751,81 @@ class EmbeddedServerManager:
         await self._async_wait_for_pending_install()
 
         stored_spec = self._entry.data.get(DATA_LAST_PIP_SPEC)
+        target_dist = self._target_dist()
         installed_version = await self._hass.async_add_executor_job(
-            _installed_ha_mcp_version
+            _installed_ha_mcp_version, self._preferred_dist()
         )
-
-        pending_version = self._pending_install_version(defer_mutations)
-        target_dist = dist_for_channel(self._channel)
-        if not self._pip_spec_override and pending_version:
-            # Pin to the requested version. Its own value differs from
-            # stored_spec below (that is the whole point of the marker), which
-            # already forces the force-install branch further down — no
-            # separate fast-path handling needed here.
-            #
-            # Consumed HERE, before the install attempt: one-shot means one
-            # ATTEMPT, not "until it succeeds". If it were cleared only on
-            # success, a marker for a failing version would re-pin every later
-            # reload — including the periodic auto-update ones — to that same
-            # broken version, looping the failure forever while auto-update
-            # looks on (review finding).
-            self._pip_spec = f"{target_dist}=={pending_version}"
-            self._clear_pending_install_marker()
-        elif not self._pip_spec_override and not self._auto_update:
-            # Re-pin an auto-update-off channel to its TARGET distribution's
-            # installed version, read off-loop (the __init__ value was the bare
-            # dist to avoid a blocking read on the event loop). Reading the
-            # target dist specifically — not whichever dist happens to be
-            # present — keeps a cross-channel switch correct: the previous
-            # channel's dist is still installed at this point (removal happens
-            # below), so a whichever-present read would pin the new dist to a
-            # version that does not exist for it and fail the install. Nothing
-            # of the target channel installed yet => None => stays unpinned and
-            # installs the newest once.
-            pin_version = await self._hass.async_add_executor_job(
+        target_version = (
+            await self._hass.async_add_executor_job(
                 _installed_dist_version, target_dist
             )
-            if pin_version is not None and not _is_compatible_embedded_version(
-                pin_version
-            ):
-                _LOGGER.warning(
-                    "Ignoring auto-update pin to legacy %s %s; the in-process "
-                    "server requires %s or newer",
-                    target_dist,
-                    pin_version,
-                    MIN_EMBEDDED_SERVER_VERSION,
-                )
-                self._pip_spec = target_dist
-            else:
-                self._pip_spec = self._resolve_pip_spec(pin_version)
+            if target_dist is not None
+            else None
+        )
+        reinstall_requested = bool(self._entry.data.get(DATA_REINSTALL_REQUESTED))
+        conflicting = self._conflicting_dist_name()
+        conflict_present = (
+            conflicting is not None
+            and await self._hass.async_add_executor_job(_dist_installed, conflicting)
+        )
 
-        # A "stable" spec (an explicit override, or a channel pinned because
-        # auto-update is off) is eligible for the fast path; an unpinned
-        # auto-updating channel never is.
-        # A URL spec is never eligible, however stable it looks. The fast
-        # path delegates to HA's requirements manager, and
-        # homeassistant.util.package.is_installed() returns False for ANY
-        # requirement carrying a URL ("we cannot verify versions, so let the
-        # package manager handle it"), so async_process_requirements always
-        # reaches install_package(), whose upgrade default appends a bare
-        # --upgrade. That re-resolves the whole graph and replaces packages
-        # HA only floors — the #2135/#2146 tear, on every restart. Routing
-        # URL specs to the force path costs a scoped --reinstall-package of
-        # OUR distribution only, which is the install HA would have done
-        # anyway, minus the stomp.
-        spec_is_stable = (
-            bool(self._pip_spec_override) or not self._auto_update
-        ) and not _spec_is_url_requirement(self._pip_spec)
-        fast_path_ok = (
-            spec_is_stable
-            and stored_spec == self._pip_spec
+        satisfied = (
+            not reinstall_requested
+            and target_dist is not None
+            and target_version is not None
             and installed_version is not None
-            and _is_compatible_embedded_version(installed_version)
+            and not conflict_present
+            and not _spec_is_url_requirement(self._pip_spec)
+            and _spec_satisfied_by(self._pip_spec, target_version)
+            and _is_compatible_embedded_version(target_version)
+            and (
+                stored_spec is None
+                or stored_spec == self._pip_spec
+                # Same distribution from the same index: the version on disk
+                # is what the index served for it, so "satisfied by version"
+                # is the truth, not the #1914 lie.
+                or _spec_is_index_requirement_on(stored_spec, target_dist)
+            )
         )
         deferred = False
-        if fast_path_ok:
-            await self._async_process_requirements_fast()
+        if satisfied:
+            pass
         elif defer_mutations:
             deferred = True
             await self._async_defer_package_mutations(installed_version)
         else:
-            await self._async_remove_conflicting_dist()
-            await self._async_remove_legacy_target(target_dist, installed_version)
-            await self._async_remove_replaced_source(stored_spec, installed_version)
-            await self._async_force_install()
+            reinstall = reinstall_requested
+            if conflict_present and conflicting is not None:
+                _LOGGER.info(
+                    "Removing %r, which shares the ha_mcp package with %r, "
+                    "before installing %r",
+                    conflicting,
+                    target_dist,
+                    self._pip_spec,
+                )
+                await self._async_remove_distribution(conflicting)
+                reinstall = True
+            if target_dist is not None:
+                await self._async_remove_legacy_target(target_dist, installed_version)
+            if not reinstall:
+                # A reinstall replaces the files whatever the version says, so
+                # the #1914 removal would only open a window with no server
+                # installed at all.
+                await self._async_remove_replaced_source(stored_spec, installed_version)
+            await self._async_force_install(reinstall=reinstall)
+            if reinstall_requested:
+                self._hass.config_entries.async_update_entry(
+                    self._entry,
+                    data={
+                        k: v
+                        for k, v in self._entry.data.items()
+                        if k != DATA_REINSTALL_REQUESTED
+                    },
+                )
 
-        version: str | None
-        if not self._pip_spec_override and self._channel == CHANNEL_DEV:
-            version = await self._hass.async_add_executor_job(
-                _installed_ha_mcp_version, target_dist
-            )
-        else:
-            version = await self._hass.async_add_executor_job(_installed_ha_mcp_version)
+        version: str | None = await self._hass.async_add_executor_job(
+            _installed_ha_mcp_version, self._preferred_dist()
+        )
         if version is None:
             raise EmbeddedServerError(
                 f"Installed the server requirement ({self._pip_spec!r}) but the "
@@ -888,16 +837,15 @@ class EmbeddedServerManager:
                 f"The installer left installed ha-mcp {version}, but this "
                 f"in-process component requires {MIN_EMBEDDED_SERVER_VERSION} "
                 "or newer. Review the installer output logged under "
-                "custom_components.ha_mcp_tools.embedded_server (or, for an "
-                "index spec taking the fast path, homeassistant.util.package), "
-                "correct the package conflict, and reload this integration.",
+                "custom_components.ha_mcp_tools.embedded_server, correct the "
+                "package conflict, and reload this integration.",
                 kind="package",
             )
         _LOGGER.info("HA-MCP in-process server package ready (version %s)", version)
         # A DEFERRED spec change must not be recorded as installed: with the
-        # stored spec advanced, the next reload would see "unchanged", take the
-        # fast path (for a stable spec) and skip the replaced-source uninstall,
-        # so the deferred change would silently never apply.
+        # stored spec advanced, the next reload would see "unchanged", count
+        # the spec as satisfied and skip the replaced-source uninstall, so the
+        # deferred change would silently never apply.
         if not deferred and stored_spec != self._pip_spec:
             self._store_installed_spec()
         return version
@@ -919,7 +867,7 @@ class EmbeddedServerManager:
         dev_version: str | None = await self._hass.async_add_executor_job(
             _installed_dist_version, DIST_NAME_DEV
         )
-        target_dist = dist_for_channel(self._channel)
+        target_dist = self._preferred_dist()
         target_version = (
             stable_version if target_dist == DIST_NAME_STABLE else dev_version
         )
@@ -953,12 +901,11 @@ class EmbeddedServerManager:
 
         if target_version is None:
             raise EmbeddedServerError(
-                f"The configured {self._channel} channel expects {target_dist}, "
-                f"but only {other_dist} {other_version} is installed while "
-                "skip_pip is enabled. Use the system package manager to install "
-                f"{target_dist} {MIN_EMBEDDED_SERVER_VERSION} or newer, or "
-                f"change the HA-MCP release channel to match {other_dist}, then "
-                "reload this integration.",
+                f"The server requirement ({self._pip_spec!r}) expects "
+                f"{target_dist}, but only {other_dist} {other_version} is "
+                "installed while skip_pip is enabled. Use the system package "
+                f"manager to install {target_dist} {MIN_EMBEDDED_SERVER_VERSION} "
+                "or newer, then reload this integration.",
                 kind="package",
             )
 
@@ -973,11 +920,9 @@ class EmbeddedServerManager:
             )
 
         _LOGGER.info(
-            "HA-MCP externally managed %s package ready (version %s; "
-            "skip_pip enabled, channel %s)",
+            "HA-MCP externally managed %s package ready (version %s; skip_pip enabled)",
             target_dist,
             target_version,
-            self._channel,
         )
         return target_version
 
@@ -1005,21 +950,6 @@ class EmbeddedServerManager:
             MIN_EMBEDDED_SERVER_VERSION,
         )
         await self._async_remove_distribution(target_dist)
-
-    def _pending_install_version(self, defer_mutations: bool) -> str:
-        """Return the update entity's pending-install version, or ``""``.
-
-        Always empty while mutations are deferred, leaving the marker in
-        ``entry.data`` untouched: the deferred branch runs no install, and
-        consuming the marker without an attempt would lose the user's Install
-        click entirely (with auto-update off, the next reload re-pins to the
-        OLD installed version). One-shot means one real ATTEMPT — a deferred
-        bring-up never attempts, so the marker survives to the next
-        undeferred reload (review finding on #1923).
-        """
-        if defer_mutations:
-            return ""
-        return str(self._entry.data.get(DATA_PENDING_INSTALL_VERSION) or "").strip()
 
     async def _async_defer_package_mutations(
         self, installed_version: str | None
@@ -1049,31 +979,14 @@ class EmbeddedServerManager:
     def _replaced_dist_name(self) -> str | None:
         """Return the distribution whose presence could no-op the new spec.
 
-        This is the distribution the effective spec installs *by name* — the
-        channel's distribution for a channel spec, or the named distribution
-        of an override that parses as a requirement (a pin like
-        ``ha-mcp==X``, matched against the two known channel dists). It is
-        deliberately NOT the channel's dist for every override: a repo
-        tarball installs as ``ha-mcp`` regardless of the selected channel, so
-        keying on the channel would miss the dev-channel + override case.
-
-        Returns None for an override that names an unknown distribution or
-        does not parse as a requirement at all (a direct URL): the installer
-        reinstalls a named URL requirement outright
-        (``--reinstall-package``, see :func:`_force_install_package`)
-        regardless of the installed version, so a URL install is already
-        real and nothing needs removing.
+        The known server distribution the effective spec installs by name
+        (:meth:`_target_dist`). None for a spec that names another
+        distribution or none at all (a direct URL): the installer reinstalls
+        a URL requirement outright (``--reinstall-package``, see
+        :func:`_force_install_package`) regardless of the installed version,
+        so a URL install is already real and nothing needs removing.
         """
-        if not self._pip_spec_override:
-            return dist_for_channel(self._channel)
-        try:
-            name = canonicalize_name(Requirement(self._pip_spec_override).name)
-        except InvalidRequirement:
-            return None
-        for dist_name in (DIST_NAME_STABLE, DIST_NAME_DEV):
-            if name == canonicalize_name(dist_name):
-                return dist_name
-        return None
+        return self._target_dist()
 
     async def _async_remove_replaced_source(
         self, stored_spec: str | None, installed_version: str | None
@@ -1085,9 +998,9 @@ class EmbeddedServerManager:
         change can keep the version string. A PR branch's committed
         ``project.version`` equals the release it branched from (only release
         automation bumps it), so its tarball installs with that same version
-        string; clearing the override then resolves the channel spec to the
+        string; clearing the override then resolves the paired spec to the
         exact version already on disk and the install swaps nothing, leaving
-        the PR code running while the entry reports a clean channel install
+        the PR code running while the entry reports a clean paired install
         (issue #1914). The same version-blindness bites a manual spec edit
         that pins the version already installed. The installer cannot see the
         difference, so when the spec that produced the current install
@@ -1102,11 +1015,11 @@ class EmbeddedServerManager:
         uninstall would churn — and briefly break — a healthy install on
         every restart), when the new spec is a direct URL (always installs
         for real), when the named distribution is not installed (e.g. a
-        cross-channel switch already removed it), when the stored spec is
-        an index requirement on the SAME distribution (a repin — e.g.
-        toggling auto-update rewrites bare ``ha-mcp`` to ``ha-mcp==X`` —
-        draws from the same index either way, so version resolution is
-        faithful and uninstalling a healthy install on a preference toggle
+        conflicting-dist removal already took it), when the stored spec is
+        an index requirement on the SAME distribution (a repin — e.g. a
+        component 2.x install stored bare ``ha-mcp`` and the pin is
+        ``ha-mcp==X`` — draws from the same index either way, so version
+        resolution is faithful and uninstalling a healthy install on a repin
         would only add an offline-breakage window), or when the new spec is
         an exact pin on a version provably different from the installed one
         (the install cannot no-op, so the working build stays in place as
@@ -1149,8 +1062,9 @@ class EmbeddedServerManager:
         # Compare the pin against the version of the distribution actually
         # being replaced, not the caller's ``installed_version``: that one is
         # read from whichever dist provides ``ha_mcp`` and is read BEFORE
-        # _async_remove_conflicting_dist() runs, so on a cross-channel switch
-        # it can describe the other channel's dist — or one already
+        # _async_ensure_managed_package removes the conflicting distribution,
+        # so on an ``ha-mcp`` <-> ``ha-mcp-dev`` swap it can describe the
+        # other distribution — or one already
         # uninstalled. Comparing against it could report "the pin moved" for a
         # target that is in fact already at the pinned version, skip this
         # uninstall, and let the install no-op as satisfied (#1914).
@@ -1201,7 +1115,7 @@ class EmbeddedServerManager:
                 kind="package",
             ) from err
 
-    async def _async_force_install(self) -> None:
+    async def _async_force_install(self, *, reinstall: bool = False) -> None:
         """Force a real (re)install of the pip spec, bypassing the is-installed
         cache.
 
@@ -1214,16 +1128,21 @@ class EmbeddedServerManager:
         already ships even when the installed version satisfies our spec —
         exactly how the image's websockets kept getting force-replaced
         (#2135/#2146). ``--upgrade-package`` scopes the upgrade to ha-mcp's
-        own distribution: the server still auto-updates, every other
-        installed package is kept whenever it satisfies the resolution.
+        own distribution: every other installed package is kept whenever it
+        satisfies the resolution.
+
+        ``reinstall`` replaces the target's files even when its version
+        already matches: removing the other server distribution deletes the
+        ``ha_mcp`` files both of them own.
         """
-        kwargs = pip_kwargs(self._hass.config.config_dir)
+        kwargs = self._pip_kwargs()
         timeout = max(int(kwargs.get("timeout") or 0), _PIP_INSTALL_TIMEOUT_SECONDS)
         installed = await self._async_run_tracked_install_job(
             partial(
                 _force_install_package,
                 self._pip_spec,
-                channel_dist=dist_for_channel(self._channel),
+                target_dist=self._target_dist(),
+                reinstall=reinstall,
                 constraints=kwargs.get("constraints"),
                 target=kwargs.get("target"),
                 timeout=timeout,
@@ -1240,44 +1159,27 @@ class EmbeddedServerManager:
                 kind="package",
             )
 
-    async def _async_remove_conflicting_dist(self) -> None:
-        """Uninstall the other release channel's distribution before installing.
+    def _pip_kwargs(self) -> dict[str, Any]:
+        """Home Assistant's own pip arguments (constraints file, target dir).
 
-        ``ha-mcp`` (stable) and ``ha-mcp-dev`` (dev) ship the *same* ``ha_mcp``
-        import package, so installing one over the other overwrites the shared
-        files while leaving both distributions' metadata behind. That stale
-        metadata makes a later pinned reinstall a no-op (``ha-mcp==X`` looks
-        already-satisfied, so a dev→stable downgrade would leave dev files on
-        disk) and makes the reported version ambiguous. Removing the other
-        channel's distribution first keeps exactly one installed.
-
-        Best-effort: a failed uninstall is logged, not raised — the forced
-        (re)install that follows still writes the correct channel's files, and the
-        next reload retries the cleanup. Skipped for an explicit override, whose
-        distribution name is unknown.
+        Core 2026.11 drops ``pip_kwargs``'s ``config_dir`` argument
+        (home-assistant/core#168155); passing it there raises ``TypeError``.
         """
-        other = self._conflicting_dist_name()
-        if other is None:
-            return
-        if not await self._hass.async_add_executor_job(_dist_installed, other):
-            return
-        _LOGGER.info(
-            "Removing the other release channel's package %r before installing %r",
-            other,
-            self._pip_spec,
-        )
-        await self._async_remove_distribution(other)
+        core_pip_kwargs: Any = pip_kwargs  # typed for one Core release only
+        if inspect.signature(core_pip_kwargs).parameters:
+            return dict(core_pip_kwargs(self._hass.config.config_dir))
+        return dict(core_pip_kwargs())
 
     async def _async_remove_distribution(self, dist_name: str) -> bool:
         """Remove a distribution from the same target used for installation.
 
         Tracked like the install: an uninstall mutates the same package files.
         Returns whether the uninstall subprocess reported success; callers
-        decide whether a failure is best-effort (channel-conflict / legacy
+        decide whether a failure is best-effort (conflicting-dist / legacy
         cleanup) or fatal (the replaced-source removal, whose failure would
         silently void the reinstall — see ``_async_remove_replaced_source``).
         """
-        target = pip_kwargs(self._hass.config.config_dir).get("target")
+        target = self._pip_kwargs().get("target")
         if target is None:
             result = await self._async_run_tracked_install_job(
                 partial(_uninstall_distribution, dist_name)
@@ -1294,83 +1196,18 @@ class EmbeddedServerManager:
         if new_data != dict(self._entry.data):
             self._hass.config_entries.async_update_entry(self._entry, data=new_data)
 
-    def _clear_pending_install_marker(self) -> None:
-        """Clear the update entity's one-shot pending-install marker.
+    # -- server token ------------------------------------------------------
 
-        Called at CONSUME time in :meth:`_async_ensure_package`, before the
-        install attempt runs: the marker buys exactly one attempt. Clearing
-        only on success would let a marker for a failing version re-pin every
-        later reload to that broken version (review finding).
+    async def _async_access_token(self) -> str:
+        """Return the access token the server runs with (#2427).
+
+        Raises ``EmbeddedServerError(kind="token")`` when there is no usable
+        credential; nothing is created to replace it.
         """
-        if DATA_PENDING_INSTALL_VERSION not in self._entry.data:
-            return
-        new_data = dict(self._entry.data)
-        new_data.pop(DATA_PENDING_INSTALL_VERSION, None)
-        self._hass.config_entries.async_update_entry(self._entry, data=new_data)
-
-    # -- token provisioning ------------------------------------------------
-
-    async def _async_provision_token(self) -> str:
-        """Return an admin access token for the server, provisioning if needed.
-
-        Reuses the previously-created local admin user and long-lived refresh
-        token across restarts (ids persisted in ``entry.data``); a fresh access
-        token is minted from the refresh token on every start. Falls back to
-        creating a new user / refresh token when the stored ones are gone.
-        """
-        user_id = self._entry.data.get(DATA_SERVER_USER_ID)
-        rt_id = self._entry.data.get(DATA_REFRESH_TOKEN_ID)
-
-        user = await self._hass.auth.async_get_user(user_id) if user_id else None
-        if user is None:
-            user = await self._hass.auth.async_create_user(
-                SERVER_USER_NAME,
-                group_ids=[GROUP_ID_ADMIN],
-                local_only=True,
-            )
-            rt_id = None
-
-        refresh_token = (
-            self._hass.auth.async_get_refresh_token(rt_id) if rt_id else None
-        )
-        if refresh_token is not None and refresh_token.user.id != user.id:
-            refresh_token = None
-
-        if refresh_token is None:
-            # A long-lived token's client_name must be unique per user, so clear
-            # any stale one left behind by a partial previous provision.
-            for token in list(user.refresh_tokens.values()):
-                if (
-                    token.client_name == SERVER_TOKEN_CLIENT_NAME
-                    and token.token_type == TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
-                ):
-                    self._hass.auth.async_remove_refresh_token(token)
-            refresh_token = await self._hass.auth.async_create_refresh_token(
-                user,
-                client_name=SERVER_TOKEN_CLIENT_NAME,
-                token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN,
-                access_token_expiration=_ACCESS_TOKEN_TTL,
-            )
-
-        # hass is untyped here (homeassistant mocked in unit tier); pin str.
-        access_token = str(self._hass.auth.async_create_access_token(refresh_token))
-
-        # Persist only the ids needed to REUSE the credentials next start.
-        # The access token itself is deliberately NOT stored: it is handed to
-        # the worker in memory, nothing ever reads it back from entry.data,
-        # and a fresh JWT is minted each start - persisting it would leave an
-        # unused admin token in .storage AND rewrite the config entry on
-        # every start (each mint differs). Review finding; the revoke path
-        # still strips the legacy key from entries written by older builds.
-        new_data = {
-            **self._entry.data,
-            DATA_SERVER_USER_ID: user.id,
-            DATA_REFRESH_TOKEN_ID: refresh_token.id,
-        }
-        new_data.pop(DATA_ACCESS_TOKEN, None)
-        if new_data != dict(self._entry.data):
-            self._hass.config_entries.async_update_entry(self._entry, data=new_data)
-        return access_token
+        try:
+            return await async_server_access_token(self._hass, self._entry)
+        except CredentialNeeded as err:
+            raise EmbeddedServerError(err.reason, kind="token") from err
 
     def _prepare_config_dir(self) -> None:
         """Create the server's persistent data directory (blocking)."""
@@ -1454,18 +1291,17 @@ class EmbeddedServerManager:
         A pip-spec OVERRIDE names its root explicitly — the literal
         distribution its requirement installs (:func:`_override_dist_name`:
         a pin on ``ha-mcp``, or any ``name @ url`` form, names that
-        distribution whatever the channel selector says), or ``ha-mcp`` for
-        a bare URL, since a repository tarball installs under that name on
-        every channel. An explicit root
+        distribution), or ``ha-mcp`` for a bare URL, since a repository
+        tarball installs under that name. An explicit root
         is returned even with its metadata missing: auditing it then
         reports that root as the violation — the true story when its
         install failed — where any fallback would walk a stale graph
-        instead. Override installs skip the conflicting-channel removal, so
-        stale metadata for the unselected distribution can coexist with the
-        one actually running.
+        instead. A bare-URL override skips the conflicting-dist removal, so
+        stale metadata for the other distribution can coexist with the one
+        actually running.
 
-        Without an override the channel's distribution is the root, falling
-        back to the other channel's when only that one has metadata —
+        Without an override the pinned distribution is the root, falling
+        back to the other known one when only that one has metadata —
         auditing a root that is not installed reports the root itself
         instead of the real conflict.
         """
@@ -1488,7 +1324,7 @@ class EmbeddedServerManager:
                 )
             if named is not None:
                 return named
-        preferred = dist_for_channel(self._channel)
+        preferred = self._preferred_dist()
         if _dist_installed(preferred):
             return preferred
         other = DIST_NAME_STABLE if preferred == DIST_NAME_DEV else DIST_NAME_DEV
@@ -1651,17 +1487,17 @@ class EmbeddedServerManager:
         (that module runs process-global side effects — truststore SSL patching,
         signal handlers, ``asyncio.run`` — that must never happen in-process).
         """
-        # Hand ha-mcp the loopback URL + provisioned admin token in memory, before
+        # Hand ha-mcp the loopback URL + the administrator's token in memory, before
         # the server (and its settings singleton) is built. Keeping the token out
         # of os.environ is the whole point of the in-process channel.
         self._note_startup_phase("importing the server package")
         import ha_mcp.config as _hamcp_config
 
         # Record which code generation this worker imported. Prefer the
-        # configured channel when both distributions have metadata because
+        # distribution this install targets when both distributions have metadata because
         # ha_mcp.__version__ itself checks stable first and stale stable
         # metadata can otherwise make a fresh dev worker look outdated.
-        self._running_version = _running_ha_mcp_version(self._channel)
+        self._running_version = _running_ha_mcp_version(self._preferred_dist())
         # The cache in sys.modules now holds this generation — remembered
         # process-wide so the next start can skip the purge when the install
         # has not changed (issue #1904).
@@ -1706,7 +1542,7 @@ class EmbeddedServerManager:
         _LOGGER.info(
             "Embedded connection resolved: url=%s, token=%s (requested url=%s)",
             resolved.homeassistant_url,
-            "provisioned"
+            "set"
             if resolved.homeassistant_token not in ("", OAUTH_MODE_TOKEN)
             else "SENTINEL-MISSING",
             self._server_url,
@@ -1738,7 +1574,7 @@ class EmbeddedServerManager:
         # with the friendly landing page (405 + setup guidance) instead of a
         # bare "Method Not Allowed" — both on the direct URL and through the
         # ingress webhook. Guard only the import: the installed server version
-        # is user-controlled (channel choice, pip-spec override), so an older
+        # is user-controlled (the HACS component release, a pip-spec override), so an older
         # ha-mcp without this module must keep serving; the landing is simply
         # absent there, as it is today.
         try:
@@ -2271,9 +2107,8 @@ def _installed_dist_version(dist_name: str) -> str | None:
 
     Invalidates the import caches first so a just-completed (un)install is seen.
     Unlike :func:`_installed_ha_mcp_version` (which reports whichever of the two
-    channel distributions is present) this pins the given distribution name, so
-    the auto-update check compares the newest PyPI build against the version of
-    the channel actually installed.
+    server distributions is present) this pins the given distribution name, so
+    the target's version is never read from the other distribution's metadata.
     """
     _safe_invalidate_caches()
     try:
@@ -2282,10 +2117,9 @@ def _installed_dist_version(dist_name: str) -> str | None:
         return None
 
 
-def _running_ha_mcp_version(channel: str) -> str | None:
-    """Return the imported worker version, resolving cross-channel ambiguity."""
+def _running_ha_mcp_version(preferred_dist: str) -> str | None:
+    """Return the imported worker version, resolving cross-dist ambiguity."""
     imported_version = getattr(sys.modules.get("ha_mcp"), "__version__", None)
-    preferred_dist = dist_for_channel(channel)
     preferred_version = _installed_dist_version(preferred_dist)
     if preferred_version is None:
         return imported_version
@@ -2345,7 +2179,8 @@ def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> boo
 def _force_install_package(
     spec: str,
     *,
-    channel_dist: str | None,
+    target_dist: str | None,
+    reinstall: bool = False,
     constraints: str | None,
     target: str | None,
     timeout: int | None,
@@ -2358,7 +2193,7 @@ def _force_install_package(
     EVERY dependency to the newest allowed version and replaces packages the
     Home Assistant image already ships (#2135/#2146). The replacement flag
     is chosen per spec shape by :func:`_scoped_install_flags`;
-    ``channel_dist`` is the distribution the active channel installs, used
+    ``target_dist`` is the known server distribution the spec installs, used
     to scope a bare URL that names none of its own.
     """
     env = os.environ.copy()
@@ -2366,7 +2201,8 @@ def _force_install_package(
         env["HTTP_TIMEOUT"] = str(timeout)
     args = _uv_install_args(
         spec,
-        channel_dist=channel_dist,
+        target_dist=target_dist,
+        reinstall=reinstall,
         constraints=constraints,
         target=target,
         env=env,
@@ -2408,7 +2244,9 @@ def _force_install_package(
     return False
 
 
-def _scoped_install_flags(spec: str, channel_dist: str | None) -> list[str]:
+def _scoped_install_flags(
+    spec: str, target_dist: str | None, *, reinstall: bool = False
+) -> list[str]:
     """Return the uv flag that scopes this install to OUR distribution.
 
     Never a bare ``--upgrade``: that re-resolves the whole graph and
@@ -2425,31 +2263,31 @@ def _scoped_install_flags(spec: str, channel_dist: str | None) -> list[str]:
       guarantee that ``_replaced_dist_name`` and
       ``_async_remove_replaced_source`` skip their uninstall on.
     * An index requirement only needs an UPGRADE, scoped to the
-      distribution the spec itself names. Force-reinstalling one instead
-      would reopen the non-atomic uninstall-then-extract window this PR
-      exists to close, on every bring-up, for a spec that never needed it.
+      distribution the spec itself names — unless ``reinstall`` is set:
+      removing the other server distribution deleted the shared ``ha_mcp``
+      files, and an upgrade of a version that already matches would leave
+      them missing (reproduced on Core 2026.10.0b0: ``No module named
+      'ha_mcp.config'``).
 
-    A bare URL names no distribution of its own, and the channel's dist is
-    the wrong guess: a repository tarball installs as ``ha-mcp`` whatever
-    channel is selected (see :meth:`_replaced_dist_name`), so on the dev
-    channel scoping to ``ha-mcp-dev`` would name a package the URL does not
-    provide — uv would report success while leaving the real ``ha-mcp``
-    un-refreshed, and a mutable URL (a branch tarball, a rebuilt artifact)
-    keeps its version string, so nothing else would catch it. Both known
-    dists are therefore named: reinstalling one that is not installed is a
-    harmless no-op for uv (verified: exit 0, package still installed from
-    the URL).
+    A bare URL names no distribution of its own, and either known dist can
+    be the one it provides (a repository tarball installs as ``ha-mcp``, a
+    dev wheel as ``ha-mcp-dev``) — guessing wrong would have uv report
+    success while leaving the real package un-refreshed, and a mutable URL
+    (a branch tarball, a rebuilt artifact) keeps its version string, so
+    nothing else would catch it. Both known dists are therefore named:
+    reinstalling one that is not installed is a harmless no-op for uv
+    (verified: exit 0, package still installed from the URL).
     """
     try:
         requirement = Requirement(spec)
     except InvalidRequirement:
-        candidates = [channel_dist] if channel_dist else []
+        candidates = [target_dist] if target_dist else []
         candidates += [DIST_NAME_STABLE, DIST_NAME_DEV]
         flags: list[str] = []
         for dist in dict.fromkeys(candidates):  # ordered, deduplicated
             flags += ["--reinstall-package", dist]
         return flags
-    if requirement.url is not None:
+    if requirement.url is not None or reinstall:
         return ["--reinstall-package", requirement.name]
     return ["--upgrade-package", requirement.name]
 
@@ -2549,7 +2387,8 @@ def _spec_is_url_requirement(spec: str) -> bool:
 def _uv_install_args(
     spec: str,
     *,
-    channel_dist: str | None,
+    target_dist: str | None,
+    reinstall: bool = False,
     constraints: str | None,
     target: str | None,
     env: dict[str, str],
@@ -2568,7 +2407,7 @@ def _uv_install_args(
         "--index-strategy",
         "unsafe-first-match",
     ]
-    args += _scoped_install_flags(spec, channel_dist)
+    args += _scoped_install_flags(spec, target_dist, reinstall=reinstall)
     if constraints is not None:
         args += ["--constraint", constraints]
     if target:
@@ -2607,6 +2446,39 @@ def _run_uv_install(args: list[str], env: dict[str, str]) -> str | None:
         return f"{type(err).__name__}: {err}"
     if result.returncode != 0:
         return (result.stderr or "").strip() or f"exit code {result.returncode}"
+    return None
+
+
+def _spec_satisfied_by(spec: str, installed_version: str) -> bool:
+    """True when the index requirement ``spec`` accepts ``installed_version``.
+
+    Mirrors ``homeassistant.util.package.is_installed`` (pre-releases count:
+    a pre-release component pins a dev build). False for anything unprovable.
+    """
+    try:
+        requirement = Requirement(spec)
+        Version(installed_version)
+    except (InvalidRequirement, InvalidVersion):
+        return False
+    if requirement.url:
+        return False
+    return requirement.specifier.contains(installed_version, prereleases=True)
+
+
+async def _async_paired_server_requirement(hass: HomeAssistant) -> str | None:
+    """Return the server requirement this component release pins, or None.
+
+    Every component release HACS delivers pins the ``ha-mcp`` (pre-release:
+    ``ha-mcp-dev``) build it was released with in ``manifest.json``'s ``requirements``, which Home
+    Assistant installs before setting the integration up. A copy taken from
+    master pins the last release; only a hand-edited manifest carries none.
+    """
+    known = {canonicalize_name(name) for name in KNOWN_SERVER_DISTS}
+    integration = await async_get_integration(hass, DOMAIN)
+    for requirement in integration.requirements:
+        with suppress(InvalidRequirement):
+            if canonicalize_name(Requirement(requirement).name) in known:
+                return str(requirement)
     return None
 
 

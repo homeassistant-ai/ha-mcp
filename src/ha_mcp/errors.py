@@ -346,6 +346,18 @@ def create_connection_error(
     )
 
 
+# The in-process server (HA-MCP integration) runs with an administrator token
+# saved in its config entry (#2427), not a HOMEASSISTANT_TOKEN.
+_EMBEDDED_AUTH_INVALID_SUGGESTIONS: list[str] = [
+    "Home Assistant no longer accepts the administrator access token saved in "
+    + "the HA-MCP Server entry: it was revoked, or its account was deactivated "
+    + "or is no longer an administrator",
+    "Replace it under Settings -> Devices & services -> HA-MCP Server -> "
+    + "Configure -> Replace the administrator access token",
+    "Or reload the HA-MCP Server entry: it then stops the server and files a "
+    + "repair that asks for a new token",
+]
+
 # Authentication-error suggestions for Home Assistant add-on installs. On the
 # add-on the token is managed by the Supervisor, not a user-editable
 # HOMEASSISTANT_TOKEN, so the default "verify your token / create a long-lived
@@ -387,9 +399,11 @@ def create_auth_error(
         # Lazy import keeps this low-level module free of an import-time
         # dependency on ._version; is_running_in_addon reads SUPERVISOR_TOKEN
         # live so it reflects the current environment.
-        from ._version import is_running_in_addon
+        from ._version import is_embedded, is_running_in_addon
 
-        if is_running_in_addon():
+        if is_embedded():
+            suggestions = _EMBEDDED_AUTH_INVALID_SUGGESTIONS
+        elif is_running_in_addon():
             suggestions = _ADDON_AUTH_INVALID_SUGGESTIONS
 
     return create_error_response(

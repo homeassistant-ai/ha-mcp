@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from inspect import signature
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -309,7 +310,7 @@ class TestManageServer:
         result = await DevTools(client).ha_dev_manage_server(action="info")
         entry = result["data"]["component_server_entry"]
         assert entry["entry_id"] == "server-e"
-        assert entry["channel"] == "stable"
+        assert "channel" not in entry
         assert entry["pip_spec"] == ""
         client.abort_options_flow.assert_awaited_with("flow-1")
 
@@ -333,15 +334,13 @@ class TestManageServer:
         assert result["data"]["component_server_entry"]["entry_id"] == "server-e"
         client.abort_options_flow.assert_any_await("tools-flow")
 
-    async def test_update_source_requires_params(self):
-        with pytest.raises(ToolError, match="channel"):
+    async def test_update_source_requires_pip_spec(self):
+        with pytest.raises(ToolError, match="pip_spec"):
             await DevTools(_mock_client()).ha_dev_manage_server(action="update_source")
 
-    async def test_update_source_rejects_bad_channel(self):
-        with pytest.raises(ToolError, match="channel must be one of"):
-            await DevTools(_mock_client()).ha_dev_manage_server(
-                action="update_source", channel="nightly"
-            )
+    def test_update_source_no_longer_takes_a_channel(self):
+        # Each component release pins its server; the channel selector is gone.
+        assert "channel" not in signature(DevTools.ha_dev_manage_server).parameters
 
     async def test_update_source_rejects_multiline_pip_spec(self):
         with pytest.raises(ToolError, match="single-line"):
@@ -353,7 +352,7 @@ class TestManageServer:
         client = _mock_client(entries=[])
         with pytest.raises(ToolError, match="server entry"):
             await DevTools(client).ha_dev_manage_server(
-                action="update_source", channel="dev"
+                action="update_source", pip_spec="ha-mcp==2.0.0"
             )
 
     async def test_update_source_submits_options_flow(self):
@@ -361,13 +360,13 @@ class TestManageServer:
             entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
         )
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
         client.submit_options_flow_step.assert_awaited_once_with(
-            "flow-1", {"channel": "dev"}
+            "flow-1", {"pip_spec": "ha-mcp==2.0.0"}
         )
-        assert result["data"]["applied"] == {"channel": "dev"}
-        assert result["data"]["previous"]["channel"] == "stable"
+        assert result["data"]["applied"] == {"pip_spec": "ha-mcp==2.0.0"}
+        assert result["data"]["previous"] == {"pip_spec": ""}
 
     async def test_update_source_clear_aliases_empty_pip_spec(self):
         # Clearing the override must not require sending "" — some MCP
@@ -377,15 +376,15 @@ class TestManageServer:
             entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
         )
         await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="stable", pip_spec="clear"
+            action="update_source", pip_spec="clear"
         )
         client.submit_options_flow_step.assert_awaited_once_with(
-            "flow-1", {"channel": "stable", "pip_spec": ""}
+            "flow-1", {"pip_spec": ""}
         )
 
     async def test_update_source_clear_alias_is_case_insensitive_and_lone(self):
-        # 'Clear' alone (no channel) is a valid call shape: drop the pin,
-        # fall back to the entry's already-configured channel.
+        # 'Clear' in any case drops the pin and returns to the server the
+        # component release pins.
         client = _mock_client(
             entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
         )
@@ -450,17 +449,16 @@ class TestManageServer:
             flows=[dict(_SERVER_FLOW_WITH_OVERRIDES)],
         )
         await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="stable"
+            action="update_source", pip_spec="ha-mcp==3.1.0"
         )
         client.submit_options_flow_step.assert_awaited_once_with(
             "flow-1",
             {
-                "pip_spec": "ha-mcp==9.9.9",
+                "pip_spec": "ha-mcp==3.1.0",
                 "server_url": "http://ha.local:8123",
                 "external_url": "https://ext.example.com",
                 "webhook_id_override": "hook123",
                 "secret_path_override": "/secret",
-                "channel": "stable",
             },
         )
 
@@ -468,7 +466,8 @@ class TestManageServer:
         # The resend is harvested from the flow schema itself, not a hardcoded
         # key list, so a field the component's options flow grows later is
         # preserved without this module learning its name. A bare-default
-        # field (channel) still drops out — omission keeps it — and a cleared
+        # field (channel, on a 2.x component) still drops out — omission keeps
+        # it — and a cleared
         # override carries no resendable value, so it stays omitted.
         flow = dict(_SERVER_FLOW_WITH_OVERRIDES)
         flow["data_schema"] = list(flow["data_schema"]) + [
@@ -477,12 +476,12 @@ class TestManageServer:
         ]
         client = _mock_client(entries=[{"entry_id": "server-e"}], flows=[flow])
         await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="stable"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
         submitted = client.submit_options_flow_step.await_args.args[1]
         assert submitted["future_override"] == "kept"
         assert "cleared_override" not in submitted
-        assert submitted["channel"] == "stable"
+        assert "channel" not in submitted
 
     async def test_update_source_never_echoes_preserved_secrets(self):
         # The component's options form exposes oauth_client_secret as a
@@ -499,7 +498,7 @@ class TestManageServer:
         ]
         client = _mock_client(entries=[{"entry_id": "server-e"}], flows=[flow])
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="stable"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
 
         submitted = client.submit_options_flow_step.await_args.args[1]
@@ -509,7 +508,7 @@ class TestManageServer:
 
         # ...but the response reports only what the caller asked to change.
         applied = result["data"].get("applied") or result["data"].get("applying")
-        assert applied == {"channel": "stable"}
+        assert applied == {"pip_spec": "ha-mcp==2.0.0"}
         assert "super-secret-value" not in json.dumps(result), (
             f"Credential leaked into the tool response: {result}"
         )
@@ -577,7 +576,7 @@ class TestManageServer:
             entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
         )
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
         data = result["data"]
         assert data["target"] == "ha_mcp_tools in-process server entry"
@@ -593,14 +592,14 @@ class TestManageServer:
             entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
         )
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
         assert "this server" in result["data"]["target"]
         await _drain_background_tasks()
 
     async def test_info_distinguishes_serving_server_from_component_entry(self):
         """info must label the component entry as a separate server, so its
-        channel/pip_spec can't be conflated with the serving server's
+        pip_spec can't be conflated with the serving server's
         version (deployment_mode 'standalone'/'addon')."""
         client = _mock_client(
             entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
@@ -818,7 +817,7 @@ class TestServerEntryDiscoveryErrors:
         )
         with pytest.raises(ToolError, match="config_entries/get failed"):
             await DevTools(client).ha_dev_manage_server(
-                action="update_source", channel="dev"
+                action="update_source", pip_spec="ha-mcp==2.0.0"
             )
 
     async def test_connection_error_propagates_not_masked(self):
@@ -832,7 +831,7 @@ class TestServerEntryDiscoveryErrors:
         )
         with pytest.raises(ToolError) as excinfo:
             await DevTools(client).ha_dev_manage_server(
-                action="update_source", channel="dev"
+                action="update_source", pip_spec="ha-mcp==2.0.0"
             )
         assert "server entry" not in str(excinfo.value)
 

@@ -45,8 +45,6 @@
         "title": "Servidor HA-MCP",
         "description": "Configura el servidor HA-MCP. {panel_hint}Los cambios de aquí se aplican al guardar.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
         "data": {
-          "channel": "Canal de versiones",
-          "auto_update": "Actualizaciones automáticas del servidor",
           "server_port": "Puerto de escucha del servidor MCP",
           "bind_host": "Acceso desde la red",
           "webhook_auth": "Modo de autenticación",
@@ -66,8 +64,6 @@
           "enable_sidebar_panel": "Panel de ajustes en la barra lateral"
         },
         "data_description": {
-          "channel": "Estable instala la última versión estable; Desarrollo instala la compilación de desarrollo más reciente. Con las actualizaciones automáticas activadas, una recarga o un reinicio, más una comprobación periódica, instalan la compilación más reciente del canal elegido. El paquete alternativo de desarrollo de abajo tiene prioridad y desactiva las actualizaciones automáticas.",
-          "auto_update": "Cuando está activado, la versión más reciente del canal elegido se instala automáticamente: en una recarga o reinicio y mediante una comprobación periódica. Cuando está desactivado, el servidor se queda en la versión instalada hasta que lo vuelvas a activar. Esto controla únicamente el paquete del servidor ha-mcp; las actualizaciones del propio componente personalizado HA-MCP siguen llegando por HACS.",
           "server_port": "El puerto en el que escucha este servidor. La aplicación (complemento) de ha-mcp usa el 9583, por lo que el valor predeterminado es el 9584 para permitir que ambos se ejecuten simultáneamente; si no ejecutas la aplicación (complemento), cualquier puerto libre sirve.",
           "bind_host": "Quién puede conectarse directamente al puerto del servidor MCP. El valor predeterminado coincide con el de la aplicación (complemento): accesible en tu red local, con la ruta secreta como credencial. Elige bucle local (loopback) para permitir solo conexiones desde la propia máquina de Home Assistant; la URL del webhook y el panel de la barra lateral funcionan en ambos casos.",
           "webhook_auth": "Cómo los clientes de MCP se autentican en la URL del webhook. Con la URL secreta, el propio enlace es la única credencial — OAuth sigue funcionando para los clientes que lo usan, pero cada inicio de sesión se aprueba automáticamente: no se necesita iniciar sesión ni un ID de cliente o Secreto. Con el inicio de sesión de Home Assistant, clientes como claude.ai inician sesión con una cuenta de administrador de Home Assistant (OAuth). Con OAuth heredado, esta integración ejecuta su propio servicio de inicio de sesión y emite un ID de cliente y un Secreto para pegar en los clientes que lo requieran — puede ser necesario reiniciar Home Assistant para activarlo o desactivarlo por completo.",
@@ -95,20 +91,11 @@
       "description": "El servidor HA-MCP integrado en el proceso no se ha podido iniciar dentro de Home Assistant:\n\n{detail}\n\nRevisa los registros de Home Assistant y vuelve a cargar la integración (o corrige el problema de fondo y recárgala) para reintentarlo."
     },
     "server_package_install_failed": {
-      "title": "No se ha podido instalar el paquete del servidor HA-MCP integrado en el proceso",
-      "description": "Ha fallado la instalación del paquete ha-mcp para el servidor integrado en el proceso:\n\n{detail}\n\nResuelve el problema de compatibilidad o de instalación descrito arriba y vuelve a cargar la integración para reintentarlo."
+      "title": "No se ha podido instalar el paquete del servidor HA-MCP integrado en el proceso"
     },
     "component_outdated": {
       "title": "Actualiza el componente personalizado HA-MCP mediante HACS",
       "description": "El servidor ha-mcp instalado requiere el componente personalizado HA-MCP {required} o posterior, pero tienes {installed}. Actualiza el componente mediante HACS (abre la entrada del componente personalizado HA-MCP y usa 'Actualizar información' si todavía no aparece ninguna actualización) y reinicia Home Assistant. Mientras tanto el servidor sigue funcionando, pero puede que algunas funciones nuevas no funcionen hasta que se actualice el componente."
-    },
-    "server_update_held": {
-      "title": "Actualización del servidor HA-MCP a la espera de una actualización del componente",
-      "description": "Está disponible el servidor ha-mcp {latest}, pero esa versión actualizó también el componente personalizado HA-MCP (a {shipped}; tú ejecutas {running}). Para evitar arrancar una versión del servidor con la que el componente en uso nunca se ha probado, la actualización automática del servidor queda en espera hasta que se actualice el componente.\n\nActualiza el componente mediante HACS (abre la entrada del componente personalizado HA-MCP y usa 'Actualizar información' si todavía no aparece ninguna actualización) y reinicia Home Assistant: después, la actualización del servidor se instala automáticamente. Para instalar la actualización del servidor de todos modos, pulsa Instalar en la entidad de actualización del servidor HA-MCP."
-    },
-    "legacy_hacs_source": {
-      "title": "Componente instalado desde el repositorio antiguo",
-      "description": "HACS está rastreando el repositorio principal del servidor ha-mcp para este componente, por lo que HACS muestra aquí los números de versión y las notas de la versión del servidor en lugar de los propios del componente (2.x). Las actualizaciones siguen funcionando, pero permanecen mal etiquetadas de esta manera. Para solucionarlo: elimina este repositorio de HACS (se conservan tus ajustes de integración y entradas de configuración), añade homeassistant-ai/ha-mcp-integration como un repositorio personalizado, reinstala el componente desde él y reinicia Home Assistant."
     },
     "legacy_oauth_restart": {
       "title": "Reinicia Home Assistant para aplicar los ajustes de OAuth heredado",
@@ -123,12 +110,6 @@
     }
   },
   "selector": {
-    "server_channel": {
-      "options": {
-        "stable": "Estable (recomendado)",
-        "dev": "Desarrollo (última compilación)"
-      }
-    },
     "server_webhook_auth": {
       "options": {
         "none": "URL de webhook secreta (predeterminada)",
@@ -141,13 +122,6 @@
         "tool_search": "Búsqueda de herramientas (compacta, predeterminada)",
         "full": "Catálogo completo",
         "both": "Ambas (elegir por agente)"
-      }
-    }
-  },
-  "entity": {
-    "update": {
-      "server_update": {
-        "name": "Actualizar"
       }
     }
   },

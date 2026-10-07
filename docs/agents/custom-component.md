@@ -7,62 +7,44 @@ must hold in both update directions.
 
 ## Version cycle
 
-The component version in `manifest.json` and `COMPONENT_VERSION` in
-`const.py` must stay identical. The version rides the stable release cycle;
-do not bump it once per pull request or push.
-`test_manifest_version_parity` in
-`tests/src/unit/test_component_ws_search.py` enforces the lockstep.
+The component shares the server's version and pins the server build it runs
+(#2427). `manifest.json`'s `version`, its `ha-mcp==` requirement and
+`COMPONENT_VERSION` in `const.py` always equal `pyproject.toml`'s version.
+Never edit them by hand: semantic-release stamps all four in each release
+commit (`version_variables` in `pyproject.toml`), and the PR **Component
+Version Gate** fails a pull request that moves any of them.
 
-Compare `master` with the last stable release:
+Releases follow from that:
 
-```bash
-git show stable:custom_components/ha_mcp_tools/const.py \
-  | grep COMPONENT_VERSION
-```
+- **Stable:** after **SemVer Release**, the mirror sync snapshots the release
+  tag's component and tags the mirror `vX.Y.Z` once PyPI serves
+  `ha-mcp==X.Y.Z`. A server-only release is therefore also a component
+  release.
+- **Development:** after **Publish Dev Channel**, the mirror sync stamps the
+  snapshot of the commit it built with the next release number (what
+  semantic-release would cut) and pins the exact build it uploaded,
+  `ha-mcp-dev==<next>.dev<N>` (the version `scripts/dev_version.sh` gave
+  that run, handed over as its `dev-version` artifact), and tags it
+  `v<next>-dev.<N>` as a HACS pre-release once PyPI serves that build.
 
-Apply these rules:
+The component never reports a dev suffix: released servers parse the version
+segment by segment as integers, so the suffix lives only in the pre-release tag
+and the pin.
 
-- If `master` is level with stable, bump once—patch by default—to open the
-  pending version.
-- If `master` already leads stable, do not bump; the change rides in that
-  pending version.
-- Raise an existing pending version only to escalate the required bump level,
-  such as patch to minor. Do not create never-shipped intermediate versions.
-- The PR Component Version Gate requires a changed component to lead the
-  mirror's released stable version. The mirror sync separately rejects
-  content drift under an already-tagged component version, on the
-  push-to-master leg right after a merge and again at release time.
-  In the PR gate, equal means a bump is needed to open the pending version;
-  behind means a stale tree or bad merge resurrected an older version.
-- Any byte change under `custom_components/ha_mcp_tools/` counts, comments
-  included: the gate and the mirror sync compare file content, not behaviour.
-
-The mirror drift check prevents changes from being stranded under a version
-that already shipped and therefore has no new installable release. The gap it
-catches is a pull request opened while a version was pending but merged after
-that version became stable: a PR check never reruns for an external event,
-so the recorded green stands and the merge goes through. The push-to-master
-sync leg then fails the merge commit's own run with the bump instruction
-(on every push, so a rerun after the snapshot already landed still fails),
-and the stable-tag step repeats the check at release time as the backstop.
-
-One exception overrides the shared pending-version rule: if a change adds a
-component service or argument that the server depends on, open a fresh pending
-component version even when one already exists, then raise
-`MIN_COMPONENT_VERSION` in `src/ha_mcp/tools/tools_filesystem.py` to that
-same version. The floor must identify only builds that contain the capability.
-Never use a released or previously opened pending version that also exists
-without the new behavior; callers on that build would pass the gate and then
-hit a raw missing-service failure.
-`get_caller_token` reports the component manifest version used by this gate.
-The issue #1946 failure is the precedent: the floor was set to an already
-shipped 1.1.0, so builds reporting 1.1.0 existed both with and without the
-required behavior and the gate could not distinguish them.
+When a change adds a component service or argument that the server depends
+on, raise `MIN_COMPONENT_VERSION` in `src/ha_mcp/tools/tools_filesystem.py`
+to the release that will carry it: the version
+`uvx --from python-semantic-release==<pinned> semantic-release --noop version --print`
+prints on `master` after the change merges (the pinned version is in
+`scripts/dev_version.sh`). Development pre-releases report that same number,
+so they pass the floor; every earlier build reports a lower one.
 
 ## Compatibility
 
-A new component can run against an older released server because HACS and the
-server package update independently. Do not remove or tighten an existing
+The embedded server always runs the build its component release pins, but an
+external server (app, Docker, standalone) talking to the component through
+the tools entry still updates independently, so a new component can run
+against an older released server. Do not remove or tighten an existing
 service schema without a compatibility shim the previous server can still
 satisfy. Remove that shim only after the matching server version becomes the
 minimum supported component consumer.
@@ -140,9 +122,13 @@ When changing component-backed behavior:
 ## Embedded server security
 
 The in-process server accepts active human Home Assistant administrators and
-uses a dedicated component-provisioned admin token for upstream calls. The
-token is passed in memory, not through the Home Assistant process environment;
-removing the entry revokes it, and disabling the entry stops the server.
+makes upstream calls with an administrator's long-lived access token entered at
+setup (`server_credentials.py`). The component never creates an account or
+token: entries from older releases keep their provisioned pair while it works,
+and a missing or refused credential files the fixable `server_token_needed`
+repair instead. The token is passed in memory, not through the Home Assistant
+process environment; disabling the entry stops the server. Removing the entry
+deletes only an account an older release created, never the user's.
 
 The settings panel reverse-proxies the web UI through Home Assistant. Browser
 access uses a short-lived HttpOnly session cookie issued to an authenticated

@@ -4,8 +4,8 @@ Covers ``custom_components/ha_mcp_tools/oauth_autoapprove.py``: the invisible
 ``/authorize`` (issues a PKCE code + 302, no UI) and ``/token`` (public-client
 PKCE exchange, cosmetic opaque token) views, the ``AutoApproveProvider`` code
 lifecycle, and — most importantly — the open-redirect gate layered on top of
-:func:`oauth_legacy._is_valid_redirect_uri` (every spec-valid provider callback
-is accepted; malformed targets are rejected in place).
+:func:`oauth_legacy._is_valid_redirect_uri` (only callbacks on the
+administrator's allowlist are redirected to; anything else is refused in place).
 
 Home Assistant / aiohttp are stubbed via ``_embedded_stubs``. ``yarl`` (an
 aiohttp dependency also absent here) is stubbed with the tiny
@@ -111,6 +111,7 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
 )
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK,
+    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     DOMAIN,
     OAUTH_BASE,
     WEBHOOK_AUTH_LEGACY,
@@ -145,7 +146,8 @@ def _live_hass(provider: aa.AutoApproveProvider | None = None) -> MagicMock:
             "auth_mode": "none",
             "resource_server": None,
             "oauth_provider": None,
-            aa.CFG_AUTOAPPROVE_PROVIDER: provider or aa.AutoApproveProvider(),
+            aa.CFG_AUTOAPPROVE_PROVIDER: provider
+            or aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST),
         }
     }
     return hass
@@ -195,6 +197,7 @@ def _mode_cfg(
     session: object | None = None,
     cimd_session: object | None = None,
     dcr_key: bytes | None = None,
+    allowlist: list[str] | None = None,
 ) -> dict[str, object | None]:
     """Webhook cfg dict seeding exactly one live-mode marker (mirrors
     active_auth_mode's provider-presence checks)."""
@@ -215,7 +218,15 @@ def _mode_cfg(
             oauth_dcr.CFG_DCR_SIGNING_KEY: dcr_key,
         }
     if mode == "none":
-        return {aa.CFG_AUTOAPPROVE_PROVIDER: aa.AutoApproveProvider()}
+        provider = (
+            aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
+            if allowlist is None
+            else aa.AutoApproveProvider(lambda: allowlist)
+        )
+        return {
+            aa.CFG_AUTOAPPROVE_PROVIDER: provider,
+            oauth_dcr.CFG_DCR_SIGNING_KEY: dcr_key,
+        }
     raise ValueError(f"unknown test mode: {mode}")
 
 
@@ -258,12 +269,14 @@ async def unified_view_client_factory():
             session: object | None = None,
             cimd_session: object | None = None,
             dcr_key: bytes | None = None,
+            allowlist: list[str] | None = None,
         ):
             cfg = _mode_cfg(
                 mode,
                 session=session,
                 cimd_session=cimd_session,
                 dcr_key=dcr_key,
+                allowlist=allowlist,
             )
 
             app = aiohttp_web.Application()
@@ -306,21 +319,21 @@ async def unified_view_client_factory():
 
 class TestAutoApproveProvider:
     def test_issue_and_consume_roundtrip(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         verifier, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
         assert code
         assert provider.consume_code(code, CLAUDE_REDIRECT, verifier) is True
 
     def test_wrong_verifier_rejected(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         _, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
         other_verifier, _ = _pkce_pair()
         assert provider.consume_code(code, CLAUDE_REDIRECT, other_verifier) is False
 
     def test_code_is_one_shot(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         verifier, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
         assert provider.consume_code(code, CLAUDE_REDIRECT, verifier) is True
@@ -346,7 +359,7 @@ class TestAuthorizeView:
         assert resp.status == 404
 
     async def test_happy_path_issues_code_and_redirects_no_ui(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         view = aa.AutoApproveAuthorizeView(hass)
         verifier, challenge = _pkce_pair()
@@ -420,7 +433,7 @@ class TestAuthorizeView:
         assert resp.status == 400
 
     async def test_code_store_at_capacity_redirects_temporarily_unavailable(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         provider.issue_code = lambda *a, **k: None  # type: ignore[method-assign]
         hass = _live_hass(provider)
         view = aa.AutoApproveAuthorizeView(hass)
@@ -452,7 +465,7 @@ class TestTokenView:
         assert resp.status == 404
 
     async def test_valid_pkce_exchange_returns_opaque_token_no_secret(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         verifier, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
@@ -480,7 +493,7 @@ class TestTokenView:
         assert resp.headers["Pragma"] == "no-cache"
 
     async def test_wrong_verifier_rejected(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         _, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
@@ -500,7 +513,7 @@ class TestTokenView:
         assert resp.json_body["error"] == "invalid_grant"
 
     async def test_code_is_one_time_at_token_endpoint(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         verifier, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
@@ -518,7 +531,7 @@ class TestTokenView:
         assert second.json_body["error"] == "invalid_grant"
 
     async def test_missing_params_returns_invalid_request(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         _, challenge = _pkce_pair()
         code = provider.issue_code(CLAUDE_REDIRECT, challenge)
@@ -581,7 +594,7 @@ class TestBindAutoApproveViews:
 
 class TestFullFlow:
     async def test_authorize_then_token_completes_invisibly(self):
-        provider = aa.AutoApproveProvider()
+        provider = aa.AutoApproveProvider(lambda: DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         hass = _live_hass(provider)
         authorize = aa.AutoApproveAuthorizeView(hass)
         token = aa.AutoApproveTokenView(hass)
@@ -1019,24 +1032,6 @@ AUTH_QS = (
 )
 
 
-async def test_none_mode_any_valid_https_redirect_autoapproves(
-    unified_view_client_factory,
-):
-    """Maintainer decision 2026-08-14: none mode is secret-URL-only trust —
-    ChatGPT, Spark, and any other provider auto-approve invisibly, same as
-    claude.ai."""
-    client = await unified_view_client_factory(mode="none")
-    resp = await client.get(
-        "/api/ha_mcp_tools/oauth/authorize"
-        + AUTH_QS
-        + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb",
-        allow_redirects=False,
-    )
-    assert resp.status == 302
-    assert "code=" in resp.headers["Location"]
-    assert "state=s1" in resp.headers["Location"]
-
-
 async def test_none_mode_token_undecodable_body_returns_400(
     unified_view_client_factory,
 ):
@@ -1071,19 +1066,6 @@ async def test_ha_auth_token_undecodable_body_returns_400(
 
     assert resp.status == 400
     assert (await resp.json())["error"] == "invalid_request"
-
-
-async def test_none_mode_loopback_redirect_autoapproves(unified_view_client_factory):
-    """Native/CLI loopback callbacks (RFC 8252) complete invisibly too."""
-    client = await unified_view_client_factory(mode="none")
-    resp = await client.get(
-        "/api/ha_mcp_tools/oauth/authorize"
-        + AUTH_QS
-        + "&redirect_uri=http%3A%2F%2Flocalhost%3A61264%2Fcallback",
-        allow_redirects=False,
-    )
-    assert resp.status == 302
-    assert "code=" in resp.headers["Location"]
 
 
 async def test_none_mode_malformed_redirect_still_400s(unified_view_client_factory):

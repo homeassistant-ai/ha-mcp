@@ -636,7 +636,7 @@ This page will be updated once ha_auth mode is verified end-to-end with Spark.
 
 Copilot CLI's remote MCP setup requires an OAuth **Client ID** — its `/mcp add` form won't accept a blank field — and it tries to get one via dynamic client registration. Before component 2.0.0, `ha_auth` mode advertised no registration endpoint, so that registration failed (`MCPOAuthError: Failed to register OAuth client`). As of 2.0.0 the component serves a registration endpoint in `ha_auth` mode, so registration succeeds; legacy mode remains the verified alternative if your setup predates it.
 
-On component 2.0.0 or newer: keep **Authentication mode** on `ha_auth` — Copilot CLI registers automatically and signs in with your Home Assistant account. On older versions (or as a fallback): set **Authentication mode** to `legacy`, restart Home Assistant when the repair prompts you, and copy the generated **Client ID** and **Client Secret** from the Options page (also printed in the Home Assistant log) into Copilot CLI's required fields.
+On component 2.0.0 or newer: keep **Authentication mode** on `ha_auth` — Copilot CLI registers automatically and signs in with your Home Assistant account. On older versions (or as a fallback): set **Authentication mode** to `legacy`, restart Home Assistant when the repair prompts you, and copy the generated **Client ID** and **Client Secret** from the Options page into Copilot CLI's required fields.
 
 This is the same self-hosted authorization path used for [Google Gemini Spark](#google-gemini-spark-legacy-mode-is-verified-ha_auth-expected-as-of-component-200), which can also use it as a fallback.
 
@@ -1067,7 +1067,7 @@ If no event arrives at all, check the token the server authenticates with:
 Home Assistant only accepts `POST /api/events/<type>` from an admin user, so
 a standalone install running on a non-admin long-lived token does not fire
 the event and logs that to the server log and nowhere else. The embedded
-component provisions its own admin token, so it is not affected.
+component requires an administrator's token, so it is not affected.
 
 Approving happens in the Tool Security Policies tab by default. Answering
 from an automation is possible too, behind a switch and a PIN — see the next

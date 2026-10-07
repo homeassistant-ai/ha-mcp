@@ -33,11 +33,12 @@ Webhook Proxy app uses.
 
 Once the in-process server config entry exists, it:
 
-1. Installs the `ha-mcp` package into Home Assistant at runtime (the first start
-   takes a little longer while pip downloads it — see
+1. Runs the `ha-mcp` server build this component release pins. Home Assistant
+   installs it as an integration requirement when it loads the component (the
+   first start takes a little longer while it downloads — see
    [First start](#first-start-takes-a-little-longer) below).
-2. Provisions a dedicated Home Assistant admin token the server uses to reach
-   Home Assistant over loopback.
+2. Connects to Home Assistant over loopback with the administrator access token
+   you enter during setup.
 3. Runs the server on its own thread so a slow tool call can never stall Home
    Assistant's event loop.
 4. Registers a Home Assistant webhook that forwards MCP traffic to the server, so
@@ -73,23 +74,32 @@ run current `ha-mcp` servers.
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.
 2. **Add the in-process server entry.** Go to **Settings → Devices & Services →
    Add Integration**, search for **HA-MCP Custom Component**, and — on the menu
-   that appears — choose **HA-MCP Server**, then submit the confirmation.
-   Creating the entry starts the server with the defaults. (If you already have
+   that appears — choose **HA-MCP Server**. The setup form asks for an
+   **Administrator access token**: the server acts with that account's
+   permissions, so it must be an administrator's long-lived access token. To
+   create one, open your profile (your name at the bottom of the sidebar), select the **Security** tab, and under **Long-lived access tokens** select **Create token**. It also asks how MCP clients may reach
+   the server: **Remote access through Home Assistant**
+   (disabled by default; choose Home Assistant sign-in, legacy OAuth or the
+   secret URL to let clients connect through a webhook) and **Network access**
+   (this machine only by default; choose local network to let devices on your
+   network use the direct port). Submitting creates the entry and starts the
+   server. (If you already have
    the **HA-MCP File & YAML Tools** entry, use the same **Add Integration** flow;
    the two entries appear together under the one integration tile.)
 3. **Copy your connect URL.** As soon as the server starts, a notification titled
    **HA-MCP Server** confirms it is running and points you to the URL. The
    connect URL itself is on the entry's **Configure** screen (**Settings →
-   Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**)
-   and in the Home Assistant log — both admin-only surfaces, because the URL is
-   the credential. The notification deliberately carries no URL: notifications
-   are visible to every signed-in user.
+   Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**),
+   which only administrators can open, because the URL is the credential. The
+   notification and the Home Assistant log deliberately carry no URL:
+   notifications are visible to every signed-in user, and the log reaches
+   connected MCP clients through the server's own log tools.
 4. **Connect your MCP client** to that URL.
 
 To pause the server, **disable** its config entry (**Settings → Devices &
 Services → HA-MCP Custom Component → HA-MCP Server → ⋮ → Disable**);
-re-enable it to start it again. Removing the entry stops the server and revokes
-the provisioned token.
+re-enable it to start it again. Removing the entry stops the server; the token
+you entered stays valid until you delete it from your profile.
 
 ## Connect URLs
 
@@ -110,7 +120,7 @@ as the app), bypassing the webhook, at the secret path (which looks like
 Set **Network access** to `127.0.0.1` to turn direct access off and keep only
 the webhook and panel paths. All connect URLs — the webhook forms and, whenever
 direct access is on, the direct URL — are listed on the entry's Configure
-screen and in the Home Assistant log.
+screen.
 
 ## Chat with the toolset from Home Assistant (conversation agents / voice)
 
@@ -197,124 +207,67 @@ uses **9583**, so an existing app install does not conflict.
 ## Options
 
 Open **Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure** to change these. Saving the options reloads the server so
-the changes take effect. (The **HA-MCP File & YAML Tools** entry has no options — a
+the changes take effect; a change to the OAuth callback list alone applies to the
+next sign-in without a reload. (The **HA-MCP File & YAML Tools** entry has no options — a
 Configure there just reports that.)
 
 | Option | Default | What it does |
 |--------|---------|--------------|
-| **Release channel** | `stable` | `stable` installs the latest stable release; `dev` installs the latest development build. Both channels update automatically (a reload or restart, plus a periodic check, install the newest build of the selected channel). See [Release channels](#release-channels). |
-| **Automatic server updates** | on | When on, the selected channel's newest release is installed automatically (on reload/restart and via a periodic check). When off, the server stays on the version currently installed — new releases are still offered on the server's update entity, and its **Install** button installs one without turning automatic updates back on. Governs the ha-mcp **server package** only — component updates still come through HACS. A package override below overrides this. |
 | **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the app's `9583` so an existing app install does not conflict. |
-| **Network access** | `0.0.0.0` | The default matches the app: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
-| **Authentication mode** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. `legacy`: self-hosted OAuth with a static Client ID + Secret, for clients that need a credential to paste. See [Security](#security). |
-| **ha-mcp package (advanced)** | empty (tracks the selected release channel) | The pip requirement installed at runtime. Leave it empty unless you are testing a pre-release — it accepts any pip requirement string, including a version pin or a GitHub tarball URL. An explicit value overrides the release channel and **disables automatic updates** (a pin stays put until you clear it); changing it forces a reinstall on the next reload. |
+| **Network access** | this machine only (`127.0.0.1`) for new installs | `127.0.0.1` restricts direct access to the Home Assistant machine. Local network (`0.0.0.0`) makes the port reachable on your LAN with the secret path as the credential, like the app. The webhook and panel work either way. Entries created before setup asked for it keep local network unless you change it. |
+| **Authentication mode** | as chosen at setup (`ha_auth` when remote access was left disabled) | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. `legacy`: self-hosted OAuth with a static Client ID + Secret, for clients that need a credential to paste. See [Security](#security). |
+| **ha-mcp package (advanced)** | empty (the server this component release installed) | Leave it empty unless you are testing a specific build — it accepts any pip requirement string, including a version pin, a pull-request tarball or a wheel URL. Saving it reinstalls the server and restarts it in place, without restarting Home Assistant; clearing it returns to the paired server. See [Server updates](#server-updates). |
 | **Home Assistant URL for the server (advanced)** | empty (derived from your HA's http config) | How the in-process server reaches Home Assistant. Empty derives the loopback URL from your instance's real port and SSL setting (an SSL-enabled HA is reached over `https://127.0.0.1` with certificate verification off — the certificate never matches a loopback address). Only set a value when the server must take a different route entirely. |
-| **Remote access via webhook** | on | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
+| **Remote access via webhook** | off for new installs (as chosen at setup) | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
 | **Conversation-agent LLM API** | on | Offers the toolset to Home Assistant conversation agents — see [Chat with the toolset](#chat-with-the-toolset-from-home-assistant-conversation-agents--voice). Enabling only makes it selectable per agent; turn off to remove it from every agent's selector. |
 | **Conversation-agent tool exposure** | `tool_search` | Shape of the toolset agents get: compact tool-search API (default), the full catalog, or both side by side (choose per agent). See [Exposure modes](#exposure-modes). |
 | **External URL (optional)** | empty | Shown as the primary connect URL - for your own domain / reverse proxy (e.g. `https://ha.example.com`). Opening it should reach your HA login page, and must not contain a port like `:8123` (any port breaks remote MCP clients). Empty = Nabu Casa / local automatically. |
 | **Custom webhook secret (optional)** | empty | Replaces the random webhook secret in `/api/webhook/<secret>`. The URL is the credential - use a long, hard-to-guess value. |
 | **Custom direct-access path (optional)** | empty | Replaces the random `/private_...` path on the server port. Same rule: the path is the credential. |
 | **Regenerate connect secrets now** | off | One-time action: mints fresh random values for both secrets, immediately invalidating the old connect URLs (and clearing the two overrides). |
+| **Allowed OAuth callback URL** | claude.ai's callback | In `none` mode, the only callback URLs an OAuth sign-in is sent back to. Also editable in the **HA-MCP** sidebar panel under **Server Settings → Remote access**. See [Security](#security). |
 
-### Release channels
+### Server updates
 
-The **Release channel** option selects which build of the server is installed.
-Both channels install unpinned and **update automatically**:
+The server is part of the component release. Each HA-MCP Custom Component
+release names the exact `ha-mcp` build it was released with as an integration
+requirement, and Home Assistant installs it like any integration's Python
+packages. HACS is therefore the only update path: when it offers a component
+update, that update carries the matching server, and restarting Home Assistant
+after the update installs both. The component never downloads or swaps the
+server on its own.
 
-- **`stable` (default):** the latest `ha-mcp` release from PyPI.
-- **`dev`:** the latest development build, published to PyPI as `ha-mcp-dev` on
-  every change to the project's main branch. Use it to try upcoming fixes, and
-  expect the occasional rough edge.
+**Development builds** follow the main branch. Turn on the HACS **Pre-release**
+switch for the HA-MCP Custom Component repository to receive them; each
+pre-release pins the exact `ha-mcp-dev` build published from the same commit.
+Turn the switch off to return to stable releases with the next stable update.
+Moving between the two swaps `ha-mcp-dev` and `ha-mcp` as described below.
 
-While **Automatic server updates** is on (the default), both channels install
-unpinned: an entry reload or a Home Assistant restart always reinstalls the
-newest build of the selected channel, and on top of that the component checks
-PyPI for a newer build every 6 hours and reloads the entry automatically when
-one is published — so a long-running instance picks up releases without a
-restart. The reload applies the new server code immediately (component >=
-1.0.1 reloads the module cache per worker start); only updates that require
-newer *third-party dependencies* still need a Home Assistant core restart.
-The web settings UI's **Restart HA-MCP Server** button performs the same
-entry reload. Each automatic update also raises a notification naming the old and
-new version, with a link to the release notes. Turn **Automatic server
-updates** off to freeze the server on the version currently installed:
-reloads/restarts keep that exact version until you turn it back on or install
-a newer build yourself from the update entity (this governs the server package
-only — component updates still arrive through HACS). Setting the **ha-mcp
-package (advanced)** field overrides the channel entirely (pin a version, or
-install from a URL for pre-release testing) and also disables automatic updates
-until you clear it.
+**Testing a specific build** is what the **ha-mcp package (advanced)** option is
+for. Set it to a pip requirement — a version pin, a pull-request tarball such
+as `https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/<PR>/head.tar.gz`,
+or a wheel URL — and save: the server entry reloads, installs that build and
+restarts the server in place, with no Home Assistant restart. Clear the field to
+return to the server this component release installed. Home Assistant puts the
+paired server back each time it starts, so with an override set, every Home
+Assistant restart installs the override again afterwards (this needs network
+access at startup).
 
-The server's version is always visible on its **update entity**, under
-**Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server**
-(and under **Settings → System → Updates** whenever an update is available).
-The entity shows the installed and latest version of the selected channel and
-links the release notes — the 6-hour PyPI check keeps it populated even with
-automatic updates off, where its **Install** button installs the offered
-version on your schedule. The server (`7.x`) and the component (`1.x`) are
-versioned independently: this entity and HACS each own one of the two numbers.
+`ha-mcp` and `ha-mcp-dev` share the same import package. When the pin or an
+override installs one of them while the other is present, the other is
+uninstalled and the requested one reinstalled, so only one is ever installed at
+a time.
 
-Switching channels reinstalls the server from the other channel on the next
-reload. `ha-mcp` and `ha-mcp-dev` share the same import package, so the previous
-channel's package is uninstalled first — only one is ever installed at a time.
+If a server installed through the override needs a newer version of the custom
+component than the one you have, a repair issue titled **Update the HA-MCP Custom
+Component via HACS** appears under **Settings → Repairs**. The server keeps
+running; update the component via HACS to clear it.
 
-If the installed server needs a newer version of the custom component than the
-one you have (HACS can deliver a server build before you update the component),
-a repair issue titled **Update the HA-MCP Custom Component via HACS** appears
-under **Settings → Repairs**. The server keeps running; update the component via
-HACS to clear it — see [Held server updates](#held-server-updates) if HACS does
-not show the update yet.
-
-If the component was installed from the legacy location — the main `ha-mcp`
-server repository added directly as a HACS custom repository, before the
-dedicated [`ha-mcp-integration`](https://github.com/homeassistant-ai/ha-mcp-integration)
-mirror existed — a repair issue titled **Component installed from the legacy
-repository** appears. Such an install keeps working, but HACS displays the
-server's `7.x` version numbers and the server's release notes for the
-component. Follow the issue's link to add the mirror in HACS and reinstall the
-component from it (your settings and config entries are kept), then restart
-Home Assistant; the issue clears itself afterwards.
-
-### Held server updates
-
-When a new server release also ships a **newer custom component** than the one
-you are running, the automatic server update is **held** instead of installed,
-and a repair issue titled **HA-MCP server update waiting for a component update**
-appears under **Settings → Repairs** to explain it. The hold exists to avoid
-auto-starting a server build under a component version it was never tested with —
-installing a newer server against an out-of-date component is the combination
-that has broken server startups. The server keeps running on its current version
-while the hold is in effect.
-
-**HACS usually shows no component update yet at this point.** The component
-notices the newer server quickly — it checks PyPI every 6 hours and again on
-every reload or restart — but HACS refreshes its own repository information far
-less often: for a custom repository (how this component is installed in HACS)
-that can take up to about two days. So when the hold appears the component
-update is typically not yet visible in HACS, and telling Home Assistant to check
-for updates does not make HACS re-fetch any sooner. The one manual refresh that
-does is in HACS itself: open the **HA-MCP Custom Component** repository, open its
-**⋮** (three-dot) menu, and choose **Update information**; the component update
-then appears.
-
-The component asks HACS to perform this refresh automatically whenever the hold —
-or the component-outdated repair — first appears, so in most cases the component
-update shows up in HACS right away with no manual step. The manual **Update
-information** refresh above is the fallback for when that automatic request cannot
-reach HACS (for example HACS is still starting up, or its internals changed in a
-newer HACS release).
-
-To **clear the hold**, update the component in HACS and restart Home Assistant.
-The held server update then installs automatically on the next periodic check or
-reload.
-
-To **install the update anyway**, press **Install** on the HA-MCP server update
-entity — this bypasses the hold and installs the newer server immediately. Be
-aware that it runs a server build against a component it has never been tested
-with; if that server in turn requires an even newer component, it raises a
-separate **Update the HA-MCP Custom Component via HACS** repair until you update
-the component.
+Upgrading from component 2.x: the **Release channel** and **Automatic server
+updates** options and the server update entity are gone (the entity is removed
+from the registry on the first start). A 2.x install on the `dev` channel moves
+to the stable server with this release; turn on the HACS **Pre-release** switch
+to keep receiving development builds.
 
 ### Local-only mode
 
@@ -329,25 +282,39 @@ If a connect URL may have leaked, open the entry's options and check
 **Regenerate connect secrets now**, then save - both the webhook secret and the
 direct-access path are re-minted on the spot and every old URL stops working.
 Update your MCP clients with the new URL from the Configure screen. (Removing and
-re-adding the entry also rotates everything, including the internal token.)
+re-adding the entry also rotates the webhook secret and direct-access path.)
 
 ## Security
 
 The in-process server offers three authentication postures, chosen with the
 **Authentication mode** option:
 
-- **`none` (default): the secret webhook URL is the credential.** The webhook id
+- **`none`: the secret webhook URL is the credential.** The webhook id
   is a high-entropy random string, and anyone who has the full URL can reach the
   server — exactly like the Webhook Proxy app's default. When exposed through
   Nabu Casa (or another HTTPS reverse proxy) the URL travels over TLS. Treat the
   URL like a password: don't share it or paste it where it could be logged.
+  Entries created before setup asked for an authentication mode run in this mode.
+
+  Some connectors (claude.ai among them) insist on an OAuth sign-in even here.
+  The server approves it without a login, because the token it issues grants
+  nothing, but it sends the sign-in back only to a callback URL on the
+  **Allowed OAuth callback URL** list. The list starts with claude.ai's callback;
+  for any other OAuth client, add the callback URL its sign-in uses, exactly as
+  sent. An `http://` loopback callback (`127.0.0.1`, `[::1]` or `localhost`) also
+  matches on any port, because desktop clients pick a free port per sign-in. A
+  sign-in to an unlisted callback stops on a page that names the URL and where
+  to add it; registering a client cannot add to the list. Clients that connect
+  with the webhook URL alone need no entry. Before this list existed, any
+  callback was accepted, so a non-claude.ai OAuth client that worked before
+  needs its callback added after upgrading.
 - **`ha_auth`: clients sign in with your Home Assistant account.** Home Assistant
   Core acts as the OAuth authorization server. MCP clients that support OAuth
   (for example claude.ai and ChatGPT) discover the sign-in endpoints
   automatically and authenticate the user against Home Assistant; requests
   without a valid Home Assistant token are rejected. Only **administrator**
   accounts are accepted: the server performs its Home Assistant operations with
-  its own provisioned admin token, so a non-admin login is refused rather than
+  its own administrator token, so a non-admin login is refused rather than
   silently granted admin-equivalent control. There is no separate password or
   credential to manage — it is your existing Home Assistant admin login.
 - **`legacy`: a self-hosted OAuth server with a static Client ID + Secret.** For
@@ -368,11 +335,22 @@ All three postures ride Home Assistant's own remote access (Nabu Casa / your
 reverse proxy) for TLS. If you expose the server to the internet, prefer
 `ha_auth`; keep the `none` URL — or a `legacy` Client Secret — strictly private.
 
-The server reaches Home Assistant with a dedicated admin token the component
-provisions and stores in the config entry; that token is handed to the server
-in-memory (never through the Home Assistant process environment). Removing the
-entry revokes it. As with every deployment, that token's Home Assistant
-permissions define what the server can do.
+The server reaches Home Assistant with the administrator's long-lived access
+token entered at setup, stored in the config entry and handed to the server
+in memory (never through the Home Assistant process environment). As with every
+deployment, that token's Home Assistant permissions define what the server can
+do. The component never creates a Home Assistant account or token of its own.
+
+Entries created before this change keep the **HA-MCP Server** account and token
+an older release created, for as long as both work. If the token is missing,
+revoked or expired, or its account is no longer an active administrator, the
+server does not start and the repair **HA-MCP needs an administrator access
+token** asks for a new one. You can also switch tokens at any time with
+**Replace the administrator access token** in the entry's options. Switching
+revokes the token an older release created; its **HA-MCP Server** account stays
+until you remove the entry, or until you delete it yourself under **Settings →
+People → Users**. Removing the entry deletes only an account an older release
+created; it never touches the account your token belongs to.
 
 See [SECURITY.md](../SECURITY.md) for the full threat model.
 
@@ -390,23 +368,38 @@ File & YAML Tools**); it changes nothing about how the in-process server runs.
 
 ## First start takes a little longer
 
-The first time the server starts, the component downloads and installs the
-`ha-mcp` package with pip. This can take a minute or two — occasionally longer —
-depending on your connection and hardware; the server starts automatically once
-the install finishes. Later restarts are fast because the package is already
-installed.
+The first time Home Assistant loads the component after an install or update,
+it downloads and installs the pinned `ha-mcp` package. This can take a minute or
+two — occasionally longer — depending on your connection and hardware; the
+server starts automatically once the install finishes. Later restarts are fast
+because the package is already installed.
 
 ## Troubleshooting
 
 **The server won't start.** If the server fails to come up — for example because
-the port is already in use, or token provisioning fails — a repair issue titled
+the port is already in use — a repair issue titled
 **The HA-MCP in-process server failed to start** appears under **Settings →
-Repairs**, carrying the specific reason. If the `ha-mcp` package itself can't be
-installed, the repair issue is titled **The HA-MCP in-process server package
-could not be installed** instead. Fix the cause — check the Home Assistant log and
-your network connectivity for an install failure, or set a different **Server
-port** for a port conflict — then reload the entry (save the options, or use
-**⋮ → Reload**) to retry.
+Repairs**, carrying the specific reason. Fix the cause — set a different
+**Server port** for a port conflict, for example — then reload the entry (save
+the options, or use **⋮ → Reload**) to retry.
+
+**The server package is broken.** If the server cannot be installed or its
+code cannot be imported, the repair is titled **The HA-MCP in-process server
+package could not be installed**. A common cause is another integration that
+pins an older version of one of the server's dependencies: Home Assistant
+installs that version for it, and only checks the server's own version
+afterwards. If the repair names such an integration, update or remove it first.
+Then open the repair and select **Submit**: Home Assistant restarts and
+reinstalls the server package and its dependencies before the server starts.
+A restart is needed because the broken package stays loaded in Home Assistant
+until then.
+
+**The integration does not load at all.** Home Assistant installs the server
+build each component release pins before it loads the integration. If that
+install fails (no network at startup, or a conflict with a package Home
+Assistant itself needs), neither entry loads, no repair issue is filed, and the
+log reads `Requirements for ha_mcp_tools not found`. Fix the cause the log
+names above that line, then restart Home Assistant.
 
 **Nothing happens after updating the component.** Home Assistant loads custom
 integration code at startup, so after HACS (or a manual copy) delivers a new
@@ -416,7 +409,7 @@ version you must **restart Home Assistant** for the update to take effect.
 package (advanced)** field can install from a GitHub tarball URL, but a git
 archive excludes submodules — and the bundled skill content ships as a submodule.
 A tarball install therefore omits it, so the skill-guidance tools report empty
-listings. Install from PyPI instead (either release channel includes the skill
+listings. Pin a PyPI version instead (every PyPI build includes the skill
 content); the tarball override is only meant for quick pre-release testing.
 
 **Where the logs are.** The in-process server logs into the normal Home Assistant
@@ -424,7 +417,7 @@ log (**Settings → System → Logs**, or `home-assistant.log`). Its working dat
 lives in `.ha_mcp/` under your Home Assistant config directory.
 
 **The Configure screen shows only a webhook path.** If Home Assistant cannot
-determine an external or internal URL, the Configure screen and log show the
+determine an external or internal URL, the Configure screen shows the
 webhook path on its own (`/api/webhook/<webhook-id>`); prefix it with your Home
 Assistant URL. Set your internal/external URLs under **Settings → System →
 Network** so the full URL is shown.

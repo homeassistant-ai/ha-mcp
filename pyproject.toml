@@ -415,7 +415,7 @@ dev = [
     # Renders templates/CHANGELOG.md.j2 in test_changelog_template.py. Keep the
     # version equal to the action pinned in .github/workflows/semver-release.yml,
     # so the test renders with the release that writes the real notes.
-    "python-semantic-release==10.6.2",
+    "python-semantic-release==10.7.0",
     # Provides `uv run hamcp-test-env` without shipping it in the ha-mcp wheel.
     "hamcp-test-env",
 ]
@@ -426,6 +426,14 @@ hamcp-test-env = { path = "tests/test-env", editable = true }
 # Semantic versioning configuration
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
+# The HACS component shares the server's version and pins the server build it
+# ships with, so each release commit stamps all three below as well as
+# project.version (#2427).
+version_variables = [
+    "custom_components/ha_mcp_tools/manifest.json:version",
+    "custom_components/ha_mcp_tools/manifest.json:ha-mcp",
+    "custom_components/ha_mcp_tools/const.py:COMPONENT_VERSION",
+]
 build_command = """
 pip install uv && uv lock
 git add uv.lock
