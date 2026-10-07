@@ -252,7 +252,10 @@ async def test_energy_add_source_roundtrip(mcp_client):
         assert_mcp_success(get_after)
         assert add_result.data["config"] == get_after.data["config"]
         assert add_result.data["config_hash"] == get_after.data["config_hash"]
-        assert add_result.data["config_hash_per_key"] == get_after.data["config_hash_per_key"]
+        assert (
+            add_result.data["config_hash_per_key"]
+            == get_after.data["config_hash_per_key"]
+        )
         sources = get_after.data["config"]["energy_sources"]
         assert any(s.get("stat_energy_from") == stat for s in sources), (
             f"Added grid source should appear; got sources={sources}"
@@ -318,9 +321,14 @@ async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
     if not initial_data["config"]:
         # Let Core create its defaults; this test must also pass in isolation
         # on the absent-component lane, where defaults cannot be discovered.
-        initialized = await mcp_client.call_tool("ha_manage_energy_prefs", {
-            "mode": "set", "config": {}, "config_hash": initial_data["config_hash"],
-        })
+        initialized = await mcp_client.call_tool(
+            "ha_manage_energy_prefs",
+            {
+                "mode": "set",
+                "config": {},
+                "config_hash": initial_data["config_hash"],
+            },
+        )
         assert_mcp_success(initialized)
         initial_data = initialized.data
     assert "config_hash_per_key" in initial_data, (

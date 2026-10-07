@@ -14,6 +14,7 @@ from ..utilities.topology import component_surface_available
     [
         {"type": "battery", "stat_energy_from": "sensor.total_energy_kwh"},
         {"type": "grid"},
+        {"type": "grid", "cost_adjustment_day": 0},
     ],
 )
 async def test_incomplete_source_is_never_reported_as_valid(mcp_client, source):

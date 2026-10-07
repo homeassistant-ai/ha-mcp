@@ -164,7 +164,6 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
     ]
 
 
-
 async def statistics_metadata(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:

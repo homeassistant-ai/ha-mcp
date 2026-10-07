@@ -169,6 +169,7 @@ class TestStatisticTypesValidation:
     @pytest.mark.asyncio
     async def test_invalid_type_raises(self, history_tool):
         """Native rejection is surfaced; the tool holds no copied type whitelist."""
+
         async def reject(message):
             return {"success": False, "error": "Core rejected invalid_type"}
 

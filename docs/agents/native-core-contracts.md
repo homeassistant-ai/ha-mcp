@@ -28,6 +28,13 @@ permission checks. The serializer adapter reveals the live alternatives in
 Core's opaque discriminated unions; it supplies no energy types or fields.
 Unknown serializer constructs remain explicitly incomplete.
 
+Some API meanings are not discoverable as schemas: Core declares Energy
+statistic references as plain strings. The optional metadata enrichment uses
+Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative
+reference catalog for hypothetical differently named future fields. Preserve
+the complete native preferences regardless, and do not turn ordinary strings
+that happen to match statistic IDs into asserted references.
+
 ## Preserve independent safeguards
 
 Keep read-only gates, optimistic hashes, duplicate guards, query bounds,
