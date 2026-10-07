@@ -181,10 +181,17 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
         assert card["fields"] == [
             {"name": "entity", "required": True, "type": "entity"}
         ]
+        assert card["field_coverage"] == "partial"
+        assert "editor-only" in card["note"]
 
         cards = [
             {"type": "custom:e2e-custom-card"},
             {"type": "custom:e2e-custom-card", "entity": "light.bed_light"},
+            {
+                "type": "custom:e2e-custom-card",
+                "entity": "light.bed_light",
+                "disabled": True,
+            },
         ]
         result = await mcp.call_tool_success(
             "ha_config_set_dashboard",
@@ -200,6 +207,13 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
             "e2e-custom-card needs an entity" in warnings
         ), warnings
         assert "views[0].cards[1]" not in warnings, warnings
+        assert (
+            "views[0].cards[2] (custom:e2e-custom-card): editor schema advisory"
+            in warnings
+        )
+        assert (
+            "'disabled' is not listed in the e2e-custom-card editor schema" in warnings
+        )
     finally:
         await safe_call_tool(
             mcp_client, "ha_config_delete_dashboard", {"url_path": path}
@@ -244,6 +258,10 @@ async def test_componentless_writes_keep_static_card_guidance(mcp_client):
         ("thermostat", {"entity": "climate.test"}),
         ("history-graph", {"entities": ["sensor.test"]}),
         ("picture-entity", {"entity": "light.bed_light"}),
+        ("markdown", {"content": "Coverage"}),
+        ("gauge", {"entity": "sensor.test"}),
+        ("entity", {"entity": "light.bed_light"}),
+        ("logbook", {"entities": ["light.bed_light"]}),
     ],
 )
 async def test_common_card_coverage_tracks_the_installed_frontend(
@@ -303,7 +321,16 @@ async def test_described_fields_match_stored_card_configuration(mcp_client):
         return
     mcp = MCPAssertions(mcp_client)
     descriptions = {}
-    for card_type in ("area", "statistics-graph", "tile", "shortcut", "sensor"):
+    for card_type in (
+        "area",
+        "statistics-graph",
+        "tile",
+        "shortcut",
+        "sensor",
+        "markdown",
+        "gauge",
+        "entity",
+    ):
         result = await mcp.call_tool_success(
             "ha_config_get_dashboard", {"describe": True, "card_type": card_type}
         )
@@ -315,6 +342,10 @@ async def test_described_fields_match_stored_card_configuration(mcp_client):
             & descriptions[card_type].keys()
         )
         assert "tap_action" in descriptions[card_type]
+    assert "text_only" in descriptions["markdown"]
+    assert not {"style", "actions_warning"} & descriptions["markdown"].keys()
+    assert "show_severity" not in descriptions["gauge"]
+    assert "entity" in descriptions["entity"]
     sensor = descriptions["sensor"]
     assert sensor["detail"]["type"] == "number"
     assert "min" not in sensor and "max" not in sensor

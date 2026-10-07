@@ -146,13 +146,15 @@ function card(op, p) {
     if (op === 'check') {
       var problems = [];
       var targets = [];
-      if (slot2.editor && slot2.editor.setConfig) targets.push(slot2.editor);
-      try { var el = new C(); el.hass = __hass; targets.push(el); } catch (e) {}
+      try { var el = new C(); el.hass = __hass; targets.push({source: 'card', target: el}); } catch (e) {}
+      if (slot2.editor && slot2.editor.setConfig) targets.push({source: 'editor', target: slot2.editor});
       targets.forEach(function (t) {
-        try { t.hass = __hass; t.setConfig(p.config); }
-        catch (e) { var v = __verdict(e); if (!v.sandbox) problems.push(v.message); }
+        try { t.target.hass = __hass; t.target.setConfig(p.config); }
+        catch (e) { var v = __verdict(e);
+          if (!v.sandbox && !problems.some(function (p) { return p.message === v.message; }))
+            problems.push({source: t.source, message: v.message}); }
       });
-      return { value: problems.filter(function (m, i) { return problems.indexOf(m) === i; }) };
+      return { value: problems };
     }
     if (op === 'form') {
       if (slot2.form && slot2.form.schema) return { value: __plain(slot2.form.schema) };
@@ -252,12 +254,21 @@ class _Bundle:
         listed = self.engine("cards", None)["value"]
         self.tags: list[str] = listed["tags"]
         self.cards: list[dict[str, Any]] = listed["cards"]
-        for tag in self.tags:
-            self._limit_preparation()
-            self.engine("prepare", {"tag": tag})
-        self._settle()
         self._context_call("set_time_limit", _CALL_SECONDS)
         self._unresponsive: set[str] = set()
+        self._prepared: set[str] = set()
+
+    def _prepare_tag(self, tag: str) -> None:
+        """Load only the requested card's editor, within one call's budget."""
+        if tag in self._prepared:
+            return
+        self._prepare_deadline = time.monotonic() + _CALL_SECONDS
+        self._limit_preparation()
+        if error := self.engine("prepare", {"tag": tag}).get("error"):
+            raise ValueError(error)
+        self._settle()
+        self._context_call("set_time_limit", _CALL_SECONDS)
+        self._prepared.add(tag)
 
     def close(self) -> None:
         """Dispose native objects on their creating thread before releasing capacity."""
@@ -295,11 +306,12 @@ class _Bundle:
     def memory(self) -> int:
         return int(self._context_call("memory").get("memory_used_size", 0))
 
-    def check(self, tag: str, config: dict[str, Any]) -> list[str]:
+    def check(self, tag: str, config: dict[str, Any]) -> list[dict[str, str]]:
         """The card's own objections; none (from then on) once it times out."""
         if tag in self._unresponsive:
             return []
         try:
+            self._prepare_tag(tag)
             answer = self.engine("check", {"tag": tag, "config": config})
         except Exception:
             _LOGGER.debug("Custom card %s did not answer", tag, exc_info=True)
@@ -308,11 +320,15 @@ class _Bundle:
         return list(answer.get("value") or [])
 
     def form(self, tag: str) -> list[Any] | None:
+        if tag in self._unresponsive:
+            return None
         try:
+            self._prepare_tag(tag)
             value = self.engine(
                 "form", {"tag": tag, "config": {"type": f"custom:{tag}"}}
             )
         except Exception:  # noqa: BLE001
+            self._unresponsive.add(tag)
             return None
         form = value.get("value")
         return form if isinstance(form, list) else None
@@ -444,7 +460,7 @@ class CustomCards:
                 return bundle
         return None
 
-    def check(self, tag: str, config: dict[str, Any]) -> list[str] | None:
+    def check(self, tag: str, config: dict[str, Any]) -> list[dict[str, str]] | None:
         """Problems the card reports, or ``None`` when no loaded bundle defines it."""
         with self._lock:
             bundle = self._owner(tag)
@@ -473,6 +489,8 @@ class CustomCards:
                 "name": listed.get("name"),
                 "description": listed.get("description"),
                 "fields": bundle.form(tag),
+                "field_coverage": "partial",
+                "note": "Fields come from the custom card's editor form. They may include editor-only values and omit options accepted by the card; this is not a complete stored-config schema.",
             }
 
 

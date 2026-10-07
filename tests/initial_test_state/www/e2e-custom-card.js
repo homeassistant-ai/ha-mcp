@@ -11,6 +11,16 @@ export class E2ECustomCard extends HTMLElement {
   static getConfigForm() {
     return { schema: [{ name: "entity", required: true, selector: { entity: {} } }] };
   }
+
+  static getConfigElement() {
+    return {
+      setConfig(config) {
+        if (config.disabled !== undefined) {
+          throw new Error("At path: disabled -- Expected a value of type `never`");
+        }
+      },
+    };
+  }
 }
 customElements.define("e2e-custom-card", E2ECustomCard);
 window.customCards = window.customCards || [];

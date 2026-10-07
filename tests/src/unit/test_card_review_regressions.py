@@ -11,6 +11,99 @@ from .test_card_definitions import _definitions, cc, cd, describe_mod
 from .test_card_definitions import component as component
 
 
+@pytest.mark.parametrize(
+    "key,known,suggest",
+    [
+        ("disable_sandbox", "disabled", False),
+        ("state_image", "camera_image", False),
+        ("colour", "color", True),
+    ],
+)
+def test_rename_advice_requires_a_close_spelling(key, known, suggest):
+    definitions = _definitions({"tile"}, {"tile": [known]})
+    warning = definitions._explain("tile", {"path": [key], "type": "never"})
+    assert ("did you mean" in warning) is suggest
+
+
+def test_custom_editor_rejection_is_advisory():
+    message = "At path: disabled -- Expected a value of type `never`"
+    result = cd._explain_message("mushroom-entity-card", message, editor=True)
+    assert "editor schema advisory" in result
+    assert "not listed" in result
+    assert "not a mushroom" not in result
+    assert (
+        cd._explain_message(
+            "x-card", message.replace("disabled", "card_mod"), editor=True
+        )
+        is None
+    )
+
+
+def test_custom_verdict_retains_source_and_prefers_duplicate_card_error():
+    import quickjs
+
+    engine = quickjs.Function("card", cc._RUNTIME_JS.replace("__SANDBOX", "[]"))
+    engine(
+        "eval",
+        """
+      globalThis.__registry = {'x-card': class {setConfig(c) {
+        if (c.reject) throw new Error('shared error');
+      }}};
+      __pending['x-card'] = {editor: {setConfig(c) {
+        throw new Error(c.reject ? 'shared error' : 'editor only');
+      }}};
+    """,
+    )
+    assert engine("check", {"tag": "x-card", "config": {}})["value"] == [
+        {"source": "editor", "message": "editor only"}
+    ]
+    assert engine("check", {"tag": "x-card", "config": {"reject": True}})["value"] == [
+        {"source": "card", "message": "shared error"}
+    ]
+
+
+def test_lazy_config_form_module_supplies_schema_and_assertion():
+    definitions = _definitions({"entity"}, {})
+    definitions._tag_module = {"hui-entity-card": "1"}
+    definitions._bodies = {
+        "1": "class Card{static async getConfigForm(){return(await r.e(2).then(r.bind(r,2))).default}}",
+        "2": 'function(m,e,r){const s=[{name:"entity",selector:{entity:{}}}],v=validator;const form={schema:s,assertConfig:c=>(0,x.assert)(c,v)}}',
+    }
+    definitions._evaluate = MagicMock(return_value=["entity"])
+    assert definitions._struct_ready("entity")
+    assert cd._schema_expressions(definitions._editor_body("entity")) == [
+        '[{name:"entity",selector:{entity:{}}}]'
+    ]
+
+
+def test_unavailable_struct_marks_editor_fields_unfiltered():
+    definitions = _definitions({"clock"}, {"clock": None})
+    definitions._strings = {}
+    definitions._editor_body = MagicMock(
+        return_value='const s=[{name:"editor_only"}];const form={schema:s}'
+    )
+    definitions._evaluate = MagicMock(return_value=[{"name": "editor_only"}])
+    result = definitions.describe("clock")
+    assert result["field_coverage"] == "unfiltered"
+    assert "UI-only" in result["note"]
+
+
+def test_pure_export_can_be_read_without_running_its_browser_module(tmp_path):
+    frontend = tmp_path / "frontend_latest"
+    frontend.mkdir()
+    (frontend / "cards.js").write_text(
+        'export const __webpack_modules__={1(e){(0,e.EM)("hui-tile-card")},'
+        '2(e){(0,e.EM)("hui-entities-card")},'
+        "3(m,e,r){r.a(m,async function(){var s=r(4);const refine=(x)=>s.wrap(x);r.d(e,{},{f:refine})})},"
+        "4(m,e,r){r.d(e,{},{wrap:(x)=>({schema:{entity:x}})})}};",
+        encoding="utf-8",
+    )
+    definitions = cd.CardDefinitions(tmp_path)
+    assert definitions._evaluate(
+        "struct", "var dep=r(3);", 'dep.f("string")', "tile"
+    ) == ["entity"]
+
+
 def test_malformed_select_options_do_not_abort_description():
     from ha_mcp.tools.config_helpers.describe import compact_field
 

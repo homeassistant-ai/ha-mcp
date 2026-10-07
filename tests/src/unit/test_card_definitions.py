@@ -187,7 +187,7 @@ def test_failed_module_is_not_reused_as_partial_exports(tmp_path) -> None:
     )
     definitions = cd.CardDefinitions(tmp_path)
     for _ in range(2):
-        with pytest.raises(ValueError, match="require-failed"):
+        with pytest.raises(ValueError, match="unresolved export"):
             definitions._evaluate("struct", "var x=r(7);", "x.field")
 
 
@@ -388,7 +388,10 @@ def test_custom_card_messages_read_plainly() -> None:
 
 
 def test_custom_cards_report_their_own_problems_and_unknown_ones_none() -> None:
-    answers = {"good-card": [], "picky-card": ["picky-card needs an entity"]}
+    answers = {
+        "good-card": [],
+        "picky-card": [{"source": "card", "message": "picky-card needs an entity"}],
+    }
     custom = MagicMock()
     custom.check.side_effect = lambda tag, card: answers.get(tag)
     definitions = _definitions(set(), {})

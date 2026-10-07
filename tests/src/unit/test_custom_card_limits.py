@@ -63,7 +63,7 @@ def test_all_quickjs_context_operations_use_the_creating_thread(
     assert len(set(calls)) == 1
 
 
-def test_preparing_many_tags_has_one_total_budget(monkeypatch) -> None:
+def test_only_requested_editors_are_prepared_and_cached(monkeypatch) -> None:
     import quickjs
 
     clock = [0.0]
@@ -83,9 +83,20 @@ def test_preparing_many_tags_has_one_total_budget(monkeypatch) -> None:
     monkeypatch.setattr(cc.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(cc._Bundle, "_settle", lambda self: None)
     monkeypatch.setattr(cc, "_PREPARE_SECONDS", 2, raising=False)
+    bundle = cc._Bundle("dom", "source")
+    assert prepared == []
+    bundle._prepare_tag("one-card")
+    bundle._prepare_tag("one-card")
+    assert prepared == [{"tag": "one-card"}]
+
+    def too_slow(self):
+        clock[0] += cc._CALL_SECONDS + 1
+        self._limit_preparation()
+
+    monkeypatch.setattr(cc._Bundle, "_settle", too_slow)
     with pytest.raises(TimeoutError):
-        cc._Bundle("dom", "source")
-    assert len(prepared) < 100
+        bundle._prepare_tag("slow-card")
+    assert "slow-card" not in bundle._prepared
 
 
 @pytest.mark.asyncio

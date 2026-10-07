@@ -47,7 +47,6 @@ _STRUCT_RE = re.compile(
     r"setConfig\(([\w$]+)\)\{[^}]*?\(0,[\w$]+\.[\w$]+\)\(([\w$.]+),([\w$]+)\)"
 )
 _SCHEMA_FN_RE = re.compile(r"_schema=\(0,[\w$]+\.[\w$]+\)\(")
-_SCHEMA_CONST_RE = re.compile(r"\.schema=\$\{([\w$]+)\}")
 _REF_ERROR_RE = re.compile(r"ReferenceError: ([\w$]+) is not defined")
 _I18N = "ui.panel.lovelace.editor.card."
 _MAX_WARNINGS = 20
@@ -60,7 +59,7 @@ _Queued = list[tuple[str, str, dict[str, Any]]]
 _ACCEPTED_EXTRAS = frozenset({"card_mod"})
 
 _ENGINE_JS = r"""
-var REG = {}, CACHE = {}, STRUCTS = {};
+var REG = {}, CACHE = {}, STRUCTS = {}, PURE = {};
 var ANY = new Proxy(function () {}, {
   get: function (t, k) {
     if (k === Symbol.toPrimitive) return function () { return ''; };
@@ -103,7 +102,13 @@ function build(src, bindings) {
   var values = names.map(function (n) {
     var b = bindings[n];
     if (b === 'any') return ANY;
-    try { return req(b); } catch (e) { throw new Error('require-failed ' + n + ' module ' + b + ': ' + e); }
+    try { return req(b); } catch (e) {
+      return new Proxy({}, { get: function (t, k) {
+        var key = b + ':' + String(k);
+        if (Object.prototype.hasOwnProperty.call(PURE, key)) return PURE[key];
+        throw new Error('export-needed ' + key);
+      } });
+    }
   });
   // Editor forms may read this.hass; an inert stand-in keeps them pure.
   return Function.apply(null, names.concat([src])).apply(ANY, values);
@@ -130,6 +135,10 @@ function engine(op, p) {
     if (op === 'struct') {
       STRUCTS[p.key] = build(p.src, p.bindings);
       return { value: Object.keys(STRUCTS[p.key].schema || {}) };
+    }
+    if (op === 'export') {
+      PURE[p.key] = build(p.src, p.bindings);
+      return { value: true };
     }
     if (op === 'field_types') {
       function fields(s, depth) {
@@ -346,11 +355,27 @@ class CardDefinitions:
         module_id = self._tag_module.get(tag)
         if module_id is None:
             return ""
+        return self._module_body(module_id)
+
+    def _module_body(self, module_id: str) -> str:
         if module_id not in self._bodies:
             self._bodies[module_id] = self._engine("source", {"id": module_id}).get(
                 "value", ""
             )
         return self._bodies[module_id]
+
+    def _editor_body(self, card_type: str) -> str:
+        body = self._body(self._editor(card_type))
+        if body:
+            return body
+        card = self._body(f"hui-{card_type}-card")
+        form = re.search(r"getConfigForm\(\)\{", card)
+        if form:
+            end = _balanced_end(card, form.end() - 1)
+            module = re.search(r"\.bind\([\w$]+,(\d+)\)", card[form.end() : end])
+            if module:
+                return self._module_body(module.group(1))
+        return ""
 
     def _editor(self, card_type: str) -> str:
         """The editor tag the card's ``getConfigElement`` creates."""
@@ -383,10 +408,20 @@ class CardDefinitions:
             + ";"
         )
 
-    def _evaluate(self, op: str, body: str, expr: str, key: str = "") -> Any:
+    def _evaluate(
+        self, op: str, body: str, expr: str, key: str = "", depth: int = 0
+    ) -> Any:
         """Run ``expr`` from ``body``, binding the module's imports and locals."""
         aliases = dict(_ALIAS_RE.findall(body))
-        bindings: dict[str, str] = {}
+        if depth > 10:
+            raise ValueError("export dependency depth exceeded")
+        # Functions retain their import bindings even when invoked later by a
+        # different module. Only imports mentioned in this expression are needed.
+        bindings = {
+            name: module
+            for name, module in aliases.items()
+            if re.search(r"(?<![\w$.])" + re.escape(name) + r"\.", expr)
+        }
         prelude: list[str] = []
         for _ in range(40):
             src = "".join(prelude) + "return (" + expr + ")"
@@ -397,9 +432,9 @@ class CardDefinitions:
             # A form may leave a name inert; a validator must not, or it
             # would flag valid configs.
             inert_ok = op == "schema"
-            failed = re.match(r"Error: require-failed ([\w$]+)", error)
-            if failed and inert_ok:
-                bindings[failed.group(1)] = "any"
+            needed = re.fullmatch(r"Error: export-needed (\d+):([\w$]+)", error)
+            if needed:
+                self._resolve_export(*needed.groups(), bindings, depth, inert_ok)
                 continue
             missing = _REF_ERROR_RE.match(error)
             if not missing:
@@ -414,6 +449,32 @@ class CardDefinitions:
             else:
                 raise ValueError(f"unresolved {name}")
         raise ValueError("unresolved references")
+
+    def _resolve_export(
+        self,
+        module_id: str,
+        exported: str,
+        bindings: dict[str, str],
+        depth: int,
+        inert_ok: bool,
+    ) -> None:
+        """Evaluate a pure export without starting its browser-only module."""
+        source = self._module_body(module_id)
+        ref = re.search(
+            r"(?<=[{,])" + re.escape(exported) + r":(?:\(\)=>)?([\w$]+)(?=[,}])", source
+        )
+        definition = _local_definition(source, ref.group(1)) if ref else None
+        if definition:
+            self._evaluate(
+                "export", source, definition, f"{module_id}:{exported}", depth + 1
+            )
+        elif inert_ok:
+            # Form labels may depend on browser-only helpers; validators cannot.
+            for name, value in list(bindings.items()):
+                if value == module_id:
+                    bindings[name] = "any"
+        else:
+            raise ValueError(f"unresolved export {module_id}:{exported}")
 
     def card_types(self) -> list[dict[str, Any]]:
         listed = []
@@ -442,13 +503,18 @@ class CardDefinitions:
             "note": "Fields come from the installed frontend's editor form and struct. "
             "Runtime cards may support additional options; an omitted field does not mean it is invalid.",
         }
-        body = self._body(self._editor(card_type))
+        body = self._editor_body(card_type)
         types = (
             self._engine("field_types", {"key": card_type}).get("value")
             if self._struct_ready(card_type)
             else None
         )
         fields = None
+        if types is None:
+            result["field_coverage"] = "unfiltered"
+            result["note"] = (
+                "The stored-config schema could not be evaluated. These are unfiltered editor fields, which may include UI-only values or omit stored options; they are not a validation contract."
+            )
         for expr in _schema_expressions(body):
             try:
                 value = self._evaluate("schema", body, expr)
@@ -480,8 +546,13 @@ class CardDefinitions:
 
     def _struct_ready(self, card_type: str) -> bool:
         if card_type not in self._struct_keys:
-            body = self._body(self._editor(card_type))
+            body = self._editor_body(card_type)
             match = _STRUCT_RE.search(body)
+            form_match = re.search(
+                r"assertConfig:([\w$]+)=>\(0,[\w$]+\.[\w$]+\)\(([\w$]+),([\w$]+)\)",
+                body,
+            )
+            match = match or form_match
             definition = (
                 _local_definition(body, match.group(3))
                 if match and match.group(1) == match.group(2)
@@ -549,7 +620,7 @@ class CardDefinitions:
         if failure.get("type") == "never" and len(failure.get("path") or []) == 1:
             message = f"'{path}' is not listed in the {card_type} editor schema"
             close = difflib.get_close_matches(
-                path, self._struct_keys.get(card_type) or [], n=1
+                path, self._struct_keys.get(card_type) or [], n=1, cutoff=0.8
             )
             return f"{message}; did you mean '{close[0]}'?" if close else message
         message = re.sub(r"^At path: \S+ -- ", "", failure.get("message", ""))
@@ -570,20 +641,33 @@ def _custom_warnings(custom: CustomCards, customs: _Queued) -> list[str]:
                 f"{path} ({card_type}): not found in dashboard resources; "
                 "check the type spelling or whether it loads through extra JavaScript."
             )
-        explained = (_explain_message(tag, m) for m in messages or [])
+        explained = (
+            _explain_message(tag, m["message"], editor=m["source"] == "editor")
+            for m in messages or []
+        )
         found.extend(f"{path} ({card_type}): {e}" for e in explained if e is not None)
     return found
 
 
-def _explain_message(tag: str, message: str) -> str | None:
+def _explain_message(tag: str, message: str, *, editor: bool = False) -> str | None:
     """A custom card's own error, with a struct's unknown-key wording made plain."""
     unknown = re.match(r"At path: (\w+) -- Expected a value of type `never`", message)
     if unknown:
         key = unknown.group(1)
-        return (
-            None if key in _ACCEPTED_EXTRAS else f"'{key}' is not a {tag} card option"
+        if key in _ACCEPTED_EXTRAS:
+            return None
+        message = (
+            f"'{key}' is not listed in the {tag} editor schema"
+            if editor
+            else f"'{key}' is not a {tag} card option"
         )
-    return re.sub(r"^At path: (\S+) -- ", r"\1: ", message)
+    else:
+        message = re.sub(r"^At path: (\S+) -- ", r"\1: ", message)
+    return (
+        f"editor schema advisory; runtime support may differ: {message}"
+        if editor
+        else message
+    )
 
 
 def _schema_expressions(body: str) -> list[str]:
@@ -593,8 +677,10 @@ def _schema_expressions(body: str) -> list[str]:
         end = _balanced_end(body, m.end() - 1)
         if end > 0:
             found.append(body[m.end() : end - 1])
-    for m in _SCHEMA_CONST_RE.finditer(body):
-        definition = _local_definition(body, m.group(1))
+    for m in re.finditer(
+        r"\.schema=\$\{([\w$]+)\}|(?<=[{,])schema:([\w$]+)(?=[,}])", body
+    ):
+        definition = _local_definition(body, m.group(1) or m.group(2))
         if definition and definition.startswith("["):
             found.append(definition)
     return found
