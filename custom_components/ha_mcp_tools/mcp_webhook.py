@@ -461,11 +461,11 @@ class _WellKnownProtectedResourceView(HomeAssistantView):
     cors_allowed = True
     name = "ha_mcp_tools:oauth:wellknown-protected-resource"
     url = "/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
-    extra_urls = [f"{url}/readonly"]
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Bind the view to the HA instance; liveness is resolved per request."""
         self._hass = hass
+        self.extra_urls = [f"{self.url}/readonly"]
 
     async def get(self, request: web.Request, webhook_id: str) -> web.Response:
         """Serve the document only for the CURRENT entry's webhook id."""
