@@ -805,11 +805,9 @@ _EXEMPT_GATED_OR_READ_ARGS = {
     "ha_manage_energy_prefs": {
         # Optional recorder metadata inspection in get mode.
         "include_statistics",
-        # mode='set' payload — blocked unless dry_run=True (preview only).
+        # Set and convenience-mode payloads: blocked unless dry_run=True.
         "config",
         "config_hash",
-        # Convenience-mode payloads (add_device/remove_device/add_source),
-        # all blocked unless dry_run=True.
         "stat_consumption",
         "name",
         "included_in_stat",
