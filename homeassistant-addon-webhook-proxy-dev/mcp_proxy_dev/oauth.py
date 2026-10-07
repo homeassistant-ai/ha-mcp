@@ -37,12 +37,14 @@ import secrets
 import time
 from html import escape
 from pathlib import Path
-from typing import Any, Protocol, TypedDict
+from typing import Any, TypedDict
 from urllib.parse import unquote_plus, urlparse
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
+
+from .oauth_metadata import MetadataProvider as MetadataProvider
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -354,31 +356,6 @@ def _build_base_url(request: web.Request, public_base_url: str | None = None) ->
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "")
     scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
     return f"{scheme}://{host}"
-
-
-class MetadataProvider(Protocol):
-    """Interface the mode-aware discovery-document views need from a provider.
-
-    Satisfied structurally by both `OAuthProvider` (legacy) and
-    `auth_native.ResourceServer` (ha_auth). The views additionally read the
-    implementation's `_hass` via ``getattr`` (see `_active_oauth_mode` /
-    `_active_provider`), which a Protocol cannot express for a private
-    attribute — both implementations carry it.
-    """
-
-    @property
-    def webhook_id(self) -> str:
-        """This install's private webhook id."""
-
-    def resource_url(self, base_url: str) -> str:
-        """Absolute URL of the protected webhook resource under ``base_url``."""
-
-    def authorization_server_url(self, base_url: str) -> str:
-        """Issuer / authorization-server URL under ``base_url``."""
-
-    def base_url_for(self, request: web.Request) -> str:
-        """Public base URL for ``request`` per the provider's policy
-        (legacy: pinned to the configured URL; ha_auth: request-host-derived)."""
 
 
 def _active_oauth_mode(provider: object) -> str | None:
