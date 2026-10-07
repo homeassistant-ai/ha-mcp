@@ -27,3 +27,28 @@ Neither path requires the custom component. Both use the running Core's native
 recorder API, including Core's handling of statistics without a current entity.
 The history tool currently follows Core's default display conversion; it does
 not offer an explicit output-unit override.
+
+## Native request options and schema discovery
+
+`include_schema=True` on `ha_get_history`, or on energy `mode="get"`, includes
+the running Core's contract when the component supports discovery. Descriptions
+can be incomplete for callable validators; energy dry runs still invoke the
+actual registered save schema. Without the capability, previews explicitly
+report `proposal_validation.status="unavailable"` and `partial=True`.
+
+Statistics types go directly to Core, including `last_reset` and future types.
+Omitting them uses Core's defaults; the response reports types observed in the
+returned rows. `core_options` passes additional native recorder options, such
+as `{"units": {"energy": "MWh"}}`. It cannot override the tool's controlled
+query fields. Explicit-unit labels use Core's converter through the component;
+without it, values are preserved and units are explicitly unknown.
+
+History responses retain native row fields beside the readable aliases.
+Energy saves return the normalized Core configuration and hashes calculated
+from it. Preferences and per-key hashes retain future top-level fields.
+On an unconfigured installation without the component, `config` is empty
+instead of fabricated defaults; use its full `config_hash` for the first save.
+
+Energy `current_state_validation` and `post_save_validation` preserve native
+semantic validation results. These checks concern persisted state, whereas
+proposal validation checks the save schema without writing.

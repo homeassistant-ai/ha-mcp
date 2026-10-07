@@ -6,6 +6,7 @@ It never dispatches a command. Writes still use Core's authenticated endpoints.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
+_UNSUPPORTED = _optional_attr("probatio", "UNSUPPORTED")
 _TO_JSON_SCHEMA = _optional_attr("probatio", "to_json_schema")
 COMMAND = "ha_mcp_tools/core_contract"
 CAPABILITY = "core_contract"
@@ -56,6 +58,27 @@ def validate_request(
     return {"status": "validated", "valid": True, "errors": []}
 
 
+def _core_serializer(node: Any) -> Any:
+    """Describe Core's opaque discriminated unions from their live schema objects.
+
+    cv.key_value_schemas closes over its alternatives instead of publishing a
+    serializer. This adapter only reveals those objects; it never validates or
+    supplies a list of source types/fields. Unknown wrappers remain unsupported.
+    """
+    if not inspect.isfunction(node) or node.__module__ != "homeassistant.helpers.config_validation":
+        return _UNSUPPORTED
+    if node.__qualname__ != "key_value_schemas.<locals>.key_value_validator":
+        return _UNSUPPORTED
+    closure = inspect.getclosurevars(node).nonlocals
+    alternatives = closure.get("value_schemas")
+    if not isinstance(alternatives, dict) or closure.get("default_schema") is not None:
+        return _UNSUPPORTED
+    return {"anyOf": [
+        _TO_JSON_SCHEMA(schema, custom_serializer=_core_serializer)
+        for schema in alternatives.values()
+    ]}
+
+
 def describe_contract(hass: HomeAssistant, command: str) -> dict[str, Any]:
     """Use Core's serializer; never present a lossy description as validation."""
     schema = _schema(hass, command)
@@ -65,11 +88,11 @@ def describe_contract(hass: HomeAssistant, command: str) -> dict[str, Any]:
     try:
         if _TO_JSON_SCHEMA is not None:
             try:
-                result["schema"] = _TO_JSON_SCHEMA(schema, strict=True)
-                result["description_complete"] = True
+                result["schema"] = _TO_JSON_SCHEMA(schema, strict=True, custom_serializer=_core_serializer)
+                result["description_complete"] = False
             except Exception:
                 _LOGGER.debug("Core contract needs lossy serialization", exc_info=True)
-                result["schema"] = _TO_JSON_SCHEMA(schema)
+                result["schema"] = _TO_JSON_SCHEMA(schema, custom_serializer=_core_serializer)
                 result["description_complete"] = False
         else:
             result["fields"] = _convert(schema)

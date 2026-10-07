@@ -856,6 +856,7 @@ class TestInfo:
             "bulk_call_service",
             "template_diagnose",
             *wsapi.helper_collections.CAPABILITIES,
+            wsapi.core_contract.CAPABILITY,
         ]
         assert info["capabilities"] == wsapi.CAPABILITIES
         # config_get was withdrawn before release (raw_config freshness lags the
@@ -1964,6 +1965,8 @@ class TestRegistrationAndAdminGate:
             # test_component_template_diagnose.py (this set only guards drift).
             wsapi.WS_TEMPLATE_DIAGNOSE,
             *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py
+            wsapi.core_contract.COMMAND,
+            "ha_mcp_tools/statistics_units",
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered

@@ -36,40 +36,18 @@ from .tool_hints import write_hints
 logger = logging.getLogger(__name__)
 
 
-def _flatten_validation_errors(raw: Any) -> list[dict[str, str]]:
-    """Convert the raw ``energy/validate`` response into a flat error list.
+def _flatten_validation_errors(raw: Any) -> list[dict[str, Any]]:
+    """Add paths for readability while preserving native issue objects as details."""
+    def walk(value: Any, path: str) -> list[dict[str, Any]]:
+        if not value:
+            return []
+        if isinstance(value, list):
+            return [issue for index, item in enumerate(value) for issue in walk(item, f"{path}[{index}]")]
+        if isinstance(value, dict) and not any(key in value for key in ("type", "message", "issue_type")):
+            return [issue for key, item in value.items() for issue in walk(item, f"{path}.{key}" if path else key)]
+        return [{"path": path, "message": str(value), "details": value}]
 
-    The raw response mirrors the prefs structure: a dict with the three
-    top-level keys, each mapping to a list of per-entry error lists (empty
-    inner list = that entry is valid). This function walks that structure and
-    returns a flat list of ``{"path", "message"}`` dicts, suitable for agent
-    consumption.
-
-    A successful validation returns an empty list.
-    """
-    if not isinstance(raw, dict):
-        return []
-
-    errors: list[dict[str, str]] = []
-    for key, entries in raw.items():
-        if not isinstance(entries, list):
-            continue
-        for idx, entry_errors in enumerate(entries):
-            if not entry_errors:
-                continue
-            if isinstance(entry_errors, list):
-                errors.extend(
-                    {"path": f"{key}[{idx}]", "message": str(msg)}
-                    for msg in entry_errors
-                )
-            elif isinstance(entry_errors, dict):
-                for field, msgs in entry_errors.items():
-                    msg_list = msgs if isinstance(msgs, list) else [msgs]
-                    errors.extend(
-                        {"path": f"{key}[{idx}].{field}", "message": str(msg)}
-                        for msg in msg_list
-                    )
-    return errors
+    return walk(raw, "")
 
 
 class EnergyTools:
@@ -218,7 +196,7 @@ class EnergyTools:
           device-consumption entry. The tool performs a fresh read-modify-write
           internally; the caller does NOT manage config_hash.
         - mode='add_source': append a single entry to ``energy_sources``.
-          Same atomic read-modify-write semantics.
+          Same optimistic read-modify-write semantics.
 
         RELATED TOOLS: Use ha_get_history(source="statistics") with the returned
         statistic IDs for consumption, totals, and trends. Metadata comes directly
@@ -322,13 +300,14 @@ class EnergyTools:
     async def _dry_run(self, config: dict[str, Any]) -> dict[str, Any]:
         """Preview the actual native schema and label persisted-state checks separately."""
         validation = await validate_energy_proposal(self._client, config)
-        current_errors, failure = await self._post_save_validate()
+        current_errors, failure, native_validation = await self._post_save_validate()
         result: dict[str, Any] = {
             "success": True,
             "mode": "set",
             "dry_run": True,
             "proposal_validation": validation,
             "current_state_validation_errors": current_errors,
+            "current_state_validation": native_validation,
             "message": "No preferences saved. Semantic checks describe the current persisted state only.",
         }
         if validation["status"] != "validated":
@@ -379,6 +358,7 @@ class EnergyTools:
             (
                 post_save_errors,
                 post_save_validate_error,
+                native_validation,
             ) = await self._post_save_validate()
 
             # Core returns its full normalized preferences, including defaults
@@ -391,6 +371,7 @@ class EnergyTools:
             response: dict[str, Any] = {
                 "success": True,
                 "mode": "set",
+                "post_save_validation": native_validation,
                 "config": new_prefs,
                 "config_hash": new_hash,
                 "config_hash_per_key": _compute_per_key_hashes(new_prefs),
@@ -535,7 +516,7 @@ class EnergyTools:
                     )
                 )
 
-    async def _post_save_validate(self) -> tuple[list[dict[str, str]], str | None]:
+    async def _post_save_validate(self) -> tuple[list[dict[str, Any]], str | None, Any]:
         """Call ``energy/validate`` after a save and return
         ``(errors, failure_message)``.
 
@@ -547,16 +528,16 @@ class EnergyTools:
         and a failure message when the validate call itself fails
         (transport/timeout, etc.).
         """
-        post_save_errors: list[dict[str, str]] = []
+        post_save_errors: list[dict[str, Any]] = []
+        native_validation: Any = None
         post_save_validate_error: str | None = None
         try:
             validate_result = await self._client.send_websocket_message(
                 {"type": "energy/validate"}
             )
             if validate_result.get("success"):
-                post_save_errors = _flatten_validation_errors(
-                    validate_result.get("result", {})
-                )
+                native_validation = validate_result.get("result")
+                post_save_errors = _flatten_validation_errors(native_validation)
             else:
                 post_save_validate_error = (
                     validate_result.get("error") or "unknown error"
@@ -569,7 +550,7 @@ class EnergyTools:
             # succeeded. Log and continue.
             logger.warning("Post-save energy/validate failed", exc_info=True)
             post_save_validate_error = str(e)
-        return post_save_errors, post_save_validate_error
+        return post_save_errors, post_save_validate_error, native_validation
 
     # ------------------------------------------------------------------
     # Convenience modes — atomic read-modify-write (no caller hash)
@@ -584,7 +565,7 @@ class EnergyTools:
         water: bool,
         dry_run: bool,
     ) -> dict[str, Any]:
-        """Atomically add a device-consumption entry.
+        """Add a device-consumption entry using a fresh snapshot.
 
         Reads current prefs, checks for duplicate ``stat_consumption`` in the
         target list, appends the new entry, and writes back with the freshly
@@ -640,7 +621,7 @@ class EnergyTools:
         water: bool,
         dry_run: bool,
     ) -> dict[str, Any]:
-        """Atomically remove a device-consumption entry by ``stat_consumption``."""
+        """Remove a device-consumption entry by ``stat_consumption``."""
         if stat_consumption is None:
             raise_tool_error(
                 create_error_response(
@@ -866,26 +847,10 @@ class EnergyTools:
         dry_run: bool,
         preview_payload: dict[str, Any],
     ) -> dict[str, Any]:
-        """Run convenience-mode read-modify-write with dry-run backstop and hash-conflict retry.
+        """Retry one detected snapshot conflict; Core has no conditional-save API.
 
-        Atomicity is with respect to the *entire* prefs snapshot, not just
-        ``target_key``: ``_set_prefs`` validates the full ``config_hash``, so
-        this helper retries on any concurrent modification — even one that
-        touched an unrelated top-level key.
-
-        Performs at most two attempts: on RESOURCE_LOCKED from ``_set_prefs``
-        (concurrent modification between read and write), retries once with
-        a fresh read. Other errors propagate immediately.
-
-        For ``dry_run``: runs the mutator against a fresh read (so duplicate /
-        not-found errors surface), shape-checks the resulting list as a
-        backstop matching the real-run path, then returns ``preview_payload``
-        plus the new shape — without writing. Short-circuits before the retry
-        loop since dry_run never writes.
-
-        The convenience path threads the freshly-fetched snapshot into
-        ``_set_prefs`` so the inner ``energy/get_prefs`` re-read is skipped
-        — halving the read cost on the happy path.
+        Dry runs validate the whole mutated proposal without saving. This is
+        optimistic locking, not a transaction against concurrent native writers.
         """
         try:
             if dry_run:

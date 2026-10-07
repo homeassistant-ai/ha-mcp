@@ -27,7 +27,7 @@ async def core_contract(
             url=client.base_url, token=client.token,
             verify_ssl=getattr(client, "verify_ssl", None),
         )
-        params = {"command": command}
+        params: dict[str, Any] = {"command": command}
         if payload is not None:
             params["payload"] = payload
         response = await ws.send_command("ha_mcp_tools/core_contract", **params)

@@ -36,3 +36,40 @@ def test_contract_validation_cannot_override_transport(payload: dict[str, Any]) 
 
     with pytest.raises(ValueError, match="reserved"):
         validate_request(FakeHass(), "energy/save_prefs", payload)
+
+
+def test_no_validator_means_unavailable_instead_of_success() -> None:
+    from custom_components.ha_mcp_tools.core_contract import validate_request
+
+    assert validate_request(FakeHass(), "energy/save_prefs", {})["status"] == "unavailable"
+
+
+def test_bridge_cannot_validate_arbitrary_commands() -> None:
+    from custom_components.ha_mcp_tools.core_contract import validate_request
+
+    with pytest.raises(ValueError, match="Unsupported"):
+        validate_request(FakeHass(), "call_service", {})
+
+
+@pytest.mark.asyncio
+async def test_uncertain_capability_discovery_is_not_reported_as_absence(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
+    from ha_mcp.tools import core_contract as module
+
+    monkeypatch.setattr(module, "get_component_caps", AsyncMock(side_effect=RuntimeError("offline")))
+    with pytest.raises(ToolError, match="offline"):
+        await module.core_contract(Mock(), "energy/save_prefs", {})
+
+
+@pytest.mark.asyncio
+async def test_invalid_native_result_is_a_tool_error(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
+    from ha_mcp.tools import core_contract as module
+
+    monkeypatch.setattr(module, "core_contract", AsyncMock(return_value={"status": "validated", "valid": False, "errors": [{"path": ["future"], "message": "required"}]}))
+    with pytest.raises(ToolError, match="future"):
+        await module.validate_energy_proposal(Mock(), {"future": []})
