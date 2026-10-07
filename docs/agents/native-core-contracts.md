@@ -31,7 +31,8 @@ Unknown serializer constructs remain explicitly incomplete.
 ## Preserve independent safeguards
 
 Keep read-only gates, optimistic hashes, duplicate guards, query bounds,
-pagination and protected command envelopes. Name these as HA-MCP policies,
+pagination and protected command envelopes. An empty statistics-type list is
+rejected by the wrapper because it requests timestamps without any values. Name these as HA-MCP policies,
 not Core validation rules. Generic native options must not override the entity,
 time or response-size inputs that the wrapper has already bounded.
 

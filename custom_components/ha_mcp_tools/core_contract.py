@@ -141,7 +141,7 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
     ), (
         {
             vol.Required("type"): "ha_mcp_tools/statistics_units",
-            vol.Required("statistic_ids"): vol.All([str], vol.Length(min=1, max=25)),
+            vol.Required("statistic_ids"): vol.All([str], vol.Length(min=1)),
             vol.Required("units"): {str: str},
         },
         units_result,

@@ -805,6 +805,8 @@ _EXEMPT_GATED_OR_READ_ARGS = {
     "ha_manage_energy_prefs": {
         # Optional recorder metadata inspection in get mode.
         "include_statistics",
+        # Optional Core schema discovery in get mode, never executes a handler.
+        "include_schema",
         # Set and convenience-mode payloads: blocked unless dry_run=True.
         "config",
         "config_hash",

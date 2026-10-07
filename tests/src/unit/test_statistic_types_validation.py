@@ -168,14 +168,18 @@ class TestStatisticTypesValidation:
 
     @pytest.mark.asyncio
     async def test_invalid_type_raises(self, history_tool):
-        """Invalid type name must raise ToolError with VALIDATION_INVALID_PARAMETER."""
-        with self._patch_ws(), pytest.raises(ToolError) as exc_info:
+        """Native rejection is surfaced; the tool holds no copied type whitelist."""
+        async def reject(message):
+            return {"success": False, "error": "Core rejected invalid_type"}
+
+        self._mock_client.send_websocket_message = reject
+        with pytest.raises(ToolError) as exc_info:
             await history_tool(
                 entity_ids="sensor.test",
                 source="statistics",
                 start_time="7d",
+                period="hour",
                 statistic_types=["invalid_type"],
             )
         error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "invalid_type" in error["message"]

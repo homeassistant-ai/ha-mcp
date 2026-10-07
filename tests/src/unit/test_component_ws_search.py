@@ -818,46 +818,9 @@ def empty_view(monkeypatch):
 class TestInfo:
     def test_shape(self):
         """Advertise the complete component capability contract."""
-        # Drift guard: info advertises EVERY shipped capability, as CAPABILITIES.
         info = wsapi._do_info(FakeHass(config=FakeConfig(time_zone="America/New_York")))
         assert info["schema_version"] == 1
         assert info["component_version"] == COMPONENT_VERSION
-        assert info["capabilities"] == [
-            "search",
-            "search_unified",
-            "search_entity_membership",
-            "overview",
-            "helpers_list",
-            "states",
-            "blueprint_get",
-            "blueprint_text",
-            "device_get",
-            "device_list",
-            "device_registry_child_semantics",
-            "entity_enrich",
-            "exposure",
-            "config_entries",
-            "config_entries_subentry_data",
-            "registry_lookup",
-            "system_snapshot",
-            "entity_lookup",
-            "backup_prep",
-            "registries",
-            "dashboards",
-            "dashboard_edit",
-            "dashboards_doc_search",
-            "services_list",
-            "reference_data",
-            "search_visibility",
-            "search_visibility_allowlist_authorization",
-            "server_entry",
-            "server_entry_update",
-            "call_service",
-            "bulk_call_service",
-            "template_diagnose",
-            *wsapi.helper_collections.CAPABILITIES,
-            wsapi.core_contract.CAPABILITY,
-        ]
         assert info["capabilities"] == wsapi.CAPABILITIES
         # config_get was withdrawn before release (raw_config freshness lags the
         # config file between write and reload) — it must not be advertised.

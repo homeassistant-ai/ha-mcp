@@ -1044,6 +1044,11 @@ def _parse_statistic_types(
                 stat_types_list = [statistic_types.strip()]
         else:
             stat_types_list = list(statistic_types)
+        if not stat_types_list:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "statistic_types cannot be empty: this tool requires at least one value field. Omit it for Core's defaults.",
+            ))
 
     return stat_types_list
 

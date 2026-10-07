@@ -25,8 +25,7 @@ Pass a returned statistic ID to `ha_get_history` to retrieve its readings.
 
 Neither path requires the custom component. Both use the running Core's native
 recorder API, including Core's handling of statistics without a current entity.
-The history tool currently follows Core's default display conversion; it does
-not offer an explicit output-unit override.
+The default follows Core's display conversion. Explicit units are described below.
 
 ## Native request options and schema discovery
 

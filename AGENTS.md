@@ -147,9 +147,9 @@ The minimal setup is `uv sync --group dev`; run stdio with `uv run ha-mcp` and H
 
 ## Architecture
 
-Tools are lazy-discovered from `tools_*.py`; shared business logic belongs in service modules; WebSocket-backed operations verify state changes; and tools wait for logical completion when possible. Read the [architecture map](docs/agents/development.md#architecture) and the [code review style guide](.gemini/styleguide.md) before structural code changes.
+Lazy-discover tools from `tools_*.py`; put shared logic in service modules, verify writes and wait for completion. Before structural changes, read the [architecture map](docs/agents/development.md#architecture) and [style guide](.gemini/styleguide.md).
 
-For read and write tools, use native Core APIs, schemas and flows rather than copied field/type allowlists. Before changing a wrapper, read the [native Core contract guidance](docs/agents/native-core-contracts.md); audit its request, validation, response and metadata paths together, preserving HA-MCP safety policies and explicitly labeling unavailable validation.
+Read and write wrappers must use [native Core contracts](docs/agents/native-core-contracts.md), preserving safety policies and labeling unavailable validation.
 
 ## Code Conventions
 

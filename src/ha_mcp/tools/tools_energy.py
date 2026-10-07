@@ -422,7 +422,8 @@ class EnergyTools:
         if current_prefs is not None:
             return current_prefs
 
-        return (await self._get_prefs())["config"]
+        config: dict[str, Any] = (await self._get_prefs())["config"]
+        return config
 
     @staticmethod
     def _check_config_hash(
