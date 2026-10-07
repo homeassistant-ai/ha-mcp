@@ -112,6 +112,9 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
                 ErrorCode.SERVICE_CALL_FAILED,
                 "Home Assistant's card definitions are unavailable.",
                 details=str(error),
+                suggestions=[
+                    "Use ha_get_skill_guide(file='references/dashboard-cards.md') for static card guidance"
+                ],
                 context={"action": "describe", "card_type": card_type},
             )
         )
@@ -135,8 +138,17 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
         if isinstance(fields, list)
         else None,
     }
+    response.update(
+        {
+            key: value
+            for key, value in result.items()
+            if key in ("field_coverage", "note")
+        }
+    )
     if response["fields"] is None:
-        response["note"] = _no_fields_note(card_type)
+        response["note"] = " ".join(
+            filter(None, (response.get("note"), _no_fields_note(card_type)))
+        )
     return response
 
 

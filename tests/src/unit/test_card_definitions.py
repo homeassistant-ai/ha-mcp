@@ -122,7 +122,7 @@ def test_unknown_key_names_the_closest_card_option() -> None:
 
     assert (
         definitions._explain("tile", {**never, "path": ["colour"]})
-        == "'colour' is not a tile card option; did you mean 'color'?"
+        == "'colour' is not listed in the tile editor schema; did you mean 'color'?"
     )
     assert definitions._explain("tile", {**never, "path": ["card_mod"]}) is None
     assert (

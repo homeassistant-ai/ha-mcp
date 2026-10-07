@@ -122,7 +122,10 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
             assert "card option" not in warnings, warnings
             return
         assert "views[0].cards[0]" not in warnings, warnings
-        assert "'colour' is not a tile card option; did you mean 'color'?" in warnings
+        assert (
+            "'colour' is not listed in the tile editor schema; did you mean 'color'?"
+            in warnings
+        )
         assert "views[0].cards[2]: unknown card type 'no-such-card'" in warnings
         assert "views[0].cards[3].cards[0] (button): 'entitty'" in warnings
         assert "views[1].header.card: unknown card type 'no-such-header'" in warnings
@@ -279,7 +282,8 @@ async def test_common_card_coverage_tracks_the_installed_frontend(
             },
         )
         assert any(
-            f"'e2e_unknown_option' is not a {card_type} card option" in warning
+            f"'e2e_unknown_option' is not listed in the {card_type} editor schema"
+            in warning
             for warning in saved.get("warnings", [])
         ), saved
     finally:
@@ -342,6 +346,108 @@ async def test_described_fields_match_stored_card_configuration(mcp_client):
             },
         )
         assert not result.get("warnings"), result
+    finally:
+        await safe_call_tool(
+            mcp_client, "ha_config_delete_dashboard", {"url_path": path}
+        )
+
+
+@pytest.mark.asyncio
+async def test_editor_metadata_includes_subeditors_and_declares_partial_coverage(
+    mcp_client,
+):
+    if not component_surface_available():
+        return
+    mcp = MCPAssertions(mcp_client)
+    expected = {
+        "history-graph": {"entities"},
+        "statistics-graph": {"entities"},
+        "picture-glance": {"entities"},
+        "map": {"entities"},
+        "calendar": {"entities"},
+        "distribution": {"entities"},
+        "tile": {"features", "features_position", "vertical"},
+        "picture-elements": {"elements"},
+        "weather-forecast": {
+            "forecast_type",
+            "forecast_slots",
+            "show_current",
+            "show_forecast",
+            "tap_action",
+        },
+    }
+    for card_type, names in expected.items():
+        result = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"describe": True, "card_type": card_type}
+        )
+        assert names <= {field["name"] for field in result["fields"]}, result
+        assert result["field_coverage"] == "partial"
+        assert "additional options" in result["note"]
+    for card_type in (
+        "dialog-edit",
+        "dialog-create",
+        "dialog-delete",
+        "dialog-suggest",
+        "suggestion",
+    ):
+        await mcp.call_tool_failure(
+            "ha_config_get_dashboard", {"describe": True, "card_type": card_type}
+        )
+    for card_type in ("horizontal-stack", "vertical-stack", "shopping-list"):
+        await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"describe": True, "card_type": card_type}
+        )
+
+
+@pytest.mark.asyncio
+async def test_editor_advice_does_not_claim_valid_runtime_options_are_invalid(
+    mcp_client,
+):
+    if not component_surface_available():
+        return
+    mcp = MCPAssertions(mcp_client)
+    path = "editor-advice-" + uuid4().hex[:8]
+    config = {
+        "views": [
+            {
+                "title": "Advice",
+                "cards": [
+                    {
+                        "type": "iframe",
+                        "url": "https://example.com",
+                        "allow": "fullscreen",
+                        "disable_sandbox": True,
+                    },
+                    {
+                        "type": "button",
+                        "entity": "light.bed_light",
+                        "tap_action": {"action": "fire-dom-event"},
+                    },
+                    {
+                        "type": "button",
+                        "entity": "light.bed_light",
+                        "tap_action": {
+                            "action": "toggle",
+                            "confirmation": {"exemptions": [{"user": "test"}]},
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+    try:
+        saved = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {"url_path": path, "config": config, "MandatoryBPS": False},
+        )
+        assert all(
+            "editor schema advisory; runtime support may differ" in warning
+            for warning in saved.get("warnings", [])
+        ), saved
+        readback = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"url_path": path}
+        )
+        assert readback["config"] == config
     finally:
         await safe_call_tool(
             mcp_client, "ha_config_delete_dashboard", {"url_path": path}

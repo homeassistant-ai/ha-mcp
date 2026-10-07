@@ -247,6 +247,7 @@ async def test_optional_runtime_install_uses_ha_manager_and_failure_is_advisory(
     monkeypatch.setattr(runtime, "_check_core_constraints", lambda: None)
     monkeypatch.setattr(runtime, "_provider_state", lambda: "missing")
     hass = MagicMock()
+    hass.config.skip_pip = False
     hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
     assert await runtime.async_ensure_runtime(hass) is False
     install.assert_awaited_once_with(
@@ -282,3 +283,119 @@ def test_core_constraints_cannot_be_overridden_by_the_optional_runtime(
     (tmp_path / "package_constraints.txt").write_text("quickjs-ng==0.0.0\n")
     with pytest.raises(ValueError, match="Home Assistant requires"):
         runtime._check_core_constraints()
+
+
+@pytest.mark.parametrize("state,ready", [("missing", False), ("ready", True)])
+@pytest.mark.asyncio
+async def test_skip_pip_never_installs_but_allows_compatible_provider(
+    monkeypatch, state, ready
+):
+    from custom_components.ha_mcp_tools import card_runtime as runtime
+
+    install = AsyncMock()
+    monkeypatch.setitem(
+        sys.modules,
+        "homeassistant.requirements",
+        SimpleNamespace(async_process_requirements=install),
+    )
+    monkeypatch.setattr(runtime, "_check_core_constraints", lambda: None)
+    monkeypatch.setattr(runtime, "_provider_state", lambda: state)
+    hass = MagicMock()
+    hass.config.skip_pip = True
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    assert await runtime.async_ensure_runtime(hass) is ready
+    install.assert_not_awaited()
+
+
+def test_partial_custom_child_can_omit_type_but_explicit_typo_is_reported():
+    definitions = _definitions({"entities"}, {"entities": None})
+    config = {
+        "views": [
+            {
+                "cards": [
+                    {"type": "custom:auto-entities", "card": {"title": "Lights on"}},
+                    {"type": "custom:auto-entities", "card": {"type": "tyle"}},
+                    {"title": "Missing real type"},
+                ]
+            }
+        ]
+    }
+    warnings = definitions.validate(config)
+    assert warnings == [
+        "views[0].cards[1].card: unknown card type 'tyle'",
+        "views[0].cards[2]: no card type configured",
+    ]
+
+
+@pytest.mark.parametrize(
+    "view", [{"cards": 5}, {"sections": 5}, {"sections": [{"cards": 5}]}]
+)
+def test_malformed_view_does_not_hide_other_card_warnings(view):
+    definitions = _definitions({"tile"}, {"tile": None})
+    assert definitions.validate({"views": [{"cards": [{"type": "tyle"}]}, view]}) == [
+        "views[0].cards[0]: unknown card type 'tyle'"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_describe_points_to_static_reference(component):
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
+
+    component.send_command.return_value = {
+        "result": {"success": False, "error": "unavailable"}
+    }
+    with pytest.raises(ToolError, match=r"references/dashboard-cards\.md"):
+        await describe_mod.describe_card_response(MagicMock(), "tile")
+
+
+def test_struct_fields_fill_subeditor_gaps_without_duplicating_form_fields():
+    fields = [
+        {
+            "type": "expandable",
+            "name": "content",
+            "flatten": True,
+            "schema": [{"name": "entity", "selector": {"entity": {}}}],
+        }
+    ]
+    types = {
+        "type": {"type": "string"},
+        "entity": {"type": "string"},
+        "features": {"type": "array"},
+        "vertical": {"type": "boolean"},
+    }
+    result = cd._complete_fields(fields, types)
+    compact = describe_mod._flatten(result)
+    assert [f["name"] for f in compact] == ["entity", "features", "vertical"]
+    assert compact[1:] == [
+        {"name": "features", "type": "array"},
+        {"name": "vertical", "type": "boolean"},
+    ]
+
+
+def test_struct_advice_is_explicit_about_its_editor_only_authority():
+    definitions = _definitions({"button"}, {"button": ["type", "tap_action"]})
+    definitions._engine = MagicMock(
+        return_value={
+            "value": [
+                [
+                    {
+                        "path": ["tap_action", "action"],
+                        "type": "enums",
+                        "message": "fire-dom-event is outside the editor enum",
+                    }
+                ]
+            ]
+        }
+    )
+    warnings = definitions.validate({"views": [{"cards": [{"type": "button"}]}]})
+    assert "editor schema advisory; runtime support may differ" in warnings[0]
+
+
+def test_card_index_keeps_inherited_cards_but_excludes_dialogs():
+    definitions = _definitions(set(), {})
+    definitions._strings = {f"{cd._I18N}horizontal-stack.name": "Horizontal stack"}
+    definitions._body = MagicMock(return_value="class Dialog{showDialog(t){}}")
+    assert definitions._is_card("horizontal-stack")
+    assert not definitions._is_card("dialog-edit")
+    definitions._body.return_value = "class Card{setConfig(t){this.config=t}}"
+    assert definitions._is_card("energy-internal")

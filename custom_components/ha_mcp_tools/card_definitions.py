@@ -250,6 +250,34 @@ def _stored_fields(
     return result
 
 
+def _complete_fields(
+    fields: list[dict[str, Any]], types: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    """Include struct fields configured outside the editor's ha-form."""
+    names = _field_names(fields)
+    return [
+        *fields,
+        *(
+            {"name": name, "type": metadata["type"]}
+            for name, metadata in (types or {}).items()
+            if name != "type" and name not in names
+        ),
+    ]
+
+
+def _field_names(fields: list[dict[str, Any]]) -> set[str]:
+    names = set()
+    for field in fields:
+        children = field.get("schema")
+        if isinstance(children, list) and (
+            not field.get("name") or field.get("flatten")
+        ):
+            names.update(_field_names(children))
+        elif field.get("name"):
+            names.add(field["name"])
+    return names
+
+
 class CardDefinitions:
     """Card types, forms and validators from one installed frontend build."""
 
@@ -273,6 +301,15 @@ class CardDefinitions:
         self._engine._threadpool.submit(
             self._engine.add_callable, "__chunk", self._chunk_source
         ).result()
+        # Dialogs also register hui-*-card tags. Real cards have an editor
+        # name or implement the card setConfig contract. Names retain cards
+        # such as stacks and shopping-list which inherit that method.
+        self._card_types = {tag for tag in self._card_types if self._is_card(tag)}
+
+    def _is_card(self, card_type: str) -> bool:
+        return f"{_I18N}{card_type}.name" in self._strings or bool(
+            re.search(r"setConfig\([\w$]+\)\{", self._body(f"hui-{card_type}-card"))
+        )
 
     def _index(self) -> None:
         files = sorted(self._dir.glob("*.js"), key=lambda p: p.stat().st_size)
@@ -386,23 +423,29 @@ class CardDefinitions:
             "name": self._strings.get(f"{_I18N}{card_type}.name"),
             "description": self._strings.get(f"{_I18N}{card_type}.description"),
             "fields": None,
+            "field_coverage": "partial",
+            "note": "Fields come from the installed frontend's editor form and struct. "
+            "Runtime cards may support additional options; an omitted field does not mean it is invalid.",
         }
         body = self._body(self._editor(card_type))
+        types = (
+            self._engine("field_types", {"key": card_type}).get("value")
+            if self._struct_ready(card_type)
+            else None
+        )
+        fields = None
         for expr in _schema_expressions(body):
             try:
                 value = self._evaluate("schema", body, expr)
             except ValueError:
                 continue
             if isinstance(value, list):
-                types = (
-                    self._engine("field_types", {"key": card_type}).get("value")
-                    if self._struct_ready(card_type)
-                    else None
-                )
-                result["fields"] = self._with_help(
-                    card_type, _stored_fields(value, types)
-                )
+                fields = _stored_fields(value, types)
                 break
+        if fields is not None or types:
+            result["fields"] = self._with_help(
+                card_type, _complete_fields(fields or [], types)
+            )
         return result
 
     def _with_help(self, card_type: str, fields: list[Any]) -> list[Any]:
@@ -443,7 +486,7 @@ class CardDefinitions:
     def validate(
         self, config: dict[str, Any], custom: CustomCards | None = None
     ) -> list[str]:
-        """One warning per problem the frontend would flag in a stored card."""
+        """Card type checks and advisory editor-schema diagnostics."""
         warnings, checked, customs = self._triage(config)
         if custom is not None:
             warnings.extend(_custom_warnings(custom, customs))
@@ -452,7 +495,11 @@ class CardDefinitions:
             results = self._engine("validate", {"cards": payload}).get("value") or []
             for (path, card_type, _), failures in zip(checked, results, strict=False):
                 explained = (self._explain(card_type, f) for f in failures)
-                warnings.extend(f"{path} ({card_type}): {e}" for e in explained if e)
+                warnings.extend(
+                    f"{path} ({card_type}): editor schema advisory; runtime support may differ: {e}"
+                    for e in explained
+                    if e
+                )
         if len(warnings) > _MAX_WARNINGS:
             more = len(warnings) - _MAX_WARNINGS
             warnings = [*warnings[:_MAX_WARNINGS], f"...and {more} more card problems"]
@@ -467,7 +514,8 @@ class CardDefinitions:
         for path, card in _cards(config, partial):
             card_type = card.get("type")
             if not isinstance(card_type, str):
-                warnings.append(f"{path}: no card type configured")
+                if path not in partial:
+                    warnings.append(f"{path}: no card type configured")
             elif card_type.startswith("custom:"):
                 if path not in partial:
                     customs.append((path, card_type, card))
@@ -484,7 +532,7 @@ class CardDefinitions:
         if path in _ACCEPTED_EXTRAS:
             return None
         if failure.get("type") == "never" and len(failure.get("path") or []) == 1:
-            message = f"'{path}' is not a {card_type} card option"
+            message = f"'{path}' is not listed in the {card_type} editor schema"
             close = difflib.get_close_matches(
                 path, self._struct_keys.get(card_type) or [], n=1
             )
@@ -621,11 +669,13 @@ def _cards(
                 found,
                 type_only=type_only,
             )
-        for i, card in enumerate(view.get("cards") or []):
+        cards = view.get("cards")
+        for i, card in enumerate(cards if isinstance(cards, list) else []):
             _walk_card(f"views[{v}].cards[{i}]", card, found, type_only=type_only)
-        for s, section in enumerate(view.get("sections") or []):
+        sections = view.get("sections")
+        for s, section in enumerate(sections if isinstance(sections, list) else []):
             cards = section.get("cards") if isinstance(section, dict) else None
-            for i, card in enumerate(cards or []):
+            for i, card in enumerate(cards if isinstance(cards, list) else []):
                 _walk_card(
                     f"views[{v}].sections[{s}].cards[{i}]",
                     card,

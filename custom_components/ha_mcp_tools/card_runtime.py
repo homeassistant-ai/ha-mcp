@@ -77,6 +77,11 @@ async def async_ensure_runtime(hass: Any) -> bool:
         await hass.async_add_executor_job(_check_core_constraints)
         state = await hass.async_add_executor_job(_provider_state)
         if state == "missing":
+            if hass.config.skip_pip:
+                _LOGGER.debug(
+                    "Dashboard card advice unavailable: pip installation disabled"
+                )
+                return False
             from homeassistant.requirements import async_process_requirements
 
             # HA owns pip locking, installation location and Core constraints.
