@@ -5,6 +5,7 @@ frontend files Home Assistant serves. Without the component there is no source
 for either: describe reports that, and writes carry no card warnings.
 """
 
+import re
 from uuid import uuid4
 
 import pytest
@@ -257,7 +258,17 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
             assert any("unknown card type 'tyle'" in warning for warning in warnings)
             if tile_count == 1:
                 notices = [warning for warning in warnings if "inconclusive" in warning]
-                assert len(notices) == 1 and "25 cards" in notices[0]
+                assert len(notices) == 1
+                grouped = re.search(r"\((\d+) cards; first at", notices[0])
+                unchecked = next(
+                    (
+                        int(warning.split()[0])
+                        for warning in warnings
+                        if "custom cards not checked (time budget)" in warning
+                    ),
+                    0,
+                )
+                assert (int(grouped[1]) if grouped else 1) + unchecked == len(repeated)
                 assert "entity must be a string" in notices[0]
             saved = await mcp.call_tool_success(
                 "ha_config_get_dashboard", {"url_path": path}
