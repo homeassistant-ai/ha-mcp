@@ -7,7 +7,6 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from .helpers import exception_to_structured_error, raise_tool_error
-
 from .statistics_helpers import fetch_statistics_metadata, statistics_unit
 
 
@@ -19,14 +18,20 @@ def _statistic_ids(value: Any) -> set[str]:
             found.update(_statistic_ids(item))
     elif isinstance(value, dict):
         for key, item in value.items():
-            if (key.startswith("stat_") or key == "included_in_stat") and isinstance(item, str) and item:
+            if (
+                (key.startswith("stat_") or key == "included_in_stat")
+                and isinstance(item, str)
+                and item
+            ):
                 found.add(item)
             elif isinstance(item, (dict, list)):
                 found.update(_statistic_ids(item))
     return found
 
 
-async def include_energy_statistics(client: Any, result: dict[str, Any]) -> dict[str, Any]:
+async def include_energy_statistics(
+    client: Any, result: dict[str, Any]
+) -> dict[str, Any]:
     """Enrich the read response without including metadata in config or its hash."""
     ids = sorted(_statistic_ids(result["config"]))
     metadata, failure = await fetch_statistics_metadata(client, ids)
@@ -39,7 +44,8 @@ async def include_energy_statistics(client: Any, result: dict[str, Any]) -> dict
     ]
     warnings = [
         f"{row['statistic_id']}: {row['unit_reason']}"
-        for row in result["statistics_metadata"] if row["unit_source"] == "unknown"
+        for row in result["statistics_metadata"]
+        if row["unit_source"] == "unknown"
     ]
     if warnings:
         result.setdefault("warnings", []).extend(warnings)
@@ -52,6 +58,7 @@ _PREFS_TOP_LEVEL_KEYS: tuple[_PrefsKey, ...] = (
     "device_consumption",
     "device_consumption_water",
 )
+
 
 def _default_prefs() -> dict[str, Any]:
     """Return the default empty prefs structure used by HA Core.
@@ -98,7 +105,6 @@ def _is_no_prefs_error(error_msg: str) -> bool:
     return error_msg.endswith("No prefs")
 
 
-
 async def get_energy_prefs(client: Any) -> dict[str, Any]:
     """Read preferences, mapping Core's never-configured response to empty prefs."""
     try:
@@ -106,17 +112,21 @@ async def get_energy_prefs(client: Any) -> dict[str, Any]:
         note = None
         if not result.get("success"):
             if not _is_no_prefs_error(str(result.get("error", ""))):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to get energy prefs: {result.get('error', 'Unknown error')}",
-                    context={"mode": "get"},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to get energy prefs: {result.get('error', 'Unknown error')}",
+                        context={"mode": "get"},
+                    )
+                )
             prefs = _default_prefs()
             note = "Energy Dashboard has never been configured on this instance; returning empty default."
         else:
             prefs = result.get("result") or _default_prefs()
         response = {
-            "success": True, "mode": "get", "config": prefs,
+            "success": True,
+            "mode": "get",
+            "config": prefs,
             "config_hash": compute_config_hash(prefs),
             "config_hash_per_key": _compute_per_key_hashes(prefs),
         }
@@ -126,8 +136,12 @@ async def get_energy_prefs(client: Any) -> dict[str, Any]:
     except ToolError:
         raise
     except Exception as e:  # noqa: BLE001
-        exception_to_structured_error(e, context={"mode": "get"}, suggestions=[
-            "Check Home Assistant connection", "Verify WebSocket connection is active",
-        ])
+        exception_to_structured_error(
+            e,
+            context={"mode": "get"},
+            suggestions=[
+                "Check Home Assistant connection",
+                "Verify WebSocket connection is active",
+            ],
+        )
         return None  # unreachable: exception_to_structured_error always raises
-

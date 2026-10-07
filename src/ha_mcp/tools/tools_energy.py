@@ -40,10 +40,10 @@ from ..utils.config_hash import compute_config_hash
 from .coercion import JSON_STRING_COERCION
 from .energy_statistics import (
     _PREFS_TOP_LEVEL_KEYS,
-    _PrefsKey,
     _compute_per_key_hashes,
     _default_prefs,
     _is_no_prefs_error,
+    _PrefsKey,
     get_energy_prefs,
     include_energy_statistics,
 )
@@ -464,7 +464,9 @@ class EnergyTools:
         ] = None,
         include_statistics: Annotated[
             bool,
-            Field(description="With mode='get', include native recorder metadata and resolved output units for all configured statistic references. Ignored for other modes."),
+            Field(
+                description="With mode='get', include native recorder metadata and resolved output units for all configured statistic references. Ignored for other modes."
+            ),
         ] = False,
     ) -> dict[str, Any]:
         """Manage the Home Assistant Energy Dashboard preferences: grid / solar /
@@ -516,7 +518,11 @@ class EnergyTools:
         """
         if mode == "get":
             result = await self._get_prefs()
-            return await include_energy_statistics(self._client, result) if include_statistics else result
+            return (
+                await include_energy_statistics(self._client, result)
+                if include_statistics
+                else result
+            )
 
         if mode == "add_device":
             return await self._add_device(

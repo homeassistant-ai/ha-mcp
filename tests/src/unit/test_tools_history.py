@@ -544,10 +544,13 @@ class TestHaGetHistoryWorkloadGuardrails:
     async def test_two_calendar_years_of_yearly_statistics_are_allowed(
         self, history_tool, mock_client
     ):
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": {},
-        }
+        async def recorder_response(message):
+            if message["type"] == "recorder/get_statistics_metadata":
+                return {"success": True, "result": []}
+            assert message["type"] == "recorder/statistics_during_period"
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message.side_effect = recorder_response
         with (
             patch(
                 "ha_mcp.tools.tools_history.get_global_settings",
@@ -571,7 +574,13 @@ class TestHaGetHistoryWorkloadGuardrails:
             )
 
         assert result["success"] is True
-        mock_client.send_websocket_message.assert_awaited_once()
+        assert [
+            call.args[0]["type"]
+            for call in mock_client.send_websocket_message.await_args_list
+        ] == [
+            "recorder/get_statistics_metadata",
+            "recorder/statistics_during_period",
+        ]
 
     @pytest.mark.asyncio
     async def test_non_utc_timezone_reaches_calendar_scan(

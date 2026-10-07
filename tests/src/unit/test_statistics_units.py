@@ -49,9 +49,10 @@ async def query(records, rows, *, offset=0, metadata_error=None):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stored,display", [("kWh", "kWh"), ("MWh", "kWh")])
 async def test_labels_core_converted_values_with_display_unit(stored, display):
-    result = await query([metadata(stored=stored, display=display)], [
-        {"start": 1000, "end": 2000, "sum": 1250.0, "change": 250.0}
-    ])
+    result = await query(
+        [metadata(stored=stored, display=display)],
+        [{"start": 1000, "end": 2000, "sum": 1250.0, "change": 250.0}],
+    )
     entity = result["entities"][0]
     assert entity["unit_of_measurement"] == "kWh"
     assert entity["unit_source"] == "recorder_metadata"
@@ -71,7 +72,9 @@ async def test_unit_is_available_even_when_page_is_empty(rows, offset):
 
 @pytest.mark.asyncio
 async def test_missing_metadata_keeps_values_and_explains_unknown_unit():
-    result = await query([], [{"start": 1000, "sum": 2.0, "unit_of_measurement": "wrong"}])
+    result = await query(
+        [], [{"start": 1000, "sum": 2.0, "unit_of_measurement": "wrong"}]
+    )
     entity = result["entities"][0]
     assert entity["statistics"][0]["sum"] == 2.0
     assert entity["unit_of_measurement"] is None
@@ -81,7 +84,9 @@ async def test_missing_metadata_keeps_values_and_explains_unknown_unit():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [{"code": "unknown_command"}, TimeoutError("metadata timeout")])
+@pytest.mark.parametrize(
+    "failure", [{"code": "unknown_command"}, TimeoutError("metadata timeout")]
+)
 async def test_metadata_failure_does_not_discard_numeric_results(failure):
     result = await query([], [{"start": 1000, "sum": 2.0}], metadata_error=failure)
     entity = result["entities"][0]
@@ -102,7 +107,9 @@ async def test_stored_unit_alone_is_not_assumed_to_be_output_unit():
 
 @pytest.mark.asyncio
 async def test_unitless_metadata_is_distinguished_from_failed_lookup():
-    result = await query([metadata(stored=None, display=None)], [{"start": 1000, "sum": 2.0}])
+    result = await query(
+        [metadata(stored=None, display=None)], [{"start": 1000, "sum": 2.0}]
+    )
     entity = result["entities"][0]
     assert entity["unit_of_measurement"] is None
     assert entity["unit_source"] == "recorder_metadata"

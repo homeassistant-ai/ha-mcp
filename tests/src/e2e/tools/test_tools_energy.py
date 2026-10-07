@@ -386,27 +386,55 @@ async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
 async def test_energy_inspection_exposes_native_statistics_metadata(mcp_client):
     """Configured device statistics can be discovered with their real recorder units."""
     statistic_id = "sensor.total_energy_kwh"
-    before = assert_mcp_success(await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"}))
+    before = assert_mcp_success(
+        await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
+    )
     before = before.get("data", before)
-    already_present = any(d.get("stat_consumption") == statistic_id for d in before["config"]["device_consumption"])
+    already_present = any(
+        d.get("stat_consumption") == statistic_id
+        for d in before["config"]["device_consumption"]
+    )
     added = False
     try:
         if not already_present:
-            assert_mcp_success(await mcp_client.call_tool("ha_manage_energy_prefs", {
-                "mode": "add_device", "stat_consumption": statistic_id, "name": "E2E statistics metadata",
-            }))
+            assert_mcp_success(
+                await mcp_client.call_tool(
+                    "ha_manage_energy_prefs",
+                    {
+                        "mode": "add_device",
+                        "stat_consumption": statistic_id,
+                        "name": "E2E statistics metadata",
+                    },
+                )
+            )
             added = True
-        result = assert_mcp_success(await mcp_client.call_tool("ha_manage_energy_prefs", {
-            "mode": "get", "include_statistics": True,
-        }))
+        result = assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_manage_energy_prefs",
+                {
+                    "mode": "get",
+                    "include_statistics": True,
+                },
+            )
+        )
         result = result.get("data", result)
-        record = next(r for r in result["statistics_metadata"] if r["statistic_id"] == statistic_id)
+        record = next(
+            r
+            for r in result["statistics_metadata"]
+            if r["statistic_id"] == statistic_id
+        )
         assert record["unit_of_measurement"] == "kWh"
         assert record["statistics_unit_of_measurement"] == "kWh"
         assert record["has_sum"] is True
         assert "statistics_metadata" not in result["config"]
     finally:
         if added:
-            assert_mcp_success(await mcp_client.call_tool("ha_manage_energy_prefs", {
-                "mode": "remove_device", "stat_consumption": statistic_id,
-            }))
+            assert_mcp_success(
+                await mcp_client.call_tool(
+                    "ha_manage_energy_prefs",
+                    {
+                        "mode": "remove_device",
+                        "stat_consumption": statistic_id,
+                    },
+                )
+            )

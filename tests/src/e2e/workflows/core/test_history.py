@@ -370,24 +370,38 @@ class TestGetHistory:
 class TestGetHistoryStatisticsSource:
     """Test ha_get_history with source="statistics" functionality."""
 
-    @pytest.mark.parametrize("period", ["5minute", "hour", "day", "week", "month", "year"])
-    async def test_energy_statistics_have_values_and_correct_units(self, mcp_client, period):
+    @pytest.mark.parametrize(
+        "period", ["5minute", "hour", "day", "week", "month", "year"]
+    )
+    async def test_energy_statistics_have_values_and_correct_units(
+        self, mcp_client, period
+    ):
         """Seeded kWh/MWh statistics must never silently return empty or unlabelled data."""
-        result = await mcp_client.call_tool("ha_get_history", {
-            "source": "statistics",
-            "entity_ids": ["sensor.total_energy_kwh", "sensor.total_energy_mwh"],
-            "start_time": "7d", "period": period,
-            "statistic_types": ["sum", "change"], "limit": 3,
-        })
+        result = await mcp_client.call_tool(
+            "ha_get_history",
+            {
+                "source": "statistics",
+                "entity_ids": ["sensor.total_energy_kwh", "sensor.total_energy_mwh"],
+                "start_time": "7d",
+                "period": period,
+                "statistic_types": ["sum", "change"],
+                "limit": 3,
+            },
+        )
         data = assert_mcp_success(result, "Energy statistics with units")
         data = data.get("data", data)
         entities = {row["entity_id"]: row for row in data["entities"]}
-        for entity_id, unit in [("sensor.total_energy_kwh", "kWh"), ("sensor.total_energy_mwh", "MWh")]:
+        for entity_id, unit in [
+            ("sensor.total_energy_kwh", "kWh"),
+            ("sensor.total_energy_mwh", "MWh"),
+        ]:
             entity = entities[entity_id]
             assert entity["statistics"], f"Missing seeded statistics for {entity_id}"
             assert entity["unit_of_measurement"] == unit
             assert entity["unit_source"] == "recorder_metadata"
-            assert entity["statistics_metadata"]["statistics_unit_of_measurement"] == unit
+            assert (
+                entity["statistics_metadata"]["statistics_unit_of_measurement"] == unit
+            )
             for row in entity["statistics"]:
                 assert isinstance(row["sum"], (int, float))
                 assert isinstance(row["change"], (int, float))
@@ -396,12 +410,18 @@ class TestGetHistoryStatisticsSource:
     async def test_statistics_units_survive_pagination(self, mcp_client):
         """Metadata must not depend on which rows happen to be on the returned page."""
         args = {
-            "source": "statistics", "entity_ids": "sensor.total_energy_kwh",
-            "start_time": "7d", "period": "hour", "statistic_types": ["sum"], "limit": 2,
+            "source": "statistics",
+            "entity_ids": "sensor.total_energy_kwh",
+            "start_time": "7d",
+            "period": "hour",
+            "statistic_types": ["sum"],
+            "limit": 2,
         }
         pages = []
         for offset in (0, 2, 100000):
-            result = await mcp_client.call_tool("ha_get_history", {**args, "offset": offset})
+            result = await mcp_client.call_tool(
+                "ha_get_history", {**args, "offset": offset}
+            )
             data = assert_mcp_success(result, "Paginated energy statistics")
             entity = data.get("data", data)["entities"][0]
             assert entity["unit_of_measurement"] == "kWh"

@@ -1117,8 +1117,13 @@ async def _fetch_statistics(
     result_data = response.get("result", {})
     all_stat_types = stat_types_list or ["mean", "min", "max", "sum", "state", "change"]
     entities_statistics = format_entity_statistics(
-        result_data, entity_id_list, period, effective_offset, effective_limit,
-        metadata, metadata_failure,
+        result_data,
+        entity_id_list,
+        period,
+        effective_offset,
+        effective_limit,
+        metadata,
+        metadata_failure,
     )
 
     empty_entities: list[str] = [

@@ -803,6 +803,8 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "repository",
     },
     "ha_manage_energy_prefs": {
+        # Optional recorder metadata inspection in get mode.
+        "include_statistics",
         # mode='set' payload — blocked unless dry_run=True (preview only).
         "config",
         "config_hash",
