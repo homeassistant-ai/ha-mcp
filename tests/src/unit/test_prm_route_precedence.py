@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from typing import Any
 
 import pytest
 
@@ -62,8 +63,8 @@ def real_aiohttp():
 @pytest.mark.parametrize("dynamic_first", [False, True])
 @pytest.mark.parametrize("suffix", ["", "/readonly"])
 async def test_exact_path_wins_regardless_of_registration_order(
-    real_aiohttp, dynamic_first, suffix
-):
+    real_aiohttp: tuple[Any, Any], dynamic_first: bool, suffix: str
+) -> None:
     web, test_utils = real_aiohttp
 
     async def exact(request):  # the app's view: bound at its own id

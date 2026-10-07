@@ -23,7 +23,9 @@ class TestReadonlyDiscovery:
     @pytest.mark.parametrize(
         "mode", [WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY, WEBHOOK_AUTH_NONE]
     )
-    async def test_readonly_resource_identity(self, suffix, mode, webhook_id):
+    async def test_readonly_resource_identity(
+        self, suffix: str, mode: str, webhook_id: str
+    ) -> None:
         hass = (
             _none_live_hass(webhook_id)
             if mode == WEBHOOK_AUTH_NONE
@@ -49,7 +51,9 @@ class TestReadonlyDiscovery:
 
     @pytest.mark.parametrize("suffix", ["", "/readonly"])
     @pytest.mark.parametrize("mode", [WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY])
-    async def test_readonly_discovery_identity_in_auth_challenge(self, suffix, mode):
+    async def test_readonly_discovery_identity_in_auth_challenge(
+        self, suffix: str, mode: str
+    ) -> None:
         hass = _live_hass(mode)
         request = make_request(headers={"Host": "abc.ui.nabu.casa"})
         request.path = f"/api/webhook/{WEBHOOK_ID}{suffix}"

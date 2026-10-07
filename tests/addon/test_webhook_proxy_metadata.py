@@ -1,5 +1,7 @@
 """Webhook Proxy base/read-only OAuth discovery response contracts."""
 
+from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -14,13 +16,15 @@ class TestUnauthorizedResponseShape:
     metadata URL — not just contain the word 'Bearer'."""
 
     @pytest.fixture
-    def setup(self, tmp_path):
+    def setup(self, tmp_path: Path) -> tuple[Any, Any]:
         oauth, provider = proxy._provider_for_view_tests(
             tmp_path, public_base_url="https://legit.example"
         )
         return oauth, provider
 
-    def test_resource_metadata_url_uses_pinned_base(self, setup):
+    def test_resource_metadata_url_uses_pinned_base(
+        self, setup: tuple[Any, Any]
+    ) -> None:
         oauth, provider = setup
         request = proxy._make_view_request(headers={"Host": "evil.example"})
         with patch.object(oauth.web, "Response") as resp_ctor:
@@ -42,7 +46,9 @@ class TestUnauthorizedResponseShape:
             )
 
     @pytest.mark.parametrize("suffix", ["", "/readonly"])
-    async def test_readonly_resource_identity(self, setup, suffix):
+    async def test_readonly_resource_identity(
+        self, setup: tuple[Any, Any], suffix: str
+    ) -> None:
         oauth, provider = setup
         view = oauth.WellKnownProtectedResourceView(provider)
         if proxy.CURRENT["key"] == "stable" and not getattr(view, "extra_urls", []):
