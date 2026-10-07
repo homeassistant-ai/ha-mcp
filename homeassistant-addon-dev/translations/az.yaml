@@ -4,21 +4,22 @@
 # backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Verify TLS certificates
-    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
-      only on a trusted network, for a self-signed certificate or a hostname mismatch:
-      it weakens transport security.'
+    name: TLS sertifikatlarını yoxlayın
+    description: 'Home Assistant serverinin TLS sertifikatını yoxlayın. Bunu yalnız
+      etibarlı şəbəkədə, özünü imzalayan sertifikat və ya host adı uyğunsuzluğu üçün
+      söndürün: o, nəqliyyat təhlükəsizliyini zəiflədir.'
   ha_tool_concurrency:
     name: Home Assistant alətlərinin paralel icrası
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
-      0–32.
+    description: Bütün sessiyalar üzrə xarici Home Assistant alət çağırışlarında əlavə
+      məhdudiyyət. Daxili REST, WebSocket və hər alət üzrə paylanma eynizmətliliyi
+      (concurrency) dəyişməz qalır. 0 məhdudiyyətsiz davranışı qoruyur. Tutum üçün
+      gözləyən çağırış 60 saniyədən sonra uğursuz olur. Aralıq 0–32.
   backup_hint:
-    name: Backup hint level
-    description: How strongly AI assistants are told to suggest a full Home Assistant
-      backup before risky changes. It changes only this hint; automatic edit backups
-      have their own setting.
+    name: Ehtiyat nüsxə ipucu səviyyəsi
+    description: Riskli dəyişikliklərdən əvvəl süni intellekt köməkçilərinə tam Home
+      Assistant ehtiyat nüsxəsini təklif etməyin nə qədər güclü şəkildə bildirildiyi.
+      O, yalnız bu ipucunu dəyişdirir; avtomatik redaktə ehtiyat nüsxələrinin öz parametrləri
+      var.
   enable_beta_features:
     name: Beta funksiyaları aktivləşdir (əsas seçim)
     description: ⚠ TƏHLÜKƏ — bu alətlər Home Assistant qurulumunuza BƏRPAOLUNMAZ ZƏRƏR
@@ -51,10 +52,11 @@ configuration:
       (oxuma/yazma/silmə). Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.'
   tool_search_max_results:
     name: Alət axtarışında maksimum nəticə sayı
-    description: Maximum number of hidden tools returned per ha_search_tools call
-      when tool search is enabled; a pinned tool that ranks inside that top count
-      is added as a short name-only entry on top of it. Lower values (2-3) save context
-      tokens but may miss relevant tools. Requires restart. Range 2–10.
+    description: Alətin axtarışı aktiv olduqda hər ha_search_tools çağırışı üçün qaytarılan
+      gizli alətlərin maksimum sayı; həmin ən yaxşı sayda yer alan bərkidilmiş alət
+      onun üzərinə yalnız qısa adla giriş kimi əlavə olunur. Aşağı qiymətlər (2-3)
+      kontekst tokenlərinə qənaət edir, lakin uyğun alətləri qaçıra bilər. Yenidən
+      başladılmalıdır. Aralıq 2–10.
   enable_tool_security_policies:
     name: Alətlərin təhlükəsizlik siyasətlərini aktivləşdir (qabaqcıl)
     description: Ciddi nəticələr doğura bilən alət çağırışları (kilid/siqnalizasiya
@@ -230,44 +232,47 @@ configuration:
       icra zamanı nəzərə alınmır.
   enable_auto_backup:
     name: Redaktələr üçün avtomatik ehtiyat nüsxə yarat
-    description: Save a snapshot of an entity before each write or delete tool call
-      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
-      ha_config_set_yaml) refuse to write.
+    description: Hər yazma və ya silmə aləti çağırışı onu dəyişməzdən əvvəl obyektin
+      surətini saxlayın. Bu söndürüldükdə, fayl və xam YAML alətləri (ha_write_file,
+      ha_delete_file, ha_config_set_yaml) yazmaqdan imtina edir.
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
-    description: How often auto-backup may capture the same entity. 0 captures on
-      every write; N above 0 captures at most one snapshot per N minutes per entity.
-      Range 0–1440.
+    name: Avtomatik ehtiyat nüsxə məhdudiyyəti (dəqiqə)
+    description: Avtomatik ehtiyat nüsxənin eyni obyekti nə qədər tez-tez çəkə biləcəyi.
+      0 hər yazmada çəkir; 0-dan yuxarı N hər obyekt üçün hər N dəqiqədə ən çoxu bir
+      surət çəkir. Aralıq 0–1440.
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
-    description: The most snapshots kept per entity. Each new capture removes the
-      oldest snapshots above this number. Range 1–10000.
+    name: Avtomatik ehtiyat nüsxənin saxlanılması (obyekt üzrə)
+    description: Obyekt başına saxlanılan ən çox ehtiyat nüsxə. Hər yeni çəkiliş bu
+      rəqəmdən yuxarı olan ən köhnə ehtiyat nüsxələri silir. Aralıq 1–10000.
   enable_snapshot_actions:
     name: Tam HA arxiv (snapshot) əməliyyatlarına icazə ver
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    description: AI köməkçilərinə ha_manage_backup və ha_call_service daxilindəki
+      ekvivalent ehtiyat nüsxə xidmətləri və əmrləri vasitəsilə tam Home Assistant
+      ehtiyat nüsxələrini idarə etməyə icazə verin. Bunu söndürmək siyahıyaalma daxil
+      olmaqla bütün ehtiyat nüsxə əməliyyatlarını bloklayır. Ehtiyat nüsxənin silinməsi
+      yalnız ha_manage_backup vasitəsilə əlçatandır və həmçinin Ehtiyat nüsxənin silinməsinə
+      icazə verilməsini tələb edir. Veb ayarları interfeysində şəxsin etdiyi ehtiyat
+      nüsxələrin redaktəsi və ehtiyat nüsxə əməliyyatları əlçatan olaraq qalır.
   backup_read_only:
     name: Arxiv idarəetməsini yalnız oxunaqlı edin
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    description: Ehtiyat nüsxə əməliyyatları aktiv olduqda AI köməkçilərinə redaktə
+      ehtiyat nüsxələrini siyahıya almağa, baxmağa və müqayisə etməyə, həmçinin tam
+      HA ehtiyat nüsxələrini siyahıya almağa icazə verin. ha_call_service-də ekvivalent
+      ehtiyat nüsxə xidmətləri və əmrləri də daxil olmaqla əl ilə ehtiyat nüsxə yaratma,
+      bərpa etmə (redaktə bərpaları daxil olmaqla) və silməni bloklayın. Avtomatik
+      redaktədən əvvəlki ehtiyat nüsxələr davam edir. Veb ayarları interfeysində şəxsin
+      etdiyi ehtiyat nüsxə əməliyyatları əlçatan olaraq qalır.
   enable_snapshot_delete:
     name: Anlıq nüsxələrin silinməsinə icazə ver
-    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
-      snapshot may be the last way back after a mistaken change, so a person must
-      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
-      the minimum age stay protected.
+    description: ha_manage_backup-a tam Home Assistant ehtiyat nüsxələrini silməyə
+      icazə verin. Yanlış dəyişiklikdən sonra ehtiyat nüsxə geri qayıtmağın son yolu
+      ola bilər, ona görə də şəxs bunu yandırmalıdır. Planlaşdırılmış ehtiyat nüsxələr,
+      ən yeni ehtiyat nüsxə və minimum yaşdan kiçik ehtiyat nüsxələr qorunub saxlanılır.
   snapshot_delete_min_age_days:
     name: Silmək üçün anlıq nüsxənin minimum yaşı (gün)
-    description: How old a snapshot must be, in days, before it can be deleted. 0
-      turns off the age limit; the newest snapshot and scheduled backups stay protected.
-      Range 0–365.
+    description: Ehtiyat nüsxənin silinməzdən əvvəl neçə gün yaşında olması lazımdır.
+      0 yaş həddini söndürür; ən yeni ehtiyat nüsxə və planlaşdırılmış ehtiyat nüsxələr
+      qorunub saxlanılır. Aralıq 0–365.
   disabled_tools:
     name: Deaktiv alətlər (vergüllə ayrılmış)
     description: Burada sadalanan alətlər məcburi söndürülür və veb Parametrlər interfeysində

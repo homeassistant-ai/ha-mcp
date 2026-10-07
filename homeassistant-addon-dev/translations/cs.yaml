@@ -4,21 +4,21 @@
 # backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Verify TLS certificates
-    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
-      only on a trusted network, for a self-signed certificate or a hostname mismatch:
-      it weakens transport security.'
+    name: Ověřit certifikáty TLS
+    description: 'Ověřit certifikát TLS serveru Home Assistant. Vypněte tuto možnost
+      pouze v důvěryhodné síti pro autorsky podepsaný certifikát nebo neshodu názvů
+      hostitelů: oslabuje to zabezpečení přenosu.'
   ha_tool_concurrency:
     name: Souběžnost nástrojů Home Assistant
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
-      0–32.
+    description: Volitelný limit pro vnější volání nástrojů Home Assistant napříč
+      všemi relacemi. Vnitřní souběh pro REST, WebSocket a rozbočení pro jednotlivé
+      nástroje zůstává nezměněn. 0 zachovává neomezené chování. Volání čekající na
+      kapacitu selže po 60 sekundách. Rozsah 0–32.
   backup_hint:
-    name: Backup hint level
-    description: How strongly AI assistants are told to suggest a full Home Assistant
-      backup before risky changes. It changes only this hint; automatic edit backups
-      have their own setting.
+    name: Úroveň nápovědy zálohování
+    description: Jak důrazně jsou asistenti AI vyzýváni k doporučení úplné zálohy
+      Home Assistant před rizikovými změnami. Mění pouze tuto nápovědu; automatické
+      zálohy úprav mají své vlastní nastavení.
   enable_beta_features:
     name: Povolit beta funkce (hlavní)
     description: ⚠ NEBEZPEČÍ — tyto nástroje mohou TRVALE POŠKODIT vaši instalaci
@@ -49,10 +49,11 @@ configuration:
       Vyžaduje restart, aby se projevilo.'
   tool_search_max_results:
     name: Max. výsledků vyhledávání nástrojů
-    description: Maximum number of hidden tools returned per ha_search_tools call
-      when tool search is enabled; a pinned tool that ranks inside that top count
-      is added as a short name-only entry on top of it. Lower values (2-3) save context
-      tokens but may miss relevant tools. Requires restart. Range 2–10.
+    description: Maximální počet skrytých nástrojů vrácených při volání ha_search_tools,
+      když je povoleno vyhledávání nástrojů; připnutý nástroj, který se umístí v rámci
+      tohoto horního počtu, je přidán jako krátká položka obsahující pouze název navíc.
+      Nižší hodnoty (2–3) šetří tokeny kontextu, ale mohou minout relevantní nástroje.
+      Vyžaduje restart. Rozsah 2–10.
   enable_tool_security_policies:
     name: Povolit zásady zabezpečení nástrojů (pokročilé)
     description: Podmiňuje vysoce rizikové volání nástrojů (ovládání zámků/alarmů,
@@ -219,44 +220,46 @@ configuration:
       tento dílčí příznak za běhu ignorován bez ohledu na jeho hodnotu zde.
   enable_auto_backup:
     name: Automatické zálohování úprav
-    description: Save a snapshot of an entity before each write or delete tool call
-      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
-      ha_config_set_yaml) refuse to write.
+    description: Uložit snímek entity před každým voláním nástroje pro zápis nebo
+      smazání, které ji změní. Pokud je tato možnost vypnutá, nástroje pro práci se
+      soubory a surovým YAML (ha_write_file, ha_delete_file, ha_config_set_yaml) odmítnou
+      provést zápis.
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
-    description: How often auto-backup may capture the same entity. 0 captures on
-      every write; N above 0 captures at most one snapshot per N minutes per entity.
-      Range 0–1440.
+    name: Omezení frekvence automatických záloh (minuty)
+    description: Jak často může automatická záloha zachytit stejnou entitu. Hodnota
+      0 zachytí každý zápis; hodnota N větší než 0 zachytí maximálně jeden snímek
+      za N minut na entitu. Rozsah 0–1440.
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
-    description: The most snapshots kept per entity. Each new capture removes the
-      oldest snapshots above this number. Range 1–10000.
+    name: Uchovávání automatických záloh (na entitu)
+    description: Maximální počet uchovávaných snímků na entitu. Každý nový záznam
+      odstraní nejstarší snímky nad toto číslo. Rozsah 1–10000.
   enable_snapshot_actions:
     name: Povolit akce s úplnými snapshoty HA
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    description: Umožnit asistentům AI spravovat úplné zálohy Home Assistant prostřednictvím
+      ha_manage_backup a odpovídajících zálohovacích služeb a příkazů v ha_call_service.
+      Vypnutím této možnosti zablokujete všechny akce se zálohami, včetně výpisu.
+      Smazání zálohy je k dispozici pouze prostřednictvím ha_manage_backup a vyžaduje
+      také povolení smazání zálohy. Úpravy záloh a akce se zálohami, které uživatel
+      provádí v uživatelském rozhraní nastavení webu, zůstávají k dispozici.
   backup_read_only:
     name: Nastavit správu záloh jako jen pro čtení
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    description: Umožnit asistentům AI vypisovat, zobrazovat a porovnávat zálohy úprav
+      a vypisovat úplné zálohy HA, když jsou povoleny akce se zálohami. Blokuje ruční
+      vytváření záloh, obnovení (včetně obnovení úprav) a mazání, včetně odpovídajících
+      zálohovacích služeb a příkazů v ha_call_service. Automatické zálohy před úpravami
+      pokračují. Akce se zálohami, které uživatel provádí v uživatelském rozhraní
+      nastavení webu, zůstávají k dispozici.
   enable_snapshot_delete:
     name: Povolit smazání snímků
-    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
-      snapshot may be the last way back after a mistaken change, so a person must
-      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
-      the minimum age stay protected.
+    description: Umožnit ha_manage_backup mazat úplné zálohy Home Assistant. Záloha
+      může být poslední záchranou po chybné změně, proto ji musí uživatel zapnout.
+      Plánované zálohy, nejnovější záloha a zálohy mladší než minimální stáří zůstávají
+      chráněny.
   snapshot_delete_min_age_days:
     name: Minimální stáří snímku pro smazání (dny)
-    description: How old a snapshot must be, in days, before it can be deleted. 0
-      turns off the age limit; the newest snapshot and scheduled backups stay protected.
-      Range 0–365.
+    description: Jak stará musí být záloha ve dnech, než ji bude možné smazat. Hodnota
+      0 vypíná časový limit; nejnovější záloha a plánované zálohy zůstávají chráněny.
+      Rozsah 0–365.
   disabled_tools:
     name: Zakázané nástroje (oddělené čárkami)
     description: Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém

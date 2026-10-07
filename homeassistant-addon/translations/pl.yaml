@@ -4,21 +4,21 @@
 # backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Verify TLS certificates
-    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
-      only on a trusted network, for a self-signed certificate or a hostname mismatch:
-      it weakens transport security.'
+    name: Weryfikuj certyfikaty TLS
+    description: 'Weryfikuje certyfikat TLS serwera Home Assistant. Wyłącz tę opcję
+      tylko w zaufanej sieci, dla certyfikatu z podpisem własnym lub niezgodności
+      nazwy hosta: osłabia to bezpieczeństwo transportu.'
   ha_tool_concurrency:
     name: Współbieżność narzędzi Home Assistant
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
-      0–32.
+    description: Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we
+      wszystkich sesjach. Współbieżność wewnętrznych żądań REST, WebSocket oraz rozgałęzień
+      na narzędzie pozostaje bez zmian. Wartość 0 oznacza brak limitu. Wywołanie oczekujące
+      na wolne zasoby zakończy się niepowodzeniem po 60 sekundach. Zakres 0–32.
   backup_hint:
-    name: Backup hint level
-    description: How strongly AI assistants are told to suggest a full Home Assistant
-      backup before risky changes. It changes only this hint; automatic edit backups
-      have their own setting.
+    name: Poziom podpowiedzi kopii zapasowej
+    description: Jak stanowczo asystenci AI są instruowani, aby sugerować pełną kopię
+      zapasową Home Assistant przed ryzykownymi zmianami. Zmienia to tylko tę podpowiedź;
+      automatyczne kopie zapasowe edycji mają własne ustawienie.
   enable_tool_search:
     name: Włącz wyszukiwanie narzędzi
     description: 'Zastąp pełny katalog narzędzi wyszukiwaniem. Zmniejsza bezczynny
@@ -42,10 +42,11 @@ configuration:
       tutaj.'
   tool_search_max_results:
     name: Maksymalna liczba wyników wyszukiwania narzędzi
-    description: Maximum number of hidden tools returned per ha_search_tools call
-      when tool search is enabled; a pinned tool that ranks inside that top count
-      is added as a short name-only entry on top of it. Lower values (2-3) save context
-      tokens but may miss relevant tools. Requires restart. Range 2–10.
+    description: Maksymalna liczba ukrytych narzędzi zwracanych w jednym wywołaniu
+      ha_search_tools, gdy wyszukiwanie narzędzi jest włączone; przypięte narzędzie
+      mieszczące się w tym limicie jest dodawane jako krótki wpis zawierający tylko
+      nazwę na samej górze. Niższe wartości (2-3) oszczędzają tokeny kontekstu, ale
+      mogą pominąć powiązane narzędzia. Wymaga ponownego uruchomienia. Zakres 2–10.
   enable_tool_security_policies:
     name: Włącz zasady bezpieczeństwa narzędzi (zaawansowane)
     description: Zabezpiecz wywołania narzędzi wysokiego ryzyka (kontrola zamków/alarmów,
@@ -113,44 +114,47 @@ configuration:
       aby zmiany weszły w życie.'
   enable_auto_backup:
     name: Automatyczne tworzenie kopii zapasowych edycji
-    description: Save a snapshot of an entity before each write or delete tool call
-      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
-      ha_config_set_yaml) refuse to write.
+    description: Zapisuje migawkę encji przed jej zmianą przez każde wywołanie narzędzia
+      zapisu lub usuwania. Gdy ta opcja jest wyłączona, narzędzia plików i surowego
+      YAML-a (ha_write_file, ha_delete_file, ha_config_set_yaml) odmawiają zapisu.
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
-    description: How often auto-backup may capture the same entity. 0 captures on
-      every write; N above 0 captures at most one snapshot per N minutes per entity.
-      Range 0–1440.
+    name: Ograniczenie częstotliwości automatycznych kopii zapasowych (w minutach)
+    description: Jak często kopia zapasowa może zostać utworzona dla tej samej encji.
+      Wartość 0 tworzy kopię przy każdym zapisie; wartość N większa niż 0 tworzy co
+      najwyżej jedną migawkę na N minut dla danej encji. Zakres 0–1440.
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
-    description: The most snapshots kept per entity. Each new capture removes the
-      oldest snapshots above this number. Range 1–10000.
+    name: Zachowywanie automatycznych kopii zapasowych (na encję)
+    description: Maksymalna liczba zachowywanych migawek na encję. Każde nowe utrwalenie
+      usuwa najstarsze migawki ponad tę liczbę. Zakres 1–10000.
   enable_snapshot_actions:
     name: Zezwalaj na działania na pełnych migawkach Home Assistant
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    description: Pozwala asystentom AI zarządzać pełnymi migawkami Home Assistant
+      za pomocą ha_manage_backup oraz odpowiednich usług i poleceń tworzenia kopii
+      zapasowych w ha_call_service. Wyłączenie tej opcji blokuje wszystkie działania
+      na migawkach, w tym ich listowanie. Usuwanie migawek jest dostępne wyłącznie
+      przez ha_manage_backup i wymaga także włączenia opcji Zezwól na usuwanie migawek.
+      Edycja kopii zapasowych oraz działania na kopiach zapasowych wykonywane przez
+      użytkownika w interfejsie ustawień webowych pozostają dostępne.
   backup_read_only:
     name: Ustaw zarządzanie kopiami zapasowymi jako tylko do odczytu
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    description: Pozwala asystentom AI na listowanie, przeglądanie i porównywanie
+      (diff) kopii zapasowych edycji oraz listowanie pełnych migawek HA, gdy działania
+      na migawkach są włączone. Blokuje ręczne tworzenie, przywracanie (w tym przywracanie
+      edycji) i usuwanie kopii zapasowych, w tym odpowiadające im usługi i polecenia
+      kopii zapasowych w ha_call_service. Automatyczne kopie zapasowe przed edycją
+      są nadal tworzone. Działania na kopiach zapasowych wykonywane przez użytkownika
+      w interfejsie ustawień webowych pozostają dostępne.
   enable_snapshot_delete:
     name: Zezwól na usuwanie migawek
-    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
-      snapshot may be the last way back after a mistaken change, so a person must
-      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
-      the minimum age stay protected.
+    description: Pozwala ha_manage_backup usuwać pełne migawki Home Assistant. Migawka
+      może być ostatnią deską ratunku po omyłkowej zmianie, dlatego użytkownik musi
+      włączyć tę opcję. Zaplanowane kopie zapasowe, najnowsza migawka oraz migawki
+      młodsze niż minimalny wiek pozostają chronione.
   snapshot_delete_min_age_days:
     name: Minimalny wiek migawki do usunięcia (dni)
-    description: How old a snapshot must be, in days, before it can be deleted. 0
-      turns off the age limit; the newest snapshot and scheduled backups stay protected.
-      Range 0–365.
+    description: Minimalny wiek migawki w dniach, po którym może zostać usunięta.
+      Wartość 0 wyłącza limit wieku; najnowsza migawka oraz zaplanowane kopie zapasowe
+      pozostają chronione. Zakres 0–365.
   disabled_tools:
     name: Wyłączone narzędzia (oddzielone przecinkami)
     description: Narzędzia wymienione tutaj są wymuszone na wyłączone i zablokowane

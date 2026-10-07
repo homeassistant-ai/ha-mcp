@@ -4,21 +4,21 @@
 # backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Verify TLS certificates
-    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
-      only on a trusted network, for a self-signed certificate or a hostname mismatch:
-      it weakens transport security.'
+    name: TLS-certificaten verifiëren
+    description: 'Verifieer het TLS-certificaat van de Home Assistant-server. Schakel
+      dit alleen uit op een vertrouwd netwerk, voor een zelfondertekend certificaat
+      of een hostnaamafwijking: dit verzwakt de transportbeveiliging.'
   ha_tool_concurrency:
     name: Home Assistant-toolgelijktijdigheid
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
-      0–32.
+    description: Optionele limiet voor uiterste Home Assistant-toolaanroepen over
+      alle sessies heen. Interne REST-, WebSocket- en per-tool fan-out-gelijktijdigheid
+      blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit
+      mislukt na 60 seconden. Bereik 0–32.
   backup_hint:
-    name: Backup hint level
-    description: How strongly AI assistants are told to suggest a full Home Assistant
-      backup before risky changes. It changes only this hint; automatic edit backups
-      have their own setting.
+    name: Niveau van back-uptip
+    description: Hoe sterk AI-assistenten worden aangespoord om een volledige Home
+      Assistant-back-up voor te stellen vóór risicovolle wijzigingen. Dit wijzigt
+      alleen deze tip; automatische bewerkingsback-ups hebben hun eigen instelling.
   enable_tool_search:
     name: Schakel tool-zoekfunctie in
     description: 'Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking.
@@ -41,10 +41,11 @@ configuration:
       na het wijzigen van een instelling hier.'
   tool_search_max_results:
     name: Max. resultaten tool-zoekfunctie
-    description: Maximum number of hidden tools returned per ha_search_tools call
-      when tool search is enabled; a pinned tool that ranks inside that top count
-      is added as a short name-only entry on top of it. Lower values (2-3) save context
-      tokens but may miss relevant tools. Requires restart. Range 2–10.
+    description: Maximum aantal verborgen tools geretourneerd per ha_search_tools
+      aanroep wanneer toolzoeken is ingeschakeld; een vastgezette tool die in die
+      top valt, wordt daarboven toegevoegd als een korte vermelding met alleen de
+      naam. Lagere waarden (2-3) besparen contexttokens, maar missen mogelijk relevante
+      tools. Vereist herstart. Bereik 2–10.
   enable_tool_security_policies:
     name: Schakel Tool Beveiligingsbeleid in (geavanceerd)
     description: Beveilig risicovolle tool-aanroepen (vergrendelings-/alarmbediening,
@@ -111,44 +112,46 @@ configuration:
       is. Vereist een herstart om van kracht te worden.'
   enable_auto_backup:
     name: Auto-backup bewerkingen
-    description: Save a snapshot of an entity before each write or delete tool call
-      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
-      ha_config_set_yaml) refuse to write.
+    description: Sla een snapshot van een entiteit op voordat een toolaanroep voor
+      schrijven of verwijderen deze wijzigt. Zolang dit is uitgeschakeld, weigeren
+      de bestand- en ruwe-YAML-tools (ha_write_file, ha_delete_file, ha_config_set_yaml)
+      te schrijven.
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
-    description: How often auto-backup may capture the same entity. 0 captures on
-      every write; N above 0 captures at most one snapshot per N minutes per entity.
-      Range 0–1440.
+    name: Throttle voor automatisch back-uppen (minuten)
+    description: Hoe vaak automatisch back-uppen dezelfde entiteit mag vastleggen.
+      0 legt bij elke schrijfaktie vast; N groter dan 0 legt maximaal één snapshot
+      per N minuten per entiteit vast. Bereik 0–1440.
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
-    description: The most snapshots kept per entity. Each new capture removes the
-      oldest snapshots above this number. Range 1–10000.
+    name: Bewaren van automatische back-ups (per entiteit)
+    description: Het maximum aantal bewaarde snapshots per entiteit. Elke nieuwe vastlegging
+      verwijdert de oudste snapshots boven dit getal. Bereik 1–10000.
   enable_snapshot_actions:
     name: Volledige acties voor HA-snapshots toestaan
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    description: Sta AI-assistenten toe om volledige Home Assistant-snapshots te beheren
+      via ha_manage_backup en de equivalente back-upservices en -commando's in ha_call_service.
+      Dit uitschakelen blokkeert elke snapshotactie, inclusief het weergeven van een
+      lijst. Het verwijderen van snapshots is alleen beschikbaar via ha_manage_backup
+      en vereist ook Sta het verwijderen van snapshots toe. Back-ups bewerken en de
+      back-upacties die een persoon uitvoert in de webinstellingen-UI blijven beschikbaar.
   backup_read_only:
     name: Beheer van back-ups alleen-lezen maken
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    description: Sta AI-assistenten toe om back-ups voor bewerken te tonen, te bekijken
+      en te vergelijken (diff), en volledige HA-snapshots weer te geven wanneer snapshotacties
+      zijn ingeschakeld. Blokkeer handmatig aanmaken, herstellen (inclusief bewerkingsherstel)
+      en verwijderen van back-ups, inclusief de equivalente back-upservices en -commando's
+      in ha_call_service. Automatische back-ups van vóór een bewerking gaan door.
+      De back-upacties die een persoon uitvoert in de webinstellingen-UI blijven beschikbaar.
   enable_snapshot_delete:
     name: Momentopname verwijdering toestaan
-    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
-      snapshot may be the last way back after a mistaken change, so a person must
-      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
-      the minimum age stay protected.
+    description: Sta ha_manage_backup toe om volledige Home Assistant-snapshots te
+      verwijderen. Een snapshot is mogelijk de laatste redding na een vergissing,
+      dus iemand moet dit inschakelen. Geplande back-ups, het nieuwste snapshot en
+      snapshots die jonger zijn dan de minimumleeftijd blijven beschermd.
   snapshot_delete_min_age_days:
     name: Minimale leeftijd momentopname om te verwijderen (dagen)
-    description: How old a snapshot must be, in days, before it can be deleted. 0
-      turns off the age limit; the newest snapshot and scheduled backups stay protected.
-      Range 0–365.
+    description: Hoe oud een snapshot moet zijn, in dagen, voordat het kan worden
+      verwijderd. 0 schakelt de leeftijdsgrens uit; het nieuwste snapshot en geplande
+      back-ups blijven beschermd. Bereik 0–365.
   disabled_tools:
     name: Uitgeschakelde tools (komma-gescheiden)
     description: Tools die hier worden vermeld, zijn geforceerd uitgeschakeld en vergrendeld

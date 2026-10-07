@@ -4,21 +4,17 @@
 # backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   verify_ssl:
-    name: Verify TLS certificates
-    description: 'Verify the Home Assistant server''s TLS certificate. Turn this off
-      only on a trusted network, for a self-signed certificate or a hostname mismatch:
-      it weakens transport security.'
+    name: TLS 인증서 확인
+    description: Home Assistant 서버의 TLS 인증서를 확인합니다. 자체 서명된 인증서나 호스트 이름 불일치의 경우에만 신뢰할
+      수 있는 네트워크에서 이 기능을 끄십시오. 전송 보안이 약화됩니다.
   ha_tool_concurrency:
     name: Home Assistant 도구 동시성
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds. Range
-      0–32.
+    description: '모든 세션에 걸친 외부 Home Assistant 도구 호출의 선택적 제한. 내부 REST, WebSocket 및
+      도구별 팬아웃 동시성은 변경되지 않습니다. 0은 무제한 동작을 유지합니다. 용량을 대기 중인 호출은 60초 후에 실패합니다. 범위: 0–32.'
   backup_hint:
-    name: Backup hint level
-    description: How strongly AI assistants are told to suggest a full Home Assistant
-      backup before risky changes. It changes only this hint; automatic edit backups
-      have their own setting.
+    name: 백업 힌트 수준
+    description: 위험한 변경 전에 전체 Home Assistant 백업을 제안하도록 AI 어시스턴트에 지시하는 강도입니다. 이 힌트만
+      변경하며 자동 편집 백업에는 자체 설정이 있습니다.
   enable_tool_search:
     name: 도구 검색 사용
     description: '전체 도구 카탈로그 대신 검색 기반 탐색을 사용합니다. 대기 상태 컨텍스트를 약 90% 줄여 약 5K 토큰 수준으로
@@ -32,10 +28,9 @@ configuration:
       불러오게 하세요. 앱(애드온)만 다시 시작해서는 클라이언트에 캐시된 도구 목록이 갱신되지 않으며, 이는 여기의 어떤 설정을 바꾸든 마찬가지입니다.'
   tool_search_max_results:
     name: 도구 검색 최대 결과 수
-    description: Maximum number of hidden tools returned per ha_search_tools call
-      when tool search is enabled; a pinned tool that ranks inside that top count
-      is added as a short name-only entry on top of it. Lower values (2-3) save context
-      tokens but may miss relevant tools. Requires restart. Range 2–10.
+    description: '도구 검색이 활성화된 경우 ha_search_tools 호출당 반환되는 숨겨된 도구의 최대 개수입니다. 해당 상위
+      개수에 포함된 고정된 도구는 그 위에 이름만 있는 짧은 항목으로 추가됩니다. 낮은 값(2-3)은 컨텍스트 토큰을 절약하지만 관련 도구를
+      누락할 수 있습니다. 재시작이 필요합니다. 범위: 2–10.'
   enable_tool_security_policies:
     name: 도구 보안 정책 사용(고급)
     description: 위험도가 높은 도구 호출(잠금·경보 제어, 자동화 쓰기 등)에 사용자 승인을 요구합니다. 보호된 도구가 호출되면 에이전트는
@@ -76,44 +71,36 @@ configuration:
       상위 옵션이 꺼져 있으면 아무 효과가 없습니다. 적용하려면 다시 시작해야 합니다.
   enable_auto_backup:
     name: 편집 시 자동 백업
-    description: Save a snapshot of an entity before each write or delete tool call
-      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
-      ha_config_set_yaml) refuse to write.
+    description: 쓰기 또는 삭제 도구 호출로 변경되기 전에 엔티티의 스냅샷을 저장합니다. 이 기능이 꺼져 있으면 파일 및 원본 YAML
+      도구(ha_write_file, ha_delete_file, ha_config_set_yaml)의 쓰기가 거부됩니다.
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
-    description: How often auto-backup may capture the same entity. 0 captures on
-      every write; N above 0 captures at most one snapshot per N minutes per entity.
-      Range 0–1440.
+    name: 자동 백업 제한 시간(분)
+    description: '자동 백업이 동일한 엔티티를 캡처할 수 있는 주기입니다. 0은 모든 쓰기마다 캡처하고, 0보다 큰 N은 엔티티당 N분마다
+      최대 하나의 스냅샷을 캡처합니다. 범위: 0–1440.'
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
-    description: The most snapshots kept per entity. Each new capture removes the
-      oldest snapshots above this number. Range 1–10000.
+    name: 자동 백업 보관(엔티티당)
+    description: '엔티티당 유지되는 최대 스냅샷 수입니다. 새로운 캡처가 발생할 때마다 이 숫자를 초과하는 가장 오래된 스냅샷이 제거됩니다.
+      범위: 1–10000.'
   enable_snapshot_actions:
     name: 전체 Home Assistant 스냅샷 작업 허용
-    description: Allow AI assistants to manage full Home Assistant snapshots through
-      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
-      Turning this off blocks every snapshot action, including listing. Snapshot deletion
-      is only available through ha_manage_backup and also requires Allow snapshot
-      deletion. Edit backups and the backup actions a person takes in the web settings
-      UI remain available.
+    description: AI 어시스턴트가 ha_manage_backup 및 ha_call_service의 동등한 백업 서비스와 명령을 통해
+      전체 Home Assistant 스냅샷을 관리할 수 있도록 허용합니다. 이 기능을 끄면 목록 조회를 포함한 모든 스냅샷 작업이 차단됩니다.
+      스냅샷 삭제는 ha_manage_backup을 통해서만 가능하며 '스냅샷 삭제 허용'도 필요합니다. 웹 설정 UI에서 사람이 수행하는 백업
+      편집 및 백업 작업은 계속 사용할 수 있습니다.
   backup_read_only:
     name: 백업 관리 읽기 전용으로 설정
-    description: Allow AI assistants to list, view, and diff edit backups, and list
-      full HA snapshots when snapshot actions are enabled. Block manual backup create,
-      restore (including edit restores), and delete, including the equivalent backup
-      services and commands in ha_call_service. Automatic pre-edit backups continue.
-      The backup actions a person takes in the web settings UI remain available.
+    description: AI 어시스턴트가 편집 백업을 나열, 보기 및 비교(diff)하고, 스냅샷 작업이 활성화된 경우 전체 HA 스냅샷을
+      나열할 수 있도록 허용합니다. ha_call_service의 동등한 백업 서비스 및 명령을 포함하여 수동 백업 생성, 복원(편집 복원 포함)
+      및 삭제를 차단합니다. 자동 편집 전 백업은 계속 유지됩니다. 웹 설정 UI에서 사람이 수행하는 백업 작업은 계속 사용할 수 있습니다.
   enable_snapshot_delete:
     name: 스냅숏 삭제 허용
-    description: Allow ha_manage_backup to delete full Home Assistant snapshots. A
-      snapshot may be the last way back after a mistaken change, so a person must
-      turn this on. Scheduled backups, the newest snapshot and snapshots younger than
-      the minimum age stay protected.
+    description: ha_manage_backup이 전체 Home Assistant 스냅샷을 삭제할 수 있도록 허용합니다. 실수로 변경한
+      후 스냅샷이 유일한 복구 방법일 수 있으므로 사용자가 직접 이 기능을 켜야 합니다. 예약된 백업, 최신 스냅샷 및 최소 연령보다 젊은 스냅샷은
+      계속 보호됩니다.
   snapshot_delete_min_age_days:
     name: 삭제 가능한 최소 스냅숏 보관 기간(일)
-    description: How old a snapshot must be, in days, before it can be deleted. 0
-      turns off the age limit; the newest snapshot and scheduled backups stay protected.
-      Range 0–365.
+    description: '스냅샷을 삭제하기 전에 경과해야 하는 최소 기간(일)입니다. 0은 연령 제한을 끕니다. 최신 스냅샷과 예약된 백업은
+      계속 보호됩니다. 범위: 0–365.'
   disabled_tools:
     name: 비활성화할 도구(쉼표로 구분)
     description: '여기에 나열한 도구는 강제로 꺼지고 웹 설정 UI(도구 탭)에서 잠깁니다. 이 옵션을 먼저 해제하지 않으면 거기서
