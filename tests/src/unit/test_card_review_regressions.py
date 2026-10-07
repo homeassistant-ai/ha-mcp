@@ -399,3 +399,11 @@ def test_card_index_keeps_inherited_cards_but_excludes_dialogs():
     assert not definitions._is_card("dialog-edit")
     definitions._body.return_value = "class Card{setConfig(t){this.config=t}}"
     assert definitions._is_card("energy-internal")
+    definitions._body.return_value = (
+        "function(m,e,r){var c=r(123);class Alias extends c.Card{}}"
+    )
+    definitions._engine = MagicMock(
+        return_value={"value": "class Card{setConfig(t){this.config=t}}"}
+    )
+    assert definitions._is_card("shopping-list")
+    definitions._engine.assert_called_once_with("source", {"id": "123"})

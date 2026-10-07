@@ -302,14 +302,29 @@ class CardDefinitions:
             self._engine.add_callable, "__chunk", self._chunk_source
         ).result()
         # Dialogs also register hui-*-card tags. Real cards have an editor
-        # name or implement the card setConfig contract. Names retain cards
-        # such as stacks and shopping-list which inherit that method.
+        # name or implement (possibly inherit) the card setConfig contract.
         self._card_types = {tag for tag in self._card_types if self._is_card(tag)}
 
     def _is_card(self, card_type: str) -> bool:
-        return f"{_I18N}{card_type}.name" in self._strings or bool(
-            re.search(r"setConfig\([\w$]+\)\{", self._body(f"hui-{card_type}-card"))
-        )
+        if f"{_I18N}{card_type}.name" in self._strings:
+            return True
+        pending = [self._body(f"hui-{card_type}-card")]
+        seen = set()
+        # Unnamed aliases, e.g. shopping-list, inherit an imported card class.
+        # Inspect its source without instantiating browser elements.
+        while pending and len(seen) < 20:
+            body = pending.pop()
+            if re.search(r"setConfig\([\w$]+\)\{", body):
+                return True
+            aliases = dict(_ALIAS_RE.findall(body))
+            for alias in re.findall(r"\bextends ([\w$]+)\.[\w$]+", body):
+                module_id = aliases.get(alias)
+                if module_id is not None and module_id not in seen:
+                    seen.add(module_id)
+                    pending.append(
+                        self._engine("source", {"id": module_id}).get("value", "")
+                    )
+        return False
 
     def _index(self) -> None:
         files = sorted(self._dir.glob("*.js"), key=lambda p: p.stat().st_size)
