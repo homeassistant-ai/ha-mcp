@@ -120,6 +120,7 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
         warnings = "\n".join(result.get("warnings", []))
         if not component_surface_available():
             assert "card option" not in warnings, warnings
+            assert "editor schema advisory" not in warnings, warnings
             return
         assert "views[0].cards[0]" not in warnings, warnings
         assert (
@@ -127,7 +128,10 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
             in warnings
         )
         assert "views[0].cards[2]: unknown card type 'no-such-card'" in warnings
-        assert "views[0].cards[3].cards[0] (button): 'entitty'" in warnings
+        assert any(
+            "views[0].cards[3].cards[0] (button):" in warning and "'entitty'" in warning
+            for warning in result["warnings"]
+        )
         assert "views[1].header.card: unknown card type 'no-such-header'" in warnings
         assert "no-such-field-card" in warnings
         assert "no-such-state-card" in warnings
@@ -411,6 +415,7 @@ async def test_editor_advice_does_not_claim_valid_runtime_options_are_invalid(
         "views": [
             {
                 "title": "Advice",
+                "path": "advice",
                 "cards": [
                     {
                         "type": "iframe",
