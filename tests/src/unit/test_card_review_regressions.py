@@ -269,12 +269,12 @@ def test_skipped_resources_report_coverage_instead_of_claiming_unknown(
     assert custom.status()["resources"] == [
         {"resource": str(files[1]), "reason": "memory limit"}
     ]
-    assert cd._custom_warnings(custom, [("card", "custom:unknown", {})]) == []
+    assert cd._custom_warnings(custom, [("card", "custom:unknown", {})]) == ([], [], 0)
 
 
 def test_unregistered_custom_type_is_only_a_resource_inventory_advisory():
     custom = cc.CustomCards("")
-    warnings = cd._custom_warnings(custom, [("card", "custom:typo", {})])
+    warnings, _, _ = cd._custom_warnings(custom, [("card", "custom:typo", {})])
     assert "not found in dashboard resources" in warnings[0]
     assert "extra JavaScript" in warnings[0]
 
@@ -285,7 +285,11 @@ def test_failed_refresh_cannot_turn_cached_empty_inventory_into_unknown_warning(
     custom = cc.CustomCards("")
     monkeypatch.setattr(cc, "_resource_error", "DOM download failed")
     monkeypatch.setattr(cc, "_refresh_task", None)
-    assert cd._custom_warnings(custom, [("card", "custom:installed", {})]) == []
+    assert cd._custom_warnings(custom, [("card", "custom:installed", {})]) == (
+        [],
+        [],
+        0,
+    )
 
 
 @pytest.mark.asyncio

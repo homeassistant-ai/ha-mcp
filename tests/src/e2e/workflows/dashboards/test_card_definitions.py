@@ -225,6 +225,44 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
             "ha_config_get_dashboard", {"url_path": path}
         )
         assert saved["config"]["views"][0]["cards"] == cards
+        repeated = [{"type": "custom:e2e-type-error-card"}] * 25
+        for tile_count in (1, 19):
+            config = {
+                "views": [
+                    {
+                        "path": "review",
+                        "cards": repeated
+                        + [
+                            {
+                                "type": "tile",
+                                "entity": "light.bed_light",
+                                "colour": "red",
+                            }
+                        ]
+                        * tile_count
+                        + [{"type": "tyle"}],
+                    }
+                ]
+            }
+            result = await mcp.call_tool_success(
+                "ha_config_set_dashboard",
+                {
+                    "url_path": path,
+                    "config": config,
+                    "MandatoryBPS": False,
+                },
+            )
+            warnings = result.get("warnings", [])
+            assert sum("'colour'" in warning for warning in warnings) == tile_count
+            assert any("unknown card type 'tyle'" in warning for warning in warnings)
+            if tile_count == 1:
+                notices = [warning for warning in warnings if "inconclusive" in warning]
+                assert len(notices) == 1 and "25 cards" in notices[0]
+                assert "entity must be a string" in notices[0]
+            saved = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"url_path": path}
+            )
+            assert saved["config"] == config
         # Each fault must leave time for the following card. Combining every
         # deliberate timeout in one save tests the aggregate cutoff instead.
         for fault in ("slow-verdict", "slow-editor", "broken-editor"):

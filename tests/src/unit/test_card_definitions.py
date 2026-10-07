@@ -113,7 +113,7 @@ def test_warnings_are_capped() -> None:
     warnings = definitions.validate({"views": [{"cards": cards}]})
 
     assert len(warnings) == 21
-    assert warnings[-1] == "...and 5 more card problems"
+    assert warnings[-1] == "...and 5 more card diagnostics"
 
 
 def test_unknown_key_names_the_closest_card_option() -> None:

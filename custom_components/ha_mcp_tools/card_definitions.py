@@ -586,8 +586,11 @@ class CardDefinitions:
     ) -> list[str]:
         """Card type checks and advisory editor-schema diagnostics."""
         warnings, checked, customs = self._triage(config)
+        notices: list[str] = []
+        unchecked = 0
         if custom is not None:
-            warnings.extend(_custom_warnings(custom, customs))
+            findings, notices, unchecked = _custom_warnings(custom, customs)
+            warnings.extend(findings)
         if checked:
             payload = [{"key": t, "config": c} for _, t, c in checked]
             results = self._engine("validate", {"cards": payload}).get("value") or []
@@ -598,9 +601,15 @@ class CardDefinitions:
                     for e in explained
                     if e
                 )
+        # Inconclusive inspection advice must not displace schema findings.
+        warnings.extend(notices)
         if len(warnings) > _MAX_WARNINGS:
             more = len(warnings) - _MAX_WARNINGS
-            warnings = [*warnings[:_MAX_WARNINGS], f"...and {more} more card problems"]
+            noun = "diagnostic" if more == 1 else "diagnostics"
+            warnings = [*warnings[:_MAX_WARNINGS], f"...and {more} more card {noun}"]
+        # Coverage is independent of the diagnostic cap: never hide the cutoff.
+        if unchecked:
+            warnings.append(f"{unchecked} custom cards not checked (time budget)")
         return warnings
 
     def _triage(self, config: dict[str, Any]) -> tuple[list[str], _Queued, _Queued]:
@@ -635,12 +644,17 @@ class CardDefinitions:
         return f"{path}: {message}" if path else message
 
 
-def _custom_warnings(custom: CustomCards, customs: _Queued) -> list[str]:
-    """What each custom card says about its own config."""
+def _custom_warnings(
+    custom: CustomCards, customs: _Queued
+) -> tuple[list[str], list[str], int]:
+    """Return card findings, grouped inconclusive notices, and unchecked count."""
     found: list[str] = []
+    inconclusive: dict[tuple[str, str], tuple[str, int]] = {}
+    unchecked = 0
     deadline = time.monotonic() + _CUSTOM_WAIT_SECONDS
-    for path, card_type, card in customs:
+    for index, (path, card_type, card) in enumerate(customs):
         if time.monotonic() >= deadline:
+            unchecked = len(customs) - index
             break
         tag = card_type[len("custom:") :]
         messages = custom.check(tag, card)
@@ -649,17 +663,29 @@ def _custom_warnings(custom: CustomCards, customs: _Queued) -> list[str]:
                 f"{path} ({card_type}): not found in dashboard resources; "
                 "check the type spelling or whether it loads through extra JavaScript."
             )
-        explained = (
-            _explain_message(
+        for message in messages or []:
+            if message["source"] == "inspection":
+                key = (card_type, message["message"])
+                first, count = inconclusive.get(key, (path, 0))
+                inconclusive[key] = (first, count + 1)
+                continue
+            explained = _explain_message(
                 tag,
-                m["message"],
-                editor=m["source"] == "editor",
-                inconclusive=m["source"] == "inspection",
+                message["message"],
+                editor=message["source"] == "editor",
             )
-            for m in messages or []
+            if explained is not None:
+                found.append(f"{path} ({card_type}): {explained}")
+    notices = []
+    for (card_type, message), (path, count) in inconclusive.items():
+        location = (
+            f"{path} ({card_type})"
+            if count == 1
+            else f"{card_type} ({count} cards; first at {path})"
         )
-        found.extend(f"{path} ({card_type}): {e}" for e in explained if e is not None)
-    return found
+        explained = _explain_message(card_type, message, inconclusive=True)
+        notices.append(f"{location}: {explained}")
+    return found, notices, unchecked
 
 
 def _explain_message(
