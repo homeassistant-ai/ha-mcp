@@ -43,7 +43,14 @@ async def test_energy_prefs_get_returns_expected_shape(mcp_client):
     # Native defaults are available through the component; without it an
     # unconfigured Core returns no prefs and the tool reports an empty config.
     if config:
-        assert all(isinstance(config[key], list) for key in ("energy_sources", "device_consumption", "device_consumption_water"))
+        assert all(
+            isinstance(config[key], list)
+            for key in (
+                "energy_sources",
+                "device_consumption",
+                "device_consumption_water",
+            )
+        )
     else:
         assert "unavailable" in data["note"]
 

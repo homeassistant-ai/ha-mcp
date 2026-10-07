@@ -3,6 +3,9 @@
 import logging
 from typing import Any
 
+from ..errors import ErrorCode, create_error_response
+from .coercion import parse_string_list_param
+from .helpers import raise_tool_error
 from .response_helpers import build_pagination_metadata
 
 logger = logging.getLogger(__name__)
@@ -106,14 +109,27 @@ async def resolve_requested_units(
 ) -> None:
     """Resolve Core's actual converter or label explicit-unit output as unknown."""
     from ..client.websocket_client import get_websocket_client
-    from .component_api import component_supports, get_component_caps, invalidate_caps, is_unknown_command
+    from .component_api import (
+        component_supports,
+        get_component_caps,
+        invalidate_caps,
+        is_unknown_command,
+    )
 
     records: dict[str, dict[str, Any]] = {}
     try:
         caps = await get_component_caps(client)
         if component_supports(caps, "core_contract"):
-            ws = await get_websocket_client(url=client.base_url, token=client.token, verify_ssl=getattr(client, "verify_ssl", None))
-            response = await ws.send_command("ha_mcp_tools/statistics_units", statistic_ids=[e["entity_id"] for e in entities], units=units)
+            ws = await get_websocket_client(
+                url=client.base_url,
+                token=client.token,
+                verify_ssl=getattr(client, "verify_ssl", None),
+            )
+            response = await ws.send_command(
+                "ha_mcp_tools/statistics_units",
+                statistic_ids=[e["entity_id"] for e in entities],
+                units=units,
+            )
             records = {r["statistic_id"]: r for r in response["result"]["records"]}
     except Exception as exc:
         if is_unknown_command(exc):
@@ -126,4 +142,36 @@ async def resolve_requested_units(
             entity["unit_source"] = "core_converter"
             entity.pop("unit_reason", None)
         else:
-            entity.update(unit_of_measurement=None, unit_source="unknown", unit_reason="requested_unit_resolution_unavailable")
+            entity.update(
+                unit_of_measurement=None,
+                unit_source="unknown",
+                unit_reason="requested_unit_resolution_unavailable",
+            )
+
+
+def _parse_statistic_types(
+    statistic_types: str | list[str] | None,
+) -> list[str] | None:
+    """Parse and validate the statistic_types param into a list (or None for all)."""
+    stat_types_list: list[str] | None = None
+    if statistic_types is not None:
+        if isinstance(statistic_types, str):
+            if statistic_types.startswith("["):
+                stat_types_list = parse_string_list_param(
+                    statistic_types, "statistic_types"
+                )
+            elif "," in statistic_types:
+                stat_types_list = [
+                    s.strip() for s in statistic_types.split(",") if s.strip()
+                ]
+            else:
+                stat_types_list = [statistic_types.strip()]
+        else:
+            stat_types_list = list(statistic_types)
+        if not stat_types_list:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "statistic_types cannot be empty: this tool requires at least one value field. Omit it for Core's defaults.",
+            ))
+
+    return stat_types_list

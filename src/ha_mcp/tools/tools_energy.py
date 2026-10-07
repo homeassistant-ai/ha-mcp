@@ -38,13 +38,24 @@ logger = logging.getLogger(__name__)
 
 def _flatten_validation_errors(raw: Any) -> list[dict[str, Any]]:
     """Add paths for readability while preserving native issue objects as details."""
+
     def walk(value: Any, path: str) -> list[dict[str, Any]]:
         if not value:
             return []
         if isinstance(value, list):
-            return [issue for index, item in enumerate(value) for issue in walk(item, f"{path}[{index}]")]
-        if isinstance(value, dict) and not any(key in value for key in ("type", "message", "issue_type")):
-            return [issue for key, item in value.items() for issue in walk(item, f"{path}.{key}" if path else key)]
+            return [
+                issue
+                for index, item in enumerate(value)
+                for issue in walk(item, f"{path}[{index}]")
+            ]
+        if isinstance(value, dict) and not any(
+            key in value for key in ("type", "message", "issue_type")
+        ):
+            return [
+                issue
+                for key, item in value.items()
+                for issue in walk(item, f"{path}.{key}" if path else key)
+            ]
         return [{"path": path, "message": str(value), "details": value}]
 
     return walk(raw, "")
@@ -175,7 +186,10 @@ class EnergyTools:
             ),
         ] = None,
         include_schema: Annotated[
-            bool, Field(description="With mode='get', describe the running Core's save schema. Unavailable without the component.")
+            bool,
+            Field(
+                description="With mode='get', describe the running Core's save schema. Unavailable without the component."
+            ),
         ] = False,
         include_statistics: Annotated[
             bool,
@@ -233,7 +247,9 @@ class EnergyTools:
         if mode == "get":
             result = await self._get_prefs()
             if include_schema:
-                result["core_contract"] = await core_contract(self._client, "energy/save_prefs")
+                result["core_contract"] = await core_contract(
+                    self._client, "energy/save_prefs"
+                )
             return (
                 await include_energy_statistics(self._client, result)
                 if include_statistics
@@ -315,7 +331,9 @@ class EnergyTools:
             result["warnings"] = [validation["reason"]]
         if failure:
             result["partial"] = True
-            result.setdefault("warnings", []).append(f"Current-state validation failed: {failure}")
+            result.setdefault("warnings", []).append(
+                f"Current-state validation failed: {failure}"
+            )
         return result
 
     async def _set_prefs(
@@ -395,7 +413,7 @@ class EnergyTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("Error setting energy prefs", exc_info=True)
             exception_to_structured_error(
                 e,
@@ -481,7 +499,11 @@ class EnergyTools:
                 key
                 for key in sorted(submitted_keys)
                 if config_hash[key]
-                != (compute_config_hash({key: current_prefs[key]}) if key in current_prefs else None)
+                != (
+                    compute_config_hash({key: current_prefs[key]})
+                    if key in current_prefs
+                    else None
+                )
             ]
             if mismatched_keys:
                 raise_tool_error(
@@ -546,7 +568,7 @@ class EnergyTools:
                 logger.warning(
                     f"energy/validate (post-save) failed: {post_save_validate_error}"
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Post-save validate failure is non-fatal — the save itself
             # succeeded. Log and continue.
             logger.warning("Post-save energy/validate failed", exc_info=True)

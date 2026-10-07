@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Canonical agent guidance for the Home Assistant MCP Server repository.
+Canonical agent guidance for HA-MCP.
 
 ## Instruction structure
 
@@ -149,7 +149,7 @@ The minimal setup is `uv sync --group dev`; run stdio with `uv run ha-mcp` and H
 
 Lazy-discover tools from `tools_*.py`; put shared logic in service modules, verify writes and wait for completion. Before structural changes, read the [architecture map](docs/agents/development.md#architecture) and [style guide](.gemini/styleguide.md).
 
-Read and write wrappers must use [native Core contracts](docs/agents/native-core-contracts.md), preserving safety policies and labeling unavailable validation.
+For read/write tools, follow [native Core contracts](docs/agents/native-core-contracts.md); preserve safety gates and label unavailable validation.
 
 ## Code Conventions
 

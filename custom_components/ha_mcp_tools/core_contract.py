@@ -65,7 +65,10 @@ def _core_serializer(node: Any) -> Any:
     serializer. This adapter only reveals those objects; it never validates or
     supplies a list of source types/fields. Unknown wrappers remain unsupported.
     """
-    if not inspect.isfunction(node) or node.__module__ != "homeassistant.helpers.config_validation":
+    if (
+        not inspect.isfunction(node)
+        or node.__module__ != "homeassistant.helpers.config_validation"
+    ):
         return _UNSUPPORTED
     if node.__qualname__ != "key_value_schemas.<locals>.key_value_validator":
         return _UNSUPPORTED
@@ -73,10 +76,12 @@ def _core_serializer(node: Any) -> Any:
     alternatives = closure.get("value_schemas")
     if not isinstance(alternatives, dict) or closure.get("default_schema") is not None:
         return _UNSUPPORTED
-    return {"anyOf": [
-        _TO_JSON_SCHEMA(schema, custom_serializer=_core_serializer)
-        for schema in alternatives.values()
-    ]}
+    return {
+        "anyOf": [
+            _TO_JSON_SCHEMA(schema, custom_serializer=_core_serializer)
+            for schema in alternatives.values()
+        ]
+    }
 
 
 def describe_contract(hass: HomeAssistant, command: str) -> dict[str, Any]:
@@ -88,11 +93,15 @@ def describe_contract(hass: HomeAssistant, command: str) -> dict[str, Any]:
     try:
         if _TO_JSON_SCHEMA is not None:
             try:
-                result["schema"] = _TO_JSON_SCHEMA(schema, strict=True, custom_serializer=_core_serializer)
+                result["schema"] = _TO_JSON_SCHEMA(
+                    schema, strict=True, custom_serializer=_core_serializer
+                )
                 result["description_complete"] = False
             except Exception:
                 _LOGGER.debug("Core contract needs lossy serialization", exc_info=True)
-                result["schema"] = _TO_JSON_SCHEMA(schema, custom_serializer=_core_serializer)
+                result["schema"] = _TO_JSON_SCHEMA(
+                    schema, custom_serializer=_core_serializer
+                )
                 result["description_complete"] = False
         else:
             result["fields"] = _convert(schema)
@@ -115,6 +124,7 @@ def _defaults() -> dict[str, Any]:
 
 def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
     """Register on the shared admin-gated surface for both component entries."""
+
     def execute(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         command = msg["command"]
         if "payload" in msg:
@@ -127,26 +137,32 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
     async def units_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         return {"result": await statistics_metadata(hass, msg)}
 
-    def units_result(hass: HomeAssistant, msg: dict[str, Any], *, result: dict[str, Any]) -> dict[str, Any]:
+    def units_result(
+        hass: HomeAssistant, msg: dict[str, Any], *, result: dict[str, Any]
+    ) -> dict[str, Any]:
         return result
 
-    return [(
-        {
-            vol.Required("type"): COMMAND,
-            vol.Required("command"): vol.In(COMMANDS),
-            vol.Optional("payload"): dict,
-        },
-        execute,
-        None,
-    ), (
-        {
-            vol.Required("type"): "ha_mcp_tools/statistics_units",
-            vol.Required("statistic_ids"): vol.All([str], vol.Length(min=1)),
-            vol.Required("units"): {str: str},
-        },
-        units_result,
-        units_prep,
-    )]
+    return [
+        (
+            {
+                vol.Required("type"): COMMAND,
+                vol.Required("command"): vol.In(COMMANDS),
+                vol.Optional("payload"): dict,
+            },
+            execute,
+            None,
+        ),
+        (
+            {
+                vol.Required("type"): "ha_mcp_tools/statistics_units",
+                vol.Required("statistic_ids"): vol.All([str], vol.Length(min=1)),
+                vol.Required("units"): {str: str},
+            },
+            units_result,
+            units_prep,
+        ),
+    ]
+
 
 
 async def statistics_metadata(
@@ -165,7 +181,9 @@ async def statistics_metadata(
         converter = _get_unit_converter(record.get("unit_class"), stored)
         requested = units.get(converter.UNIT_CLASS) if converter else None
         # A converter absent in Core means statistics are returned as stored.
-        output = stored if converter is None else record.get("display_unit_of_measurement")
+        output = (
+            stored if converter is None else record.get("display_unit_of_measurement")
+        )
         if converter and requested is not None:
             output = requested if requested in converter.VALID_UNITS else stored
         record["output_unit_of_measurement"] = output

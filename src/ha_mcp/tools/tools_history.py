@@ -40,10 +40,11 @@ from .response_helpers import (
     resolve_local_timezone,
 )
 from .statistics_helpers import (
+    _parse_statistic_types,
     fetch_statistics_metadata,
     format_entity_statistics,
-    statistics_warnings,
     resolve_requested_units,
+    statistics_warnings,
 )
 from .tool_hints import read_only_hints
 from .util_helpers import is_connection_error_message
@@ -332,11 +333,17 @@ class HistoryTools:
             ),
         ] = None,
         include_schema: Annotated[
-            bool, Field(description="Include the running Core's native request schema when the component supports discovery.")
+            bool,
+            Field(
+                description="Include the running Core's native request schema when the component supports discovery."
+            ),
         ] = False,
         core_options: Annotated[
-            dict[str, Any] | None, JSON_STRING_COERCION,
-            Field(description="Additional native Core request fields, e.g. {'units': {'energy': 'MWh'}} for statistics. Core validates them. Cannot override fields controlled by the tool's parameters or query limits.")
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description="Additional native Core request fields, e.g. {'units': {'energy': 'MWh'}} for statistics. Core validates them. Cannot override fields controlled by the tool's parameters or query limits."
+            ),
         ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
@@ -475,7 +482,11 @@ class HistoryTools:
                     core_options=core_options,
                 )
             if include_schema:
-                command = "recorder/statistics_during_period" if source == "statistics" else "history/history_during_period"
+                command = (
+                    "recorder/statistics_during_period"
+                    if source == "statistics"
+                    else "history/history_during_period"
+                )
                 inner["core_contract"] = await core_contract(self._client, command)
             await safe_progress(
                 ctx,
@@ -1025,34 +1036,6 @@ async def _fetch_history(
     return history_data
 
 
-def _parse_statistic_types(
-    statistic_types: str | list[str] | None,
-) -> list[str] | None:
-    """Parse and validate the statistic_types param into a list (or None for all)."""
-    stat_types_list: list[str] | None = None
-    if statistic_types is not None:
-        if isinstance(statistic_types, str):
-            if statistic_types.startswith("["):
-                stat_types_list = parse_string_list_param(
-                    statistic_types, "statistic_types"
-                )
-            elif "," in statistic_types:
-                stat_types_list = [
-                    s.strip() for s in statistic_types.split(",") if s.strip()
-                ]
-            else:
-                stat_types_list = [statistic_types.strip()]
-        else:
-            stat_types_list = list(statistic_types)
-        if not stat_types_list:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "statistic_types cannot be empty: this tool requires at least one value field. Omit it for Core's defaults.",
-            ))
-
-    return stat_types_list
-
-
 async def _fetch_statistics(
     client: Any,
     entity_id_list: list[str],
@@ -1080,7 +1063,9 @@ async def _fetch_statistics(
         "statistic_ids": entity_id_list,
         "period": period,
     }
-    command_params = merge_core_options({**command_params, "types": stat_types_list}, core_options)
+    command_params = merge_core_options(
+        {**command_params, "types": stat_types_list}, core_options
+    )
     if stat_types_list is None:
         command_params.pop("types")
 
@@ -1102,10 +1087,19 @@ async def _fetch_statistics(
         )
 
     result_data = response.get("result", {})
-    all_stat_types = stat_types_list if stat_types_list is not None else sorted({
-        key for rows in result_data.values() for row in rows for key in row
-        if key not in {"start", "end"}
-    })
+    all_stat_types = (
+        stat_types_list
+        if stat_types_list is not None
+        else sorted(
+            {
+                key
+                for rows in result_data.values()
+                for row in rows
+                for key in row
+                if key not in {"start", "end"}
+            }
+        )
+    )
     entities_statistics = format_entity_statistics(
         result_data,
         entity_id_list,
@@ -1116,7 +1110,9 @@ async def _fetch_statistics(
         metadata_failure,
     )
     if command_params.get("units"):
-        await resolve_requested_units(client, entities_statistics, command_params["units"])
+        await resolve_requested_units(
+            client, entities_statistics, command_params["units"]
+        )
 
     empty_entities: list[str] = [
         str(e["entity_id"]) for e in entities_statistics if e["count"] == 0
