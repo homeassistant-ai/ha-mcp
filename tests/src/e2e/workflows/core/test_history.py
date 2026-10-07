@@ -370,170 +370,66 @@ class TestGetHistory:
 class TestGetHistoryStatisticsSource:
     """Test ha_get_history with source="statistics" functionality."""
 
-    async def test_get_statistics_single_entity(self, mcp_client):
-        """Test retrieving statistics for a sensor with state_class."""
-        logger.info("Testing ha_get_history with source=statistics")
-
-        # Search for a sensor with state_class (numeric sensors)
-        search_result = await mcp_client.call_tool(
-            "ha_search",
-            {"query": "temperature", "domain_filter": "sensor", "limit": 5},
-        )
-        search_data = parse_mcp_result(search_result)
-
-        sensors = search_data.get("entities", [])
-
-        # Try to find a numeric sensor
-        test_sensor = None
-        for sensor in sensors:
-            entity_id = sensor.get("entity_id", "")
-            if entity_id:
-                test_sensor = entity_id
-                break
-
-        if not test_sensor:
-            # Fallback: try any sensor
-            search_result = await mcp_client.call_tool(
-                "ha_search",
-                {"domain_filter": "sensor", "limit": 5},
-            )
-            search_data = parse_mcp_result(search_result)
-            sensors = search_data.get("entities", [])
-            if sensors:
-                test_sensor = sensors[0].get("entity_id")
-
-        if not test_sensor:
-            pytest.skip("No sensor entities available for statistics test")
-
-        logger.info(f"Testing statistics with: {test_sensor}")
-
+    @pytest.mark.parametrize(
+        "period", ["5minute", "hour", "day", "week", "month", "year"]
+    )
+    async def test_energy_statistics_have_values_and_correct_units(
+        self, mcp_client, period
+    ):
+        """Seeded kWh/MWh statistics must never silently return empty or unlabelled data."""
         result = await mcp_client.call_tool(
             "ha_get_history",
             {
                 "source": "statistics",
-                "entity_ids": test_sensor,
+                "entity_ids": ["sensor.total_energy_kwh", "sensor.total_energy_mwh"],
                 "start_time": "7d",
-                "period": "day",
+                "period": period,
+                "statistic_types": ["sum", "change"],
+                "limit": 3,
             },
         )
-
-        data = parse_mcp_result(result)
-
-        # Statistics data may be nested in 'data' key
-        inner_data = data.get("data", data)
-        if inner_data.get("success") or "entities" in inner_data:
-            assert "entities" in inner_data, f"Missing 'entities': {data}"
-            logger.info(
-                f"Statistics retrieved for {len(inner_data.get('entities', []))} entities"
+        data = assert_mcp_success(result, "Energy statistics with units")
+        data = data.get("data", data)
+        entities = {row["entity_id"]: row for row in data["entities"]}
+        for entity_id, unit in [
+            ("sensor.total_energy_kwh", "kWh"),
+            ("sensor.total_energy_mwh", "MWh"),
+        ]:
+            entity = entities[entity_id]
+            assert entity["statistics"], f"Missing seeded statistics for {entity_id}"
+            assert entity["unit_of_measurement"] == unit
+            assert entity["unit_source"] == "recorder_metadata"
+            assert (
+                entity["statistics_metadata"]["statistics_unit_of_measurement"] == unit
             )
+            for row in entity["statistics"]:
+                assert isinstance(row["sum"], (int, float))
+                assert isinstance(row["change"], (int, float))
+                assert row["end"] > row["start"]
 
-            if inner_data["entities"]:
-                stats_data = inner_data["entities"][0]
-                stats_count = stats_data.get(
-                    "count", len(stats_data.get("statistics", []))
-                )
-                logger.info(f"Retrieved {stats_count} statistical periods")
-                logger.info(f"Period type: {stats_data.get('period')}")
-                if stats_data.get("unit_of_measurement"):
-                    logger.info(f"Unit: {stats_data['unit_of_measurement']}")
-        else:
-            # Statistics may not be available for all sensors
-            logger.info(
-                f"Statistics not available: {inner_data.get('error', 'Unknown error')}"
-            )
-            if "warnings" in inner_data or "suggestions" in inner_data:
-                logger.info("This is expected for sensors without state_class")
-
-    async def test_get_statistics_different_periods(self, mcp_client):
-        """Test statistics with different aggregation periods."""
-        logger.info("Testing ha_get_history statistics with different periods")
-
-        # Find a sensor
-        search_result = await mcp_client.call_tool(
-            "ha_search",
-            {"domain_filter": "sensor", "limit": 1},
-        )
-        search_data = parse_mcp_result(search_result)
-        sensors = search_data.get("entities", [])
-
-        if not sensors:
-            pytest.skip("No sensors available for test")
-
-        test_sensor = sensors[0].get("entity_id")
-
-        periods = ["5minute", "hour", "day", "week", "month", "year"]
-
-        for period in periods:
+    async def test_statistics_units_survive_pagination(self, mcp_client):
+        """Metadata must not depend on which rows happen to be on the returned page."""
+        args = {
+            "source": "statistics",
+            "entity_ids": "sensor.total_energy_kwh",
+            "start_time": "7d",
+            "period": "hour",
+            "statistic_types": ["sum"],
+            "limit": 2,
+        }
+        pages = []
+        for offset in (0, 2, 100000):
             result = await mcp_client.call_tool(
-                "ha_get_history",
-                {
-                    "source": "statistics",
-                    "entity_ids": test_sensor,
-                    "start_time": "30d",
-                    "period": period,
-                },
+                "ha_get_history", {**args, "offset": offset}
             )
-
-            data = parse_mcp_result(result)
-
-            # Statistics data may be nested in 'data' key
-            inner_data = data.get("data", data)
-            if inner_data.get("success") or "entities" in inner_data:
-                logger.info(f"Period '{period}' accepted")
-            else:
-                # 5minute may not be available for older data
-                logger.info(
-                    f"Period '{period}' may not have data: {str(inner_data.get('error', ''))[:50]}"
-                )
-
-    async def test_get_statistics_specific_types(self, mcp_client):
-        """Test statistics with specific statistic types."""
-        logger.info("Testing ha_get_history statistics with specific types")
-
-        # Find a sensor
-        search_result = await mcp_client.call_tool(
-            "ha_search",
-            {"domain_filter": "sensor", "limit": 1},
-        )
-        search_data = parse_mcp_result(search_result)
-        sensors = search_data.get("entities", [])
-
-        if not sensors:
-            pytest.skip("No sensors available for test")
-
-        test_sensor = sensors[0].get("entity_id")
-
-        result = await mcp_client.call_tool(
-            "ha_get_history",
-            {
-                "source": "statistics",
-                "entity_ids": test_sensor,
-                "start_time": "7d",
-                "period": "day",
-                "statistic_types": ["mean", "min", "max"],
-            },
-        )
-
-        data = parse_mcp_result(result)
-
-        # Statistics data may be nested in 'data' key
-        inner_data = data.get("data", data)
-        if inner_data.get("success") or "entities" in inner_data:
-            assert "statistic_types" in inner_data or "entities" in inner_data, (
-                f"Missing expected fields: {data}"
-            )
-            logger.info("Specific statistic types query succeeded")
-
-            # Check if requested types are in response
-            if inner_data.get("entities") and inner_data["entities"][0].get(
-                "statistics"
-            ):
-                first_stat = inner_data["entities"][0]["statistics"][0]
-                logger.info(f"Statistic fields returned: {list(first_stat.keys())}")
-        else:
-            logger.info(
-                f"Statistics query failed (may be expected): {str(inner_data.get('error', ''))[:50]}"
-            )
+            data = assert_mcp_success(result, "Paginated energy statistics")
+            entity = data.get("data", data)["entities"][0]
+            assert entity["unit_of_measurement"] == "kWh"
+            assert entity["unit_source"] == "recorder_metadata"
+            pages.append(entity)
+        assert pages[0]["has_more"] and pages[1]["statistics"]
+        assert pages[0]["statistics"][0]["start"] != pages[1]["statistics"][0]["start"]
+        assert pages[2]["statistics"] == []
 
     async def test_get_statistics_invalid_period(self, mcp_client):
         """Test statistics with invalid period."""

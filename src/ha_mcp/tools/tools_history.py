@@ -38,6 +38,11 @@ from .response_helpers import (
     project_fields,
     resolve_local_timezone,
 )
+from .statistics_helpers import (
+    fetch_statistics_metadata,
+    format_entity_statistics,
+    statistics_warnings,
+)
 from .tool_hints import read_only_hints
 from .util_helpers import is_connection_error_message
 
@@ -335,7 +340,11 @@ class HistoryTools:
         total_increasing).
 
         History-only params: minimal_response, significant_changes_only.
-        Statistics-only params: period, statistic_types.
+        Statistics-only params: period, statistic_types. Output units come from
+        Core recorder metadata and reflect its display-unit conversion; unresolved
+        units include a reason. statistics_metadata preserves Core's native fields.
+        Use ha_manage_energy_prefs(mode="get", include_statistics=True) to
+        discover the statistics configured in the Energy Dashboard.
 
         All data is fetched from HA before slicing; limit/offset are client-side.
         With multiple entity_ids, offset must be 0 — use a single entity_id for
@@ -427,8 +436,7 @@ class HistoryTools:
             )
 
             # Route through the shared pooled WebSocket (issue #1813) instead of
-            # a dedicated connect/auth handshake per call. Each source issues a
-            # single request/response WS command; the pooled client owns the
+            # a dedicated connect/auth handshake per call. Statistics also fetches native recorder metadata; the pooled client owns the
             # connection lifecycle, so there is no per-call connect/disconnect.
             if source == "statistics":
                 inner = await _fetch_statistics(
@@ -1048,51 +1056,6 @@ def _parse_statistic_types(
     return stat_types_list
 
 
-def _format_entity_statistics(
-    result_data: dict[str, Any],
-    entity_id_list: list[str],
-    all_stat_types: list[str],
-    period: str,
-    effective_offset: int,
-    effective_limit: int,
-) -> list[dict[str, Any]]:
-    """Format the per-entity statistics rows from a statistics_during_period result."""
-    entities_statistics = []
-    for entity_id in entity_id_list:
-        entity_stats = result_data.get(entity_id, [])
-        paged_stats = entity_stats[
-            effective_offset : effective_offset + effective_limit
-        ]
-        formatted_stats = []
-        unit = None
-
-        for stat in paged_stats:
-            stat_entry: dict[str, Any] = {"start": stat.get("start")}
-            for stat_type in all_stat_types:
-                if stat_type in stat:
-                    stat_entry[stat_type] = stat[stat_type]
-            if unit is None and "unit_of_measurement" in stat:
-                unit = stat["unit_of_measurement"]
-            formatted_stats.append(stat_entry)
-
-        pagination = build_pagination_metadata(
-            total_count=len(entity_stats),
-            offset=effective_offset,
-            limit=effective_limit,
-            count=len(formatted_stats),
-        )
-        entities_statistics.append(
-            {
-                "entity_id": entity_id,
-                "period": period,
-                "statistics": formatted_stats,
-                "unit_of_measurement": unit,
-                **pagination,
-            }
-        )
-    return entities_statistics
-
-
 async def _fetch_statistics(
     client: Any,
     entity_id_list: list[str],
@@ -1134,6 +1097,7 @@ async def _fetch_statistics(
     if stat_types_list is not None:
         command_params["types"] = stat_types_list
 
+    metadata, metadata_failure = await fetch_statistics_metadata(client, entity_id_list)
     response = await client.send_websocket_message(
         {"type": "recorder/statistics_during_period", **command_params}
     )
@@ -1152,13 +1116,14 @@ async def _fetch_statistics(
 
     result_data = response.get("result", {})
     all_stat_types = stat_types_list or ["mean", "min", "max", "sum", "state", "change"]
-    entities_statistics = _format_entity_statistics(
+    entities_statistics = format_entity_statistics(
         result_data,
         entity_id_list,
-        all_stat_types,
         period,
         effective_offset,
         effective_limit,
+        metadata,
+        metadata_failure,
     )
 
     empty_entities: list[str] = [
@@ -1182,10 +1147,13 @@ async def _fetch_statistics(
         },
     }
 
+    warnings = statistics_warnings(entities_statistics)
     if empty_entities:
-        statistics_data["warnings"] = [
+        warnings += [
             f"No statistics found for: {', '.join(empty_entities)}. "
             "These entities may not have state_class attribute or may not have recorded data yet."
         ]
 
+    if warnings:
+        statistics_data["warnings"] = warnings
     return statistics_data

@@ -544,10 +544,10 @@ class TestHaGetHistoryWorkloadGuardrails:
     async def test_two_calendar_years_of_yearly_statistics_are_allowed(
         self, history_tool, mock_client
     ):
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": {},
-        }
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": []},
+            {"success": True, "result": {}},
+        ]
         with (
             patch(
                 "ha_mcp.tools.tools_history.get_global_settings",
@@ -571,7 +571,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             )
 
         assert result["success"] is True
-        mock_client.send_websocket_message.assert_awaited_once()
+        assert mock_client.send_websocket_message.await_count == 2
 
     @pytest.mark.asyncio
     async def test_non_utc_timezone_reaches_calendar_scan(
