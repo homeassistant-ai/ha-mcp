@@ -350,18 +350,23 @@ class HistoryTools:
     ) -> dict[str, Any]:
         """Get historical data from Home Assistant's recorder.
 
+        WHEN NOT TO USE:
+        For current values, use ha_get_state. To inspect Energy Dashboard
+        preferences and configured statistics, use
+        ha_manage_energy_prefs(mode="get", include_statistics=True).
+
+        WHEN TO USE:
         Use source="history" (default) to troubleshoot why a value changed, check
         event sequences, or analyze recent patterns. Use source="statistics" for
         long-term trends beyond the ~10-day recorder retention and period
         averages; entities must have state_class (measurement, total,
         total_increasing).
 
+        CAVEATS:
         History-only params: minimal_response, significant_changes_only.
         Statistics-only params: period, statistic_types. Output units come from
         Core recorder metadata and reflect its display-unit conversion; unresolved
         units include a reason. statistics_metadata preserves Core's native fields.
-        Use ha_manage_energy_prefs(mode="get", include_statistics=True) to
-        discover the statistics configured in the Energy Dashboard.
 
         All data is fetched from HA before slicing; limit/offset are client-side.
         With multiple entity_ids, offset must be 0 — use a single entity_id for
