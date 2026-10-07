@@ -99,3 +99,31 @@ def statistics_warnings(entities: list[dict[str, Any]]) -> list[str]:
         for entity in entities
         if entity["unit_source"] == "unknown"
     ]
+
+
+async def resolve_requested_units(
+    client: Any, entities: list[dict[str, Any]], units: dict[str, str]
+) -> None:
+    """Resolve Core's actual converter or label explicit-unit output as unknown."""
+    from ..client.websocket_client import get_websocket_client
+    from .component_api import component_supports, get_component_caps, invalidate_caps, is_unknown_command
+
+    records: dict[str, dict[str, Any]] = {}
+    try:
+        caps = await get_component_caps(client)
+        if component_supports(caps, "core_contract"):
+            ws = await get_websocket_client(url=client.base_url, token=client.token, verify_ssl=getattr(client, "verify_ssl", None))
+            response = await ws.send_command("ha_mcp_tools/statistics_units", statistic_ids=[e["entity_id"] for e in entities], units=units)
+            records = {r["statistic_id"]: r for r in response["result"]["records"]}
+    except Exception as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        logger.warning("Explicit statistics unit resolution failed", exc_info=True)
+    for entity in entities:
+        record = records.get(entity["entity_id"])
+        if record is not None and "output_unit_of_measurement" in record:
+            entity["unit_of_measurement"] = record["output_unit_of_measurement"]
+            entity["unit_source"] = "core_converter"
+            entity.pop("unit_reason", None)
+        else:
+            entity.update(unit_of_measurement=None, unit_source="unknown", unit_reason="requested_unit_resolution_unavailable")

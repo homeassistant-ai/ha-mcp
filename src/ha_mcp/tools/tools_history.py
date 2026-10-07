@@ -24,6 +24,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
+from .core_contract import core_contract, merge_core_options
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -42,6 +43,7 @@ from .statistics_helpers import (
     fetch_statistics_metadata,
     format_entity_statistics,
     statistics_warnings,
+    resolve_requested_units,
 )
 from .tool_hints import read_only_hints
 from .util_helpers import is_connection_error_message
@@ -302,7 +304,7 @@ class HistoryTools:
             str | list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description='Statistics types: "mean", "min", "max", "sum", "state", "change". Default: all. Ignored when source="history"',
+                description='Native Core statistics types (for example "sum", "change", "last_reset"). Default: Core chooses all. Use include_schema=True to discover the installed contract. Ignored when source="history"',
                 default=None,
             ),
         ] = None,
@@ -328,6 +330,13 @@ class HistoryTools:
                     "period_type, time_range, statistic_types, query_params, warnings."
                 ),
             ),
+        ] = None,
+        include_schema: Annotated[
+            bool, Field(description="Include the running Core's native request schema when the component supports discovery.")
+        ] = False,
+        core_options: Annotated[
+            dict[str, Any] | None, JSON_STRING_COERCION,
+            Field(description="Additional native Core request fields, e.g. {'units': {'energy': 'MWh'}} for statistics. Core validates them. Cannot override fields controlled by the tool's parameters or query limits.")
         ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
@@ -448,6 +457,7 @@ class HistoryTools:
                     statistic_types,
                     limit,
                     offset,
+                    core_options=core_options,
                 )
             else:
                 inner = await _fetch_history(
@@ -462,7 +472,11 @@ class HistoryTools:
                     _DEFAULT_HISTORY_LIMIT,
                     _MAX_HISTORY_LIMIT,
                     order=order,
+                    core_options=core_options,
                 )
+            if include_schema:
+                command = "recorder/statistics_during_period" if source == "statistics" else "history/history_during_period"
+                inner["core_contract"] = await core_contract(self._client, command)
             await safe_progress(
                 ctx,
                 progress=3,
@@ -746,7 +760,7 @@ def _statistics_workload_violation(
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid statistics period: {period}",
+                f"Cannot safely estimate recorder workload for period: {period}",
                 context={"period": period},
                 suggestions=[
                     "Use one of: '5minute', 'hour', 'day', 'week', 'month', 'year'."
@@ -794,7 +808,7 @@ def _statistics_scan_window(
     period: str,
     local_timezone: tzinfo,
 ) -> tuple[datetime, datetime]:
-    """Mirror Core's calendar alignment before its statistics table query."""
+    """Estimate Core's scan expansion for HA-MCP workload limits (not API validation)."""
     if period not in _CALENDAR_STATISTICS_PERIODS:
         return start_dt, end_dt
 
@@ -906,6 +920,7 @@ async def _fetch_history(
     default_limit: int,
     max_limit: int,
     order: str = "desc",
+    core_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute the history/history_during_period WebSocket call.
 
@@ -927,6 +942,7 @@ async def _fetch_history(
         "no_attributes": minimal_response,
     }
 
+    command_params = merge_core_options(command_params, core_options)
     response = await client.send_websocket_message(
         {"type": "history/history_during_period", **command_params}
     )
@@ -962,6 +978,7 @@ async def _fetch_history(
                 last_changed_raw = last_updated_raw
 
             state_entry = {
+                **state,
                 "state": state.get("s", state.get("state")),
                 "last_changed": _convert_timestamp(last_changed_raw),
                 "last_updated": _convert_timestamp(last_updated_raw),
@@ -1028,31 +1045,6 @@ def _parse_statistic_types(
         else:
             stat_types_list = list(statistic_types)
 
-        valid_types = ["mean", "min", "max", "sum", "state", "change"]
-        assert stat_types_list is not None
-        if not stat_types_list:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "statistic_types cannot be an empty list. "
-                    "Omit the parameter to retrieve all types, or specify at least one valid type.",
-                    context={"parameter": "statistic_types", "value": statistic_types},
-                    suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
-                )
-            )
-        invalid_types = [t for t in stat_types_list if t not in valid_types]
-        if invalid_types:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid statistic types: {invalid_types}",
-                    context={
-                        "invalid_types": invalid_types,
-                        "valid_types": valid_types,
-                    },
-                    suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
-                )
-            )
     return stat_types_list
 
 
@@ -1065,6 +1057,7 @@ async def _fetch_statistics(
     statistic_types: str | list[str] | None,
     limit: int | None,
     offset: int | None,
+    core_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute the recorder/statistics_during_period WebSocket call.
 
@@ -1074,18 +1067,6 @@ async def _fetch_statistics(
     effective_limit = limit if limit is not None else _DEFAULT_HISTORY_LIMIT
     effective_offset = offset if offset is not None else 0
 
-    # Validate period
-    valid_periods = ["5minute", "hour", "day", "week", "month", "year"]
-    if period not in valid_periods:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid period: {period}",
-                context={"period": period, "valid_periods": valid_periods},
-                suggestions=[f"Use one of: {', '.join(valid_periods)}"],
-            )
-        )
-
     stat_types_list = _parse_statistic_types(statistic_types)
 
     command_params: dict[str, Any] = {
@@ -1094,8 +1075,9 @@ async def _fetch_statistics(
         "statistic_ids": entity_id_list,
         "period": period,
     }
-    if stat_types_list is not None:
-        command_params["types"] = stat_types_list
+    command_params = merge_core_options({**command_params, "types": stat_types_list}, core_options)
+    if stat_types_list is None:
+        command_params.pop("types")
 
     metadata, metadata_failure = await fetch_statistics_metadata(client, entity_id_list)
     response = await client.send_websocket_message(
@@ -1115,7 +1097,10 @@ async def _fetch_statistics(
         )
 
     result_data = response.get("result", {})
-    all_stat_types = stat_types_list or ["mean", "min", "max", "sum", "state", "change"]
+    all_stat_types = stat_types_list if stat_types_list is not None else sorted({
+        key for rows in result_data.values() for row in rows for key in row
+        if key not in {"start", "end"}
+    })
     entities_statistics = format_entity_statistics(
         result_data,
         entity_id_list,
@@ -1125,6 +1110,8 @@ async def _fetch_statistics(
         metadata,
         metadata_failure,
     )
+    if command_params.get("units"):
+        await resolve_requested_units(client, entities_statistics, command_params["units"])
 
     empty_entities: list[str] = [
         str(e["entity_id"]) for e in entities_statistics if e["count"] == 0
