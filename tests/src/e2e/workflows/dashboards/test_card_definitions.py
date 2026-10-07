@@ -189,10 +189,6 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
                 "entity": "light.bed_light",
                 "disabled": True,
             },
-            {"type": "custom:e2e-slow-verdict-card"},
-            {"type": "custom:e2e-slow-editor-card"},
-            {"type": "custom:e2e-custom-card"},
-            {"type": "custom:e2e-broken-editor-card"},
         ]
         result = await mcp.call_tool_success(
             "ha_config_set_dashboard",
@@ -215,11 +211,35 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
         assert (
             "'disabled' is not listed in the e2e-custom-card editor schema" in warnings
         )
-        for index in (5, 6):
-            assert any(
-                f"views[0].cards[{index}]" in w and "needs an entity" in w
-                for w in result["warnings"]
+        # Each fault must leave time for the following card. Combining every
+        # deliberate timeout in one save tests the aggregate cutoff instead.
+        for fault in ("slow-verdict", "slow-editor", "broken-editor"):
+            result = await mcp.call_tool_success(
+                "ha_config_set_dashboard",
+                {
+                    "url_path": path,
+                    "config": {
+                        "views": [
+                            {
+                                "cards": [
+                                    {"type": f"custom:e2e-{fault}-card"},
+                                    {"type": "custom:e2e-custom-card"},
+                                ]
+                            }
+                        ]
+                    },
+                    "MandatoryBPS": False,
+                },
             )
+            assert any(
+                "views[0].cards[1]" in w and "needs an entity" in w
+                for w in result.get("warnings", [])
+            ), (fault, result)
+            if fault == "broken-editor":
+                assert any(
+                    "views[0].cards[0]" in w and "needs an entity" in w
+                    for w in result.get("warnings", [])
+                ), result
         no_form = await mcp.call_tool_success(
             "ha_config_get_dashboard",
             {"describe": True, "card_type": "custom:e2e-broken-editor-card"},
