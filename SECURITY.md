@@ -297,11 +297,12 @@ mode** option in the entry options:
     metadata-honoring clients are unaffected; metadata-ignoring clients that
     guess root paths reach the app instead.
 
-Discovery never publishes the webhook id, in any of the three modes. The only
-protected-resource document the entry serves is the path-scoped one at
-`/.well-known/oauth-protected-resource/api/webhook/<id>`, which a caller can
-reach only by already holding the id, and the webhook's 401 challenge points
-there rather than at a fixed, guessable path. Switching from `ha_auth` or
+Discovery never publishes the webhook id, in any of the three modes. The entry
+serves protected-resource metadata only at
+`/.well-known/oauth-protected-resource/api/webhook/<id>` and its `/readonly`
+variant. Both require the caller to already hold the id, and the webhook's
+401 challenge points to its matching document rather than a fixed, guessable
+path. Switching from `ha_auth` or
 `legacy` back to the secret-URL posture therefore does not promote a published
 value into the sole credential. Component versions before 2.1.1 also served the
 document at a fixed path, where it handed the full webhook URL to any
@@ -336,9 +337,9 @@ the proxy returns 503 whenever the server is not running.
 In the app's `ha_auth` mode the Home Assistant login is the credential, not
 the webhook URL. The URL without a Bearer gets a 401, and that 401 points at
 the RFC 9728 protected-resource document served under the webhook's own path
-(`/.well-known/oauth-protected-resource/api/webhook/<id>`) — the only
-protected-resource document the app serves, and one a caller can reach only by
-already holding the id. Discovery therefore never publishes the webhook id in
+(`/.well-known/oauth-protected-resource/api/webhook/<id>`). The dev flavor also
+serves its `/readonly` variant. These metadata paths require the caller to
+already hold the id. Discovery therefore never publishes the webhook id in
 any mode, which is what lets the default posture with OAuth disabled keep
 treating that URL as the sole credential.
 

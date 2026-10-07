@@ -435,8 +435,7 @@ class _AuthorizationServerMetadataView(HomeAssistantView):
 
 
 class _WellKnownProtectedResourceView(HomeAssistantView):
-    """RFC 9728 §3.1 path-scoped Protected Resource Metadata — the ONLY
-    protected-resource document this integration serves.
+    """RFC 9728 §3.1 metadata for the webhook and its read-only alias.
 
     Served at the well-known location derived from the webhook resource URL
     (``/.well-known/oauth-protected-resource/api/webhook/<id>``), which is also
@@ -466,15 +465,17 @@ class _WellKnownProtectedResourceView(HomeAssistantView):
     def __init__(self, hass: HomeAssistant) -> None:
         """Bind the view to the HA instance; liveness is resolved per request."""
         self._hass = hass
+        self.extra_urls = [f"{self.url}/readonly"]
 
     async def get(self, request: web.Request, webhook_id: str) -> web.Response:
         """Serve the document only for the CURRENT entry's webhook id."""
         active_id = _active_webhook_id(self._hass)
         if active_id is None or webhook_id != active_id:
             return _json_not_found()
-        return web.json_response(
-            _protected_resource_document(active_id, _build_base_url(request))
-        )
+        document = _protected_resource_document(active_id, _build_base_url(request))
+        if request.path == f"{self.url.format(webhook_id=webhook_id)}/readonly":
+            document["resource"] += "/readonly"
+        return web.json_response(document)
 
 
 class _WellKnownAuthorizationServerMetadataView(_AuthorizationServerMetadataView):
@@ -563,6 +564,8 @@ def _build_unauthorized_response(request: web.Request, webhook_id: str) -> web.R
     metadata_url = (
         f"{base}/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
     )
+    if request.path == f"/api/webhook/{webhook_id}/readonly":
+        metadata_url += "/readonly"
     return web.Response(
         status=401,
         text="Unauthorized",
