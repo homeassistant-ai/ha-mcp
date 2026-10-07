@@ -12,7 +12,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import tools_energy as module
-from ha_mcp.tools.energy_statistics import _compute_per_key_hashes
+from ha_mcp.tools.energy_preferences import compute_per_key_hashes
 from ha_mcp.tools.tools_energy import EnergyTools
 from ha_mcp.utils.config_hash import compute_config_hash
 
@@ -368,4 +368,4 @@ async def test_unconfigured_state_is_distinguished_from_read_failure(
 
 def test_per_key_hashes_have_no_hardcoded_preference_slots() -> None:
     prefs = {"future": {"field": 7}}
-    assert _compute_per_key_hashes(prefs) == {"future": compute_config_hash(prefs)}
+    assert compute_per_key_hashes(prefs) == {"future": compute_config_hash(prefs)}

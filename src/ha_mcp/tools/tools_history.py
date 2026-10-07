@@ -46,6 +46,7 @@ from .statistics_helpers import (
     resolve_requested_units,
     statistics_warnings,
 )
+from .statistics_resets import restore_reset_timestamps
 from .tool_hints import read_only_hints
 from .util_helpers import is_connection_error_message
 
@@ -452,8 +453,8 @@ class HistoryTools:
             )
 
             # Route through the shared pooled WebSocket (issue #1813) instead of
-            # a dedicated connect/auth handshake per call. Statistics also fetches native recorder metadata; the pooled client owns the
-            # connection lifecycle, so there is no per-call connect/disconnect.
+            # a dedicated connect/auth handshake per call. Statistics also fetches
+            # native recorder metadata through the same pooled client.
             if source == "statistics":
                 inner = await _fetch_statistics(
                     self._client,
@@ -1087,6 +1088,9 @@ async def _fetch_statistics(
         )
 
     result_data = response.get("result", {})
+    reset_warnings = await restore_reset_timestamps(
+        client, result_data, metadata, command_params
+    )
     all_stat_types = (
         stat_types_list
         if stat_types_list is not None
@@ -1135,7 +1139,7 @@ async def _fetch_statistics(
         },
     }
 
-    warnings = statistics_warnings(entities_statistics)
+    warnings = statistics_warnings(entities_statistics) + reset_warnings
     if empty_entities:
         warnings += [
             f"No statistics found for: {', '.join(empty_entities)}. "

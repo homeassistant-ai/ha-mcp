@@ -1,5 +1,6 @@
-"""Read the recorder statistics referenced by native Energy Dashboard preferences."""
+"""Read native Energy preferences, hash saved state and enrich statistic references."""
 
+import logging
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -9,6 +10,8 @@ from ..utils.config_hash import compute_config_hash
 from .core_contract import core_contract
 from .helpers import exception_to_structured_error, raise_tool_error
 from .statistics_helpers import fetch_statistics_metadata, statistics_unit
+
+logger = logging.getLogger(__name__)
 
 
 def _statistic_ids(value: Any) -> set[str]:
@@ -53,7 +56,7 @@ async def include_energy_statistics(
     return result
 
 
-def _compute_per_key_hashes(prefs: dict[str, Any]) -> dict[str, str]:
+def compute_per_key_hashes(prefs: dict[str, Any]) -> dict[str, str]:
     """Hash every native preference slot without an allowlist or invented defaults."""
     return {key: compute_config_hash({key: value}) for key, value in prefs.items()}
 
@@ -83,11 +86,15 @@ async def get_energy_prefs(client: Any) -> dict[str, Any]:
                         context={"mode": "get"},
                     )
                 )
-            contract = await core_contract(client, "energy/save_prefs")
+            try:
+                contract = await core_contract(client, "energy/save_prefs")
+            except ToolError:
+                logger.warning("Energy defaults discovery failed", exc_info=True)
+                contract = {}
             prefs = contract.get("default_preferences", {})
             note = "Energy Dashboard has never been configured."
             if "default_preferences" not in contract:
-                note += " Core defaults are unavailable without the component; config is empty. Use the full config_hash for the initial save."
+                note += " Core defaults are unavailable; config is empty. Use the full config_hash for the initial save."
         else:
             prefs = result.get("result") or {}
         response = {
@@ -95,7 +102,7 @@ async def get_energy_prefs(client: Any) -> dict[str, Any]:
             "mode": "get",
             "config": prefs,
             "config_hash": compute_config_hash(prefs),
-            "config_hash_per_key": _compute_per_key_hashes(prefs),
+            "config_hash_per_key": compute_per_key_hashes(prefs),
         }
         if note:
             response["note"] = note

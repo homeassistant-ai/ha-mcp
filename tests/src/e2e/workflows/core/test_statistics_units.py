@@ -5,16 +5,31 @@ from uuid import uuid4
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp.client import HomeAssistantClient
+
 from ...utilities.assertions import assert_mcp_success
 from ...utilities.wait_helpers import wait_for_tool_result
 
 
 @pytest.mark.asyncio
 @pytest.mark.core
+@pytest.mark.parametrize(
+    "stored,display,unit_class,expected",
+    [
+        ("MWh", "kWh", "energy", [1000.0, 1250.0, 1500.0]),
+        ("%", None, "unitless", [0.01, 0.0125, 0.015]),
+    ],
+)
 async def test_core_display_conversion_labels_the_converted_values(
-    mcp_client, ha_client
-):
-    """A stored MWh statistic must report MWh without a state, then kWh with conversion."""
+    mcp_client: Client,
+    ha_client: HomeAssistantClient,
+    stored: str,
+    display: str | None,
+    unit_class: str,
+    expected: list[float],
+) -> None:
+    """Conversion changes numeric values and units, never reset timestamps."""
     entity_id = f"sensor.e2e_statistics_{uuid4().hex}"
     start = datetime.now(UTC).replace(minute=0, second=0, microsecond=0) - timedelta(
         days=2
@@ -25,8 +40,8 @@ async def test_core_display_conversion_labels_the_converted_values(
         "start_time": start.isoformat(),
         "end_time": (start + timedelta(hours=3)).isoformat(),
         "period": "hour",
-        "statistic_types": ["state", "sum", "change"],
     }
+    reset = start - timedelta(days=1)
     state_created = False
     try:
         imported = await ha_client.send_websocket_message(
@@ -36,14 +51,15 @@ async def test_core_display_conversion_labels_the_converted_values(
                     "statistic_id": entity_id,
                     "source": "recorder",
                     "name": "E2E energy conversion",
-                    "unit_of_measurement": "MWh",
-                    "unit_class": "energy",
+                    "unit_of_measurement": stored,
+                    "unit_class": unit_class,
                     "mean_type": 0,
                     "has_sum": True,
                 },
                 "stats": [
                     {
                         "start": (start + timedelta(hours=i)).isoformat(),
+                        "last_reset": reset.isoformat(),
                         "state": value,
                         "sum": value,
                     }
@@ -64,7 +80,7 @@ async def test_core_display_conversion_labels_the_converted_values(
             timeout=30,
         )
         entity = ready.get("data", ready)["entities"][0]
-        assert entity["unit_of_measurement"] == "MWh"
+        assert entity["unit_of_measurement"] == stored
         assert [r["sum"] for r in entity["statistics"]] == [1.0, 1.25, 1.5]
 
         await ha_client._request(
@@ -73,8 +89,7 @@ async def test_core_display_conversion_labels_the_converted_values(
             json={
                 "state": "1500",
                 "attributes": {
-                    "unit_of_measurement": "kWh",
-                    "device_class": "energy",
+                    "unit_of_measurement": display,
                     "state_class": "total",
                 },
             },
@@ -82,10 +97,30 @@ async def test_core_display_conversion_labels_the_converted_values(
         state_created = True
         result = assert_mcp_success(await mcp_client.call_tool("ha_get_history", args))
         entity = result.get("data", result)["entities"][0]
-        assert entity["unit_of_measurement"] == "kWh"
-        assert entity["statistics_metadata"]["statistics_unit_of_measurement"] == "MWh"
-        assert [r["sum"] for r in entity["statistics"]] == [1000.0, 1250.0, 1500.0]
-        assert entity["statistics"][1]["change"] == 250.0
+        assert entity["unit_of_measurement"] == display
+        assert entity["unit_source"] == "recorder_metadata"
+        assert entity["statistics_metadata"]["statistics_unit_of_measurement"] == stored
+        assert [r["sum"] for r in entity["statistics"]] == pytest.approx(expected)
+        assert entity["statistics"][1]["change"] == pytest.approx(
+            expected[1] - expected[0]
+        )
+        assert [r["last_reset"] for r in entity["statistics"]] == [
+            int(reset.timestamp() * 1000)
+        ] * 3
+        explicit = assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_get_history",
+                {
+                    **args,
+                    "statistic_types": ["last_reset"],
+                    "core_options": {"units": {unit_class: display}},
+                },
+            )
+        )
+        assert [
+            r["last_reset"]
+            for r in explicit.get("data", explicit)["entities"][0]["statistics"]
+        ] == [int(reset.timestamp() * 1000)] * 3
     finally:
         try:
             if state_created:

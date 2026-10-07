@@ -58,8 +58,6 @@ def statistics_unit(
         return {**unknown, "unit_reason": "invalid_display_unit_metadata"}
     result = {"unit_of_measurement": unit, "unit_source": "recorder_metadata"}
     if unit is None:
-        if metadata.get("statistics_unit_of_measurement") is not None:
-            return {**unknown, "unit_reason": "display_unit_not_reported"}
         result["unit_reason"] = "statistics_are_unitless"
     return result
 
@@ -105,7 +103,7 @@ def statistics_warnings(entities: list[dict[str, Any]]) -> list[str]:
 
 
 async def resolve_requested_units(
-    client: Any, entities: list[dict[str, Any]], units: dict[str, str]
+    client: Any, entities: list[dict[str, Any]], units: dict[str, Any]
 ) -> None:
     """Resolve Core's actual converter or label explicit-unit output as unknown."""
     from ..client.websocket_client import get_websocket_client

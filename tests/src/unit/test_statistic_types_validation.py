@@ -171,6 +171,8 @@ class TestStatisticTypesValidation:
         """Native rejection is surfaced; the tool holds no copied type whitelist."""
 
         async def reject(message):
+            if message["type"] == "recorder/statistics_during_period":
+                assert message["types"] == ["invalid_type"]
             return {"success": False, "error": "Core rejected invalid_type"}
 
         self._mock_client.send_websocket_message = reject

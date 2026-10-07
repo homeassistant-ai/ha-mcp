@@ -131,7 +131,10 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
             return validate_request(hass, command, msg["payload"])
         result = describe_contract(hass, command)
         if command == "energy/save_prefs":
-            result["default_preferences"] = _defaults()
+            try:
+                result["default_preferences"] = _defaults()
+            except Exception:
+                _LOGGER.debug("Energy defaults unavailable", exc_info=True)
         return result
 
     async def units_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
@@ -156,7 +159,7 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
             {
                 vol.Required("type"): "ha_mcp_tools/statistics_units",
                 vol.Required("statistic_ids"): vol.All([str], vol.Length(min=1)),
-                vol.Required("units"): {str: str},
+                vol.Required("units"): dict,
             },
             units_result,
             units_prep,
@@ -172,9 +175,10 @@ async def statistics_metadata(
         _get_unit_converter,
         async_list_statistic_ids,
     )
+    from homeassistant.components.recorder.websocket_api import UNIT_SCHEMA
 
     records = await async_list_statistic_ids(hass, set(msg["statistic_ids"]))
-    units = msg["units"]
+    units = UNIT_SCHEMA(msg["units"])
     for record in records:
         stored = record.get("statistics_unit_of_measurement")
         converter = _get_unit_converter(record.get("unit_class"), stored)
@@ -183,7 +187,7 @@ async def statistics_metadata(
         output = (
             stored if converter is None else record.get("display_unit_of_measurement")
         )
-        if converter and requested is not None:
+        if converter and converter.UNIT_CLASS in units:
             output = requested if requested in converter.VALID_UNITS else stored
         record["output_unit_of_measurement"] = output
     return {"records": records}

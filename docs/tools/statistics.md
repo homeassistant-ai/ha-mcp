@@ -36,6 +36,12 @@ actual registered save schema. Without the capability, previews explicitly
 report `proposal_validation.status="unavailable"` and `partial=True`.
 
 Statistics types go directly to Core, including `last_reset` and future types.
+Reset timestamps use a supplementary native query in the stored unit when
+conversion is possible: affected Core versions otherwise convert timestamps
+along with numeric values. Queries are grouped by native unit class and stored
+unit. If the timestamp cannot be recovered, `last_reset` is omitted with a
+warning; other values remain available. A reported null display unit is a
+known unitless result, including conversions from percent.
 Omitting them uses Core's defaults; the response reports types observed in the
 returned rows. `core_options` passes additional native recorder options, such
 as `{"units": {"energy": "MWh"}}`. It cannot override the tool's controlled

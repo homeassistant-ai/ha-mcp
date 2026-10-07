@@ -1,10 +1,12 @@
 """Energy proposals use Core's validator without saving, across both topologies."""
 
+from typing import Any
+
 import pytest
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp import Client
 
-from ..utilities.assertions import assert_mcp_success
+from ..utilities.assertions import MCPAssertions, assert_mcp_success
 from ..utilities.topology import component_surface_available
 
 
@@ -17,7 +19,9 @@ from ..utilities.topology import component_surface_available
         {"type": "grid", "cost_adjustment_day": 0},
     ],
 )
-async def test_incomplete_source_is_never_reported_as_valid(mcp_client, source):
+async def test_incomplete_source_is_never_reported_as_valid(
+    mcp_client: Client, source: dict[str, Any]
+) -> None:
     before_raw = assert_mcp_success(
         await mcp_client.call_tool(
             "ha_manage_energy_prefs", {"mode": "get", "include_schema": True}
@@ -28,8 +32,10 @@ async def test_incomplete_source_is_never_reported_as_valid(mcp_client, source):
     assert (before["core_contract"]["status"] == "available") is supported
     arguments = {"mode": "set", "config": {"energy_sources": [source]}, "dry_run": True}
     if supported:
-        with pytest.raises(ToolError, match="VALIDATION_FAILED"):
-            await mcp_client.call_tool("ha_manage_energy_prefs", arguments)
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_manage_energy_prefs", arguments, expected_error="VALIDATION_FAILED"
+            )
     else:
         raw = assert_mcp_success(
             await mcp_client.call_tool("ha_manage_energy_prefs", arguments)
@@ -46,7 +52,7 @@ async def test_incomplete_source_is_never_reported_as_valid(mcp_client, source):
 
 
 @pytest.mark.asyncio
-async def test_core_supported_last_reset_is_readable(mcp_client):
+async def test_core_supported_last_reset_is_readable(mcp_client: Client) -> None:
     raw = assert_mcp_success(
         await mcp_client.call_tool(
             "ha_get_history",
@@ -67,8 +73,8 @@ async def test_core_supported_last_reset_is_readable(mcp_client):
 
 @pytest.mark.asyncio
 async def test_explicit_units_change_values_without_using_default_unit_label(
-    mcp_client,
-):
+    mcp_client: Client,
+) -> None:
     query = {
         "source": "statistics",
         "entity_ids": ["sensor.total_energy_kwh"],
@@ -100,7 +106,7 @@ async def test_explicit_units_change_values_without_using_default_unit_label(
 
 
 @pytest.mark.asyncio
-async def test_energy_schema_exposes_native_battery_fields(mcp_client):
+async def test_energy_schema_exposes_native_battery_fields(mcp_client: Client) -> None:
     raw = assert_mcp_success(
         await mcp_client.call_tool(
             "ha_manage_energy_prefs", {"mode": "get", "include_schema": True}

@@ -106,9 +106,12 @@ async def test_stored_unit_alone_is_not_assumed_to_be_output_unit():
 
 
 @pytest.mark.asyncio
-async def test_unitless_metadata_is_distinguished_from_failed_lookup():
+@pytest.mark.parametrize("stored", [None, "%"])
+async def test_unitless_metadata_is_distinguished_from_failed_lookup(
+    stored: str | None,
+) -> None:
     result = await query(
-        [metadata(stored=None, display=None)], [{"start": 1000, "sum": 2.0}]
+        [metadata(stored=stored, display=None)], [{"start": 1000, "sum": 2.0}]
     )
     entity = result["entities"][0]
     assert entity["unit_of_measurement"] is None

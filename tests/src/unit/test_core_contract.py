@@ -92,3 +92,94 @@ async def test_invalid_native_result_is_a_tool_error(monkeypatch) -> None:
     )
     with pytest.raises(ToolError, match="future"):
         await module.validate_energy_proposal(Mock(), {"future": []})
+
+
+def test_missing_core_defaults_does_not_hide_available_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from custom_components.ha_mcp_tools import core_contract as module
+
+    from .test_component_ws_search import _REAL_VOL
+
+    monkeypatch.setattr(
+        module, "_defaults", Mock(side_effect=AttributeError("Core changed"))
+    )
+    hass = FakeHass()
+    hass.data["websocket_api"] = {"energy/save_prefs": (Mock(), lambda value: value)}
+    execute = module.command_specs(_REAL_VOL)[0][1]
+    result = execute(hass, {"command": "energy/save_prefs"})
+    assert result["status"] == "available"
+    assert "default_preferences" not in result
+
+
+@pytest.mark.asyncio
+async def test_defaults_discovery_failure_keeps_unconfigured_prefs_readable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
+    from ha_mcp.tools import energy_preferences as module
+
+    client = Mock()
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": False, "error": "Command failed: No prefs"}
+    )
+    monkeypatch.setattr(
+        module,
+        "core_contract",
+        AsyncMock(side_effect=ToolError("discovery unavailable")),
+    )
+    result = await module.get_energy_prefs(client)
+    assert result["success"] is True
+    assert result["config"] == {}
+    assert "unavailable" in result["note"]
+
+
+@pytest.mark.parametrize(
+    "command", ["ha_mcp_tools/core_contract", "ha_mcp_tools/statistics_units"]
+)
+@pytest.mark.parametrize(
+    "is_admin,has_user", [(False, True), (True, False), (True, True)]
+)
+def test_contract_commands_require_admin_before_preparation(
+    monkeypatch: pytest.MonkeyPatch, command: str, is_admin: bool, has_user: bool
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from custom_components.ha_mcp_tools import websocket_api as wsapi
+
+    from .test_component_ws_search import (
+        _REAL_VOL,
+        _FakeConnection,
+        _FakeWSApi,
+        _Unauthorized,
+    )
+
+    fake = _FakeWSApi()
+    monkeypatch.setattr(wsapi, "websocket_api", fake)
+    monkeypatch.setattr(wsapi, "vol", _REAL_VOL)
+    preparation = AsyncMock(return_value={"records": []})
+    monkeypatch.setattr(wsapi.core_contract, "statistics_metadata", preparation)
+    wsapi.async_register_commands(FakeHass())
+    connection = _FakeConnection(is_admin=is_admin, has_user=has_user)
+    params = (
+        {"command": "history/history_during_period"}
+        if command == "ha_mcp_tools/core_contract"
+        else {"statistic_ids": ["sensor.energy"], "units": {"energy": "kWh"}}
+    )
+
+    def call() -> None:
+        fake.registered[command](
+            FakeHass(), connection, {"id": 1, "type": command, **params}
+        )
+
+    if is_admin and has_user:
+        call()
+        assert 1 in connection.results
+        if command.endswith("statistics_units"):
+            preparation.assert_awaited_once()
+    else:
+        with pytest.raises(_Unauthorized):
+            call()
+        preparation.assert_not_called()

@@ -19,8 +19,8 @@ from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from .coercion import JSON_STRING_COERCION
 from .core_contract import command_payload, core_contract, validate_energy_proposal
-from .energy_statistics import (
-    _compute_per_key_hashes,
+from .energy_preferences import (
+    compute_per_key_hashes,
     get_energy_prefs,
     include_energy_statistics,
 )
@@ -202,6 +202,11 @@ class EnergyTools:
         battery / gas / water energy sources, device consumption sensors for
         electricity and water, and cost tariffs.
 
+        WHEN NOT TO USE:
+        - To create the underlying statistics themselves — they must already
+          exist as HA entities before being referenced here; create them via
+          the relevant integration's config flow first.
+
         WHEN TO USE:
         - mode='get' / 'set': inspect or replace the full Energy Dashboard
           config. Use 'set' for bulk edits or anything touching multiple
@@ -215,11 +220,6 @@ class EnergyTools:
         RELATED TOOLS: Use ha_get_history(source="statistics") with the returned
         statistic IDs for consumption, totals, and trends. Metadata comes directly
         from the running Core, including stored and display units.
-
-        WHEN NOT TO USE:
-        - To create the underlying statistics themselves — they must already
-          exist as HA entities before being referenced here; create them via
-          the relevant integration's config flow first.
 
         CAVEATS:
         - ``energy/save_prefs`` has per-key FULL-REPLACE semantics. Passing
@@ -392,7 +392,7 @@ class EnergyTools:
                 "post_save_validation": native_validation,
                 "config": new_prefs,
                 "config_hash": new_hash,
-                "config_hash_per_key": _compute_per_key_hashes(new_prefs),
+                "config_hash_per_key": compute_per_key_hashes(new_prefs),
                 "message": "Energy prefs updated.",
             }
             if post_save_errors:
