@@ -434,7 +434,9 @@ class CardDefinitions:
             inert_ok = op == "schema"
             needed = re.fullmatch(r"Error: export-needed (\d+):([\w$]+)", error)
             if needed:
-                self._resolve_export(*needed.groups(), bindings, depth, inert_ok)
+                self._resolve_export(
+                    needed.group(1), needed.group(2), bindings, depth, inert_ok
+                )
                 continue
             missing = _REF_ERROR_RE.match(error)
             if not missing:
