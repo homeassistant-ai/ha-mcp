@@ -42,7 +42,8 @@ class TestUnauthorizedResponseShape:
             )
         else:
             assert (
-                f"https://legit.example{proxy.CURRENT['oauth_base']}/protected-resource" in ww
+                f"https://legit.example{proxy.CURRENT['oauth_base']}/protected-resource"
+                in ww
             )
 
     @pytest.mark.parametrize("suffix", ["", "/readonly"])
