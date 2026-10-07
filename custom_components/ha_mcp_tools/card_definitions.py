@@ -309,7 +309,7 @@ class CardDefinitions:
         if f"{_I18N}{card_type}.name" in self._strings:
             return True
         pending = [self._body(f"hui-{card_type}-card")]
-        seen = set()
+        seen: set[str] = set()
         # Unnamed aliases, e.g. shopping-list, inherit an imported card class.
         # Inspect its source without instantiating browser elements.
         while pending and len(seen) < 20:
