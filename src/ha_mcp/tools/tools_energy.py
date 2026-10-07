@@ -38,6 +38,15 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from .coercion import JSON_STRING_COERCION
+from .energy_statistics import (
+    _PREFS_TOP_LEVEL_KEYS,
+    _PrefsKey,
+    _compute_per_key_hashes,
+    _default_prefs,
+    _is_no_prefs_error,
+    get_energy_prefs,
+    include_energy_statistics,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -55,12 +64,6 @@ logger = logging.getLogger(__name__)
 # corresponding ``Literal`` alias so MCP-wire callers (Pydantic-validated)
 # get typo-rejection at the boundary; runtime guards in `_set_prefs` cover
 # the unit-test path that bypasses Pydantic.
-_PrefsKey = Literal["energy_sources", "device_consumption", "device_consumption_water"]
-_PREFS_TOP_LEVEL_KEYS: tuple[_PrefsKey, ...] = (
-    "energy_sources",
-    "device_consumption",
-    "device_consumption_water",
-)
 
 # Energy source ``type`` values accepted by HA Core's ``SourceType`` union
 # (homeassistant/components/energy/data.py). ``_EnergySourceType`` names the
@@ -90,40 +93,6 @@ _STAT_FROM_SOURCE_TYPES: frozenset[str] = frozenset(
 )
 
 
-def _default_prefs() -> dict[str, Any]:
-    """Return the default empty prefs structure used by HA Core.
-
-    Mirrors ``EnergyManager.default_preferences()`` in
-    ``homeassistant/components/energy/data.py``. A Home Assistant instance
-    that has never had the Energy Dashboard configured returns
-    ``ERR_NOT_FOUND "No prefs"`` from ``energy/get_prefs``; this helper
-    provides the canonical empty structure so the tool can transparently
-    treat the two cases (never-configured vs. configured-but-empty) the
-    same way.
-    """
-    return {
-        "energy_sources": [],
-        "device_consumption": [],
-        "device_consumption_water": [],
-    }
-
-
-def _compute_per_key_hashes(prefs: dict[str, Any]) -> dict[_PrefsKey, str]:
-    """Per-top-level-key hashes for partial-update optimistic locking.
-
-    Each top-level key is wrapped in its own single-key dict before hashing,
-    so the per-key hash captures both the key name and its value — an agent
-    cannot accidentally use, say, an ``energy_sources`` hash to authorise a
-    ``device_consumption`` write. ``prefs.get(key, [])`` mirrors the
-    "missing top-level key = empty list" semantics codified by
-    ``_default_prefs``.
-    """
-    return {
-        key: compute_config_hash({key: prefs.get(key, [])})
-        for key in _PREFS_TOP_LEVEL_KEYS
-    }
-
-
 def _merge_submitted_keys(
     base: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
@@ -141,17 +110,6 @@ def _merge_submitted_keys(
         if key in config:
             merged[key] = config[key]
     return merged
-
-
-def _is_no_prefs_error(error_msg: str) -> bool:
-    """Return True if an error string from send_websocket_message indicates
-    ``ERR_NOT_FOUND "No prefs"`` from HA Core's energy/get_prefs handler.
-
-    HA Core wraps the error as ``f"Command failed: {message}"``; the
-    underlying sentinel we key on is the literal ``"No prefs"`` message
-    emitted by ``ws_get_prefs`` when ``manager.data is None``.
-    """
-    return error_msg.endswith("No prefs")
 
 
 def _flatten_validation_errors(raw: Any) -> list[dict[str, str]]:
@@ -504,6 +462,10 @@ class EnergyTools:
                 default=None,
             ),
         ] = None,
+        include_statistics: Annotated[
+            bool,
+            Field(description="With mode='get', include native recorder metadata and resolved output units for all configured statistic references. Ignored for other modes."),
+        ] = False,
     ) -> dict[str, Any]:
         """Manage the Home Assistant Energy Dashboard preferences: grid / solar /
         battery / gas / water energy sources, device consumption sensors for
@@ -518,6 +480,10 @@ class EnergyTools:
           internally; the caller does NOT manage config_hash.
         - mode='add_source': append a single entry to ``energy_sources``.
           Same atomic read-modify-write semantics.
+
+        RELATED TOOLS: Use ha_get_history(source="statistics") with the returned
+        statistic IDs for consumption, totals, and trends. Metadata comes directly
+        from the running Core, including stored and display units.
 
         WHEN NOT TO USE:
         - To create the underlying statistics themselves — they must already
@@ -549,7 +515,8 @@ class EnergyTools:
           de-duplicates grid sources.
         """
         if mode == "get":
-            return await self._get_prefs()
+            result = await self._get_prefs()
+            return await include_energy_statistics(self._client, result) if include_statistics else result
 
         if mode == "add_device":
             return await self._add_device(
@@ -606,66 +573,7 @@ class EnergyTools:
     # ------------------------------------------------------------------
 
     async def _get_prefs(self) -> dict[str, Any]:
-        """Fetch current prefs and return them with a config_hash.
-
-        On a Home Assistant instance that has never had the Energy Dashboard
-        configured, ``energy/get_prefs`` returns ``ERR_NOT_FOUND "No prefs"``
-        rather than an empty default. This method maps that case to the
-        documented default preferences structure so the tool works uniformly
-        on fresh installations.
-        """
-        try:
-            result = await self._client.send_websocket_message(
-                {
-                    "type": "energy/get_prefs",
-                }
-            )
-
-            if not result.get("success"):
-                error_msg = str(result.get("error", ""))
-                if _is_no_prefs_error(error_msg):
-                    prefs = _default_prefs()
-                    return {
-                        "success": True,
-                        "mode": "get",
-                        "config": prefs,
-                        "config_hash": compute_config_hash(prefs),
-                        "config_hash_per_key": _compute_per_key_hashes(prefs),
-                        "note": (
-                            "Energy Dashboard has never been configured on "
-                            "this instance; returning empty default."
-                        ),
-                    }
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to get energy prefs: {result.get('error', 'Unknown error')}",
-                        context={"mode": "get"},
-                    )
-                )
-
-            prefs = result.get("result") or _default_prefs()
-            return {
-                "success": True,
-                "mode": "get",
-                "config": prefs,
-                "config_hash": compute_config_hash(prefs),
-                "config_hash_per_key": _compute_per_key_hashes(prefs),
-            }
-
-        except ToolError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Error getting energy prefs: {e}")
-            exception_to_structured_error(
-                e,
-                context={"mode": "get"},
-                suggestions=[
-                    "Check Home Assistant connection",
-                    "Verify WebSocket connection is active",
-                ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+        return await get_energy_prefs(self._client)
 
     async def _dry_run(self, config: dict[str, Any]) -> dict[str, Any]:
         """Shape-check the proposed config and fetch current-state validate.
