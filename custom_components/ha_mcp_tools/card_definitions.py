@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import bisect
-import difflib
 import json
 import logging
 import re
@@ -129,7 +128,15 @@ function engine(op, p) {
       var first = new Proxy(localize, {
         get: function (t, k) { return k === 'localize' ? localize : ANY; },
       });
-      var v = typeof fn === 'function' ? fn(first) : fn;
+      var v = fn;
+      if (typeof fn === 'function') {
+        try { v = fn(first); }
+        catch (e) {
+          // Some forms require selected options even without an entity.
+          // Preserve normal defaults in forms that work without this context.
+          v = fn(first, undefined, []);
+        }
+      }
       return { value: plain(v) };
     }
     if (op === 'struct') {
@@ -148,7 +155,7 @@ function engine(op, p) {
           var child = s.schema[key];
           if (!child || typeof child.type !== 'string') return;
           out[key] = { type: child.type };
-          if (child.type === 'object' || child.type === 'type') {
+          if ((child.type === 'object' || child.type === 'type') && child.schema) {
             out[key].schema = fields(child, depth + 1);
           }
         });
@@ -529,6 +536,9 @@ class CardDefinitions:
             result["fields"] = self._with_help(
                 card_type, _complete_fields(fields or [], types)
             )
+        if result["fields"] is None:
+            result.pop("field_coverage")
+            result.pop("note")
         return result
 
     def _with_help(self, card_type: str, fields: list[Any]) -> list[Any]:
@@ -620,11 +630,7 @@ class CardDefinitions:
         if path in _ACCEPTED_EXTRAS:
             return None
         if failure.get("type") == "never" and len(failure.get("path") or []) == 1:
-            message = f"'{path}' is not listed in the {card_type} editor schema"
-            close = difflib.get_close_matches(
-                path, self._struct_keys.get(card_type) or [], n=1, cutoff=0.8
-            )
-            return f"{message}; did you mean '{close[0]}'?" if close else message
+            return f"'{path}' is not listed in the {card_type} editor schema"
         message = re.sub(r"^At path: \S+ -- ", "", failure.get("message", ""))
         return f"{path}: {message}" if path else message
 
@@ -790,6 +796,8 @@ def _cards(
 
 _definitions: CardDefinitions | None = None
 _build_task: asyncio.Task[CardDefinitions | None] | None = None
+_build_failed_at: float | None = None
+_BUILD_RETRY_SECONDS = 600
 
 
 def _build() -> CardDefinitions | None:
@@ -805,17 +813,26 @@ def _build() -> CardDefinitions | None:
 async def async_get_definitions(
     hass: HomeAssistant, timeout: float | None = None
 ) -> CardDefinitions | None:
-    """The frontend's card definitions; built once per Home Assistant run."""
+    """Share the frontend index; retry failed initialization after a cooldown."""
     global _build_task, _definitions
     if _definitions is not None:
         return _definitions
     task = _build_task
+    if (
+        task is not None
+        and task.done()
+        and _build_failed_at is not None
+        and time.monotonic() - _build_failed_at >= _BUILD_RETRY_SECONDS
+    ):
+        task = None
     if task is None:
 
         async def _run() -> CardDefinitions | None:
-            if not await async_ensure_runtime(hass):
-                return None
-            built: CardDefinitions | None = await hass.async_add_executor_job(_build)
+            global _build_failed_at
+            built: CardDefinitions | None = None
+            if await async_ensure_runtime(hass):
+                built = await hass.async_add_executor_job(_build)
+            _build_failed_at = time.monotonic() if built is None else None
             return built
 
         task = _build_task = hass.async_create_background_task(

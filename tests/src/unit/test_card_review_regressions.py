@@ -11,18 +11,10 @@ from .test_card_definitions import _definitions, cc, cd, describe_mod
 from .test_card_definitions import component as component
 
 
-@pytest.mark.parametrize(
-    "key,known,suggest",
-    [
-        ("disable_sandbox", "disabled", False),
-        ("state_image", "camera_image", False),
-        ("colour", "color", True),
-    ],
-)
-def test_rename_advice_requires_a_close_spelling(key, known, suggest):
-    definitions = _definitions({"tile"}, {"tile": [known]})
-    warning = definitions._explain("tile", {"path": [key], "type": "never"})
-    assert ("did you mean" in warning) is suggest
+def test_advice_does_not_guess_even_a_close_spelling():
+    definitions = _definitions({"tile"}, {"tile": ["color"]})
+    warning = definitions._explain("tile", {"path": ["colour"], "type": "never"})
+    assert warning == "'colour' is not listed in the tile editor schema"
 
 
 def test_custom_editor_rejection_is_advisory():

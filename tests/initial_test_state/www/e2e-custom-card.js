@@ -23,6 +23,27 @@ export class E2ECustomCard extends HTMLElement {
   }
 }
 customElements.define("e2e-custom-card", E2ECustomCard);
+class E2EBrokenEditorCard extends E2ECustomCard {
+  static getConfigElement() { throw new Error("editor unavailable"); }
+  static getConfigForm() { return null; }
+}
+class E2ESlowEditorCard extends HTMLElement {
+  setConfig(config) {}
+  static getConfigElement() {
+    const tick = () => setTimeout(tick, 0);
+    tick();
+    return { setConfig(config) {} };
+  }
+}
+class E2ESlowVerdictCard extends HTMLElement {
+  setConfig(config) {}
+  static getConfigElement() {
+    return { setConfig(config) { while (true) {} } };
+  }
+}
+customElements.define("e2e-broken-editor-card", E2EBrokenEditorCard);
+customElements.define("e2e-slow-editor-card", E2ESlowEditorCard);
+customElements.define("e2e-slow-verdict-card", E2ESlowVerdictCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "e2e-custom-card",

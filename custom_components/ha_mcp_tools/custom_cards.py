@@ -45,6 +45,8 @@ _TOTAL_MEMORY = 128 * 1024 * 1024
 _MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _MAX_DOM_DOWNLOAD_BYTES = 2 * 1024 * 1024
 _CALL_SECONDS = 5
+# Editor enrichment must leave time for later cards in a dashboard save.
+_EDITOR_SECONDS = 0.5
 _PREPARE_SECONDS = 15.0
 _REFRESH_SECONDS = 10.0
 _SETTLE_JOBS = 20_000
@@ -140,14 +142,16 @@ function card(op, p) {
       var slot = __pending[p.tag] = {};
       if (C.getConfigForm) Promise.resolve(C.getConfigForm()).then(function (f) { slot.form = f; }, function () {});
       if (C.getConfigElement) Promise.resolve(C.getConfigElement()).then(function (e) { slot.editor = e; }, function () {});
-      return {};
+      return { value: !!(C.getConfigForm || C.getConfigElement) };
     }
     var slot2 = __pending[p.tag] || {};
     if (op === 'check') {
       var problems = [];
       var targets = [];
-      try { var el = new C(); el.hass = __hass; targets.push({source: 'card', target: el}); } catch (e) {}
-      if (slot2.editor && slot2.editor.setConfig) targets.push({source: 'editor', target: slot2.editor});
+      if (p.source !== 'editor') {
+        try { var el = new C(); el.hass = __hass; targets.push({source: 'card', target: el}); } catch (e) {}
+      }
+      if (p.source !== 'card' && slot2.editor && slot2.editor.setConfig) targets.push({source: 'editor', target: slot2.editor});
       targets.forEach(function (t) {
         try { t.target.hass = __hass; t.target.setConfig(p.config); }
         catch (e) { var v = __verdict(e);
@@ -257,18 +261,34 @@ class _Bundle:
         self._context_call("set_time_limit", _CALL_SECONDS)
         self._unresponsive: set[str] = set()
         self._prepared: set[str] = set()
+        self._editor_unavailable: set[str] = set()
 
     def _prepare_tag(self, tag: str) -> None:
-        """Load only the requested card's editor, within one call's budget."""
+        """Load one editor without consuming the dashboard's whole check budget."""
         if tag in self._prepared:
             return
-        self._prepare_deadline = time.monotonic() + _CALL_SECONDS
-        self._limit_preparation()
-        if error := self.engine("prepare", {"tag": tag}).get("error"):
-            raise ValueError(error)
-        self._settle()
-        self._context_call("set_time_limit", _CALL_SECONDS)
+        self._prepare_deadline = time.monotonic() + _EDITOR_SECONDS
+        try:
+            self._limit_preparation()
+            answer = self.engine("prepare", {"tag": tag})
+            if error := answer.get("error"):
+                raise ValueError(error)
+            if answer.get("value"):
+                self._settle()
+        finally:
+            self._context_call("set_time_limit", _CALL_SECONDS)
         self._prepared.add(tag)
+
+    def _editor_ready(self, tag: str) -> bool:
+        if tag in self._editor_unavailable:
+            return False
+        try:
+            self._prepare_tag(tag)
+            return True
+        except Exception:
+            _LOGGER.debug("Custom card editor %s did not load", tag, exc_info=True)
+            self._editor_unavailable.add(tag)
+            return False
 
     def close(self) -> None:
         """Dispose native objects on their creating thread before releasing capacity."""
@@ -311,24 +331,44 @@ class _Bundle:
         if tag in self._unresponsive:
             return []
         try:
-            self._prepare_tag(tag)
-            answer = self.engine("check", {"tag": tag, "config": config})
+            answer = self.engine(
+                "check", {"tag": tag, "config": config, "source": "card"}
+            )
         except Exception:
             _LOGGER.debug("Custom card %s did not answer", tag, exc_info=True)
             self._unresponsive.add(tag)
             return []
-        return list(answer.get("value") or [])
+        problems = list(answer.get("value") or [])
+        if self._editor_ready(tag):
+            try:
+                self._context_call("set_time_limit", _EDITOR_SECONDS)
+                answer = self.engine(
+                    "check", {"tag": tag, "config": config, "source": "editor"}
+                )
+                seen = {problem["message"] for problem in problems}
+                problems.extend(
+                    problem
+                    for problem in answer.get("value") or []
+                    if problem["message"] not in seen
+                )
+            except Exception:
+                _LOGGER.debug(
+                    "Custom card editor %s did not answer", tag, exc_info=True
+                )
+                self._editor_unavailable.add(tag)
+            finally:
+                self._context_call("set_time_limit", _CALL_SECONDS)
+        return problems
 
     def form(self, tag: str) -> list[Any] | None:
-        if tag in self._unresponsive:
+        if not self._editor_ready(tag):
             return None
         try:
-            self._prepare_tag(tag)
             value = self.engine(
                 "form", {"tag": tag, "config": {"type": f"custom:{tag}"}}
             )
         except Exception:  # noqa: BLE001
-            self._unresponsive.add(tag)
+            self._editor_unavailable.add(tag)
             return None
         form = value.get("value")
         return form if isinstance(form, list) else None
@@ -484,14 +524,19 @@ class CustomCards:
             if bundle is None:
                 return None
             listed = next((c for c in bundle.cards if c.get("type") == tag), {})
-            return {
+            fields = bundle.form(tag)
+            result = {
                 "type": f"custom:{tag}",
                 "name": listed.get("name"),
                 "description": listed.get("description"),
-                "fields": bundle.form(tag),
-                "field_coverage": "partial",
-                "note": "Fields come from the custom card's editor form. They may include editor-only values and omit options accepted by the card; this is not a complete stored-config schema.",
+                "fields": fields,
             }
+            if fields is not None:
+                result.update(
+                    field_coverage="partial",
+                    note="Fields come from the custom card's editor form. They may include editor-only values and omit options accepted by the card; this is not a complete stored-config schema.",
+                )
+            return result
 
 
 _dom_failed_at: float | None = None
