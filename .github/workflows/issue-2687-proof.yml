@@ -49,7 +49,7 @@ jobs:
           --log-cli-level=INFO
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@b0eafd3af99c38fce2933b2cc1e37e16f28a2c1a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: issue-2687-results
           path: tests/*-results.xml
