@@ -37,7 +37,7 @@
   "src/ha_mcp/tools/tools_registry.py": 1117,
   "src/ha_mcp/tools/tools_resources.py": 1180,
   "src/ha_mcp/tools/tools_service.py": 2581,
-  "src/ha_mcp/tools/tools_system.py": 1997,
+  "src/ha_mcp/tools/tools_system.py": 1937,
   "src/ha_mcp/tools/tools_updates.py": 1115,
   "tests/addon/test_webhook_proxy.py": 7346,
   "tests/haos_image_build/build_image.py": 2859,
