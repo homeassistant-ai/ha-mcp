@@ -86,9 +86,7 @@ async def test_hacs_credentials_follow_each_oauth_request() -> None:
         ):
             for token in ("first-user-token", "second-user-token"):
                 access_token.return_value = MagicMock(claims={"ha_token": token})
-                result = await hacs.ha_get_hacs_info(
-                    action="info", repository_id="123"
-                )
+                result = await hacs.ha_get_hacs_info(action="info", repository_id="123")
                 assert result["success"] is True
                 connection.assert_awaited_once_with(
                     url="https://ha.example.test", token=token, verify_ssl=True

@@ -62,9 +62,7 @@ async def _authorize(http: httpx.AsyncClient, ha_token: str) -> str:
     )
     assert authorize.status_code == 302
     txn_id = parse_qs(urlparse(authorize.headers["location"]).query)["txn_id"][0]
-    consent = await http.post(
-        "/consent", data={"txn_id": txn_id, "ha_token": ha_token}
-    )
+    consent = await http.post("/consent", data={"txn_id": txn_id, "ha_token": ha_token})
     assert consent.status_code == 303
     callback = parse_qs(urlparse(consent.headers["location"]).query)
     assert callback["state"] == ["hacs-regression"]
@@ -107,9 +105,7 @@ async def test_hacs_uses_admin_oauth_session_instead_of_global_placeholder(
         assert await launcher.wait_for_lifespan_started(), launcher.output()
         async with httpx.AsyncClient(base_url=base_url) as http:
             token = await _authorize(http, container.get("token", TEST_TOKEN))
-        transport = StreamableHttpTransport(
-            f"{base_url}/e2e-nudge-probe", auth=token
-        )
+        transport = StreamableHttpTransport(f"{base_url}/e2e-nudge-probe", auth=token)
         async with Client(transport, timeout=60) as mcp:
             hacs = await mcp.call_tool(
                 "ha_get_hacs_info",
