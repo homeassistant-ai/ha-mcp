@@ -16,11 +16,11 @@ def _client() -> AsyncMock:
 
 
 @pytest.fixture(autouse=True)
-def _no_delay(monkeypatch):
+def _no_delay(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(system_restart, "_EMBEDDED_RESTART_DELAY_S", 0)
 
 
-async def test_embedded_replies_before_restart(monkeypatch):
+async def test_embedded_replies_before_restart(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
     client = _client()
 
@@ -32,7 +32,9 @@ async def test_embedded_replies_before_restart(monkeypatch):
     client.call_service.assert_awaited_once_with("homeassistant", "restart", {})
 
 
-async def test_embedded_invalid_config_does_not_schedule(monkeypatch):
+async def test_embedded_invalid_config_does_not_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
     client = _client()
     client.check_config.return_value = {"result": "invalid", "errors": ["bad"]}
@@ -44,7 +46,7 @@ async def test_embedded_invalid_config_does_not_schedule(monkeypatch):
     client.call_service.assert_not_awaited()
 
 
-async def test_external_awaits_restart_call(monkeypatch):
+async def test_external_awaits_restart_call(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
     client = _client()
 
