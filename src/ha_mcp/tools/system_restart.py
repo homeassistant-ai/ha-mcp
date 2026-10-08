@@ -70,9 +70,8 @@ async def restart_home_assistant(client: Any) -> dict[str, Any]:
                     "until it is back (1-5 minutes)."
                 ),
                 "warnings": [
-                    "The first call after Home Assistant is back can fail "
-                    "with an empty response while this server starts. "
-                    "Retry it after a few seconds."
+                    "Calls may fail while this server starts. "
+                    "Try again after a few seconds."
                 ],
             }
 
