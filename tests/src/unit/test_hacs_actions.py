@@ -67,8 +67,11 @@ def tools():
     return HacsTools(MagicMock())
 
 
-async def test_hacs_credentials_follow_each_oauth_request() -> None:
+async def test_hacs_credentials_follow_each_oauth_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """One registered HACS tool must use each caller's token, not global settings."""
+    monkeypatch.setenv("HA_VERIFY_SSL", "true")
     proxy = OAuthProxyClient("https://ha.example.test")
     hacs = HacsTools(proxy)
     ws = _ws({"name": "Example", "full_name": "example/repo"})

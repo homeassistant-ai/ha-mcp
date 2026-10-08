@@ -12,12 +12,14 @@ import pytest
 
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
-from ha_mcp.client.rest_client import HomeAssistantAuthError
+from ha_mcp.client.rest_client import HomeAssistantAuthError, HomeAssistantClient
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.config import OAUTH_MODE_TOKEN
 
 from ...conftest import TEST_TOKEN
+from ...utilities.assertions import MCPAssertions
 from .test_auto_refresh_startup import (
+    HACS_WS_READY_TIMEOUT,
     _http_launcher_env,
     _spawn_http_launcher,
     _wait_for_hacs_ws_ready,
@@ -80,9 +82,11 @@ async def _authorize(http: httpx.AsyncClient, ha_token: str) -> str:
     return issued.json()["access_token"]
 
 
+# Allow launcher startup, OAuth requests, MCP calls, and teardown after HACS is ready.
+@pytest.mark.timeout(HACS_WS_READY_TIMEOUT + 180)
 async def test_hacs_uses_admin_oauth_session_instead_of_global_placeholder(
     ha_container_with_fresh_config: dict,
-    ha_client,
+    ha_client: HomeAssistantClient,
     tmp_path: Path,
     unused_tcp_port: int,
 ) -> None:
@@ -106,18 +110,15 @@ async def test_hacs_uses_admin_oauth_session_instead_of_global_placeholder(
         async with httpx.AsyncClient(base_url=base_url) as http:
             token = await _authorize(http, container.get("token", TEST_TOKEN))
         transport = StreamableHttpTransport(f"{base_url}/e2e-nudge-probe", auth=token)
-        async with Client(transport, timeout=60) as mcp:
-            hacs = await mcp.call_tool(
-                "ha_get_hacs_info",
-                {"action": "search", "installed_only": True},
-                raise_on_error=False,
-            )
-            dashboard = await mcp.call_tool(
-                "ha_config_get_dashboard", {"list_only": True}
-            )
-            logger.info("OAuth dashboard control succeeded: %s", dashboard.data)
-            assert not hacs.is_error, hacs.content
-            assert hacs.data["success"] is True
+        async with Client(transport, timeout=60) as client:
+            async with MCPAssertions(client) as mcp:
+                await mcp.call_tool_success(
+                    "ha_get_hacs_info",
+                    {"action": "search", "installed_only": True},
+                )
+                await mcp.call_tool_success(
+                    "ha_config_get_dashboard", {"list_only": True}
+                )
     finally:
         logger.info("OAuth launcher output:\n%s", launcher.output())
         await launcher.aclose()
