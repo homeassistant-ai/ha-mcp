@@ -325,6 +325,7 @@ class Instance:
             self.env["container"].get_wrapped_container().restart(timeout=30)
         if not _wait_for_ha_api_ready(self.base_url, self.headers, timeout=600):
             raise RuntimeError("Home Assistant did not come back after the restart")
+        self.wait_server()
 
     def update_server(self, sha: str) -> None:
         if self.standalone:
