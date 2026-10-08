@@ -210,7 +210,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ),
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _client, data: {"data": data, "metadata": {}},
+                side_effect=lambda _client, data, **_kw: {"data": data, "metadata": {}},
             ),
         ):
             result = await history_tool(
@@ -374,7 +374,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ),
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _client, data: {"data": data, "metadata": {}},
+                side_effect=lambda _client, data, **_kw: {"data": data, "metadata": {}},
             ),
         ):
             result = await history_tool(
@@ -405,7 +405,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ) as get_live_settings,
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _client, data: {"data": data, "metadata": {}},
+                side_effect=lambda _client, data, **_kw: {"data": data, "metadata": {}},
             ),
         ):
             first_result = await history_tool(
@@ -439,7 +439,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ),
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _client, data: {"data": data, "metadata": {}},
+                side_effect=lambda _client, data, **_kw: {"data": data, "metadata": {}},
             ),
         ):
             result = await history_tool(
@@ -559,7 +559,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ),
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _client, data: {"data": data, "metadata": {}},
+                side_effect=lambda _client, data, **_kw: {"data": data, "metadata": {}},
             ),
         ):
             result = await history_tool(

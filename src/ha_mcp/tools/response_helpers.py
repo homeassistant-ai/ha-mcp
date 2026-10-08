@@ -390,7 +390,11 @@ def _convert_timestamp_fields(obj: Any, local_tz: _TZInfo) -> Any:
 
 
 async def add_timezone_metadata(
-    client: Any, data: dict[str, Any], include_metadata: bool = True
+    client: Any,
+    data: dict[str, Any],
+    include_metadata: bool = True,
+    *,
+    convert_timestamps: bool = True,
 ) -> dict[str, Any]:
     """Add Home Assistant timezone to tool responses and convert timestamps to local time.
 
@@ -404,6 +408,9 @@ async def add_timezone_metadata(
     Pass ``include_metadata=False`` to return *data* unchanged — the
     ``metadata`` wrapper is then omitted entirely.
 
+    Pass ``convert_timestamps=False`` to retain native values while still
+    including timezone context, without claiming that timestamps were converted.
+
     Conversion notes:
     - Offset-aware strings (``+00:00``) are converted directly.
     - Naive strings (no offset) are assumed to be UTC before conversion.
@@ -414,6 +421,19 @@ async def add_timezone_metadata(
         return data
 
     ha_timezone, fetch_failed = await fetch_ha_timezone(client)
+
+    if not convert_timestamps:
+        note = "Timestamp fields retain their native format; see the tool description for units."
+        if fetch_failed:
+            note += " Could not fetch Home Assistant timezone; timezone context defaults to UTC."
+        return {
+            "data": data,
+            "metadata": {
+                "home_assistant_timezone": ha_timezone,
+                "timestamp_format": "native",
+                "note": note,
+            },
+        }
 
     if fetch_failed:
         return {

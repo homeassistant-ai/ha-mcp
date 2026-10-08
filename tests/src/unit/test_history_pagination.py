@@ -131,7 +131,7 @@ class TestHistoryPagination:
         assert entity["offset"] == 5
         # Default order="desc" reverses the HA list (oldest-first) to newest-first.
         # States 0..19, reversed = [19,18,...,0]; offset=5 → first entry is state "14".
-        assert entity["states"][0]["state"] == "14"
+        assert entity["states"][0]["s"] == "14"
 
     @pytest.mark.asyncio
     async def test_offset_beyond_total_returns_empty(self, history_tool):

@@ -155,8 +155,10 @@ async def test_core_parameter_errors_retain_validation_classification(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fields", [None, ["entities"]])
 async def test_history_schema_does_not_warn_when_core_describes_it_completely(
     mcp_client: Client,
+    fields: list[str] | None,
 ) -> None:
     result = assert_mcp_success(
         await mcp_client.call_tool(
@@ -165,6 +167,7 @@ async def test_history_schema_does_not_warn_when_core_describes_it_completely(
                 "entity_ids": ["sensor.total_energy_kwh"],
                 "start_time": "1d",
                 "include_schema": True,
+                "fields": fields,
             },
         )
     )

@@ -59,9 +59,21 @@ Unrequested classes retain their native display-unit labels. Core parameter
 rejections retain Core's message and are reported as invalid parameters, rather
 than as recorder service failures.
 
-History responses retain native row fields beside the readable aliases, including
-Core's original timestamps. The `fields` parameter selects keys within `data`;
-response-level warnings and timezone metadata are always retained.
+History rows pass through Core's original fields without synthesized aliases:
+
+| Core field | Meaning | Former HA-MCP alias |
+|---|---|---|
+| `s` | State value | `state` |
+| `a` | Attributes, when included | `attributes` |
+| `lu` | Last updated, as Unix seconds | `last_updated` |
+| `lc` | Last changed, as Unix seconds; omitted when equal to `lu` | `last_changed` |
+
+The former aliases are no longer added. Callers using them should read the native
+keys instead and format numeric timestamps only when needed. Unknown future
+Core fields also pass through. Minimal responses may omit attributes.
+The `fields` parameter selects keys within `data`; response-level warnings and
+timezone metadata are always retained. `include_schema=True` also retains
+`core_contract` through field projection.
 Energy saves return the normalized Core configuration and hashes calculated
 from it. Preferences and per-key hashes retain future top-level fields.
 On an unconfigured installation without the component, `config` is empty

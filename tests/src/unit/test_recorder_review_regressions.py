@@ -141,6 +141,7 @@ async def test_optional_schema_preserves_reads_and_promotes_warnings(
             entity_ids=["sensor.energy"],
             start_time="1h",
             include_schema=True,
+            fields=["entities"],
         )
         payload = result["data"]
         assert payload["entities"][0]["states"] == [{"state": "5"}]

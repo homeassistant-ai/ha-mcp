@@ -36,9 +36,30 @@ async def test_future_statistics_type_reaches_core_and_response_is_preserved() -
 
 
 @pytest.mark.asyncio
-async def test_history_keeps_native_fields_beside_readable_aliases() -> None:
+@pytest.mark.parametrize("minimal", [True, False])
+@pytest.mark.parametrize(
+    "row",
+    [
+        {
+            "s": "on",
+            "lu": 1700000000.25,
+            "lc": 1700000000.0,
+            "a": {"friendly_name": "Test"},
+            "future_native_field": {"opaque": True},
+        },
+        {"s": "off", "lu": 0, "future_native_field": [1]},
+        {
+            "state": "on",
+            "last_updated": "2026-01-01T00:00:00Z",
+            "future_native_field": True,
+        },
+    ],
+)
+async def test_history_returns_native_rows_without_synthesized_aliases(
+    minimal: bool,
+    row: dict,
+) -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
-    row = {"s": "on", "lc": 1, "future_native_field": {"opaque": True}}
     client = AsyncMock()
     client.send_websocket_message.return_value = {
         "success": True,
@@ -49,7 +70,7 @@ async def test_history_keeps_native_fields_beside_readable_aliases() -> None:
         ["light.test"],
         start,
         start + timedelta(hours=1),
-        True,
+        minimal,
         True,
         10,
         0,
@@ -57,8 +78,7 @@ async def test_history_keeps_native_fields_beside_readable_aliases() -> None:
         1000,
     )
     actual = result["entities"][0]["states"][0]
-    assert actual.items() >= row.items()
-    assert actual["state"] == "on"
+    assert actual == row
 
 
 @pytest.mark.parametrize(
@@ -80,3 +100,33 @@ def test_new_native_options_are_not_silently_filtered() -> None:
     assert merge_core_options({"period": "hour"}, {"future": {"nested": 3}})[
         "future"
     ] == {"nested": 3}
+
+
+@pytest.mark.asyncio
+async def test_history_preserves_native_attribute_values_through_timezone_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ha_mcp.tools import response_helpers, tools_history
+
+    row = {
+        "s": "on",
+        "lu": 1700000000.25,
+        "a": {"last_updated": "2026-01-01T00:00:00Z"},
+    }
+    client = AsyncMock()
+    client.send_websocket_message.return_value = {
+        "success": True,
+        "result": {"light.test": [row]},
+    }
+    monkeypatch.setattr(
+        response_helpers,
+        "fetch_ha_timezone",
+        AsyncMock(return_value=("America/New_York", False)),
+    )
+    result = await tools_history.HistoryTools(client).ha_get_history(
+        entity_ids=["light.test"],
+        start_time="1h",
+        minimal_response=False,
+    )
+    assert result["data"]["entities"][0]["states"] == [row]
+    assert result["metadata"]["timestamp_format"] == "native"

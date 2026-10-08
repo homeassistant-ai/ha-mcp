@@ -60,27 +60,6 @@ _RELATIVE_TIME_UNIT_SECONDS = {
 }
 
 
-def _convert_timestamp(value: Any) -> str | None:
-    """Convert a timestamp value to ISO format string.
-
-    Handles both Unix epoch floats (from WebSocket short-form responses)
-    and string timestamps (from long-form responses).
-
-    Args:
-        value: Timestamp as Unix epoch float, ISO string, or None
-
-    Returns:
-        ISO format string or None if value is None/invalid
-    """
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC).isoformat()
-    if isinstance(value, str):
-        return value
-    return None
-
-
 def parse_relative_time(
     time_str: str | None,
     default_hours: int = 24,
@@ -361,6 +340,13 @@ class HistoryTools:
         long-term trends and period averages.
 
         CAVEATS:
+        History rows use Core's original keys: s = state, a = attributes,
+        lu = last updated, lc = last changed. Timestamps are Unix seconds;
+        omitted lc means it equals lu. Statistics timestamps use Unix milliseconds.
+        Minimal history responses may omit attributes.
+        No renamed copies are added. include_schema=True retains core_contract
+        even when fields selects other data keys.
+
         Output units come from
         Core recorder metadata and reflect its display-unit conversion; unresolved
         units include a reason. statistics_metadata preserves Core's native fields.
@@ -500,8 +486,16 @@ class HistoryTools:
             # Wrap first so the outer {"data": ..., "metadata": ...} shape
             # is always present; then project the inner data dict in-place
             # when caller requested field projection.
-            _r = await add_timezone_metadata(self._client, inner)
-            _r["data"] = project_fields(_r["data"], parsed_fields)
+            _r = await add_timezone_metadata(
+                self._client, inner, convert_timestamps=False
+            )
+            _r["data"] = project_fields(
+                _r["data"],
+                parsed_fields,
+                extra_always_keep=frozenset({"core_contract"})
+                if include_schema
+                else None,
+            )
             if warnings := _r["data"].pop("warnings", None):
                 _r["warnings"] = warnings
             return _r
@@ -951,28 +945,11 @@ async def _fetch_history(
             effective_offset : effective_offset + effective_limit
         ]
 
-        formatted_states = []
-        for state in paged_states:
-            last_updated_raw = state.get("lu", state.get("last_updated"))
-            last_changed_raw = state.get("lc", state.get("last_changed"))
-            if last_changed_raw is None and last_updated_raw is not None:
-                last_changed_raw = last_updated_raw
-
-            state_entry = {
-                **state,
-                "state": state.get("s", state.get("state")),
-                "last_changed": _convert_timestamp(last_changed_raw),
-                "last_updated": _convert_timestamp(last_updated_raw),
-            }
-            if not minimal_response:
-                state_entry["attributes"] = state.get("a", state.get("attributes", {}))
-            formatted_states.append(state_entry)
-
         pagination = build_pagination_metadata(
             total_count=len(entity_states),
             offset=effective_offset,
             limit=effective_limit,
-            count=len(formatted_states),
+            count=len(paged_states),
         )
         entities_history.append(
             {
@@ -981,7 +958,7 @@ async def _fetch_history(
                     "start": start_dt.isoformat(),
                     "end": end_dt.isoformat(),
                 },
-                "states": formatted_states,
+                "states": paged_states,
                 **pagination,
             }
         )
