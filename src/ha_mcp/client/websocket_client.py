@@ -481,15 +481,8 @@ class HomeAssistantWebSocketClient:
             await self._send_auth()
 
             # Wait for auth response
-            auth_response = await self._wait_for_auth_message(
-                message_type="auth_ok", timeout=5
-            )
+            auth_response = await self._wait_for_auth_message("auth_ok", timeout=5)
             if not auth_response:
-                auth_invalid = await self._wait_for_auth_message(
-                    message_type="auth_invalid", timeout=1
-                )
-                if auth_invalid:
-                    raise HomeAssistantAuthError("Authentication failed: Invalid token")
                 raise HomeAssistantConnectionError("Authentication timeout")
 
             self._state.mark_authenticated()
@@ -559,6 +552,8 @@ class HomeAssistantWebSocketClient:
         start_time = time.time()
 
         while time.time() - start_time < timeout:
+            if isinstance(self._last_connect_exception, HomeAssistantAuthError):
+                raise self._last_connect_exception
             message = self._state.consume_auth_message(message_type)
             if message:
                 return message
@@ -617,6 +612,10 @@ class HomeAssistantWebSocketClient:
 
         # Handle authentication messages (store for auth sequence)
         if message_type in ["auth_required", "auth_ok", "auth_invalid"]:
+            if message_type == "auth_invalid":
+                self._last_connect_exception = HomeAssistantAuthError(
+                    "Authentication failed: Invalid token"
+                )
             self._state.store_auth_message(message_type, data)
             return
 
