@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ha_mcp.__main__ import OAuthProxyClient
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_hacs import (
     HACS_ADD_REGISTRATION_TIMEOUT,
@@ -64,6 +65,37 @@ def _patched_hacs(ws):
 @pytest.fixture
 def tools():
     return HacsTools(MagicMock())
+
+
+async def test_hacs_credentials_follow_each_oauth_request() -> None:
+    """One registered HACS tool must use each caller's token, not global settings."""
+    proxy = OAuthProxyClient("https://ha.example.test")
+    hacs = HacsTools(proxy)
+    ws = _ws({"name": "Example", "full_name": "example/repo"})
+    try:
+        with (
+            _patched_hacs(ws),
+            patch(
+                "ha_mcp._vendor.fastmcp.server.dependencies.get_access_token"
+            ) as access_token,
+            patch(
+                "ha_mcp.client.websocket_client.get_websocket_client",
+                new_callable=AsyncMock,
+                return_value=ws,
+            ) as connection,
+        ):
+            for token in ("first-user-token", "second-user-token"):
+                access_token.return_value = MagicMock(claims={"ha_token": token})
+                result = await hacs.ha_get_hacs_info(
+                    action="info", repository_id="123"
+                )
+                assert result["success"] is True
+                connection.assert_awaited_once_with(
+                    url="https://ha.example.test", token=token, verify_ssl=True
+                )
+                connection.reset_mock()
+    finally:
+        await proxy.close()
 
 
 class TestGetHacsInfo:

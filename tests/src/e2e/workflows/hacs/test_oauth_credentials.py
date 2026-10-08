@@ -31,9 +31,11 @@ async def _authorize(http: httpx.AsyncClient, ha_token: str) -> str:
     """Complete public-client PKCE registration and consent over real HTTP."""
     redirect_uri = "http://localhost/callback"
     verifier = secrets.token_urlsafe(48)
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode()).digest()
-    ).decode().rstrip("=")
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .decode()
+        .rstrip("=")
+    )
     registered = await http.post(
         "/register",
         json={
@@ -137,5 +139,10 @@ async def test_rejected_websocket_token_surfaces_auth_error_not_timeout(
         assert isinstance(client.last_connect_exception, HomeAssistantAuthError), (
             client.last_connect_error
         )
+        client.token = ha_container_with_fresh_config.get("token", TEST_TOKEN)
+        assert await client.connect() is True
+        assert client.last_connect_exception is None
+        user = await client.send_command("auth/current_user")
+        assert user["result"]["is_admin"] is True
     finally:
         await client.disconnect()
