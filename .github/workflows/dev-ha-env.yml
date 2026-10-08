@@ -36,7 +36,7 @@ on:
         type: boolean
         default: true
       ha_image:
-        description: "docker only: HA container image (empty = the branch's pinned E2E image)"
+        description: "docker only: HA container image (empty = current stable; accepts version or beta tags)"
         default: ""
       minutes:
         description: How long to keep the instance up (max 330)
@@ -211,8 +211,8 @@ jobs:
               app) export HAOS_TEST_MODE=inaddon ;;
             esac
           else
-            # An empty HA_TEST_IMAGE would override the branch's pinned image.
-            if [ -n "$HA_IMAGE" ]; then export HA_TEST_IMAGE="$HA_IMAGE"; fi
+            # Dev sessions follow stable independently of the E2E fixture pin.
+            export HA_TEST_IMAGE="${HA_IMAGE:-ghcr.io/home-assistant/home-assistant:stable}"
             if [ "$SERVER" = embedded ]; then export E2E_BACKEND=embedded; fi
           fi
           # Anyone can read a public fork's logs and artifacts, and anyone with a

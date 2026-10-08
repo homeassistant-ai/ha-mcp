@@ -449,3 +449,7 @@ If you believe a finding is likely out of scope, say so explicitly so the user c
 Do not phrase findings as "post-merge follow-up," "nice to have," or "happy to file an issue" when the change is small and bundleable. Either apply the suggestion inline with a code suggestion block, or raise it plainly and let the user decide.
 
 See AGENTS.md § *Boy Scout Rule — Handling Discovered Improvements* for the author/agent-side rule.
+
+## Native Core contracts
+
+Read and write wrappers follow the [native Core contract guidance](../docs/agents/native-core-contracts.md). Keep domain validation in Core; distinguish wrapper safeguards and incomplete schema descriptions from native validation.

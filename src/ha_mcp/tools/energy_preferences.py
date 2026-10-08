@@ -1,13 +1,17 @@
-"""Read the recorder statistics referenced by native Energy Dashboard preferences."""
+"""Read native Energy preferences, hash saved state and enrich statistic references."""
 
-from typing import Any, Literal
+import logging
+from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
+from .core_contract import core_contract
 from .helpers import exception_to_structured_error, raise_tool_error
 from .statistics_helpers import fetch_statistics_metadata, statistics_unit
+
+logger = logging.getLogger(__name__)
 
 
 def _statistic_ids(value: Any) -> set[str]:
@@ -52,46 +56,9 @@ async def include_energy_statistics(
     return result
 
 
-_PrefsKey = Literal["energy_sources", "device_consumption", "device_consumption_water"]
-_PREFS_TOP_LEVEL_KEYS: tuple[_PrefsKey, ...] = (
-    "energy_sources",
-    "device_consumption",
-    "device_consumption_water",
-)
-
-
-def _default_prefs() -> dict[str, Any]:
-    """Return the default empty prefs structure used by HA Core.
-
-    Mirrors ``EnergyManager.default_preferences()`` in
-    ``homeassistant/components/energy/data.py``. A Home Assistant instance
-    that has never had the Energy Dashboard configured returns
-    ``ERR_NOT_FOUND "No prefs"`` from ``energy/get_prefs``; this helper
-    provides the canonical empty structure so the tool can transparently
-    treat the two cases (never-configured vs. configured-but-empty) the
-    same way.
-    """
-    return {
-        "energy_sources": [],
-        "device_consumption": [],
-        "device_consumption_water": [],
-    }
-
-
-def _compute_per_key_hashes(prefs: dict[str, Any]) -> dict[_PrefsKey, str]:
-    """Per-top-level-key hashes for partial-update optimistic locking.
-
-    Each top-level key is wrapped in its own single-key dict before hashing,
-    so the per-key hash captures both the key name and its value — an agent
-    cannot accidentally use, say, an ``energy_sources`` hash to authorise a
-    ``device_consumption`` write. ``prefs.get(key, [])`` mirrors the
-    "missing top-level key = empty list" semantics codified by
-    ``_default_prefs``.
-    """
-    return {
-        key: compute_config_hash({key: prefs.get(key, [])})
-        for key in _PREFS_TOP_LEVEL_KEYS
-    }
+def compute_per_key_hashes(prefs: dict[str, Any]) -> dict[str, str]:
+    """Hash every native preference slot without an allowlist or invented defaults."""
+    return {key: compute_config_hash({key: value}) for key, value in prefs.items()}
 
 
 def _is_no_prefs_error(error_msg: str) -> bool:
@@ -119,16 +86,23 @@ async def get_energy_prefs(client: Any) -> dict[str, Any]:
                         context={"mode": "get"},
                     )
                 )
-            prefs = _default_prefs()
-            note = "Energy Dashboard has never been configured on this instance; returning empty default."
+            try:
+                contract = await core_contract(client, "energy/save_prefs")
+            except ToolError:
+                logger.warning("Energy defaults discovery failed", exc_info=True)
+                contract = {}
+            prefs = contract.get("default_preferences", {})
+            note = "Energy Dashboard has never been configured."
+            if "default_preferences" not in contract:
+                note += " Core defaults are unavailable; config is empty. Use the full config_hash for the initial save."
         else:
-            prefs = result.get("result") or _default_prefs()
+            prefs = result.get("result") or {}
         response = {
             "success": True,
             "mode": "get",
             "config": prefs,
             "config_hash": compute_config_hash(prefs),
-            "config_hash_per_key": _compute_per_key_hashes(prefs),
+            "config_hash_per_key": compute_per_key_hashes(prefs),
         }
         if note:
             response["note"] = note

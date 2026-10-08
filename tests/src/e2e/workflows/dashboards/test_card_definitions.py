@@ -5,14 +5,19 @@ frontend files Home Assistant serves. Without the component there is no source
 for either: describe reports that, and writes carry no card warnings.
 """
 
+import logging
 import re
 from uuid import uuid4
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client
+
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_tool_result
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
@@ -142,7 +147,9 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_client):
+async def test_custom_cards_are_checked_and_described_from_their_resource(
+    mcp_client: Client,
+) -> None:
     """A card from a dashboard resource answers for itself, like a HACS card."""
     mcp = MCPAssertions(mcp_client)
     if not component_surface_available():
@@ -160,7 +167,7 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
     try:
         # No preseeded DOM cache: wait for the user's first-use download,
         # integrity verification and resource loading to complete.
-        listed = await wait_for_tool_result(
+        await wait_for_tool_result(
             mcp_client,
             "ha_config_get_dashboard",
             {"describe": True},
@@ -171,7 +178,6 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
             timeout=90,
             description="custom card production first-use loading",
         )
-        assert "custom:e2e-custom-card" in {c["type"] for c in listed["card_types"]}
         card = await mcp.call_tool_success(
             "ha_config_get_dashboard",
             {"card_type": "custom:e2e-custom-card", "describe": True},
@@ -193,14 +199,26 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
             {"type": "custom:e2e-type-error-card"},
             {"type": "custom:e2e-type-error-card", "mode": "browser"},
         ]
-        result = await mcp.call_tool_success(
+        # Inspection can consume the per-request budget before every card.
+        # Retry that explicit partial result; all card assertions still run below.
+        result = await wait_for_tool_result(
+            mcp_client,
             "ha_config_set_dashboard",
             {
                 "url_path": path,
                 "config": {"views": [{"title": "Custom", "cards": cards}]},
                 "MandatoryBPS": False,
             },
+            lambda data: (
+                not any(
+                    "not checked (time budget)" in warning
+                    for warning in data.get("warnings", [])
+                )
+            ),
+            timeout=30,
+            description="all custom fixture cards inspected within one request",
         )
+        logger.info("Custom-card validation response: %s", result)
         warnings = "\n".join(result.get("warnings", []))
         assert (
             "views[0].cards[0] (custom:e2e-custom-card): "

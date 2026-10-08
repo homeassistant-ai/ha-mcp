@@ -24,6 +24,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
+from .core_contract import include_core_contract, merge_core_options
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -31,6 +32,8 @@ from .helpers import (
     register_tool_methods,
     safe_progress,
 )
+from .history_response import format_history_response
+from .recorder_errors import raise_recorder_ws_failure as _raise_recorder_ws_failure
 from .response_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
@@ -39,12 +42,14 @@ from .response_helpers import (
     resolve_local_timezone,
 )
 from .statistics_helpers import (
+    _parse_statistic_types,
     fetch_statistics_metadata,
     format_entity_statistics,
+    resolve_requested_units,
     statistics_warnings,
 )
+from .statistics_resets import restore_reset_timestamps
 from .tool_hints import read_only_hints
-from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -54,27 +59,6 @@ _RELATIVE_TIME_UNIT_SECONDS = {
     "w": 7 * 24 * 60 * 60,
     "m": 30 * 24 * 60 * 60,
 }
-
-
-def _convert_timestamp(value: Any) -> str | None:
-    """Convert a timestamp value to ISO format string.
-
-    Handles both Unix epoch floats (from WebSocket short-form responses)
-    and string timestamps (from long-form responses).
-
-    Args:
-        value: Timestamp as Unix epoch float, ISO string, or None
-
-    Returns:
-        ISO format string or None if value is None/invalid
-    """
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC).isoformat()
-    if isinstance(value, str):
-        return value
-    return None
 
 
 def parse_relative_time(
@@ -302,7 +286,7 @@ class HistoryTools:
             str | list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description='Statistics types: "mean", "min", "max", "sum", "state", "change". Default: all. Ignored when source="history"',
+                description='Native Core statistics types (for example "sum", "change", "last_reset"). Default: Core chooses all. Use include_schema=True to discover the installed contract. Ignored when source="history"',
                 default=None,
             ),
         ] = None,
@@ -322,29 +306,54 @@ class HistoryTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys to reduce response "
+                    "Return only the specified keys within data to reduce response "
                     "size. None = full response. History keys: success, source, entities, "
                     "period, query_params. Statistics keys: success, source, entities, "
-                    "period_type, time_range, statistic_types, query_params, warnings."
+                    "period_type, time_range, statistic_types, query_params. Warnings and timezone metadata remain outside data and are always retained."
                 ),
+            ),
+        ] = None,
+        include_schema: Annotated[
+            bool,
+            Field(
+                description="Include the running Core's native request schema when the component supports discovery."
+            ),
+        ] = False,
+        core_options: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description="Additional native Core request fields, e.g. {'units': {'energy': 'MWh'}} for statistics. Core validates them. Cannot override fields controlled by the tool's parameters or query limits."
             ),
         ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Get historical data from Home Assistant's recorder.
 
+        WHEN NOT TO USE:
+        For current values, use ha_get_state. To inspect Energy Dashboard
+        preferences and configured statistics, use
+        ha_manage_energy_prefs(mode="get", include_statistics=True).
+
+        WHEN TO USE:
         Use source="history" (default) to troubleshoot why a value changed, check
         event sequences, or analyze recent patterns. Use source="statistics" for
-        long-term trends beyond the ~10-day recorder retention and period
-        averages; entities must have state_class (measurement, total,
-        total_increasing).
+        long-term trends and period averages.
 
-        History-only params: minimal_response, significant_changes_only.
-        Statistics-only params: period, statistic_types. Output units come from
+        CAVEATS:
+        History rows rename Core's compact keys once: s -> state, a -> attributes,
+        lu -> last_updated, lc -> last_changed. History event times are ISO strings
+        in HA's timezone (UTC if unavailable). When Core omits lc, last_changed
+        falls back to last_updated; this may not be the actual state-change time
+        with significant_changes_only (default) or a window-start snapshot.
+        Attributes and unknown fields pass through unchanged.
+        Statistics timestamps use Unix milliseconds. Minimal history may omit attributes.
+        No duplicate compact aliases are added. include_schema=True
+        retains core_contract even when fields selects other data keys.
+
+        Output units come from
         Core recorder metadata and reflect its display-unit conversion; unresolved
         units include a reason. statistics_metadata preserves Core's native fields.
-        Use ha_manage_energy_prefs(mode="get", include_statistics=True) to
-        discover the statistics configured in the Energy Dashboard.
 
         All data is fetched from HA before slicing; limit/offset are client-side.
         With multiple entity_ids, offset must be 0 — use a single entity_id for
@@ -436,8 +445,8 @@ class HistoryTools:
             )
 
             # Route through the shared pooled WebSocket (issue #1813) instead of
-            # a dedicated connect/auth handshake per call. Statistics also fetches native recorder metadata; the pooled client owns the
-            # connection lifecycle, so there is no per-call connect/disconnect.
+            # a dedicated connect/auth handshake per call. Statistics also fetches
+            # native recorder metadata through the same pooled client.
             if source == "statistics":
                 inner = await _fetch_statistics(
                     self._client,
@@ -448,6 +457,7 @@ class HistoryTools:
                     statistic_types,
                     limit,
                     offset,
+                    core_options=core_options,
                 )
             else:
                 inner = await _fetch_history(
@@ -462,7 +472,15 @@ class HistoryTools:
                     _DEFAULT_HISTORY_LIMIT,
                     _MAX_HISTORY_LIMIT,
                     order=order,
+                    core_options=core_options,
                 )
+            if include_schema:
+                command = (
+                    "recorder/statistics_during_period"
+                    if source == "statistics"
+                    else "history/history_during_period"
+                )
+                await include_core_contract(self._client, inner, command)
             await safe_progress(
                 ctx,
                 progress=3,
@@ -472,9 +490,19 @@ class HistoryTools:
             # Wrap first so the outer {"data": ..., "metadata": ...} shape
             # is always present; then project the inner data dict in-place
             # when caller requested field projection.
-            _r = await add_timezone_metadata(self._client, inner)
-            if parsed_fields is not None:
-                _r["data"] = project_fields(_r["data"], parsed_fields)
+            _r = await add_timezone_metadata(
+                self._client, inner, convert_timestamps=False
+            )
+            _r = format_history_response(_r)
+            _r["data"] = project_fields(
+                _r["data"],
+                parsed_fields,
+                extra_always_keep=frozenset({"core_contract"})
+                if include_schema
+                else None,
+            )
+            if warnings := _r["data"].pop("warnings", None):
+                _r.setdefault("warnings", []).extend(warnings)
             return _r
 
         except ToolError:
@@ -746,7 +774,7 @@ def _statistics_workload_violation(
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid statistics period: {period}",
+                f"Cannot safely estimate recorder workload for period: {period}",
                 context={"period": period},
                 suggestions=[
                     "Use one of: '5minute', 'hour', 'day', 'week', 'month', 'year'."
@@ -794,7 +822,7 @@ def _statistics_scan_window(
     period: str,
     local_timezone: tzinfo,
 ) -> tuple[datetime, datetime]:
-    """Mirror Core's calendar alignment before its statistics table query."""
+    """Estimate Core's scan expansion for HA-MCP workload limits (not API validation)."""
     if period not in _CALENDAR_STATISTICS_PERIODS:
         return start_dt, end_dt
 
@@ -859,41 +887,6 @@ def _next_month_start(value: datetime) -> datetime:
     )
 
 
-def _raise_recorder_ws_failure(
-    kind: str,
-    error_msg: str,
-    entity_id_list: list[str],
-    suggestions: list[str],
-) -> None:
-    """Raise the structured error for a failed recorder WS call.
-
-    The pooled ``send_websocket_message`` collapses transport failures into
-    ``{"success": False, "error": ...}`` — classify connection-shaped errors
-    as CONNECTION_FAILED (retry/connectivity guidance) instead of presenting
-    recorder-retention suggestions during an HA restart or WS outage.
-    """
-    if is_connection_error_message(error_msg):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                f"Failed to retrieve {kind}: {error_msg}",
-                context={"entity_ids": entity_id_list},
-                suggestions=[
-                    "Home Assistant may be restarting or unreachable — retry shortly",
-                    "Check the connection to Home Assistant",
-                ],
-            )
-        )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Failed to retrieve {kind}: {error_msg}",
-            context={"entity_ids": entity_id_list},
-            suggestions=suggestions,
-        )
-    )
-
-
 async def _fetch_history(
     client: Any,
     entity_id_list: list[str],
@@ -906,6 +899,7 @@ async def _fetch_history(
     default_limit: int,
     max_limit: int,
     order: str = "desc",
+    core_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute the history/history_during_period WebSocket call.
 
@@ -927,6 +921,7 @@ async def _fetch_history(
         "no_attributes": minimal_response,
     }
 
+    command_params = merge_core_options(command_params, core_options)
     response = await client.send_websocket_message(
         {"type": "history/history_during_period", **command_params}
     )
@@ -936,6 +931,7 @@ async def _fetch_history(
             "history",
             response.get("error", "Unknown error"),
             entity_id_list,
+            error_code=response.get("error_code"),
             suggestions=[
                 "Verify entity IDs exist using ha_search()",
                 "Check that entities are recorded (not excluded from recorder)",
@@ -954,27 +950,11 @@ async def _fetch_history(
             effective_offset : effective_offset + effective_limit
         ]
 
-        formatted_states = []
-        for state in paged_states:
-            last_updated_raw = state.get("lu", state.get("last_updated"))
-            last_changed_raw = state.get("lc", state.get("last_changed"))
-            if last_changed_raw is None and last_updated_raw is not None:
-                last_changed_raw = last_updated_raw
-
-            state_entry = {
-                "state": state.get("s", state.get("state")),
-                "last_changed": _convert_timestamp(last_changed_raw),
-                "last_updated": _convert_timestamp(last_updated_raw),
-            }
-            if not minimal_response:
-                state_entry["attributes"] = state.get("a", state.get("attributes", {}))
-            formatted_states.append(state_entry)
-
         pagination = build_pagination_metadata(
             total_count=len(entity_states),
             offset=effective_offset,
             limit=effective_limit,
-            count=len(formatted_states),
+            count=len(paged_states),
         )
         entities_history.append(
             {
@@ -983,7 +963,7 @@ async def _fetch_history(
                     "start": start_dt.isoformat(),
                     "end": end_dt.isoformat(),
                 },
-                "states": formatted_states,
+                "states": paged_states,
                 **pagination,
             }
         )
@@ -1008,54 +988,6 @@ async def _fetch_history(
     return history_data
 
 
-def _parse_statistic_types(
-    statistic_types: str | list[str] | None,
-) -> list[str] | None:
-    """Parse and validate the statistic_types param into a list (or None for all)."""
-    stat_types_list: list[str] | None = None
-    if statistic_types is not None:
-        if isinstance(statistic_types, str):
-            if statistic_types.startswith("["):
-                stat_types_list = parse_string_list_param(
-                    statistic_types, "statistic_types"
-                )
-            elif "," in statistic_types:
-                stat_types_list = [
-                    s.strip() for s in statistic_types.split(",") if s.strip()
-                ]
-            else:
-                stat_types_list = [statistic_types.strip()]
-        else:
-            stat_types_list = list(statistic_types)
-
-        valid_types = ["mean", "min", "max", "sum", "state", "change"]
-        assert stat_types_list is not None
-        if not stat_types_list:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "statistic_types cannot be an empty list. "
-                    "Omit the parameter to retrieve all types, or specify at least one valid type.",
-                    context={"parameter": "statistic_types", "value": statistic_types},
-                    suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
-                )
-            )
-        invalid_types = [t for t in stat_types_list if t not in valid_types]
-        if invalid_types:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid statistic types: {invalid_types}",
-                    context={
-                        "invalid_types": invalid_types,
-                        "valid_types": valid_types,
-                    },
-                    suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
-                )
-            )
-    return stat_types_list
-
-
 async def _fetch_statistics(
     client: Any,
     entity_id_list: list[str],
@@ -1065,6 +997,7 @@ async def _fetch_statistics(
     statistic_types: str | list[str] | None,
     limit: int | None,
     offset: int | None,
+    core_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute the recorder/statistics_during_period WebSocket call.
 
@@ -1074,18 +1007,6 @@ async def _fetch_statistics(
     effective_limit = limit if limit is not None else _DEFAULT_HISTORY_LIMIT
     effective_offset = offset if offset is not None else 0
 
-    # Validate period
-    valid_periods = ["5minute", "hour", "day", "week", "month", "year"]
-    if period not in valid_periods:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid period: {period}",
-                context={"period": period, "valid_periods": valid_periods},
-                suggestions=[f"Use one of: {', '.join(valid_periods)}"],
-            )
-        )
-
     stat_types_list = _parse_statistic_types(statistic_types)
 
     command_params: dict[str, Any] = {
@@ -1094,8 +1015,11 @@ async def _fetch_statistics(
         "statistic_ids": entity_id_list,
         "period": period,
     }
-    if stat_types_list is not None:
-        command_params["types"] = stat_types_list
+    command_params = merge_core_options(
+        {**command_params, "types": stat_types_list}, core_options
+    )
+    if stat_types_list is None:
+        command_params.pop("types")
 
     metadata, metadata_failure = await fetch_statistics_metadata(client, entity_id_list)
     response = await client.send_websocket_message(
@@ -1107,6 +1031,7 @@ async def _fetch_statistics(
             "statistics",
             response.get("error", "Unknown error"),
             entity_id_list,
+            error_code=response.get("error_code"),
             suggestions=[
                 "Verify entities have state_class attribute (measurement, total, total_increasing)",
                 "Use ha_search() to check entity attributes",
@@ -1115,7 +1040,6 @@ async def _fetch_statistics(
         )
 
     result_data = response.get("result", {})
-    all_stat_types = stat_types_list or ["mean", "min", "max", "sum", "state", "change"]
     entities_statistics = format_entity_statistics(
         result_data,
         entity_id_list,
@@ -1124,6 +1048,25 @@ async def _fetch_statistics(
         effective_limit,
         metadata,
         metadata_failure,
+    )
+    resolved_units = await resolve_requested_units(
+        client, entities_statistics, command_params.get("units", {})
+    )
+    reset_warnings = await restore_reset_timestamps(
+        client, result_data, metadata, command_params, resolved_units
+    )
+    all_stat_types = (
+        stat_types_list
+        if stat_types_list is not None
+        else sorted(
+            {
+                key
+                for rows in result_data.values()
+                for row in rows
+                for key in row
+                if key not in {"start", "end"}
+            }
+        )
     )
 
     empty_entities: list[str] = [
@@ -1147,7 +1090,7 @@ async def _fetch_statistics(
         },
     }
 
-    warnings = statistics_warnings(entities_statistics)
+    warnings = statistics_warnings(entities_statistics) + reset_warnings
     if empty_entities:
         warnings += [
             f"No statistics found for: {', '.join(empty_entities)}. "

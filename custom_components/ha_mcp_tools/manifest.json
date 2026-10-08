@@ -4,10 +4,12 @@
     "after_dependencies": [
         "backup",
         "cloud",
+        "energy",
         "frontend",
         "http",
         "lovelace",
-        "network"
+        "network",
+        "recorder"
     ],
     "codeowners": [
         "@homeassistant-ai"

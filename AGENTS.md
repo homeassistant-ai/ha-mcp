@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Canonical agent guidance for the Home Assistant MCP Server repository.
+Canonical agent guidance for HA-MCP.
 
 ## Instruction structure
 
@@ -147,7 +147,9 @@ The minimal setup is `uv sync --group dev`; run stdio with `uv run ha-mcp` and H
 
 ## Architecture
 
-Tools are lazy-discovered from `tools_*.py`; shared business logic belongs in service modules; WebSocket-backed operations verify state changes; and tools wait for logical completion when possible. Read the [architecture map](docs/agents/development.md#architecture) and the [code review style guide](.gemini/styleguide.md) before structural code changes.
+Lazy-discover tools from `tools_*.py`; put shared logic in service modules, verify writes and wait for completion. Before structural changes, read the [architecture map](docs/agents/development.md#architecture) and [style guide](.gemini/styleguide.md).
+
+For read/write tools, follow [native Core contracts](docs/agents/native-core-contracts.md); preserve safety gates and label unavailable validation.
 
 ## Code Conventions
 

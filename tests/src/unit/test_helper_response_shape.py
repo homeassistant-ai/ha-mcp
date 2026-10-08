@@ -1289,14 +1289,13 @@ class TestSweepWarningsShape:
         from ha_mcp.tools.tools_energy import EnergyTools
 
         tools = EnergyTools.__new__(EnergyTools)
-        client = MagicMock()
+        client = MagicMock(base_url=None, token=None)
         client.send_websocket_message = AsyncMock(
             return_value={"success": False, "error": "energy not configured"}
         )
         tools._client = client
 
-        # Minimal valid prefs shape passing _shape_check() — empty source/device
-        # lists are accepted, only the top-level keys are required.
+        # Without the component, the preview labels schema validation unavailable.
         result = await tools._dry_run(
             {
                 "energy_sources": [],

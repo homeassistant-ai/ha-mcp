@@ -3,6 +3,9 @@
 import logging
 from typing import Any
 
+from ..errors import ErrorCode, create_error_response
+from .coercion import parse_string_list_param
+from .helpers import raise_tool_error
 from .response_helpers import build_pagination_metadata
 
 logger = logging.getLogger(__name__)
@@ -55,8 +58,6 @@ def statistics_unit(
         return {**unknown, "unit_reason": "invalid_display_unit_metadata"}
     result = {"unit_of_measurement": unit, "unit_source": "recorder_metadata"}
     if unit is None:
-        if metadata.get("statistics_unit_of_measurement") is not None:
-            return {**unknown, "unit_reason": "display_unit_not_reported"}
         result["unit_reason"] = "statistics_are_unitless"
     return result
 
@@ -99,3 +100,97 @@ def statistics_warnings(entities: list[dict[str, Any]]) -> list[str]:
         for entity in entities
         if entity["unit_source"] == "unknown"
     ]
+
+
+async def resolve_requested_units(
+    client: Any, entities: list[dict[str, Any]], units: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Resolve explicit units and default converters absent from recorder metadata."""
+    from ..client.websocket_client import get_websocket_client
+    from .component_api import (
+        component_supports,
+        get_component_caps,
+        invalidate_caps,
+        is_unknown_command,
+    )
+
+    if not units:
+        entities = [
+            entity
+            for entity in entities
+            if (record := entity.get("statistics_metadata"))
+            and record.get("unit_class") is None
+            and record.get("display_unit_of_measurement")
+            != record.get("statistics_unit_of_measurement")
+        ]
+    if not entities:
+        return {}
+    records: dict[str, dict[str, Any]] = {}
+    try:
+        caps = await get_component_caps(client)
+        if component_supports(caps, "core_contract"):
+            ws = await get_websocket_client(
+                url=client.base_url,
+                token=client.token,
+                verify_ssl=getattr(client, "verify_ssl", None),
+            )
+            response = await ws.send_command(
+                "ha_mcp_tools/statistics_units",
+                statistic_ids=[e["entity_id"] for e in entities],
+                units=units,
+            )
+            records = {r["statistic_id"]: r for r in response["result"]["records"]}
+    except Exception as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        logger.warning("Statistics converter resolution failed", exc_info=True)
+    if not units:
+        # Default labels already come from recorder metadata; this lookup only
+        # supplies converter classes needed to recover reset timestamps.
+        return records
+    for entity in entities:
+        record = records.get(entity["entity_id"])
+        if record is not None and "output_unit_of_measurement" in record:
+            entity["unit_of_measurement"] = record["output_unit_of_measurement"]
+            entity["unit_source"] = "core_converter"
+            entity.pop("unit_reason", None)
+        else:
+            unit_class = (entity.get("statistics_metadata") or {}).get("unit_class")
+            if isinstance(unit_class, str) and unit_class not in units:
+                continue
+            entity.update(
+                unit_of_measurement=None,
+                unit_source="unknown",
+                unit_reason="requested_unit_resolution_unavailable",
+            )
+    return records
+
+
+def _parse_statistic_types(
+    statistic_types: str | list[str] | None,
+) -> list[str] | None:
+    """Parse and validate the statistic_types param into a list (or None for all)."""
+    stat_types_list: list[str] | None = None
+    if statistic_types is not None:
+        if isinstance(statistic_types, str):
+            if statistic_types.startswith("["):
+                stat_types_list = parse_string_list_param(
+                    statistic_types, "statistic_types"
+                )
+            elif "," in statistic_types:
+                stat_types_list = [
+                    s.strip() for s in statistic_types.split(",") if s.strip()
+                ]
+            else:
+                stat_types_list = [statistic_types.strip()]
+        else:
+            stat_types_list = list(statistic_types)
+        if not stat_types_list:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "statistic_types cannot be empty: this tool requires at least one value field. Omit it for Core's defaults.",
+                )
+            )
+
+    return stat_types_list

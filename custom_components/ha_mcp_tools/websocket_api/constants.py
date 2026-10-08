@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .. import card_definitions, helper_collections
+from .. import card_definitions, core_contract, helper_collections
 
 __all__ = [
     "ALL_SEARCH_TYPES",
@@ -172,6 +172,7 @@ CAPABILITIES: list[str] = [
     # this is advertised; without it the error is returned as Core reported it.
     "template_diagnose",
     *helper_collections.CAPABILITIES,
+    core_contract.CAPABILITY,
     *card_definitions.CAPABILITIES,
 ]
 

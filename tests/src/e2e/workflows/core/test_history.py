@@ -8,8 +8,12 @@ state change history and long-term statistics via ha_get_history.
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
+
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp.client import HomeAssistantClient
 
 from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 
@@ -58,7 +62,7 @@ class TestGetHistory:
             if entity_history.get("states"):
                 first_state = entity_history["states"][0]
                 logger.info(
-                    f"First state: {first_state.get('state')} at {first_state.get('last_changed')}"
+                    f"First state: {first_state.get('state')} at {first_state.get('last_changed', first_state.get('last_updated'))}"
                 )
         else:
             logger.info("No history data available (may be normal for short periods)")
@@ -278,91 +282,79 @@ class TestGetHistory:
         else:
             logger.info("Comma-separated format may not be supported")
 
-    async def test_get_history_timestamps_present(self, mcp_client):
-        """Test that history returns valid timestamps for last_changed and last_updated.
-
-        This is a regression test for issue #447 where timestamps were null/missing.
-        """
-        logger.info("Testing ha_get_history includes valid timestamps")
-
-        result = await mcp_client.call_tool(
-            "ha_get_history",
+    @pytest.mark.parametrize("minimal", [True, False])
+    async def test_get_history_preserves_native_rows(
+        self,
+        mcp_client: Client,
+        ha_client: HomeAssistantClient,
+        minimal: bool,
+    ) -> None:
+        """History keeps local timestamps and native data without compact duplicates."""
+        config = await ha_client.get_config()
+        local_timezone = ZoneInfo(config["time_zone"])
+        end = datetime.now(UTC) - timedelta(minutes=1)
+        start = end - timedelta(days=1)
+        native = await ha_client.send_websocket_message(
             {
-                "entity_ids": "sun.sun",
-                "start_time": "24h",
-                "minimal_response": False,
+                "type": "history/history_during_period",
+                "entity_ids": ["sun.sun"],
+                "start_time": start.isoformat(),
+                "end_time": end.isoformat(),
+                "minimal_response": minimal,
                 "significant_changes_only": False,
-                "limit": 10,
-            },
+                "no_attributes": minimal,
+            }
         )
-
-        data = assert_mcp_success(result, "Get history with timestamps")
-
-        # History data is nested in 'data' key
-        inner_data = data.get("data", data)
-        assert "entities" in inner_data, f"Missing 'entities' in response: {data}"
-        assert len(inner_data["entities"]) > 0, "No entities in response"
-
-        entity_history = inner_data["entities"][0]
-        assert "states" in entity_history, f"Missing states: {entity_history}"
-        states = entity_history["states"]
-
-        if len(states) > 0:
-            logger.info(f"Checking {len(states)} state entries for valid timestamps")
-
-            for idx, state in enumerate(states):
-                # Verify both timestamp fields are present
-                assert "last_changed" in state, (
-                    f"State {idx} missing 'last_changed': {state}"
-                )
-                assert "last_updated" in state, (
-                    f"State {idx} missing 'last_updated': {state}"
-                )
-
-                # Verify timestamps are not null
-                last_changed = state["last_changed"]
-                last_updated = state["last_updated"]
-
-                assert last_changed is not None, (
-                    f"State {idx} has null last_changed: {state}"
-                )
-                assert last_updated is not None, (
-                    f"State {idx} has null last_updated: {state}"
-                )
-
-                # Verify timestamps are valid ISO 8601 strings
-                assert isinstance(last_changed, str), (
-                    f"State {idx} last_changed not a string: {type(last_changed)}"
-                )
-                assert isinstance(last_updated, str), (
-                    f"State {idx} last_updated not a string: {type(last_updated)}"
-                )
-
-                # Verify timestamps can be parsed as ISO datetime
-                try:
-                    datetime.fromisoformat(last_changed.replace("Z", "+00:00"))
-                except ValueError as e:
-                    pytest.fail(
-                        f"State {idx} last_changed not valid ISO format: {last_changed}: {e}"
-                    )
-
-                try:
-                    datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
-                except ValueError as e:
-                    pytest.fail(
-                        f"State {idx} last_updated not valid ISO format: {last_updated}: {e}"
-                    )
-
-            logger.info(
-                "✓ All state entries have valid last_changed and last_updated timestamps"
+        assert native["success"], native
+        expected = native["result"]["sun.sun"][:10]
+        assert expected, "The recorded sun fixture must provide history rows"
+        result = assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_get_history",
+                {
+                    "entity_ids": ["sun.sun"],
+                    "start_time": start.isoformat(),
+                    "end_time": end.isoformat(),
+                    "minimal_response": minimal,
+                    "significant_changes_only": False,
+                    "limit": 10,
+                    "order": "asc",
+                },
             )
-            logger.info(
-                f"Sample: last_changed={states[0]['last_changed']}, last_updated={states[0]['last_updated']}"
-            )
-        else:
-            logger.warning(
-                "No state history available for test (may be normal for short periods)"
-            )
+        )
+        actual = result["data"]["entities"][0]["states"]
+        assert len(actual) == len(expected)
+        for row, native_row in zip(actual, expected, strict=True):
+            remaining = dict(row)
+            for native_key, readable_key in (
+                ("s", "state"),
+                ("a", "attributes"),
+            ):
+                if native_key in native_row:
+                    value = remaining.pop(readable_key)
+                    assert value == native_row[native_key]
+                    assert native_key not in row
+                else:
+                    assert readable_key not in row
+            for native_key, readable_key in (
+                ("lu", "last_updated"),
+                ("lc", "last_changed"),
+            ):
+                value = remaining.pop(readable_key)
+                parsed = datetime.fromisoformat(value)
+                # Python datetimes retain microseconds; Core floats can be finer.
+                assert parsed.timestamp() == pytest.approx(
+                    native_row.get(native_key, native_row["lu"]), abs=1e-6, rel=0
+                ), (value, parsed.timestamp(), native_row)
+                assert (
+                    parsed.utcoffset() == parsed.astimezone(local_timezone).utcoffset()
+                )
+                assert native_key not in row
+            assert remaining == {
+                key: value
+                for key, value in native_row.items()
+                if key not in {"s", "a", "lu", "lc"}
+            }
 
 
 @pytest.mark.asyncio

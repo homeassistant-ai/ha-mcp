@@ -35,7 +35,11 @@ async def test_energy_inspection_resolves_all_referenced_statistics_without_writ
             return {"success": True, "result": [record]}
         raise AssertionError(f"Unexpected write or request: {message}")
 
-    client = MagicMock(send_websocket_message=AsyncMock(side_effect=dispatch))
+    client = MagicMock(
+        base_url=None,
+        token=None,
+        send_websocket_message=AsyncMock(side_effect=dispatch),
+    )
     tool = EnergyTools(client)
     ordinary = await tool.ha_manage_energy_prefs(mode="get")
     inspected = await tool.ha_manage_energy_prefs(mode="get", include_statistics=True)
@@ -52,12 +56,14 @@ async def test_energy_inspection_resolves_all_referenced_statistics_without_writ
 @pytest.mark.asyncio
 async def test_empty_energy_config_does_not_request_all_recorder_metadata():
     client = MagicMock(
+        base_url=None,
+        token=None,
         send_websocket_message=AsyncMock(
             return_value={
                 "success": False,
                 "error": "Command failed: No prefs",
             }
-        )
+        ),
     )
     result = await EnergyTools(client).ha_manage_energy_prefs(
         mode="get", include_statistics=True

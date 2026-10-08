@@ -20,7 +20,9 @@ the tracked branch's E2E directory only for the run.
 `no_component=true` removes the component's File & YAML Tools entry, like the
 no-tools E2E lanes. `strict_bps` (default on, as agents meet it) sets strict
 best-practices mode for the standalone and embedded servers. `ha_image`
-overrides the Docker image (default: the branch's pinned E2E image). `minutes`
+overrides the Docker image (default: `ghcr.io/home-assistant/home-assistant:stable`).
+Pass an explicit version tag to test an older Core release, or `:beta` to test
+the current beta. This dev default is independent of the branch's E2E pin. `minutes`
 defaults to and is capped at 330. A HAOS run builds the HAOS image the first
 time the image build files, the test config or the proxy app change, and saves
 it to the fork's cache for later runs. A branch whose component differs from
