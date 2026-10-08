@@ -37,6 +37,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .system_restart import restart_home_assistant
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import filter_active_repairs, summarize_theme_listing
 
@@ -180,7 +181,9 @@ class SystemTools:
         Config is validated automatically before the restart proceeds (to
         pre-check, call ha_get_system_health(include="config_check")). For
         configuration changes, consider ha_reload_core() instead, which reloads
-        specific components without a full restart.
+        specific components without a full restart. When this server runs
+        inside Home Assistant (embedded), it replies before the restart starts
+        and is unreachable until Home Assistant is back.
 
         EXAMPLE: ha_restart(confirm=True)
         """
@@ -201,70 +204,7 @@ class SystemTools:
                 )
             )
 
-        restart_initiated = False
-        try:
-            # Check configuration first as a safety measure
-            config_result = await self._client.check_config()
-            if config_result.get("result") != "valid":
-                errors = config_result.get("errors") or []
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.CONFIG_INVALID,
-                        "Configuration is invalid - restart aborted",
-                        details=(
-                            "Home Assistant configuration has errors. "
-                            "Fix the errors before restarting."
-                        ),
-                        context={"config_errors": errors},
-                    )
-                )
-
-            # Call the restart service - mark as initiated before the call
-            # as the connection may be closed before we get a response
-            restart_initiated = True
-            await self._client.call_service("homeassistant", "restart", {})
-
-            return {
-                "success": True,
-                "message": (
-                    "Home Assistant restart initiated. "
-                    "The system will be unavailable for 1-5 minutes."
-                ),
-                "warnings": [
-                    "Connection will be lost during restart. "
-                    "Wait for Home Assistant to become available again."
-                ],
-            }
-
-        except ToolError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            error_msg = str(e)
-            # Connection errors after restart initiated are expected
-            # (HA closes connections during restart)
-            if restart_initiated and any(
-                pattern in error_msg.lower()
-                for pattern in (
-                    "connect",
-                    "closed",
-                    "504",
-                    "502",
-                    "503",
-                    "gateway",
-                    "unavailable",
-                )
-            ):
-                return {
-                    "success": True,
-                    "message": (
-                        "Home Assistant restart initiated. "
-                        "Connection was closed as expected during restart."
-                    ),
-                    "warnings": ["Wait 1-5 minutes for Home Assistant to restart."],
-                }
-
-            exception_to_structured_error(e)
-            return None  # unreachable: exception_to_structured_error always raises
+        return await restart_home_assistant(self._client)
 
     @tool(
         name="ha_reload_core",
