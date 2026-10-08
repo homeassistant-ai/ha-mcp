@@ -61,7 +61,10 @@ _RELATIVE_TIME_UNIT_SECONDS = {
 
 
 _HISTORY_FIELD_NAMES = {
-    "s": "state", "a": "attributes", "lu": "last_updated", "lc": "last_changed",
+    "s": "state",
+    "a": "attributes",
+    "lu": "last_updated",
+    "lc": "last_changed",
 }
 
 

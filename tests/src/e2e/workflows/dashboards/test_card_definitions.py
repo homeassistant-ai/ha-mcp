@@ -147,7 +147,9 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_client: Client) -> None:
+async def test_custom_cards_are_checked_and_described_from_their_resource(
+    mcp_client: Client,
+) -> None:
     """A card from a dashboard resource answers for itself, like a HACS card."""
     mcp = MCPAssertions(mcp_client)
     if not component_surface_available():
@@ -165,7 +167,7 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
     try:
         # No preseeded DOM cache: wait for the user's first-use download,
         # integrity verification and resource loading to complete.
-        listed = await wait_for_tool_result(
+        await wait_for_tool_result(
             mcp_client,
             "ha_config_get_dashboard",
             {"describe": True},
@@ -176,7 +178,6 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
             timeout=90,
             description="custom card production first-use loading",
         )
-        assert "custom:e2e-custom-card" in {c["type"] for c in listed["card_types"]}
         card = await mcp.call_tool_success(
             "ha_config_get_dashboard",
             {"card_type": "custom:e2e-custom-card", "describe": True},

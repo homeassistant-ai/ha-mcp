@@ -226,7 +226,9 @@ class TestGetHistory:
             logger.info(f"Full response state fields: {list(first_state.keys())}")
             # Full response should include attributes
             if "attributes" in first_state:
-                logger.info(f"Attributes included: {list(first_state['attributes'].keys())}")
+                logger.info(
+                    f"Attributes included: {list(first_state['attributes'].keys())}"
+                )
 
     async def test_get_history_nonexistent_entity(self, mcp_client):
         """Test history for non-existent entity."""
@@ -322,8 +324,10 @@ class TestGetHistory:
         for row, native_row in zip(actual, expected, strict=True):
             remaining = dict(row)
             for native_key, readable_key in (
-                ("s", "state"), ("a", "attributes"),
-                ("lu", "last_updated"), ("lc", "last_changed"),
+                ("s", "state"),
+                ("a", "attributes"),
+                ("lu", "last_updated"),
+                ("lc", "last_changed"),
             ):
                 if native_key in native_row:
                     assert remaining.pop(readable_key) == native_row[native_key]
@@ -331,7 +335,8 @@ class TestGetHistory:
                 else:
                     assert readable_key not in row
             assert remaining == {
-                key: value for key, value in native_row.items()
+                key: value
+                for key, value in native_row.items()
                 if key not in {"s", "a", "lu", "lc"}
             }
             assert len(row) == len(native_row)
