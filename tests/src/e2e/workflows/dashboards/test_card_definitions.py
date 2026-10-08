@@ -199,13 +199,24 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(
             {"type": "custom:e2e-type-error-card"},
             {"type": "custom:e2e-type-error-card", "mode": "browser"},
         ]
-        result = await mcp.call_tool_success(
+        # Inspection can consume the per-request budget before every card.
+        # Retry that explicit partial result; all card assertions still run below.
+        result = await wait_for_tool_result(
+            mcp_client,
             "ha_config_set_dashboard",
             {
                 "url_path": path,
                 "config": {"views": [{"title": "Custom", "cards": cards}]},
                 "MandatoryBPS": False,
             },
+            lambda data: (
+                not any(
+                    "not checked (time budget)" in warning
+                    for warning in data.get("warnings", [])
+                )
+            ),
+            timeout=30,
+            description="all custom fixture cards inspected within one request",
         )
         logger.info("Custom-card validation response: %s", result)
         warnings = "\n".join(result.get("warnings", []))
