@@ -4413,7 +4413,7 @@
   {
     "name": "ha_restart",
     "title": "Restart Home Assistant",
-    "description": "Execute a Home Assistant restart.\n\nWARNING: restarts the entire Home Assistant instance; all automations\nare unavailable during the restart, which typically takes 1-5 minutes.\nConfig is validated automatically before the restart proceeds (to\npre-check, call ha_get_system_health(include=\"config_check\")). For\nconfiguration changes, consider ha_reload_core() instead, which reloads\nspecific components without a full restart.\n\nEXAMPLE: ha_restart(confirm=True)",
+    "description": "Execute a Home Assistant restart.\n\nWARNING: restarts the entire Home Assistant instance; all automations\nare unavailable during the restart, which typically takes 1-5 minutes.\nConfig is validated automatically before the restart proceeds (to\npre-check, call ha_get_system_health(include=\"config_check\")). For\nconfiguration changes, consider ha_reload_core() instead, which reloads\nspecific components without a full restart. When this server runs\ninside Home Assistant (embedded), it replies before the restart starts\nand is unreachable until Home Assistant is back.\n\nEXAMPLE: ha_restart(confirm=True)",
     "inputSchema": {
       "properties": {
         "confirm": {
