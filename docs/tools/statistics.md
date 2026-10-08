@@ -31,7 +31,8 @@ The default follows Core's display conversion. Explicit units are described belo
 
 `include_schema=True` on `ha_get_history`, or on energy `mode="get"`, includes
 the running Core's contract when the component supports discovery. Descriptions
-can be incomplete for callable validators; energy dry runs still invoke the
+can be incomplete for callable validators. Discovery failures preserve the read
+result and produce a top-level warning; energy dry runs still invoke the
 actual registered save schema. Without the capability, previews explicitly
 report `proposal_validation.status="unavailable"` and `partial=True`.
 
@@ -42,14 +43,19 @@ observed in the returned rows.
 Reset timestamps use a supplementary native query in the stored unit when
 conversion is possible: affected Core versions otherwise convert timestamps
 along with numeric values. Queries are grouped by native unit class and stored
-unit. If the timestamp cannot be recovered, `last_reset` is omitted with a
+unit. Core converter metadata avoids extra queries for unchanged classes.
+Without that metadata, a query using unchanged default units can recover resets
+without inferring a converter. If the timestamp cannot be recovered, `last_reset` is omitted with a
 warning; other values remain available.
 
 A reported null display unit is a known unitless result, including conversions
 from percent. `core_options` passes additional native recorder options, such as
 `{"units": {"energy": "MWh"}}`. It cannot override the tool's controlled
 query fields. Explicit-unit labels use Core's converter through the component;
-without it, values are preserved and units are explicitly unknown.
+without it, values are preserved and explicitly requested classes remain unknown.
+Unrequested classes retain their native display-unit labels. Core parameter
+rejections retain Core's message and are reported as invalid parameters, rather
+than as recorder service failures.
 
 History responses retain native row fields beside the readable aliases.
 Energy saves return the normalized Core configuration and hashes calculated

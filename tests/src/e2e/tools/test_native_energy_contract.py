@@ -124,3 +124,31 @@ async def test_energy_schema_exposes_native_battery_fields(mcp_client: Client) -
         assert contract["description_complete"] is False
     else:
         assert contract["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"statistic_types": ["avg"]},
+        {"core_options": {"units": {"energy": "kwh"}}},
+    ],
+)
+async def test_core_parameter_errors_retain_validation_classification(
+    mcp_client: Client,
+    options: dict[str, Any],
+) -> None:
+    async with MCPAssertions(mcp_client) as mcp:
+        failure = await mcp.call_tool_failure(
+            "ha_get_history",
+            {
+                "source": "statistics",
+                "entity_ids": ["sensor.total_energy_kwh"],
+                "start_time": "1d",
+                "period": "hour",
+                **options,
+            },
+            expected_error="parameters",
+        )
+    assert failure["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "state_class" not in str(failure["error"]["suggestions"])

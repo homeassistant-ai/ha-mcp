@@ -146,3 +146,95 @@ async def test_core_display_conversion_labels_the_converted_values(
                 }
             )
             assert cleared["success"], cleared
+
+
+@pytest.mark.asyncio
+@pytest.mark.core
+async def test_mixed_energy_cost_and_water_keep_unconverted_metadata(
+    mcp_client: Client,
+    ha_client: HomeAssistantClient,
+) -> None:
+    """An energy-only conversion preserves cost resets and unrelated water units."""
+    start = datetime.now(UTC).replace(minute=0, second=0, microsecond=0) - timedelta(
+        days=2
+    )
+    reset = start - timedelta(days=1)
+    samples = [("kWh", "energy"), ("USD", None), ("m³", "volume"), ("kWh", None)]
+    ids = [f"sensor.e2e_mixed_{uuid4().hex}" for _ in samples]
+    args = {
+        "source": "statistics",
+        "entity_ids": ids,
+        "start_time": start.isoformat(),
+        "end_time": (start + timedelta(hours=1)).isoformat(),
+        "period": "hour",
+        "statistic_types": ["sum", "last_reset"],
+    }
+    try:
+        for statistic_id, (unit, unit_class) in zip(ids, samples, strict=True):
+            imported = await ha_client.send_websocket_message(
+                {
+                    "type": "recorder/import_statistics",
+                    "metadata": {
+                        "statistic_id": statistic_id,
+                        "source": "recorder",
+                        "name": "E2E mixed energy dashboard statistics",
+                        "unit_of_measurement": unit,
+                        "unit_class": unit_class,
+                        "mean_type": 0,
+                        "has_sum": True,
+                    },
+                    "stats": [
+                        {
+                            "start": start.isoformat(),
+                            "last_reset": reset.isoformat(),
+                            "state": 55,
+                            "sum": 55,
+                        }
+                    ],
+                }
+            )
+            assert imported["success"], imported
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_history",
+            arguments=args,
+            predicate=lambda d: (
+                len(entities := d.get("data", d).get("entities", [])) == len(ids)
+                and all(
+                    e.get("statistics") and e.get("statistics_metadata")
+                    for e in entities
+                )
+            ),
+            description="mixed statistics rows and metadata committed",
+            timeout=30,
+        )
+        raw = assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_get_history",
+                {**args, "core_options": {"units": {"energy": "MWh"}}},
+            )
+        )
+        entities = raw.get("data", raw)["entities"]
+        for entity, expected_sum in zip(entities, (0.055, 55, 55, 0.055), strict=True):
+            assert entity["statistics"][0]["last_reset"] == int(
+                reset.timestamp() * 1000
+            )
+            assert entity["statistics"][0]["sum"] == pytest.approx(expected_sum)
+        assert entities[2]["unit_of_measurement"] == "m³"
+        if component_surface_available():
+            assert [e["unit_of_measurement"] for e in entities] == [
+                "MWh",
+                "USD",
+                "m³",
+                "MWh",
+            ]
+        else:
+            assert entities[0]["unit_source"] == "unknown"
+    finally:
+        cleared = await ha_client.send_websocket_message(
+            {
+                "type": "recorder/clear_statistics",
+                "statistic_ids": ids,
+            }
+        )
+        assert cleared["success"], cleared

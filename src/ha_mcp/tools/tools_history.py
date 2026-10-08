@@ -24,7 +24,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
-from .core_contract import core_contract, merge_core_options
+from .core_contract import include_core_contract, merge_core_options
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -32,6 +32,7 @@ from .helpers import (
     register_tool_methods,
     safe_progress,
 )
+from .recorder_errors import raise_recorder_ws_failure as _raise_recorder_ws_failure
 from .response_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
@@ -48,7 +49,6 @@ from .statistics_helpers import (
 )
 from .statistics_resets import restore_reset_timestamps
 from .tool_hints import read_only_hints
-from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -358,13 +358,10 @@ class HistoryTools:
         WHEN TO USE:
         Use source="history" (default) to troubleshoot why a value changed, check
         event sequences, or analyze recent patterns. Use source="statistics" for
-        long-term trends beyond the ~10-day recorder retention and period
-        averages; entities must have state_class (measurement, total,
-        total_increasing).
+        long-term trends and period averages.
 
         CAVEATS:
-        History-only params: minimal_response, significant_changes_only.
-        Statistics-only params: period, statistic_types. Output units come from
+        Output units come from
         Core recorder metadata and reflect its display-unit conversion; unresolved
         units include a reason. statistics_metadata preserves Core's native fields.
 
@@ -493,7 +490,7 @@ class HistoryTools:
                     if source == "statistics"
                     else "history/history_during_period"
                 )
-                inner["core_contract"] = await core_contract(self._client, command)
+                await include_core_contract(self._client, inner, command)
             await safe_progress(
                 ctx,
                 progress=3,
@@ -504,8 +501,9 @@ class HistoryTools:
             # is always present; then project the inner data dict in-place
             # when caller requested field projection.
             _r = await add_timezone_metadata(self._client, inner)
-            if parsed_fields is not None:
-                _r["data"] = project_fields(_r["data"], parsed_fields)
+            _r["data"] = project_fields(_r["data"], parsed_fields)
+            if warnings := _r["data"].pop("warnings", None):
+                _r["warnings"] = warnings
             return _r
 
         except ToolError:
@@ -890,41 +888,6 @@ def _next_month_start(value: datetime) -> datetime:
     )
 
 
-def _raise_recorder_ws_failure(
-    kind: str,
-    error_msg: str,
-    entity_id_list: list[str],
-    suggestions: list[str],
-) -> None:
-    """Raise the structured error for a failed recorder WS call.
-
-    The pooled ``send_websocket_message`` collapses transport failures into
-    ``{"success": False, "error": ...}`` — classify connection-shaped errors
-    as CONNECTION_FAILED (retry/connectivity guidance) instead of presenting
-    recorder-retention suggestions during an HA restart or WS outage.
-    """
-    if is_connection_error_message(error_msg):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                f"Failed to retrieve {kind}: {error_msg}",
-                context={"entity_ids": entity_id_list},
-                suggestions=[
-                    "Home Assistant may be restarting or unreachable — retry shortly",
-                    "Check the connection to Home Assistant",
-                ],
-            )
-        )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Failed to retrieve {kind}: {error_msg}",
-            context={"entity_ids": entity_id_list},
-            suggestions=suggestions,
-        )
-    )
-
-
 async def _fetch_history(
     client: Any,
     entity_id_list: list[str],
@@ -969,6 +932,7 @@ async def _fetch_history(
             "history",
             response.get("error", "Unknown error"),
             entity_id_list,
+            error_code=response.get("error_code"),
             suggestions=[
                 "Verify entity IDs exist using ha_search()",
                 "Check that entities are recorded (not excluded from recorder)",
@@ -1085,6 +1049,7 @@ async def _fetch_statistics(
             "statistics",
             response.get("error", "Unknown error"),
             entity_id_list,
+            error_code=response.get("error_code"),
             suggestions=[
                 "Verify entities have state_class attribute (measurement, total, total_increasing)",
                 "Use ha_search() to check entity attributes",
@@ -1093,8 +1058,22 @@ async def _fetch_statistics(
         )
 
     result_data = response.get("result", {})
+    entities_statistics = format_entity_statistics(
+        result_data,
+        entity_id_list,
+        period,
+        effective_offset,
+        effective_limit,
+        metadata,
+        metadata_failure,
+    )
+    resolved_units = {}
+    if command_params.get("units"):
+        resolved_units = await resolve_requested_units(
+            client, entities_statistics, command_params["units"]
+        )
     reset_warnings = await restore_reset_timestamps(
-        client, result_data, metadata, command_params
+        client, result_data, metadata, command_params, resolved_units
     )
     all_stat_types = (
         stat_types_list
@@ -1109,19 +1088,6 @@ async def _fetch_statistics(
             }
         )
     )
-    entities_statistics = format_entity_statistics(
-        result_data,
-        entity_id_list,
-        period,
-        effective_offset,
-        effective_limit,
-        metadata,
-        metadata_failure,
-    )
-    if command_params.get("units"):
-        await resolve_requested_units(
-            client, entities_statistics, command_params["units"]
-        )
 
     empty_entities: list[str] = [
         str(e["entity_id"]) for e in entities_statistics if e["count"] == 0

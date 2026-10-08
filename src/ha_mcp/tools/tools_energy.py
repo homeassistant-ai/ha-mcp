@@ -18,7 +18,11 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from .coercion import JSON_STRING_COERCION
-from .core_contract import command_payload, core_contract, validate_energy_proposal
+from .core_contract import (
+    command_payload,
+    include_core_contract,
+    validate_energy_proposal,
+)
 from .energy_preferences import (
     compute_per_key_hashes,
     get_energy_prefs,
@@ -213,7 +217,7 @@ class EnergyTools:
           top-level keys at once.
         - mode='add_device' / 'remove_device': add or remove a single
           device-consumption entry. The tool performs a fresh read-modify-write
-          internally; the caller does NOT manage config_hash.
+          internally.
         - mode='add_source': append a single entry to ``energy_sources``.
           Same optimistic read-modify-write semantics.
 
@@ -224,9 +228,7 @@ class EnergyTools:
         CAVEATS:
         - ``energy/save_prefs`` has per-key FULL-REPLACE semantics. Passing
           ``{"device_consumption": [<one entry>]}`` deletes every other device
-          the user had configured — silently, with no error. mode='set'
-          requires a fresh ``config_hash`` for optimistic locking; convenience
-          modes hide this entirely.
+          the user had configured — silently, with no error.
         - The per-key ``config_hash`` form lets an agent submit only the
           top-level key it wants to change: ``config`` keys must equal the dict
           keys, and a per-key submission still fully replaces
@@ -243,13 +245,16 @@ class EnergyTools:
           solar/battery/gas/water; grid entries are appended without a duplicate
           check (multiple grid variants are legitimate), so the caller
           de-duplicates grid sources.
+
+        EXAMPLES:
+        - ha_manage_energy_prefs(mode="get", include_schema=True)
+        - Preview a device: ha_manage_energy_prefs(mode="add_device", stat_consumption="sensor.fridge_energy", dry_run=True)
+        - Remove a device: ha_manage_energy_prefs(mode="remove_device", stat_consumption="sensor.fridge_energy")
         """
         if mode == "get":
             result = await self._get_prefs()
             if include_schema:
-                result["core_contract"] = await core_contract(
-                    self._client, "energy/save_prefs"
-                )
+                await include_core_contract(self._client, result, "energy/save_prefs")
             return (
                 await include_energy_statistics(self._client, result)
                 if include_statistics

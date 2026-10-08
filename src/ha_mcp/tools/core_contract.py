@@ -3,6 +3,8 @@
 import logging
 from typing import Any
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
@@ -14,6 +16,26 @@ from .component_api import (
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
+
+
+async def include_core_contract(
+    client: Any, result: dict[str, Any], command: str
+) -> None:
+    """Attach optional discovery without discarding an otherwise successful read."""
+    try:
+        contract = dict(await core_contract(client, command))
+    except ToolError:
+        logger.warning("Optional Core schema discovery failed", exc_info=True)
+        contract = {
+            "status": "unavailable",
+            "reason": "Core schema discovery failed; the read result is preserved.",
+        }
+    warnings = contract.pop("warnings", [])
+    if contract.get("status") == "unavailable":
+        warnings.append(contract["reason"])
+    if warnings:
+        result.setdefault("warnings", []).extend(warnings)
+    result["core_contract"] = contract
 
 
 async def core_contract(

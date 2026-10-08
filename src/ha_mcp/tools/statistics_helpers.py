@@ -104,7 +104,7 @@ def statistics_warnings(entities: list[dict[str, Any]]) -> list[str]:
 
 async def resolve_requested_units(
     client: Any, entities: list[dict[str, Any]], units: dict[str, Any]
-) -> None:
+) -> dict[str, dict[str, Any]]:
     """Resolve Core's actual converter or label explicit-unit output as unknown."""
     from ..client.websocket_client import get_websocket_client
     from .component_api import (
@@ -140,11 +140,15 @@ async def resolve_requested_units(
             entity["unit_source"] = "core_converter"
             entity.pop("unit_reason", None)
         else:
+            unit_class = (entity.get("statistics_metadata") or {}).get("unit_class")
+            if isinstance(unit_class, str) and unit_class not in units:
+                continue
             entity.update(
                 unit_of_measurement=None,
                 unit_source="unknown",
                 unit_reason="requested_unit_resolution_unavailable",
             )
+    return records
 
 
 def _parse_statistic_types(

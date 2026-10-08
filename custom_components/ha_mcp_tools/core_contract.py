@@ -190,4 +190,5 @@ async def statistics_metadata(
         if converter and converter.UNIT_CLASS in units:
             output = requested if requested in converter.VALID_UNITS else stored
         record["output_unit_of_measurement"] = output
+        record["conversion_unit_class"] = converter.UNIT_CLASS if converter else None
     return {"records": records}

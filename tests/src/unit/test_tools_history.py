@@ -210,7 +210,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ),
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _client, data: data,
+                side_effect=lambda _client, data: {"data": data, "metadata": {}},
             ),
         ):
             result = await history_tool(
@@ -218,7 +218,7 @@ class TestHaGetHistoryWorkloadGuardrails:
                 start_time="7d",
             )
 
-        assert result["success"] is True
+        assert result["data"]["success"] is True
         mock_client.send_websocket_message.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -374,7 +374,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ),
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _client, data: data,
+                side_effect=lambda _client, data: {"data": data, "metadata": {}},
             ),
         ):
             result = await history_tool(
@@ -383,7 +383,7 @@ class TestHaGetHistoryWorkloadGuardrails:
                 end_time="2026-02-01T00:00:00Z",
             )
 
-        assert result["success"] is True
+        assert result["data"]["success"] is True
         mock_client.send_websocket_message.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -405,7 +405,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ) as get_live_settings,
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _client, data: data,
+                side_effect=lambda _client, data: {"data": data, "metadata": {}},
             ),
         ):
             first_result = await history_tool(
@@ -420,7 +420,7 @@ class TestHaGetHistoryWorkloadGuardrails:
                     end_time="2026-02-01T00:00:00Z",
                 )
 
-        assert first_result["success"] is True
+        assert first_result["data"]["success"] is True
         assert get_live_settings.call_count == 2
         mock_client.send_websocket_message.assert_awaited_once()
 
@@ -439,7 +439,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ),
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _client, data: data,
+                side_effect=lambda _client, data: {"data": data, "metadata": {}},
             ),
         ):
             result = await history_tool(
@@ -447,7 +447,7 @@ class TestHaGetHistoryWorkloadGuardrails:
                 start_time="0h",
             )
 
-        assert result["success"] is True
+        assert result["data"]["success"] is True
         mock_client.send_websocket_message.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -559,7 +559,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ),
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _client, data: data,
+                side_effect=lambda _client, data: {"data": data, "metadata": {}},
             ),
         ):
             result = await history_tool(
@@ -570,7 +570,7 @@ class TestHaGetHistoryWorkloadGuardrails:
                 period="year",
             )
 
-        assert result["success"] is True
+        assert result["data"]["success"] is True
         assert mock_client.send_websocket_message.await_count == 2
 
     @pytest.mark.asyncio
@@ -797,8 +797,8 @@ class TestHaGetHistoryFieldsProjection:
             )
         data = result["data"]
         assert data["success"] is True
-        assert "warnings" in data
-        assert any("nonexistent" in w for w in data["warnings"])
+        assert "warnings" not in data
+        assert any("nonexistent" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
     async def test_malformed_fields_raises_tool_error(self, history_tool):
@@ -939,8 +939,8 @@ class TestHaGetHistoryStatisticsFieldsProjection:
             )
         data = result["data"]
         assert data["success"] is True
-        assert "warnings" in data
-        assert any("nonexistent" in w for w in data["warnings"])
+        assert "warnings" not in data
+        assert any("nonexistent" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
     async def test_malformed_fields_raises_tool_error(self, history_tool):
@@ -1054,7 +1054,7 @@ class TestHaGetHistoryPooledTransport:
         tool = HistoryTools(client).ha_get_history
         with patch(
             "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
         ):
             await tool(entity_ids="sensor.temp")
 

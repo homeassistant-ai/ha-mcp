@@ -91,7 +91,7 @@ class TestStatisticTypesValidation:
         self._mock_client.send_websocket_message = capturing_send
         with patch(
             "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -116,7 +116,7 @@ class TestStatisticTypesValidation:
         self._mock_client.send_websocket_message = capturing_send
         with patch(
             "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -140,7 +140,7 @@ class TestStatisticTypesValidation:
         self._mock_client.send_websocket_message = capturing_send
         with patch(
             "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
         ):
             await history_tool(
                 entity_ids="sensor.test",

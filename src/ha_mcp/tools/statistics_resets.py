@@ -10,24 +10,37 @@ def _reset_groups(
     rows_by_id: dict[str, Any],
     metadata: dict[str, dict[str, Any]],
     query: dict[str, Any],
-) -> tuple[dict[tuple[str, str | None], list[str]], set[str]]:
-    groups: dict[tuple[str, str | None], list[str]] = {}
+    resolved_units: dict[str, dict[str, Any]],
+) -> tuple[dict[tuple[str | None, str | None], list[str]], set[str]]:
+    groups: dict[tuple[str | None, str | None], list[str]] = {}
     unresolved: set[str] = set()
     for statistic_id, rows in rows_by_id.items():
         if not any(row.get("last_reset") is not None for row in rows):
             continue
-        record = metadata.get(statistic_id, {})
+        record = resolved_units.get(statistic_id) or metadata.get(statistic_id, {})
         stored = record.get("statistics_unit_of_measurement")
         unit_class = record.get("unit_class")
-        if (
-            not query.get("units")
-            and "display_unit_of_measurement" in record
+        resolved = resolved_units.get(statistic_id, {})
+        if "conversion_unit_class" in resolved:
+            if resolved["output_unit_of_measurement"] == stored:
+                continue
+            unit_class = resolved["conversion_unit_class"]
+        unchanged_default = (
+            "display_unit_of_measurement" in record
             and "statistics_unit_of_measurement" in record
             and record["display_unit_of_measurement"] == stored
+        )
+        if unchanged_default and (
+            not query.get("units")
+            or (isinstance(unit_class, str) and unit_class not in query["units"])
         ):
             continue
         if isinstance(unit_class, str) and "statistics_unit_of_measurement" in record:
             groups.setdefault((unit_class, stored), []).append(statistic_id)
+        elif unchanged_default:
+            # Core's default output is stored-unit data even when its converter
+            # class cannot be discovered. Clear explicit units on the reset query.
+            groups.setdefault((None, stored), []).append(statistic_id)
         else:
             unresolved.add(statistic_id)
     return groups, unresolved
@@ -58,6 +71,7 @@ async def restore_reset_timestamps(
     rows_by_id: dict[str, Any],
     metadata: dict[str, dict[str, Any]],
     query: dict[str, Any],
+    resolved_units: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
     """Read resets in their stored unit to avoid Core converting timestamps.
 
@@ -66,7 +80,9 @@ async def restore_reset_timestamps(
     and remains correct when Core fixes it. Group by native class/stored unit
     because one query's unit option applies to every statistic in that class.
     """
-    groups, unresolved = _reset_groups(rows_by_id, metadata, query)
+    groups, unresolved = _reset_groups(
+        rows_by_id, metadata, query, resolved_units or {}
+    )
     for (unit_class, stored), ids in groups.items():
         try:
             response = await client.send_websocket_message(
@@ -75,7 +91,7 @@ async def restore_reset_timestamps(
                     "type": "recorder/statistics_during_period",
                     "statistic_ids": ids,
                     "types": ["last_reset"],
-                    "units": {unit_class: stored},
+                    "units": {unit_class: stored} if unit_class else {},
                 }
             )
             result = response.get("result") if response.get("success") else None

@@ -58,7 +58,7 @@ def test_bridge_cannot_validate_arbitrary_commands() -> None:
 
 @pytest.mark.asyncio
 async def test_uncertain_capability_discovery_is_not_reported_as_absence(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from unittest.mock import AsyncMock
 
@@ -73,7 +73,9 @@ async def test_uncertain_capability_discovery_is_not_reported_as_absence(
 
 
 @pytest.mark.asyncio
-async def test_invalid_native_result_is_a_tool_error(monkeypatch) -> None:
+async def test_invalid_native_result_is_a_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from unittest.mock import AsyncMock
 
     from ha_mcp._vendor.fastmcp.exceptions import ToolError
