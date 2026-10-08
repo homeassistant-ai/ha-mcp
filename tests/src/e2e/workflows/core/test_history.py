@@ -61,7 +61,7 @@ class TestGetHistory:
             if entity_history.get("states"):
                 first_state = entity_history["states"][0]
                 logger.info(
-                    f"First state: {first_state.get('s')} at {first_state.get('lc', first_state.get('lu'))}"
+                    f"First state: {first_state.get('state')} at {first_state.get('last_changed', first_state.get('last_updated'))}"
                 )
         else:
             logger.info("No history data available (may be normal for short periods)")
@@ -225,8 +225,8 @@ class TestGetHistory:
             first_state = inner_data["entities"][0]["states"][0]
             logger.info(f"Full response state fields: {list(first_state.keys())}")
             # Full response should include attributes
-            if "a" in first_state:
-                logger.info(f"Attributes included: {list(first_state['a'].keys())}")
+            if "attributes" in first_state:
+                logger.info(f"Attributes included: {list(first_state['attributes'].keys())}")
 
     async def test_get_history_nonexistent_entity(self, mcp_client):
         """Test history for non-existent entity."""
@@ -286,7 +286,7 @@ class TestGetHistory:
         ha_client: HomeAssistantClient,
         minimal: bool,
     ) -> None:
-        """Return Core's exact rows, including timestamps and optional attributes."""
+        """Readable names retain all Core values, with no synthesized duplicate fields."""
         end = datetime.now(UTC) - timedelta(minutes=1)
         start = end - timedelta(days=1)
         native = await ha_client.send_websocket_message(
@@ -317,7 +317,24 @@ class TestGetHistory:
                 },
             )
         )
-        assert result["data"]["entities"][0]["states"] == expected
+        actual = result["data"]["entities"][0]["states"]
+        assert len(actual) == len(expected)
+        for row, native_row in zip(actual, expected, strict=True):
+            remaining = dict(row)
+            for native_key, readable_key in (
+                ("s", "state"), ("a", "attributes"),
+                ("lu", "last_updated"), ("lc", "last_changed"),
+            ):
+                if native_key in native_row:
+                    assert remaining.pop(readable_key) == native_row[native_key]
+                    assert native_key not in row
+                else:
+                    assert readable_key not in row
+            assert remaining == {
+                key: value for key, value in native_row.items()
+                if key not in {"s", "a", "lu", "lc"}
+            }
+            assert len(row) == len(native_row)
 
 
 @pytest.mark.asyncio

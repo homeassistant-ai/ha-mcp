@@ -59,18 +59,21 @@ Unrequested classes retain their native display-unit labels. Core parameter
 rejections retain Core's message and are reported as invalid parameters, rather
 than as recorder service failures.
 
-History rows pass through Core's original fields without synthesized aliases:
+History rows rename only the compact keys Core actually returns, once:
 
-| Core field | Meaning | Former HA-MCP alias |
+| Returned field | Core field | Meaning |
 |---|---|---|
-| `s` | State value | `state` |
-| `a` | Attributes, when included | `attributes` |
-| `lu` | Last updated, as Unix seconds | `last_updated` |
-| `lc` | Last changed, as Unix seconds; omitted when equal to `lu` | `last_changed` |
+| `state` | `s` | State value |
+| `attributes` | `a` | Attributes, when included |
+| `last_updated` | `lu` | Last updated, as Unix seconds |
+| `last_changed` | `lc` | Last changed, as Unix seconds |
 
-The former aliases are no longer added. Callers using them should read the native
-keys instead and format numeric timestamps only when needed. Unknown future
-Core fields also pass through. Minimal responses may omit attributes.
+Values are unchanged: timestamps remain numeric, and attributes are not rewritten.
+No duplicate aliases or defaults are added for absent fields. When Core omits
+`lc`, `last_changed` is absent and its time equals `last_updated`. Minimal
+responses may omit attributes. New or renamed Core fields pass through under
+their native names. If a readable name collides with another native field, both
+original fields are preserved under their Core names rather than overwritten.
 The `fields` parameter selects keys within `data`; response-level warnings and
 timezone metadata are always retained. `include_schema=True` also retains
 `core_contract` through field projection.

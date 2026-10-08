@@ -5,14 +5,19 @@ frontend files Home Assistant serves. Without the component there is no source
 for either: describe reports that, and writes carry no card warnings.
 """
 
+import logging
 import re
 from uuid import uuid4
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client
+
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_tool_result
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
@@ -142,7 +147,7 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_client):
+async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_client: Client) -> None:
     """A card from a dashboard resource answers for itself, like a HACS card."""
     mcp = MCPAssertions(mcp_client)
     if not component_surface_available():
@@ -201,6 +206,7 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(mcp_cl
                 "MandatoryBPS": False,
             },
         )
+        logger.info("Custom-card validation response: %s", result)
         warnings = "\n".join(result.get("warnings", []))
         assert (
             "views[0].cards[0] (custom:e2e-custom-card): "

@@ -60,6 +60,21 @@ _RELATIVE_TIME_UNIT_SECONDS = {
 }
 
 
+_HISTORY_FIELD_NAMES = {
+    "s": "state", "a": "attributes", "lu": "last_updated", "lc": "last_changed",
+}
+
+
+def _readable_history_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Rename present compact keys once; preserve unknown or colliding native keys."""
+    result = {}
+    for key, value in row.items():
+        name = _HISTORY_FIELD_NAMES.get(key, key)
+        # If Core supplies both names, keep both original fields without overwriting.
+        result[key if name in row else name] = value
+    return result
+
+
 def parse_relative_time(
     time_str: str | None,
     default_hours: int = 24,
@@ -340,12 +355,13 @@ class HistoryTools:
         long-term trends and period averages.
 
         CAVEATS:
-        History rows use Core's original keys: s = state, a = attributes,
-        lu = last updated, lc = last changed. Timestamps are Unix seconds;
-        omitted lc means it equals lu. Statistics timestamps use Unix milliseconds.
-        Minimal history responses may omit attributes.
-        No renamed copies are added. include_schema=True retains core_contract
-        even when fields selects other data keys.
+        History rows rename Core's compact keys once: s -> state, a -> attributes,
+        lu -> last_updated, lc -> last_changed. Values and unknown fields pass
+        through unchanged. Timestamps are Unix seconds; when Core omits lc,
+        last_changed is absent and its time equals last_updated. Statistics
+        timestamps use Unix milliseconds. Minimal history may omit attributes.
+        No duplicate aliases or missing-field defaults are added. include_schema=True
+        retains core_contract even when fields selects other data keys.
 
         Output units come from
         Core recorder metadata and reflect its display-unit conversion; unresolved
@@ -958,7 +974,7 @@ async def _fetch_history(
                     "start": start_dt.isoformat(),
                     "end": end_dt.isoformat(),
                 },
-                "states": paged_states,
+                "states": [_readable_history_row(row) for row in paged_states],
                 **pagination,
             }
         )
