@@ -84,6 +84,7 @@ async def test_core_display_conversion_labels_the_converted_values(
                 )
                 == 3
                 and entity.get("statistics_metadata") is not None
+                and entity.get("unit_of_measurement") == stored
             ),
             description="imported recorder statistics and metadata visible",
             timeout=30,

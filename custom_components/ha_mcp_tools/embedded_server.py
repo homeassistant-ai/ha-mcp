@@ -49,7 +49,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.requirements import (
     RequirementsNotFound,
     async_process_requirements,
-    pip_kwargs,
 )
 from homeassistant.util.package import is_virtual_env
 from packaging.requirements import InvalidRequirement, Requirement
@@ -97,6 +96,7 @@ from .dependency_diagnostics import (
     requirement_forces_conflict,
     root_import_failure,
 )
+from .pip_compat import pip_kwargs
 
 if TYPE_CHECKING:
     from collections.abc import Callable
