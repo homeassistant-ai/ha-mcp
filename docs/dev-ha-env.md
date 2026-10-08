@@ -61,6 +61,8 @@ Run it **from your fork only**. The job refuses to run in
      as HACS does, and restarts Home Assistant.
 
    The job log's `STATUS` lines show the running commit and any update error.
+   An embedded server that fails to come up at boot is reported there too;
+   Home Assistant stays up, so push the fix to the branch.
 
    The instance is a normal HA you can change. On HAOS, change the Core
    version from Settings → System → Updates, or run
