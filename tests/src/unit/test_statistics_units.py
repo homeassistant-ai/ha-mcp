@@ -1,6 +1,7 @@
 """Recorder values must be labelled from Core metadata, never current states."""
 
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -117,3 +118,26 @@ async def test_unitless_metadata_is_distinguished_from_failed_lookup(
     assert entity["unit_of_measurement"] is None
     assert entity["unit_source"] == "recorder_metadata"
     assert entity["unit_reason"] == "statistics_are_unitless"
+
+
+@pytest.mark.asyncio
+async def test_import_committing_between_reads_never_yields_rows_without_unit() -> None:
+    """Core commits an import's rows and metadata together; here, after our first read."""
+    reads = 0
+
+    async def dispatch(message: dict[str, Any]) -> dict[str, Any]:
+        nonlocal reads
+        committed = reads > 0
+        reads += 1
+        if message["type"] == "recorder/get_statistics_metadata":
+            return {"success": True, "result": [metadata()] if committed else []}
+        rows = [{"start": 1000, "sum": 1.0}] if committed else []
+        return {"success": True, "result": {"sensor.energy": rows}}
+
+    client = MagicMock(send_websocket_message=AsyncMock(side_effect=dispatch))
+    result = await _fetch_statistics(
+        client, ["sensor.energy"], START, END, "hour", None, 1, 0
+    )
+
+    entity = result["entities"][0]
+    assert not entity["statistics"] or entity["unit_of_measurement"] == "kWh", entity

@@ -545,8 +545,8 @@ class TestHaGetHistoryWorkloadGuardrails:
         self, history_tool, mock_client
     ):
         mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": []},
             {"success": True, "result": {}},
+            {"success": True, "result": []},
         ]
         with (
             patch(

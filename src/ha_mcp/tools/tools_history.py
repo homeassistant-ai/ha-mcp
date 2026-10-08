@@ -1021,7 +1021,6 @@ async def _fetch_statistics(
     if stat_types_list is None:
         command_params.pop("types")
 
-    metadata, metadata_failure = await fetch_statistics_metadata(client, entity_id_list)
     response = await client.send_websocket_message(
         {"type": "recorder/statistics_during_period", **command_params}
     )
@@ -1040,6 +1039,7 @@ async def _fetch_statistics(
         )
 
     result_data = response.get("result", {})
+    metadata, metadata_failure = await fetch_statistics_metadata(client, entity_id_list)
     entities_statistics = format_entity_statistics(
         result_data,
         entity_id_list,
