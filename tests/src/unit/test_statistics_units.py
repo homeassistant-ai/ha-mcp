@@ -120,20 +120,23 @@ async def test_unitless_metadata_is_distinguished_from_failed_lookup(
 
 
 @pytest.mark.asyncio
-async def test_metadata_is_read_after_the_rows():
-    """An import commits rows and metadata together: rows first, then metadata."""
-    sent: list[str] = []
+async def test_import_committing_between_reads_never_yields_rows_without_unit():
+    """Core commits an import's rows and metadata together; here, after our first read."""
+    reads = 0
 
     async def dispatch(message):
-        sent.append(message["type"])
+        nonlocal reads
+        committed = reads > 0
+        reads += 1
         if message["type"] == "recorder/get_statistics_metadata":
-            return {"success": True, "result": [metadata()]}
-        return {"success": True, "result": {"sensor.energy": [{"start": 1000}]}}
+            return {"success": True, "result": [metadata()] if committed else []}
+        rows = [{"start": 1000, "sum": 1.0}] if committed else []
+        return {"success": True, "result": {"sensor.energy": rows}}
 
     client = MagicMock(send_websocket_message=AsyncMock(side_effect=dispatch))
-    await _fetch_statistics(client, ["sensor.energy"], START, END, "hour", None, 1, 0)
+    result = await _fetch_statistics(
+        client, ["sensor.energy"], START, END, "hour", None, 1, 0
+    )
 
-    assert sent == [
-        "recorder/statistics_during_period",
-        "recorder/get_statistics_metadata",
-    ]
+    entity = result["entities"][0]
+    assert not entity["statistics"] or entity["unit_of_measurement"] == "kWh", entity
