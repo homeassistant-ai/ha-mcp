@@ -56,9 +56,11 @@ async def test_core_display_conversion_labels_the_converted_values(
             mcp_client,
             tool_name="ha_get_history",
             arguments=args,
+            # Rows can be visible before their metadata, which carries the unit.
             predicate=lambda d: (
                 len(d.get("data", d).get("entities", [{}])[0].get("statistics", []))
                 == 3
+                and d.get("data", d)["entities"][0].get("unit_of_measurement") == "MWh"
             ),
             description="imported recorder statistics visible",
             timeout=30,
