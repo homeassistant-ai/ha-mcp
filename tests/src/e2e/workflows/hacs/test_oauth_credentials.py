@@ -110,15 +110,17 @@ async def test_hacs_uses_admin_oauth_session_instead_of_global_placeholder(
         async with httpx.AsyncClient(base_url=base_url) as http:
             token = await _authorize(http, container.get("token", TEST_TOKEN))
         transport = StreamableHttpTransport(f"{base_url}/e2e-nudge-probe", auth=token)
-        async with Client(transport, timeout=60) as client:
-            async with MCPAssertions(client) as mcp:
-                await mcp.call_tool_success(
-                    "ha_get_hacs_info",
-                    {"action": "search", "installed_only": True},
-                )
-                await mcp.call_tool_success(
-                    "ha_config_get_dashboard", {"list_only": True}
-                )
+        async with (
+            Client(transport, timeout=60) as client,
+            MCPAssertions(client) as mcp,
+        ):
+            await mcp.call_tool_success(
+                "ha_get_hacs_info",
+                {"action": "search", "installed_only": True},
+            )
+            await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"list_only": True}
+            )
     finally:
         logger.info("OAuth launcher output:\n%s", launcher.output())
         await launcher.aclose()
