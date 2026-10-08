@@ -342,9 +342,10 @@ class TestGetHistory:
             ):
                 value = remaining.pop(readable_key)
                 parsed = datetime.fromisoformat(value)
-                assert parsed.timestamp() == native_row.get(
-                    native_key, native_row["lu"]
-                )
+                # Python datetimes retain microseconds; Core floats can be finer.
+                assert parsed.timestamp() == pytest.approx(
+                    native_row.get(native_key, native_row["lu"]), abs=1e-6, rel=0
+                ), (value, parsed.timestamp(), native_row)
                 assert (
                     parsed.utcoffset() == parsed.astimezone(local_timezone).utcoffset()
                 )
