@@ -20,6 +20,7 @@ from ...utilities.wait_helpers import wait_for_tool_result
     [
         ("MWh", "kWh", "energy", [1000.0, 1250.0, 1500.0]),
         ("%", None, "unitless", [0.01, 0.0125, 0.015]),
+        ("kWh", "Wh", None, [1000.0, 1250.0, 1500.0]),
     ],
 )
 async def test_core_display_conversion_labels_the_converted_values(
@@ -27,7 +28,7 @@ async def test_core_display_conversion_labels_the_converted_values(
     ha_client: HomeAssistantClient,
     stored: str,
     display: str | None,
-    unit_class: str,
+    unit_class: str | None,
     expected: list[float],
 ) -> None:
     """Conversion changes numeric values and units, never reset timestamps."""
@@ -112,23 +113,36 @@ async def test_core_display_conversion_labels_the_converted_values(
         assert entity["statistics"][1]["change"] == pytest.approx(
             expected[1] - expected[0]
         )
-        assert [r["last_reset"] for r in entity["statistics"]] == [
-            int(reset.timestamp() * 1000)
-        ] * 3
+        can_recover_reset = unit_class is not None or component_surface_available()
+        if can_recover_reset:
+            assert [r["last_reset"] for r in entity["statistics"]] == [
+                int(reset.timestamp() * 1000)
+            ] * 3
+        else:
+            assert all("last_reset" not in row for row in entity["statistics"])
+            assert any(
+                "last_reset omitted" in warning for warning in result["warnings"]
+            )
         explicit = assert_mcp_success(
             await mcp_client.call_tool(
                 "ha_get_history",
                 {
                     **args,
                     "statistic_types": ["last_reset"],
-                    "core_options": {"units": {unit_class: display}},
+                    "core_options": {"units": {unit_class or "energy": display}},
                 },
             )
         )
         explicit_entity = explicit.get("data", explicit)["entities"][0]
-        assert [r["last_reset"] for r in explicit_entity["statistics"]] == [
-            int(reset.timestamp() * 1000)
-        ] * 3
+        if can_recover_reset:
+            assert [r["last_reset"] for r in explicit_entity["statistics"]] == [
+                int(reset.timestamp() * 1000)
+            ] * 3
+        else:
+            assert all("last_reset" not in row for row in explicit_entity["statistics"])
+            assert any(
+                "last_reset omitted" in warning for warning in explicit["warnings"]
+            )
         if component_surface_available():
             assert explicit_entity["unit_of_measurement"] == display
             assert explicit_entity["unit_source"] == "core_converter"

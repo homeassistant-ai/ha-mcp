@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from .helper_collections import _INVALID_ERRORS, _convert, _optional_attr
@@ -58,7 +59,7 @@ def validate_request(
     return {"status": "validated", "valid": True, "errors": []}
 
 
-def _core_serializer(node: Any) -> Any:
+def _core_serializer(node: Any, *, strict: bool = False) -> Any:
     """Describe Core's opaque discriminated unions from their live schema objects.
 
     cv.key_value_schemas closes over its alternatives instead of publishing a
@@ -78,7 +79,11 @@ def _core_serializer(node: Any) -> Any:
         return _UNSUPPORTED
     return {
         "anyOf": [
-            _TO_JSON_SCHEMA(schema, custom_serializer=_core_serializer)
+            _TO_JSON_SCHEMA(
+                schema,
+                strict=strict,
+                custom_serializer=partial(_core_serializer, strict=strict),
+            )
             for schema in alternatives.values()
         ]
     }
@@ -94,9 +99,11 @@ def describe_contract(hass: HomeAssistant, command: str) -> dict[str, Any]:
         if _TO_JSON_SCHEMA is not None:
             try:
                 result["schema"] = _TO_JSON_SCHEMA(
-                    schema, strict=True, custom_serializer=_core_serializer
+                    schema,
+                    strict=True,
+                    custom_serializer=partial(_core_serializer, strict=True),
                 )
-                result["description_complete"] = False
+                result["description_complete"] = True
             except Exception:
                 _LOGGER.debug("Core contract needs lossy serialization", exc_info=True)
                 result["schema"] = _TO_JSON_SCHEMA(
@@ -170,7 +177,7 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
 async def statistics_metadata(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
-    """Resolve explicit-unit labels with Core's converter selection, not a unit table."""
+    """Resolve default and explicit output with Core's converter selection."""
     from homeassistant.components.recorder.statistics import (
         _get_unit_converter,
         async_list_statistic_ids,

@@ -240,3 +240,92 @@ async def test_unknown_converter_can_recover_resets_in_unchanged_default_units()
     )
     assert rows["sensor.cost"][0]["last_reset"] == 800
     assert client.send_websocket_message.call_args.args[0]["units"] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("component", [True, False])
+async def test_default_conversion_recovers_null_class_reset_without_losing_unit(
+    monkeypatch: pytest.MonkeyPatch, component: bool
+) -> None:
+    from ha_mcp.client import websocket_client
+    from ha_mcp.tools import component_api
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    metadata = {
+        "statistic_id": "sensor.energy",
+        "unit_class": None,
+        "statistics_unit_of_measurement": "kWh",
+        "display_unit_of_measurement": "Wh",
+    }
+    ws = Mock(
+        send_command=AsyncMock(
+            return_value={
+                "result": {
+                    "records": [
+                        {
+                            **metadata,
+                            "conversion_unit_class": "energy",
+                            "output_unit_of_measurement": "Wh",
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(
+        component_api,
+        "get_component_caps",
+        AsyncMock(
+            return_value=(
+                component_api.ComponentCaps(1, "test", frozenset({"core_contract"}), {})
+                if component
+                else None
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        websocket_client, "get_websocket_client", AsyncMock(return_value=ws)
+    )
+    client = Mock(
+        base_url="http://test",
+        token="test",
+        verify_ssl=True,
+        send_websocket_message=AsyncMock(
+            side_effect=[
+                {"success": True, "result": [metadata]},
+                {
+                    "success": True,
+                    "result": {
+                        "sensor.energy": [
+                            {"start": 1000, "sum": 1000, "last_reset": 900000}
+                        ]
+                    },
+                },
+                {
+                    "success": True,
+                    "result": {"sensor.energy": [{"start": 1000, "last_reset": 900}]},
+                },
+            ]
+        ),
+    )
+    result = await tools_history._fetch_statistics(
+        client,
+        ["sensor.energy"],
+        start,
+        start + timedelta(hours=1),
+        "hour",
+        ["sum", "last_reset"],
+        10,
+        0,
+    )
+    entity = result["entities"][0]
+    assert entity["unit_of_measurement"] == "Wh"
+    if component:
+        assert entity["statistics"][0]["last_reset"] == 900
+        assert client.send_websocket_message.call_args.args[0]["units"] == {
+            "energy": "kWh"
+        }
+    else:
+        assert "last_reset" not in entity["statistics"][0]
+        assert result["warnings"]
+        ws.send_command.assert_not_called()

@@ -105,7 +105,7 @@ def statistics_warnings(entities: list[dict[str, Any]]) -> list[str]:
 async def resolve_requested_units(
     client: Any, entities: list[dict[str, Any]], units: dict[str, Any]
 ) -> dict[str, dict[str, Any]]:
-    """Resolve Core's actual converter or label explicit-unit output as unknown."""
+    """Resolve explicit units and default converters absent from recorder metadata."""
     from ..client.websocket_client import get_websocket_client
     from .component_api import (
         component_supports,
@@ -114,6 +114,17 @@ async def resolve_requested_units(
         is_unknown_command,
     )
 
+    if not units:
+        entities = [
+            entity
+            for entity in entities
+            if (record := entity.get("statistics_metadata"))
+            and record.get("unit_class") is None
+            and record.get("display_unit_of_measurement")
+            != record.get("statistics_unit_of_measurement")
+        ]
+    if not entities:
+        return {}
     records: dict[str, dict[str, Any]] = {}
     try:
         caps = await get_component_caps(client)
@@ -132,7 +143,11 @@ async def resolve_requested_units(
     except Exception as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)
-        logger.warning("Explicit statistics unit resolution failed", exc_info=True)
+        logger.warning("Statistics converter resolution failed", exc_info=True)
+    if not units:
+        # Default labels already come from recorder metadata; this lookup only
+        # supplies converter classes needed to recover reset timestamps.
+        return records
     for entity in entities:
         record = records.get(entity["entity_id"])
         if record is not None and "output_unit_of_measurement" in record:

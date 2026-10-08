@@ -27,7 +27,7 @@ def raise_recorder_ws_failure(
                 context={"entity_ids": entity_id_list, "ha_error_code": error_code},
                 suggestions=[
                     "Correct the parameter named in Home Assistant's validation message",
-                    "Use include_schema=True on a valid read to inspect the running Core schema",
+                    "With the HA-MCP component installed and supporting schema discovery, use include_schema=True on a valid read to inspect the running Core schema",
                 ],
             )
         )

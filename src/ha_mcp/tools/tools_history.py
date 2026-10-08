@@ -326,10 +326,10 @@ class HistoryTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys to reduce response "
+                    "Return only the specified keys within data to reduce response "
                     "size. None = full response. History keys: success, source, entities, "
                     "period, query_params. Statistics keys: success, source, entities, "
-                    "period_type, time_range, statistic_types, query_params, warnings."
+                    "period_type, time_range, statistic_types, query_params. Warnings and timezone metadata remain outside data and are always retained."
                 ),
             ),
         ] = None,
@@ -1067,11 +1067,9 @@ async def _fetch_statistics(
         metadata,
         metadata_failure,
     )
-    resolved_units = {}
-    if command_params.get("units"):
-        resolved_units = await resolve_requested_units(
-            client, entities_statistics, command_params["units"]
-        )
+    resolved_units = await resolve_requested_units(
+        client, entities_statistics, command_params.get("units", {})
+    )
     reset_warnings = await restore_reset_timestamps(
         client, result_data, metadata, command_params, resolved_units
     )
