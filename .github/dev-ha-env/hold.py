@@ -39,6 +39,7 @@ from haos_runtime import (
     SSH_ADDON_PASSWORD,
     SSH_ADDON_USER,
     SSHPASS_BIN,
+    STABLE_ADDON_FILES,
     _build_embedded_server_wheel,
     _home_assistant_ws_command,
     _ssh_debug_host_port,
@@ -60,7 +61,7 @@ APP_PATHS = (
     *SERVER_PATHS,
     *DEV_ADDON_REPO_FILES,
     "homeassistant-addon-dev/",
-    "homeassistant-addon/start.py",
+    *(f"homeassistant-addon/{name}" for name in STABLE_ADDON_FILES),
 )
 # A failed update is retried on later polls this many times before it waits
 # for the next commit.
@@ -150,10 +151,8 @@ def build_dev_addon_source_tar(workdir: Path, sha: str) -> Path:
 
     # Same file-shaping as build_image.stage_dev_addon_source so the
     # build context matches what the cached Docker layers expect.
-    _shutil.copy(
-        repo_root / "homeassistant-addon" / "start.py",
-        staging / "start.py",
-    )
+    for name in STABLE_ADDON_FILES:
+        _shutil.copy(repo_root / "homeassistant-addon" / name, staging / name)
     for name in DEV_ADDON_REPO_FILES:
         (staging / name).parent.mkdir(parents=True, exist_ok=True)
         _shutil.copy(repo_root / name, staging / name)
@@ -165,12 +164,12 @@ def build_dev_addon_source_tar(workdir: Path, sha: str) -> Path:
 
     # Dockerfile shape fixup (same as bake).
     dockerfile = staging / "Dockerfile"
-    dockerfile.write_text(
-        dockerfile.read_text().replace(
-            "COPY homeassistant-addon/start.py /",
-            "COPY start.py /",
+    patched = dockerfile.read_text()
+    for name in STABLE_ADDON_FILES:
+        patched = patched.replace(
+            f"COPY homeassistant-addon/{name} /", f"COPY {name} /"
         )
-    )
+    dockerfile.write_text(patched)
 
     # Strip image: from config.yaml — Supervisor pulls from GHCR when
     # image: is set, but the per-PR version we bump to below doesn't
