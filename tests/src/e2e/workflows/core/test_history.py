@@ -330,7 +330,8 @@ class TestGetHistory:
                 ("lc", "last_changed"),
             ):
                 if native_key in native_row:
-                    assert remaining.pop(readable_key) == native_row[native_key]
+                    value = remaining.pop(readable_key)
+                    assert value == native_row[native_key]
                     assert native_key not in row
                 else:
                     assert readable_key not in row
