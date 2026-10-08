@@ -1,0 +1,136 @@
+"""Broken installed cards must stay within their resource budgets."""
+
+from __future__ import annotations
+
+import threading
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from .test_card_definitions import cc
+
+
+@pytest.mark.parametrize("module", [False, True])
+def test_all_quickjs_context_operations_use_the_creating_thread(
+    monkeypatch, module
+) -> None:
+    import quickjs
+
+    context_type = quickjs.Context
+    calls: list[int] = []
+
+    class TrackedContext:
+        def __init__(self):
+            calls.append(threading.get_ident())
+            self.context = context_type()
+
+        def __getattr__(self, name):
+            method = getattr(self.context, name)
+
+            def tracked(*args):
+                calls.append(threading.get_ident())
+                return method(*args)
+
+            return tracked
+
+    monkeypatch.setattr(quickjs, "Context", TrackedContext)
+    # This test covers native thread ownership; the real DOM is fetched through
+    # the production cold-cache path in E2E, never vendored into fixtures.
+    dom = """
+    globalThis.__linkedom = {
+      HTMLElement: class HTMLElement {},
+      parseHTML: function () { return {
+        document: {}, customElements: {define: function () {}}
+      }; }
+    };
+    """
+    source = (
+        "globalThis.modeOK = this === "
+        + ("undefined;" if module else "globalThis;")
+        + ("void import.meta; export " if module else "")
+        + "class Card extends HTMLElement {setConfig(c) {if (!modeOK) throw new Error('wrong mode');}}"
+        + "customElements.define('a-card', Card);"
+    )
+    bundle = cc._Bundle(dom, source, module=module)
+    assert bundle.check("a-card", {}) == []
+    bundle.form("a-card")
+    assert bundle.memory > 0
+    bundle.close()
+    assert not hasattr(bundle.engine, "_context")
+    with pytest.raises(RuntimeError, match="shutdown"):
+        bundle.engine._threadpool.submit(lambda: None)
+    assert len(set(calls)) == 1
+
+
+def test_only_requested_editors_are_prepared_and_cached(monkeypatch) -> None:
+    import quickjs
+
+    clock = [0.0]
+    prepared = []
+
+    def call(op, payload):
+        if op == "cards":
+            return {"value": {"tags": list(range(100)), "cards": []}}
+        if op == "prepare":
+            clock[0] += 1
+            prepared.append(payload)
+            return {"value": True}
+        return {}
+
+    monkeypatch.setattr(
+        quickjs, "Function", MagicMock(return_value=MagicMock(side_effect=call))
+    )
+    monkeypatch.setattr(cc.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cc._Bundle, "_settle", lambda self: None)
+    monkeypatch.setattr(cc, "_PREPARE_SECONDS", 2, raising=False)
+    bundle = cc._Bundle("dom", "source")
+    assert prepared == []
+    bundle._prepare_tag("one-card")
+    bundle._prepare_tag("one-card")
+    assert prepared == [{"tag": "one-card"}]
+
+    def too_slow(self):
+        clock[0] += cc._CALL_SECONDS + 1
+        self._limit_preparation()
+
+    monkeypatch.setattr(cc._Bundle, "_settle", too_slow)
+    with pytest.raises(TimeoutError):
+        bundle._prepare_tag("slow-card")
+    assert "slow-card" not in bundle._prepared
+
+
+@pytest.mark.asyncio
+async def test_linkedom_download_stops_before_buffering_an_oversized_response(
+    tmp_path, monkeypatch
+) -> None:
+    import sys
+
+    consumed = []
+
+    async def chunks(size):
+        for i in range(20):
+            consumed.append(i)
+            yield b"x" * 8
+
+    response = MagicMock()
+    response.content.iter_chunked = chunks
+    response.read = AsyncMock(return_value=b"x" * 160)
+    session = MagicMock()
+    session.get.return_value.__aenter__ = AsyncMock(return_value=response)
+    monkeypatch.setitem(
+        sys.modules,
+        "homeassistant.helpers.aiohttp_client",
+        SimpleNamespace(async_get_clientsession=lambda hass: session),
+    )
+    monkeypatch.setattr(cc, "_dom_failed_at", None)
+    monkeypatch.setattr(cc, "_MAX_DOM_DOWNLOAD_BYTES", 16, raising=False)
+    transform = MagicMock(return_value="oversized content was accepted")
+    monkeypatch.setattr(cc, "dom_script", transform)
+    hass = MagicMock()
+    hass.config.path.side_effect = lambda *parts: str(tmp_path.joinpath(*parts))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *args: fn(*args))
+    assert await cc._async_dom(hass) is None
+    transform.assert_not_called()
+    response.read.assert_not_awaited()
+    assert len(consumed) < 20

@@ -156,8 +156,10 @@ ignore_errors = true
 module = [
     "homeassistant.*",
     "awesomeversion",
+    "hass_frontend",
     "jsonschema",
     "psutil",
+    "quickjs",
 ]
 ignore_missing_imports = true
 
@@ -390,6 +392,8 @@ dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",
     "pytest-timeout>=2.3.0",
+    # Exercise the component's real sandbox thread affinity in focused unit tests.
+    "quickjs-ng==0.17.0.1",
     "pytest-rerunfailures>=15.0",
     # Real voluptuous for the config-flow tests (the component's
     # config_flow imports it; HA provides it at runtime, tests need it here).

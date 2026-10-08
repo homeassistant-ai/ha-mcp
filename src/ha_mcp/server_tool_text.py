@@ -290,7 +290,7 @@ LITE_DOCSTRINGS: dict[str, str] = {
     "ha_config_get_dashboard": (
         "Get Home Assistant dashboard info (list mode, search "
         "mode, or full config).\n\n"
-        "Three modes: (1) list — `list_only=True` returns all "
+        "Four modes: (1) list — `list_only=True` returns all "
         "storage-mode dashboards with metadata. (2) search — pass "
         "any of `entity_id`, `card_type`, `heading` to find cards "
         "(including nested ones, with a `python_path`) inside a "
@@ -301,9 +301,13 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "returns the full Lovelace config plus a stable "
         "`config_hash`. Use `url_path='default'` for the main "
         "dashboard. For known JSON Pointer paths, use "
-        "ha_config_set_dashboard(patch=..., config_hash=...).\n\n"
-        "For card-type taxonomy and search workflow examples, see "
-        "ha_get_skill_guide."
+        "ha_config_set_dashboard(patch=..., config_hash=...). (4) "
+        "describe — `describe=True` with `card_type` returns that "
+        "card's fields from Home Assistant's card editor; omit "
+        "`card_type` to list the card types. Describe requires the "
+        "ha_mcp_tools component with dashboard-card support. Without it, "
+        "use ha_get_skill_guide(file='references/dashboard-cards.md') "
+        "for card-selection guidance."
     ),
     "ha_config_set_dashboard": (
         "Create or update a Home Assistant dashboard.\n\n"

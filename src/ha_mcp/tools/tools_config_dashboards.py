@@ -67,6 +67,7 @@ from .config_write_helpers import (
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
 )
+from .dashboard_card_describe import describe_card_response
 from .dashboard_edit_errors import (
     raise_dashboard_edit_error,
     raise_dashboard_edit_fetch_error,
@@ -122,24 +123,27 @@ class _DashboardScreenshotOptions:
     render_timeout_seconds: float = DEFAULT_RENDER_TIMEOUT_SECONDS
 
 
-# dashboard-guide.md + dashboard-cards.md cover layout patterns and the
-# card-type taxonomy — both relevant on every dashboard write.
-_DASHBOARD_SKILL_FILES: tuple[str, ...] = (
-    "references/dashboard-guide.md",
-    "references/dashboard-cards.md",
-)
+# Live card fields replace the static reference only on capable components.
+_DASHBOARD_SKILL_FILES: tuple[str, ...] = ("references/dashboard-guide.md",)
 
 
-def _attach_dashboard_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
+async def _attach_dashboard_skill(
+    response: dict[str, Any], MandatoryBPS: bool, client: Any
+) -> None:
     """In-place attach skill_content to a dashboard response when applicable.
 
     Delegates to the shared :func:`attach_skill_content` so the
     missing-vendor-warning path is consistent across every write tool.
     """
+    files = _DASHBOARD_SKILL_FILES
+    if MandatoryBPS and not component_supports(
+        await get_component_caps(client), "dashboard_cards"
+    ):
+        files += ("references/dashboard-cards.md",)
     attach_skill_content(
         response,
         MandatoryBPS=MandatoryBPS,
-        canonical_files=_DASHBOARD_SKILL_FILES,
+        canonical_files=files,
         referenced_files=None,
     )
 
@@ -1789,7 +1793,7 @@ class DashboardConfigTools:
     @tool(
         name="ha_config_get_dashboard",
         tags={"Dashboards"},
-        annotations=read_only_hints("Get Dashboard", open_world=False),
+        annotations=read_only_hints("Get Dashboard", open_world=True),
     )
     @log_tool_usage
     async def ha_config_get_dashboard(
@@ -1874,6 +1878,10 @@ class DashboardConfigTools:
                 "find across all storage-mode dashboards. Ignored otherwise."
             ),
         ] = None,
+        describe: Annotated[
+            bool,
+            Field(description="Return card_type's fields from HA's card editor"),
+        ] = False,
     ) -> "dict[str, Any] | ToolResult":
         """Get dashboard info - list all dashboards, get config, or search for cards.
 
@@ -1931,15 +1939,11 @@ class DashboardConfigTools:
         - Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path="my-dash", entity_id="sensor.temperature_*")
         - Find heading: ha_config_get_dashboard(url_path="my-dash", heading="Climate", card_type="heading")
         - Which dashboards use an entity: ha_config_get_dashboard(mode="search", query="light.bedroom")
-
-        SEARCH WORKFLOW EXAMPLE:
-        1. find = ha_config_get_dashboard(url_path="my-dash", entity_id="light.bedroom")
-        2. ha_config_set_dashboard(
-               url_path="my-dash",
-               config_hash=find["config_hash"],
-               python_transform=f'config{find["matches"][0]["python_path"]}["icon"] = "mdi:lamp"'
-           )
+        - Fields of a card type before writing one (omit card_type to list types):
+          ha_config_get_dashboard(card_type="tile", describe=True)
         """
+        if describe:
+            return await describe_card_response(self._client, card_type)
         screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
         search_mode = (
             entity_id is not None or card_type is not None or heading is not None
@@ -2074,12 +2078,7 @@ class DashboardConfigTools:
         return list_result
 
     async def _fetch_search_dashboard_config(
-        self,
-        url_path: str | None,
-        *,
-        entity_id: str | None,
-        card_type: str | None,
-        heading: str | None,
+        self, url_path: str | None
     ) -> tuple[dict[str, Any], str | None, str | None]:
         """Fetch + resolve the dashboard config for search mode.
 
@@ -2272,9 +2271,7 @@ class DashboardConfigTools:
             config,
             url_path,
             search_resolved_from,
-        ) = await self._fetch_search_dashboard_config(
-            url_path, entity_id=entity_id, card_type=card_type, heading=heading
-        )
+        ) = await self._fetch_search_dashboard_config(url_path)
         # Surface the canonicalized url_path to the caller's scope now, so
         # an unexpected exception from the search/hashing below still
         # reports the resolved identifier (see ha_config_get_dashboard's
@@ -2726,7 +2723,7 @@ class DashboardConfigTools:
             "Create or Update Dashboard",
             destructive=True,
             idempotent=False,
-            open_world=False,
+            open_world=True,
         ),
     )
     @with_auto_backup(domain="dashboard", id_param="url_path")
@@ -2835,8 +2832,8 @@ class DashboardConfigTools:
         """Create or update a Home Assistant dashboard.
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
-        `dashboard-guide.md` and `dashboard-cards.md` ship under `skill_content`
-        by default.
+        `dashboard-guide.md` ships under `skill_content` by default. A card's
+        fields: ha_config_get_dashboard(card_type=..., describe=True).
 
         MODES (pick one):
         - patch: edit known paths with literal values using JSON Patch
@@ -3395,7 +3392,7 @@ class DashboardConfigTools:
             result["message"] = f"Dashboard {url_path} unchanged"
         if edit["post_write_verified"]:
             _attach_dashboard_render_paths(result, url_path, edit["config"])
-        _attach_dashboard_skill(result, MandatoryBPS)
+        await _attach_dashboard_skill(result, MandatoryBPS, self._client)
         return await _maybe_attach_screenshot(
             result,
             url_path,
@@ -3961,7 +3958,7 @@ class DashboardConfigTools:
         render_config = await self._attach_dashboard_write_result(
             result_dict, url_path, render_config, native_result
         )
-        _attach_dashboard_skill(result_dict, MandatoryBPS)
+        await _attach_dashboard_skill(result_dict, MandatoryBPS, self._client)
         return await _maybe_attach_screenshot(
             result_dict,
             url_path,
