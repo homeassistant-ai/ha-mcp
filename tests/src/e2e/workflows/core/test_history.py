@@ -313,6 +313,7 @@ class TestGetHistory:
                     "minimal_response": minimal,
                     "significant_changes_only": False,
                     "limit": 10,
+                    "order": "asc",
                 },
             )
         )
