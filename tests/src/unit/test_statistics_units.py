@@ -1,6 +1,7 @@
 """Recorder values must be labelled from Core metadata, never current states."""
 
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -120,11 +121,11 @@ async def test_unitless_metadata_is_distinguished_from_failed_lookup(
 
 
 @pytest.mark.asyncio
-async def test_import_committing_between_reads_never_yields_rows_without_unit():
+async def test_import_committing_between_reads_never_yields_rows_without_unit() -> None:
     """Core commits an import's rows and metadata together; here, after our first read."""
     reads = 0
 
-    async def dispatch(message):
+    async def dispatch(message: dict[str, Any]) -> dict[str, Any]:
         nonlocal reads
         committed = reads > 0
         reads += 1
