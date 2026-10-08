@@ -699,6 +699,7 @@ dev = [
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "python-semantic-release" },
+    { name = "quickjs-ng" },
     { name = "requests" },
     { name = "ruamel-yaml" },
     { name = "ruff" },
@@ -767,6 +768,7 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.3.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "python-semantic-release", specifier = "==10.6.2" },
+    { name = "quickjs-ng", specifier = "==0.17.0.1" },
     { name = "requests", specifier = ">=2.25.0" },
     { name = "ruamel-yaml", specifier = ">=0.18.0" },
     { name = "ruff", specifier = ">=0.12.12" },
@@ -1921,6 +1923,23 @@ wheels = [
 ]
 
 [[package]]
+name = "quickjs-ng"
+version = "0.17.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/f0/34285112767f07aa2df4f4f8741b00fc6bae80124162245f2901fba1f2e7/quickjs_ng-0.17.0.1.tar.gz", hash = "sha256:a1f7352b7e508346c8254f5ae790799898ebd1b2df2538bf9b7070a757faf903", size = 537979, upload-time = "2026-10-01T13:15:39.127Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/29/6e/8934b81ccb8974c57a385bd1ea63f5d46acef25a7a0ec93850a591966656/quickjs_ng-0.17.0.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:330f6bdb61ebf8102d650af799dd093924f34cc8be449fed97102147e133f685", size = 533433, upload-time = "2026-10-01T13:15:11.248Z" },
+    { url = "https://files.pythonhosted.org/packages/66/1e/bf364ef846a1d36f2e7c424699d5b01b5c0eb852a0d7bae183e521742184/quickjs_ng-0.17.0.1-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b8f41e2230d96925e69d40c7bbb66a81535ca63a1941d0ac8a2456c53085bafe", size = 2470407, upload-time = "2026-10-01T13:15:12.698Z" },
+    { url = "https://files.pythonhosted.org/packages/95/e3/a5acb921a5400f98e568afe4b77d14c31f0c6af974ac8db86d001c2289bb/quickjs_ng-0.17.0.1-cp310-abi3-manylinux2014_i686.manylinux_2_17_i686.manylinux_2_28_i686.whl", hash = "sha256:91b1bb7b05168027c7a62cf85e7a21af2c00bbd6eb7134f2afbb4785a7c1c664", size = 2415230, upload-time = "2026-10-01T13:15:14.056Z" },
+    { url = "https://files.pythonhosted.org/packages/db/d7/95ad035994e03478ad83275895ea218c3c1c7adc821aa1e2f3de4ed38d72/quickjs_ng-0.17.0.1-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:096486a0bb5467e3934d62d8a228f2ad04d9c71e1f70a31a05b20d1b5018702a", size = 2550955, upload-time = "2026-10-01T13:15:15.69Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/3f/e40c1d6c968b2401964fa90c738a0732cd07f8c3e9e0d2e28d3662ce7f6f/quickjs_ng-0.17.0.1-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:74c5394c02fb777c0e4098468fa49bf1648230d42b6f8c0762d2e05e40e480e7", size = 2454105, upload-time = "2026-10-01T13:15:17.414Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/cf/170b9e25155e18b94e7ee9365047c0f309ab60324dfc27aa69ea4051a3da/quickjs_ng-0.17.0.1-cp310-abi3-musllinux_1_2_i686.whl", hash = "sha256:84fd50e1472318e95eef8aa6a4ce7a3126baa9536991f11c96b03e402b27aa6c", size = 2444583, upload-time = "2026-10-01T13:15:19.134Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/c3/c0609ff4474a7c64aa2b92ae153ddf2738d4b06491cff0e4a3c85949e918/quickjs_ng-0.17.0.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:181a649d9169e8ac9c8efeb79a9e36ea7a5e13020ceccf181a6b6907c03885c3", size = 2539090, upload-time = "2026-10-01T13:15:20.592Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/5b/ab3945b98bb78040bdd96a3ae47731bd5665d6201709b9953f41e499e1c4/quickjs_ng-0.17.0.1-cp310-abi3-win32.whl", hash = "sha256:f61260b0b1f20a7d5b226c1b23939a5420866d11bea188b15d29ae98a7eb52b1", size = 395430, upload-time = "2026-10-01T13:15:21.911Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/67/623df580c13e7cc3bbce5b15c41658dfb753d99839fab25695eef99df34a/quickjs_ng-0.17.0.1-cp310-abi3-win_amd64.whl", hash = "sha256:355511615baa17bc98092680f068e3536ea1ee5a650b16f59bf6871f497f3780", size = 519389, upload-time = "2026-10-01T13:15:23.15Z" },
+]
+
+[[package]]
 name = "referencing"
 version = "0.36.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2091,8 +2110,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography" },
-    { name = "jeepney" },
+    { name = "cryptography", marker = "sys_platform != 'win32'" },
+    { name = "jeepney", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [

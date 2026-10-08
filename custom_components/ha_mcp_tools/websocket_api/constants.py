@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .. import core_contract, helper_collections
+from .. import card_definitions, core_contract, helper_collections
 
 __all__ = [
     "ALL_SEARCH_TYPES",
@@ -173,6 +173,7 @@ CAPABILITIES: list[str] = [
     "template_diagnose",
     *helper_collections.CAPABILITIES,
     core_contract.CAPABILITY,
+    *card_definitions.CAPABILITIES,
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates
