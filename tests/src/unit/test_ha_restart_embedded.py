@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ha_mcp.tools import tools_system
+from ha_mcp.tools import system_restart
 from ha_mcp.tools.tools_system import SystemTools
 
 
@@ -17,7 +17,7 @@ def _client() -> AsyncMock:
 
 @pytest.fixture(autouse=True)
 def _no_delay(monkeypatch):
-    monkeypatch.setattr(tools_system, "_EMBEDDED_RESTART_DELAY_S", 0)
+    monkeypatch.setattr(system_restart, "_EMBEDDED_RESTART_DELAY_S", 0)
 
 
 async def test_embedded_replies_before_restart(monkeypatch):
@@ -28,7 +28,7 @@ async def test_embedded_replies_before_restart(monkeypatch):
 
     assert result["success"] is True
     client.call_service.assert_not_awaited()
-    await asyncio.gather(*tools_system._RESTART_TASKS)
+    await asyncio.gather(*system_restart._RESTART_TASKS)
     client.call_service.assert_awaited_once_with("homeassistant", "restart", {})
 
 
@@ -40,7 +40,7 @@ async def test_embedded_invalid_config_does_not_schedule(monkeypatch):
     with pytest.raises(Exception, match="Configuration is invalid"):
         await SystemTools(client).ha_restart(confirm=True)
 
-    assert not tools_system._RESTART_TASKS
+    assert not system_restart._RESTART_TASKS
     client.call_service.assert_not_awaited()
 
 
@@ -52,4 +52,4 @@ async def test_external_awaits_restart_call(monkeypatch):
 
     assert result["success"] is True
     client.call_service.assert_awaited_once_with("homeassistant", "restart", {})
-    assert not tools_system._RESTART_TASKS
+    assert not system_restart._RESTART_TASKS
