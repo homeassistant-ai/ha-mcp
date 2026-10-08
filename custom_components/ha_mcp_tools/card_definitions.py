@@ -609,7 +609,8 @@ class CardDefinitions:
             warnings = [*warnings[:_MAX_WARNINGS], f"...and {more} more card {noun}"]
         # Coverage is independent of the diagnostic cap: never hide the cutoff.
         if unchecked:
-            warnings.append(f"{unchecked} custom cards not checked (time budget)")
+            noun = "card" if unchecked == 1 else "cards"
+            warnings.append(f"{unchecked} custom {noun} not checked (time budget)")
         return warnings
 
     def _triage(self, config: dict[str, Any]) -> tuple[list[str], _Queued, _Queued]:
