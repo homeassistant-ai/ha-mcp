@@ -1,5 +1,6 @@
 """HAOS backend setup for the E2E fixtures: image staging, post-boot setup and log dumps."""
 
+import itertools
 import json
 import logging
 import os
@@ -20,6 +21,8 @@ from haos_runtime import (
     HA_MCP_SERVER_ENTRY_ID,
     HA_MCP_SERVER_WEBHOOK_ID,
     HA_MCP_WEBHOOK_PROXY_ADDON_SLUG,
+    _authenticate_ws_supervisor,
+    _wait_supervisor_running,
     enable_config_entry,
     inject_hacs_token_in_qcow2,
     login_for_token,
@@ -308,6 +311,24 @@ def _wait_for_haos_light_ready(base_url: str, haos_headers: dict[str, str]) -> N
         )
 
 
+def _wait_for_haos_supervisor_running(
+    base_url: str, token: str, timeout: float = 300.0
+) -> None:
+    """Hold the session until Supervisor finishes its own boot.
+
+    Core answers before Supervisor is ``running``, and until then Supervisor
+    rejects app lifecycle calls ("Supervisor is not ready to perform this
+    operation"), which failed the first app test on a fresh VM.
+    """
+    import websockets.sync.client
+
+    ws_url = base_url.replace("http://", "ws://", 1) + "/api/websocket"
+    ids = itertools.count(1)
+    with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
+        _authenticate_ws_supervisor(ws, token)
+        _wait_supervisor_running(ws, time.monotonic() + timeout, lambda: next(ids))
+
+
 def _haos_post_boot_setup(base_url: str, request) -> tuple[str, dict]:
     """Post-boot HAOS setup: token, env, readiness waits, blueprint rewrite."""
     token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
@@ -342,6 +363,7 @@ def _haos_post_boot_setup(base_url: str, request) -> tuple[str, dict]:
     haos_headers = {"Authorization": f"Bearer {token}"}
     _wait_for_haos_sun_ready(base_url, haos_headers)
     _wait_for_haos_light_ready(base_url, haos_headers)
+    _wait_for_haos_supervisor_running(base_url, token)
     # Set HA Core's default backup-create password via WS so
     # ha_backup_create tests pass without a pre-baked seed. Must
     # run AFTER the sun.sun ready-wait above — sun.sun ready
