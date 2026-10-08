@@ -18,7 +18,6 @@ jobs:
     timeout-minutes: 20
     env:
       TESTCONTAINERS_RYUK_DISABLED: "true"
-      HAMCP_ENV_FILE: "tests/.env.test"
       UV_CACHE_DIR: /tmp/.uv-cache
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -34,14 +33,19 @@ jobs:
           uv sync --all-extras --dev --frozen
       - name: Focused unit tests
         working-directory: tests
+        env:
+          HAMCP_ENV_FILE: /dev/null
         run: >-
           uv run pytest src/unit/test_hacs_actions.py
           src/unit/test_hacs_auto_refresh.py src/unit/test_websocket_client.py
           src/unit/test_websocket_late_release.py src/unit/test_oauth.py
           --tb=short -q --junitxml=unit-results.xml
       - name: Real Home Assistant and standalone OAuth reproduction
+        if: ${{ !cancelled() }}
         working-directory: tests
         env:
+          HAMCP_ENV_FILE: tests/.env.test
+          ENVIRONMENT: development
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           uv run pytest src/e2e/workflows/hacs/test_oauth_credentials.py
