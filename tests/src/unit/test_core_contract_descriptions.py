@@ -30,14 +30,19 @@ def test_nested_unsupported_validator_cannot_be_marked_complete(
     from custom_components.ha_mcp_tools import core_contract as module
 
     nested = object()
-    value_schemas = {"future": nested}
-    default_schema = None
 
-    def validator(value: Any) -> Any:
-        return value_schemas.get(value, default_schema)
+    def union(child: Any) -> Any:
+        value_schemas = {"future": child}
+        default_schema = None
 
-    validator.__module__ = "homeassistant.helpers.config_validation"
-    validator.__qualname__ = "key_value_schemas.<locals>.key_value_validator"
+        def validator(value: Any) -> Any:
+            return value_schemas.get(value, default_schema)
+
+        validator.__module__ = "homeassistant.helpers.config_validation"
+        validator.__qualname__ = "key_value_schemas.<locals>.key_value_validator"
+        return validator
+
+    validator = union(union(nested))
     strict_attempts: list[bool] = []
 
     def serialize(node: Any, *, strict: bool = False, custom_serializer: Any) -> Any:

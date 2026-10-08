@@ -7,6 +7,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.core_contract import merge_core_options
+from ha_mcp.tools.history_response import format_history_response
 from ha_mcp.tools.tools_history import _fetch_history, _fetch_statistics
 
 
@@ -50,15 +51,20 @@ async def test_future_statistics_type_reaches_core_and_response_is_preserved() -
             },
             {
                 "state": "on",
-                "last_updated": 1700000000.25,
-                "last_changed": 1700000000.0,
+                "last_updated": "2023-11-14T22:13:20.250000+00:00",
+                "last_changed": "2023-11-14T22:13:20+00:00",
                 "attributes": {"friendly_name": "Test"},
                 "future_native_field": {"opaque": True},
             },
         ),
         (
             {"s": "off", "lu": 0, "future_native_field": [1]},
-            {"state": "off", "last_updated": 0, "future_native_field": [1]},
+            {
+                "state": "off",
+                "last_updated": "1970-01-01T00:00:00+00:00",
+                "last_changed": "1970-01-01T00:00:00+00:00",
+                "future_native_field": [1],
+            },
         ),
         (
             {"renamed_state": "on", "new_field": 5},
@@ -67,6 +73,18 @@ async def test_future_statistics_type_reaches_core_and_response_is_preserved() -
         (
             {"s": "on", "state": "future Core value"},
             {"s": "on", "state": "future Core value"},
+        ),
+        (
+            {
+                "lu": 1700000000,
+                "last_updated": "future value",
+                "last_changed": "opaque",
+            },
+            {
+                "lu": 1700000000,
+                "last_updated": "future value",
+                "last_changed": "opaque",
+            },
         ),
     ],
 )
@@ -93,9 +111,11 @@ async def test_history_renames_present_keys_once_and_preserves_all_core_data(
         100,
         1000,
     )
-    actual = result["entities"][0]["states"][0]
+    wrapped = format_history_response(
+        {"data": result, "metadata": {"home_assistant_timezone": "UTC"}}
+    )
+    actual = wrapped["data"]["entities"][0]["states"][0]
     assert actual == expected
-    assert len(actual) == len(row)
 
 
 @pytest.mark.parametrize(
@@ -120,14 +140,27 @@ def test_new_native_options_are_not_silently_filtered() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "timestamp,timezone,fetch_failed,expected",
+    [
+        (1700000000.25, "America/New_York", False, "2023-11-14T17:13:20.250000-05:00"),
+        (1719856800, "America/New_York", False, "2024-07-01T14:00:00-04:00"),
+        (1700000000.25, "UTC", True, "2023-11-14T22:13:20.250000+00:00"),
+        (1700000000.25, "Invalid/Timezone", False, "2023-11-14T22:13:20.250000+00:00"),
+    ],
+)
 async def test_history_preserves_native_attribute_values_through_timezone_wrapper(
     monkeypatch: pytest.MonkeyPatch,
+    timestamp: float,
+    timezone: str,
+    fetch_failed: bool,
+    expected: str,
 ) -> None:
     from ha_mcp.tools import response_helpers, tools_history
 
     row = {
         "s": "on",
-        "lu": 1700000000.25,
+        "lu": timestamp,
         "a": {"last_updated": "2026-01-01T00:00:00Z"},
     }
     client = AsyncMock()
@@ -138,7 +171,7 @@ async def test_history_preserves_native_attribute_values_through_timezone_wrappe
     monkeypatch.setattr(
         response_helpers,
         "fetch_ha_timezone",
-        AsyncMock(return_value=("America/New_York", False)),
+        AsyncMock(return_value=(timezone, fetch_failed)),
     )
     result = await tools_history.HistoryTools(client).ha_get_history(
         entity_ids=["light.test"],
@@ -148,8 +181,9 @@ async def test_history_preserves_native_attribute_values_through_timezone_wrappe
     assert result["data"]["entities"][0]["states"] == [
         {
             "state": row["s"],
-            "last_updated": row["lu"],
+            "last_updated": expected,
+            "last_changed": expected,
             "attributes": row["a"],
         }
     ]
-    assert result["metadata"]["timestamp_format"] == "native"
+    assert result["metadata"]["timestamp_format"].startswith("ISO 8601")

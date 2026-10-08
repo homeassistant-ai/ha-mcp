@@ -8,6 +8,7 @@ state change history and long-term statistics via ha_get_history.
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -288,7 +289,9 @@ class TestGetHistory:
         ha_client: HomeAssistantClient,
         minimal: bool,
     ) -> None:
-        """Readable names retain all Core values, with no synthesized duplicate fields."""
+        """History keeps local timestamps and native data without compact duplicates."""
+        config = await ha_client.get_config()
+        local_timezone = ZoneInfo(config["time_zone"])
         end = datetime.now(UTC) - timedelta(minutes=1)
         start = end - timedelta(days=1)
         native = await ha_client.send_websocket_message(
@@ -326,8 +329,6 @@ class TestGetHistory:
             for native_key, readable_key in (
                 ("s", "state"),
                 ("a", "attributes"),
-                ("lu", "last_updated"),
-                ("lc", "last_changed"),
             ):
                 if native_key in native_row:
                     value = remaining.pop(readable_key)
@@ -335,12 +336,24 @@ class TestGetHistory:
                     assert native_key not in row
                 else:
                     assert readable_key not in row
+            for native_key, readable_key in (
+                ("lu", "last_updated"),
+                ("lc", "last_changed"),
+            ):
+                value = remaining.pop(readable_key)
+                parsed = datetime.fromisoformat(value)
+                assert parsed.timestamp() == native_row.get(
+                    native_key, native_row["lu"]
+                )
+                assert (
+                    parsed.utcoffset() == parsed.astimezone(local_timezone).utcoffset()
+                )
+                assert native_key not in row
             assert remaining == {
                 key: value
                 for key, value in native_row.items()
                 if key not in {"s", "a", "lu", "lc"}
             }
-            assert len(row) == len(native_row)
 
 
 @pytest.mark.asyncio

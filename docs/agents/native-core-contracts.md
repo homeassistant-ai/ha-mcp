@@ -12,6 +12,11 @@ from the API that owns it; a current entity state is not a substitute for
 recorder metadata. Use the result or readback of a mutation when computing
 hashes, because Core may coerce values, add defaults or generate fields.
 
+Preserve useful presentation behavior when removing copied schemas. Readable
+field names and local event timestamps can be retained without duplicate aliases
+or filtering out new Core fields. Decode compact omissions according to Core's
+semantics, and test both native-data preservation and the user-facing result.
+
 When the required contract is only available in process, add a narrow component
 bridge to the actual Core schema, collection or flow. Update its capability,
 consumer and explicit fallback together, on both component entry topologies.

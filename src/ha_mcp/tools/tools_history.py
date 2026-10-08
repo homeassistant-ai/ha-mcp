@@ -32,6 +32,7 @@ from .helpers import (
     register_tool_methods,
     safe_progress,
 )
+from .history_response import format_history_response
 from .recorder_errors import raise_recorder_ws_failure as _raise_recorder_ws_failure
 from .response_helpers import (
     add_timezone_metadata,
@@ -58,24 +59,6 @@ _RELATIVE_TIME_UNIT_SECONDS = {
     "w": 7 * 24 * 60 * 60,
     "m": 30 * 24 * 60 * 60,
 }
-
-
-_HISTORY_FIELD_NAMES = {
-    "s": "state",
-    "a": "attributes",
-    "lu": "last_updated",
-    "lc": "last_changed",
-}
-
-
-def _readable_history_row(row: dict[str, Any]) -> dict[str, Any]:
-    """Rename present compact keys once; preserve unknown or colliding native keys."""
-    result = {}
-    for key, value in row.items():
-        name = _HISTORY_FIELD_NAMES.get(key, key)
-        # If Core supplies both names, keep both original fields without overwriting.
-        result[key if name in row else name] = value
-    return result
 
 
 def parse_relative_time(
@@ -359,11 +342,11 @@ class HistoryTools:
 
         CAVEATS:
         History rows rename Core's compact keys once: s -> state, a -> attributes,
-        lu -> last_updated, lc -> last_changed. Values and unknown fields pass
-        through unchanged. Timestamps are Unix seconds; when Core omits lc,
-        last_changed is absent and its time equals last_updated. Statistics
-        timestamps use Unix milliseconds. Minimal history may omit attributes.
-        No duplicate aliases or missing-field defaults are added. include_schema=True
+        lu -> last_updated, lc -> last_changed. History event times are ISO strings
+        in HA's timezone (UTC if unavailable). When Core omits lc, last_changed
+        equals last_updated. Attributes and unknown fields pass through unchanged.
+        Statistics timestamps use Unix milliseconds. Minimal history may omit attributes.
+        No duplicate compact aliases are added. include_schema=True
         retains core_contract even when fields selects other data keys.
 
         Output units come from
@@ -508,6 +491,7 @@ class HistoryTools:
             _r = await add_timezone_metadata(
                 self._client, inner, convert_timestamps=False
             )
+            _r = format_history_response(_r)
             _r["data"] = project_fields(
                 _r["data"],
                 parsed_fields,
@@ -977,7 +961,7 @@ async def _fetch_history(
                     "start": start_dt.isoformat(),
                     "end": end_dt.isoformat(),
                 },
-                "states": [_readable_history_row(row) for row in paged_states],
+                "states": paged_states,
                 **pagination,
             }
         )
