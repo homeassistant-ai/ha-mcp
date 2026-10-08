@@ -46,7 +46,7 @@ from haos_runtime import (
     wait_for_addon_mcp_ready,
 )
 
-from . import _conftest_embedded
+from . import _conftest_embedded, _conftest_haos, _conftest_testcontainer
 from ._conftest_embedded import _wait_for_embedded_webhook_ready
 from ._conftest_readiness import _wait_for_ha_api_ready
 
@@ -77,6 +77,21 @@ def git(*args: str) -> str:
 
 def log(**status: object) -> None:
     print("STATUS", json.dumps(status), flush=True)
+
+
+def _boot_gate(url: str, timeout: int, **kwargs: Any) -> bool:
+    """The session fixture's embedded-server gate, made non-fatal.
+
+    A server that never comes up must not take Home Assistant down with it:
+    the poll loop reports it and applies the push that fixes it.
+    """
+    if not _wait_for_embedded_webhook_ready(url, timeout, **kwargs):
+        log(ready=False, error=f"embedded server did not answer within {timeout}s")
+    return True
+
+
+_conftest_testcontainer._wait_for_embedded_webhook_ready = _boot_gate
+_conftest_haos._wait_for_embedded_webhook_ready = _boot_gate
 
 
 def haos_shell(command: str, data: bytes | None = None, timeout: float = 300) -> str:
