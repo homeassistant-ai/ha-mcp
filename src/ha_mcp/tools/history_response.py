@@ -40,7 +40,7 @@ def _readable_row(row: dict[str, Any], timezone: tzinfo) -> dict[str, Any]:
             result[name] = (
                 _local_timestamp(value, timezone) if key in {"lu", "lc"} else value
             )
-    # Core omits lc when the state change and last update have the same time.
+    # Match Core's fallback; omitted lc does not prove a state change at lu.
     if "lc" not in row and "last_changed" not in row and "lu" in row:
         result["last_changed"] = _local_timestamp(row["lu"], timezone)
     return result
@@ -60,8 +60,10 @@ def format_history_response(response: dict[str, Any]) -> dict[str, Any]:
         home_assistant_timezone=name,
         timestamp_format=f"ISO 8601 ({name})",
         note=(
-            f"History event times use {name}. last_changed equals last_updated when "
-            "Core omits lc. Attributes, unknown fields and query bounds are unchanged."
+            f"History event times use {name}. When Core omits lc, last_changed "
+            "falls back to last_updated; it may not be the actual state-change time "
+            "with significant_changes_only or a window-start snapshot. "
+            "Attributes, unknown fields and query bounds are unchanged."
             " UTC is used if HA's timezone is unavailable."
         ),
     )

@@ -66,13 +66,16 @@ History rows rename only the compact keys Core actually returns, once:
 | `state` | `s` | State value |
 | `attributes` | `a` | Attributes, when included |
 | `last_updated` | `lu` | Last updated, as a local ISO timestamp |
-| `last_changed` | `lc` | Last changed, as a local ISO timestamp |
+| `last_changed` | `lc`, otherwise `lu` | Local ISO timestamp; see fallback caveat below |
 
 History event timestamps use Home Assistant's configured timezone, including DST,
 with UTC as the fallback when that timezone is unavailable. When Core omits
-`lc`, `last_changed` equals `last_updated`, following Core's compressed-state
-semantics. Attributes and unknown fields are not rewritten, and compact aliases
-are not duplicated. Minimal responses may omit attributes. New or renamed Core fields pass through under
+`lc`, `last_changed` falls back to `last_updated`. This may not be the actual
+state-change time: default `significant_changes_only` queries omit `lc` even
+for attribute-only updates, and a window-start snapshot uses the query boundary.
+A failed timezone lookup produces an explicit response-level warning. Attributes and unknown fields are not rewritten, and compact aliases
+are not duplicated. Minimal responses may omit attributes. New or renamed Core
+fields pass through under
 their native names. If a readable name collides with another native field, both
 original fields are preserved under their Core names rather than overwritten.
 The `fields` parameter selects keys within `data`; response-level warnings and

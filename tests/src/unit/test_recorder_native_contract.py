@@ -187,3 +187,4 @@ async def test_history_preserves_native_attribute_values_through_timezone_wrappe
         }
     ]
     assert result["metadata"]["timestamp_format"].startswith("ISO 8601")
+    assert bool(result.get("warnings")) is fetch_failed

@@ -424,9 +424,7 @@ async def add_timezone_metadata(
 
     if not convert_timestamps:
         note = "Timestamp fields retain their native format; see the tool description for units."
-        if fetch_failed:
-            note += " Could not fetch Home Assistant timezone; timezone context defaults to UTC."
-        return {
+        result: dict[str, Any] = {
             "data": data,
             "metadata": {
                 "home_assistant_timezone": ha_timezone,
@@ -434,6 +432,11 @@ async def add_timezone_metadata(
                 "note": note,
             },
         }
+        if fetch_failed:
+            result["warnings"] = [
+                "Could not fetch Home Assistant timezone; timezone context defaults to UTC."
+            ]
+        return result
 
     if fetch_failed:
         return {

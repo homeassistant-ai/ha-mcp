@@ -344,7 +344,9 @@ class HistoryTools:
         History rows rename Core's compact keys once: s -> state, a -> attributes,
         lu -> last_updated, lc -> last_changed. History event times are ISO strings
         in HA's timezone (UTC if unavailable). When Core omits lc, last_changed
-        equals last_updated. Attributes and unknown fields pass through unchanged.
+        falls back to last_updated; this may not be the actual state-change time
+        with significant_changes_only (default) or a window-start snapshot.
+        Attributes and unknown fields pass through unchanged.
         Statistics timestamps use Unix milliseconds. Minimal history may omit attributes.
         No duplicate compact aliases are added. include_schema=True
         retains core_contract even when fields selects other data keys.
@@ -500,7 +502,7 @@ class HistoryTools:
                 else None,
             )
             if warnings := _r["data"].pop("warnings", None):
-                _r["warnings"] = warnings
+                _r.setdefault("warnings", []).extend(warnings)
             return _r
 
         except ToolError:

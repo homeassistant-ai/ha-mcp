@@ -135,7 +135,7 @@ async def test_optional_schema_preserves_reads_and_promotes_warnings(
         monkeypatch.setattr(
             response_helpers,
             "fetch_ha_timezone",
-            AsyncMock(return_value=("UTC", False)),
+            AsyncMock(return_value=("UTC", True)),
         )
         result = await tools_history.HistoryTools(client).ha_get_history(
             entity_ids=["sensor.energy"],
@@ -146,6 +146,12 @@ async def test_optional_schema_preserves_reads_and_promotes_warnings(
         payload = result["data"]
         assert payload["entities"][0]["states"] == [{"state": "5"}]
         assert "warnings" not in payload
+        assert any(
+            "Could not fetch Home Assistant timezone" in w for w in result["warnings"]
+        )
+    assert any(
+        "schema" in w.lower() or "incomplete" in w.lower() for w in result["warnings"]
+    )
     assert result["warnings"]
     assert all(isinstance(warning, str) for warning in result["warnings"])
     assert "warnings" not in payload["core_contract"]
