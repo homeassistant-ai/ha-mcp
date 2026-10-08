@@ -18,6 +18,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
+from .._version import is_embedded
 from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
@@ -41,6 +42,14 @@ from .tool_hints import read_only_hints, write_hints
 from .util_helpers import filter_active_repairs, summarize_theme_listing
 
 logger = logging.getLogger(__name__)
+
+# Embedded mode: delay before the restart fires, so ha_restart's reply flushes
+# to the client first. Same value as tools_dev._SELF_ACTION_FLUSH_DELAY_S.
+_EMBEDDED_RESTART_DELAY_S = 1.0
+
+# Strong references to in-flight deferred restarts (the event loop holds tasks
+# only weakly).
+_RESTART_TASKS: set[asyncio.Task[None]] = set()
 
 # The ha_mcp_tools/system_snapshot WS command: one consistent in-process read of
 # config_entries/issues/entities/states, collapsing what used to be up to 3x
@@ -180,7 +189,9 @@ class SystemTools:
         Config is validated automatically before the restart proceeds (to
         pre-check, call ha_get_system_health(include="config_check")). For
         configuration changes, consider ha_reload_core() instead, which reloads
-        specific components without a full restart.
+        specific components without a full restart. When this server runs
+        inside Home Assistant (embedded), it replies before the restart starts
+        and is unreachable until Home Assistant is back.
 
         EXAMPLE: ha_restart(confirm=True)
         """
@@ -218,6 +229,25 @@ class SystemTools:
                         context={"config_errors": errors},
                     )
                 )
+
+            if is_embedded():
+                # This server runs inside HA and stops with it: on HAOS the
+                # restart call never returns before Core is killed, so reply
+                # first and restart after (#2691).
+                self._schedule_embedded_restart()
+                return {
+                    "success": True,
+                    "message": (
+                        "Home Assistant restart scheduled. This MCP server runs "
+                        "inside Home Assistant and goes down with it; calls fail "
+                        "until it is back (1-5 minutes)."
+                    ),
+                    "warnings": [
+                        "The first call after Home Assistant is back can fail "
+                        "with an empty response while this server starts. "
+                        "Retry it after a few seconds."
+                    ],
+                }
 
             # Call the restart service - mark as initiated before the call
             # as the connection may be closed before we get a response
@@ -265,6 +295,21 @@ class SystemTools:
 
             exception_to_structured_error(e)
             return None  # unreachable: exception_to_structured_error always raises
+
+    def _schedule_embedded_restart(self) -> None:
+        """Fire ``homeassistant.restart`` after this tool's reply has flushed."""
+
+        async def _restart() -> None:
+            await asyncio.sleep(_EMBEDDED_RESTART_DELAY_S)
+            try:
+                await self._client.call_service("homeassistant", "restart", {})
+            except Exception:
+                # No caller left to answer; WARNING is the level HA surfaces.
+                logger.warning("Deferred Home Assistant restart failed", exc_info=True)
+
+        task = asyncio.get_running_loop().create_task(_restart())
+        _RESTART_TASKS.add(task)
+        task.add_done_callback(_RESTART_TASKS.discard)
 
     @tool(
         name="ha_reload_core",
