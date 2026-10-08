@@ -17,8 +17,8 @@ async def test_future_statistics_type_reaches_core_and_response_is_preserved() -
     row = {"start": 1, "end": 2, "future_native_type": {"opaque": [3]}}
     client = AsyncMock()
     client.send_websocket_message.side_effect = [
-        {"success": True, "result": []},
         {"success": True, "result": {"sensor.energy": [row]}},
+        {"success": True, "result": []},
     ]
     result = await _fetch_statistics(
         client,
@@ -30,7 +30,7 @@ async def test_future_statistics_type_reaches_core_and_response_is_preserved() -
         10,
         0,
     )
-    assert client.send_websocket_message.call_args.args[0]["types"] == [
+    assert client.send_websocket_message.await_args_list[0].args[0]["types"] == [
         "future_native_type"
     ]
     assert result["entities"][0]["statistics"] == [row]

@@ -62,7 +62,6 @@ async def test_native_parameter_rejection_has_parameter_guidance() -> None:
     client = Mock(
         send_websocket_message=AsyncMock(
             side_effect=[
-                {"success": True, "result": []},
                 {
                     "success": False,
                     "error": "invalid native units.energy",
@@ -299,7 +298,6 @@ async def test_default_conversion_recovers_null_class_reset_without_losing_unit(
         verify_ssl=True,
         send_websocket_message=AsyncMock(
             side_effect=[
-                {"success": True, "result": [metadata]},
                 {
                     "success": True,
                     "result": {
@@ -308,6 +306,7 @@ async def test_default_conversion_recovers_null_class_reset_without_losing_unit(
                         ]
                     },
                 },
+                {"success": True, "result": [metadata]},
                 {
                     "success": True,
                     "result": {"sensor.energy": [{"start": 1000, "last_reset": 900}]},

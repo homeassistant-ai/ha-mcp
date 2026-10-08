@@ -117,3 +117,23 @@ async def test_unitless_metadata_is_distinguished_from_failed_lookup(
     assert entity["unit_of_measurement"] is None
     assert entity["unit_source"] == "recorder_metadata"
     assert entity["unit_reason"] == "statistics_are_unitless"
+
+
+@pytest.mark.asyncio
+async def test_metadata_is_read_after_the_rows():
+    """An import commits rows and metadata together: rows first, then metadata."""
+    sent: list[str] = []
+
+    async def dispatch(message):
+        sent.append(message["type"])
+        if message["type"] == "recorder/get_statistics_metadata":
+            return {"success": True, "result": [metadata()]}
+        return {"success": True, "result": {"sensor.energy": [{"start": 1000}]}}
+
+    client = MagicMock(send_websocket_message=AsyncMock(side_effect=dispatch))
+    await _fetch_statistics(client, ["sensor.energy"], START, END, "hour", None, 1, 0)
+
+    assert sent == [
+        "recorder/statistics_during_period",
+        "recorder/get_statistics_metadata",
+    ]

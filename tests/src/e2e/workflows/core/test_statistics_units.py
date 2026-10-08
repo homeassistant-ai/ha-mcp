@@ -70,23 +70,17 @@ async def test_core_display_conversion_labels_the_converted_values(
             }
         )
         assert imported["success"], imported
-        # Core acknowledges the queued import before it is committed. Metadata
-        # is read before rows, so the first response can contain only the rows.
+        # Core acknowledges the queued import before it is committed. Metadata is
+        # read after the rows, so the first response with rows carries the unit.
         ready = await wait_for_tool_result(
             mcp_client,
             tool_name="ha_get_history",
             arguments=args,
             predicate=lambda d: (
-                len(
-                    (entity := d.get("data", d).get("entities", [{}])[0]).get(
-                        "statistics", []
-                    )
-                )
+                len(d.get("data", d).get("entities", [{}])[0].get("statistics", []))
                 == 3
-                and entity.get("statistics_metadata") is not None
-                and entity.get("unit_of_measurement") == stored
             ),
-            description="imported recorder statistics and metadata visible",
+            description="imported recorder statistics visible",
             timeout=30,
         )
         entity = ready.get("data", ready)["entities"][0]
