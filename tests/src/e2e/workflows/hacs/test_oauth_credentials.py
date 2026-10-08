@@ -118,9 +118,7 @@ async def test_hacs_uses_admin_oauth_session_instead_of_global_placeholder(
                 "ha_get_hacs_info",
                 {"action": "search", "installed_only": True},
             )
-            await mcp.call_tool_success(
-                "ha_config_get_dashboard", {"list_only": True}
-            )
+            await mcp.call_tool_success("ha_config_get_dashboard", {"list_only": True})
     finally:
         logger.info("OAuth launcher output:\n%s", launcher.output())
         await launcher.aclose()
