@@ -78,7 +78,7 @@ from .integration_reconfigure import (
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import get_logger_levels, websocket_error_message
-from .ws_waiters import wait_for_entity_removed
+from .ws_waiters import verify_entity_removed, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 
@@ -2577,19 +2577,21 @@ class IntegrationTools:
                 *[wait_for_entity_removed(client, eid) for eid in entity_ids],
                 return_exceptions=True,
             )
-            # Auth/connection errors during polling must surface as
-            # tool errors — wait_for_entity_removed re-raises these
-            # deliberately. Re-raise the first one we find so the
-            # outer except chain converts it to a structured error.
-            for res in results:
-                if isinstance(
-                    res, HomeAssistantConnectionError | HomeAssistantAuthError
-                ):
-                    raise res
+            # The entry is already gone: a failed check is a warning, as in the
+            # sibling delete tools, never an error for a delete that worked.
+            failed = [
+                r
+                for r in results
+                if isinstance(r, HomeAssistantConnectionError | HomeAssistantAuthError)
+            ]
+            if failed:
+                response.setdefault("warnings", []).append(
+                    f"Deletion confirmed but removal verification failed: {failed[0]}"
+                )
             not_removed = [
                 eid
                 for eid, res in zip(entity_ids, results, strict=True)
-                if res is not True
+                if res is not True and res not in failed
             ]
             if not_removed:
                 response.setdefault("warnings", []).append(
@@ -3056,12 +3058,7 @@ class IntegrationTools:
             "fallback_used": "direct_id",
         }
         if wait_bool:
-            removed = await wait_for_entity_removed(client, entity_id)
-            if not removed:
-                response.setdefault("warnings", []).append(
-                    f"Deletion confirmed but {entity_id} "
-                    "is still present after the wait window."
-                )
+            await verify_entity_removed(client, entity_id, response)
         return response
 
     async def _state_absent(self, entity_id: str) -> bool:
@@ -3143,12 +3140,7 @@ class IntegrationTools:
                 ),
             }
             if wait_bool:
-                removed = await wait_for_entity_removed(client, entity_id)
-                if not removed:
-                    response.setdefault("warnings", []).append(
-                        f"Deletion confirmed but {entity_id} "
-                        "is still present after the wait window."
-                    )
+                await verify_entity_removed(client, entity_id, response)
             return response
 
         # Core's storage collection holds only UI-created items; a YAML helper

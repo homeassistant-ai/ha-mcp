@@ -508,6 +508,32 @@ def _classify_by_message(
     return result
 
 
+# Environment failures: the classified guidance (token, admin rights, reachability)
+# is what fixes them and most callers do not anticipate them, so it leads and a
+# caller's own hints follow. Every other code keeps the caller's list as given.
+_ENVIRONMENT_CODES = frozenset(
+    {
+        ErrorCode.AUTH_INVALID_TOKEN.value,
+        ErrorCode.AUTH_EXPIRED.value,
+        ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS.value,
+        ErrorCode.CONNECTION_FAILED.value,
+        ErrorCode.CONNECTION_TIMEOUT.value,
+    }
+)
+
+
+def _with_classified_suggestions(
+    error: dict[str, Any], suggestions: list[str]
+) -> list[str]:
+    """Put the classified suggestions of an environment code before the caller's."""
+    if error.get("code") not in _ENVIRONMENT_CODES:
+        return suggestions
+    classified = error.get("suggestions") or (
+        [error["suggestion"]] if error.get("suggestion") else []
+    )
+    return [*classified, *(s for s in suggestions if s not in classified)]
+
+
 def _append_macos_hints(error_response: dict[str, Any]) -> None:
     if not (
         sys.platform == "darwin"
@@ -576,6 +602,8 @@ def exception_to_structured_error(
                     If False, returns the error dict for further modification.
         suggestions: Optional list of actionable suggestions to embed in the error.
                     Saves callers from manually inserting suggestions after the call.
+                    They replace the classified ones, except for auth and
+                    connection codes, where they follow them (duplicates dropped).
 
     Returns:
         Structured error response dictionary (only if raise_error=False)
@@ -618,6 +646,7 @@ def exception_to_structured_error(
         # rely on the plural key being present even for single-item caller
         # suggestions. Setting both keeps response consumers on both code
         # paths working.
+        suggestions = _with_classified_suggestions(error_response["error"], suggestions)
         error_response["error"]["suggestion"] = suggestions[0]
         error_response["error"]["suggestions"] = suggestions
 

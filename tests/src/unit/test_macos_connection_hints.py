@@ -7,7 +7,7 @@ when connection errors occur (Local Network Privacy, SSH tunnel, http vs https).
 from unittest.mock import patch
 
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.errors import ErrorCode
+from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
 from ha_mcp.tools.helpers import exception_to_structured_error
 
 MACOS_HINT_FRAGMENT = "Local Network"
@@ -73,8 +73,9 @@ class TestMacOSConnectionHints:
         # macOS hints should also be present
         assert any(MACOS_HINT_FRAGMENT in s for s in suggestions)
 
-    def test_caller_suggestions_still_override_on_non_darwin(self):
-        """On non-darwin, caller suggestions should replace defaults (original behavior)."""
+    def test_caller_suggestions_follow_the_reachability_guidance_on_non_darwin(self):
+        """On non-darwin, a caller's hints follow the classified connection
+        guidance instead of replacing it (issue #2698)."""
         error = HomeAssistantConnectionError("All connection attempts failed")
         caller_suggestions = ["Custom suggestion"]
         with patch("ha_mcp.tools.helpers.sys") as mock_sys:
@@ -83,7 +84,10 @@ class TestMacOSConnectionHints:
                 error, raise_error=False, suggestions=caller_suggestions
             )
 
-        assert result["error"]["suggestions"] == ["Custom suggestion"]
+        assert result["error"]["suggestions"] == [
+            *DEFAULT_SUGGESTIONS[ErrorCode.CONNECTION_FAILED],
+            "Custom suggestion",
+        ]
 
     def test_string_matched_connection_errors_get_hints(self):
         """Generic exceptions classified as connection errors via string matching
