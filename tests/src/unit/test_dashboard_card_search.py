@@ -1,4 +1,4 @@
-"""Card search reach and the ``query`` criterion of the dashboard card search.
+"""Reach and the ``query`` criterion of the dashboard card search.
 
 Cards that custom cards nest under keys of their own (issue #2694), and the
 text criterion the single search applies alongside entity_id / card_type /
@@ -266,7 +266,8 @@ class TestSearchSurvivesUnusualConfigs:
 
 
 class TestSearchResultScope:
-    """Warning locations name the dashboard only in a search across dashboards."""
+    """Warning locations name the dashboard only in a search across dashboards,
+    whose top-level config_hash is null."""
 
     CONFIG: ClassVar[dict[str, Any]] = {
         "views": [
@@ -327,31 +328,41 @@ class TestEntityWildcards:
 class TestBlankCriteria:
     """A blank criterion counts as not given."""
 
+    def test_blank_criterion_beside_a_real_one_is_ignored(self):
+        config = {
+            "views": [
+                {
+                    "badges": ["light.a"],
+                    "cards": [{"type": "tile", "entity": "light.a"}],
+                }
+            ]
+        }
+        assert _find_cards_in_config(
+            config, entity_id="light.a", heading=""
+        ) == _find_cards_in_config(config, entity_id="light.a")
+
+
+class TestBadgeCriteria:
+    """card_type='badge' alone lists every badge; a heading excludes them."""
+
     CONFIG: ClassVar[dict[str, Any]] = {
         "views": [
             {
-                "badges": ["light.a"],
-                "cards": [
-                    {"type": "tile", "entity": "light.a"},
-                    {"type": "tile", "entity": "light.a", "title": "T"},
-                ],
+                "badges": ["light.a", {"type": "entity", "entity": "sensor.b"}],
+                "cards": [{"type": "tile", "entity": "light.a", "title": "T"}],
             }
         ]
     }
 
-    def test_blank_criterion_beside_a_real_one_is_ignored(self):
-        assert _find_cards_in_config(
-            self.CONFIG, entity_id="light.a", heading=""
-        ) == _find_cards_in_config(self.CONFIG, entity_id="light.a")
-
-
-class TestBadgeCriteria:
-    """Badges answer entity_id and query; a heading excludes them."""
+    def test_badge_card_type_alone_lists_every_badge(self):
+        matches = _find_cards_in_config(self.CONFIG, card_type="badge")
+        assert [m["jq_path"] for m in matches] == [
+            ".views[0].badges[0]",
+            ".views[0].badges[1]",
+        ]
 
     def test_heading_excludes_badges(self):
-        matches = _find_cards_in_config(
-            TestBlankCriteria.CONFIG, entity_id="light.a", heading="t"
-        )
+        matches = _find_cards_in_config(self.CONFIG, entity_id="light.a", heading="t")
         assert [m["card_type"] for m in matches] == ["tile"]
 
 

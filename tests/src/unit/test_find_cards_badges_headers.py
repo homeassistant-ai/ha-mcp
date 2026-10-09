@@ -1,6 +1,6 @@
-"""Unit tests for badge and header card search in the dashboard card search.
+"""Unit tests for view-badge and sections-view header-card matches in the card search.
 
-Validates that the card search finds view-level badges and
+Validates that the search finds view-level badges and
 sections-view header cards, addressing issue #801.
 """
 
@@ -10,7 +10,7 @@ from ._dashboard_search_helpers import _find_cards_in_config
 
 
 class TestBadgeSearch:
-    """Test badge search in the dashboard card search."""
+    """Badge matches in the dashboard card search."""
 
     DASHBOARD_WITH_BADGES: ClassVar[dict[str, Any]] = {
         "views": [
@@ -112,7 +112,7 @@ class TestBadgeSearch:
 
 
 class TestHeaderCardSearch:
-    """Test sections-view header card search in the dashboard card search."""
+    """Sections-view header-card matches in the dashboard card search."""
 
     DASHBOARD_WITH_HEADER: ClassVar[dict[str, Any]] = {
         "views": [

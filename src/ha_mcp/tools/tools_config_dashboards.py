@@ -206,14 +206,18 @@ async def _get_dashboard_config_internal(
     return cast(dict[str, Any], config), compute_config_hash(config)
 
 
-def _badge_matches(badge: Any, entity_id: str) -> bool:
-    """Check if a badge matches the entity_id search criteria.
+def _lovelace_url_path(url_path: str | None) -> str | None:
+    """The ``url_path`` HA's Lovelace reads take: ``None`` for the default dashboard."""
+    return None if not url_path or url_path == "default" else url_path
+
+
+def _badge_matches(badge: Any, pattern: str) -> bool:
+    """Whether ``badge``'s entity matches ``pattern`` (see ``_entity_matches``).
 
     Badges can be simple strings (entity IDs) or dicts with an 'entity' field.
-    Supports wildcard matching with *.
     """
     return _entity_matches(
-        entity_id, badge.get("entity") if isinstance(badge, dict) else badge
+        pattern, badge.get("entity") if isinstance(badge, dict) else badge
     )
 
 
@@ -304,10 +308,10 @@ class _SearchCriteria:
     query: str | None = None
 
     def __post_init__(self) -> None:
-        for f in fields(self):
-            value = getattr(self, f.name)
+        for criterion in fields(self):
+            value = getattr(self, criterion.name)
             if isinstance(value, str):
-                object.__setattr__(self, f.name, value.strip() or None)
+                object.__setattr__(self, criterion.name, value.strip() or None)
 
     @property
     def query_lower(self) -> str | None:
@@ -534,8 +538,9 @@ def _find_badge_matches_in_view(
 ) -> list[dict[str, Any]]:
     """View-level badges matching ``frame``'s entity_id and/or query.
 
-    Badges are entity references, so they answer entity_id and text searches;
-    a heading or a card_type other than ``badge`` excludes them.
+    Badges are entity references, so they answer entity_id and text searches,
+    and ``card_type='badge'`` alone lists them all; a heading or another
+    card_type excludes them.
     """
     view_idx = frame.view_index
     criteria = frame.criteria
@@ -544,7 +549,6 @@ def _find_badge_matches_in_view(
         not isinstance(badges, list)
         or criteria.heading is not None
         or criteria.card_type not in (None, "badge")
-        or (criteria.entity_id is None and criteria.query is None)
     ):
         return []
     matches: list[dict[str, Any]] = []
@@ -1517,8 +1521,8 @@ class DashboardConfigTools:
             str | None,
             Field(
                 description="Search: cards whose entity/entities field holds this "
-                "entity ID; '*' matches any run of characters and the whole ID "
-                "must match (e.g. 'sensor.temperature_*')."
+                "entity ID; '*' matches any run of characters (including none) "
+                "and the whole ID must match (e.g. 'sensor.temperature_*')."
             ),
         ] = None,
         card_type: Annotated[
@@ -1587,8 +1591,8 @@ class DashboardConfigTools:
         - Any of query / entity_id / card_type / heading searches cards and
           header cards, AND-ing the criteria, in url_path or, when it is
           omitted, every storage dashboard. View badges answer entity_id and
-          query; card_type='badge' keeps only badges (so it needs entity_id or
-          query), and heading excludes them.
+          query; card_type='badge' keeps only badges (alone, it lists them all),
+          and heading excludes them.
           Cards nested at any depth count, including
           custom cards' own keys such as groups[].cards[].card. Each match has a
           jq_path and a python_path to append to `config` in
@@ -1747,7 +1751,7 @@ class DashboardConfigTools:
         it differed from the canonical form, else ``None``.
         """
         get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
-        effective_url_path: str | None = None if url_path == "default" else url_path
+        effective_url_path = _lovelace_url_path(url_path)
         if effective_url_path is not None:
             get_data["url_path"] = effective_url_path
 
@@ -2051,9 +2055,7 @@ class DashboardConfigTools:
         legacy ``lovelace/config`` request below (which threads ``force=True``) to
         actually bust HA's Lovelace cache.
         """
-        component_url_path = (
-            None if (not url_path or url_path == "default") else url_path
-        )
+        component_url_path = _lovelace_url_path(url_path)
         component_config = (
             None
             if force_reload
@@ -2073,9 +2075,9 @@ class DashboardConfigTools:
             )
 
         data: dict[str, Any] = {"type": "lovelace/config", "force": force_reload}
-        # Handle "default" as special value for default dashboard
-        if url_path and url_path != "default":
-            data["url_path"] = url_path
+        lovelace_url_path = _lovelace_url_path(url_path)
+        if lovelace_url_path is not None:
+            data["url_path"] = lovelace_url_path
 
         response = await self._client.send_websocket_message(data)
 
