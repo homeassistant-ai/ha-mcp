@@ -345,29 +345,24 @@ def _dashboard_document_matches(
     ]
 
 
-def _doc_contains(data: Any, query_lower: str, depth: int = 0) -> bool:
+def _doc_contains(data: Any, query_lower: str) -> bool:
     """Case-insensitive substring test over keys and every leaf of a config.
 
-    Exact port of the server's ``_search_in_dict_exact`` (keys + string
-    leaves + ``str()`` of non-None scalars) so the component-served verdict
-    matches the legacy walk's, leaf for leaf. Containers below
-    ``_MAX_NODE_DEPTH`` levels are not read, so a pathological config cannot
-    exhaust the recursion limit.
+    Port of the server's ``_search_in_dict_exact`` (keys + ``str()`` of every
+    non-None leaf) so the component-served verdict matches the legacy walk's,
+    leaf for leaf; iterative, so a config of any depth is read in full.
     """
-    if isinstance(data, (dict, list)) and depth > _MAX_NODE_DEPTH:
-        return False
-    if isinstance(data, dict):
-        return any(
-            query_lower in str(key).lower()
-            or _doc_contains(value, query_lower, depth + 1)
-            for key, value in data.items()
-        )
-    if isinstance(data, list):
-        return any(_doc_contains(item, query_lower, depth + 1) for item in data)
-    if isinstance(data, str):
-        return query_lower in data.lower()
-    if data is not None:
-        return query_lower in str(data).lower()
+    pending = [data]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            if any(query_lower in str(key).lower() for key in node):
+                return True
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+        elif node is not None and query_lower in str(node).lower():
+            return True
     return False
 
 
@@ -679,6 +674,8 @@ def _walk_card_nodes(
     if isinstance(value, str):
         if value:
             leaves.append((key, value))
+    elif isinstance(value, (bool, int, float)):
+        leaves.append((key, str(value)))
     elif depth > _MAX_NODE_DEPTH:
         return
     elif isinstance(value, dict):

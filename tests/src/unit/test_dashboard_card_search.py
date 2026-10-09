@@ -574,3 +574,29 @@ class TestReviewedSearchEdges:
         result = self._search(config, card_type="alarm-panel")
         assert result["match_count"] == 1
         assert "warnings" not in result
+
+    def test_card_list_is_reported_as_malformed(self) -> None:
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "conditional",
+                            "card": [{"type": "tile", "entity": "light.a"}],
+                        }
+                    ]
+                }
+            ]
+        }
+        result = self._search(config, entity_id="light.a")
+        assert result["match_count"] == 0
+        assert any(".views[0].cards[0].card" in w for w in result["warnings"])
+
+    def test_query_matches_number_and_boolean_options(self) -> None:
+        config = {
+            "views": [{"cards": [{"type": "grid", "columns": 3, "square": False}]}]
+        }
+        assert self._search(config, query="3")["matches"][0]["matched"] == [
+            {"field": "columns", "value": "3"}
+        ]
+        assert self._search(config, query="false")["match_count"] == 1

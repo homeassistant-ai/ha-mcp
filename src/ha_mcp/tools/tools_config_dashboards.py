@@ -409,18 +409,22 @@ class _CardSplit:
 def _split_card_node(
     node: Any, path: tuple[str, str], key: str, out: _CardSplit, depth: int = 0
 ) -> None:
-    """Split a card's subtree into its own string leaves and the cards below it.
+    """Split a card's subtree into its own leaves and the cards below it.
 
     ``path`` is the (jq, python) suffix of ``node``. Every dict and list is
     descended, down to ``_MAX_NODE_DEPTH`` levels (deeper subtrees are recorded
     in ``out.cut``); a typed dict in a card slot goes to ``out.cards`` with its
-    paths instead of contributing leaves. Leaves carry their nearest dict key
+    paths instead of contributing leaves. Leaves are strings (scalars as ``str()``)
+    and carry their nearest dict key
     (a ``custom_fields`` / ``states`` value carries its name).
     """
     jq, py = path
     if isinstance(node, str):
         if node:
             out.leaves.append((key, node))
+        return
+    if isinstance(node, (bool, int, float)):
+        out.leaves.append((key, str(node)))
         return
     if not isinstance(node, (list, dict)):
         return
@@ -458,14 +462,16 @@ def _split_card_entry(
 
 
 def _is_swapped_card_container(key: str, value: Any) -> bool:
-    """``cards`` holding a mapping, or ``custom_fields`` holding a list.
+    """``card`` or ``custom_fields`` holding a list, or ``cards`` a mapping.
 
     Other shapes under slot keys are ordinary options (the alarm-panel card's
     ``states`` is a list of modes), so they are read as text, not reported.
     """
     if key == _NESTED_CARDS_KEY:
         return isinstance(value, dict)
-    return key == _NESTED_CUSTOM_FIELDS_KEY and isinstance(value, list)
+    return key in (_NESTED_CARD_KEY, _NESTED_CUSTOM_FIELDS_KEY) and isinstance(
+        value, list
+    )
 
 
 def _card_slots(
@@ -477,7 +483,7 @@ def _card_slots(
     """
     if key == _NESTED_CARDS_KEY and isinstance(value, list):
         return [(f"[{i}]", f"[{i}]", key, item) for i, item in enumerate(value)]
-    if key == _NESTED_CARD_KEY:
+    if key == _NESTED_CARD_KEY and isinstance(value, dict):
         return [("", "", key, value)]
     if key in (_NESTED_CUSTOM_FIELDS_KEY, _NESTED_STATES_KEY) and isinstance(
         value, dict

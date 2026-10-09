@@ -301,14 +301,13 @@ class TestSearchInDictBM25:
         assert score > 0
 
     @pytest.mark.parametrize("exact_match", [True, False])
-    def test_deeply_nested_config_does_not_fail_the_search(
+    def test_deeply_nested_config_is_searched_in_full(
         self, smart_tools: SmartSearchTools, exact_match: bool
     ) -> None:
         deep: dict[str, Any] = {"entity": "light.deep"}
         for _ in range(1500):
             deep = {"n": deep}
-        config = {"options": deep, "alias": "Kitchen"}
-        assert smart_tools._search_in_dict(config, "kitchen", exact_match) > 0
+        assert smart_tools._search_in_dict(deep, "light.deep", exact_match) > 0
 
 
 # ---------------------------------------------------------------------------

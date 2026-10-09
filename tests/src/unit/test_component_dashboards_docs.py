@@ -151,6 +151,17 @@ def test_search_survives_a_deep_chain_of_nested_cards(monkeypatch: Any) -> None:
     assert [m["card_path"] for m in result["matches"]] == ["views[0].cards[1]"]
 
 
+def test_search_query_matches_number_options(monkeypatch: Any) -> None:
+    body = {"views": [{"cards": [{"type": "grid", "columns": 3}]}]}
+    _dashboards(monkeypatch, {"home": _storage_dash("home", "Home", body=body)})
+
+    result = _run_dashboards(FakeHass(), {"mode": "search", "query": "3"})
+
+    assert [(m["card_path"], m["matched_field"]) for m in result["matches"]] == [
+        ("views[0].cards[0]", "columns")
+    ]
+
+
 def test_docs_capability_is_advertised() -> None:
     """The component advertises ``dashboards_docs``, which gates the server's ``docs`` read."""
     assert "dashboards_docs" in wsapi._do_info(FakeHass())["capabilities"]
