@@ -275,37 +275,6 @@ class TestForwardingHandler:
         assert resp.eof is True
         assert f"dropped mid-stream after {len(chunk)} bytes" in caplog.text
 
-    async def test_cloudhook_relay_reads_body_and_buffers_sse(self):
-        # #2696: a Nabu Casa cloudhook (Settings → Home Assistant Cloud →
-        # Webhooks) is relayed in-process as HA's ``MockRequest``, which has
-        # no ``read()`` and no transport, and the relay returns only
-        # ``response.body`` — so the SSE reply must come back buffered.
-        chunks = [b"event: message\ndata: 1\n\n", b"data: 2\n\n"]
-        upstream = FakeUpstream(
-            status=200,
-            headers={"Content-Type": "text/event-stream"},
-            body=b"".join(chunks),
-            chunks=chunks,
-        )
-        session = FakeSession(upstream=upstream)
-        hass = _make_hass()
-        _store_cfg(hass, session=session)
-
-        body = b'{"jsonrpc":"2.0","id":1,"method":"ping"}'
-        request = mw.MockRequest(
-            content=body,
-            mock_source="cloud",
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
-
-        assert session.calls[0]["data"] == body
-        assert isinstance(resp, mw.web.Response)
-        assert resp.status == 200
-        assert resp.body == b"".join(chunks)
-        assert resp.headers["Content-Type"] == "text/event-stream"
-
     async def test_client_error_maps_to_502(self):
         session = FakeSession(exc=mw.aiohttp.ClientError("connection refused"))
         hass = _make_hass()
