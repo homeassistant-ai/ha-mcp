@@ -75,6 +75,7 @@ from .backup_diff import (
     _summarize_patch_counts,
 )
 from .backup_entity_ids import _restore_entity_ids
+from .backup_integrations import fetch_integration, restore_integration
 from .backup_tags import restore_tag, tag_snapshot
 from .client.rest_client import (
     HomeAssistantCommandError,
@@ -2710,28 +2711,6 @@ async def _restore_device(client: Any, entity_id: str, config: Any) -> Any:
 # Integration enable/disable — restore re-applies the disabled flag.
 
 
-async def _fetch_integration(client: Any, entity_id: str) -> Any:
-    items = _require_list(
-        await _ws_send(client, {"type": "config_entries/get"}), "config_entries/get"
-    )
-    for item in items:
-        if item.get("entry_id") == entity_id:
-            return item
-    return None
-
-
-async def _restore_integration(client: Any, entity_id: str, config: Any) -> Any:
-    disabled = config.get("disabled_by") is not None
-    return await _ws_send(
-        client,
-        {
-            "type": "config_entries/disable",
-            "entry_id": entity_id,
-            "disabled_by": "user" if disabled else None,
-        },
-    )
-
-
 # Helpers — one handler family. Entity ID is "<helper_type>:<id>" so each
 # helper type lists/restores via its native WS endpoints. The decorator
 # constructs the domain key as ``helper_<type>`` so files group naturally.
@@ -3947,7 +3926,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(DomainHandler("todo_item", _fetch_todo_item, _restore_todo_item))
     mgr.register(DomainHandler("entity", _fetch_entity_state, _restore_entity_state))
     mgr.register(DomainHandler("device", _fetch_device, _restore_device))
-    mgr.register(DomainHandler("integration", _fetch_integration, _restore_integration))
+    mgr.register(DomainHandler("integration", fetch_integration, restore_integration))
     mgr.register(DomainHandler("file", _fetch_file, _restore_file))
     mgr.register(DomainHandler("yaml", _fetch_yaml, _restore_yaml))
     # Whole-file YAML config: same fetch as "file" (read_file), but restored via

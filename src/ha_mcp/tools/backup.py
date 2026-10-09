@@ -1597,7 +1597,7 @@ def register_backup_tools(
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
 | `edits` | `view` | Read one auto-backup file by name; returns YAML and parsed `config`. |
 | `edits` | `diff` | Compare one auto-backup against the entity's current config. RFC 6902 JSON-Patch + add/remove/replace counts; bounded output. Read-only — fetches the live config, makes no changes. |
-| `edits` | `restore` | Re-apply one auto-backup. Existing flow helpers (template, group, utility_meter, …) and config subentries require a fresh safety snapshot; other domains follow auto-backup settings and may proceed without one. A deleted flow helper is recreated with a new config-entry ID and its saved entity IDs are restored if unoccupied; a deleted subentry is recreated with a new subentry ID. **No HA restart.** |
+| `edits` | `restore` | Re-apply one auto-backup. Existing flow helpers (template, group, utility_meter, …) and config subentries require a fresh safety snapshot; other domains follow auto-backup settings and may proceed without one. A deleted flow helper is recreated with a new config-entry ID and its saved entity IDs are restored if unoccupied; a deleted subentry is recreated with a new subentry ID. A deleted integration config entry cannot be: its snapshot holds only metadata and the enabled state. **No HA restart.** |
 | `edits` | `delete` | Delete one auto-backup by `backup_name`, or bulk-delete by filter. |
 
 **When to use which scope:**
@@ -2034,22 +2034,20 @@ async def _edits_restore(
             "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "backup_capture_failed": ErrorCode.BACKUP_CAPTURE_FAILED,
+            "entry_deleted": ErrorCode.RESOURCE_NOT_FOUND,
         }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
+        hint = "Inspect the current configuration and restore outcome before retrying"
+        suggestions = list(err.outcome.get("suggestions") or [hint])
+        if err.outcome.get("safety_backup"):
+            suggestions.append(
+                "Use safety_backup to inspect or restore the captured previous state"
+            )
         raise_tool_error(
             create_error_response(
                 code,
                 str(err),
                 context={"backup_name": bname, "data": err.outcome},
-                suggestions=[
-                    "Inspect the current configuration and restore outcome before retrying",
-                ]
-                + (
-                    [
-                        "Use safety_backup to inspect or restore the captured previous state"
-                    ]
-                    if err.outcome.get("safety_backup")
-                    else []
-                ),
+                suggestions=suggestions,
             )
         )
     except MandatoryBackupError as err:
