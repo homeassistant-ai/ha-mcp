@@ -13,18 +13,25 @@ from .schemas import SIMPLE_HELPER_TYPES
 logger = logging.getLogger(__name__)
 
 # The component reports ``secret_scrub_degraded`` when secrets.yaml exists but
-# cannot be read; its flow-helper options then went out unscrubbed.
+# cannot be read (its flow-helper options then went out unscrubbed), and
+# ``helper_flows_degraded`` when Core's loader could not list the helper flows.
 _SCRUB_DEGRADED_WARNING = (
     "secrets.yaml could not be read, so flow-helper options in this listing were "
     "not scrubbed of resolved !secret values."
 )
+_FLOWS_DEGRADED_WARNING = (
+    "Home Assistant's loader could not list its helper flows, so custom helper "
+    "integrations are missing from this listing."
+)
 
 
-def _scrub_warnings(result: dict[str, Any]) -> list[str]:
-    """The warning for a component result whose secret scrub degraded, if any."""
-    return (
-        [_SCRUB_DEGRADED_WARNING] if result.get("secret_scrub_degraded") is True else []
+def _component_warnings(result: dict[str, Any]) -> list[str]:
+    """The warnings for a component result whose flow-helper read degraded."""
+    flags = (
+        ("secret_scrub_degraded", _SCRUB_DEGRADED_WARNING),
+        ("helper_flows_degraded", _FLOWS_DEGRADED_WARNING),
     )
+    return [warning for key, warning in flags if result.get(key) is True]
 
 
 def listed_items(listed: Any) -> list[Any]:
@@ -102,6 +109,9 @@ def _shape_flow_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
     options = rec.get("options")
     if isinstance(options, dict):
         out["options"] = options
+    withheld = rec.get("options_withheld")
+    if withheld is not None:
+        out["options_withheld"] = withheld
     return out
 
 
@@ -186,7 +196,7 @@ def _shape_component_helpers_response(
         "helpers": helpers,
         "message": f"Found {len(helpers)} {helper_type} helper(s)",
     }
-    if want_flow and (warnings := _scrub_warnings(result)):
+    if want_flow and (warnings := _component_warnings(result)):
         response["warnings"] = warnings
     return response
 
@@ -295,7 +305,7 @@ async def shape_all_helpers_response(
                 ],
             )
         )
-    merge_warnings = _scrub_warnings(result)
+    merge_warnings = _component_warnings(result)
     for helper_type in sorted(SIMPLE_HELPER_TYPES - covered_set):
         legacy = await legacy_list(helper_type)
         # legacy_list joins the registry (issue #1945) and, degrade-

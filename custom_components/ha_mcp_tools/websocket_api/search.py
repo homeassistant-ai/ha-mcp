@@ -25,7 +25,7 @@ from .constants import (
     SEARCH_TYPE_SCENE,
     SEARCH_TYPE_SCRIPT,
 )
-from .flow_domains import _flow_helper_domains
+from .flow_domains import HELPER_FLOWS_DEGRADED_WARNING, _flow_helper_domains
 from .registry import (
     _area_name,
     _device_dict_repr,
@@ -40,7 +40,12 @@ from .registry import (
 )
 from .search_config import _search_config_surface, _search_helpers
 from .search_score import _apply_hidden_penalty, _text_tier, _tokenize
-from .secrets import SCRUB_DEGRADED_WARNING, _load_secret_scrub, _load_secret_values
+from .secrets import (
+    SCRUB_DEGRADED_MATCH_WARNING,
+    SCRUB_DEGRADED_WARNING,
+    _load_secret_scrub,
+    _load_secret_values,
+)
 from .visibility import (
     _visibility_hidden_set,
     _visibility_inventory,
@@ -56,6 +61,7 @@ def _do_search(  # noqa: PLR0915
     secret_scrub_degraded: bool = False,
     flow_domains: frozenset[str] = FLOW_HELPER_DOMAINS,
     custom_domains: frozenset[str] = frozenset(),
+    helper_flows_degraded: bool = False,
 ) -> dict[str, Any]:
     """Unified in-process search. Pure over ``hass`` — the WS wrapper is thin.
 
@@ -66,9 +72,10 @@ def _do_search(  # noqa: PLR0915
     loop by :func:`_search_prep` and passed in (default empty — the loader is
     skipped for an entity-only search, and direct callers/tests supply it
     explicitly). It keeps this function a pure, synchronous in-memory read.
-    Flow-helper ``options`` are emitted under ``include_config``, so a degraded
-    scrub (reported by the pre-step for a helper search) adds
-    :data:`SCRUB_DEGRADED_WARNING` to ``warnings`` there.
+    A degraded scrub (reported by the pre-step for a helper search) adds
+    :data:`SCRUB_DEGRADED_WARNING` to ``warnings`` when ``include_config`` is set
+    and :data:`SCRUB_DEGRADED_MATCH_WARNING` when it is not; a failed loader read
+    adds :data:`HELPER_FLOWS_DEGRADED_WARNING`.
     """
     query_lower = (params.get("query") or "").strip().lower()
     match_all = not query_lower
@@ -251,23 +258,40 @@ def _do_search(  # noqa: PLR0915
         result,
         diagnostics,
         visibility_warnings,
-        scrub_degraded=secret_scrub_degraded and include_config,
+        _degradation_warnings(
+            scrub_degraded=secret_scrub_degraded,
+            include_config=include_config,
+            flows_degraded=helper_flows_degraded,
+        ),
     )
     return add_location_metadata(result, location)
+
+
+def _degradation_warnings(
+    *, scrub_degraded: bool, include_config: bool, flows_degraded: bool
+) -> list[str]:
+    """The warnings for a pre-step that ran degraded (helper searches only)."""
+    out: list[str] = []
+    if scrub_degraded:
+        out.append(
+            SCRUB_DEGRADED_WARNING if include_config else SCRUB_DEGRADED_MATCH_WARNING
+        )
+    if flows_degraded:
+        out.append(HELPER_FLOWS_DEGRADED_WARNING)
+    return out
 
 
 def _add_optional_keys(
     result: dict[str, Any],
     diagnostics: dict[str, int],
     visibility_warnings: list[str],
-    *,
-    scrub_degraded: bool,
+    degradation_warnings: list[str],
 ) -> None:
     """Set the keys a search response carries only when they have content."""
     if diagnostics:
         result["diagnostics"] = diagnostics
-    if scrub_degraded:
-        result.setdefault("warnings", []).append(SCRUB_DEGRADED_WARNING)
+    if degradation_warnings:
+        result.setdefault("warnings", []).extend(degradation_warnings)
     # Additive (present only when non-empty, no schema_version bump): the server's
     # ha_search consumer merges these into the response's top-level warnings.
     if visibility_warnings:

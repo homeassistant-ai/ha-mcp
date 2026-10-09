@@ -90,21 +90,27 @@ def _collect_secret_strings(raw: dict[Any, Any]) -> frozenset[str]:
     return frozenset(values)
 
 
-# Added to a helper ``search``'s ``warnings`` when the scrub degraded and the
-# response carries flow-helper options; the server merges it into ``ha_search``.
+# Added to a helper ``search``'s ``warnings`` when the scrub degraded: the first
+# when the response emits flow-helper options (``include_config``), the second
+# when only the match corpus went unscrubbed. The server merges them into
+# ``ha_search``.
 SCRUB_DEGRADED_WARNING = (
     "secrets.yaml could not be read, so flow-helper options in this response "
     "were not scrubbed of resolved !secret values."
+)
+SCRUB_DEGRADED_MATCH_WARNING = (
+    "secrets.yaml could not be read, so this search matched flow-helper options "
+    "without the !secret scrub; a match_in_config hit may confirm a secret value."
 )
 
 
 def _load_secret_values(hass: HomeAssistant) -> frozenset[str]:
     """The ``secrets.yaml`` scrub set (see :func:`_load_secret_scrub`); degraded dropped.
 
-    A ``search`` without the helper surface only filters its match corpus, so it
-    does not surface the degraded signal (that filtering degrading open is the
-    pre-PR behaviour); the ``config_entries`` / ``helpers_list`` / helper ``search``
-    preps call :func:`_load_secret_scrub` directly so they can surface it.
+    A ``search`` without the helper surface only filters its match corpus, and that
+    filter is best-effort by design, so it drops the degraded signal; the
+    ``config_entries`` / ``helpers_list`` / helper ``search`` preps call
+    :func:`_load_secret_scrub` directly so they can surface it.
     """
     values, _degraded = _load_secret_scrub(hass)
     return values

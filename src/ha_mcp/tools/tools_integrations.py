@@ -2265,8 +2265,8 @@ class IntegrationTools:
         WARNING: Removing a helper or integration that is referenced by
         automations, scripts, or other integrations may cause those to fail.
         Use ha_search() / ha_get_integration() to verify before removal.
-        Auto-backup recreates only removed FLOW helpers and config subentries; re-add
-        any other removed helper or entry yourself (otp: the user, in the HA UI).
+        ha_manage_backup(scope="edits", action="restore") recreates only removed FLOW
+        helpers and config subentries; re-add others yourself (otp: the user, HA UI).
         """
         # === Confirm gate (uniform for every path) ===
         if not confirm:

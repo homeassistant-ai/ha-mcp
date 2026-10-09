@@ -7,6 +7,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from ha_mcp.tools.search import component as search_component
+
+from ._component_routing_helpers import patch_ws
+from .test_component_search_visibility_contract import _real_search_ws
 from .test_component_ws_search import (
     FakeConfig,
     FakeConfigEntry,
@@ -14,11 +18,13 @@ from .test_component_ws_search import (
     empty_view,  # noqa: F401 - pytest fixture
     wsapi,
 )
+from .test_ha_search_component_routing import RoutingClient, _build_ha_search
 
 pytestmark = pytest.mark.usefixtures("empty_view")
 
 _MARKER = "flowdomainoption5521"
 _CORE_MARKER = "coreoverrideoption7713"
+_UNREADABLE_SECRETS = "key: [unclosed\n"
 
 
 def _search(entry: FakeConfigEntry, query: str, **extra: object) -> dict:
@@ -71,11 +77,17 @@ def test_search_indexes_only_the_helpers_core_lists(domain: str, listed: bool) -
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "prep,msg",
-    [("_helpers_list_prep", {}), ("_search_prep", {"search_types": ["helper"]})],
+    [
+        ("_helpers_list_prep", {}),
+        ("_search_prep", {"search_types": ["helper"]}),
+        ("_search_prep", {}),
+    ],
 )
-async def test_prep_asks_core_for_its_helper_flows(
+async def test_custom_helper_integrations_reach_listing_and_search(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, prep: str, msg: dict
 ) -> None:
+    """Both commands take Core's helper flows, custom helper integrations
+    included, and withhold only the custom-only domains' options."""
     loader = _loader(monkeypatch, {"template", "my_helper"})
     hass = _hass(tmp_path)
     extra = await getattr(wsapi, prep)(hass, msg)
@@ -93,7 +105,7 @@ async def test_prep_asks_core_for_its_helper_flows(
         ("_search_prep", {"search_types": ["automation"]}),
     ],
 )
-async def test_prep_without_flow_helpers_skips_the_helper_flow_lookup(
+async def test_requests_without_flow_helpers_do_not_wait_on_the_loader(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, prep: str, msg: dict
 ) -> None:
     loader = _loader(monkeypatch, set())
@@ -103,12 +115,35 @@ async def test_prep_without_flow_helpers_skips_the_helper_flow_lookup(
 
 
 @pytest.mark.asyncio
+async def test_a_failed_loader_read_lists_core_helpers_and_says_so(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A loader failure must not fail the command (the server would report the
+    component as missing); it falls back to Core's own list, withholds nothing
+    custom, and reports the gap."""
+    monkeypatch.setattr(
+        wsapi, "async_get_config_flows", AsyncMock(side_effect=RuntimeError("boom"))
+    )
+    entry = FakeConfigEntry("template", title="Sun Helper", options={"k": 1})
+    hass = _hass(tmp_path, [entry])
+    extra = await wsapi._helpers_list_prep(hass, {})
+    assert extra["flow_domains"] == wsapi.FLOW_HELPER_DOMAINS
+    assert extra["custom_domains"] == frozenset()
+    listing = wsapi._do_helpers_list(hass, {}, **extra)
+    assert [h["helper_type"] for h in _flow(listing)] == ["template"]
+    assert listing["helper_flows_degraded"] is True
+    msg = {"search_types": ["helper"], "query": "sun helper"}
+    found = wsapi._do_search(hass, msg, **await wsapi._search_prep(hass, msg))
+    assert wsapi.HELPER_FLOWS_DEGRADED_WARNING in found["warnings"]
+
+
+@pytest.mark.asyncio
 async def test_helpers_list_withholds_only_custom_only_options(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Through the real pre-step: a custom-only helper is listed without its
-    options, while a Core helper domain keeps them even if a custom integration
-    overrides it."""
+    options and marked as withheld, while a Core helper domain keeps them even if
+    a custom integration overrides it."""
     _loader(monkeypatch, {"template", "my_helper"})
     hass = _hass(
         tmp_path,
@@ -119,8 +154,11 @@ async def test_helpers_list_withholds_only_custom_only_options(
     )
     extra = await wsapi._helpers_list_prep(hass, {})
     res = wsapi._do_helpers_list(hass, {}, **extra)
-    options = {h["helper_type"]: h["options"] for h in _flow(res)}
-    assert options == {"template": {"k": _CORE_MARKER}, "my_helper": None}
+    flow = {h["helper_type"]: h for h in _flow(res)}
+    assert flow["template"]["options"] == {"k": _CORE_MARKER}
+    assert "options_withheld" not in flow["template"]
+    assert flow["my_helper"]["options"] is None
+    assert flow["my_helper"]["options_withheld"] == "custom_integration"
     assert "my_helper" in res["covered_types"]
     assert _MARKER not in json.dumps(res)
     only = wsapi._do_helpers_list(hass, {"helper_types": ["my_helper"]}, **extra)
@@ -139,9 +177,9 @@ async def test_search_matches_custom_only_helpers_on_title_only(
     msg = {"search_types": ["helper"], "include_config": True}
     extra = await wsapi._search_prep(hass, msg)
     by_title = wsapi._do_search(hass, {**msg, "query": "custom helper"}, **extra)
-    assert [(h["helper_type"], h["options"]) for h in _flow(by_title)] == [
-        ("my_helper", None)
-    ]
+    (record,) = _flow(by_title)
+    assert (record["helper_type"], record["options"]) == ("my_helper", None)
+    assert record["options_withheld"] == "custom_integration"
     assert _MARKER not in json.dumps(by_title)
     by_option = wsapi._do_search(hass, {**msg, "query": _MARKER}, **extra)
     assert _flow(by_option) == []
@@ -164,12 +202,18 @@ def test_search_scrubs_resolved_secrets_from_flow_helper_options() -> None:
 
 
 @pytest.mark.parametrize(
-    "degraded,include_config,warned",
-    [(True, True, True), (True, False, False), (False, True, False)],
+    "degraded,include_config,warning",
+    [
+        (True, True, "SCRUB_DEGRADED_WARNING"),
+        (True, False, "SCRUB_DEGRADED_MATCH_WARNING"),
+        (False, True, None),
+    ],
 )
-def test_search_warns_of_a_degraded_scrub_when_it_emits_options(
-    degraded: bool, include_config: bool, warned: bool
+def test_search_warns_when_options_were_handled_without_the_scrub(
+    degraded: bool, include_config: bool, warning: str | None
 ) -> None:
+    """Emitted options and the match corpus both go unscrubbed when secrets.yaml
+    is unreadable; each case gets its own warning."""
     entry = FakeConfigEntry("template", title="Sun Helper", entry_id="e1")
     res = wsapi._do_search(
         FakeHass(config_entries=[entry]),
@@ -180,13 +224,37 @@ def test_search_warns_of_a_degraded_scrub_when_it_emits_options(
         },
         secret_scrub_degraded=degraded,
     )
-    assert (wsapi.SCRUB_DEGRADED_WARNING in res.get("warnings", [])) is warned
+    expected = [getattr(wsapi, warning)] if warning else []
+    assert res.get("warnings", []) == expected
 
 
 @pytest.mark.asyncio
 async def test_helper_search_prep_reports_an_unreadable_secrets_file(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "secrets.yaml").write_text("key: [unclosed\n", encoding="utf-8")
+    (tmp_path / "secrets.yaml").write_text(_UNREADABLE_SECRETS, encoding="utf-8")
     extra = await wsapi._search_prep(_hass(tmp_path), {"search_types": ["helper"]})
     assert extra["secret_scrub_degraded"] is True
+
+
+@pytest.mark.asyncio
+async def test_ha_search_shows_the_scrub_warning_and_the_withheld_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """End to end through ha_search: the component's warning and the
+    options_withheld marker survive the server's response shaping."""
+    _loader(monkeypatch, {"template", "my_helper"})
+    (tmp_path / "secrets.yaml").write_text(_UNREADABLE_SECRETS, encoding="utf-8")
+    hass = _hass(
+        tmp_path,
+        [FakeConfigEntry("my_helper", title="Sun Helper", options={"k": _MARKER})],
+    )
+    ha_search = _build_ha_search(RoutingClient())
+    with patch_ws(_real_search_ws(hass), search_component):
+        resp = await ha_search(
+            query="sun helper", search_types=["helper"], include_config=True
+        )
+    assert wsapi.SCRUB_DEGRADED_WARNING in resp["warnings"]
+    (record,) = resp["helpers"]
+    assert record["options_withheld"] == "custom_integration"
+    assert record["config"] is None

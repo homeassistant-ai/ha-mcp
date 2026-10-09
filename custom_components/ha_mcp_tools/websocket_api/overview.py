@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
 from .constants import FLOW_HELPER_DOMAINS, HELPERS_LIST_COLLECTION_DOMAINS
-from .flow_domains import _flow_helper_domains
+from .flow_domains import OPTIONS_WITHHELD_CUSTOM, _flow_helper_domains
 from .registry import (
     _all_area_entries,
     _all_device_entries,
@@ -53,11 +53,14 @@ def _do_helpers_list(
     secret_scrub_degraded: bool = False,
     flow_domains: frozenset[str] = FLOW_HELPER_DOMAINS,
     custom_domains: frozenset[str] = frozenset(),
+    helper_flows_degraded: bool = False,
 ) -> dict[str, Any]:
     """List collection helpers (live state bodies) + flow helpers (config-entry options).
 
     Flow-helper ``options`` come straight from ``ConfigEntry.options`` (``None``
-    for a custom-only domain, see :func:`_flow_helper_domains`) — no
+    with ``options_withheld`` for a custom-only domain, and
+    ``helper_flows_degraded: true`` when the loader read failed; see
+    :func:`_flow_helper_domains`) — no
     OptionsFlow start/abort dance, and NEVER ``entry.data`` (integration
     credentials). Every record carries the CURRENT entity_id + display name from
     the entity registry so a renamed helper shows current values (issue #1794),
@@ -100,6 +103,8 @@ def _do_helpers_list(
     }
     if include_flow and secret_scrub_degraded:
         result["secret_scrub_degraded"] = True
+    if include_flow and helper_flows_degraded:
+        result["helper_flows_degraded"] = True
     return result
 
 
@@ -211,18 +216,19 @@ def _flow_helpers_list(
         reg = entity_by_entry.get(entry_id)
         entity_id = getattr(reg, "entity_id", None) if reg is not None else None
         name = _reg_name(reg) or _current_friendly_name(hass, entity_id, title)
-        out.append(
-            {
-                "helper_type": domain,
-                "kind": "flow",
-                "entry_id": entry_id,
-                "entity_id": entity_id,
-                "name": str(name) if name else title,
-                "storage_id": entry_id,
-                # Data minimization: options only, never entry.data.
-                "options": options,
-            }
-        )
+        record: dict[str, Any] = {
+            "helper_type": domain,
+            "kind": "flow",
+            "entry_id": entry_id,
+            "entity_id": entity_id,
+            "name": str(name) if name else title,
+            "storage_id": entry_id,
+            # Data minimization: options only, never entry.data.
+            "options": options,
+        }
+        if options is None:
+            record["options_withheld"] = OPTIONS_WITHHELD_CUSTOM
+        out.append(record)
     return out
 
 

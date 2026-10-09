@@ -86,6 +86,8 @@ def _normalize_component_config_record(
             out["entity_id"] = entity_id
         out["helper_type"] = rec.get("helper_type")
         out["name"] = name
+        if rec.get("options_withheld") is not None:
+            out["options_withheld"] = rec["options_withheld"]
     else:
         out["entity_id"] = entity_id
         if bucket == "scripts":
