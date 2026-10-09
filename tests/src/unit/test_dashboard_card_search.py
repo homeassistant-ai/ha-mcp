@@ -540,7 +540,7 @@ class TestReviewedSearchEdges:
         result = self._search(config, card_type="badge")
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[0]"]
 
-    def test_cards_mapping_is_reported_as_malformed(self) -> None:
+    def test_cards_mapping_is_reported_as_read_as_text(self) -> None:
         config = {
             "views": [
                 {
@@ -555,7 +555,9 @@ class TestReviewedSearchEdges:
         }
         result = self._search(config, entity_id="light.a")
         assert result["match_count"] == 0
-        assert any(".views[0].cards[0].cards" in w for w in result["warnings"])
+        [warning] = result["warnings"]
+        assert ".views[0].cards[0].cards" in warning
+        assert "not searched" not in warning
 
     def test_alarm_panel_states_list_is_not_malformed(self) -> None:
         config = {
@@ -575,7 +577,7 @@ class TestReviewedSearchEdges:
         assert result["match_count"] == 1
         assert "warnings" not in result
 
-    def test_card_list_is_reported_as_malformed(self) -> None:
+    def test_card_list_is_reported_as_read_as_text(self) -> None:
         config = {
             "views": [
                 {
@@ -590,7 +592,9 @@ class TestReviewedSearchEdges:
         }
         result = self._search(config, entity_id="light.a")
         assert result["match_count"] == 0
-        assert any(".views[0].cards[0].card" in w for w in result["warnings"])
+        [warning] = result["warnings"]
+        assert ".views[0].cards[0].card" in warning
+        assert "not searched" not in warning
 
     def test_query_matches_number_and_boolean_options(self) -> None:
         config = {
