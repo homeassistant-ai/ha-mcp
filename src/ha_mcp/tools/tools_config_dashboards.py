@@ -543,6 +543,10 @@ def _walk_card(
         if match is not None:
             matches.append(match)
         _note_uncovered(card, jq_prefix, frame)
+    elif frame.criteria.can_match_cards():
+        # Only top-level and header entries reach here untyped (nested ones are
+        # leaves of their parent); the frontend renders them as error cards.
+        frame.gaps.malformed.append(jq_prefix)
     child_frame = frame.descend()
     for jq_suffix, py_suffix, child in split.cards:
         matches.extend(
@@ -600,6 +604,17 @@ def _query_hits(
     return [{"field": f, "value": v} for f, v in leaves if query_lower in v.lower()]
 
 
+def _split_badge(badge: Any, out: _CardSplit) -> None:
+    """``_split_card_node`` for a badge, folding any card nested in it into its leaves.
+
+    A badge is one match, so text under a card it holds is the badge's own.
+    """
+    _split_card_node(badge, ("", ""), "badges", out)
+    while out.cards:
+        jq, py, card = out.cards.pop()
+        _split_card_node(card, (jq, py), "", out)
+
+
 def _find_badge_matches_in_view(
     view: dict[str, Any], frame: _CardWalkFrame
 ) -> list[dict[str, Any]]:
@@ -628,9 +643,12 @@ def _find_badge_matches_in_view(
             badge, criteria.entity_id
         ):
             continue
+        badge_jq = f".views[{view_idx}].badges[{badge_idx}]"
         split = _CardSplit()
         if criteria.query is not None:
-            _split_card_node(badge, ("", ""), "badges", split)
+            _split_badge(badge, split)
+            frame.gaps.truncation.extend(badge_jq + cut for cut in split.cut)
+            frame.gaps.malformed.extend(badge_jq + path for path in split.malformed)
         hits = _query_hits(split.leaves, criteria.query_lower)
         if hits == []:
             continue
@@ -639,7 +657,7 @@ def _find_badge_matches_in_view(
             "section_index": None,
             "card_index": None,
             "badge_index": badge_idx,
-            "jq_path": f".views[{view_idx}].badges[{badge_idx}]",
+            "jq_path": badge_jq,
             "card_type": _BADGE_CARD_TYPE,
             "card_config": badge if is_dict_badge else {"entity": badge},
         }

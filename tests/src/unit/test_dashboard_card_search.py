@@ -600,3 +600,34 @@ class TestReviewedSearchEdges:
             {"field": "columns", "value": "3"}
         ]
         assert self._search(config, query="false")["match_count"] == 1
+
+    def test_untyped_top_level_card_is_reported_as_malformed(self) -> None:
+        config = {"views": [{"cards": [{"entity": "light.a"}]}]}
+        result = self._search(config, query="light.a")
+        assert result["match_count"] == 0
+        assert any(".views[0].cards[0]" in w for w in result["warnings"])
+
+    def test_query_reads_a_card_nested_in_a_badge(self) -> None:
+        config = {
+            "views": [
+                {
+                    "badges": [
+                        {
+                            "type": "entity",
+                            "entity": "sensor.door",
+                            "card": {"type": "markdown", "content": "light.garage"},
+                        }
+                    ]
+                }
+            ]
+        }
+        result = self._search(config, query="light.garage")
+        assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[0]"]
+
+    def test_depth_cut_inside_a_badge_is_reported(self) -> None:
+        options: dict[str, Any] = {"entity": "light.deep"}
+        for _ in range(150):
+            options = {"n": options}
+        badge = {"type": "entity", "entity": "sensor.a", "options": options}
+        result = self._search({"views": [{"badges": [badge]}]}, query="light.deep")
+        assert any("depth bound" in w for w in result["warnings"])
