@@ -151,10 +151,14 @@ def raise_flow_helper_lookup_error(
                     "entity_id": entity_id,
                 },
                 suggestions=[
-                    "Omit helper_type: the entity's registry entry then "
-                    "identifies the helper.",
-                    "To delete an integration's config entry, pass its "
-                    "entry_id as target and omit helper_type.",
+                    (
+                        "Omit helper_type: the entity's registry entry then "
+                        "identifies the helper."
+                    ),
+                    (
+                        "To delete an integration's config entry, pass its "
+                        "entry_id as target and omit helper_type."
+                    ),
                 ],
             )
         )
@@ -289,8 +293,10 @@ async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None
             context={"target": entity_id, "platform": platform},
             suggestions=[
                 "To remove only this entity, use ha_remove_entity().",
-                "To delete the integration's config entry, pass its entry_id "
-                "as target.",
+                (
+                    "To delete the integration's config entry, pass its "
+                    "entry_id as target."
+                ),
             ],
         )
     )

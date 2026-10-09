@@ -2347,8 +2347,11 @@ class IntegrationTools:
                 e,
                 context={"target": entity_id},
                 suggestions=[
-                    "Reading the entity registry or Home Assistant's helper "
-                    "list failed; retry, or pass helper_type explicitly.",
+                    (
+                        "Reading the entity registry or Home Assistant's "
+                        "helper list failed; retry, or pass helper_type "
+                        "explicitly."
+                    ),
                 ],
             )
             return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
