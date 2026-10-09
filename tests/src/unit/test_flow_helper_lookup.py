@@ -1,9 +1,12 @@
 """Unit tests for the flow-helper entity → config entry lookup."""
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
@@ -62,7 +65,9 @@ class TestGetEntryIdForFlowHelper:
         client.send_websocket_message.assert_not_awaited()
 
     async def test_returns_none_when_entity_not_in_registry(self) -> None:
-        client = _make_client({"success": False, "error": "not_found"})
+        client = _make_client(
+            {"success": False, "error": "Entity not found", "error_code": "not_found"}
+        )
         entry_id, reason = await get_entry_id_for_flow_helper(
             client, "template", "template.ghost"
         )
@@ -124,3 +129,19 @@ class TestGetEntryIdForFlowHelper:
         client = _make_client(raises=HomeAssistantAuthError("token expired"))
         with pytest.raises(HomeAssistantAuthError):
             await get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")
+
+
+async def test_blocked_registry_read_is_not_reported_as_missing() -> None:
+    """A proxy-blocked read is no evidence the entity is absent."""
+    client = _make_client(
+        {
+            "success": False,
+            "error": "WebSocket request blocked (403 Forbidden): denied",
+            "error_code": None,
+        }
+    )
+    with pytest.raises(ToolError) as exc_info:
+        await get_entry_id_for_flow_helper(client, "template", "template.x")
+    err = json.loads(str(exc_info.value))["error"]
+    assert err["code"] == "SERVICE_CALL_FAILED"
+    assert "403 Forbidden" in err["message"]

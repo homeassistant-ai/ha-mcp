@@ -159,3 +159,27 @@ async def test_update_path_refuses_an_unusable_range_before_writing() -> None:
     )
     update = client.send_websocket_message.await_args.args[0]
     assert update["type"] == "counter/update" and update["name"] == "Renamed"
+
+
+async def test_item_vanishing_before_the_update_reports_like_the_read() -> None:
+    """Core's not_found on <type>/update is the same missing item the stored
+    read reports as CONFIG_NOT_FOUND, so the caller sees one code for it."""
+    from unittest.mock import AsyncMock
+
+    from ha_mcp.tools.config_helpers.update import _execute_legacy_update
+
+    stored = {"id": "c1", "name": "Count", "minimum": 0, "maximum": 10, "step": 1}
+    client = AsyncMock()
+    client.send_websocket_message.side_effect = [
+        {"success": True, "result": [stored]},
+        {
+            "success": False,
+            "error": "Unable to find counter_id c1",
+            "error_code": "not_found",
+        },
+    ]
+    with pytest.raises(ToolError) as exc_info:
+        await _execute_legacy_update(
+            client, "counter", "counter.count", "c1", "Renamed", None, {}
+        )
+    assert json.loads(str(exc_info.value))["error"]["code"] == "CONFIG_NOT_FOUND"

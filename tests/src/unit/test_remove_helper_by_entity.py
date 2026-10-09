@@ -164,3 +164,13 @@ async def test_yaml_helper_that_only_core_lists_is_not_found() -> None:
         {"entity_id": "sensor.my_otp", "platform": "otp", "config_entry_id": None}
     )
     assert await _refused(client, "sensor.my_otp") == "RESOURCE_NOT_FOUND"
+
+
+async def test_registry_transport_failure_names_its_cause() -> None:
+    client = _client(None)
+    client.send_websocket_message = AsyncMock(side_effect=ConnectionError("ws drop"))
+    with pytest.raises(ToolError) as exc_info:
+        await _remove(client, "sensor.energy_peak")
+    err = json.loads(str(exc_info.value))["error"]
+    assert err["code"] == "WEBSOCKET_DISCONNECTED"
+    assert "ws drop" in err["message"]
