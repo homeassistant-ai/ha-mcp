@@ -54,15 +54,23 @@ Run it **from your fork only**. The job refuses to run in
 4. Once the run reaches "Keep running", download and decrypt the URLs:
    ```bash
    gh run download <run-id> -R <you>/ha-mcp -n dev-ha-env-urls
-   openssl pkeyutl -decrypt -inkey devenv-key.pem -pkeyopt rsa_padding_mode:oaep -in dev-ha-env-urls.enc
+   openssl pkeyutl -decrypt -inkey devenv-key.pem -pkeyopt rsa_padding_mode:oaep -in dev-ha-env-urls.enc -out dev-ha-env-urls.txt
+   cat dev-ha-env-urls.txt
    ```
    `HA:` is the HA UI and API. `MCP:` is your branch's server (streamable
    HTTP, path included), ready to add to an MCP client.
 
    Test through `MCP:`, the way an agent uses the server: add it to your
    client as a regular MCP server, or, when the agent's client cannot load a
-   new server mid-session, have the agent build a small shim that sends
-   `tools/list` and `tools/call` to that URL and drive it one call at a time.
+   new server mid-session, drive it one call at a time through a shim that
+   sends `tools/list` and `tools/call` to that URL.
+   [`.github/dev-ha-env/mcpshim.py`](../.github/dev-ha-env/mcpshim.py) is an
+   example; agents can modify it as needed:
+   ```bash
+   python3 .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt tools
+   python3 .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt describe ha_search
+   python3 .github/dev-ha-env/mcpshim.py dev-ha-env-urls.txt call ha_search '{"query": "kitchen"}'
+   ```
    Do the setup and the checks with the tools as well. Creating or verifying
    state through `HA:`'s REST API routes around the tools under test, so a
    gap in them goes unnoticed.
