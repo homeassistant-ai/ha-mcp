@@ -8,9 +8,7 @@ error" from Supervisor.
 
 from __future__ import annotations
 
-import shutil
 import sys
-import tarfile
 import types
 from pathlib import Path
 
@@ -65,12 +63,12 @@ def _load_dev_env_holder(monkeypatch: pytest.MonkeyPatch) -> object:
 
     source_path = _REPO_ROOT / ".github" / "dev-ha-env" / "hold.py"
     run_path = _REPO_ROOT / "tests" / "src" / "e2e" / "hold.py"
-    monkeypatch.setenv("TRACK_REF", "unit-test")
+    flags = _conftest_embedded._EMBEDDED_FEATURE_FLAGS
+    # The holder edits the shared flags at import; restore them afterwards.
     monkeypatch.setitem(
-        _conftest_embedded._EMBEDDED_FEATURE_FLAGS,
-        "enable_strict_mandatory_bps",
-        _conftest_embedded._EMBEDDED_FEATURE_FLAGS["enable_strict_mandatory_bps"],
+        flags, "enable_strict_mandatory_bps", flags["enable_strict_mandatory_bps"]
     )
+    monkeypatch.setitem(flags, "enable_dev_mode", False)
     monkeypatch.syspath_prepend(str(_REPO_ROOT / "tests" / "src"))
     module = types.ModuleType("tests.src.e2e._dev_env_holder")
     module.__file__ = str(run_path)
@@ -82,31 +80,13 @@ def _load_dev_env_holder(monkeypatch: pytest.MonkeyPatch) -> object:
     return module
 
 
-@pytest.mark.skipif(shutil.which("tar") is None, reason="needs the tar CLI")
-def test_the_dev_env_holder_stages_every_file_its_dockerfile_copies(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_the_dev_env_runs_its_embedded_server_in_developer_mode(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``hold.py`` builds the app context itself, so check the archive it ships."""
-    holder = _load_dev_env_holder(monkeypatch)
+    """docs/dev-ha-env.md updates the embedded server with ha_dev_manage_server,
+    which only a server in developer mode exposes."""
+    from tests.src.e2e import _conftest_embedded
 
-    archive = holder.build_dev_addon_source_tar(tmp_path, "abc1234")  # type: ignore[attr-defined]
+    _load_dev_env_holder(monkeypatch)
 
-    with tarfile.open(archive) as tar:
-        members = set(tar.getnames())
-        dockerfile = tar.extractfile("ha_mcp_dev/Dockerfile")
-        assert dockerfile is not None
-        lines = dockerfile.read().decode("utf-8").splitlines()
-    sources: set[str] = set()
-    for line in lines:
-        words = line.split()
-        if not words or words[0] != "COPY" or any("--from=" in w for w in words):
-            continue
-        sources.update(word.rstrip("/") for word in words[1:-1])
-    assert sources, "found no COPY sources in the staged Dockerfile"
-    missing = sorted(
-        source
-        for source in sources
-        if f"ha_mcp_dev/{source}" not in members
-        and not any(name.startswith(f"ha_mcp_dev/{source}/") for name in members)
-    )
-    assert missing == []
+    assert _conftest_embedded._EMBEDDED_FEATURE_FLAGS["enable_dev_mode"] is True

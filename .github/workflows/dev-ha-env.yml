@@ -3,8 +3,9 @@ name: Dev HA environment
 # A live HA test instance behind temporary Cloudflare tunnels, for testing a
 # branch against a real HA without using your own: Docker or HAOS, with the
 # server standalone, embedded in the component, or as the app (HAOS). Run it
-# from your fork, never from homeassistant-ai/ha-mcp. It follows track_ref and
-# applies each new commit the way a user's update would. The tunnel URLs are
+# from your fork, never from homeassistant-ai/ha-mcp. It starts track_ref's
+# commit (standalone and embedded servers in developer mode); iterate with
+# ha-mcp's own update tools, as on any live instance. The tunnel URLs are
 # only in the `dev-ha-env-urls` artifact, encrypted to the RSA public key the
 # run was started with. Cancel the run when done.
 # Usage: docs/dev-ha-env.md
@@ -26,7 +27,7 @@ on:
         description: "How the server runs: standalone beside HA, embedded in the component, or the app (haos only)"
         type: choice
         options: [standalone, embedded, app]
-        default: standalone
+        default: embedded
       no_component:
         description: Without the ha_mcp_tools File & YAML Tools entry (like the no-tools E2E lanes)
         type: boolean
@@ -91,7 +92,9 @@ jobs:
         with:
           path: devenv
           persist-credentials: false
-          sparse-checkout: .github/dev-ha-env/hold.py
+          sparse-checkout: |
+            .github/dev-ha-env/hold.py
+            .github/dev-ha-env/tunnels.sh
           sparse-checkout-cone-mode: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -235,48 +238,62 @@ jobs:
             sleep 5
           done
           if [ ! -s targets.json ]; then echo "HA never came up"; tail -150 env.log; exit 1; fi
-          tunnel() {
-            nohup ./cloudflared tunnel --no-autoupdate --url "$1" > "$2" 2>&1 &
-            echo $! >> tunnel.pids
-            url=""
-            for i in $(seq 1 60); do
-              url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$2" | head -1)
-              [ -n "$url" ] && break
-              sleep 2
-            done
-            [ -n "$url" ] || { echo "A tunnel never came up"; exit 1; }
-            echo "::add-mask::$url"
-            echo "::add-mask::${url#https://}"
-          }
           target() { python3 -c "import json,sys;print(json.load(open('targets.json'))[sys.argv[1]])" "$1"; }
-          tunnel "$(target ha)" tunnel-ha.log
-          HA_URL=$url
-          tunnel "$(target mcp)" tunnel-mcp.log
-          MCP_URL=$url
-          printf 'HA:  %s\nMCP: %s%s\n' "$HA_URL" "$MCP_URL" "$(target mcp_path)" > urls.txt
-          mkdir out
-          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/url-key.pem" \
-            -pkeyopt rsa_padding_mode:oaep -in urls.txt -out out/dev-ha-env-urls.enc
-          rm urls.txt targets.json
+          target mcp_path > mcp-path
+          source devenv/.github/dev-ha-env/tunnels.sh
+          # A tunnel that will not start leaves HA up: Keep running retries it.
+          start_tunnel ha "$(target ha)" || true
+          start_tunnel mcp "$(target mcp)" || true
+          publish_urls
+          rm targets.json
           grep STATUS env.log | tail -3
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dev-ha-env-urls
           path: out/dev-ha-env-urls.enc
           retention-days: 1
+      # A restarted tunnel has a new URL. Each Keep running step returns when
+      # the URLs change so the next step can upload them again; after three,
+      # new URLs are in the job log only.
       - name: Keep running
-        run: |
-          while kill -0 "$(cat hold.pid)" 2>/dev/null; do
-            sleep 60
-            grep -E "STATUS|Traceback|Error" env.log | tail -3 || true
-            for pid in $(cat tunnel.pids); do
-              if ! kill -0 "$pid" 2>/dev/null; then
-                echo "::error::A tunnel exited, so its URL is dead. Start the run again."
-                exit 1
-              fi
-            done
-          done
-          tail -80 env.log
+        id: keep-1
+        run: source devenv/.github/dev-ha-env/tunnels.sh && keep_running
+      - name: Upload the new URLs
+        if: steps.keep-1.outputs.urls_changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dev-ha-env-urls
+          path: out/dev-ha-env-urls.enc
+          retention-days: 1
+          overwrite: true
+      - name: Keep running
+        id: keep-2
+        if: steps.keep-1.outputs.urls_changed == 'true'
+        run: source devenv/.github/dev-ha-env/tunnels.sh && keep_running
+      - name: Upload the new URLs
+        if: steps.keep-2.outputs.urls_changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dev-ha-env-urls
+          path: out/dev-ha-env-urls.enc
+          retention-days: 1
+          overwrite: true
+      - name: Keep running
+        id: keep-3
+        if: steps.keep-2.outputs.urls_changed == 'true'
+        run: source devenv/.github/dev-ha-env/tunnels.sh && keep_running
+      - name: Upload the new URLs
+        if: steps.keep-3.outputs.urls_changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dev-ha-env-urls
+          path: out/dev-ha-env-urls.enc
+          retention-days: 1
+          overwrite: true
+      - name: Keep running
+        id: keep-4
+        if: steps.keep-3.outputs.urls_changed == 'true'
+        run: source devenv/.github/dev-ha-env/tunnels.sh && keep_running last
       - name: Logs
         if: always()
         run: |
