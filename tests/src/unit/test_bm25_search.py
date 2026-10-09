@@ -297,6 +297,16 @@ class TestSearchInDictBM25:
         score = smart_tools._search_in_dict(config, "kitchen motion", exact_match=False)
         assert score > 0
 
+    @pytest.mark.parametrize("exact_match", [True, False])
+    def test_deeply_nested_config_does_not_fail_the_search(
+        self, smart_tools, exact_match
+    ):
+        deep: dict = {"entity": "light.deep"}
+        for _ in range(1500):
+            deep = {"n": deep}
+        config = {"options": deep, "alias": "Kitchen"}
+        assert smart_tools._search_in_dict(config, "kitchen", exact_match) > 0
+
 
 # ---------------------------------------------------------------------------
 # Issue #1170 — fuzzy_search.py algorithmic regression tests

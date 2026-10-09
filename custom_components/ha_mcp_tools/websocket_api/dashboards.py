@@ -44,8 +44,10 @@ _DASHBOARD_MATCH_CAP = 200
 _CARD_LIST_KEY = "cards"
 _CARD_KEY = "card"
 _NAMED_CARD_MAP_KEYS = frozenset({"custom_fields", "states"})
-# Bound on non-card nesting inside one card, against pathological configs.
+# Bounds on non-card nesting inside one card and on card nesting, against
+# pathological configs.
 _MAX_NODE_DEPTH = 100
+_MAX_CARD_DEPTH = 50
 
 
 def _do_dashboards(
@@ -516,13 +518,17 @@ def _collect_one_card_matches(
     view_title: Any,
     query_lower: str,
     matches: list[dict[str, Any]],
+    card_depth: int = 0,
 ) -> None:
     """Record matches for a SINGLE card at ``card_path`` and every card below it.
 
     Shared by :func:`_collect_card_matches` (list-indexed cards) and
     :func:`_collect_header_card_matches` (a header card is a single card, not
-    list-indexed).
+    list-indexed). Cards nested more than ``_MAX_CARD_DEPTH`` levels down are
+    not read.
     """
+    if card_depth > _MAX_CARD_DEPTH:
+        return
     leaves: list[tuple[str, str]] = []
     nested: list[tuple[str, dict[str, Any]]] = []
     _walk_card_nodes(card, card_path, "", leaves, nested)
@@ -551,6 +557,7 @@ def _collect_one_card_matches(
             view_title,
             query_lower,
             matches,
+            card_depth + 1,
         )
 
 
