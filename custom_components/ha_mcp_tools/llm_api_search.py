@@ -1,13 +1,13 @@
 """The tool-search mode's ``ha_search_tools`` meta-tool (#1745, #2633).
 
-A keyword search returns compact hits (name, one-line description, one-line
-params); ``tools=[name]`` returns a tool's full description and input schema,
-the second hop the agent makes before executing it with ``ha_call_tool``.
+A keyword search returns compact hits (name, one-line description, the
+server-rendered one-line params); ``tools=[name]`` returns a tool's full
+description and input schema, the second hop the agent makes before executing
+it with ``ha_call_tool``.
 """
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
@@ -30,78 +30,9 @@ _NOT_FOUND_SUGGESTION = (
 )
 
 
-# The compact-params renderer below is a verbatim copy of the server's
-# (src/ha_mcp/transforms/categorized_search.py); this package cannot import
-# ha_mcp. tests/src/unit/test_llm_api_search.py checks the two agree.
-def _literal_labels(branch: dict[str, Any]) -> list[str | None]:
-    """Labels of the ``enum``/``const`` values *branch* admits; ``None`` is
-    kept as-is for the caller's nullable check."""
-    values = [*(branch.get("enum") or [])]
-    if "const" in branch:
-        values.append(branch["const"])
-    return [v if isinstance(v, str) or v is None else json.dumps(v) for v in values]
-
-
-def _plain_type(branch: dict[str, Any], *, nested: bool) -> str:
-    """Label of a branch without literal values."""
-    kind = branch.get("type")
-    if kind == "array":
-        return f"{_param_type(branch.get('items'))}[]"
-    if isinstance(kind, str) and kind:
-        return kind
-    if nested and (isinstance(kind, list) or "anyOf" in branch or "oneOf" in branch):
-        return _param_type(branch)
-    return "object" if {"$ref", "properties", "allOf"} & branch.keys() else "any"
-
-
-def _param_type(node: Any) -> str:
-    """Type label for one parameter: ``|`` joins union branches, enum and
-    const values are spelled out inline, ``?`` marks nullable, ``T[]`` an
-    array of ``T``."""
-    if not isinstance(node, dict):
-        return "any"
-    kind = node.get("type")
-    if isinstance(kind, list):
-        branches: list[Any] = [{**node, "type": k} for k in kind]
-    else:
-        branches = node.get("anyOf") or node.get("oneOf") or [node]
-    labels: dict[str, None] = {}
-    nullable = False
-    for branch in branches:
-        if not isinstance(branch, dict):
-            continue
-        if values := _literal_labels(branch):
-            nullable = nullable or None in values
-            labels.update(dict.fromkeys(v for v in values if v is not None))
-        elif branch.get("type") == "null":
-            nullable = True
-        else:
-            labels[_plain_type(branch, nested=branch is not node)] = None
-    if not labels:
-        return "null" if nullable else "any"
-    return "|".join(labels) + ("?" if nullable else "")
-
-
-def compact_params(schema: Any) -> str:
-    """One line naming every parameter with its type and required marker;
-    ``none`` for a tool without parameters."""
-    props = schema.get("properties") if isinstance(schema, dict) else None
-    if not isinstance(props, dict) or not props:
-        return "none"
-    required = schema.get("required")
-    required = set(required) if isinstance(required, list) else set()
-    return "; ".join(
-        f"{name} ({_param_type(field)}{', required' if name in required else ''})"
-        for name, field in props.items()
-    )
-
-
 def summary(description: str | None) -> str:
-    """The first paragraph of a tool description, on one line.
-
-    The paragraphs after it (and the server's appended BM25 keyword list)
-    come back with the full entry from ``tools=[...]``.
-    """
+    """The first paragraph of a tool description, on one line; the rest
+    comes back with the full entry from ``tools=[...]``."""
     return " ".join((description or "").split("\n\n", 1)[0].split())
 
 
@@ -203,6 +134,13 @@ class HaMcpSearchTool(llm.Tool):
             "hint": f"{name} is already in your tool list — call it directly.",
         }
 
+    def _hit(self, tool: dict[str, Any]) -> dict[str, Any]:
+        """The compact entry: name, summary line and the server's params."""
+        hit = {"name": tool["name"], "description": summary(tool["description"])}
+        if "params" in tool:
+            hit["params"] = tool["params"]
+        return hit
+
     def _full(self, names: list[str]) -> JsonObjectType:
         """Full entries for *names* in the order given; an error when none
         of them is an exposed tool."""
@@ -234,13 +172,7 @@ class HaMcpSearchTool(llm.Tool):
             reverse=True,
         )
         results = [
-            self._stub(t["name"])
-            if t["name"] in self._pinned
-            else {
-                "name": t["name"],
-                "description": summary(t["description"]),
-                "params": compact_params(t["input_schema"]),
-            }
+            self._stub(t["name"]) if t["name"] in self._pinned else self._hit(t)
             for score, t in scored[:_SEARCH_RESULT_LIMIT]
             if score > 0
         ]

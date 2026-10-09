@@ -16,14 +16,8 @@ from ._embedded_stubs import install
 
 install()
 
-import ha_mcp.server as server_module  # noqa: E402
 from custom_components.ha_mcp_tools import llm_api  # noqa: E402
 from custom_components.ha_mcp_tools.const import EXPOSURE_TOOL_SEARCH  # noqa: E402
-from custom_components.ha_mcp_tools.llm_api_search import (  # noqa: E402
-    HaMcpSearchTool,
-    compact_params,
-)
-from ha_mcp.transforms.categorized_search import _compact_params  # noqa: E402
 
 from ._llm_api_helpers import (  # noqa: E402
     fake_session,
@@ -32,9 +26,6 @@ from ._llm_api_helpers import (  # noqa: E402
     tool_entry,
 )
 from .test_llm_tool_metadata import _CoreToolResult  # noqa: E402
-from .test_search_pinned_results import (  # noqa: E402
-    toolsearch_server as toolsearch_server,
-)
 
 _FULL_SCHEMA = {
     "type": "object",
@@ -51,10 +42,17 @@ _DESCRIPTION = (
     "Create or update an automation,\nwrapped onto two lines.\n\n"
     "Guidance the agent needs once it calls the tool."
 )
+_PARAMS = "config (object, required)"
 
 
-def _tool(name: str, schema: dict[str, Any], *, exposed: bool = True) -> Any:
-    entry = tool_entry(name, exposed=exposed, description=_DESCRIPTION)
+def _tool(
+    name: str,
+    schema: dict[str, Any],
+    *,
+    exposed: bool = True,
+    params: str | None = _PARAMS,
+) -> Any:
+    entry = tool_entry(name, exposed=exposed, description=_DESCRIPTION, params=params)
     entry.inputSchema = schema
     return entry
 
@@ -88,103 +86,33 @@ async def _search(
     )
 
 
-@pytest.mark.parametrize(
-    ("properties", "required", "params"),
-    [
-        (
-            {"helper_type": {"type": "string", "enum": ["input_boolean", "timer"]}},
-            ["helper_type"],
-            "helper_type (input_boolean|timer, required)",
-        ),
-        (
-            {"area": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
-            [],
-            "area (string?)",
-        ),
-        (
-            {"mode": {"anyOf": [{"enum": ["single", "queued"]}, {"type": "null"}]}},
-            [],
-            "mode (single|queued?)",
-        ),
-        (
-            {"entity_ids": {"type": "array", "items": {"type": "string"}}},
-            [],
-            "entity_ids (string[])",
-        ),
-        ({"config": {"$ref": "#/$defs/Config"}}, [], "config (object)"),
-        (
-            {"height": {"anyOf": [{"type": "integer"}, {"const": "auto"}]}},
-            [],
-            "height (integer|auto)",
-        ),
-        ({"limit": {"type": ["integer", "null"]}}, [], "limit (integer?)"),
-        # Non-string literals are JSON, the spelling the model will send.
-        ({"flag": {"const": True}}, [], "flag (true)"),
-        (
-            {"name": {"type": "string"}, "limit": {"type": "integer"}},
-            [],
-            "name (string); limit (integer)",
-        ),
-        ({}, [], "none"),
-    ],
-    ids=[
-        "enum-required",
-        "nullable",
-        "enum-branch",
-        "array",
-        "ref",
-        "literal-next-to-type",
-        "list-valued-type",
-        "json-literal",
-        "two",
-        "none",
-    ],
-)
-async def test_search_hit_tells_the_agent_each_param_in_one_line(
-    monkeypatch: pytest.MonkeyPatch,
-    properties: dict[str, Any],
-    required: list[str],
-    params: str,
-) -> None:
-    schema = {"type": "object", "properties": properties, "required": required}
-
-    result = await _search(
-        monkeypatch, {"query": "automation"}, [_tool("ha_widget", schema)]
-    )
-
-    assert [hit["params"] for hit in result.data["results"]] == [params]
-
-
-async def test_component_renders_params_exactly_as_the_server_does(
-    toolsearch_server: server_module.HomeAssistantSmartMCPServer,
-) -> None:
-    """The component cannot import the server's renderer, so it carries a
-    copy; the two must agree on every schema in the real catalog."""
-    tools = await toolsearch_server.mcp.local_provider._list_tools()
-    assert tools
-    for tool in tools:
-        assert compact_params(tool.parameters) == _compact_params(tool.parameters), (
-            tool.name
-        )
-
-
-def test_tools_parameter_is_advertised_as_optional_names() -> None:
-    """The model only learns about the second hop from the tool's schema."""
-    assert HaMcpSearchTool.parameters({"tools": ["ha_get_state"]}) == {
-        "tools": ["ha_get_state"]
-    }
-    assert HaMcpSearchTool.parameters({"query": "lights"}) == {"query": "lights"}
-
-
-async def test_hit_description_is_the_first_paragraph_on_one_line(
+async def test_hit_carries_the_summary_line_and_the_servers_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The server renders the params line and stamps it on the tool; the
+    component shows it rather than carrying a renderer of its own."""
     result = await _search(monkeypatch, {"query": "automation"}, _catalog())
 
     [hit] = result.data["results"]
-    assert hit["description"] == (
-        "Create or update an automation, wrapped onto two lines."
+    assert hit == {
+        "name": "ha_config_set_automation",
+        "description": "Create or update an automation, wrapped onto two lines.",
+        "params": _PARAMS,
+    }
+
+
+async def test_hit_from_a_server_without_the_stamp_has_no_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = await _search(
+        monkeypatch,
+        {"query": "automation"},
+        [_tool("ha_config_set_automation", _FULL_SCHEMA, params=None)],
     )
+
+    [hit] = result.data["results"]
+    assert "params" not in hit
+    assert hit["description"]
 
 
 async def test_tools_hop_returns_the_full_schema_and_description(

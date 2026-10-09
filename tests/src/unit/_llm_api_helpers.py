@@ -36,10 +36,12 @@ def tool_entry(
     pinned: bool = False,
     stamped: bool = True,
     description: str | None = None,
+    params: str | None = "query (string)",
 ) -> SimpleNamespace:
-    meta = (
-        {"ha_mcp": {"llm_api_exposed": exposed, "pinned": pinned}} if stamped else None
-    )
+    namespace: dict[str, Any] = {"llm_api_exposed": exposed, "pinned": pinned}
+    if params is not None:
+        namespace["params"] = params
+    meta = {"ha_mcp": namespace} if stamped else None
     return SimpleNamespace(
         name=name,
         description=description if description is not None else f"{name} description",

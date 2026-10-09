@@ -20,10 +20,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
 from ha_mcp.read_only import ReadOnlyToolsTransform
-from ha_mcp.transforms.categorized_search import (
-    CategorizedSearchTransform,
-    _compact_params,
-)
+from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
+from ha_mcp.transforms.compact_params import compact_params
 
 from .test_search_pinned_results import _tool
 from .test_search_pinned_results import toolsearch_server as toolsearch_server
@@ -117,21 +115,57 @@ async def test_params_name_each_parameter_with_its_type(fragment: str) -> None:
     assert fragment in (await _typed_params()).split("; ")
 
 
-def test_list_valued_type_renders_each_type() -> None:
-    """Draft 2020-12 nullability as ``type: [..., "null"]`` is a valid form
-    an external tool can carry; it must not collapse to ``any``."""
-    schema = {
-        "properties": {
-            "limit": {"type": ["integer", "null"]},
-            "ids": {"type": ["string", "array"], "items": {"type": "string"}},
-        }
-    }
-    assert _compact_params(schema) == "limit (integer?); ids (string|string[])"
-
-
-def test_array_of_enum_spells_the_values() -> None:
-    schema = {"properties": {"kinds": {"type": "array", "items": {"enum": ["a", "b"]}}}}
-    assert _compact_params(schema) == "kinds (a|b[])"
+@pytest.mark.parametrize(
+    ("properties", "required", "params"),
+    [
+        (
+            {"area": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+            [],
+            "area (string?)",
+        ),
+        (
+            {"mode": {"anyOf": [{"enum": ["single", "queued"]}, {"type": "null"}]}},
+            [],
+            "mode (single|queued?)",
+        ),
+        # Draft 2020-12 nullability as ``type: [..., "null"]`` is a valid form
+        # an external tool can carry; it must not collapse to ``any``.
+        (
+            {
+                "limit": {"type": ["integer", "null"]},
+                "ids": {"type": ["string", "array"], "items": {"type": "string"}},
+            },
+            [],
+            "limit (integer?); ids (string|string[])",
+        ),
+        (
+            {"kinds": {"type": "array", "items": {"enum": ["a", "b"]}}},
+            [],
+            "kinds (a|b[])",
+        ),
+        (
+            {"config": {"$ref": "#/$defs/Config"}},
+            ["config"],
+            "config (object, required)",
+        ),
+        # Non-string literals are JSON, the spelling the model will send.
+        ({"flag": {"const": True}, "n": {"enum": [1, 2]}}, [], "flag (true); n (1|2)"),
+        ({}, [], "none"),
+    ],
+    ids=[
+        "nullable",
+        "enum-branch",
+        "list-valued-type",
+        "array-of-enum",
+        "ref",
+        "json-literal",
+        "none",
+    ],
+)
+def test_compact_params_renders_each_schema_form(
+    properties: dict[str, Any], required: list[str], params: str
+) -> None:
+    assert compact_params({"properties": properties, "required": required}) == params
 
 
 @pytest.mark.anyio

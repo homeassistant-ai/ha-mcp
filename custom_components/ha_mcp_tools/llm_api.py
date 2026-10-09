@@ -77,7 +77,7 @@ from .const import (
 from .llm_api_search import CALL_TOOL_NAME as _CALL_TOOL_NAME
 from .llm_api_search import SEARCH_TOOL_NAME as _SEARCH_TOOL_NAME
 from .llm_api_search import HaMcpSearchTool
-from .llm_tool_exposure import partition_tools
+from .llm_tool_exposure import META_PARAMS_KEY, _tool_meta_namespace, partition_tools
 from .llm_tool_metadata import declare_metadata, tool_hints, tool_result, tool_title
 
 if TYPE_CHECKING:
@@ -822,13 +822,17 @@ class HaMcpLlmApi(llm.API):
             # converter that wrote back would corrupt the catalog entry, so
             # re-check this before pointing the component at a third one.
             schema = _normalise_schema(_tool_input_schema(tool), tool.name)
-            catalog.append(
-                {
-                    "name": tool.name,
-                    "description": tool.description or "",
-                    "input_schema": schema,
-                }
-            )
+            entry = {
+                "name": tool.name,
+                "description": tool.description or "",
+                "input_schema": schema,
+            }
+            # The server renders the compact params line (#2633); a server
+            # that predates the stamp leaves the hit without one.
+            params = (_tool_meta_namespace(tool) or {}).get(META_PARAMS_KEY)
+            if isinstance(params, str):
+                entry["params"] = params
+            catalog.append(entry)
             if tool.name in pinned:
                 parameters = self._convert_parameters(tool, schema)
                 if parameters is not None:

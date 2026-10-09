@@ -35,6 +35,7 @@ from ha_mcp._vendor.mcp.types import ToolAnnotations
 
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..renamed_tools import adapt_retired_arguments, current_tool_name
+from .compact_params import compact_params, summary
 from .write_tool_note import DESKTOP_APPROVAL_NOTE
 
 if TYPE_CHECKING:
@@ -324,82 +325,6 @@ def _execute_via(proxy: str, tool_name: str) -> str:
         f'client.{proxy}(name="{tool_name}", arguments={{...}}) '
         f'or {proxy}(name="{tool_name}", arguments={{...}})'
     )
-
-
-# The compact-params renderer is duplicated verbatim in the component
-# (custom_components/ha_mcp_tools/llm_api_search.py), which cannot import
-# ha_mcp; tests/src/unit/test_llm_api_search.py checks the two agree.
-def _literal_labels(branch: dict[str, Any]) -> list[str | None]:
-    """Labels of the ``enum``/``const`` values *branch* admits; ``None`` is
-    kept as-is for the caller's nullable check."""
-    values = [*(branch.get("enum") or [])]
-    if "const" in branch:
-        values.append(branch["const"])
-    return [v if isinstance(v, str) or v is None else json.dumps(v) for v in values]
-
-
-def _plain_type(branch: dict[str, Any], *, nested: bool) -> str:
-    """Label of a branch without literal values."""
-    kind = branch.get("type")
-    if kind == "array":
-        return f"{_param_type(branch.get('items'))}[]"
-    if isinstance(kind, str) and kind:
-        return kind
-    if nested and (isinstance(kind, list) or "anyOf" in branch or "oneOf" in branch):
-        return _param_type(branch)
-    return "object" if {"$ref", "properties", "allOf"} & branch.keys() else "any"
-
-
-def _param_type(node: Any) -> str:
-    """Type label for one parameter: ``|`` joins union branches, enum and
-    const values are spelled out inline, ``?`` marks nullable, ``T[]`` an
-    array of ``T``."""
-    if not isinstance(node, dict):
-        return "any"
-    kind = node.get("type")
-    if isinstance(kind, list):
-        branches: list[Any] = [{**node, "type": k} for k in kind]
-    else:
-        branches = node.get("anyOf") or node.get("oneOf") or [node]
-    labels: dict[str, None] = {}
-    nullable = False
-    for branch in branches:
-        if not isinstance(branch, dict):
-            continue
-        if values := _literal_labels(branch):
-            nullable = nullable or None in values
-            labels.update(dict.fromkeys(v for v in values if v is not None))
-        elif branch.get("type") == "null":
-            nullable = True
-        else:
-            labels[_plain_type(branch, nested=branch is not node)] = None
-    if not labels:
-        return "null" if nullable else "any"
-    return "|".join(labels) + ("?" if nullable else "")
-
-
-def _compact_params(schema: Any) -> str:
-    """One line naming every parameter with its type and required marker;
-    ``none`` for a tool without parameters."""
-    props = schema.get("properties") if isinstance(schema, dict) else None
-    if not isinstance(props, dict) or not props:
-        return "none"
-    required = schema.get("required")
-    required = set(required) if isinstance(required, list) else set()
-    return "; ".join(
-        f"{name} ({_param_type(field)}{', required' if name in required else ''})"
-        for name, field in props.items()
-    )
-
-
-def _summary(description: str | None) -> str:
-    """The first paragraph of a tool description, on one line.
-
-    A docstring opens with its summary line; the paragraphs after it (and
-    the BM25 keyword list ``SearchKeywordsTransform`` appends) come back
-    with the full definition from ``tools=[...]``.
-    """
-    return " ".join((description or "").split("\n\n", 1)[0].split())
 
 
 def _read_only_mode() -> bool:
@@ -752,8 +677,8 @@ class CategorizedSearchTransform(BM25SearchTransform):
             if tool.name in self._always_visible
             else {
                 "name": tool.name,
-                "description": _summary(tool.description),
-                "params": _compact_params(tool.parameters),
+                "description": summary(tool.description),
+                "params": compact_params(tool.parameters),
                 "execute_via": self._execute_via_hint(tool),
             }
             for tool in tools
@@ -799,16 +724,17 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 data["execute_via"] = self._execute_via_hint(tool)
                 results.append(data)
         if not found:
-            error = (
-                results[0]
-                if len(results) == 1
-                else create_error_response(
+            if len(results) == 1:
+                error = results[0]
+            elif all(name in hidden for name in names):
+                error = {**hidden[names[0]], "results": results}
+            else:
+                error = create_error_response(
                     code=ErrorCode.RESOURCE_NOT_FOUND,
                     message=f"None of the named tools were found: {', '.join(names)}.",
                     suggestions=[_TOOL_NOT_FOUND],
                     context={"results": results},
                 )
-            )
             raise ToolError(json.dumps(error), log_level=TOOL_ERROR_LOG_LEVEL)
         return results
 
