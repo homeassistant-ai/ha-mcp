@@ -3,8 +3,9 @@ name: Dev HA environment
 # A live HA test instance behind temporary Cloudflare tunnels, for testing a
 # branch against a real HA without using your own: Docker or HAOS, with the
 # server standalone, embedded in the component, or as the app (HAOS). Run it
-# from your fork, never from homeassistant-ai/ha-mcp. It follows track_ref and
-# applies each new commit the way a user's update would. The tunnel URLs are
+# from your fork, never from homeassistant-ai/ha-mcp. It starts track_ref's
+# commit with developer mode on; iterate with ha-mcp's own update tools, as on
+# any live instance. The tunnel URLs are
 # only in the `dev-ha-env-urls` artifact, encrypted to the RSA public key the
 # run was started with. Cancel the run when done.
 # Usage: docs/dev-ha-env.md
