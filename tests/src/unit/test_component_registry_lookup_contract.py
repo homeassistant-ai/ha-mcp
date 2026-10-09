@@ -140,7 +140,10 @@ async def test_flow_delete_finds_all_subentities_via_real_component(
     ws = _real_component_ws(FakeHass())
     # Step 1 (_get_entry_id_for_flow_helper) stays legacy: one targeted get.
     client = _ContractClient(
-        get_result={"success": True, "result": {"config_entry_id": "um_entry"}}
+        get_result={
+            "success": True,
+            "result": {"platform": "utility_meter", "config_entry_id": "um_entry"},
+        }
     )
     tools = IntegrationTools(client)
 

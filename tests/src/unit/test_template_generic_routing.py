@@ -194,7 +194,10 @@ async def test_explicit_template_entity_id_captures_once_after_resolution(
     async def registry_read(message: dict[str, Any]) -> dict[str, Any]:
         if message["type"] == "config/entity_registry/get":
             assert message["entity_id"] == "sensor.example"
-            return {"success": True, "result": {"config_entry_id": "template-entry"}}
+            return {
+                "success": True,
+                "result": {"platform": "template", "config_entry_id": "template-entry"},
+            }
         assert message["type"] == "config/entity_registry/list"
         return {"success": True, "result": []}
 
@@ -301,7 +304,13 @@ async def test_flow_helper_removal_captures_once_and_only_when_confirmed(
 
     async def registry_read(message: dict[str, Any]) -> dict[str, Any]:
         if message["type"] == "config/entity_registry/get":
-            return {"success": True, "result": {"config_entry_id": "template-entry"}}
+            return {
+                "success": True,
+                "result": {
+                    "platform": "utility_meter",
+                    "config_entry_id": "template-entry",
+                },
+            }
         return {"success": True, "result": []}
 
     entry_backup.client.send_websocket_message.side_effect = registry_read

@@ -218,7 +218,10 @@ async def test_alias_removal_uses_core_identity_and_waits_for_restore(
         if message["type"] == "config/entity_registry/get":
             assert message["entity_id"] == "sensor.secondary"
             resolved.set()
-            return {"success": True, "result": {"config_entry_id": "template-entry"}}
+            return {
+                "success": True,
+                "result": {"platform": "template", "config_entry_id": "template-entry"},
+            }
         assert message["type"] == "config/entity_registry/list"
         return {"success": True, "result": []}
 

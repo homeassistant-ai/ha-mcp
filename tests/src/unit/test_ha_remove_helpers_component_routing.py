@@ -420,7 +420,10 @@ async def test_flow_delete_subentities_via_component_no_dump() -> None:
     )
     # Step 1 (_get_entry_id_for_flow_helper) stays legacy: a single targeted get.
     client = RoutingClient(
-        get_result={"success": True, "result": {"config_entry_id": "um_entry"}}
+        get_result={
+            "success": True,
+            "result": {"platform": "utility_meter", "config_entry_id": "um_entry"},
+        }
     )
     tools = IntegrationTools(client)
 
@@ -457,7 +460,10 @@ async def test_flow_delete_capability_miss_uses_legacy_dump() -> None:
         info_exc=HomeAssistantCommandError("no info", "unknown_command"),
     )
     client = RoutingClient(
-        get_result={"success": True, "result": {"config_entry_id": "um_entry"}},
+        get_result={
+            "success": True,
+            "result": {"platform": "utility_meter", "config_entry_id": "um_entry"},
+        },
         entities=[
             _row("sensor.energy_peak", unique_id="p", config_entry_id="um_entry"),
             _row("sensor.energy_offpeak", unique_id="o", config_entry_id="um_entry"),
