@@ -329,6 +329,10 @@ class _SearchCriteria:
         """Whether a card-field criterion can select cards (not only badges)."""
         return self.has_card_criteria() and self.card_type != _BADGE_CARD_TYPE
 
+    def can_match_cards(self) -> bool:
+        """Whether cards can match at all (card_type='badge' selects only badges)."""
+        return self.card_type != _BADGE_CARD_TYPE
+
     def can_match_badges(self) -> bool:
         """Whether view badges can match: they carry no heading, and any other
         card_type names a card."""
@@ -348,12 +352,17 @@ class _SearchGaps:
 
     truncation: list[str] = field(default_factory=list)
     uncovered: list[str] = field(default_factory=list)
-    malformed_badges: list[str] = field(default_factory=list)
+    malformed: list[str] = field(default_factory=list)
+
+    def note_malformed(self, value: Any, path: str) -> None:
+        """Record ``path`` when its ``value`` is present but not searchable."""
+        if value is not None:
+            self.malformed.append(path)
 
     def extend(self, other: "_SearchGaps", prefix: str) -> None:
         self.truncation.extend(prefix + p for p in other.truncation)
         self.uncovered.extend(prefix + p for p in other.uncovered)
-        self.malformed_badges.extend(prefix + p for p in other.malformed_badges)
+        self.malformed.extend(prefix + p for p in other.malformed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,14 +486,8 @@ def _walk_card(
     cards carrying ``_NON_CARD_CHILD_KEYS`` in ``frame.gaps.uncovered``.
     """
     if not isinstance(card, dict):
-        # Structurally-present but malformed slot (e.g. a string where a card
-        # dict is expected): skip, but breadcrumb so it is not a silent drop.
-        if card is not None:
-            logger.debug(
-                "Card-search skipping non-dict node at %s (%s)",
-                jq_prefix,
-                type(card).__name__,
-            )
+        if frame.criteria.can_match_cards():
+            frame.gaps.note_malformed(card, jq_prefix)
         return []
     if frame.depth > _MAX_CARD_DEPTH:
         logger.warning(
@@ -568,21 +571,22 @@ def _find_badge_matches_in_view(
 
     Badges are entity references, so they answer entity_id and text searches,
     and ``card_type='badge'`` alone lists every well-formed badge (an entity id
-    or a mapping); malformed entries are reported in ``frame.gaps``.
+    or a mapping); malformed entries are recorded in ``frame.gaps``.
     """
     view_idx = frame.view_index
     criteria = frame.criteria
     badges = view.get("badges")
-    if not isinstance(badges, list) or not criteria.can_match_badges():
+    if not criteria.can_match_badges():
+        return []
+    if not isinstance(badges, list):
+        frame.gaps.note_malformed(badges, f".views[{view_idx}].badges")
         return []
     matches: list[dict[str, Any]] = []
     for badge_idx, badge in enumerate(badges):
         is_dict_badge = isinstance(badge, dict)
         is_entity_badge = isinstance(badge, str) and bool(badge.strip())
         if not (is_dict_badge or is_entity_badge):
-            frame.gaps.malformed_badges.append(
-                f".views[{view_idx}].badges[{badge_idx}]"
-            )
+            frame.gaps.note_malformed(badge, f".views[{view_idx}].badges[{badge_idx}]")
             continue
         if criteria.entity_id is not None and not _badge_matches(
             badge, criteria.entity_id
@@ -624,7 +628,11 @@ def _find_header_card_matches(
     """
     view_idx = frame.view_index
     header = view.get("header")
-    if not isinstance(header, dict) or not isinstance(header.get("card"), dict):
+    if not isinstance(header, dict):
+        if frame.criteria.can_match_cards():
+            frame.gaps.note_malformed(header, f".views[{view_idx}].header")
+        return []
+    if header.get("card") is None:
         return []
     return _walk_card(
         header["card"],
@@ -643,37 +651,67 @@ def _find_view_card_matches(
     with ``sections`` and no ``type`` as a sections view, and cards a view type
     does not render still reference entities a rename or removal must find.
     """
-    view_idx = frame.view_index
+    if not frame.criteria.can_match_cards():
+        return []
     matches: list[dict[str, Any]] = []
-    cards = view.get("cards")
-    for card_idx, card in enumerate(cards if isinstance(cards, list) else []):
-        matches.extend(
-            _walk_card(
-                card,
-                jq_prefix=f".views[{view_idx}].cards[{card_idx}]",
-                python_prefix=f"['views'][{view_idx}]['cards'][{card_idx}]",
-                frame=frame.with_indices(section_index=None, card_index=card_idx),
-            )
-        )
-    sections = view.get("sections")
-    for section_idx, section in enumerate(
-        sections if isinstance(sections, list) else []
-    ):
-        section_cards = section.get("cards") if isinstance(section, dict) else None
-        if not isinstance(section_cards, list):
-            continue
-        for card_idx, card in enumerate(section_cards):
+    for base, base_py, cards, section_idx in _view_card_lists(view, frame):
+        for card_idx, card in enumerate(cards):
             matches.extend(
                 _walk_card(
                     card,
-                    jq_prefix=f".views[{view_idx}].sections[{section_idx}].cards[{card_idx}]",
-                    python_prefix=f"['views'][{view_idx}]['sections'][{section_idx}]['cards'][{card_idx}]",
+                    jq_prefix=f"{base}[{card_idx}]",
+                    python_prefix=f"{base_py}[{card_idx}]",
                     frame=frame.with_indices(
                         section_index=section_idx, card_index=card_idx
                     ),
                 )
             )
     return matches
+
+
+def _view_card_lists(
+    view: dict[str, Any], frame: _CardWalkFrame
+) -> list[tuple[str, str, list[Any], int | None]]:
+    """``(jq path, python path, cards, section index)`` per card list in a view.
+
+    A container present in the wrong shape is recorded in ``frame.gaps``.
+    """
+    view_idx = frame.view_index
+    lists: list[tuple[str, str, list[Any], int | None]] = []
+    cards = view.get("cards")
+    if isinstance(cards, list):
+        lists.append(
+            (
+                f".views[{view_idx}].cards",
+                f"['views'][{view_idx}]['cards']",
+                cards,
+                None,
+            )
+        )
+    else:
+        frame.gaps.note_malformed(cards, f".views[{view_idx}].cards")
+    sections = view.get("sections")
+    if not isinstance(sections, list):
+        frame.gaps.note_malformed(sections, f".views[{view_idx}].sections")
+        return lists
+    for section_idx, section in enumerate(sections):
+        path = f".views[{view_idx}].sections[{section_idx}]"
+        if not isinstance(section, dict):
+            frame.gaps.note_malformed(section, path)
+            continue
+        section_cards = section.get("cards")
+        if not isinstance(section_cards, list):
+            frame.gaps.note_malformed(section_cards, f"{path}.cards")
+            continue
+        lists.append(
+            (
+                f"{path}.cards",
+                f"['views'][{view_idx}]['sections'][{section_idx}]['cards']",
+                section_cards,
+                section_idx,
+            )
+        )
+    return lists
 
 
 def _find_cards_matching(
@@ -693,16 +731,21 @@ def _find_cards_matching(
     ``config`` in ``ha_config_set_dashboard(python_transform)``) except a
     bare-string badge, which is not subscript-assignable. What the walk
     could not search is recorded in ``gaps``: subtrees past the depth bound,
-    cards holding one of ``_NON_CARD_CHILD_KEYS``, and malformed badges.
+    cards holding one of ``_NON_CARD_CHILD_KEYS``, and entries in the wrong
+    shape (a view, section, card list, card or badge that cannot be read).
     Empty criteria match everything, so callers must reject them first (the
     search entry point, ``_get_dashboard_search_mode``, does).
     """
     views = config.get("views")
-    if "strategy" in config or not isinstance(views, list):
-        return []  # Strategy dashboards and view-less configs hold no cards
+    if "strategy" in config:
+        return []  # Strategy dashboards hold no stored cards
+    if not isinstance(views, list):
+        gaps.note_malformed(views, ".views")
+        return []
     matches: list[dict[str, Any]] = []
     for view_idx, view in enumerate(views):
         if not isinstance(view, dict):
+            gaps.note_malformed(view, f".views[{view_idx}]")
             continue
         frame = _CardWalkFrame(
             criteria,
@@ -1462,7 +1505,7 @@ def _search_warnings(
     """Warnings that keep an incomplete search from reading as complete.
 
     Disclosure keys off the *presence* of a match cap, a depth-truncated
-    subtree, unsearched picture-elements or a malformed badge, not off a
+    subtree, unsearched picture-elements or a malformed entry, not off a
     0-match. ``warn_uncovered`` gates the picture-elements warning.
     """
     uncovered = gaps.uncovered if warn_uncovered else []
@@ -1486,10 +1529,11 @@ def _search_warnings(
             f"picture-elements 'elements', present at: {locations}. Use query= "
             "to search their text, or fetch the full config to inspect them."
         )
-    if gaps.malformed_badges:
+    if gaps.malformed:
         warnings.append(
-            "Skipped badge entries that are neither an entity id nor a mapping, "
-            f"at: {', '.join(gaps.malformed_badges)}. Fetch the config to repair them."
+            "Skipped entries that are not the expected list, mapping or entity "
+            f"id, so they were not searched, at: {', '.join(gaps.malformed)}. "
+            "Fetch the config to repair them."
         )
     return warnings
 
@@ -1927,6 +1971,19 @@ class DashboardConfigTools:
         storage dashboard HA lists is read (never the default, which HA does
         not list).
         """
+        if not criteria.can_match_cards() and not criteria.can_match_badges():
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "card_type='badge' cannot be combined with heading: view badges "
+                    "have no heading, so the search could never match",
+                    suggestions=[
+                        "Drop heading to list badges, or drop card_type='badge' to "
+                        "search cards by heading",
+                    ],
+                    context={"action": "search"},
+                )
+            )
         if criteria.is_empty():
             raise_tool_error(
                 create_error_response(

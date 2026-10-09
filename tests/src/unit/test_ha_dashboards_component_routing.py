@@ -571,6 +571,20 @@ async def test_legacy_search_names_broken_not_unconfigured_dashboards() -> None:
 
 
 @pytest.mark.asyncio
+async def test_badge_search_by_heading_is_rejected() -> None:
+    """View badges have no heading, so card_type='badge' with heading can't match."""
+    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    client = RoutingClient()
+
+    with (
+        patch_ws(ws, tools_config_dashboards),
+        pytest.raises(ToolError, match="cannot be combined with heading"),
+    ):
+        await _build_get_dashboard(client)(card_type="badge", heading="Lights")
+    assert client.list_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_list_only_with_search_parameters_says_it_searched() -> None:
     ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     client = RoutingClient(dashboards_list=[_STORAGE_ROW], configs={"home": _HOME_BODY})

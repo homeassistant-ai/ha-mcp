@@ -406,6 +406,52 @@ class TestBadgeCriteria:
         assert [m["card_type"] for m in matches] == ["tile"]
 
 
+class TestMalformedContainers:
+    """Containers in the wrong shape are reported, never silently skipped."""
+
+    CONFIG: ClassVar[dict[str, Any]] = {
+        "views": [
+            "not-a-view",
+            {
+                "badges": "light.a",
+                "cards": ["not-a-card", {"type": "tile", "entity": "light.a"}],
+                "sections": [5, {"cards": {"type": "tile"}}],
+                "header": "not-a-header",
+            },
+        ]
+    }
+
+    def test_every_unreadable_container_is_named(self):
+        result = DashboardConfigTools._build_search_result(
+            [{"url_path": "d", "config": self.CONFIG}],
+            criteria=_SearchCriteria(entity_id="light.a"),
+            include_config=False,
+            url_path="d",
+        )
+        assert [m["jq_path"] for m in result["matches"]] == [".views[1].cards[1]"]
+        [warning] = result["warnings"]
+        for path in (
+            ".views[0]",
+            ".views[1].badges",
+            ".views[1].header",
+            ".views[1].cards[0]",
+            ".views[1].sections[0]",
+            ".views[1].sections[1].cards",
+        ):
+            assert path in warning
+
+    def test_badge_search_reports_only_badge_containers(self):
+        result = DashboardConfigTools._build_search_result(
+            [{"url_path": "d", "config": self.CONFIG}],
+            criteria=_SearchCriteria(card_type="badge"),
+            include_config=False,
+            url_path="d",
+        )
+        [warning] = result["warnings"]
+        assert ".views[1].badges" in warning
+        assert ".views[1].cards[0]" not in warning
+
+
 class TestPictureElementsDisclosure:
     """query reads picture-elements text; the card criteria are warned about."""
 
