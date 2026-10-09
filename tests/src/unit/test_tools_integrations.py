@@ -728,6 +728,33 @@ class TestRemoveHelpersIntegrations:
         assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert "storage-based" in err["error"]["message"]
 
+    async def test_flow_path_never_deletes_another_integrations_entry(
+        self, tools, mock_client
+    ):
+        """A helper_type that does not own the target entity must not delete
+        the config entry the entity belongs to: group + a Hue light would
+        otherwise remove the whole Hue integration."""
+        mock_client.send_websocket_message.side_effect = [
+            {
+                "success": True,
+                "result": {
+                    "entity_id": "light.hue_lamp",
+                    "platform": "hue",
+                    "config_entry_id": "hue_entry",
+                },
+            },
+        ]
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_remove_helpers_integrations(
+                target="light.hue_lamp",
+                helper_type="group",
+                confirm=True,
+                wait=False,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.delete_config_entry.assert_not_awaited()
+
     async def test_flow_path_entry_not_found_at_delete_raises(self, tools, mock_client):
         """Path 2 TOCTOU: entry_id resolved at step 1 but already deleted
         before step 3 reaches HA → raises RESOURCE_NOT_FOUND. Silent
