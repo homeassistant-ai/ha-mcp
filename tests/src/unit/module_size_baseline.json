@@ -2,7 +2,6 @@
   "custom_components/ha_mcp_tools/__init__.py": 3655,
   "custom_components/ha_mcp_tools/config_flow.py": 1031,
   "custom_components/ha_mcp_tools/embedded_server.py": 2658,
-  "custom_components/ha_mcp_tools/llm_api.py": 1004,
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py": 1149,
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py": 1314,
   "homeassistant-addon-webhook-proxy-dev/start.py": 1948,
