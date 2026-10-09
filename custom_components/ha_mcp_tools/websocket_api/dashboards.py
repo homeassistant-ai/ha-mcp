@@ -343,20 +343,25 @@ def _dashboard_document_matches(
     ]
 
 
-def _doc_contains(data: Any, query_lower: str) -> bool:
+def _doc_contains(data: Any, query_lower: str, depth: int = 0) -> bool:
     """Case-insensitive substring test over keys and every leaf of a config.
 
     Exact port of the server's ``_search_in_dict_exact`` (keys + string
     leaves + ``str()`` of non-None scalars) so the component-served verdict
-    matches the legacy walk's, leaf for leaf.
+    matches the legacy walk's, leaf for leaf. Containers below
+    ``_MAX_NODE_DEPTH`` levels are not read, so a pathological config cannot
+    exhaust the recursion limit.
     """
+    if isinstance(data, (dict, list)) and depth > _MAX_NODE_DEPTH:
+        return False
     if isinstance(data, dict):
         return any(
-            query_lower in str(key).lower() or _doc_contains(value, query_lower)
+            query_lower in str(key).lower()
+            or _doc_contains(value, query_lower, depth + 1)
             for key, value in data.items()
         )
     if isinstance(data, list):
-        return any(_doc_contains(item, query_lower) for item in data)
+        return any(_doc_contains(item, query_lower, depth + 1) for item in data)
     if isinstance(data, str):
         return query_lower in data.lower()
     if data is not None:
