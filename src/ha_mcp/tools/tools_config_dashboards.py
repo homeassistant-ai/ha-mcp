@@ -8,7 +8,6 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Sequence
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Annotated, Any, Literal, NoReturn, cast, overload
 
@@ -218,16 +217,16 @@ def _badge_matches(badge: Any, entity_id: str) -> bool:
     )
 
 
-def _entity_matches(entity_id: str, candidate: object) -> bool:
-    """Whether ``candidate`` is a non-empty entity id equal to ``entity_id``.
+def _entity_matches(pattern: str, candidate: object) -> bool:
+    """Whether ``candidate`` is a non-empty entity id matching ``pattern``.
 
-    ``*`` in ``entity_id`` matches any run of characters; every other character
+    ``*`` in ``pattern`` matches any run of characters; every other character
     is literal, and the whole id must match.
     """
     if not isinstance(candidate, str) or not candidate:
         return False
-    pattern = ".*".join(re.escape(part) for part in entity_id.split("*"))
-    return re.fullmatch(pattern, candidate) is not None
+    regex = ".*".join(re.escape(part) for part in pattern.split("*"))
+    return re.fullmatch(regex, candidate) is not None
 
 
 # Card slots — keys whose typed values are card configs (issue #1599). They are
@@ -305,10 +304,10 @@ class _SearchCriteria:
     query: str | None = None
 
     def __post_init__(self) -> None:
-        for field in fields(self):
-            value = getattr(self, field.name)
+        for f in fields(self):
+            value = getattr(self, f.name)
             if isinstance(value, str):
-                object.__setattr__(self, field.name, value.strip() or None)
+                object.__setattr__(self, f.name, value.strip() or None)
 
     @property
     def query_lower(self) -> str | None:
@@ -1461,8 +1460,12 @@ def _search_warnings(
     return warnings
 
 
-def _unread_dashboards_warning(failed: int | Sequence[str]) -> list[str]:
-    """The warning for storage dashboards that could not be read (a count or their url_paths)."""
+def _unread_dashboards_warning(failed: int | list[str]) -> list[str]:
+    """The warning for storage dashboards that could not be read.
+
+    ``failed`` is the component's count (it does not name them) or the url_paths
+    the legacy reads collected.
+    """
     if not failed:
         return []
     if isinstance(failed, int):
@@ -1514,7 +1517,8 @@ class DashboardConfigTools:
             str | None,
             Field(
                 description="Search: cards whose entity/entities field holds this "
-                "entity ID (wildcards, e.g. 'sensor.temperature_*')."
+                "entity ID; '*' matches any run of characters and the whole ID "
+                "must match (e.g. 'sensor.temperature_*')."
             ),
         ] = None,
         card_type: Annotated[
@@ -1583,7 +1587,8 @@ class DashboardConfigTools:
         - Any of query / entity_id / card_type / heading searches cards and
           header cards, AND-ing the criteria, in url_path or, when it is
           omitted, every storage dashboard. View badges answer entity_id and
-          query; card_type='badge' narrows those to badges, heading excludes them.
+          query; card_type='badge' keeps only badges (so it needs entity_id or
+          query), and heading excludes them.
           Cards nested at any depth count, including
           custom cards' own keys such as groups[].cards[].card. Each match has a
           jq_path and a python_path to append to `config` in
@@ -1742,9 +1747,7 @@ class DashboardConfigTools:
         it differed from the canonical form, else ``None``.
         """
         get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
-        effective_url_path: str | None = (
-            url_path if url_path and url_path != "default" else None
-        )
+        effective_url_path: str | None = None if url_path == "default" else url_path
         if effective_url_path is not None:
             get_data["url_path"] = effective_url_path
 

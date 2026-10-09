@@ -503,6 +503,7 @@ async def test_search_capability_miss_uses_legacy_reads() -> None:
     assert not _dash_calls(ws)
     # Only the component can read the default dashboard; the gap is disclosed.
     assert any("url_path='default'" in w for w in resp["warnings"])
+    assert not any("Could not read" in w for w in resp["warnings"])
 
 
 @pytest.mark.asyncio

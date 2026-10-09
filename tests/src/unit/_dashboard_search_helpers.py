@@ -1,4 +1,8 @@
-"""Keyword-argument entry to the dashboard card search for unit tests."""
+"""Keyword-argument entry to the dashboard card search for unit tests.
+
+``_find_cards_in_config`` wraps ``_find_cards_matching``, which takes the
+criteria as one ``_SearchCriteria``.
+"""
 
 from __future__ import annotations
 

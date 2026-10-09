@@ -1,4 +1,4 @@
-"""Card search reach and the ``query`` criterion of ``_find_cards_in_config``.
+"""Card search reach and the ``query`` criterion of the dashboard card search.
 
 Cards that custom cards nest under keys of their own (issue #2694), and the
 text criterion the single search applies alongside entity_id / card_type /
@@ -266,8 +266,7 @@ class TestSearchSurvivesUnusualConfigs:
 
 
 class TestSearchResultScope:
-    """A scoped result carries its config_hash at the top level; a result across
-    dashboards names the dashboard in warning locations instead."""
+    """Warning locations name the dashboard only in a search across dashboards."""
 
     CONFIG: ClassVar[dict[str, Any]] = {
         "views": [
@@ -313,10 +312,12 @@ class TestEntityWildcards:
 
     def test_suffix_pattern_must_match_to_the_end(self):
         assert _find_cards_in_config(self.CONFIG, entity_id="sensor.*_temp") == []
-        assert (
-            len(_find_cards_in_config(self.CONFIG, entity_id="sensor.*_temperature"))
-            == 2
-        )
+        matches = _find_cards_in_config(self.CONFIG, entity_id="sensor.*_temperature")
+        assert [m["card_type"] for m in matches] == ["badge", "tile"]
+
+    def test_star_never_matches_an_empty_entity(self):
+        config = {"views": [{"cards": [{"type": "tile", "entity": ""}]}]}
+        assert _find_cards_in_config(config, entity_id="*") == []
 
     def test_regex_characters_are_literal(self):
         assert _find_cards_in_config(self.CONFIG, entity_id="sensor.(*") == []
@@ -324,13 +325,15 @@ class TestEntityWildcards:
 
 
 class TestBlankCriteria:
+    """A blank criterion counts as not given."""
+
     CONFIG: ClassVar[dict[str, Any]] = {
         "views": [
             {
                 "badges": ["light.a"],
                 "cards": [
                     {"type": "tile", "entity": "light.a"},
-                    {"type": "tile", "entity": "light.a", "name": "x", "title": "T"},
+                    {"type": "tile", "entity": "light.a", "title": "T"},
                 ],
             }
         ]
@@ -341,8 +344,14 @@ class TestBlankCriteria:
             self.CONFIG, entity_id="light.a", heading=""
         ) == _find_cards_in_config(self.CONFIG, entity_id="light.a")
 
+
+class TestBadgeCriteria:
+    """Badges answer entity_id and query; a heading excludes them."""
+
     def test_heading_excludes_badges(self):
-        matches = _find_cards_in_config(self.CONFIG, entity_id="light.a", heading="t")
+        matches = _find_cards_in_config(
+            TestBlankCriteria.CONFIG, entity_id="light.a", heading="t"
+        )
         assert [m["card_type"] for m in matches] == ["tile"]
 
 
