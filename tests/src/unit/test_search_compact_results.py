@@ -269,6 +269,21 @@ async def test_read_only_mode_still_says_not_found_for_a_made_up_name() -> None:
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
+@pytest.mark.anyio
+@pytest.mark.usefixtures("read_only_on")
+async def test_mixed_hidden_and_unknown_names_say_only_the_unknown_is_missing() -> None:
+    """The top-level message must not tell the model a hidden write tool
+    does not exist; its own entry carries READ_ONLY_MODE."""
+    error = await _error({"tools": ["ha_config_set_thing", "ha_no_such_tool"]})
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert "ha_no_such_tool" in error["error"]["message"]
+    assert "ha_config_set_thing" not in error["error"]["message"]
+    assert [e["error"]["code"] for e in error["results"]] == [
+        "READ_ONLY_MODE",
+        "RESOURCE_NOT_FOUND",
+    ]
+
+
 async def _hits_and_full(
     server: server_module.HomeAssistantSmartMCPServer, query: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

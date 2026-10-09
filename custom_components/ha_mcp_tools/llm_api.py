@@ -808,6 +808,7 @@ class HaMcpLlmApi(llm.API):
         """Build the compact catalog: mirrored pinned tools + meta-tools."""
         tools: list[llm.Tool] = []
         exposed_names: set[str] = set()
+        mirrored: set[str] = set()
         catalog: list[dict[str, Any]] = []
         for tool in exposed:
             exposed_names.add(tool.name)
@@ -837,7 +838,11 @@ class HaMcpLlmApi(llm.API):
                 parameters = self._convert_parameters(tool, schema)
                 if parameters is not None:
                     tools.append(self._mirror(tool, parameters))
-        tools.append(HaMcpSearchTool(catalog, pinned & exposed_names))
+                    mirrored.add(tool.name)
+        # Only a tool actually mirrored is in the agent's list; a pinned one
+        # whose schema failed to convert stays a full search entry, reachable
+        # through ha_call_tool.
+        tools.append(HaMcpSearchTool(catalog, mirrored))
         tools.append(HaMcpCallTool(self.server_url, exposed_names))
         return tools
 

@@ -163,6 +163,34 @@ async def test_tools_hop_returns_the_stub_for_a_pinned_tool(
     assert "ha_search" in entry["hint"]
 
 
+async def test_pinned_tool_that_failed_to_mirror_stays_a_full_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pinned tool whose schema does not convert is skipped from the
+    agent's list; a stub saying "already in your tool list" would leave it
+    unreachable, so search must hand out its schema for ha_call_tool."""
+
+    def convert(schema: Any) -> Any:
+        if "fails" in schema.get("properties", {}):
+            raise ValueError("unconvertible")
+        return {"_converted": schema}
+
+    monkeypatch.setattr(llm_api, "convert_to_voluptuous", convert)
+    pinned = tool_entry("ha_search", pinned=True)
+    pinned.inputSchema = {"type": "object", "properties": {"fails": {}}}
+    tools = [pinned, *(t for t in _catalog() if t.name != "ha_search")]
+
+    instance = await _instance(monkeypatch, tools)
+    assert "ha_search" not in [t.name for t in instance.tools]
+    by_query = await _search(monkeypatch, {"query": "ha_search"}, tools)
+    by_name = await _search(monkeypatch, {"tools": ["ha_search"]}, tools)
+
+    [hit] = by_query.data["results"]
+    assert "pinned" not in hit
+    [entry] = by_name.data["results"]
+    assert entry["input_schema"] == pinned.inputSchema
+
+
 async def test_keyword_hit_on_a_pinned_tool_is_the_stub(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

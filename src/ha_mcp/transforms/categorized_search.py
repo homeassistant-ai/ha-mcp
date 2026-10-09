@@ -729,9 +729,13 @@ class CategorizedSearchTransform(BM25SearchTransform):
             elif all(name in hidden for name in names):
                 error = {**hidden[names[0]], "results": results}
             else:
+                missing = [name for name in names if name not in hidden]
+                message = f"No tool is named {', '.join(missing)}."
+                if hidden:
+                    message += " Read Only Mode hides the others; see their entries in results."
                 error = create_error_response(
                     code=ErrorCode.RESOURCE_NOT_FOUND,
-                    message=f"None of the named tools were found: {', '.join(names)}.",
+                    message=message,
                     suggestions=[_TOOL_NOT_FOUND],
                     context={"results": results},
                 )
