@@ -2351,6 +2351,7 @@ class IntegrationTools:
                     "list failed; retry, or pass helper_type explicitly.",
                 ],
             )
+            return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     # === Path 3: Direct config entry delete (any integration) ===
     async def _delete_direct_entry(self, entry_id: str) -> dict[str, Any]:

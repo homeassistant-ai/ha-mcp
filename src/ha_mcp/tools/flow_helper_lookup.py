@@ -294,6 +294,7 @@ async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None
             ],
         )
     )
+    return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 async def _helper_flow_domains(client: Any) -> frozenset[str]:
