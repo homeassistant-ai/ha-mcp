@@ -238,14 +238,19 @@ jobs:
           if [ ! -s targets.json ]; then echo "HA never came up"; tail -150 env.log; exit 1; fi
           tunnel() {
             nohup ./cloudflared tunnel --no-autoupdate --url "$1" > "$2" 2>&1 &
-            echo $! >> tunnel.pids
+            local pid=$!
+            echo "$pid" >> tunnel.pids
             url=""
             for i in $(seq 1 60); do
-              url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$2" | head -1)
+              # cloudflared names api.trycloudflare.com when it fails to get a
+              # quick tunnel; that host is never ours.
+              url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$2" \
+                | grep -v '^https://api\.' | head -1)
               [ -n "$url" ] && break
+              kill -0 "$pid" 2>/dev/null || break
               sleep 2
             done
-            [ -n "$url" ] || { echo "A tunnel never came up"; exit 1; }
+            [ -n "$url" ] || { echo "A tunnel never came up:"; tail -20 "$2"; exit 1; }
             echo "::add-mask::$url"
             echo "::add-mask::${url#https://}"
           }
