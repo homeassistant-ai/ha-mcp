@@ -6,7 +6,7 @@ sections-view header cards, addressing issue #801.
 
 from typing import Any, ClassVar
 
-from ha_mcp.tools.tools_config_dashboards import _find_cards_in_config
+from ._dashboard_search_helpers import _find_cards_in_config
 
 
 class TestBadgeSearch:

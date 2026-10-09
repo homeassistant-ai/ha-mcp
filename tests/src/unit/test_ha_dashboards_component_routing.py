@@ -25,6 +25,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
@@ -348,8 +349,6 @@ async def test_get_not_found_falls_back_to_legacy() -> None:
     client = RoutingClient()  # legacy lovelace/config → config_not_found
     get_dashboard = _build_get_dashboard(client)
 
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
     with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError):
         await get_dashboard(url_path="ghost")
     assert client.config_calls == ["ghost"]
@@ -474,7 +473,9 @@ async def test_search_reports_unreadable_component_dashboards() -> None:
         resp = await get_dashboard(query="light.kitchen")
 
     assert resp["match_count"] == 0
-    assert any("2 storage dashboard(s)" in w for w in resp["warnings"])
+    unread = [w for w in resp["warnings"] if "2 storage dashboard(s)" in w]
+    assert len(unread) == 1
+    assert "log" not in unread[0]
 
 
 @pytest.mark.asyncio
@@ -569,17 +570,6 @@ async def test_legacy_search_names_broken_not_unconfigured_dashboards() -> None:
 
 
 @pytest.mark.asyncio
-async def test_blank_card_criteria_are_rejected_not_searched() -> None:
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    get_dashboard = _build_get_dashboard(RoutingClient())
-
-    with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError):
-        await get_dashboard(entity_id=" ", heading="")
-
-
-@pytest.mark.asyncio
 async def test_list_only_with_search_parameters_says_it_searched() -> None:
     ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     client = RoutingClient(dashboards_list=[_STORAGE_ROW], configs={"home": _HOME_BODY})
@@ -599,10 +589,13 @@ async def test_search_trims_the_query() -> None:
     get_dashboard = _build_get_dashboard(client)
 
     with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="home", query="  light.kitchen ")
+        resp = await get_dashboard(
+            url_path="home", query="  light.kitchen ", entity_id="light.kitchen "
+        )
 
     assert resp["match_count"] == 1
     assert resp["search_criteria"]["query"] == "light.kitchen"
+    assert resp["search_criteria"]["entity_id"] == "light.kitchen"
 
 
 @pytest.mark.asyncio
@@ -662,18 +655,21 @@ async def test_legacy_search_walk_skips_untagged_row() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_requires_query() -> None:
-    """A search with only a blank query is a structured validation error (no WS)."""
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
+@pytest.mark.parametrize("criterion", ["query", "entity_id", "card_type", "heading"])
+async def test_blank_search_criteria_are_rejected_not_searched(criterion: str) -> None:
+    """A search given only blank criteria is a validation error, not a get."""
     ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_DASHBOARDS)
     client = RoutingClient()
     get_dashboard = _build_get_dashboard(client)
 
-    with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError):
-        await get_dashboard(query="   ")
+    with (
+        patch_ws(ws, tools_config_dashboards),
+        pytest.raises(ToolError, match="Search needs a non-blank"),
+    ):
+        await get_dashboard(**{criterion: "   "})
     assert not _dash_calls(ws)
     assert client.list_calls == 0
+    assert client.config_calls == []
 
 
 # --- transport failure falls back to legacy ----------------------------------

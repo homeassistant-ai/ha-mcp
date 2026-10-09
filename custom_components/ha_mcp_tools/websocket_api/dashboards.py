@@ -257,10 +257,11 @@ async def _dashboard_search_docs(
 
     ``load_failed`` counts storage dashboards whose config load raised or
     returned a non-dict — real gaps the caller must surface as partial rather
-    than fail-soft into a clean-looking result. A ``ConfigNotFound`` load is a clean skip, not a failure: an
-    auto-generated (never taken control of) dashboard has no stored config to
-    scan. If core drift breaks the guarded ``ConfigNotFound`` import, those
-    loads degrade to ``load_failed`` — over-reported as partial, never silent.
+    than fail-soft into a clean-looking result. A ``ConfigNotFound`` load is a
+    clean skip, not a failure: an auto-generated (never taken control of)
+    dashboard has no stored config to scan. If core drift breaks the guarded
+    ``ConfigNotFound`` import, those loads degrade to ``load_failed`` —
+    over-reported as partial, never silent.
     """
     try:
         from homeassistant.components.lovelace.const import ConfigNotFound

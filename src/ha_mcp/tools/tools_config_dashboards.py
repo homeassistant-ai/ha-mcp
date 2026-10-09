@@ -9,7 +9,7 @@ import json
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 from typing import Annotated, Any, Literal, NoReturn, cast, overload
 
 from pydantic import Field
@@ -213,20 +213,21 @@ def _badge_matches(badge: Any, entity_id: str) -> bool:
     Badges can be simple strings (entity IDs) or dicts with an 'entity' field.
     Supports wildcard matching with *.
     """
-    badge_entity = badge.get("entity") if isinstance(badge, dict) else badge
-    return (
-        isinstance(badge_entity, str)
-        and bool(badge_entity)
-        and _entity_matches(entity_id, badge_entity)
+    return _entity_matches(
+        entity_id, badge.get("entity") if isinstance(badge, dict) else badge
     )
 
 
-def _entity_matches(entity_id: str, candidate: str) -> bool:
-    """Whether ``candidate`` is ``entity_id`` (``*`` matches any run of characters)."""
-    if "*" in entity_id:
-        pattern = entity_id.replace(".", r"\.").replace("*", ".*")
-        return re.match(pattern, candidate) is not None
-    return candidate == entity_id
+def _entity_matches(entity_id: str, candidate: object) -> bool:
+    """Whether ``candidate`` is a non-empty entity id equal to ``entity_id``.
+
+    ``*`` in ``entity_id`` matches any run of characters; every other character
+    is literal, and the whole id must match.
+    """
+    if not isinstance(candidate, str) or not candidate:
+        return False
+    pattern = ".*".join(re.escape(part) for part in entity_id.split("*"))
+    return re.fullmatch(pattern, candidate) is not None
 
 
 # Card slots — keys whose typed values are card configs (issue #1599). They are
@@ -304,10 +305,10 @@ class _SearchCriteria:
     query: str | None = None
 
     def __post_init__(self) -> None:
-        for name in ("entity_id", "card_type", "heading", "query"):
-            value = getattr(self, name)
+        for field in fields(self):
+            value = getattr(self, field.name)
             if isinstance(value, str):
-                object.__setattr__(self, name, value.strip() or None)
+                object.__setattr__(self, field.name, value.strip() or None)
 
     @property
     def query_lower(self) -> str | None:
@@ -530,13 +531,14 @@ def _query_hits(
 
 
 def _find_badge_matches_in_view(
-    view: dict[str, Any], view_idx: int, frame: _CardWalkFrame
+    view: dict[str, Any], frame: _CardWalkFrame
 ) -> list[dict[str, Any]]:
     """View-level badges matching ``frame``'s entity_id and/or query.
 
     Badges are entity references, so they answer entity_id and text searches;
     a heading or a card_type other than ``badge`` excludes them.
     """
+    view_idx = frame.view_index
     criteria = frame.criteria
     badges = view.get("badges")
     if (
@@ -581,12 +583,13 @@ def _find_badge_matches_in_view(
 
 
 def _find_header_card_matches(
-    view: dict[str, Any], view_idx: int, frame: _CardWalkFrame
+    view: dict[str, Any], frame: _CardWalkFrame
 ) -> list[dict[str, Any]]:
     """Search a sections-view header card (views[n].header.card).
 
     The header accepts a card (typically Markdown) that can contain entity refs.
     """
+    view_idx = frame.view_index
     header = view.get("header")
     if not isinstance(header, dict) or not isinstance(header.get("card"), dict):
         return []
@@ -599,7 +602,7 @@ def _find_header_card_matches(
 
 
 def _find_view_card_matches(
-    view: dict[str, Any], view_idx: int, frame: _CardWalkFrame
+    view: dict[str, Any], frame: _CardWalkFrame
 ) -> list[dict[str, Any]]:
     """Search a view's top-level cards: its ``cards`` and every section's ``cards``.
 
@@ -607,6 +610,7 @@ def _find_view_card_matches(
     with ``sections`` and no ``type`` as a sections view, and cards a view type
     does not render still reference entities a rename or removal must find.
     """
+    view_idx = frame.view_index
     matches: list[dict[str, Any]] = []
     cards = view.get("cards")
     for card_idx, card in enumerate(cards if isinstance(cards, list) else []):
@@ -639,26 +643,6 @@ def _find_view_card_matches(
     return matches
 
 
-def _find_cards_in_config(
-    config: dict[str, Any],
-    entity_id: str | None = None,
-    card_type: str | None = None,
-    heading: str | None = None,
-    truncation: list[str] | None = None,
-    uncovered: list[str] | None = None,
-    query: str | None = None,
-) -> list[dict[str, Any]]:
-    """:func:`_find_cards_matching` with the criteria as keyword parameters."""
-    return _find_cards_matching(
-        config,
-        _SearchCriteria(
-            entity_id=entity_id, card_type=card_type, heading=heading, query=query
-        ),
-        truncation=[] if truncation is None else truncation,
-        uncovered=[] if uncovered is None else uncovered,
-    )
-
-
 def _find_cards_matching(
     config: dict[str, Any],
     criteria: _SearchCriteria,
@@ -677,7 +661,7 @@ def _find_cards_matching(
     Each match carries ``jq_path`` and ``python_path`` (appended after
     ``config`` in ``ha_config_set_dashboard(python_transform)``). The jq path
     of each subtree skipped at the depth bound is appended to ``truncation``,
-    and the ``.elements`` path of each card holding ``_NON_CARD_CHILD_KEYS``
+    and the ``.<key>`` path of each card holding one of ``_NON_CARD_CHILD_KEYS``
     to ``uncovered``.
     """
     views = config.get("views")
@@ -696,9 +680,9 @@ def _find_cards_matching(
             truncation=truncation,
             uncovered=uncovered,
         )
-        matches.extend(_find_badge_matches_in_view(view, view_idx, frame))
-        matches.extend(_find_header_card_matches(view, view_idx, frame))
-        matches.extend(_find_view_card_matches(view, view_idx, frame))
+        matches.extend(_find_badge_matches_in_view(view, frame))
+        matches.extend(_find_header_card_matches(view, frame))
+        matches.extend(_find_view_card_matches(view, frame))
     return matches
 
 
@@ -713,11 +697,8 @@ def _card_matches(card: dict[str, Any], criteria: _SearchCriteria) -> bool:
             row.get("entity") if isinstance(row, dict) else row
             for row in (rows if isinstance(rows, list) else [])
         ]
-        # Rows such as dividers carry no entity; only entity id strings count.
-        if not any(
-            isinstance(v, str) and v and _entity_matches(criteria.entity_id, v)
-            for v in values
-        ):
+        # Rows such as dividers carry no entity; _entity_matches skips them.
+        if not any(_entity_matches(criteria.entity_id, v) for v in values):
             return False
 
     if criteria.heading is not None:
@@ -1480,17 +1461,17 @@ def _search_warnings(
     return warnings
 
 
-def _unread_dashboards_warning(count: int, url_paths: Sequence[str] = ()) -> list[str]:
-    if not count:
+def _unread_dashboards_warning(failed: int | Sequence[str]) -> list[str]:
+    """The warning for storage dashboards that could not be read (a count or their url_paths)."""
+    if not failed:
         return []
-    if url_paths:
+    if isinstance(failed, int):
         return [
-            f"Could not read {count} storage dashboard(s), so they were not "
-            f"searched: {', '.join(url_paths)}. Get one by url_path to see its error."
+            f"Could not read {failed} storage dashboard(s), so they were not searched."
         ]
     return [
-        f"Could not read {count} storage dashboard(s), so they were not searched; "
-        "the Home Assistant log names them."
+        f"Could not read {len(failed)} storage dashboard(s), so they were not "
+        f"searched: {', '.join(failed)}. Get one by url_path to see its error."
     ]
 
 
@@ -1602,7 +1583,7 @@ class DashboardConfigTools:
         - Any of query / entity_id / card_type / heading searches cards and
           header cards, AND-ing the criteria, in url_path or, when it is
           omitted, every storage dashboard. View badges answer entity_id and
-          query (card_type='badge' keeps only them; heading excludes them).
+          query; card_type='badge' narrows those to badges, heading excludes them.
           Cards nested at any depth count, including
           custom cards' own keys such as groups[].cards[].card. Each match has a
           jq_path and a python_path to append to `config` in
@@ -1751,8 +1732,8 @@ class DashboardConfigTools:
         return list_result
 
     async def _fetch_search_dashboard_config(
-        self, url_path: str | None
-    ) -> tuple[dict[str, Any], str | None, str | None]:
+        self, url_path: str
+    ) -> tuple[dict[str, Any], str, str | None]:
         """Fetch + resolve the dashboard config for search mode.
 
         Returns ``(config, url_path, search_resolved_from)`` — ``url_path`` is
@@ -1840,10 +1821,10 @@ class DashboardConfigTools:
 
         ``url_path`` names the one dashboard a scoped search read; its
         ``config_hash`` then also appears at the top level (``None`` across
-        dashboards). ``config_suppressed_note`` (a dashboard not provably storage-mode)
-        withholds card bodies even with ``include_config=True`` — a YAML
-        dashboard may carry HA-resolved ``!secret`` plaintext. Match LOCATIONS
-        are always reported.
+        dashboards). ``config_suppressed_note`` (a dashboard not provably
+        storage-mode) withholds card bodies even with ``include_config=True`` —
+        a YAML dashboard may carry HA-resolved ``!secret`` plaintext. Match
+        LOCATIONS are always reported.
         """
         matches, truncation, uncovered = _find_cards_in_docs(
             docs, criteria, name_dashboards=url_path is None
@@ -1914,7 +1895,7 @@ class DashboardConfigTools:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Search needs query, entity_id, card_type or heading",
+                    "Search needs a non-blank query, entity_id, card_type or heading",
                     suggestions=[
                         "Pass query='light.kitchen' to find cards mentioning it",
                         "Use list_only=True to list dashboards, or url_path=... to get one",
@@ -1975,8 +1956,9 @@ class DashboardConfigTools:
     async def _search_docs(self) -> tuple[list[dict[str, Any]], list[str]]:
         """Every storage dashboard's ``{url_path, config}`` and warnings about gaps.
 
-        One component frame when it advertises ``dashboards_docs``; otherwise one
-        read per storage dashboard HA lists, which never includes the default.
+        One component frame when it advertises ``dashboards_docs``; otherwise, or
+        when that frame is unavailable, one read per storage dashboard HA lists,
+        which never includes the default.
         """
         caps = await get_component_caps(self._client)
         if component_supports(caps, "dashboards_docs"):
@@ -1986,7 +1968,7 @@ class DashboardConfigTools:
                 return result["docs"], _unread_dashboards_warning(failed)
         docs, failed_paths = await self._collect_legacy_search_docs()
         return docs, [
-            *_unread_dashboards_warning(len(failed_paths), failed_paths),
+            *_unread_dashboards_warning(failed_paths),
             "The default dashboard was not searched: only the dashboard read of a "
             "current ha_mcp_tools component reaches it, and that read was not "
             "available. Search it with url_path='default'.",
@@ -2002,8 +1984,9 @@ class DashboardConfigTools:
         ``mode == "storage"`` — fail-closed: HA resolves ``!secret`` when it
         loads a YAML Lovelace config. Core stamps ``mode`` on both kinds of row,
         so beyond YAML rows this skips only an untagged row (a storage item
-        persisted before core's mode default existed). A dashboard with no stored config yet has
-        nothing to search; any other read failure is reported, not hidden.
+        persisted before core's mode default existed). A dashboard with no
+        stored config yet has nothing to search; any other read failure is
+        reported, not hidden.
         """
         rows = await fetch_dashboards_list(self._client) or []
         docs: list[dict[str, Any]] = []

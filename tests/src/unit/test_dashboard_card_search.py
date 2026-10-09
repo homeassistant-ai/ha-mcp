@@ -9,9 +9,10 @@ from typing import Any, ClassVar
 
 from ha_mcp.tools.tools_config_dashboards import (
     DashboardConfigTools,
-    _find_cards_in_config,
     _SearchCriteria,
 )
+
+from ._dashboard_search_helpers import _find_cards_in_config
 
 
 class TestCardsNestedUnderCustomKeys:
@@ -264,8 +265,9 @@ class TestSearchSurvivesUnusualConfigs:
         assert _find_cards_in_config({"views": None}, card_type="tile") == []
 
 
-class TestSearchResultShape:
-    """Scoped and cross-dashboard results share one shape."""
+class TestSearchResultScope:
+    """A scoped result carries its config_hash at the top level; a result across
+    dashboards names the dashboard in warning locations instead."""
 
     CONFIG: ClassVar[dict[str, Any]] = {
         "views": [
@@ -286,14 +288,62 @@ class TestSearchResultShape:
             url_path=url_path,
         )
 
-    def test_scoped_search_returns_the_config_hash_at_the_top_level(self):
+    def test_scoped_search_locations_name_no_dashboard(self):
         result = self._search("only")
-        assert result["config_hash"] == result["matches"][0]["config_hash"]
+        assert any(".views[0].cards[1].elements" in w for w in result["warnings"])
+        assert not any("only:" in w for w in result["warnings"])
 
     def test_search_across_dashboards_names_the_dashboard_in_locations(self):
         result = self._search(None)
         assert result["config_hash"] is None
-        assert "only:.views[0].cards[1].elements" in result["warnings"][0]
+        assert any("only:.views[0].cards[1].elements" in w for w in result["warnings"])
+
+
+class TestEntityWildcards:
+    """``*`` matches any run of characters across the whole entity id."""
+
+    CONFIG: ClassVar[dict[str, Any]] = {
+        "views": [
+            {
+                "badges": ["sensor.x_temperature"],
+                "cards": [{"type": "tile", "entity": "sensor.x_temperature"}],
+            }
+        ]
+    }
+
+    def test_suffix_pattern_must_match_to_the_end(self):
+        assert _find_cards_in_config(self.CONFIG, entity_id="sensor.*_temp") == []
+        assert (
+            len(_find_cards_in_config(self.CONFIG, entity_id="sensor.*_temperature"))
+            == 2
+        )
+
+    def test_regex_characters_are_literal(self):
+        assert _find_cards_in_config(self.CONFIG, entity_id="sensor.(*") == []
+        assert _find_cards_in_config(self.CONFIG, entity_id="sensor.x+*") == []
+
+
+class TestBlankCriteria:
+    CONFIG: ClassVar[dict[str, Any]] = {
+        "views": [
+            {
+                "badges": ["light.a"],
+                "cards": [
+                    {"type": "tile", "entity": "light.a"},
+                    {"type": "tile", "entity": "light.a", "name": "x", "title": "T"},
+                ],
+            }
+        ]
+    }
+
+    def test_blank_criterion_beside_a_real_one_is_ignored(self):
+        assert _find_cards_in_config(
+            self.CONFIG, entity_id="light.a", heading=""
+        ) == _find_cards_in_config(self.CONFIG, entity_id="light.a")
+
+    def test_heading_excludes_badges(self):
+        matches = _find_cards_in_config(self.CONFIG, entity_id="light.a", heading="t")
+        assert [m["card_type"] for m in matches] == ["tile"]
 
 
 class TestPictureElementsDisclosure:

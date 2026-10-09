@@ -86,6 +86,7 @@ class TestCardSearch:
                 {"url_path": URL_PATH, "entity_id": ENTITY, "card_type": "tile"},
             )
             assert [m["jq_path"] for m in scoped["matches"]] == EXPECTED_PATHS
+            assert scoped["config_hash"] == ours[0]["config_hash"]
             assert scoped["matches"][0]["config_hash"] == ours[0]["config_hash"]
 
             # A match from the search across dashboards is directly editable.
