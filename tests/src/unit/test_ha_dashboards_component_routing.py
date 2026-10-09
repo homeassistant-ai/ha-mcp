@@ -440,6 +440,25 @@ async def test_search_reads_configs_from_one_component_frame() -> None:
     assert client.list_calls == 0
     assert client.config_calls == []
     assert _dash_calls(ws)[0].kwargs == {"mode": "docs"}
+    # The component read covers the default dashboard: nothing to disclose.
+    assert "warnings" not in resp
+
+
+@pytest.mark.asyncio
+async def test_search_falls_back_when_the_component_docs_read_is_unavailable() -> None:
+    ws = make_ws(
+        "ha_mcp_tools/dashboards",
+        info_result=_CAPS_DASHBOARDS_DOCS,
+        cmd_result={"mode": "docs", "available": False, "docs": []},
+    )
+    client = RoutingClient(dashboards_list=[_STORAGE_ROW], configs={"home": _HOME_BODY})
+
+    with patch_ws(ws, tools_config_dashboards):
+        resp = await _build_get_dashboard(client)(query="light.kitchen")
+
+    assert resp["match_count"] == 1
+    assert client.config_calls == ["home"]
+    assert any("url_path='default'" in w for w in resp["warnings"])
 
 
 @pytest.mark.asyncio
@@ -447,12 +466,7 @@ async def test_search_reports_unreadable_component_dashboards() -> None:
     ws = make_ws(
         "ha_mcp_tools/dashboards",
         info_result=_CAPS_DASHBOARDS_DOCS,
-        cmd_result={
-            "mode": "docs",
-            "available": True,
-            "docs": [],
-            "load_failed": 2,
-        },
+        cmd_result={"mode": "docs", "available": True, "docs": [], "load_failed": 2},
     )
     get_dashboard = _build_get_dashboard(RoutingClient())
 
@@ -500,10 +514,13 @@ async def test_search_with_url_path_searches_only_that_dashboard() -> None:
         resp = await get_dashboard(url_path="home", query="light.kitchen")
 
     assert resp["url_path"] == "home"
+    assert resp["config_hash"] == tools_config_dashboards.compute_config_hash(
+        _HOME_BODY
+    )
     assert resp["match_count"] == 1
     m = resp["matches"][0]
     assert m["url_path"] == "home"
-    assert m["config_hash"] == tools_config_dashboards.compute_config_hash(_HOME_BODY)
+    assert m["config_hash"] == resp["config_hash"]
     assert client.config_calls == ["home"]
 
 
@@ -526,9 +543,7 @@ async def test_search_with_older_component_reads_dashboards_one_by_one() -> None
 
 
 @pytest.mark.asyncio
-async def test_legacy_search_reports_unreadable_but_not_unconfigured_dashboards() -> (
-    None
-):
+async def test_legacy_search_names_broken_not_unconfigured_dashboards() -> None:
     """A dashboard with nothing stored yet is not a read failure; a broken one is."""
     ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     rows = [
@@ -548,9 +563,20 @@ async def test_legacy_search_reports_unreadable_but_not_unconfigured_dashboards(
 
     assert resp["match_count"] == 1
     unread = [w for w in resp["warnings"] if "Could not read" in w]
-    assert unread == [
-        "Could not read 1 storage dashboard(s), so they were not searched: broken."
-    ]
+    assert len(unread) == 1
+    assert "broken" in unread[0]
+    assert "fresh" not in unread[0]
+
+
+@pytest.mark.asyncio
+async def test_blank_card_criteria_are_rejected_not_searched() -> None:
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
+
+    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    get_dashboard = _build_get_dashboard(RoutingClient())
+
+    with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError):
+        await get_dashboard(entity_id=" ", heading="")
 
 
 @pytest.mark.asyncio

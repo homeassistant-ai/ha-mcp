@@ -240,22 +240,24 @@ async def _dashboard_search_docs(
     """Load every STORAGE dashboard's config for ``search`` and ``docs``.
 
     Only storage dashboards are loaded — YAML bodies are never searched/emitted.
-    Returns ``(docs, yaml_skipped, load_failed)``: ``docs`` are
-    ``[{url_path, title, registry_title, config}, ...]`` plain dicts —
-    ``title`` stays the config body's (carried by the card-scoped ``matches``
-    records released servers read) while the additive
-    ``registry_title`` carries the list-row metadata title that
-    ``document_matches`` emits (what the legacy ha_search bucket records
-    carry); ``yaml_skipped`` counts
-    the YAML-mode entries this walk never reads, INCLUDING a default dashboard
-    forced to YAML (``lovelace: mode: yaml``), which has no ``list`` row for
-    the server to count — the server treats a non-zero count as its
-    fall-back-to-legacy signal, since the legacy walk DOES read YAML bodies
-    and coverage must not depend on which path served (issue #2008 review);
-    ``load_failed`` counts storage
-    dashboards whose config load raised or returned a non-dict — real gaps the
-    caller must surface as partial rather than fail-soft into a clean-looking
-    result. A ``ConfigNotFound`` load is a clean skip, not a failure: an
+    Returns ``(docs, yaml_skipped, load_failed)``.
+
+    ``docs`` are ``[{url_path, title, registry_title, config}, ...]`` plain
+    dicts. ``title`` stays the config body's, carried by the card-scoped
+    ``matches`` records that servers predating ``dashboards_docs`` read;
+    ``registry_title`` carries the list-row metadata title ``document_matches``
+    emits (what the legacy ha_search bucket records carry).
+
+    ``yaml_skipped`` counts the YAML-mode entries this walk never reads,
+    INCLUDING a default dashboard forced to YAML (``lovelace: mode: yaml``),
+    which has no ``list`` row for the server to count. The server's ha_search
+    treats a non-zero count as its fall-back-to-legacy signal, since its legacy
+    walk DOES read YAML bodies and coverage must not depend on which path
+    served (issue #2008 review).
+
+    ``load_failed`` counts storage dashboards whose config load raised or
+    returned a non-dict — real gaps the caller must surface as partial rather
+    than fail-soft into a clean-looking result. A ``ConfigNotFound`` load is a clean skip, not a failure: an
     auto-generated (never taken control of) dashboard has no stored config to
     scan. If core drift breaks the guarded ``ConfigNotFound`` import, those
     loads degrade to ``load_failed`` — over-reported as partial, never silent.
@@ -382,8 +384,8 @@ def _collect_dashboard_matches(
     nested cards recursed), plus the two view-level containers the card walk never
     visits: ``badges`` and a sections-view ``header.card``, so a query answered
     "no match" here is a real absence, not a blind spot for entities referenced
-    only as a badge or in a header card. Released servers read these matches; the
-    current server's card search reads ``docs`` instead.
+    only as a badge or in a header card. Servers predating ``dashboards_docs``
+    read these matches; newer ones search the configs ``docs`` returns.
     """
     config = doc.get("config")
     if not isinstance(config, dict):
@@ -446,7 +448,7 @@ def _dashboard_match(
     """One ``search``-mode match record (shared, fixed shape).
 
     Every match site — cards, badges, header cards — builds its record here so the
-    wire shape released servers read stays identical.
+    wire shape servers predating ``dashboards_docs`` read stays identical.
     """
     return {
         "url_path": url_path,
@@ -631,9 +633,8 @@ def _card_string_leaves(card: dict[str, Any]) -> list[tuple[str, str]]:
 
     Leaves of cards nested below it are left out (callers that need them walk
     those cards separately). The key attributed to a leaf is the nearest dict
-    key, so
-    ``entities: [{entity: light.a}]`` yields ``("entity", "light.a")`` and
-    ``entities: [light.a]`` yields ``("entities", "light.a")``.
+    key, so ``entities: [{entity: light.a}]`` yields ``("entity", "light.a")``
+    and ``entities: [light.a]`` yields ``("entities", "light.a")``.
     """
     out: list[tuple[str, str]] = []
     _walk_card_nodes(card, "", "", out, [])

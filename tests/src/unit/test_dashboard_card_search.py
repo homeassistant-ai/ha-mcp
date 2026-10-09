@@ -240,6 +240,61 @@ class TestSearchSurvivesUnusualConfigs:
         feature_owner = _find_cards_in_config(config, query="light-brightness")
         assert [m["jq_path"] for m in feature_owner] == [".views[0].cards[0]"]
 
+    def test_view_cards_and_section_cards_are_both_searched_once(self):
+        config = {
+            "views": [
+                {
+                    "type": "sections",
+                    "cards": [{"type": "tile", "entity": "light.a"}],
+                    "sections": [{"cards": [{"type": "tile", "entity": "light.a"}]}],
+                }
+            ]
+        }
+        matches = _find_cards_in_config(config, entity_id="light.a")
+        assert [m["jq_path"] for m in matches] == [
+            ".views[0].cards[0]",
+            ".views[0].sections[0].cards[0]",
+        ]
+
+    def test_badge_with_a_non_string_entity_is_skipped(self):
+        config = {"views": [{"badges": [{"type": "entity", "entity": 5}], "cards": []}]}
+        assert _find_cards_in_config(config, entity_id="sensor.*") == []
+
+    def test_config_without_views_has_no_cards(self):
+        assert _find_cards_in_config({"views": None}, card_type="tile") == []
+
+
+class TestSearchResultShape:
+    """Scoped and cross-dashboard results share one shape."""
+
+    CONFIG: ClassVar[dict[str, Any]] = {
+        "views": [
+            {
+                "cards": [
+                    {"type": "picture-elements", "elements": []},
+                    {"type": "picture-elements", "elements": [{"type": "icon"}]},
+                ]
+            }
+        ]
+    }
+
+    def _search(self, url_path: str | None) -> dict[str, Any]:
+        return DashboardConfigTools._build_search_result(
+            [{"url_path": "only", "config": self.CONFIG}],
+            criteria=_SearchCriteria(card_type="picture-elements"),
+            include_config=False,
+            url_path=url_path,
+        )
+
+    def test_scoped_search_returns_the_config_hash_at_the_top_level(self):
+        result = self._search("only")
+        assert result["config_hash"] == result["matches"][0]["config_hash"]
+
+    def test_search_across_dashboards_names_the_dashboard_in_locations(self):
+        result = self._search(None)
+        assert result["config_hash"] is None
+        assert "only:.views[0].cards[1].elements" in result["warnings"][0]
+
 
 class TestPictureElementsDisclosure:
     """query reads picture-elements text; the card criteria are warned about."""
@@ -260,7 +315,7 @@ class TestPictureElementsDisclosure:
     def _search(self, **criteria: str) -> dict[str, Any]:
         return DashboardConfigTools._build_search_result(
             [{"url_path": "d", "config": self.CONFIG}],
-            criteria=_SearchCriteria.from_params(**criteria),
+            criteria=_SearchCriteria(**criteria),
             include_config=False,
         )
 

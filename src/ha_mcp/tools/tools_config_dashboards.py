@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Annotated, Any, Literal, NoReturn, cast, overload
 
@@ -213,12 +214,19 @@ def _badge_matches(badge: Any, entity_id: str) -> bool:
     Supports wildcard matching with *.
     """
     badge_entity = badge.get("entity") if isinstance(badge, dict) else badge
-    if not isinstance(badge_entity, str) or not badge_entity:
-        return False
+    return (
+        isinstance(badge_entity, str)
+        and bool(badge_entity)
+        and _entity_matches(entity_id, badge_entity)
+    )
+
+
+def _entity_matches(entity_id: str, candidate: str) -> bool:
+    """Whether ``candidate`` is ``entity_id`` (``*`` matches any run of characters)."""
     if "*" in entity_id:
         pattern = entity_id.replace(".", r"\.").replace("*", ".*")
-        return bool(re.match(pattern, badge_entity))
-    return entity_id == badge_entity
+        return re.match(pattern, candidate) is not None
+    return candidate == entity_id
 
 
 # Card slots — keys whose typed values are card configs (issue #1599). They are
@@ -239,7 +247,7 @@ _NESTED_STATES_KEY = "states"
 # read by ``query``, but entity_id/card_type/heading match cards only, so a card
 # carrying one is disclosed by its *presence*, not by the absence of matches
 # (issue #1599).
-_UNTRAVERSED_NESTED_KEYS = ("elements",)
+_NON_CARD_CHILD_KEYS = ("elements",)
 # Bound on card nesting levels against pathological configs; real dashboards
 # nest a handful.
 _MAX_CARD_DEPTH = 50
@@ -285,25 +293,21 @@ def _log_non_str_key(container_key: str, name: object, jq_prefix: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class _SearchCriteria:
-    """What a card search matches; every criterion that is set must hold."""
+    """What a card search matches; every criterion that is set must hold.
+
+    Values are trimmed and a blank one counts as not given.
+    """
 
     entity_id: str | None = None
     card_type: str | None = None
     heading: str | None = None
     query: str | None = None
 
-    @classmethod
-    def from_params(
-        cls,
-        *,
-        query: str | None = None,
-        entity_id: str | None = None,
-        card_type: str | None = None,
-        heading: str | None = None,
-    ) -> "_SearchCriteria":
-        """Criteria from tool parameters; a query is trimmed, a blank one dropped."""
-        query = query.strip() if query is not None else None
-        return cls(entity_id, card_type, heading, query or None)
+    def __post_init__(self) -> None:
+        for name in ("entity_id", "card_type", "heading", "query"):
+            value = getattr(self, name)
+            if isinstance(value, str):
+                object.__setattr__(self, name, value.strip() or None)
 
     @property
     def query_lower(self) -> str | None:
@@ -331,8 +335,8 @@ class _CardWalkFrame:
     section_index: int | None
     card_index: int | None
     depth: int
-    truncation: list[str] | None
-    uncovered: list[str] | None
+    truncation: list[str]
+    uncovered: list[str]
 
     def with_indices(
         self, *, section_index: int | None, card_index: int | None
@@ -398,7 +402,10 @@ def _split_card_entry(
 def _card_slots(
     key: str, value: Any, jq: str
 ) -> list[tuple[str, str, str, Any]] | None:
-    """``(jq segment, python segment, leaf key, item)`` per slot, ``None`` if no slot key."""
+    """``(jq segment, python segment, leaf key, item)`` per slot.
+
+    ``None`` when ``key: value`` holds no card slots.
+    """
     if key == _NESTED_CARDS_KEY and isinstance(value, list):
         return [(f"[{i}]", f"[{i}]", key, item) for i, item in enumerate(value)]
     if key == _NESTED_CARD_KEY:
@@ -435,7 +442,7 @@ def _walk_card(
 
     Only a dict carrying a ``type`` key is matched as a card. Subtrees past
     ``_MAX_CARD_DEPTH`` card levels are recorded in ``frame.truncation``; cards
-    carrying ``_UNTRAVERSED_NESTED_KEYS`` in ``frame.uncovered``.
+    carrying ``_NON_CARD_CHILD_KEYS`` in ``frame.uncovered``.
     """
     if not isinstance(card, dict):
         # Structurally-present but malformed slot (e.g. a string where a card
@@ -453,8 +460,7 @@ def _walk_card(
             _MAX_CARD_DEPTH,
             jq_prefix,
         )
-        if frame.truncation is not None:
-            frame.truncation.append(jq_prefix)
+        frame.truncation.append(jq_prefix)
         return []
 
     leaves: list[tuple[str, str]] = []
@@ -482,9 +488,7 @@ def _walk_card(
 def _note_uncovered(
     card: dict[str, Any], jq_prefix: str, frame: _CardWalkFrame
 ) -> None:
-    if frame.uncovered is None:
-        return
-    for key in _UNTRAVERSED_NESTED_KEYS:
+    for key in _NON_CARD_CHILD_KEYS:
         if card.get(key):
             frame.uncovered.append(f"{jq_prefix}.{key}")
             return
@@ -500,9 +504,7 @@ def _card_search_match(
     """The match record for ``card`` when it meets every criterion in ``frame``."""
     criteria = frame.criteria
     hits = _query_hits(leaves, criteria.query_lower)
-    if hits == [] or not _card_matches(
-        card, criteria.entity_id, criteria.card_type, criteria.heading
-    ):
+    if hits == [] or not _card_matches(card, criteria):
         return None
     match: dict[str, Any] = {
         "view_index": frame.view_index,
@@ -602,7 +604,8 @@ def _find_view_card_matches(
     """Search a view's top-level cards: its ``cards`` and every section's ``cards``.
 
     Both are read whatever the view's ``type``: the frontend renders a view
-    with ``sections`` and no ``type`` as a sections view.
+    with ``sections`` and no ``type`` as a sections view, and cards a view type
+    does not render still reference entities a rename or removal must find.
     """
     matches: list[dict[str, Any]] = []
     cards = view.get("cards")
@@ -645,26 +648,41 @@ def _find_cards_in_config(
     uncovered: list[str] | None = None,
     query: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Find cards, badges, and header cards in a dashboard config matching the criteria.
+    """:func:`_find_cards_matching` with the criteria as keyword parameters."""
+    return _find_cards_matching(
+        config,
+        _SearchCriteria(
+            entity_id=entity_id, card_type=card_type, heading=heading, query=query
+        ),
+        truncation=[] if truncation is None else truncation,
+        uncovered=[] if uncovered is None else uncovered,
+    )
 
-    Criteria are AND-ed; ``query`` (case-insensitive, trimmed) requires a string
-    the card itself holds to contain it, and each such match lists the hits
-    under ``matched``. Cards are searched in a view's ``cards`` and its
-    sections, in every card slot nested at any depth (see ``_split_card_node``),
-    plus view-level badges and sections-view header cards.
+
+def _find_cards_matching(
+    config: dict[str, Any],
+    criteria: _SearchCriteria,
+    *,
+    truncation: list[str],
+    uncovered: list[str],
+) -> list[dict[str, Any]]:
+    """Find cards, badges, and header cards in a dashboard config matching ``criteria``.
+
+    ``query`` (case-insensitive) requires a string the card itself holds to
+    contain it, and each such match lists the hits under ``matched``. Cards
+    are searched in a view's ``cards`` and its sections, in every card slot
+    nested at any depth (see ``_split_card_node``), plus view-level badges and
+    sections-view header cards.
 
     Each match carries ``jq_path`` and ``python_path`` (appended after
-    ``config`` in ``ha_config_set_dashboard(python_transform)``). If
-    ``truncation`` is provided, subtrees skipped at the depth bound are appended
-    to it; if ``uncovered`` is provided, cards carrying
-    ``_UNTRAVERSED_NESTED_KEYS`` are.
+    ``config`` in ``ha_config_set_dashboard(python_transform)``). The jq path
+    of each subtree skipped at the depth bound is appended to ``truncation``,
+    and the ``.elements`` path of each card holding ``_NON_CARD_CHILD_KEYS``
+    to ``uncovered``.
     """
     views = config.get("views")
     if "strategy" in config or not isinstance(views, list):
-        return []  # Strategy dashboards don't have explicit cards
-    criteria = _SearchCriteria.from_params(
-        query=query, entity_id=entity_id, card_type=card_type, heading=heading
-    )
+        return []  # Strategy dashboards and view-less configs hold no cards
     matches: list[dict[str, Any]] = []
     for view_idx, view in enumerate(views):
         if not isinstance(view, dict):
@@ -684,34 +702,30 @@ def _find_cards_in_config(
     return matches
 
 
-def _card_matches(
-    card: dict[str, Any],
-    entity_id: str | None,
-    card_type: str | None,
-    heading: str | None,
-) -> bool:
-    """Check if a card matches the search criteria (wildcards allowed in entity_id)."""
-    if card_type is not None and card.get("type") != card_type:
+def _card_matches(card: dict[str, Any], criteria: _SearchCriteria) -> bool:
+    """Check if a card matches the entity_id / card_type / heading criteria."""
+    if criteria.card_type is not None and card.get("type") != criteria.card_type:
         return False
 
-    if entity_id is not None:
+    if criteria.entity_id is not None:
         rows = card.get("entities")
         values = [card.get("entity")] + [
             row.get("entity") if isinstance(row, dict) else row
             for row in (rows if isinstance(rows, list) else [])
         ]
         # Rows such as dividers carry no entity; only entity id strings count.
-        entities = [v for v in values if isinstance(v, str) and v]
-        if "*" in entity_id:
-            pattern = entity_id.replace(".", r"\.").replace("*", ".*")
-            if not any(re.match(pattern, e) for e in entities):
-                return False
-        elif entity_id not in entities:
+        if not any(
+            isinstance(v, str) and v and _entity_matches(criteria.entity_id, v)
+            for v in values
+        ):
             return False
 
-    if heading is not None:
+    if criteria.heading is not None:
         card_heading = card.get("heading", card.get("title"))
-        if card_heading is None or heading.lower() not in str(card_heading).lower():
+        if (
+            card_heading is None
+            or criteria.heading.lower() not in str(card_heading).lower()
+        ):
             return False
 
     return True
@@ -1404,12 +1418,12 @@ def _attach_screenshot_tool_error(
 
 
 def _find_cards_in_docs(
-    docs: list[dict[str, Any]], criteria: _SearchCriteria
+    docs: list[dict[str, Any]], criteria: _SearchCriteria, *, name_dashboards: bool
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     """Matches over ``docs`` (``{url_path, config}``) plus truncated/uncovered spots.
 
     Each match is stamped with its dashboard's ``url_path`` and ``config_hash``;
-    locations are prefixed with ``<url_path>:`` when more than one doc is read.
+    with ``name_dashboards`` each location is prefixed with ``<url_path>:``.
     """
     matches: list[dict[str, Any]] = []
     truncation: list[str] = []
@@ -1420,21 +1434,15 @@ def _find_cards_in_docs(
         url_path = doc["url_path"] or "default"
         doc_truncation: list[str] = []
         doc_uncovered: list[str] = []
-        found = _find_cards_in_config(
-            doc["config"],
-            criteria.entity_id,
-            criteria.card_type,
-            criteria.heading,
-            truncation=doc_truncation,
-            uncovered=doc_uncovered,
-            query=criteria.query,
+        found = _find_cards_matching(
+            doc["config"], criteria, truncation=doc_truncation, uncovered=doc_uncovered
         )
         if found:
             config_hash = compute_config_hash(doc["config"])
             for match in found:
                 match["url_path"] = url_path
                 match["config_hash"] = config_hash
-        prefix = f"{url_path}:" if len(docs) > 1 else ""
+        prefix = f"{url_path}:" if name_dashboards else ""
         matches.extend(found)
         truncation.extend(prefix + path for path in doc_truncation)
         uncovered.extend(prefix + path for path in doc_uncovered)
@@ -1472,13 +1480,17 @@ def _search_warnings(
     return warnings
 
 
-def _unread_dashboards_warning(count: int, url_paths: list[str]) -> list[str]:
+def _unread_dashboards_warning(count: int, url_paths: Sequence[str] = ()) -> list[str]:
     if not count:
         return []
-    named = f": {', '.join(url_paths)}" if url_paths else ""
+    if url_paths:
+        return [
+            f"Could not read {count} storage dashboard(s), so they were not "
+            f"searched: {', '.join(url_paths)}. Get one by url_path to see its error."
+        ]
     return [
-        f"Could not read {count} storage dashboard(s), so they were not "
-        f"searched{named}."
+        f"Could not read {count} storage dashboard(s), so they were not searched; "
+        "the Home Assistant log names them."
     ]
 
 
@@ -1500,8 +1512,7 @@ class DashboardConfigTools:
             str | None,
             Field(
                 description="Dashboard URL path (e.g. 'lovelace-home'); 'default' for the "
-                "default dashboard. Omitted: get reads the default dashboard and a "
-                "search covers every storage dashboard."
+                "default dashboard."
             ),
         ] = None,
         list_only: Annotated[
@@ -1522,8 +1533,7 @@ class DashboardConfigTools:
             str | None,
             Field(
                 description="Search: cards whose entity/entities field holds this "
-                "entity ID (wildcards, e.g. 'sensor.temperature_*'), plus view "
-                "badges and header cards."
+                "entity ID (wildcards, e.g. 'sensor.temperature_*')."
             ),
         ] = None,
         card_type: Annotated[
@@ -1590,13 +1600,16 @@ class DashboardConfigTools:
         The parameters pick the mode:
         - list_only=True lists dashboard metadata, storage and YAML alike.
         - Any of query / entity_id / card_type / heading searches cards and
-          header cards (badges too, for entity_id or query), AND-ing the
-          criteria. Cards nested at any depth count, including
+          header cards, AND-ing the criteria, in url_path or, when it is
+          omitted, every storage dashboard. View badges answer entity_id and
+          query (card_type='badge' keeps only them; heading excludes them).
+          Cards nested at any depth count, including
           custom cards' own keys such as groups[].cards[].card. Each match has a
           jq_path and a python_path to append to `config` in
           ha_config_set_dashboard(python_transform=...), e.g.
           f'config{m["python_path"]}["icon"] = "mdi:x"'. Each match carries its
-          dashboard's url_path and config_hash.
+          dashboard's url_path and config_hash; a one-dashboard search also
+          returns the config_hash at the top level.
         - Otherwise the full config of url_path (the default dashboard when
           omitted) is returned; with view_path only that view, while config_hash
           still covers the full config.
@@ -1621,9 +1634,11 @@ class DashboardConfigTools:
         if describe:
             return await describe_card_response(self._client, card_type)
         screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
-        criteria = _SearchCriteria.from_params(
-            query=query, entity_id=entity_id, card_type=card_type, heading=heading
+        criteria = _SearchCriteria(
+            entity_id=entity_id, card_type=card_type, heading=heading, query=query
         )
+        # The raw parameters, not criteria.is_empty(): a blank-only search must
+        # reach its "Search needs ..." error instead of falling through to a get.
         search_mode = any(v is not None for v in (query, entity_id, card_type, heading))
         # Mutable single-element holder so the mode helpers can surface the
         # lazy-resolved/canonicalized url_path back to this scope even when
@@ -1818,16 +1833,21 @@ class DashboardConfigTools:
         *,
         criteria: _SearchCriteria,
         include_config: bool,
+        url_path: str | None = None,
         config_suppressed_note: str | None = None,
     ) -> dict[str, Any]:
         """Run the card search over ``docs`` (``{url_path, config}``) and assemble it.
 
-        ``config_suppressed_note`` (a dashboard not provably storage-mode)
+        ``url_path`` names the one dashboard a scoped search read; its
+        ``config_hash`` then also appears at the top level (``None`` across
+        dashboards). ``config_suppressed_note`` (a dashboard not provably storage-mode)
         withholds card bodies even with ``include_config=True`` — a YAML
         dashboard may carry HA-resolved ``!secret`` plaintext. Match LOCATIONS
         are always reported.
         """
-        matches, truncation, uncovered = _find_cards_in_docs(docs, criteria)
+        matches, truncation, uncovered = _find_cards_in_docs(
+            docs, criteria, name_dashboards=url_path is None
+        )
         truncated = len(matches) > _SEARCH_MATCH_CAP
         matches = matches[:_SEARCH_MATCH_CAP]
         if not include_config or config_suppressed_note is not None:
@@ -1857,7 +1877,10 @@ class DashboardConfigTools:
         result: dict[str, Any] = {
             "success": True,
             "action": "search",
-            "url_path": None,
+            "url_path": url_path,
+            "config_hash": (
+                compute_config_hash(docs[0]["config"]) if url_path is not None else None
+            ),
             "search_criteria": asdict(criteria),
             "matches": matches,
             "match_count": len(matches),
@@ -1884,7 +1907,8 @@ class DashboardConfigTools:
         With ``url_path`` the dashboard is read directly (YAML included, with
         bodies withheld). Without it every storage dashboard is searched: the
         component serves all their configs in one frame, and otherwise each
-        storage dashboard HA lists is read.
+        storage dashboard HA lists is read (never the default, which HA does
+        not list).
         """
         if criteria.is_empty():
             raise_tool_error(
@@ -1931,9 +1955,9 @@ class DashboardConfigTools:
                 [{"url_path": url_path, "config": config}],
                 criteria=criteria,
                 include_config=include_config,
+                url_path=url_path,
                 config_suppressed_note=config_suppressed_note,
             )
-            search_result["url_path"] = url_path
             if search_resolved_from is not None:
                 search_result["resolved_from"] = search_resolved_from
         if list_only:
@@ -1959,12 +1983,13 @@ class DashboardConfigTools:
             result = await _dashboards_via_component(self._client, "docs")
             if result is not None and isinstance(result.get("docs"), list):
                 failed = int(result.get("load_failed", 0) or 0)
-                return result["docs"], _unread_dashboards_warning(failed, [])
+                return result["docs"], _unread_dashboards_warning(failed)
         docs, failed_paths = await self._collect_legacy_search_docs()
         return docs, [
             *_unread_dashboards_warning(len(failed_paths), failed_paths),
-            "The default dashboard was not searched (it needs the ha_mcp_tools "
-            "component, current version); search it with url_path='default'.",
+            "The default dashboard was not searched: only the dashboard read of a "
+            "current ha_mcp_tools component reaches it, and that read was not "
+            "available. Search it with url_path='default'.",
         ]
 
     async def _collect_legacy_search_docs(
@@ -1976,8 +2001,8 @@ class DashboardConfigTools:
         returns. A body is read ONLY when its row is EXPLICITLY tagged
         ``mode == "storage"`` — fail-closed: HA resolves ``!secret`` when it
         loads a YAML Lovelace config. Core stamps ``mode`` on both kinds of row,
-        so this skips only an untagged row (a storage item persisted before
-        core's mode default existed). A dashboard with no stored config yet has
+        so beyond YAML rows this skips only an untagged row (a storage item
+        persisted before core's mode default existed). A dashboard with no stored config yet has
         nothing to search; any other read failure is reported, not hidden.
         """
         rows = await fetch_dashboards_list(self._client) or []

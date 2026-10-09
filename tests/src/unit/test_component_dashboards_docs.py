@@ -1,8 +1,9 @@
 """The component's ``dashboards`` ``docs`` mode and its card walk's reach.
 
 ``docs`` hands the server every storage dashboard's config for the card search
-(issue #2694); ``search`` keeps serving released servers, so its walk must reach
-cards nested under a custom card's own keys too.
+(issue #2694). Servers predating the ``dashboards_docs`` capability still read
+``search`` matches, so that walk must reach cards nested under a custom card's
+own keys too.
 """
 
 from __future__ import annotations
@@ -66,7 +67,7 @@ def test_docs_without_lovelace_is_unavailable(monkeypatch: Any) -> None:
 
 
 def test_search_reaches_cards_under_a_custom_cards_own_keys(monkeypatch: Any) -> None:
-    """Released servers read ``search`` matches; nested custom-card cards count."""
+    """``search`` matches (read by older servers) reach nested custom-card cards."""
     body = {
         "views": [
             {
@@ -98,5 +99,5 @@ def test_search_reaches_cards_under_a_custom_cards_own_keys(monkeypatch: Any) ->
 
 
 def test_docs_capability_is_advertised() -> None:
-    """The server only sends ``docs`` to a component that advertises it."""
+    """The component advertises ``dashboards_docs``, which gates the server's ``docs`` read."""
     assert "dashboards_docs" in wsapi._do_info(FakeHass())["capabilities"]

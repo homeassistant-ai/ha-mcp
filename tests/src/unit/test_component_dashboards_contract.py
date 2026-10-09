@@ -347,7 +347,7 @@ async def test_get_yaml_dashboard_falls_back_to_legacy() -> None:
 
 # --- cross-dashboard search parity -------------------------------------------
 @pytest.mark.asyncio
-async def test_search_parity_component_vs_legacy_walk() -> None:
+async def test_search_parity_docs_frame_vs_legacy_reads() -> None:
     """Configs from the component's one ``docs`` frame and from the legacy
     per-dashboard reads give the SAME matches."""
     dmap = {
