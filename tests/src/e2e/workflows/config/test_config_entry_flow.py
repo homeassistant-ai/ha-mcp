@@ -565,10 +565,10 @@ class TestRemoveHelperByEntity:
         try:
             await wait_for_tool_result(
                 mcp_client,
-                tool_name="ha_get_entity",
+                tool_name="ha_get_state",
                 arguments={"entity_id": entity_ids[0]},
-                predicate=lambda d: d.get("count") == 1,
-                description="min_max helper entity is registered",
+                predicate=lambda d: d.get("data", {}).get("entity_id") == entity_ids[0],
+                description="min_max helper entity is queryable",
             )
             async with MCPAssertions(mcp_client) as mcp:
                 removed = await mcp.call_tool_success(
@@ -599,4 +599,4 @@ class TestRemoveHelperByEntity:
             still_there = await mcp.call_tool_success(
                 "ha_get_entity", {"entity_id": target}
             )
-        assert still_there.get("count") == 1
+        assert still_there["entity_entry"]["platform"] == "sun"
