@@ -268,16 +268,17 @@ Design notes that are load-bearing:
   merely unemitted.
 * **Event-loop hygiene.** Every registry/state join is a pure in-memory read
   over live data — run synchronously, no persistent index (always fresh, zero
-  cache-invalidation surface). The one blocking read — ``secrets.yaml`` for the
+  cache-invalidation surface). The blocking read — ``secrets.yaml`` for the
   match-corpus scrub — runs in the executor via the command wrapper's async
-  pre-step (:func:`_search_prep`), never on the event loop.
+  pre-step (:func:`_search_prep`), never on the event loop; that pre-step also
+  asks Core's loader for the helper flows.
 
 Module layout. This package's ``__init__`` holds the registration seam
 (``async_register_commands``, ``_command_specs`` and ``_build_handler``). The command
 code lives in the submodules:
 
 * ``constants`` and ``schemas``: the wire contract, capability list and request schemas.
-* ``registry``, ``secrets`` and ``assist``: shared registry, secret-scrub and Assist exposure helpers.
+* ``registry``, ``secrets``, ``assist`` and ``flow_domains``: shared registry, secret-scrub, Assist exposure and flow-helper domain helpers.
 * ``search``, ``search_config``, ``search_score`` and ``visibility``: ``ha_mcp_tools/search``.
 * ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries`` and ``dashboards``: the read commands.
 * ``system``: ``info``, ``system_snapshot``, ``backup_prep``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.

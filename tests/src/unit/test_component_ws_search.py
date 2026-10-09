@@ -1407,9 +1407,9 @@ class TestHelpers:
 
 
 def test_flow_helper_domains_cover_server_flow_helper_types():
-    """The component must index every domain the server routes as a flow helper,
-    or a UI-created helper of a covered type would be invisible to the component
-    path (e2e ``test_deep_search_finds_non_template_flow_helpers``)."""
+    """The conftest FLOWS["helper"] stub must hold every server FLOW_HELPER_TYPES
+    entry, as a live Core must for the all-types listing (e2e
+    ``test_deep_search_finds_non_template_flow_helpers`` covers group/min_max)."""
     from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
 
     missing = set(FLOW_HELPER_TYPES) - wsapi.FLOW_HELPER_DOMAINS

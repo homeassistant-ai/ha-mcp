@@ -16,6 +16,7 @@ from .constants import (
 )
 from .registry import _iter_config_entries, _iter_states, _plainify, _RegistryView
 from .search_score import _config_score
+from .secrets import _scrub_secret_values
 
 
 # --- Config surfaces (automation/script/scene) -------------------------------
@@ -254,8 +255,14 @@ def _search_helpers(
     exact: bool,
     include_config: bool,
     secret_values: frozenset[str] = frozenset(),
+    flow_domains: frozenset[str] = FLOW_HELPER_DOMAINS,
+    custom_domains: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """Index collection helpers (states) + flow helpers (config-entry options)."""
+    """Index collection helpers (states) + flow helpers (config-entry options).
+
+    An entry of a custom-only domain is matched on its title only and emitted with
+    ``options: None`` (see ``flow_domains._flow_helper_domains``).
+    """
     results: list[dict[str, Any]] = []
 
     # Collection helpers: entities in the state machine, matched on entity_id /
@@ -311,7 +318,7 @@ def _search_helpers(
     # Flow helpers: config entries — options + title ONLY, never data.
     for entry in _iter_config_entries(hass):
         domain = getattr(entry, "domain", None)
-        if domain not in FLOW_HELPER_DOMAINS:
+        if domain not in flow_domains:
             continue
         title = getattr(entry, "title", None) or ""
         # ``ConfigEntry.options`` is a ``MappingProxyType`` in live HA, not a
@@ -321,7 +328,11 @@ def _search_helpers(
         # Accept any ``Mapping`` so the persisted options are searchable and
         # emittable under ``include_config``.
         raw_options = getattr(entry, "options", None)
-        options = dict(raw_options) if isinstance(raw_options, Mapping) else {}
+        options = (
+            dict(raw_options)
+            if isinstance(raw_options, Mapping) and domain not in custom_domains
+            else {}
+        )
         entry_id = getattr(entry, "entry_id", None)
         if match_all:
             score = 100
@@ -350,7 +361,11 @@ def _search_helpers(
                 "match_in_name": match_in_name,
                 "match_in_config": match_in_config,
                 # Data minimization: options only, never entry.data.
-                "options": options if include_config else None,
+                "options": (
+                    _scrub_secret_values(_plainify(options), secret_values)
+                    if include_config and domain not in custom_domains
+                    else None
+                ),
             }
         )
     return results

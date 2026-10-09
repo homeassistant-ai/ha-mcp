@@ -258,12 +258,14 @@ COLLECTION_HELPER_DOMAINS = frozenset(
 )
 # Flow (config-entry-backed) helpers. Indexed from ``entry.options`` / ``title``
 # directly — no OptionsFlow start/abort dance, and NEVER ``entry.data``.
-# Read from the running Core's generated flow registry (manifest
-# ``integration_type: "helper"``), so the set follows the installed version and
-# never holds a custom integration, whose options would reach the listing and
-# search here without the redaction ha_get_integration applies. Must stay a
-# superset of the server's ``FLOW_HELPER_TYPES``: its all-types listing errors on
-# any flow type missing from ``covered_types``.
+# Core's generated ``config_flows.FLOWS["helper"]`` list (manifest
+# ``integration_type: "helper"``), so the set follows the installed version. It
+# holds no custom-only domain; a Core helper domain stays in it even when a custom
+# integration overrides it. It is the default for a caller that skips the async
+# pre-step, and the line ``flow_domains._flow_helper_domains`` draws between Core
+# and custom-only domains when it hands ``helpers_list`` and ``search`` the full
+# set. ``covered_types`` comes from that full set, and the server's all-types
+# listing errors on any of its ``FLOW_HELPER_TYPES`` missing there.
 FLOW_HELPER_DOMAINS = frozenset(FLOWS["helper"])
 
 # Collection helper domains enumerated by ``ha_mcp_tools/helpers_list``: the

@@ -18,12 +18,14 @@ from .constants import (
     ALL_SEARCH_TYPES,
     CONFIG_SEARCH_TYPES,
     DEFAULT_LIMIT,
+    FLOW_HELPER_DOMAINS,
     SEARCH_TYPE_AUTOMATION,
     SEARCH_TYPE_ENTITY,
     SEARCH_TYPE_HELPER,
     SEARCH_TYPE_SCENE,
     SEARCH_TYPE_SCRIPT,
 )
+from .flow_domains import _flow_helper_domains
 from .registry import (
     _area_name,
     _device_dict_repr,
@@ -38,7 +40,7 @@ from .registry import (
 )
 from .search_config import _search_config_surface, _search_helpers
 from .search_score import _apply_hidden_penalty, _text_tier, _tokenize
-from .secrets import _load_secret_values
+from .secrets import SCRUB_DEGRADED_WARNING, _load_secret_scrub, _load_secret_values
 from .visibility import (
     _visibility_hidden_set,
     _visibility_inventory,
@@ -51,6 +53,9 @@ def _do_search(  # noqa: PLR0915
     params: dict[str, Any],
     *,
     secret_values: frozenset[str] = frozenset(),
+    secret_scrub_degraded: bool = False,
+    flow_domains: frozenset[str] = FLOW_HELPER_DOMAINS,
+    custom_domains: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Unified in-process search. Pure over ``hass`` — the WS wrapper is thin.
 
@@ -61,6 +66,9 @@ def _do_search(  # noqa: PLR0915
     loop by :func:`_search_prep` and passed in (default empty — the loader is
     skipped for an entity-only search, and direct callers/tests supply it
     explicitly). It keeps this function a pure, synchronous in-memory read.
+    Flow-helper ``options`` are emitted under ``include_config``, so a degraded
+    scrub (reported by the pre-step for a helper search) adds
+    :data:`SCRUB_DEGRADED_WARNING` to ``warnings`` there.
     """
     query_lower = (params.get("query") or "").strip().lower()
     match_all = not query_lower
@@ -201,6 +209,8 @@ def _do_search(  # noqa: PLR0915
                 exact=exact,
                 include_config=include_config,
                 secret_values=secret_values,
+                flow_domains=flow_domains,
+                custom_domains=custom_domains,
             )
         )
 
@@ -237,13 +247,31 @@ def _do_search(  # noqa: PLR0915
         "partial": bool(partial_reasons),
         "partial_reason": " ; ".join(partial_reasons) if partial_reasons else None,
     }
+    _add_optional_keys(
+        result,
+        diagnostics,
+        visibility_warnings,
+        scrub_degraded=secret_scrub_degraded and include_config,
+    )
+    return add_location_metadata(result, location)
+
+
+def _add_optional_keys(
+    result: dict[str, Any],
+    diagnostics: dict[str, int],
+    visibility_warnings: list[str],
+    *,
+    scrub_degraded: bool,
+) -> None:
+    """Set the keys a search response carries only when they have content."""
     if diagnostics:
         result["diagnostics"] = diagnostics
+    if scrub_degraded:
+        result.setdefault("warnings", []).append(SCRUB_DEGRADED_WARNING)
     # Additive (present only when non-empty, no schema_version bump): the server's
     # ha_search consumer merges these into the response's top-level warnings.
     if visibility_warnings:
         result["visibility_warnings"] = visibility_warnings
-    return add_location_metadata(result, location)
 
 
 def _sort_key(rec: dict[str, Any]) -> str:
@@ -252,7 +280,9 @@ def _sort_key(rec: dict[str, Any]) -> str:
 
 
 async def _search_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
-    """Async pre-step for ``search``: load the secret-scrub set off the loop.
+    """Async pre-step for ``search``: load the secret-scrub set off the loop, and
+    for a helper search ask Core which domains are helper flows
+    (:func:`_flow_helper_domains`).
 
     The scrub only applies to config/helper surfaces, so an entity-only search
     skips the ``secrets.yaml`` read entirely (perf gate). When a scrubbed surface
@@ -264,8 +294,15 @@ async def _search_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, An
     scrub_surfaces = (*CONFIG_SEARCH_TYPES, SEARCH_TYPE_HELPER)
     if not any(st in search_types for st in scrub_surfaces):
         return {"secret_values": frozenset()}
-    values = await hass.async_add_executor_job(_load_secret_values, hass)
-    return {"secret_values": values}
+    if SEARCH_TYPE_HELPER not in search_types:
+        values = await hass.async_add_executor_job(_load_secret_values, hass)
+        return {"secret_values": values}
+    values, degraded = await hass.async_add_executor_job(_load_secret_scrub, hass)
+    return {
+        "secret_values": values,
+        "secret_scrub_degraded": degraded,
+        **await _flow_helper_domains(hass),
+    }
 
 
 # --- Entity join + scoring ---------------------------------------------------

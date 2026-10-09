@@ -22,7 +22,8 @@ def _load_secret_scrub(hass: HomeAssistant) -> tuple[frozenset[str], bool]:
     out of two surfaces: the config-body match corpus (so ``ha_search`` cannot be a
     probe oracle — a query equal to a suspected secret confirmed via
     ``match_in_config``) and the ``options`` emitted by ``config_entries`` /
-    ``helpers_list`` (so a resolved secret never leaves the component).
+    ``helpers_list`` / a helper ``search`` (so a resolved secret never leaves the
+    component).
 
     Both string AND numeric scalars are collected as their ``str()`` form: an
     unquoted ``alarm_code: 1234`` is a YAML int, and a config-entry option can carry
@@ -89,13 +90,21 @@ def _collect_secret_strings(raw: dict[Any, Any]) -> frozenset[str]:
     return frozenset(values)
 
 
+# Added to a helper ``search``'s ``warnings`` when the scrub degraded and the
+# response carries flow-helper options; the server merges it into ``ha_search``.
+SCRUB_DEGRADED_WARNING = (
+    "secrets.yaml could not be read, so flow-helper options in this response "
+    "were not scrubbed of resolved !secret values."
+)
+
+
 def _load_secret_values(hass: HomeAssistant) -> frozenset[str]:
     """The ``secrets.yaml`` scrub set (see :func:`_load_secret_scrub`); degraded dropped.
 
-    The ``search`` corpus scrub is best-effort and does not surface the degraded
-    signal (its filtering degrading open is the pre-PR behaviour); the
-    ``config_entries`` / ``helpers_list`` emission preps call
-    :func:`_load_secret_scrub` directly so they can surface it.
+    A ``search`` without the helper surface only filters its match corpus, so it
+    does not surface the degraded signal (that filtering degrading open is the
+    pre-PR behaviour); the ``config_entries`` / ``helpers_list`` / helper ``search``
+    preps call :func:`_load_secret_scrub` directly so they can surface it.
     """
     values, _degraded = _load_secret_scrub(hass)
     return values

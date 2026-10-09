@@ -425,10 +425,12 @@ def _apply_dashboard_leg_state(response: dict[str, Any], leg: _DashboardLeg) -> 
 def _merge_component_visibility_warnings(
     response: dict[str, Any], component_result: dict[str, Any]
 ) -> None:
-    """Fold component visibility and location warnings into the response.
+    """Fold component visibility, location and secret-scrub warnings into the response.
 
     The component emits these when a hide dimension fails open (unknown category /
-    empty-registry allowlist / Assist unavailable). Merged into the same top-level
+    empty-registry allowlist / Assist unavailable), when a location scan is
+    incomplete, or when helper options went out without the secrets.yaml scrub
+    because that file could not be read. Merged into the same top-level
     warnings surface the legacy path fills via ``merge_visibility_warnings``, so the
     fast path is no longer silent about incomplete filtering.
     """

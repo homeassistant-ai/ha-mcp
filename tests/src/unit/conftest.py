@@ -204,6 +204,28 @@ def _ensure_event_state_changed_const():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _core_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer the component's Core loader call with the stubbed helper flow list.
+
+    ``helpers_list`` and ``search`` ask ``homeassistant.loader`` for the helper
+    flows in their async pre-steps. The loader is a ``MagicMock`` stub in unit
+    tests, which cannot be awaited, so this answers with the ``FLOWS["helper"]``
+    stub above, i.e. no custom helper integrations. It does nothing until the
+    component is loaded; a test that loads it later fails loudly on that await.
+    A test that needs custom helper integrations patches the name again.
+    """
+    from unittest.mock import AsyncMock
+
+    mod = sys.modules.get("custom_components.ha_mcp_tools.websocket_api.flow_domains")
+    if mod is None:
+        return
+    flows = sys.modules["homeassistant.generated.config_flows"].FLOWS["helper"]
+    monkeypatch.setattr(
+        mod, "async_get_config_flows", AsyncMock(return_value=set(flows))
+    )
+
+
 @pytest.fixture
 def real_probatio():
     """The installed probatio, past the stub this tier installs for it.

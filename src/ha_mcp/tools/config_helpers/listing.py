@@ -12,6 +12,20 @@ from .schemas import SIMPLE_HELPER_TYPES
 
 logger = logging.getLogger(__name__)
 
+# The component reports ``secret_scrub_degraded`` when secrets.yaml exists but
+# cannot be read; its flow-helper options then went out unscrubbed.
+_SCRUB_DEGRADED_WARNING = (
+    "secrets.yaml could not be read, so flow-helper options in this listing were "
+    "not scrubbed of resolved !secret values."
+)
+
+
+def _scrub_warnings(result: dict[str, Any]) -> list[str]:
+    """The warning for a component result whose secret scrub degraded, if any."""
+    return (
+        [_SCRUB_DEGRADED_WARNING] if result.get("secret_scrub_degraded") is True else []
+    )
+
 
 def listed_items(listed: Any) -> list[Any]:
     """The editable items of a ``<type>/list`` result.
@@ -165,13 +179,16 @@ def _shape_component_helpers_response(
             if want_flow
             else _shape_collection_helper_record(rec)
         )
-    return {
+    response: dict[str, Any] = {
         "success": True,
         "helper_type": helper_type,
         "count": len(helpers),
         "helpers": helpers,
         "message": f"Found {len(helpers)} {helper_type} helper(s)",
     }
+    if want_flow and (warnings := _scrub_warnings(result)):
+        response["warnings"] = warnings
+    return response
 
 
 def _component_covers(result: dict[str, Any], helper_type: str) -> bool:
@@ -278,7 +295,7 @@ async def shape_all_helpers_response(
                 ],
             )
         )
-    merge_warnings: list[str] = []
+    merge_warnings = _scrub_warnings(result)
     for helper_type in sorted(SIMPLE_HELPER_TYPES - covered_set):
         legacy = await legacy_list(helper_type)
         # legacy_list joins the registry (issue #1945) and, degrade-

@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
 from .constants import FLOW_HELPER_DOMAINS, HELPERS_LIST_COLLECTION_DOMAINS
+from .flow_domains import _flow_helper_domains
 from .registry import (
     _all_area_entries,
     _all_device_entries,
@@ -50,10 +51,13 @@ def _do_helpers_list(
     *,
     secret_values: frozenset[str] = frozenset(),
     secret_scrub_degraded: bool = False,
+    flow_domains: frozenset[str] = FLOW_HELPER_DOMAINS,
+    custom_domains: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """List collection helpers (live state bodies) + flow helpers (config-entry options).
 
-    Flow-helper ``options`` come straight from ``ConfigEntry.options`` — no
+    Flow-helper ``options`` come straight from ``ConfigEntry.options`` (``None``
+    for a custom-only domain, see :func:`_flow_helper_domains`) — no
     OptionsFlow start/abort dance, and NEVER ``entry.data`` (integration
     credentials). Every record carries the CURRENT entity_id + display name from
     the entity registry so a renamed helper shows current values (issue #1794),
@@ -83,8 +87,12 @@ def _do_helpers_list(
     helpers = _collection_helpers_list(hass, view, type_filter)
     covered = set(HELPERS_LIST_COLLECTION_DOMAINS)
     if include_flow:
-        helpers.extend(_flow_helpers_list(hass, view, type_filter, secret_values))
-        covered |= FLOW_HELPER_DOMAINS
+        helpers.extend(
+            _flow_helpers_list(
+                hass, view, type_filter, secret_values, flow_domains, custom_domains
+            )
+        )
+        covered |= flow_domains
     result: dict[str, Any] = {
         "helpers": helpers,
         "count": len(helpers),
@@ -98,7 +106,8 @@ def _do_helpers_list(
 async def _helpers_list_prep(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
-    """Async pre-step for ``helpers_list``: load the secret-scrub set off the loop.
+    """Async pre-step for ``helpers_list``: load the secret-scrub set off the loop
+    and ask Core which domains are helper flows (:func:`_flow_helper_domains`).
 
     Only the flow-helper ``options`` are scrubbed, so the blocking ``secrets.yaml``
     read is skipped entirely when ``include_flow_helpers`` is false (perf gate,
@@ -109,7 +118,11 @@ async def _helpers_list_prep(
     if not msg.get("include_flow_helpers", True):
         return {"secret_values": frozenset(), "secret_scrub_degraded": False}
     values, degraded = await hass.async_add_executor_job(_load_secret_scrub, hass)
-    return {"secret_values": values, "secret_scrub_degraded": degraded}
+    return {
+        "secret_values": values,
+        "secret_scrub_degraded": degraded,
+        **await _flow_helper_domains(hass),
+    }
 
 
 def _collection_helpers_list(
@@ -166,29 +179,35 @@ def _flow_helpers_list(
     view: _RegistryView,
     type_filter: frozenset[str] | None,
     secret_values: frozenset[str] = frozenset(),
+    flow_domains: frozenset[str] = FLOW_HELPER_DOMAINS,
+    custom_domains: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Flow (config-entry-backed) helpers — options + title + entry_id, never data.
 
     ``options`` is passed through the same resolved-``!secret`` scrub
     ``config_entries`` applies (a flow helper is a config entry, so its ``options``
-    share the same exposure class); an empty ``secret_values`` is a no-op.
+    share the same exposure class); an empty ``secret_values`` is a no-op. An entry
+    of a custom-only domain is emitted with ``options: None`` (see
+    :func:`_flow_helper_domains`).
     """
     out: list[dict[str, Any]] = []
     entity_by_entry = _entities_by_config_entry(view)
     for entry in _iter_config_entries(hass):
         domain = getattr(entry, "domain", None)
-        if domain not in FLOW_HELPER_DOMAINS:
+        if domain not in flow_domains:
             continue
         if type_filter is not None and domain not in type_filter:
             continue
         entry_id = getattr(entry, "entry_id", None)
         title = getattr(entry, "title", None) or ""
         raw_options = getattr(entry, "options", None)
-        options = (
-            _scrub_secret_values(_plainify(dict(raw_options)), secret_values)
-            if isinstance(raw_options, Mapping)
-            else {}
-        )
+        options: dict[str, Any] | None = None
+        if domain not in custom_domains:
+            options = (
+                _scrub_secret_values(_plainify(dict(raw_options)), secret_values)
+                if isinstance(raw_options, Mapping)
+                else {}
+            )
         reg = entity_by_entry.get(entry_id)
         entity_id = getattr(reg, "entity_id", None) if reg is not None else None
         name = _reg_name(reg) or _current_friendly_name(hass, entity_id, title)
