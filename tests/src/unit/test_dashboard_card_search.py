@@ -510,7 +510,7 @@ class TestReviewedSearchEdges:
             url_path="d",
         )
 
-    def test_deeply_nested_card_options_do_not_fail_the_search(self):
+    def test_deeply_nested_card_options_do_not_fail_the_search(self) -> None:
         options: dict[str, Any] = {"entity": "light.deep"}
         for _ in range(600):
             options = {"n": options}
@@ -528,7 +528,7 @@ class TestReviewedSearchEdges:
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].cards[1]"]
         assert any("depth bound" in w for w in result["warnings"])
 
-    def test_badge_search_does_not_list_header_cards(self):
+    def test_badge_search_does_not_list_header_cards(self) -> None:
         config = {
             "views": [
                 {
@@ -540,7 +540,7 @@ class TestReviewedSearchEdges:
         result = self._search(config, card_type="badge")
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[0]"]
 
-    def test_cards_mapping_is_reported_as_malformed(self):
+    def test_cards_mapping_is_reported_as_malformed(self) -> None:
         config = {
             "views": [
                 {
@@ -557,7 +557,7 @@ class TestReviewedSearchEdges:
         assert result["match_count"] == 0
         assert any(".views[0].cards[0].cards" in w for w in result["warnings"])
 
-    def test_alarm_panel_states_list_is_not_malformed(self):
+    def test_alarm_panel_states_list_is_not_malformed(self) -> None:
         config = {
             "views": [
                 {
