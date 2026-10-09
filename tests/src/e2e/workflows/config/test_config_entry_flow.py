@@ -560,9 +560,9 @@ class TestRemoveHelperByEntity:
                 },
             )
         entry_id = created["entry_id"]
-        entity_ids = created.get("entity_ids") or []
-        assert entity_ids, f"No entity_ids in response: {created}"
         try:
+            entity_ids = created.get("entity_ids") or []
+            assert entity_ids, f"No entity_ids in response: {created}"
             await wait_for_tool_result(
                 mcp_client,
                 tool_name="ha_get_state",
