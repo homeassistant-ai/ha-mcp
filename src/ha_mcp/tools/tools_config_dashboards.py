@@ -252,6 +252,8 @@ _NESTED_STATES_KEY = "states"
 # carrying one is disclosed by its *presence*, not by the absence of matches
 # (issue #1599).
 _NON_CARD_CHILD_KEYS = ("elements",)
+# The card_type value that selects view badges, which are not cards.
+_BADGE_CARD_TYPE = "badge"
 # Bound on card nesting levels against pathological configs; real dashboards
 # nest a handful.
 _MAX_CARD_DEPTH = 50
@@ -321,6 +323,14 @@ class _SearchCriteria:
         """Whether a criterion that matches card fields (not text) is set."""
         return any(
             v is not None for v in (self.entity_id, self.card_type, self.heading)
+        )
+
+    def targets_cards(self) -> bool:
+        """Whether a card-field criterion can select cards (not only badges)."""
+        return (
+            self.entity_id is not None
+            or self.heading is not None
+            or self.card_type not in (None, _BADGE_CARD_TYPE)
         )
 
     def is_empty(self) -> bool:
@@ -536,7 +546,7 @@ def _query_hits(
 def _find_badge_matches_in_view(
     view: dict[str, Any], frame: _CardWalkFrame
 ) -> list[dict[str, Any]]:
-    """View-level badges matching ``frame``'s entity_id and/or query.
+    """View-level badges matching ``frame``'s criteria.
 
     Badges are entity references, so they answer entity_id and text searches,
     and ``card_type='badge'`` alone lists them all; a heading or another
@@ -548,11 +558,19 @@ def _find_badge_matches_in_view(
     if (
         not isinstance(badges, list)
         or criteria.heading is not None
-        or criteria.card_type not in (None, "badge")
+        or criteria.card_type not in (None, _BADGE_CARD_TYPE)
     ):
         return []
     matches: list[dict[str, Any]] = []
     for badge_idx, badge in enumerate(badges):
+        if not isinstance(badge, dict) and not (isinstance(badge, str) and badge):
+            logger.debug(
+                "Card-search skipping malformed badge at .views[%d].badges[%d] (%s)",
+                view_idx,
+                badge_idx,
+                type(badge).__name__,
+            )
+            continue
         if criteria.entity_id is not None and not _badge_matches(
             badge, criteria.entity_id
         ):
@@ -570,7 +588,7 @@ def _find_badge_matches_in_view(
             "card_index": None,
             "badge_index": badge_idx,
             "jq_path": f".views[{view_idx}].badges[{badge_idx}]",
-            "card_type": "badge",
+            "card_type": _BADGE_CARD_TYPE,
             "card_config": badge if is_dict_badge else {"entity": badge},
         }
         # A bare-string badge (the common form) is not subscript-assignable, so
@@ -665,7 +683,8 @@ def _find_cards_matching(
     ``config`` in ``ha_config_set_dashboard(python_transform)``). The jq path
     of each subtree skipped at the depth bound is appended to ``truncation``,
     and the ``.<key>`` path of each card holding one of ``_NON_CARD_CHILD_KEYS``
-    to ``uncovered``.
+    to ``uncovered``. Empty criteria match everything, so callers reject them
+    first (as ``_get_dashboard_search_mode`` does).
     """
     views = config.get("views")
     if "strategy" in config or not isinstance(views, list):
@@ -1751,9 +1770,9 @@ class DashboardConfigTools:
         it differed from the canonical form, else ``None``.
         """
         get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
-        effective_url_path = _lovelace_url_path(url_path)
-        if effective_url_path is not None:
-            get_data["url_path"] = effective_url_path
+        lovelace_url_path = _lovelace_url_path(url_path)
+        if lovelace_url_path is not None:
+            get_data["url_path"] = lovelace_url_path
 
         response = await self._client.send_websocket_message(get_data)
 
@@ -1763,11 +1782,11 @@ class DashboardConfigTools:
         # this via an eager pre-resolver before the hyphen check, so it has
         # no equivalent fallback here.)
         search_resolved_from: str | None = None
-        if effective_url_path is not None:
+        if lovelace_url_path is not None:
             new_url_path, response = await _lazy_resolve_and_retry(
-                self._client, effective_url_path, get_data, response
+                self._client, lovelace_url_path, get_data, response
             )
-            if new_url_path != effective_url_path:
+            if new_url_path != lovelace_url_path:
                 # Surface the original caller-passed identifier so the
                 # caller can see their input was canonicalized.
                 search_resolved_from = url_path
@@ -1842,12 +1861,12 @@ class DashboardConfigTools:
             for match in matches:
                 del match["card_config"]
 
-        # query reads picture-elements text; only the card criteria leave it
-        # unsearched.
+        # query reads picture-elements text, and a badge-only search never
+        # looks at cards; only criteria that select cards leave it unsearched.
         warnings = _search_warnings(
             truncated=truncated,
             truncation=truncation,
-            uncovered=uncovered if criteria.has_card_criteria() else [],
+            uncovered=uncovered if criteria.targets_cards() else [],
         )
         if config_suppressed_note is not None and matches:
             warnings.insert(0, config_suppressed_note)
@@ -2055,11 +2074,11 @@ class DashboardConfigTools:
         legacy ``lovelace/config`` request below (which threads ``force=True``) to
         actually bust HA's Lovelace cache.
         """
-        component_url_path = _lovelace_url_path(url_path)
+        lovelace_url_path = _lovelace_url_path(url_path)
         component_config = (
             None
             if force_reload
-            else await _component_dashboard_config(self._client, component_url_path)
+            else await _component_dashboard_config(self._client, lovelace_url_path)
         )
         if component_config is not None:
             # The component matches an exact url_path (or the default), so no
@@ -2075,7 +2094,6 @@ class DashboardConfigTools:
             )
 
         data: dict[str, Any] = {"type": "lovelace/config", "force": force_reload}
-        lovelace_url_path = _lovelace_url_path(url_path)
         if lovelace_url_path is not None:
             data["url_path"] = lovelace_url_path
 

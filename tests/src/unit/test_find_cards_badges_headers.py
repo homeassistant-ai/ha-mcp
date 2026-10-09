@@ -73,7 +73,7 @@ class TestBadgeSearch:
         assert len(badge_matches) == 0
 
     def test_badge_search_with_card_type_badge(self):
-        """card_type='badge' should trigger badge search."""
+        """card_type='badge' keeps only badge matches."""
         matches = _find_cards_in_config(
             self.DASHBOARD_WITH_BADGES,
             entity_id="sensor.temperature",

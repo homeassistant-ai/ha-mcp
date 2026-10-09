@@ -711,16 +711,10 @@ class TestDashboardsIdentifierValidation:
         self, mock_ws_client
     ):
         # Control: ``url_path=None`` without ``list_only`` is the
-        # documented "default dashboard" fallback per
-        # ``tools_config_dashboards.py`` L569-571 ("defaulting to the
-        # main dashboard if url_path is omitted"). The
-        # ``if url_path and url_path != "default":`` gate at L734 must
-        # NOT add a ``url_path`` key to the WebSocket payload — HA
-        # returns the default dashboard when the key is absent. Without
-        # this control, a regression flipping the conditional guard at
-        # L617 to unconditional, or normalising ``None`` to ``""``
-        # before the gate, would silently break the documented
-        # default-dashboard path.
+        # documented default-dashboard read. ``_lovelace_url_path`` must
+        # leave ``url_path`` out of the WebSocket payload — HA returns the
+        # default dashboard when the key is absent — so a regression that
+        # sent it unconditionally would silently break that read.
         mock_ws_client.send_websocket_message = AsyncMock(
             return_value={"success": True, "result": {"views": []}}
         )

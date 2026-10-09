@@ -1,4 +1,4 @@
-"""Reach and the ``query`` criterion of the dashboard card search.
+"""Nested-card reach and the ``query`` criterion of the dashboard card search.
 
 Cards that custom cards nest under keys of their own (issue #2694), and the
 text criterion the single search applies alongside entity_id / card_type /
@@ -266,8 +266,11 @@ class TestSearchSurvivesUnusualConfigs:
 
 
 class TestSearchResultScope:
-    """Warning locations name the dashboard only in a search across dashboards,
-    whose top-level config_hash is null."""
+    """Scope of a search result: dashboard names in warning locations, top-level hash.
+
+    Only a search across dashboards names the dashboard in warning locations,
+    and its top-level config_hash is null.
+    """
 
     CONFIG: ClassVar[dict[str, Any]] = {
         "views": [
@@ -360,6 +363,32 @@ class TestBadgeCriteria:
             ".views[0].badges[0]",
             ".views[0].badges[1]",
         ]
+        assert all("matched" not in m for m in matches)
+
+    def test_malformed_badge_entries_are_not_listed(self):
+        config = {"views": [{"badges": [None, 5, "", "sensor.ok"], "cards": []}]}
+        matches = _find_cards_in_config(config, card_type="badge")
+        assert [m["jq_path"] for m in matches] == [".views[0].badges[3]"]
+
+    def test_badge_search_does_not_warn_about_picture_elements(self):
+        config = {
+            "views": [
+                {
+                    "badges": ["light.a"],
+                    "cards": [
+                        {"type": "picture-elements", "elements": [{"type": "icon"}]}
+                    ],
+                }
+            ]
+        }
+        result = DashboardConfigTools._build_search_result(
+            [{"url_path": "d", "config": config}],
+            criteria=_SearchCriteria(card_type="badge"),
+            include_config=False,
+            url_path="d",
+        )
+        assert result["match_count"] == 1
+        assert "warnings" not in result
 
     def test_heading_excludes_badges(self):
         matches = _find_cards_in_config(self.CONFIG, entity_id="light.a", heading="t")
