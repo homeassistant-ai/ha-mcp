@@ -709,7 +709,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Dashboards
 - `ha_config_delete_dashboard` — Delete a storage-mode dashboard completely.
 - `ha_config_delete_dashboard_resource` — Delete a dashboard resource.
-- `ha_config_get_dashboard` — Get dashboard info - list all dashboards, get config, or search for cards.
+- `ha_config_get_dashboard` — Get Lovelace dashboards: list them, read one config, or search their cards.
 - `ha_config_list_dashboard_resources` — List Lovelace dashboard resources (custom cards, themes, CSS/JS).
 - `ha_config_set_dashboard` — Create or update a Home Assistant dashboard.
 - `ha_config_set_dashboard_resource` — Create or update a dashboard resource (inline code or external URL).

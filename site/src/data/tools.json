@@ -978,62 +978,57 @@
   {
     "name": "ha_config_get_dashboard",
     "title": "Get Dashboard",
-    "description": "Get dashboard info - list all dashboards, get config, or search for cards.\n\nMODE 1 — List: list_only=True\n  Lists every dashboard's metadata (url_path, title, icon), storage and\n  YAML alike (metadata only — bodies are never included here).\n\nMODE 2 — Search: any of entity_id / card_type / heading provided\n  Finds cards, badges, and header cards matching the criteria, including\n  cards nested inside stacks, grids, conditional cards, button-card\n  custom_fields, and state-switch states. Each match carries a\n  python_path and a jq_path that locate the card for nested as well as\n  top-level cards. The python_path is a Python subscript chain to be\n  appended after `config` — e.g.\n  python_transform=f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"' (it is\n  NOT valid on its own without the `config` prefix). jq_path is the same\n  location in jq dot-notation.\n  Multiple criteria are AND-ed. Always fetches fresh config, bypassing the cache.\n  Search covers cards/card/custom_fields/states containers up to a depth\n  bound; if the dashboard carries a non-traversed child-bearing shape\n  (e.g. picture-elements `elements`), the result carries a `warnings`\n  entry naming where, so its hidden content is not mistaken for absent.\n  Strategy dashboards are not searchable (no explicit cards).\n\nMODE 3 — Get: Active when list_only=False and no search parameters are provided.\n  Returns the full Lovelace dashboard config, defaulting to the\n  main dashboard if url_path is omitted.\n  With view_path, `config_hash` still covers the FULL config, so a follow-up\n  ha_config_set_dashboard(python_transform=...) addressing\n  config['views'][view_index] validates unchanged. An unknown\n  view_path errors and lists the available view paths.\n  When you only need the render and not the config, use the\n  dedicated ha_get_dashboard_screenshot tool (registered when the\n  dashboard screenshot beta feature is on) instead; it returns images\n  without echoing the config.\n\nMODE 4 — Search all: mode=\"search\" with query=<entity_id or text>\n  Answers \"which dashboards contain this entity/card\" by walking every\n  storage-mode dashboard's views/cards/sections for the query substring.\n  Each match names the url_path, view, card_path, card_type, and the\n  matched field/value. Takes precedence over the other modes (list_only /\n  entity_id / card_type / heading are ignored when mode=\"search\").\n  YAML-mode dashboards are never searched on either path — the component\n  walk skips them in-process and the component-less legacy walk skips any\n  row tagged mode=\"yaml\" — because HA resolves `!secret` when loading a\n  YAML Lovelace config, so searching one could surface resolved secrets.\n  On installs without the ha_mcp_tools component, the default (unnamed)\n  dashboard is also not searched — only dashboards with a url_path are.\n\nMODE 2 (Search) and MODE 3 (Get) return a `config_hash` that stays the same across consecutive reads of an unchanged config; MODE 1 and MODE 4 do not return one.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get one view only: ha_config_get_dashboard(url_path=\"lovelace-mobile\", view_path=\"office\")\n- Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n- Which dashboards use an entity: ha_config_get_dashboard(mode=\"search\", query=\"light.bedroom\")\n- Fields of a card type before writing one (omit card_type to list types):\n  ha_config_get_dashboard(card_type=\"tile\", describe=True)",
+    "description": "Get Lovelace dashboards: list them, read one config, or search their cards.\n\nNot for a render alone: ha_get_dashboard_screenshot (screenshot beta\nfeature) returns images without the config. Not for entity discovery:\nuse ha_search.\n\nThe parameters pick the mode:\n- list_only=True: storage and YAML dashboards alike.\n- Any of query / entity_id / card_type / heading searches cards and\n  header cards, AND-ing the criteria, in url_path or, when it is\n  omitted, every storage dashboard. View badges answer entity_id and\n  query, and heading excludes them.\n  Cards nested at any depth count, including\n  custom cards' own keys such as groups[].cards[].card. Each match has a\n  jq_path and a python_path to append to `config` in\n  ha_config_set_dashboard(python_transform=...), e.g.\n  f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"'. Each match carries its\n  dashboard's url_path and config_hash; a one-dashboard search also\n  returns the config_hash at the top level.\n- Otherwise the full config of url_path (the default dashboard when\n  omitted) is returned; with view_path only that view, while config_hash\n  still covers the full config.\n\nCaveats: config_hash stays the same across reads of an unchanged config.\nSearches stop at 200 matches (`truncated`). A search across dashboards\nskips YAML dashboards (HA resolves !secret in them) and, without a\ncurrent ha_mcp_tools component, the default dashboard (with a warning);\nname either by url_path.\nStrategy dashboards have no stored cards to search. An unknown view_path\nerrors and lists the available ones.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get one view only: ha_config_get_dashboard(url_path=\"lovelace-mobile\", view_path=\"office\")\n- Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n- Which dashboards use an entity: ha_config_get_dashboard(query=\"light.bedroom\")\n- Fields of a card type before writing one (omit card_type to list types):\n  ha_config_get_dashboard(card_type=\"tile\", describe=True)",
     "inputSchema": {
       "properties": {
         "url_path": {
           "type": "str | None",
-          "description": "Dashboard URL path (e.g., 'lovelace-home'). Use 'default' for default dashboard.",
+          "description": "Dashboard URL path (e.g. 'lovelace-home'); 'default' for the default dashboard.",
           "default": null
         },
         "list_only": {
           "type": "bool",
-          "description": "When True, url_path is ignored.",
+          "description": "List every dashboard's metadata instead of reading one; ignored when a search parameter is given.",
           "default": false
         },
         "force_reload": {
           "type": "bool",
-          "description": "Force reload from storage (bypass cache). Not applicable in search mode.",
+          "description": "Get only: bypass the config cache (searches always read fresh config).",
           "default": false
         },
         "entity_id": {
           "type": "str | None",
-          "description": "Find cards by entity ID. Supports wildcards, e.g. 'sensor.temperature_*'. Matches cards with this entity in 'entity' or 'entities' field, view-level badges, and header cards.",
+          "description": "Search: cards whose entity/entities field holds this entity ID; '*' matches any run of characters (including none) and the whole ID must match (e.g. 'sensor.temperature_*').",
           "default": null
         },
         "card_type": {
           "type": "str | None",
-          "description": "Find cards by type, e.g. 'tile', 'button', 'heading'.",
+          "description": "Search: cards of this type, e.g. 'tile'; 'badge' selects view badges instead (alone, it lists them all). With describe=True: the type to describe.",
           "default": null
         },
         "heading": {
           "type": "str | None",
-          "description": "Find cards by heading/title text (case-insensitive partial match).",
+          "description": "Search: cards whose heading/title contains this text (case-insensitive).",
           "default": null
         },
         "include_config": {
           "type": "bool",
-          "description": "In search mode: include each matched card's own configuration object in results. A container card's body includes its descendants, which are also separate matches with their own bodies, so nested stacks multiply the payload. Bodies are returned only for dashboards provably in storage mode; for a YAML or unconfirmed dashboard they are withheld (they may carry resolved !secret values) and the response says so, with match locations still reported. Ignored outside search mode.",
+          "description": "Search: include each matched card's own config. A container's body includes its nested cards, which are also matches, so nested stacks multiply the payload. Withheld, with a warning, for a dashboard not provably storage-mode (a YAML config may carry resolved !secret values).",
           "default": false
         },
         "include_screenshot": {
           "type": "bool",
-          "description": "Get mode only: also return rendered image(s) of the dashboard for visual verification. Requires the 'dashboard screenshot' beta feature + engine app (add-on)/sidecar. If the feature is disabled the config is returned with a warning; if the engine is configured but the render fails, the call errors. Ignored in list/search mode.",
+          "description": "Get mode only: also return rendered image(s) of the dashboard for visual verification. Requires the 'dashboard screenshot' beta feature + engine app (add-on)/sidecar. If the feature is disabled the config is returned with a warning; if the engine is configured but the render fails, the call errors.",
           "default": false
         },
         "view_path": {
           "type": "str | None",
-          "description": "Get mode: return ONLY the view whose Lovelace views[].path matches (response carries 'view' + 'view_index' instead of the full 'config'). With include_screenshot, also selects the view to render. Ignored in list/search mode.",
-          "default": null
-        },
-        "mode": {
-          "type": "Literal['search'] | None",
-          "description": "Set to 'search' (requires query).",
+          "description": "Get mode: return ONLY the view whose Lovelace views[].path matches (response carries 'view' + 'view_index' instead of the full 'config'). With include_screenshot, also selects the view to render.",
           "default": null
         },
         "query": {
           "type": "str | None",
-          "description": "With mode='search': the entity_id or substring to find across all storage-mode dashboards. Ignored otherwise.",
+          "description": "Search: text or entity ID contained in any value a card holds (case-insensitive); the matching values are listed under `matched`.",
           "default": null
         },
         "describe": {
