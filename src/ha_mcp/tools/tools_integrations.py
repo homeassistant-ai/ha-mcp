@@ -2145,10 +2145,9 @@ class IntegrationTools:
             Field(
                 description=(
                     "Helper type. Required when target is a bare helper_id. "
-                    "Optional for an entity_id: omitted, the entity's registry "
-                    "entry identifies the helper. Omit when target is a config "
-                    "entry_id to remove any integration. Use 'config_subentry' "
-                    "to remove a config subentry under target."
+                    "Omit when target is a config entry_id to remove any "
+                    "integration. Use 'config_subentry' to remove a config "
+                    "subentry under target."
                 ),
                 default=None,
             ),
@@ -2174,9 +2173,10 @@ class IntegrationTools:
             Field(
                 description=(
                     "Wait for entity removal. Default: True. "
-                    "Ignored for a config entry_id target or "
-                    "helper_type='config_subentry' (no entity poll, "
-                    "require_restart returned)."
+                    "Ignored for a direct config entry delete (an entry_id "
+                    "target, or an entity_id whose helper is outside the "
+                    "SIMPLE/FLOW types) or helper_type='config_subentry' (no "
+                    "entity poll, require_restart returned)."
                 ),
                 default=True,
             ),
@@ -2186,7 +2186,8 @@ class IntegrationTools:
 
         Unifies three backend removal mechanisms — simple-helper websocket
         delete, config-entry delete, and config-subentry delete — behind one
-        entry point with four routing paths driven by helper_type.
+        entry point; helper_type picks the path, or the entity registry does
+        when an entity_id comes without one.
 
         WHEN NOT TO USE:
         - Removing only an entity (without deleting its underlying helper or
@@ -2217,9 +2218,9 @@ class IntegrationTools:
 
         A target that is confirmed absent raises a structured error rather than
         returning silent success: ENTITY_NOT_FOUND for a SIMPLE target missing
-        from both the state machine and the entity registry, or a FLOW
-        entity_id missing from the registry (a bare helper_id on a FLOW target
-        also raises it — FLOW resolution needs a full entity_id);
+        from both the state machine and the entity registry, or a FLOW or
+        type-less entity_id missing from the registry (a bare helper_id on a
+        FLOW target also raises it — FLOW resolution needs a full entity_id);
         RESOURCE_NOT_FOUND for a YAML-configured helper (SIMPLE or FLOW), a
         config entry the backend reports as 404, or a missing config subentry.
         Calling N times gives the same response. Transient connectivity failures
@@ -2229,6 +2230,7 @@ class IntegrationTools:
         EXAMPLES:
         - Remove SIMPLE button: ha_remove_helpers_integrations(target="my_button", helper_type="input_button", confirm=True)
         - Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target="sensor.energy_peak", helper_type="utility_meter", confirm=True)
+        - Remove whatever helper owns an entity: ha_remove_helpers_integrations(target="sensor.energy_peak", confirm=True)
         - Remove any integration by entry_id: ha_remove_helpers_integrations(target="01HXYZ...", confirm=True)
         - Remove a config subentry: ha_remove_helpers_integrations(target="01HXYZ...", helper_type="config_subentry", subentry_id="subentry-123", confirm=True)
 
@@ -2237,7 +2239,7 @@ class IntegrationTools:
         Use ha_search() / ha_get_integration() to verify before removal.
         Recovery requires a usable backup and supported restore path.
         """
-        # === Confirm gate (uniform for all four paths) ===
+        # === Confirm gate (uniform for every path) ===
         if not confirm:
             raise_tool_error(
                 create_error_response(
@@ -2254,7 +2256,7 @@ class IntegrationTools:
                 )
             )
 
-        # === Empty/whitespace target gate (uniform for all four paths) ===
+        # === Empty/whitespace target gate (uniform for every path) ===
         # Empty/whitespace ``target`` would reach the destructive backend call
         # on every path: Path 1 (simple-helper websocket delete), Path 2
         # (flow-helper entity-resolution → entry_id delete), Path 3
@@ -2282,12 +2284,15 @@ class IntegrationTools:
             # An entity_id alone: its registry entry names the helper, and the
             # resolved call runs the matching path with its own backup.
             resolved_type, resolved_target = await self._resolve_helper_entity(target)
-            return await self.ha_remove_helpers_integrations(
+            resolved: dict[str, Any] = await self.ha_remove_helpers_integrations(
                 target=resolved_target,
                 helper_type=resolved_type,
                 confirm=True,
                 wait=wait,
             )
+            if resolved_target != target:
+                resolved["resolved_from"] = target
+            return resolved
 
         if helper_type is None:
             # Path 3: Direct config entry delete (any integration)
@@ -2331,7 +2336,6 @@ class IntegrationTools:
     # join the ``ha_remove_*`` behavioural family; the prefix asymmetry is
     # intentional and prevents future renames pulled by either side.
 
-    # === Path 3: Direct config entry delete (any integration) ===
     async def _resolve_helper_entity(self, entity_id: str) -> tuple[Any, str]:
         """Map an entity_id to the (helper_type, target) that removes its helper."""
         try:
@@ -2342,9 +2346,13 @@ class IntegrationTools:
             exception_to_structured_error(
                 e,
                 context={"target": entity_id},
-                suggestions=["Verify the entity exists using ha_get_entity()"],
+                suggestions=[
+                    "Reading the entity registry or Home Assistant's helper "
+                    "list failed; retry, or pass helper_type explicitly.",
+                ],
             )
 
+    # === Path 3: Direct config entry delete (any integration) ===
     async def _delete_direct_entry(self, entry_id: str) -> dict[str, Any]:
         """Delete a config entry directly via the REST delete API."""
         try:
@@ -3089,7 +3097,7 @@ class IntegrationTools:
             return response
 
         # Core's storage collection holds only UI-created items; a YAML helper
-        # keeps its registry unique_id but has no stored item to delete.
+        # has a registry entry with a unique_id but no stored item to delete.
         if ws_failure_code(result) is ErrorCode.RESOURCE_NOT_FOUND:
             raise_tool_error(
                 create_error_response(
@@ -3108,7 +3116,6 @@ class IntegrationTools:
                 )
             )
 
-        # Standard path delete failed → SERVICE_CALL_FAILED
         error_msg = result.get("error", "Unknown error")
         if isinstance(error_msg, dict):
             error_msg = error_msg.get("message", str(error_msg))

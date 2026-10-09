@@ -539,6 +539,7 @@ class TestConfigEntryFlow:
 
 @pytest.mark.asyncio
 @pytest.mark.config
+@pytest.mark.slow
 class TestRemoveHelperByEntity:
     """ha_remove_helpers_integrations with an entity_id and no helper_type."""
 

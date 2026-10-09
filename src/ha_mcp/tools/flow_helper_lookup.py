@@ -57,8 +57,8 @@ async def _read_registry_entry(
     if not isinstance(result, dict) or not result.get("success"):
         return None, "not_in_registry"
 
-    entry = result.get("result") or {}
-    if not isinstance(entry, dict):
+    entry = result.get("result")
+    if not isinstance(entry, dict) or not entry:
         return None, "not_in_registry"
     return entry, "ok"
 
@@ -85,9 +85,8 @@ async def get_entry_id_for_flow_helper(
         Tuple of (config_entry_id, reason). On success: (entry_id, "ok").
         On failure: (None, reason) where reason discriminates the cause so
         the caller can produce an accurate error response without an extra
-        WebSocket round-trip. HomeAssistantConnectionError and
-        HomeAssistantAuthError propagate; the caller's outer except chain
-        converts them to structured errors.
+        WebSocket round-trip; "platform_mismatch" means the entity belongs
+        to another integration than helper_type.
     """
     if helper_type not in FLOW_HELPER_TYPES:
         return None, "wrong_helper_type"
@@ -210,7 +209,9 @@ def raise_flow_helper_lookup_error(
                     "types often expose entities under a "
                     "different domain than the helper_type "
                     "itself (e.g. utility_meter → sensor.*, "
-                    "switch_as_x → switch.* / light.*).",
+                    "switch_as_x → switch.* / light.*)."
+                    if helper_type
+                    else "Find the entity_id with ha_search().",
                 ],
             )
         )
@@ -245,9 +246,9 @@ async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None
     """Return the ``(helper_type, target)`` that removes the helper behind ``entity_id``.
 
     The registry ``platform`` names the integration that owns the entity. A
-    helper Core lists as a helper flow but ha-mcp cannot drive (``otp``, custom
-    integrations) comes back as ``(None, config_entry_id)``: a direct entry
-    delete. An entity of any other integration is refused.
+    helper Core lists as a helper flow but not in FLOW_HELPER_TYPES (``otp``,
+    custom integrations) comes back as ``(None, config_entry_id)``: a direct
+    entry delete. An entity of any other integration is refused.
     """
     entry, reason = await _read_registry_entry(client, entity_id)
     if entry is None:
@@ -255,8 +256,10 @@ async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None
     platform = entry.get("platform")
     if platform in SIMPLE_HELPER_TYPES or platform in FLOW_HELPER_TYPES:
         return platform, entity_id
-    config_entry_id = entry.get("config_entry_id")
-    if config_entry_id and platform in await _helper_flow_domains(client):
+    if platform in await _helper_flow_domains(client):
+        config_entry_id = entry.get("config_entry_id")
+        if not config_entry_id:
+            raise_flow_helper_lookup_error("no_config_entry", platform, entity_id)
         return None, config_entry_id
     raise_tool_error(
         create_error_response(
@@ -280,4 +283,11 @@ async def _helper_flow_domains(client: Any) -> frozenset[str]:
     domains = await client._request(
         "GET", "/config/config_entries/flow_handlers", params={"type": "helper"}
     )
+    # _request answers an unparseable body with {}; an empty set would refuse
+    # every helper outside the static lists as "not a helper".
+    if not isinstance(domains, list):
+        raise HomeAssistantConnectionError(
+            "flow_handlers returned an unexpected response shape: "
+            f"{type(domains).__name__}"
+        )
     return frozenset(domains)

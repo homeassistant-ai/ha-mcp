@@ -19,15 +19,27 @@ from ha_mcp.tools.tools_integrations import IntegrationTools
 _HELPER_FLOW_DOMAINS = ["group", "otp", "template", "utility_meter"]
 
 
-def _client(registry_row: dict[str, Any]) -> MagicMock:
+def _client(
+    registry_row: dict[str, Any] | None, helper_flow_domains: Any = None
+) -> MagicMock:
     client = MagicMock()
     client.get_entity_state = AsyncMock(return_value=None)
     client.delete_config_entry = AsyncMock(return_value={"require_restart": False})
-    client._request = AsyncMock(return_value=_HELPER_FLOW_DOMAINS)
+    client._request = AsyncMock(
+        return_value=_HELPER_FLOW_DOMAINS
+        if helper_flow_domains is None
+        else helper_flow_domains
+    )
     client.ws_deletes = []
 
     async def send(message: dict[str, Any]) -> dict[str, Any]:
         if message["type"] == "config/entity_registry/get":
+            if registry_row is None:
+                return {
+                    "success": False,
+                    "error": "Entity not found",
+                    "error_code": "not_found",
+                }
             return {"success": True, "result": registry_row}
         if message["type"] == "config/entity_registry/list":
             return {"success": True, "result": [registry_row]}
@@ -39,11 +51,22 @@ def _client(registry_row: dict[str, Any]) -> MagicMock:
     return client
 
 
-async def _remove(client: MagicMock, entity_id: str) -> dict[str, Any]:
+async def _remove(
+    client: MagicMock, entity_id: str, *, confirm: bool = True
+) -> dict[str, Any]:
     result: dict[str, Any] = await IntegrationTools(
         client
-    ).ha_remove_helpers_integrations(target=entity_id, confirm=True, wait=False)
+    ).ha_remove_helpers_integrations(target=entity_id, confirm=confirm, wait=False)
     return result
+
+
+async def _refused(client: MagicMock, entity_id: str, **kwargs: Any) -> str:
+    with pytest.raises(ToolError) as exc_info:
+        await _remove(client, entity_id, **kwargs)
+    client.delete_config_entry.assert_not_awaited()
+    assert client.ws_deletes == []
+    code: str = json.loads(str(exc_info.value))["error"]["code"]
+    return code
 
 
 async def test_entity_of_a_non_helper_integration_is_refused() -> None:
@@ -72,7 +95,7 @@ async def test_flow_helper_is_removed_without_naming_its_type() -> None:
         }
     )
     result = await _remove(client, "sensor.energy_peak")
-    assert result["success"] is True
+    assert result["helper_type"] == "utility_meter"
     client.delete_config_entry.assert_awaited_once_with("um_entry")
 
 
@@ -87,7 +110,7 @@ async def test_helper_that_only_core_lists_is_removed_by_its_entity() -> None:
         }
     )
     result = await _remove(client, "sensor.my_otp")
-    assert result["success"] is True
+    assert result["resolved_from"] == "sensor.my_otp"
     client.delete_config_entry.assert_awaited_once_with("otp_entry")
 
 
@@ -106,3 +129,38 @@ async def test_storage_helper_is_removed_without_naming_its_type() -> None:
         {"type": "input_boolean/delete", "input_boolean_id": "guest_mode"}
     ]
     client.delete_config_entry.assert_not_awaited()
+
+
+async def test_unconfirmed_entity_only_call_deletes_nothing() -> None:
+    client = _client(
+        {
+            "entity_id": "sensor.energy_peak",
+            "platform": "utility_meter",
+            "config_entry_id": "um_entry",
+        }
+    )
+    code = await _refused(client, "sensor.energy_peak", confirm=False)
+    assert code == "VALIDATION_INVALID_PARAMETER"
+
+
+async def test_unreadable_helper_list_is_a_connection_error_not_a_refusal() -> None:
+    """An unparseable flow_handlers reply must not read as 'not a helper'."""
+    client = _client(
+        {"entity_id": "sensor.my_otp", "platform": "otp", "config_entry_id": "e"},
+        helper_flow_domains={},
+    )
+    assert await _refused(client, "sensor.my_otp") == "CONNECTION_FAILED"
+
+
+async def test_entity_missing_from_the_registry_is_not_found() -> None:
+    client = _client(None)
+    assert await _refused(client, "sensor.typo") == "ENTITY_NOT_FOUND"
+
+
+async def test_yaml_helper_that_only_core_lists_is_not_found() -> None:
+    """A Core-listed helper platform without a config entry is YAML-configured,
+    not a foreign integration."""
+    client = _client(
+        {"entity_id": "sensor.my_otp", "platform": "otp", "config_entry_id": None}
+    )
+    assert await _refused(client, "sensor.my_otp") == "RESOURCE_NOT_FOUND"
