@@ -5,7 +5,7 @@ IntegrationTools.ha_remove_helpers_integrations dispatch.
 
 import json
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -243,17 +243,25 @@ class TestRemoveHelpersIntegrations:
         delete_call = mock_client.send_websocket_message.call_args_list[-1]
         assert delete_call[0][0]["input_button_id"] == "my_button"
 
+    @pytest.mark.parametrize("absent_code", ["not_found", "invalid_format"])
     async def test_simple_path_state_gone_raises_entity_not_found(
-        self, tools, mock_client
+        self, tools, mock_client, absent_code
     ):
         """Registry empty + direct delete fails + state=None + registry-verify
         confirms gone → raises ENTITY_NOT_FOUND (entity-shape target)."""
         # 3x registry no unique_id, 1x direct delete fails, 1x verify-registry
-        # confirms entity is truly gone (success=False)
+        # confirms entity is truly gone (Core's not_found, or invalid_format
+        # for an id that cannot name an entity)
         mock_client.send_websocket_message.side_effect = (
             [{"success": True, "result": {}}] * 3
             + [{"success": False, "error": "not found"}]
-            + [{"success": False, "error": "not_found"}]
+            + [
+                {
+                    "success": False,
+                    "error": "Entity not found",
+                    "error_code": absent_code,
+                }
+            ]
         )
         # State check at the end returns None → entity gone from state machine
         mock_client.get_entity_state.side_effect = (
@@ -423,35 +431,43 @@ class TestRemoveHelpersIntegrations:
         assert result.get("fallback_used") is None
         assert result["unique_id"] == "uid-disabled-apierror"
 
-    async def test_simple_path_failed_registry_read_is_not_reported_missing(
-        self, tools, mock_client
+    _BLOCKED: ClassVar[dict[str, Any]] = {
+        "success": False,
+        "error": "WebSocket request blocked (403 Forbidden): denied",
+        "suggestions": ["Check the reverse proxy", "Allow the WebSocket path"],
+    }
+
+    @pytest.mark.parametrize(
+        ("state", "verify_reply", "cause"),
+        [
+            ({"state": "off"}, None, "403 Forbidden"),
+            (None, _BLOCKED, "403 Forbidden"),
+            (None, {"success": True, "result": {}}, "no registry entry"),
+        ],
+        ids=["state_present", "verify_blocked", "verify_without_entry"],
+    )
+    async def test_simple_path_unproven_registry_read_is_not_reported_missing(
+        self, tools, mock_client, state, verify_reply, cause
     ):
-        """Registry read fails without Core's not_found + direct fails + state
-        still present: the entity exists and the registry absence is unproven,
-        so the read failure is reported, not ENTITY_NOT_FOUND, with the
-        guidance the failed reply carries (a proxy block names the proxy)."""
-        blocked = {
-            "success": False,
-            "error": "no entity",
-            "suggestions": ["Check the reverse proxy", "Allow the WebSocket path"],
-        }
-        mock_client.send_websocket_message.side_effect = [blocked] * 3 + [
-            {"success": False, "error": "still no"}
+        """The registry lookup is blocked and the direct-id delete fails. With a
+        state the entity exists; without one, a disabled helper keeps its
+        registry entry (#2699). Unless Core answers not_found, the read failure
+        is reported with its cause, never ENTITY_NOT_FOUND."""
+        mock_client.send_websocket_message.side_effect = [self._BLOCKED] * 3 + [
+            {"success": False, "error": "not found"},
+            verify_reply,
         ]
-        # State check ALWAYS returns a state → no fallback path catches it
-        mock_client.get_entity_state.return_value = {"state": "off"}
+        mock_client.get_entity_state.return_value = state
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
-                target="ghost_button",
-                helper_type="input_button",
-                confirm=True,
-                wait=False,
+                target="my_button", helper_type="input_button", confirm=True, wait=False
             )
-        err = json.loads(str(exc_info.value))
-        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "no entity" in err["error"]["message"]
-        assert err["error"]["suggestions"] == blocked["suggestions"]
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "SERVICE_CALL_FAILED"
+        assert cause in err["message"]
+        if cause == "403 Forbidden":
+            assert err["suggestions"] == self._BLOCKED["suggestions"]
 
     async def test_simple_path_entity_without_registry_entry_is_not_missing(
         self, tools, mock_client

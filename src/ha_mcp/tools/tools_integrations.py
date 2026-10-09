@@ -7,7 +7,7 @@ integrations (config entries) via the REST and WebSocket APIs.
 
 import asyncio
 import logging
-from typing import Annotated, Any, Literal, cast, get_args
+from typing import Annotated, Any, Literal, NoReturn, cast, get_args
 
 from pydantic import Field
 
@@ -102,6 +102,30 @@ def _skip_removal_capture(kwargs: dict[str, Any]) -> bool:
     helper_type = kwargs.get("helper_type")
     return helper_type in FLOW_HELPER_TYPES or (
         helper_type is None and "." in str(kwargs.get("target", ""))
+    )
+
+
+def _raise_registry_read_failure(
+    target: str, entity_id: str, result: dict[str, Any] | None
+) -> NoReturn:
+    """Report a failed registry read as itself: anything but Core's
+    ``not_found`` proves nothing about whether the entity is registered."""
+    failure = result or {}
+    detail = failure.get("error") or "unknown error" if result else "no response"
+    raise_tool_error(
+        create_error_response(
+            ws_failure_code(failure),
+            (
+                f"Reading the entity registry for {entity_id} failed: "
+                f"{detail}. Nothing was deleted."
+            ),
+            context={"target": target, "entity_id": entity_id},
+            # A proxy-blocked read carries its own guidance.
+            suggestions=failure.get("suggestions")
+            or [
+                "Retry; check the Home Assistant connection if it keeps failing.",
+            ],
+        )
     )
 
 
@@ -2893,7 +2917,7 @@ class IntegrationTools:
         # raise carries the structured "typo or removed" hint
         # message rather than a raw 404.
         if await self._state_absent(entity_id):
-            if not await self._registry_still_has_entry(entity_id):
+            if not await self._registry_still_has_entry(target, entity_id):
                 logger.info(
                     f"Entity {entity_id} absent from state and "
                     "registry; surfacing as ENTITY_NOT_FOUND"
@@ -2960,30 +2984,8 @@ class IntegrationTools:
         if registry_miss:
             raise_unregistered_entity_error(target, helper_type, entity_id)
         if not (registry_result or {}).get("success"):
-            # Any other failed read proves nothing about the registry, and
-            # the state shows the entity exists: report the read failure.
-            failure = registry_result or {}
-            detail = (
-                failure.get("error") or "unknown error"
-                if registry_result
-                else "no response"
-            )
-            raise_tool_error(
-                create_error_response(
-                    ws_failure_code(failure),
-                    (
-                        f"Reading the entity registry for {entity_id} failed: "
-                        f"{detail}. Nothing was deleted."
-                    ),
-                    context={"target": target, "entity_id": entity_id},
-                    # A proxy-blocked read carries its own guidance.
-                    suggestions=failure.get("suggestions")
-                    or [
-                        "Retry; check the Home Assistant connection if it "
-                        "keeps failing.",
-                    ],
-                )
-            )
+            # The state shows the entity exists; report the read failure.
+            _raise_registry_read_failure(target, entity_id, registry_result)
 
         # The registry returned an entry, but without a unique_id. The
         # component path resolves via ONE authoritative in-process lookup (no
@@ -3086,31 +3088,25 @@ class IntegrationTools:
             )
             return True
 
-    async def _registry_still_has_entry(self, entity_id: str) -> bool:
+    async def _registry_still_has_entry(self, target: str, entity_id: str) -> bool:
         """Return True if ``entity_id`` still has an entity-registry entry.
 
-        On a verify failure, conservatively returns True so a transient error
-        is not misread as confirmed-absent.
+        Only Core's ``not_found``, or its ``invalid_format`` for an id that
+        cannot name an entity, confirms absence. Any other failed read, and a
+        reply without an entry, is raised as the read failure, so a disabled
+        helper behind a blocked read is not reported as already removed.
         """
-        client = self._client
-        try:
-            verify_result = await client.send_websocket_message(
-                {
-                    "type": "config/entity_registry/get",
-                    "entity_id": entity_id,
-                }
-            )
-            if (verify_result or {}).get("success"):
-                verify_entry = (verify_result or {}).get("result") or {}
-                if verify_entry.get("entity_id"):
-                    return True
-        except HomeAssistantAPIError as verify_err:
-            # On verify failure, conservatively assume the
-            # entry is still there rather than misclassify
-            # a verify failure as confirmed-absent.
-            logger.debug(f"Registry verify for {entity_id} failed: {verify_err}")
-            return True
-        return False
+        reply = await self._client.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id}
+        )
+        if (reply or {}).get("success"):
+            if (reply.get("result") or {}).get("entity_id"):
+                return True
+            reply = {"error": "the reply carried no registry entry"}
+        elif (reply or {}).get("error_code") in ("not_found", "invalid_format"):
+            return False
+        _raise_registry_read_failure(target, entity_id, reply)
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _delete_simple_via_unique_id(
         self,
