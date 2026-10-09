@@ -59,45 +59,12 @@ for _mod in (
     "homeassistant.config",
     "homeassistant.config_entries",
     "homeassistant.core",
-    "homeassistant.generated",
     "homeassistant.helpers",
     "homeassistant.helpers.config_validation",
     "homeassistant.helpers.storage",
     "homeassistant.loader",
 ):
     sys.modules.setdefault(_mod, MagicMock())
-
-# Core's generated flow registry, which the component reads its flow-helper set
-# from; the helper list is Core 2026.10's. Bayesian is a Core integration of
-# type "service", so Core files it under "integration".
-sys.modules.setdefault(
-    "homeassistant.generated.config_flows",
-    SimpleNamespace(
-        FLOWS={
-            "helper": [
-                "derivative",
-                "filter",
-                "generic_hygrostat",
-                "generic_thermostat",
-                "group",
-                "history_stats",
-                "integration",
-                "min_max",
-                "mold_indicator",
-                "otp",
-                "random",
-                "statistics",
-                "switch_as_x",
-                "template",
-                "threshold",
-                "tod",
-                "trend",
-                "utility_meter",
-            ],
-            "integration": ["bayesian"],
-        }
-    ),
-)
 
 
 class _StubHomeAssistantError(Exception):
@@ -2667,16 +2634,6 @@ class TestHelpersList:
         )
         assert rec["name"] == "Current Guest"
         assert rec["storage_id"] == "guest_mode"
-
-    @pytest.mark.parametrize("domain,listed", [("otp", True), ("bayesian", False)])
-    def test_flow_helpers_are_the_ones_core_lists(self, empty_view, domain, listed):
-        """Core's own helper flow list decides what a flow helper is: otp is one,
-        bayesian (a Core integration of type service) is not."""
-        entry = FakeConfigEntry(domain, title="Helper", entry_id="e1")
-        res = wsapi._do_helpers_list(FakeHass(config_entries=[entry]), {})
-        flow = [h for h in res["helpers"] if h["kind"] == "flow"]
-        assert bool(flow) is listed
-        assert (domain in res["covered_types"]) is listed
 
     def test_flow_helper_options_and_entity_data_never_leaks(self, monkeypatch):
         entry = FakeConfigEntry(

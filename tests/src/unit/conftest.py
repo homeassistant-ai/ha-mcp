@@ -8,9 +8,46 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
+from types import SimpleNamespace
 
 import pytest
+
+# Core's generated flow registry, which the component imports at module level
+# for its flow-helper set. Home Assistant is not a unit-test dependency, and the
+# module must exist before any test module imports the component. The helper
+# list is Core 2026.10's (refresh it from homeassistant/generated/config_flows.py);
+# bayesian is a Core integration of type "service", so Core files it under
+# "integration".
+sys.modules.setdefault(
+    "homeassistant.generated.config_flows",
+    SimpleNamespace(
+        FLOWS={
+            "helper": [
+                "derivative",
+                "filter",
+                "generic_hygrostat",
+                "generic_thermostat",
+                "group",
+                "history_stats",
+                "integration",
+                "min_max",
+                "mold_indicator",
+                "otp",
+                "random",
+                "statistics",
+                "switch_as_x",
+                "template",
+                "threshold",
+                "tod",
+                "trend",
+                "utility_meter",
+            ],
+            "integration": ["bayesian"],
+        }
+    ),
+)
 
 _ISOLATION_VARS = ("HA_MCP_CONFIG_DIR", "HA_MCP_DISABLE_SETTINGS_UI")
 _SESSION_DATA_DIR = ""

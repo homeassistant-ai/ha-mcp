@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from homeassistant.generated.config_flows import FLOWS
+
 from .. import card_definitions, core_contract, helper_collections
 
 __all__ = [
@@ -256,29 +258,13 @@ COLLECTION_HELPER_DOMAINS = frozenset(
 )
 # Flow (config-entry-backed) helpers. Indexed from ``entry.options`` / ``title``
 # directly — no OptionsFlow start/abort dance, and NEVER ``entry.data``.
-FLOW_HELPER_DOMAINS = frozenset(
-    {
-        "template",
-        "group",
-        "utility_meter",
-        "threshold",
-        "derivative",
-        "integration",
-        "min_max",
-        "statistics",
-        "trend",
-        "tod",
-        "random",
-        "switch_as_x",
-        "mold_indicator",
-        "history_stats",
-        "bayesian",
-        "filter",
-        "generic_thermostat",
-        "generic_hygrostat",
-        "combine",
-    }
-)
+# Read from the running Core's generated flow registry (manifest
+# ``integration_type: "helper"``), so the set follows the installed version and
+# never holds a custom integration, whose options would reach the listing and
+# search here without the redaction ha_get_integration applies. Must stay a
+# superset of the server's ``FLOW_HELPER_TYPES``: its all-types listing errors on
+# any flow type missing from ``covered_types``.
+FLOW_HELPER_DOMAINS = frozenset(FLOWS["helper"])
 
 # Collection helper domains enumerated by ``ha_mcp_tools/helpers_list``: the
 # collection helpers ``search`` indexes PLUS zone/person, which are state-machine
