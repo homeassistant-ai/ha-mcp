@@ -341,20 +341,20 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
 def _build_base_url(request: web.Request, public_base_url: str | None = None) -> str:
     """Build the public base URL used in OAuth metadata and redirects.
 
-    When `public_base_url` is provided (the operator-configured
-    `remote_url`/Nabu Casa URL written into proxy_config by start.py),
-    it wins and per-request headers are ignored. This pins canonical
-    URLs to the operator's intent and prevents an attacker who can hit
-    the addon via a forged Host header from poisoning the metadata.
+    When `public_base_url` is provided (the operator-configured `remote_url`/Nabu
+    Casa URL written into proxy_config by start.py) it wins and per-request headers
+    are ignored: canonical URLs follow the operator's intent, so a forged Host
+    header cannot poison the metadata.
 
-    Falls back to X-Forwarded-Proto/Host or request.scheme/Host when
-    no public base URL is configured (e.g. cloudflared/custom proxy
-    setups where start.py couldn't auto-detect the public URL).
+    Falls back to X-Forwarded-Proto/Host, else request.scheme/Host, when no public
+    base URL is configured; a relayed cloudhook MockRequest has no scheme (https).
     """
     if public_base_url:
         return public_base_url.rstrip("/")
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "")
-    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    scheme = request.headers.get(
+        "X-Forwarded-Proto", getattr(request, "scheme", "https")
+    )
     return f"{scheme}://{host}"
 
 
@@ -1301,7 +1301,7 @@ def build_unauthorized_response(
     metadata_url = (
         f"{base}/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
     )
-    if request.path == f"/api/webhook/{provider.webhook_id}/readonly":
+    if getattr(request, "path", "") == f"/api/webhook/{provider.webhook_id}/readonly":
         metadata_url += "/readonly"
     return web.Response(
         status=401,

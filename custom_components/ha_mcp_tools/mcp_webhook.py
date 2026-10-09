@@ -166,7 +166,9 @@ def _build_base_url(request: web.Request) -> str:
     hardening.
     """
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "")
-    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    scheme = request.headers.get(
+        "X-Forwarded-Proto", getattr(request, "scheme", "https")
+    )
     return f"{scheme}://{host}"
 
 
@@ -570,7 +572,7 @@ def _build_unauthorized_response(request: web.Request, webhook_id: str) -> web.R
     metadata_url = (
         f"{base}/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
     )
-    if request.path == f"/api/webhook/{webhook_id}/readonly":
+    if getattr(request, "path", "") == f"/api/webhook/{webhook_id}/readonly":
         metadata_url += "/readonly"
     return web.Response(
         status=401,

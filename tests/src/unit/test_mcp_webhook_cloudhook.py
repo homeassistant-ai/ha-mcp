@@ -17,6 +17,7 @@ from ._embedded_stubs import FakeSession, FakeUpstream, install
 install()
 
 import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
+from custom_components.ha_mcp_tools.const import WEBHOOK_AUTH_HA  # noqa: E402
 
 from .test_mcp_webhook import WEBHOOK_ID, _make_hass, _store_cfg  # noqa: E402
 
@@ -65,3 +66,31 @@ async def test_cloudhook_reply_that_never_ends_is_cut_off_with_504(
 
     assert resp.status == 504
     assert "did not finish within" in caplog.text
+
+
+async def test_cloudhook_without_bearer_gets_the_401_challenge() -> None:
+    # ``MockRequest`` has no ``scheme`` or ``path``; the discovery 401 must
+    # still be built from the relayed headers instead of raising.
+    session = FakeSession(upstream=FakeUpstream(status=200))
+    hass = _make_hass(validate_result=None)
+    _store_cfg(
+        hass,
+        session=session,
+        auth_mode=WEBHOOK_AUTH_HA,
+        resource_server=mw.ResourceServer(hass, WEBHOOK_ID),
+    )
+
+    request = mw.MockRequest(
+        content=b"{}",
+        mock_source="cloud",
+        method="POST",
+        headers={"Host": "hooks.nabu.casa"},
+    )
+    resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
+
+    assert resp.status == 401
+    assert session.calls == []
+    assert (
+        f"https://hooks.nabu.casa/.well-known/oauth-protected-resource/api/webhook/{WEBHOOK_ID}"
+        in resp.headers["WWW-Authenticate"]
+    )
