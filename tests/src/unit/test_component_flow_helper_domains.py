@@ -1,6 +1,7 @@
 """The component's flow helpers are the helper flows the running Core lists."""
 
 import json
+from pathlib import Path
 from types import MappingProxyType
 from unittest.mock import AsyncMock
 
@@ -32,7 +33,7 @@ def _flow(res: dict) -> list[dict]:
     return [h for h in res["helpers"] if h["kind"] == "flow"]
 
 
-def _hass(tmp_path, entries: list[FakeConfigEntry] | None = None) -> FakeHass:
+def _hass(tmp_path: Path, entries: list[FakeConfigEntry] | None = None) -> FakeHass:
     hass = FakeHass(config_entries=entries or [])
     hass.config = FakeConfig(tmp_path)
     return hass
@@ -73,7 +74,7 @@ def test_search_indexes_only_the_helpers_core_lists(domain: str, listed: bool) -
     [("_helpers_list_prep", {}), ("_search_prep", {"search_types": ["helper"]})],
 )
 async def test_prep_asks_core_for_its_helper_flows(
-    monkeypatch: pytest.MonkeyPatch, tmp_path, prep: str, msg: dict
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, prep: str, msg: dict
 ) -> None:
     loader = _loader(monkeypatch, {"template", "my_helper"})
     hass = _hass(tmp_path)
@@ -93,7 +94,7 @@ async def test_prep_asks_core_for_its_helper_flows(
     ],
 )
 async def test_prep_without_flow_helpers_skips_the_helper_flow_lookup(
-    monkeypatch: pytest.MonkeyPatch, tmp_path, prep: str, msg: dict
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, prep: str, msg: dict
 ) -> None:
     loader = _loader(monkeypatch, set())
     extra = await getattr(wsapi, prep)(_hass(tmp_path), msg)
@@ -103,7 +104,7 @@ async def test_prep_without_flow_helpers_skips_the_helper_flow_lookup(
 
 @pytest.mark.asyncio
 async def test_helpers_list_withholds_only_custom_only_options(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Through the real pre-step: a custom-only helper is listed without its
     options, while a Core helper domain keeps them even if a custom integration
@@ -128,7 +129,7 @@ async def test_helpers_list_withholds_only_custom_only_options(
 
 @pytest.mark.asyncio
 async def test_search_matches_custom_only_helpers_on_title_only(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _loader(monkeypatch, {"template", "my_helper"})
     entry = FakeConfigEntry(
@@ -184,7 +185,7 @@ def test_search_warns_of_a_degraded_scrub_when_it_emits_options(
 
 @pytest.mark.asyncio
 async def test_helper_search_prep_reports_an_unreadable_secrets_file(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     (tmp_path / "secrets.yaml").write_text("key: [unclosed\n", encoding="utf-8")
     extra = await wsapi._search_prep(_hass(tmp_path), {"search_types": ["helper"]})
