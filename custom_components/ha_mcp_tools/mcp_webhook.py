@@ -47,6 +47,7 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.webhook import async_register, async_unregister
 from homeassistant.core import HomeAssistant
+from homeassistant.util.aiohttp import MockRequest
 
 from .const import (
     DATA_WEBHOOK,
@@ -627,7 +628,12 @@ async def _async_handle_webhook(
     )
     session: aiohttp.ClientSession = cfg["session"]
 
-    body = await request.read()
+    # A Nabu Casa cloudhook (Settings → Home Assistant Cloud → Webhooks) is
+    # relayed in-process as ``MockRequest`` (#2696): it has no ``read()`` and
+    # no transport, and the relay returns only ``response.body`` — so the SSE
+    # reply must be buffered, not streamed.
+    cloudhook = isinstance(request, MockRequest)
+    body = await (request.content.read() if cloudhook else request.read())
 
     forward_headers = {
         key: value
@@ -652,7 +658,7 @@ async def _async_handle_webhook(
             if mcp_session:
                 resp_headers["Mcp-Session-Id"] = mcp_session
 
-            if "text/event-stream" in content_type:
+            if "text/event-stream" in content_type and not cloudhook:
                 # SSE streaming: prevent HA's compression middleware from
                 # buffering/breaking the stream (supervisor#6470).
                 resp_headers["Content-Type"] = "text/event-stream"

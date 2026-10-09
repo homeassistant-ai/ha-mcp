@@ -134,6 +134,43 @@ class _FakeTCPConnector:
     limit: int = 100
 
 
+class _FakeMockStreamReader:
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+
+    async def read(self, byte_count: int = -1) -> bytes:
+        return self._content if byte_count == -1 else self._content[:byte_count]
+
+
+class _FakeMockRequest:
+    """Stand-in for ``homeassistant.util.aiohttp.MockRequest`` (#2696): the
+    shape a Nabu Casa cloudhook arrives with — ``content``/``text()`` and
+    deliberately NO ``read()``."""
+
+    def __init__(
+        self,
+        content: bytes,
+        mock_source: str,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        query_string: str | None = None,
+        remote: str | None = None,
+    ) -> None:
+        self.method = method
+        self.headers = dict(headers or {})
+        self.query_string = query_string or ""
+        self._content = content
+        self.mock_source = mock_source
+        self.remote = remote
+
+    @property
+    def content(self) -> _FakeMockStreamReader:
+        return _FakeMockStreamReader(self._content)
+
+    async def text(self) -> str:
+        return self._content.decode("utf-8")
+
+
 def _install_runtime_stubs() -> None:  # noqa: PLR0915
     """Inject homeassistant.* and aiohttp stubs into sys.modules.
 
@@ -232,9 +269,15 @@ def _install_runtime_stubs() -> None:  # noqa: PLR0915
     voluptuous_mod.Required = MagicMock(name="Required")
     voluptuous_mod.In = MagicMock(name="In")
 
+    ha_util = types.ModuleType("homeassistant.util")
+    ha_util_aiohttp = types.ModuleType("homeassistant.util.aiohttp")
+    ha_util_aiohttp.MockRequest = _FakeMockRequest
+
     sys.modules.update(
         {
             "homeassistant": ha,
+            "homeassistant.util": ha_util,
+            "homeassistant.util.aiohttp": ha_util_aiohttp,
             "homeassistant.components": ha_components,
             "homeassistant.components.webhook": ha_webhook,
             "homeassistant.components.http": ha_components_http,
@@ -451,6 +494,14 @@ def _none_autoapprove_supported() -> bool:
     return os.path.exists(
         os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "oauth_autoapprove.py")
     )
+
+
+def _cloudhook_relay_supported() -> bool:
+    """Feature-detect whether the CURRENT flavor handles a Nabu Casa cloudhook
+    relayed as ``MockRequest`` (#2696); stable skips until promoted."""
+    path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "__init__.py")
+    with open(path, encoding="utf-8") as fh:
+        return "MockRequest" in fh.read()
 
 
 def _rfc9207_iss_supported() -> bool:
@@ -1821,6 +1872,60 @@ class TestOAuthOffPreservesBehavior:
         await mod._handle_webhook(hass, "mcp_test", request)
 
         request.read.assert_awaited_once()  # auth gate didn't short-circuit
+
+
+class TestCloudhookRelay:
+    """A Nabu Casa cloudhook (#2696) is relayed in-process as HA's
+    ``MockRequest`` — no ``read()``, and the relay returns only
+    ``response.body`` — so the forwarder reads via ``content`` and buffers an
+    SSE reply instead of streaming it."""
+
+    @pytest.fixture
+    def mod(self):
+        return _import_mcp_proxy()
+
+    async def test_cloudhook_reads_body_and_buffers_sse(self, mod):
+        if not _cloudhook_relay_supported():
+            pytest.skip("flavor does not relay cloudhooks yet")
+        body = b'{"jsonrpc":"2.0","id":1,"method":"ping"}'
+        sse = b"event: message\ndata: {}\n\n"
+        upstream = MagicMock()
+        upstream.status = 200
+        upstream.headers = {"Content-Type": "text/event-stream"}
+        upstream.read = AsyncMock(return_value=sse)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=upstream)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.request = MagicMock(return_value=ctx)
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test",
+                "session": session,
+                "oauth": None,
+            }
+        }
+        request = mod.MockRequest(
+            content=body,
+            mock_source="cloud",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+
+        with (
+            patch.object(mod.web, "Response") as response_cls,
+            patch.object(mod.web, "StreamResponse") as stream_cls,
+        ):
+            await mod._handle_webhook(hass, "mcp_test", request)
+
+        assert session.request.call_args.kwargs["data"] == body
+        stream_cls.assert_not_called()
+        kwargs = response_cls.call_args.kwargs
+        assert kwargs["status"] == 200
+        assert kwargs["body"] == sse
+        assert kwargs["headers"]["Content-Type"] == "text/event-stream"
 
 
 class TestDebugLogging:
