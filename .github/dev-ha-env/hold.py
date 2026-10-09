@@ -216,19 +216,28 @@ def apply_stale_component(inst: Instance, sha: str) -> None:
     commit, so a component-only change costs a Core restart, not an image
     rebuild. The instance is not reported ready with the wrong component.
     """
+    last_err: Exception | None = None
     for attempt in range(1, MAX_TRIES + 1):
         log(sha=sha, backend=inst.backend, ready=False, updating=["component"])
         try:
             inst.update_component()
             return
-        except Exception as err:  # noqa: BLE001
+        # Transient: HTTP, the SSH copy, timeouts, and the RuntimeError that
+        # haos_shell and the readiness checks raise. Bugs propagate.
+        except (
+            requests.RequestException,
+            subprocess.SubprocessError,
+            TimeoutError,
+            RuntimeError,
+        ) as err:
+            last_err = err
             log(
                 sha=sha,
                 ready=False,
                 attempt=attempt,
                 error=f"{type(err).__name__}: {err}",
             )
-    raise RuntimeError("the branch's component could not be applied")
+    raise RuntimeError("the branch's component could not be applied") from last_err
 
 
 def test_hold_dev_ha_env(ha_container_with_fresh_config: dict[str, Any]) -> None:

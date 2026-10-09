@@ -64,7 +64,12 @@ Run it **from your fork only**. The job refuses to run in
    new URL, and the run uploads `dev-ha-env-urls` again: download it into an
    empty directory and decrypt it again. A tunnel still being retried shows
    as `down`. After three restarts, newer URLs are only in the job log, as a
-   `DEVENV_URLS` line holding the same encrypted file in base64.
+   `DEVENV_URLS` line holding the same encrypted file in base64. The API
+   serves a job's log only once the run ends, so copy the latest value from
+   the live log in the browser and decode it before decrypting as above:
+   ```bash
+   printf '%s' '<value>' | openssl base64 -d -A -out dev-ha-env-urls.enc
+   ```
 
    Test through `MCP:`, the way an agent uses the server: add it to your
    client as a regular MCP server, or, when the agent's client cannot load a

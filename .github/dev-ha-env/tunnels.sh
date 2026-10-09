@@ -32,8 +32,11 @@ start_tunnel() {
       return 0
     fi
     kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
     echo "::warning::The $name tunnel did not start (attempt $attempt); retrying."
-    tail -5 "$log"
+    # A URL printed after the last poll was never masked: keep it out of the
+    # public log. api.trycloudflare.com, the failing endpoint, stays readable.
+    tail -5 "$log" | sed -E 's#https://[a-z0-9-]{5,}\.trycloudflare\.com#<tunnel url>#g'
     sleep $((attempt * 20))
   done
   return 1
