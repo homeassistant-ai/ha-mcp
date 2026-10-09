@@ -615,7 +615,7 @@ async def test_search_default_dashboard_asymmetry() -> None:
         )
 
     assert comp_resp["matches"]
-    assert comp_resp["matches"][0]["url_path"] is None  # the default's own key
+    assert comp_resp["matches"][0]["url_path"] == "default"
     assert legacy_resp["matches"] == []  # documented exclusion
 
 

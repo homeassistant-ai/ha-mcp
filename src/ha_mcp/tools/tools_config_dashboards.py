@@ -1493,10 +1493,13 @@ def _search_dashboard_docs(
         )
         prefix = ""
         if per_dashboard:
-            prefix = f"{doc['url_path'] or 'default'}:"
+            # The default dashboard has no url_path; "default" is what the get
+            # and set tools accept for it.
+            url_path = doc["url_path"] or "default"
+            prefix = f"{url_path}:"
             config_hash = compute_config_hash(doc["config"]) if found else None
             for match in found:
-                match["url_path"] = doc["url_path"]
+                match["url_path"] = url_path
                 match["config_hash"] = config_hash
         matches.extend(found)
         truncation.extend(prefix + path for path in doc_truncation)
