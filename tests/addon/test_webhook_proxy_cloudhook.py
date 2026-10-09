@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.src.unit._embedded_stubs import MockRequest
+
 from . import test_webhook_proxy as proxy
 from .test_webhook_proxy import _webhook_proxy_variant  # noqa: F401
 
@@ -52,7 +54,7 @@ class TestCloudhookRelay:
                 "oauth": None,
             }
         }
-        request = mod.MockRequest(
+        request = MockRequest(
             content=body,
             mock_source="cloud",
             method="POST",
