@@ -570,6 +570,26 @@ async def test_legacy_search_names_broken_not_unconfigured_dashboards() -> None:
     assert "fresh" not in unread[0]
 
 
+class _ListErrorClient(RoutingClient):
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        if msg.get("type") == "lovelace/dashboards/list":
+            return {"success": False, "error": {"message": "boom"}}
+        return await super().send_websocket_message(msg)
+
+
+@pytest.mark.asyncio
+async def test_legacy_search_reports_an_unreadable_dashboards_list() -> None:
+    """A failed list read is reported, not answered as a clean "no matches"."""
+    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    get_dashboard = _build_get_dashboard(_ListErrorClient())
+
+    with patch_ws(ws, tools_config_dashboards):
+        resp = await get_dashboard(query="light.kitchen")
+
+    assert resp["match_count"] == 0
+    assert any("dashboards list could not be read" in w for w in resp["warnings"])
+
+
 @pytest.mark.asyncio
 async def test_badge_search_by_heading_is_rejected() -> None:
     """View badges have no heading, so card_type='badge' with heading can't match."""

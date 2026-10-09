@@ -2119,9 +2119,9 @@ class DashboardConfigTools:
             if result is not None and isinstance(result.get("docs"), list):
                 failed = int(result.get("load_failed", 0) or 0)
                 return result["docs"], _unread_dashboards_warning(failed)
-        docs, failed_paths = await self._collect_legacy_search_docs()
+        docs, unread = await self._collect_legacy_search_docs()
         return docs, [
-            *_unread_dashboards_warning(failed_paths),
+            *unread,
             "The default dashboard was not searched: only the dashboard read of a "
             "current ha_mcp_tools component reaches it, and that read was not "
             "available. Search it with url_path='default'.",
@@ -2130,7 +2130,7 @@ class DashboardConfigTools:
     async def _collect_legacy_search_docs(
         self,
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        """Storage dashboards' ``{url_path, config}`` and the url_paths that failed.
+        """Storage dashboards' ``{url_path, config}`` and warnings about unread ones.
 
         One ``lovelace/config`` read per dashboard ``fetch_dashboards_list``
         returns. A body is read ONLY when its row is EXPLICITLY tagged
@@ -2141,7 +2141,12 @@ class DashboardConfigTools:
         stored config yet has nothing to search; any other read failure is
         reported, not hidden.
         """
-        rows = await fetch_dashboards_list(self._client) or []
+        rows = await fetch_dashboards_list(self._client)
+        if rows is None:
+            return [], [
+                "The dashboards list could not be read, so no stored dashboard "
+                "was searched."
+            ]
         docs: list[dict[str, Any]] = []
         failed: list[str] = []
         for row in rows:
@@ -2160,7 +2165,7 @@ class DashboardConfigTools:
                     failed.append(url_path)
                 continue
             docs.append({"url_path": url_path, "config": config})
-        return docs, failed
+        return docs, _unread_dashboards_warning(failed)
 
     async def _dashboard_is_storage_mode(self, url_path: str | None) -> bool:
         """True only when ``url_path`` is a dashboard PROVABLY tagged mode="storage".
