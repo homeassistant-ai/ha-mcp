@@ -631,3 +631,15 @@ class TestReviewedSearchEdges:
         badge = {"type": "entity", "entity": "sensor.a", "options": options}
         result = self._search({"views": [{"badges": [badge]}]}, query="light.deep")
         assert any("depth bound" in w for w in result["warnings"])
+
+    def test_misshapen_slot_in_a_badge_is_reported_as_read_as_text(self) -> None:
+        badge = {
+            "type": "entity",
+            "entity": "sensor.d",
+            "card": [{"type": "markdown", "content": "light.a"}],
+        }
+        result = self._search({"views": [{"badges": [badge]}]}, query="light.a")
+        assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[0]"]
+        [warning] = result["warnings"]
+        assert ".views[0].badges[0].card" in warning
+        assert "not searched" not in warning

@@ -356,6 +356,7 @@ class _SearchGaps:
     truncation: list[str] = field(default_factory=list)
     uncovered: list[str] = field(default_factory=list)
     malformed: list[str] = field(default_factory=list)
+    misshapen: list[str] = field(default_factory=list)
 
     def note_malformed(self, value: Any, path: str) -> None:
         """Record container key ``path`` when present (not ``None``) in the wrong shape.
@@ -369,6 +370,7 @@ class _SearchGaps:
         self.truncation.extend(prefix + p for p in other.truncation)
         self.uncovered.extend(prefix + p for p in other.uncovered)
         self.malformed.extend(prefix + p for p in other.malformed)
+        self.misshapen.extend(prefix + p for p in other.misshapen)
 
 
 @dataclass(frozen=True, slots=True)
@@ -403,7 +405,7 @@ class _CardSplit:
     leaves: list[tuple[str, str]] = field(default_factory=list)
     cards: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
     cut: list[str] = field(default_factory=list)
-    malformed: list[str] = field(default_factory=list)
+    misshapen: list[str] = field(default_factory=list)
 
 
 def _split_card_node(
@@ -450,7 +452,7 @@ def _split_card_entry(
     slots = _card_slots(key, value, child_jq)
     if slots is None:
         if _is_swapped_card_container(key, value):
-            out.malformed.append(child_jq)
+            out.misshapen.append(child_jq)
         _split_card_node(value, (child_jq, child_py), key, out, depth)
         return
     for jq_seg, py_seg, leaf_key, item in slots:
@@ -536,7 +538,7 @@ def _walk_card(
     _split_card_node(card, ("", ""), "", split)
     frame.gaps.truncation.extend(jq_prefix + cut for cut in split.cut)
     if frame.criteria.can_match_cards():
-        frame.gaps.malformed.extend(jq_prefix + path for path in split.malformed)
+        frame.gaps.misshapen.extend(jq_prefix + path for path in split.misshapen)
     matches: list[dict[str, Any]] = []
     if "type" in card:
         match = _card_search_match(card, split.leaves, jq_prefix, python_prefix, frame)
@@ -648,7 +650,7 @@ def _find_badge_matches_in_view(
         if criteria.query is not None:
             _split_badge(badge, split)
             frame.gaps.truncation.extend(badge_jq + cut for cut in split.cut)
-            frame.gaps.malformed.extend(badge_jq + path for path in split.malformed)
+            frame.gaps.misshapen.extend(badge_jq + path for path in split.misshapen)
         hits = _query_hits(split.leaves, criteria.query_lower)
         if hits == []:
             continue
@@ -1588,6 +1590,13 @@ def _search_warnings(
             "Skipped entries that are not the expected list, mapping or entity "
             f"id, so they were not searched, at: {', '.join(gaps.malformed)}. "
             "Fetch the config to repair them."
+        )
+    if gaps.misshapen:
+        warnings.append(
+            "Read as text only, since a card slot holds the wrong kind of "
+            "container, so entity_id, card_type and heading do not match cards "
+            f"inside, at: {', '.join(gaps.misshapen)}. Fetch the config to repair "
+            "them."
         )
     return warnings
 
