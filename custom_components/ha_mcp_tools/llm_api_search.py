@@ -33,7 +33,7 @@ _NOT_FOUND_SUGGESTION = (
 # The compact-params renderer below is a verbatim copy of the server's
 # (src/ha_mcp/transforms/categorized_search.py); this package cannot import
 # ha_mcp. tests/src/unit/test_llm_api_search.py checks the two agree.
-def _literal_labels(branch: dict[str, Any]) -> list[str]:
+def _literal_labels(branch: dict[str, Any]) -> list[str | None]:
     """Labels of the ``enum``/``const`` values *branch* admits; ``None`` is
     kept as-is for the caller's nullable check."""
     values = [*(branch.get("enum") or [])]

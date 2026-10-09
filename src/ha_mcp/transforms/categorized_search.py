@@ -329,7 +329,7 @@ def _execute_via(proxy: str, tool_name: str) -> str:
 # The compact-params renderer is duplicated verbatim in the component
 # (custom_components/ha_mcp_tools/llm_api_search.py), which cannot import
 # ha_mcp; tests/src/unit/test_llm_api_search.py checks the two agree.
-def _literal_labels(branch: dict[str, Any]) -> list[str]:
+def _literal_labels(branch: dict[str, Any]) -> list[str | None]:
     """Labels of the ``enum``/``const`` values *branch* admits; ``None`` is
     kept as-is for the caller's nullable check."""
     values = [*(branch.get("enum") or [])]
