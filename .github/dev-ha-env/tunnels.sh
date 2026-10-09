@@ -53,31 +53,36 @@ publish_urls() {
   echo "DEVENV_URLS $(openssl base64 -A -in out/dev-ha-env-urls.enc)"
 }
 
-# Restart every tunnel whose process has exited; publish once and set REVIVED
-# if any came back.
+# Restart every tunnel whose process has exited. When the published URLs
+# change (a new URL, or a published one now down), publish them and set
+# URLS_CHANGED; a tunnel that stays down publishes nothing new.
 revive_tunnels() {
-  local name revived=""
+  local name had_url changed=""
   for name in ha mcp; do
     if ! kill -0 "$(cat "tunnel-$name.pid" 2>/dev/null)" 2>/dev/null \
       || [ ! -s "tunnel-$name.url" ]; then
+      had_url=""
+      [ -s "tunnel-$name.url" ] && had_url=1
       echo "::warning::The $name tunnel is down; restarting it, so its URL changes."
-      start_tunnel "$name" "$(cat "tunnel-$name.target")" && revived=1
+      if start_tunnel "$name" "$(cat "tunnel-$name.target")" || [ -n "$had_url" ]; then
+        changed=1
+      fi
     fi
   done
-  [ -z "$revived" ] || { publish_urls; REVIVED=1; }
+  [ -z "$changed" ] || { publish_urls; URLS_CHANGED=1; }
 }
 
-# Watch the holder and revive tunnels. After a tunnel comes back with a new
-# URL, return with revived=true so the workflow uploads the URLs artifact
-# again; with "last", keep going and leave the new URLs in the job log only.
+# Watch the holder and revive tunnels. When the URLs change, return with
+# urls_changed=true so the workflow uploads the URLs artifact again; with
+# "last", keep going and leave the new URLs in the job log only.
 keep_running() {
   while kill -0 "$(cat hold.pid)" 2>/dev/null; do
     sleep 60
     grep -E "STATUS|Traceback|Error" env.log | tail -3 || true
-    REVIVED=""
+    URLS_CHANGED=""
     revive_tunnels
-    if [ -n "$REVIVED" ] && [ "${1:-}" != last ]; then
-      echo "revived=true" >> "$GITHUB_OUTPUT"
+    if [ -n "$URLS_CHANGED" ] && [ "${1:-}" != last ]; then
+      echo "urls_changed=true" >> "$GITHUB_OUTPUT"
       return 0
     fi
   done
