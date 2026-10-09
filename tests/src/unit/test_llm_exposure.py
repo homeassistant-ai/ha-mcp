@@ -141,6 +141,8 @@ class TestMiddleware:
         by_name = {t.name: t.meta[META_NAMESPACE] for t in result}
         assert by_name["ha_search"][META_EXPOSED_KEY] is True
         assert by_name["ha_search"][META_PINNED_KEY] is True
+        # The component's compact search hits show this line (#2633).
+        assert by_name["ha_search"][llm_exposure.META_PARAMS_KEY] == "none"
         # The serving-server policy block rides the same namespace (#1990).
         assert llm_exposure.META_POLICY_KEY in by_name["ha_search"]
         # Override exposes the default-hidden restart tool.

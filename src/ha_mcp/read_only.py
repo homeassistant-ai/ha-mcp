@@ -348,6 +348,17 @@ def read_only_visible(tool: Tool) -> bool:
 def _raise_read_only_error(
     name: str, *, blocked_operation: str | None = None, allowed: str | None = None
 ) -> NoReturn:
+    raise_tool_error(
+        read_only_error_response(
+            name, blocked_operation=blocked_operation, allowed=allowed
+        )
+    )
+
+
+def read_only_error_response(
+    name: str, *, blocked_operation: str | None = None, allowed: str | None = None
+) -> dict[str, Any]:
+    """The structured ``READ_ONLY_MODE`` error for a blocked call to *name*."""
     context: dict[str, Any] = {"tool_name": name, "read_only_mode": True}
     if blocked_operation is not None:
         context["blocked_operation"] = blocked_operation
@@ -364,17 +375,15 @@ def _raise_read_only_error(
             f"'{name}' is a write-capable tool, so the call was blocked — "
             f"no changes were made."
         )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.READ_ONLY_MODE,
-            message,
-            suggestions=[
-                "Continue with read-only tools — searching, getting, and "
-                + "listing data all remain available.",
-                read_only_remedy_hint(),
-            ],
-            context=context,
-        )
+    return create_error_response(
+        ErrorCode.READ_ONLY_MODE,
+        message,
+        suggestions=[
+            "Continue with read-only tools — searching, getting, and "
+            + "listing data all remain available.",
+            read_only_remedy_hint(),
+        ],
+        context=context,
     )
 
 

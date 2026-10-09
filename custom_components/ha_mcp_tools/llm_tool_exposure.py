@@ -1,7 +1,7 @@
 """Read the server's per-tool LLM API exposure stamp (#1745).
 
 The server stamps every ``tools/list`` entry with
-``_meta.ha_mcp = {llm_api_exposed, pinned}`` (see
+``_meta.ha_mcp = {llm_api_exposed, pinned, params}`` (see
 ``src/ha_mcp/llm_exposure.py``); :mod:`llm_api` filters on it. This module
 holds the stamp keys, the legacy fallback for servers that predate the stamp,
 and the split of a raw tool list into exposed tools and pinned names.
@@ -17,6 +17,9 @@ from typing import Any
 META_NAMESPACE = "ha_mcp"
 META_EXPOSED_KEY = "llm_api_exposed"
 META_PINNED_KEY = "pinned"
+# The server's one-line parameter summary for compact search hits (#2633);
+# absent on servers that predate it.
+META_PARAMS_KEY = "params"
 
 # Fallback exposure policy for servers that predate the stamp: hide the
 # operational-hazard names and the known beta/developer tools. Imperfect by

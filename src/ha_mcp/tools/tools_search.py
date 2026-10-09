@@ -618,7 +618,9 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             result["tool_discovery"] = {
                 "hint": (
                     "This server uses search-based tool discovery. "
-                    "Use ha_search_tools(query='...') to find tools, then "
+                    "Use ha_search_tools(query='...') to find tools, "
+                    "ha_search_tools(tools=['<name>']) for the full input "
+                    "schema of the one you will call, then "
                     "execute the discovered tool directly by name (preferred), "
                     "or via a proxy for permission gating: "
                     "ha_call_read_tool, ha_call_write_tool, or "

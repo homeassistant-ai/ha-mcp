@@ -74,7 +74,9 @@ async def test_pinned_tool_that_matches_is_returned_as_a_stub_without_its_schema
 
 
 @pytest.mark.anyio
-async def test_hidden_hit_keeps_its_full_definition_next_to_a_stub() -> None:
+async def test_hidden_hit_is_compact_next_to_a_stub() -> None:
+    """A hidden hit names its params and proxy without the full schema;
+    the schema comes from the ``tools=`` second hop."""
     results = await _search(
         [
             _tool("ha_get_state", "get entity state"),
@@ -84,10 +86,12 @@ async def test_hidden_hit_keeps_its_full_definition_next_to_a_stub() -> None:
         query="get entity",
     )
 
-    by_name = {entry["name"]: entry for entry in results}
-    assert "inputSchema" in by_name["ha_get_entity"]
-    assert "pinned" not in by_name["ha_get_entity"]
-    assert "ha_call_read_tool" in by_name["ha_get_entity"]["execute_via"]
+    hit = {entry["name"]: entry for entry in results}["ha_get_entity"]
+    assert "inputSchema" not in hit
+    assert "pinned" not in hit
+    assert hit["description"] == "get entity details"
+    assert "params" in hit
+    assert "ha_call_read_tool" in hit["execute_via"]
 
 
 @pytest.mark.anyio
