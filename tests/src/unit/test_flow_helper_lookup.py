@@ -8,6 +8,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
@@ -15,8 +16,12 @@ from ha_mcp.tools.flow_helper_lookup import get_entry_id_for_flow_helper
 
 
 def _make_client(ws_response: Any = None, raises: Exception | None = None) -> MagicMock:
-    """Build a mock client whose send_websocket_message returns / raises."""
+    """Build a mock client whose send_websocket_message returns / raises.
+
+    The entity has no state unless a test gives it one.
+    """
     client = MagicMock()
+    client.get_entity_state = AsyncMock(return_value=None)
     if raises is not None:
         client.send_websocket_message = AsyncMock(side_effect=raises)
     else:
@@ -107,15 +112,24 @@ class TestGetEntryIdForFlowHelper:
         assert entry_id is None
         assert reason == "lookup_failed"
 
-    @pytest.mark.parametrize("payload", ["garbage", {}])
-    async def test_unexpected_result_shape_returns_none(self, payload: Any) -> None:
-        """A non-entry payload is a missing entity, not a foreign platform."""
-        client = _make_client({"success": True, "result": payload})
-        entry_id, reason = await get_entry_id_for_flow_helper(
-            client, "template", "template.x"
-        )
-        assert entry_id is None
-        assert reason == "not_in_registry"
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "garbage",
+            {"success": True, "result": "garbage"},
+            {"success": True, "result": {}},
+        ],
+        ids=["reply_not_a_dict", "result_not_a_dict", "result_empty"],
+    )
+    async def test_reply_without_an_entry_is_a_failed_read(self, reply: Any) -> None:
+        """A reply that carries no entry proves neither that the entity is
+        missing nor that it belongs elsewhere; it is a failed read, and
+        nothing is deleted on it."""
+        client = _make_client(reply)
+        with pytest.raises(ToolError) as exc_info:
+            await get_entry_id_for_flow_helper(client, "template", "template.x")
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "SERVICE_CALL_FAILED"
 
     async def test_connection_error_propagates(self) -> None:
         # Auth/connection errors must reach the outer handler — they are
@@ -144,3 +158,64 @@ async def test_blocked_registry_read_is_not_reported_as_missing() -> None:
     err = json.loads(str(exc_info.value))["error"]
     assert err["code"] == "SERVICE_CALL_FAILED"
     assert "403 Forbidden" in err["message"]
+
+
+_NOT_FOUND = {"success": False, "error": "Entity not found", "error_code": "not_found"}
+
+
+async def test_entity_with_a_state_but_no_registry_entry_is_not_missing() -> None:
+    """Core keeps no registry entry for an entity without a unique_id (a YAML
+    template sensor without one, zone.home); it exists, so it must not read
+    as missing."""
+    client = _make_client(_NOT_FOUND)
+    client.get_entity_state = AsyncMock(return_value={"state": "zoning"})
+    entry_id, reason = await get_entry_id_for_flow_helper(
+        client, "template", "zone.home"
+    )
+    assert (entry_id, reason) == (None, "not_registry_managed")
+
+
+async def test_state_read_404_confirms_the_entity_is_missing() -> None:
+    client = _make_client(_NOT_FOUND)
+    client.get_entity_state = AsyncMock(
+        side_effect=HomeAssistantAPIError("not found", status_code=404)
+    )
+    entry_id, reason = await get_entry_id_for_flow_helper(
+        client, "template", "template.ghost"
+    )
+    assert (entry_id, reason) == (None, "not_in_registry")
+
+
+async def test_failed_state_read_is_not_evidence_of_absence() -> None:
+    client = _make_client(_NOT_FOUND)
+    client.get_entity_state = AsyncMock(
+        side_effect=HomeAssistantAPIError("server error", status_code=500)
+    )
+    with pytest.raises(HomeAssistantAPIError):
+        await get_entry_id_for_flow_helper(client, "template", "template.x")
+
+
+@pytest.mark.parametrize(
+    ("platform", "retry_hint"),
+    [("sun", "ha_remove_entity()"), ("input_boolean", "helper_type='input_boolean'")],
+    ids=["not_a_helper", "other_helper"],
+)
+async def test_wrong_helper_type_refusal_names_the_owning_integration(
+    platform: str, retry_hint: str
+) -> None:
+    """The refusal must say which integration owns the entity, so omitting
+    helper_type is suggested only where it can work."""
+    client = _make_client(
+        {
+            "success": True,
+            "result": {"platform": platform, "config_entry_id": "e"},
+        }
+    )
+    with pytest.raises(ToolError) as exc_info:
+        await get_entry_id_for_flow_helper(client, "group", "sensor.x")
+    response = json.loads(str(exc_info.value))
+    err = response["error"]
+    assert err["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert f"'{platform}'" in err["message"]
+    assert response["platform"] == platform
+    assert retry_hint in err["suggestion"]

@@ -7,7 +7,7 @@ integrations (config entries) via the REST and WebSocket APIs.
 
 import asyncio
 import logging
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal, cast, get_args
 
 from pydantic import Field
 
@@ -60,6 +60,7 @@ from .flow_helper_lookup import (
     YAML_HELPER_SUGGESTION,
     get_entry_id_for_flow_helper,
     raise_flow_helper_lookup_error,
+    raise_unregistered_entity_error,
     resolve_helper_entity,
 )
 from .helpers import (
@@ -86,22 +87,18 @@ _REGISTRY_RETRY_BASE_DELAY = 0.5
 
 
 def _removal_backup_domain(kwargs: dict[str, Any]) -> str:
-    # ``target`` is one of three shapes: a flow-helper entity_id like
-    # ``sensor.my_meter`` (routes through the matching ``helper_<type>``
-    # domain when ``helper_type`` is also passed), a bare config-entry
-    # id, or a parent.subentry pair. Dispatch to ``helper_<type>``
-    # when the kw is supplied so storage-backed helpers (input_*,
-    # counter, timer, ...) get a snapshot via the same handler the
-    # ``ha_config_set_helper`` decorator uses; otherwise fall back to
-    # the integration domain.
+    """Snapshot under ``helper_<type>``, the handler ha_config_set_helper uses,
+    when helper_type is set; an untyped target here is a config entry
+    (_skip_removal_capture already skipped an untyped entity_id)."""
     helper_type = kwargs.get("helper_type")
     return f"helper_{helper_type}" if helper_type else "integration"
 
 
 def _skip_removal_capture(kwargs: dict[str, Any]) -> bool:
-    # An explicit flow-helper removal validates and resolves its target
-    # through Core before the inner decorator captures the entry; an
-    # entity_id without helper_type is captured by the resolved call.
+    """True when a later layer owns the snapshot: a FLOW type is captured by
+    _delete_resolved_flow_helper once Core resolves its entry, a type-less
+    entity_id by the resolved call (_remove_resolved_helper, which again
+    defers a FLOW type to _delete_resolved_flow_helper)."""
     helper_type = kwargs.get("helper_type")
     return helper_type in FLOW_HELPER_TYPES or (
         helper_type is None and "." in str(kwargs.get("target", ""))
@@ -2223,13 +2220,14 @@ class IntegrationTools:
         - helper_type="config_subentry" + parent entry_id + subentry_id →
           delete one config subentry.
 
-        A target that is confirmed absent raises a structured error rather than
-        returning silent success: ENTITY_NOT_FOUND for a SIMPLE target missing
-        from both the state machine and the entity registry, or a FLOW or
-        type-less entity_id missing from the registry (a bare helper_id on a
-        FLOW target also raises it — FLOW resolution needs a full entity_id);
-        RESOURCE_NOT_FOUND for a YAML-configured helper (SIMPLE or FLOW), a
-        config entry the backend reports as 404, or a missing config subentry.
+        A target that cannot be removed raises a structured error rather than
+        returning silent success: ENTITY_NOT_FOUND when the entity_id is absent
+        from both the state machine and the entity registry (a bare helper_id
+        on a FLOW target also raises it — FLOW resolution needs a full
+        entity_id); RESOURCE_NOT_FOUND when it exists but is not storage- or
+        registry-managed (a YAML-configured helper, or an entity with a state
+        but no registry entry), for a config entry the backend reports as 404,
+        or for a missing config subentry.
         Calling N times gives the same response. Transient connectivity failures
         raise their own codes (WEBSOCKET_DISCONNECTED, CONNECTION_FAILED) so
         retry logic can branch separately.
@@ -2347,7 +2345,7 @@ class IntegrationTools:
         skip_fn=_skip_removal_capture,
     )
     async def _remove_resolved_helper(
-        self, *, target: str, helper_type: Any, wait: bool
+        self, *, target: str, helper_type: HelperTypeLiteral | None, wait: bool
     ) -> dict[str, Any]:
         """Remove the helper an entity_id resolved to, under the tool's backup.
 
@@ -2359,24 +2357,28 @@ class IntegrationTools:
             return await self._delete_simple_helper(helper_type, target, wait)
         return await self._delete_flow_helper(helper_type, target, wait, [])
 
-    async def _resolve_helper_entity(self, entity_id: str) -> tuple[Any, str]:
+    async def _resolve_helper_entity(
+        self, entity_id: str
+    ) -> tuple[HelperTypeLiteral | None, str]:
         """Map an entity_id to the (helper_type, target) that removes its helper."""
         try:
-            return await resolve_helper_entity(self._client, entity_id)
+            helper_type, target = await resolve_helper_entity(self._client, entity_id)
+            # resolve_helper_entity returns a SIMPLE or FLOW type, or None.
+            return cast("HelperTypeLiteral | None", helper_type), target
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
-                e,
-                context={"target": entity_id},
-                suggestions=[
-                    (
-                        "Reading the entity registry or Home Assistant's "
-                        "helper list failed; retry, or pass helper_type "
-                        "explicitly."
-                    ),
-                ],
+            # Keep the classified suggestions (auth, connection) and add the
+            # route that does not need helper_type, which cannot name a
+            # Core-listed helper such as otp.
+            error = exception_to_structured_error(
+                e, context={"target": entity_id}, raise_error=False
             )
+            error["error"].setdefault("suggestions", []).append(
+                "Or pass the helper's config entry_id as target "
+                "(ha_get_integration() lists config entries)."
+            )
+            raise_tool_error(error)
             return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     # === Path 3: Direct config entry delete (any integration) ===
@@ -2695,7 +2697,7 @@ class IntegrationTools:
 
         Uses a 3-retry registry lookup with exponential backoff to find the
         helper's unique_id, then falls back to direct-id-delete and a
-        confirmed-absent classification if the registry has no record.
+        classification of why the registry has no usable record.
         """
         # Convert to entity_id form
         entity_id = (
@@ -2866,9 +2868,12 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Handle SIMPLE-helper deletion when the registry yielded no unique_id.
 
-        Tries a direct-id delete, then classifies the target as confirmed-absent
-        (ENTITY_NOT_FOUND) or a real failure (SERVICE_CALL_FAILED). Always
-        returns a success response or raises a structured error.
+        Tries a direct-id delete, then classifies the target: absent from
+        state and registry, or registered without a unique_id
+        (ENTITY_NOT_FOUND); present but not registry-managed
+        (RESOURCE_NOT_FOUND); or a failed registry read or real failure
+        (SERVICE_CALL_FAILED). Always returns a success response or raises a
+        structured error.
         """
         # Fallback strategy 1: direct-ID delete if unique_id not found
         response = await self._try_direct_id_delete(
@@ -2946,25 +2951,50 @@ class IntegrationTools:
                 )
             )
 
-        # All fallbacks exhausted
-        err_detail = (
-            registry_result.get("error", "Unknown error")
-            if registry_result
-            else "No registry response"
+        # The state is present (an absent state raised above). If the
+        # registry definitely has no entry — a component miss, or Core's
+        # not_found — the entity is not registry-managed rather than missing.
+        registry_miss = not (registry_result or {}).get("success") and (
+            component_used or (registry_result or {}).get("error_code") == "not_found"
         )
-        max_retries = 3
-        # The component path resolves via ONE authoritative in-process
-        # lookup (no retry loop), so the detail text must not claim
-        # "3 attempts" there. The legacy branch's wording is unchanged.
+        if registry_miss:
+            raise_unregistered_entity_error(target, helper_type, entity_id)
+        if not (registry_result or {}).get("success"):
+            # Any other failed read proves nothing about the registry, and
+            # the state shows the entity exists: report the read failure.
+            failure = registry_result or {}
+            detail = (
+                failure.get("error") or "unknown error"
+                if registry_result
+                else "no response"
+            )
+            raise_tool_error(
+                create_error_response(
+                    ws_failure_code(failure),
+                    (
+                        f"Reading the entity registry for {entity_id} failed: "
+                        f"{detail}. Nothing was deleted."
+                    ),
+                    context={"target": target, "entity_id": entity_id},
+                    # A proxy-blocked read carries its own guidance.
+                    suggestions=failure.get("suggestions")
+                    or [
+                        "Retry; check the Home Assistant connection if it "
+                        "keeps failing.",
+                    ],
+                )
+            )
+
+        # The registry returned an entry, but without a unique_id. The
+        # component path resolves via ONE authoritative in-process lookup (no
+        # retry loop), so its text must not claim "3 attempts".
         if component_used:
             not_found_detail = (
-                f"Component registry lookup found no unique_id for "
-                f"{entity_id}: {err_detail}"
+                f"Component registry lookup found no unique_id for {entity_id}."
             )
         else:
             not_found_detail = (
-                f"Helper not found in entity registry after "
-                f"{max_retries} attempts: {err_detail}"
+                f"Registry entry for {entity_id} has no unique_id after 3 attempts."
             )
         raise_tool_error(
             create_error_response(

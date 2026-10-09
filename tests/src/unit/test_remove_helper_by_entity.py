@@ -12,8 +12,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantAuthError
+from ha_mcp.errors import DEFAULT_SUGGESTIONS
 from ha_mcp.tools import auto_backup
+from ha_mcp.tools.helpers import exception_to_structured_error
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 # What Core's GET /api/config/config_entries/flow_handlers?type=helper returns:
@@ -211,11 +215,11 @@ async def test_entity_route_logs_one_tool_call(
 
 
 @pytest.mark.parametrize(
-    ("registry_row", "captured"),
+    ("registry_row", "snapshot"),
     [
         (
             {"entity_id": "sensor.my_otp", "platform": "otp", "config_entry_id": "e"},
-            ("e", None),
+            ("integration", "e"),
         ),
         (
             {
@@ -224,27 +228,63 @@ async def test_entity_route_logs_one_tool_call(
                 "unique_id": "guest_mode",
                 "config_entry_id": None,
             },
-            ("input_boolean.guest_mode", "input_boolean"),
+            ("helper_input_boolean", "input_boolean.guest_mode"),
         ),
     ],
     ids=["core_listed", "storage"],
 )
-async def test_entity_route_captures_the_resolved_helper(
+async def test_entity_route_backs_up_the_resolved_helper_before_deleting(
     registry_row: dict[str, Any],
-    captured: tuple[str, str | None],
+    snapshot: tuple[str, str],
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
 ) -> None:
-    """Helpers the flow path does not back up are captured by the resolved call."""
-    targets: list[tuple[str, str | None]] = []
+    """A helper the flow path does not back up, removed by its entity_id, must
+    stay restorable: one snapshot of the resolved helper, taken before the
+    delete."""
+    client = _client(registry_row)
+    client.get_config_entry = AsyncMock(return_value={"domain": "otp"})
+    taken: list[tuple[str, str, int]] = []
 
-    async def record(_func: Any, _args: Any, kwargs: dict[str, Any], **_: Any) -> None:
-        targets.append((kwargs["target"], kwargs["helper_type"]))
+    async def record(_mgr: Any, domain: str, entity_id: str, **_: Any) -> None:
+        deletes = client.delete_config_entry.await_count + len(client.ws_deletes)
+        taken.append((domain, entity_id, deletes))
 
+    monkeypatch.setattr(bm.BackupManager, "maybe_snapshot", record)
     monkeypatch.setattr(
         auto_backup,
         "get_global_settings",
-        lambda: SimpleNamespace(enable_auto_backup=True),
+        lambda: SimpleNamespace(enable_auto_backup=True, auto_backup_dir=str(tmp_path)),
     )
-    monkeypatch.setattr(auto_backup, "_capture_pre_write_snapshot", record)
-    await _remove(_client(registry_row), registry_row["entity_id"])
-    assert targets == [captured]
+    await _remove(client, registry_row["entity_id"])
+    assert taken == [(*snapshot, 0)]
+
+
+async def test_entity_without_a_registry_entry_is_not_reported_missing() -> None:
+    """zone.home and a YAML template sensor without unique_id have a state but
+    no registry entry; telling the caller they are missing sends them to
+    ha_search(), which finds them."""
+    client = _client(None)
+    client.get_entity_state = AsyncMock(return_value={"state": "zoning"})
+    assert await _refused(client, "zone.home") == "RESOURCE_NOT_FOUND"
+
+
+async def test_failed_registry_read_keeps_its_classified_suggestions() -> None:
+    """An auth failure must keep its token guidance; the added route names
+    the config entry_id, since helper_type cannot name a helper like otp.
+    Adding it must not leak into the shared defaults every other tool's
+    errors are built from."""
+    failure = HomeAssistantAuthError("token expired")
+    classified = exception_to_structured_error(
+        failure, context={"target": "sensor.my_otp"}, raise_error=False
+    )["error"]["suggestions"]
+    assert classified
+    defaults = {code: list(hints) for code, hints in DEFAULT_SUGGESTIONS.items()}
+    client = _client(None)
+    client.send_websocket_message = AsyncMock(side_effect=failure)
+    with pytest.raises(ToolError) as exc_info:
+        await _remove(client, "sensor.my_otp")
+    suggestions = json.loads(str(exc_info.value))["error"]["suggestions"]
+    assert suggestions == [*classified, suggestions[-1]]
+    assert "config entry_id" in suggestions[-1]
+    assert defaults == DEFAULT_SUGGESTIONS

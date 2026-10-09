@@ -3,7 +3,11 @@
 import logging
 from typing import Any, Literal, NoReturn
 
-from ..client.rest_client import HomeAssistantAuthError, HomeAssistantConnectionError
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow import FLOW_HELPER_TYPES
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
@@ -21,7 +25,7 @@ FlowLookupReason = Literal[
     "wrong_helper_type",
     "bare_id_not_supported",
     "not_in_registry",
-    "platform_mismatch",
+    "not_registry_managed",
     "no_config_entry",
     "lookup_failed",
 ]
@@ -30,10 +34,15 @@ FlowLookupReason = Literal[
 async def _read_registry_entry(
     client: Any, entity_id: str, warnings: list[str] | None = None
 ) -> tuple[dict[str, Any] | None, FlowLookupReason]:
-    """Read ``entity_id``'s entity-registry entry; ``(None, reason)`` on failure.
+    """Read ``entity_id``'s entity-registry entry, or ``(None, reason)``.
 
-    HomeAssistantConnectionError and HomeAssistantAuthError propagate; the
-    caller's outer except chain converts them to structured errors.
+    ``reason`` is ``lookup_failed`` for an OSError/TimeoutError from the
+    WebSocket send. On Core's ``not_found`` the entity's state decides between
+    ``not_registry_managed`` and ``not_in_registry``. A ``success: false``
+    reply other than ``not_found``, and a reply without an entry, raise a
+    ToolError: neither proves the entity is absent. HomeAssistantConnectionError, HomeAssistantAuthError
+    and a non-404 HomeAssistantAPIError from the state read propagate to the
+    caller's except chain.
     """
     try:
         result = await client.send_websocket_message(
@@ -47,7 +56,7 @@ async def _read_registry_entry(
         # BrokenPipeError, TimeoutError, …). Programmer-bug-shape
         # exceptions (KeyError, AttributeError, TypeError) intentionally
         # propagate — the response is shape-checked at the dict guard
-        # below, and a raise here would otherwise mask the bug as a
+        # below, and catching them here would mask the bug as a
         # transient WEBSOCKET_DISCONNECTED.
         logger.debug(f"entity_registry/get failed for {entity_id}: {e}")
         if warnings is not None:
@@ -55,7 +64,7 @@ async def _read_registry_entry(
         return None, "lookup_failed"
 
     if not isinstance(result, dict):
-        return None, "not_in_registry"
+        _raise_unexpected_registry_reply(entity_id, result)
     if not result.get("success"):
         # Core answers an unknown entity with not_found; any other failure (a
         # proxy block, a malformed request) is no evidence of absence.
@@ -69,12 +78,68 @@ async def _read_registry_entry(
                     suggestions=result.get("suggestions"),
                 )
             )
-        return None, "not_in_registry"
+        return None, await _absence_reason(client, entity_id)
 
     entry = result.get("result")
     if not isinstance(entry, dict) or not entry:
-        return None, "not_in_registry"
+        _raise_unexpected_registry_reply(entity_id, entry)
     return entry, "ok"
+
+
+def _raise_unexpected_registry_reply(entity_id: str, reply: Any) -> NoReturn:
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            (
+                f"Reading the entity registry for {entity_id} returned no "
+                f"entry ({type(reply).__name__}). Nothing was deleted."
+            ),
+            context={"entity_id": entity_id},
+        )
+    )
+
+
+async def _absence_reason(client: Any, entity_id: str) -> FlowLookupReason:
+    """Tell an entity Core keeps no registry entry for from a missing one.
+
+    Core registers only entities with a ``unique_id``; one without it (a YAML
+    template sensor without unique_id, ``zone.home``) still has a state. A
+    state read failing with a status other than 404 propagates.
+    """
+    try:
+        state = await client.get_entity_state(entity_id)
+    except HomeAssistantAPIError as e:
+        if e.status_code != 404:
+            raise
+        state = None
+    return "not_registry_managed" if state else "not_in_registry"
+
+
+def raise_unregistered_entity_error(
+    target: str, helper_type: str | None, entity_id: str
+) -> NoReturn:
+    """Refuse an entity that has a state but no entity-registry entry."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            (
+                f"{entity_id} has a state but no entity registry entry, so it "
+                "is not managed through the registry and cannot be removed "
+                "here. Nothing was deleted."
+            ),
+            context={
+                "target": target,
+                "helper_type": helper_type,
+                "entity_id": entity_id,
+            },
+            suggestions=[
+                "Remove it where it is defined, e.g. delete it from its YAML "
+                "file and reload that integration.",
+                "Entities Home Assistant builds from its core configuration, "
+                "such as zone.home, cannot be removed.",
+            ],
+        )
+    )
 
 
 async def get_entry_id_for_flow_helper(
@@ -99,8 +164,15 @@ async def get_entry_id_for_flow_helper(
         Tuple of (config_entry_id, reason). On success: (entry_id, "ok").
         On failure: (None, reason) where reason discriminates the cause so
         the caller can produce an accurate error response without an extra
-        WebSocket round-trip; "platform_mismatch" means the entity belongs
-        to another integration than helper_type.
+        WebSocket round-trip.
+
+    Raises:
+        ToolError: the entity belongs to another integration than
+            helper_type, or the registry read failed for a reason other than
+            ``not_found``.
+        HomeAssistantConnectionError, HomeAssistantAuthError: propagated.
+        HomeAssistantAPIError: the state read that tells an unregistered
+            entity from a missing one failed with a status other than 404.
     """
     if helper_type not in FLOW_HELPER_TYPES:
         return None, "wrong_helper_type"
@@ -114,13 +186,43 @@ async def get_entry_id_for_flow_helper(
 
     # A helper's entities are registered under its own integration, so a
     # foreign platform means the config_entry_id belongs to another integration.
-    if entry.get("platform") != helper_type:
-        return None, "platform_mismatch"
+    platform = entry.get("platform")
+    if platform != helper_type:
+        _raise_platform_mismatch(target, helper_type, platform)
 
     config_entry_id = entry.get("config_entry_id")
     if not config_entry_id:
         return None, "no_config_entry"
     return config_entry_id, "ok"
+
+
+def _raise_platform_mismatch(target: str, helper_type: str, platform: Any) -> NoReturn:
+    """Refuse an explicit flow-helper type that the entity's registry
+    platform contradicts, naming the platform so the caller can tell whether
+    omitting helper_type can work."""
+    if platform in SIMPLE_HELPER_TYPES or platform in FLOW_HELPER_TYPES:
+        retry = f"Pass helper_type='{platform}', or omit helper_type."
+    else:
+        retry = (
+            f"Omit helper_type only if '{platform}' is a helper integration; "
+            "otherwise use ha_remove_entity() to remove just this entity, or "
+            "pass the integration's config entry_id as target."
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            (
+                f"{target} is not a {helper_type} helper: it belongs to the "
+                f"'{platform}' integration. Nothing was deleted."
+            ),
+            context={
+                "target": target,
+                "helper_type": helper_type,
+                "platform": platform,
+            },
+            suggestions=[retry],
+        )
+    )
 
 
 def raise_flow_helper_lookup_error(
@@ -136,32 +238,8 @@ def raise_flow_helper_lookup_error(
     told us everything we need.
     """
     entity_id = target if "." in target else f"{helper_type}.{target}"
-    if reason == "platform_mismatch":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                (
-                    f"{target} is not a {helper_type} helper: its registry "
-                    "entry belongs to another integration. Nothing was "
-                    "deleted."
-                ),
-                context={
-                    "target": target,
-                    "helper_type": helper_type,
-                    "entity_id": entity_id,
-                },
-                suggestions=[
-                    (
-                        "Omit helper_type: the entity's registry entry then "
-                        "identifies the helper."
-                    ),
-                    (
-                        "To delete an integration's config entry, pass its "
-                        "entry_id as target and omit helper_type."
-                    ),
-                ],
-            )
-        )
+    if reason == "not_registry_managed":
+        raise_unregistered_entity_error(target, helper_type, entity_id)
     if reason == "no_config_entry":
         raise_tool_error(
             create_error_response(
@@ -201,8 +279,8 @@ def raise_flow_helper_lookup_error(
     # assertion enforces that contract at runtime.
     assert reason != "wrong_helper_type"
     if reason == "not_in_registry":
-        # Target is absent from the entity registry. Surface
-        # as ENTITY_NOT_FOUND (entity-shaped target) so the
+        # Target is absent from the entity registry and has no
+        # state. Surface as ENTITY_NOT_FOUND (entity-shaped target) so the
         # caller learns the identifier is unusable — the typo
         # case is the failure mode "absent → success" would
         # silently mask. Matches the bare_id_not_supported

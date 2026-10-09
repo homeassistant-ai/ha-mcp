@@ -291,10 +291,16 @@ class TestRemoveHelpersIntegrations:
         # 1x direct-id delete returns success=False → falls through to
         #   fallback-2
         # 1x verify-registry returns success=False → registry confirms absent
+        # Registry replies carry Core's not_found code, as a real Core sends.
+        not_found = {
+            "success": False,
+            "error": "Entity not found",
+            "error_code": "not_found",
+        }
         mock_client.send_websocket_message.side_effect = (
-            [{"success": False, "error": "Entity not found"}] * 3
+            [not_found] * 3
             + [{"success": False, "error": "Unable to find input_button_id"}]
-            + [{"success": False, "error": "Entity not found"}]
+            + [not_found]
         )
         # State check raises 404 throughout — never-existed entity case
         mock_client.get_entity_state.side_effect = HomeAssistantAPIError(
@@ -417,11 +423,21 @@ class TestRemoveHelpersIntegrations:
         assert result.get("fallback_used") is None
         assert result["unique_id"] == "uid-disabled-apierror"
 
-    async def test_simple_path_all_fallbacks_exhausted(self, tools, mock_client):
-        """Registry empty + direct fails + state still present → ENTITY_NOT_FOUND."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": False, "error": "no entity"}
-        ] * 3 + [{"success": False, "error": "still no"}]
+    async def test_simple_path_failed_registry_read_is_not_reported_missing(
+        self, tools, mock_client
+    ):
+        """Registry read fails without Core's not_found + direct fails + state
+        still present: the entity exists and the registry absence is unproven,
+        so the read failure is reported, not ENTITY_NOT_FOUND, with the
+        guidance the failed reply carries (a proxy block names the proxy)."""
+        blocked = {
+            "success": False,
+            "error": "no entity",
+            "suggestions": ["Check the reverse proxy", "Allow the WebSocket path"],
+        }
+        mock_client.send_websocket_message.side_effect = [blocked] * 3 + [
+            {"success": False, "error": "still no"}
+        ]
         # State check ALWAYS returns a state → no fallback path catches it
         mock_client.get_entity_state.return_value = {"state": "off"}
 
@@ -433,7 +449,28 @@ class TestRemoveHelpersIntegrations:
                 wait=False,
             )
         err = json.loads(str(exc_info.value))
-        assert err["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "no entity" in err["error"]["message"]
+        assert err["error"]["suggestions"] == blocked["suggestions"]
+
+    async def test_simple_path_entity_without_registry_entry_is_not_missing(
+        self, tools, mock_client
+    ):
+        """zone.home has a state but no registry entry (no unique_id); Core
+        answers the registry read with not_found. It exists, so the caller
+        must learn it is configured elsewhere, not that it is missing."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": False, "error": "Entity not found", "error_code": "not_found"}
+        ] * 3 + [{"success": False, "error": "not found"}]
+        mock_client.get_entity_state.return_value = {"state": "zoning"}
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_remove_helpers_integrations(
+                target="zone.home", helper_type="zone", confirm=True, wait=False
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "no entity registry entry" in err["error"]["message"]
 
     async def test_simple_path_ws_delete_fails(self, tools, mock_client):
         """unique_id found, but {type}/delete returns success=False
@@ -567,13 +604,14 @@ class TestRemoveHelpersIntegrations:
 
     async def test_flow_path_entity_not_in_registry_raises(self, tools, mock_client):
         """Path 2 not_in_registry: target FLOW entity_id confirmed absent
-        from the entity registry → raises ENTITY_NOT_FOUND (entity-shape
+        from the entity registry and the state machine → raises ENTITY_NOT_FOUND (entity-shape
         target). Matches the existing bare_id_not_supported branch and
         sibling ha_remove_entity.
         """
         mock_client.send_websocket_message.side_effect = [
             {"success": False, "error": "Entity not found", "error_code": "not_found"},
         ]
+        mock_client.get_entity_state.return_value = None
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
                 target="template.ghost",
