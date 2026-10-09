@@ -76,9 +76,11 @@ async def test_flow_helper_cancellation_propagates():
     """
     tools = _make_tools()
     tools.client._request = AsyncMock(
-        return_value=[{"entry_id": "1"}, {"entry_id": "2"}]
+        return_value=[
+            {"entry_id": "1", "domain": "template", "supports_options": True},
+            {"entry_id": "2", "domain": "group", "supports_options": True},
+        ]
     )
-    tools._is_flow_helper_entry = lambda _entry: True
     tools._score_flow_entry = AsyncMock(
         side_effect=[(None, False), asyncio.CancelledError()]
     )

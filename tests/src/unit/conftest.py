@@ -226,6 +226,29 @@ def _core_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _server_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer the server's ``flow_handlers?type=helper`` read with the stubbed list.
+
+    The helper tools read Core's helper flows at call time
+    (``helper_flows.helper_flow_types``) through the REST client, which unit
+    tests mock per test. This answers with the ``FLOWS["helper"]`` stub above and
+    starts every test with an empty per-client cache. A test that needs another
+    list patches ``_fetch_helper_flow_types`` again.
+    """
+    from unittest.mock import AsyncMock
+
+    from ha_mcp.tools import helper_flows
+
+    flows = sys.modules["homeassistant.generated.config_flows"].FLOWS["helper"]
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=frozenset(flows)),
+    )
+    helper_flows._CACHE.clear()
+
+
 @pytest.fixture
 def real_probatio():
     """The installed probatio, past the stub this tier installs for it.

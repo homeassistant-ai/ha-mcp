@@ -19,11 +19,11 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
-from ..config_entry_flow import FLOW_HELPER_TYPES, config_entry_of_domain
+from ..config_entry_flow import config_entry_of_domain
 from ..config_entry_flow_introspect import fetch_helper_flow_info, menu_choices
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .listing import listed_items
-from .schemas import SIMPLE_HELPER_SCHEMAS
+from .schemas import SIMPLE_HELPER_SCHEMAS, SIMPLE_HELPER_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -373,7 +373,8 @@ async def describe_helper(
     flow helper (read via its options flow), or the storage id / entity_id
     for a storage helper.
     """
-    if helper_type in FLOW_HELPER_TYPES:
+    # ha_config_list_helpers checked the type: not storage means a helper flow.
+    if helper_type not in SIMPLE_HELPER_TYPES:
         described = await _describe_flow(client, helper_type, menu_choice, helper_id)
     else:
         if menu_choice:

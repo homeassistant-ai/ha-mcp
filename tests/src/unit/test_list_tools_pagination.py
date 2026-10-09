@@ -26,7 +26,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from ha_mcp.tools import component_api, tools_config_helpers
-from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
 from ha_mcp.tools.config_helpers import listing as helper_listing
 from ha_mcp.tools.config_helpers import registry as helper_registry
 from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
@@ -35,6 +34,7 @@ from ha_mcp.tools.tools_groups import GroupTools
 from ha_mcp.tools.tools_resources import ResourceTools
 
 from ._component_routing_helpers import make_ws, patch_ws
+from ._stub_helper_flows import STUB_HELPER_FLOWS
 
 _PAGINATION_KEYS = {
     "total_count",
@@ -448,7 +448,7 @@ class TestListHelpersPagination:
                 for i in range(120)
             ],
             "count": 120,
-            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | FLOW_HELPER_TYPES),
+            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | STUB_HELPER_FLOWS),
         }
         caps = {
             "schema_version": 1,
@@ -504,7 +504,7 @@ class TestListHelpersPagination:
         component_result = {
             "helpers": [],
             "count": 0,
-            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | FLOW_HELPER_TYPES),
+            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | STUB_HELPER_FLOWS),
         }
 
         class _MalformedTagClient:
@@ -549,7 +549,7 @@ class TestListHelpersPagination:
                 for i in range(120)
             ],
             "count": 120,
-            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | FLOW_HELPER_TYPES),
+            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | STUB_HELPER_FLOWS),
         }
         caps = {
             "schema_version": 1,

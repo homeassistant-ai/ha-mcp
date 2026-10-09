@@ -1406,16 +1406,6 @@ class TestHelpers:
             assert marker in json.dumps(flow[0]["options"])
 
 
-def test_flow_helper_domains_cover_server_flow_helper_types():
-    """The conftest FLOWS["helper"] stub must hold every server FLOW_HELPER_TYPES
-    entry, as a live Core must for the all-types listing; no test checks that
-    against a live Core."""
-    from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
-
-    missing = set(FLOW_HELPER_TYPES) - wsapi.FLOW_HELPER_DOMAINS
-    assert not missing, f"component FLOW_HELPER_DOMAINS misses server types: {missing}"
-
-
 # =============================================================================
 # secret scrub — resolved !secret plaintext is BLOCKED from the match corpus
 # =============================================================================

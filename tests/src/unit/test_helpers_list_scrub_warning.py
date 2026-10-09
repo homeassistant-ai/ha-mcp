@@ -7,9 +7,10 @@ from typing import Any
 
 import pytest
 
-from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
 from ha_mcp.tools.config_helpers import listing as helper_listing
 from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
+
+from ._stub_helper_flows import STUB_HELPER_FLOWS
 
 _SCRUB = helper_listing._SCRUB_DEGRADED_WARNING
 _FLOWS = helper_listing._FLOWS_DEGRADED_WARNING
@@ -33,7 +34,7 @@ def _result(**flags: bool) -> dict[str, Any]:
             },
             dict(_CUSTOM),
         ],
-        "covered_types": sorted(FLOW_HELPER_TYPES | SIMPLE_HELPER_TYPES),
+        "covered_types": sorted(STUB_HELPER_FLOWS | SIMPLE_HELPER_TYPES),
         **flags,
     }
 
@@ -75,7 +76,7 @@ async def test_all_types_listing_warns_when_the_flow_helper_read_degraded(
     flags: dict[str, bool], warnings: list[str]
 ) -> None:
     response = await helper_listing.shape_all_helpers_response(
-        _result(**flags), _no_legacy
+        _result(**flags), _no_legacy, flow_types=STUB_HELPER_FLOWS
     )
     assert response.get("warnings", []) == warnings
 
@@ -83,7 +84,9 @@ async def test_all_types_listing_warns_when_the_flow_helper_read_degraded(
 @pytest.mark.asyncio
 async def test_all_types_listing_marks_a_custom_helper_as_withheld_not_empty() -> None:
     """An agent must be able to tell withheld options from a helper without any."""
-    response = await helper_listing.shape_all_helpers_response(_result(), _no_legacy)
+    response = await helper_listing.shape_all_helpers_response(
+        _result(), _no_legacy, flow_types=STUB_HELPER_FLOWS
+    )
     by_type = {h["helper_type"]: h for h in response["helpers"]}
     assert by_type["my_helper"] == {
         "helper_type": "my_helper",

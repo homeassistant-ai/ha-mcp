@@ -7,13 +7,14 @@ integrations (config entries) via the REST and WebSocket APIs.
 
 import asyncio
 import logging
-from typing import Annotated, Any, Literal, NoReturn, cast, get_args
+from typing import Annotated, Any, Literal, NoReturn
 
 from pydantic import Field
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
+from ..backup_manager import _is_flow_helper_domain
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -46,14 +47,10 @@ from .config_entry_backup import (
     resolve_config_entry_backup_domain,
     skip_unless_flow_helper,
 )
-from .config_entry_flow import (
-    FLOW_HELPER_TYPES,
-    create_config_entry,
-    update_config_entry_options,
-)
+from .config_entry_flow import create_config_entry, update_config_entry_options
 from .config_entry_flow_form import iter_schema_fields
 from .config_helpers.registry import _get_entities_for_config_entry
-from .config_helpers.schemas import SIMPLE_HELPER_TYPES
+from .config_helpers.schemas import SIMPLE_HELPER_TYPES, StorageHelperType
 from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
 from .flow_helper_lookup import (
     YAML_HELPER_REMOVAL,
@@ -63,6 +60,7 @@ from .flow_helper_lookup import (
     raise_unregistered_entity_error,
     resolve_helper_entity,
 )
+from .helper_flows import helper_flow_types
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -100,9 +98,9 @@ def _skip_removal_capture(kwargs: dict[str, Any]) -> bool:
     entity_id by the resolved call (_remove_resolved_helper, which again
     defers a FLOW type to _delete_resolved_flow_helper)."""
     helper_type = kwargs.get("helper_type")
-    return helper_type in FLOW_HELPER_TYPES or (
-        helper_type is None and "." in str(kwargs.get("target", ""))
-    )
+    if helper_type is None:
+        return "." in str(kwargs.get("target", ""))
+    return _is_flow_helper_domain(f"helper_{helper_type}")
 
 
 def _raise_registry_read_failure(
@@ -164,51 +162,9 @@ def _reject_set_integration_mode_conflicts(
 WS_CONFIG_ENTRIES = "ha_mcp_tools/config_entries"
 
 
-# Tool parameter type for ha_remove_helpers_integrations.helper_type.
-# Must match SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES plus config_subentry —
-# the drift assertion below catches accidental divergence at import time.
-HelperTypeLiteral = Literal[
-    # 12 SIMPLE
-    "input_button",
-    "input_boolean",
-    "input_select",
-    "input_number",
-    "input_text",
-    "input_datetime",
-    "counter",
-    "timer",
-    "schedule",
-    "zone",
-    "person",
-    "tag",
-    # config-entry subentries
-    "config_subentry",
-    # 17 FLOW
-    "template",
-    "group",
-    "utility_meter",
-    "derivative",
-    "min_max",
-    "threshold",
-    "integration",
-    "statistics",
-    "trend",
-    "random",
-    "filter",
-    "tod",
-    "generic_thermostat",
-    "switch_as_x",
-    "generic_hygrostat",
-    "history_stats",
-    "mold_indicator",
-]
-assert set(get_args(HelperTypeLiteral)) == (
-    SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES | {"config_subentry"}
-), (
-    "HelperTypeLiteral drifted from SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES "
-    "| {'config_subentry'} — "
-    "update the inline list to match."
-)
+# ha_remove_helpers_integrations.helper_type: a storage helper type,
+# "config_subentry", or one of Core's helper flows, checked at call time.
+HelperTypeLiteral = StorageHelperType | Literal["config_subentry"] | str
 
 
 def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
@@ -2171,7 +2127,9 @@ class IntegrationTools:
             HelperTypeLiteral | None,
             Field(
                 description=(
-                    "Helper type. Required when target is a bare helper_id. "
+                    "Helper type: a storage helper (input_boolean, counter, "
+                    "...), or a helper flow Home Assistant lists (template, "
+                    "group, ...). Required when target is a bare helper_id. "
                     "Omit when target is a config entry_id to remove any "
                     "integration. Use 'config_subentry' to remove a config "
                     "subentry under target."
@@ -2226,18 +2184,16 @@ class IntegrationTools:
         - SIMPLE helper_type (input_button, input_boolean, input_select,
           input_number, input_text, input_datetime, counter, timer, schedule,
           zone, person, tag) + bare helper_id or entity_id → websocket delete.
-        - FLOW helper_type (template, group, utility_meter, derivative, min_max,
-          threshold, integration, statistics, trend, random, filter, tod,
-          generic_thermostat, switch_as_x, generic_hygrostat, history_stats,
-          mold_indicator) + full entity_id → resolve entity_id to
+        - FLOW helper_type (any helper flow Home Assistant lists: template, group,
+          utility_meter, derivative, ...; custom helper integrations too)
+          + full entity_id → resolve entity_id to
           config_entry_id via entity_registry, then delete the config entry. All
           sub-entities (e.g. utility_meter tariffs) are removed together. An
           entity registered by another integration is refused with
           VALIDATION_INVALID_PARAMETER and nothing is deleted.
         - helper_type=None + entity_id → the entity's registry entry names its
-          helper, including helpers ha_config_set_helper cannot create (otp,
-          custom-integration helpers); an entity of any other integration is
-          refused with VALIDATION_INVALID_PARAMETER.
+          helper (storage type or helper flow); an entity of any other
+          integration is refused with VALIDATION_INVALID_PARAMETER.
         - helper_type=None + entry_id → direct config entry delete (any
           integration).
         - helper_type="config_subentry" + parent entry_id + subentry_id →
@@ -2341,13 +2297,13 @@ class IntegrationTools:
             # Path 1: SIMPLE helper via websocket delete
             return await self._delete_simple_helper(helper_type, target, wait_bool)
 
-        if helper_type in FLOW_HELPER_TYPES:
+        if helper_type in await helper_flow_types(self._client):
             # Path 2: FLOW helper via entity_id → config_entry_id lookup
             return await self._delete_flow_helper(
                 helper_type, target, wait_bool, warnings
             )
 
-        # Should be unreachable due to Literal type — defensive fallback
+        # Neither a storage helper nor one of Core's helper flows.
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -2386,9 +2342,7 @@ class IntegrationTools:
     ) -> tuple[HelperTypeLiteral | None, str]:
         """Map an entity_id to the (helper_type, target) that removes its helper."""
         try:
-            helper_type, target = await resolve_helper_entity(self._client, entity_id)
-            # resolve_helper_entity returns a SIMPLE or FLOW type, or None.
-            return cast("HelperTypeLiteral | None", helper_type), target
+            return await resolve_helper_entity(self._client, entity_id)
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001

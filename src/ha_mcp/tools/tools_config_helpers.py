@@ -30,10 +30,6 @@ from .component_api import (
     is_unknown_command,
 )
 from .config_entry_backup import helper_backup_id
-from .config_entry_flow import (
-    FLOW_HELPER_TYPES,
-    SUPPORTED_HELPERS,
-)
 from .config_helpers.core_payload import core_fields
 from .config_helpers.create import _execute_create_simple_helper
 from .config_helpers.describe import describe_helper_response
@@ -54,6 +50,8 @@ from .config_helpers.registry import (
 )
 from .config_helpers.schemas import (
     _SIMPLE_CONFIG_KEYS_DESCRIPTION,
+    SIMPLE_HELPER_TYPES,
+    StorageHelperType,
     _attach_helper_skill,
 )
 from .config_helpers.typed_config import _core_schema_context, _prepare_typed_params
@@ -63,6 +61,7 @@ from .config_write_helpers import (
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
 )
+from .helper_flows import helper_flow_types, require_helper_type
 from .helpers import (
     HIDDEN_PARAM,
     clear_or_keep,
@@ -91,28 +90,15 @@ class HelperConfigTools:
     async def ha_config_list_helpers(
         self,
         helper_type: Annotated[
-            Literal[
-                "input_button",
-                "input_boolean",
-                "input_select",
-                "input_number",
-                "input_text",
-                "input_datetime",
-                "counter",
-                "timer",
-                "schedule",
-                "zone",
-                "person",
-                "tag",
-                "all",
-            ]
-            | SUPPORTED_HELPERS,
+            StorageHelperType | Literal["all"] | str,
             Field(
                 description=(
-                    "Helper type to list. Storage types are listed on all "
-                    "installs; flow-based types require the ha_mcp_tools "
-                    "custom component. Pass 'all' to list every helper type in "
-                    "one call (also requires the ha_mcp_tools component)."
+                    "Helper type to list: a storage type (input_boolean, "
+                    "counter, timer, ...), a helper flow Home Assistant lists "
+                    "(template, group, utility_meter, ...), or 'all' for every "
+                    "type in one call. Storage types are listed on all "
+                    "installs; flow types and 'all' require the ha_mcp_tools "
+                    "custom component."
                 )
             ),
         ],
@@ -208,6 +194,7 @@ class HelperConfigTools:
 
         For detailed helper documentation, use ha_get_skill_guide.
         """
+        await require_helper_type(self._client, helper_type, "all")
         if describe or menu_choice is not None or helper_id is not None:
             return await describe_helper_response(
                 self._client, helper_type, menu_choice, helper_id, describe=describe
@@ -224,7 +211,7 @@ class HelperConfigTools:
         # component's ``helpers_list`` can enumerate them: they are served
         # exclusively through the component path (never the legacy body, never a
         # silent empty). Storage/collection types keep the legacy fallback.
-        is_flow = helper_type in FLOW_HELPER_TYPES
+        is_flow = helper_type not in SIMPLE_HELPER_TYPES
 
         # Prefer the custom component's in-process listing when it advertises
         # the capability: one WS round-trip that joins the entity registry, so
@@ -494,7 +481,9 @@ class HelperConfigTools:
             logger.warning("ha_mcp_tools/helpers_list (all) failed: %r", exc)
             return None
         return await shape_all_helpers_response(
-            raw.get("result") or {}, self._legacy_helper_list
+            raw.get("result") or {},
+            self._legacy_helper_list,
+            flow_types=await helper_flow_types(self._client),
         )
 
     async def _send_component_all_helpers(self) -> dict[str, Any]:
@@ -532,39 +521,14 @@ class HelperConfigTools:
     async def ha_config_set_helper(
         self,
         helper_type: Annotated[
-            Literal[
-                "counter",
-                "config_subentry",
-                "derivative",
-                "filter",
-                "generic_hygrostat",
-                "generic_thermostat",
-                "group",
-                "history_stats",
-                "input_boolean",
-                "input_button",
-                "input_datetime",
-                "input_number",
-                "input_select",
-                "input_text",
-                "integration",
-                "min_max",
-                "mold_indicator",
-                "person",
-                "random",
-                "schedule",
-                "statistics",
-                "switch_as_x",
-                "tag",
-                "template",
-                "threshold",
-                "timer",
-                "tod",
-                "trend",
-                "utility_meter",
-                "zone",
-            ],
-            Field(description="Type of helper entity to create or update"),
+            StorageHelperType | Literal["config_subentry"] | str,
+            Field(
+                description=(
+                    "Type of helper to create or update: a storage type "
+                    "(input_boolean, counter, timer, ...), 'config_subentry', or "
+                    "a helper flow Home Assistant lists (template, group, ...)."
+                )
+            ),
         ],
         name: Annotated[
             str | None,
@@ -779,10 +743,10 @@ class HelperConfigTools:
         input_select, input_number, input_text, input_datetime, counter, timer, schedule,
         zone, person, tag. Create requires `name`; update requires `helper_id`.
 
-        FLOW types (pass `config` dict, Config Entry Flow API): template, group,
-        utility_meter, derivative, min_max, threshold, integration, statistics, trend,
-        random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat,
-        history_stats, mold_indicator. Create requires `name`; for updates pass the
+        FLOW types (pass `config` dict, Config Entry Flow API): every helper flow
+        Home Assistant lists, read from it at call time — template, group,
+        utility_meter, derivative, min_max, threshold, integration, statistics,
+        trend, ... and custom helper integrations. Create requires `name`; for updates pass the
         existing entry_id as `helper_id` (options flows reject the `name` key).
         `otp` is not offered here: the user sets it up in the HA UI, since its
         secret is a credential they enroll in an authenticator app.
@@ -829,6 +793,7 @@ class HelperConfigTools:
                     MandatoryBPS,
                 )
 
+            await require_helper_type(self._client, helper_type)
             action = await _validate_set_helper_action(
                 self._client, action, helper_id, helper_type
             )  # type: ignore[assignment]
@@ -871,7 +836,7 @@ class HelperConfigTools:
                 if action == "create":
                     await _check_name_collision(self._client, helper_type, name)
 
-                if helper_type in FLOW_HELPER_TYPES:
+                if helper_type not in SIMPLE_HELPER_TYPES:
                     flow_response = await _handle_flow_helper(
                         self._client,
                         helper_type,

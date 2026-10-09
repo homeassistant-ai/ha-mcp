@@ -8,6 +8,7 @@ like ha_config_set_helper does (#2632).
 from typing import Any
 
 from ..backup_manager import _is_flow_helper_domain
+from .helper_flows import helper_flow_types
 
 
 def helper_backup_id(kwargs: dict[str, Any]) -> str:
@@ -34,6 +35,8 @@ def flow_helper_backup_domain(kwargs: dict[str, Any]) -> str:
 
 
 def skip_unless_flow_helper(kwargs: dict[str, Any]) -> bool:
+    if not kwargs.get("helper_type"):
+        return True
     return not _is_flow_helper_domain(flow_helper_backup_domain(kwargs))
 
 
@@ -51,6 +54,9 @@ async def resolve_config_entry_backup_domain(
     if not (edits_options or deletes_entry):
         # Enable/disable restores must retain the integration's disabled flag.
         return domain
+    # The entry's domain can be any integration, so it is checked against Core's
+    # helper flows rather than inferred from the snapshot-domain shape.
     entry = await client.get_config_entry(entry_id)
-    helper_domain = f"helper_{entry.get('domain')}"
-    return helper_domain if _is_flow_helper_domain(helper_domain) else domain
+    if entry.get("domain") in await helper_flow_types(client):
+        return f"helper_{entry.get('domain')}"
+    return domain

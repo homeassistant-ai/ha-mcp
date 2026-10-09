@@ -43,8 +43,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, tools_config_helpers
-from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
+from ha_mcp.tools import component_api, helper_flows, tools_config_helpers
 from ha_mcp.tools.config_helpers import registry as helper_registry
 from ha_mcp.tools.config_helpers.listing import _shape_collection_helper_record
 from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
@@ -55,6 +54,7 @@ from ._component_routing_helpers import (
     patch_ws,
     patch_ws_establish_failure,
 )
+from ._stub_helper_flows import STUB_HELPER_FLOWS
 
 # person is the one storage type whose {type}/list does not return a flat list:
 # HA's PersonStorageCollectionWebsocket overrides the base ws_list_item to send
@@ -410,7 +410,7 @@ async def test_all_types_merge_surfaces_legacy_enrichment_warning() -> None:
     ``_legacy_helper_list("tag")``; its registry read then fails, and the
     degrade-open warning must reach the merged response rather than vanish.
     """
-    covered = sorted((SIMPLE_HELPER_TYPES - {"tag"}) | FLOW_HELPER_TYPES)
+    covered = sorted((SIMPLE_HELPER_TYPES - {"tag"}) | STUB_HELPER_FLOWS)
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
@@ -751,7 +751,7 @@ def _component_all_result() -> dict[str, Any]:
             },
         ],
         "count": 2,
-        "covered_types": sorted((SIMPLE_HELPER_TYPES - {"tag"}) | FLOW_HELPER_TYPES),
+        "covered_types": sorted((SIMPLE_HELPER_TYPES - {"tag"}) | STUB_HELPER_FLOWS),
     }
 
 
@@ -789,6 +789,31 @@ async def test_all_types_via_component_returns_merged_listing() -> None:
     (call,) = _helpers_calls(ws)
     assert "helper_types" not in call.kwargs
     assert call.kwargs["include_flow_helpers"] is True
+
+
+@pytest.mark.asyncio
+async def test_all_types_refuses_a_listing_that_misses_a_custom_helper_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A helper flow Core lists but the component did not cover (an older
+    component without custom helpers) -> hard error, not a partial listing."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=STUB_HELPER_FLOWS | {"my_custom_helper"}),
+    )
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_all_result(),
+    )
+    list_helpers = _build_list_helpers(RoutingClient())
+
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
+        await list_helpers(helper_type="all")
+
+    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert "my_custom_helper" in str(excinfo.value)
 
 
 @pytest.mark.asyncio

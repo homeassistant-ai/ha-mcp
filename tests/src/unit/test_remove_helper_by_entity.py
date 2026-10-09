@@ -16,9 +16,12 @@ from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAuthError
 from ha_mcp.errors import DEFAULT_SUGGESTIONS
-from ha_mcp.tools import auto_backup
+from ha_mcp.tools import auto_backup, helper_flows
 from ha_mcp.tools.helpers import exception_to_structured_error
 from ha_mcp.tools.tools_integrations import IntegrationTools
+
+# The real Core read, kept before conftest's autouse fixture replaces it.
+_REAL_FETCH = helper_flows._fetch_helper_flow_types
 
 # What Core's GET /api/config/config_entries/flow_handlers?type=helper returns:
 # its helper flows plus custom integrations of integration_type "helper".
@@ -105,9 +108,9 @@ async def test_flow_helper_is_removed_without_naming_its_type() -> None:
     client.delete_config_entry.assert_awaited_once_with("um_entry")
 
 
-async def test_helper_that_only_core_lists_is_removed_by_its_entity() -> None:
-    """otp (and custom-integration helpers) are helpers in Core's list but not
-    flow types ha-mcp can create, so the entity alone must still remove them."""
+async def test_otp_is_removed_by_its_entity_like_any_helper_flow() -> None:
+    """otp and custom helper integrations are helper flows in Core's list, so
+    the entity alone removes them through the flow path."""
     client = _client(
         {
             "entity_id": "sensor.my_otp",
@@ -116,7 +119,7 @@ async def test_helper_that_only_core_lists_is_removed_by_its_entity() -> None:
         }
     )
     result = await _remove(client, "sensor.my_otp")
-    assert result["resolved_from"] == "sensor.my_otp"
+    assert result["helper_type"] == "otp"
     client.delete_config_entry.assert_awaited_once_with("otp_entry")
 
 
@@ -149,8 +152,11 @@ async def test_unconfirmed_entity_only_call_deletes_nothing() -> None:
     assert code == "VALIDATION_INVALID_PARAMETER"
 
 
-async def test_unreadable_helper_list_is_a_connection_error_not_a_refusal() -> None:
+async def test_unreadable_helper_list_is_a_connection_error_not_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An unparseable flow_handlers reply must not read as 'not a helper'."""
+    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", _REAL_FETCH)
     client = _client(
         {"entity_id": "sensor.my_otp", "platform": "otp", "config_entry_id": "e"},
         helper_flow_domains={},
@@ -219,7 +225,7 @@ async def test_entity_route_logs_one_tool_call(
     [
         (
             {"entity_id": "sensor.my_otp", "platform": "otp", "config_entry_id": "e"},
-            ("integration", "e"),
+            ("helper_otp", "e"),
         ),
         (
             {
@@ -231,7 +237,7 @@ async def test_entity_route_logs_one_tool_call(
             ("helper_input_boolean", "input_boolean.guest_mode"),
         ),
     ],
-    ids=["core_listed", "storage"],
+    ids=["flow", "storage"],
 )
 async def test_entity_route_backs_up_the_resolved_helper_before_deleting(
     registry_row: dict[str, Any],
@@ -239,9 +245,8 @@ async def test_entity_route_backs_up_the_resolved_helper_before_deleting(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """A helper the flow path does not back up, removed by its entity_id, must
-    stay restorable: one snapshot of the resolved helper, taken before the
-    delete."""
+    """A helper removed by its entity_id gets one snapshot of the resolved
+    helper, taken before the delete."""
     client = _client(registry_row)
     client.get_config_entry = AsyncMock(return_value={"domain": "otp"})
     taken: list[tuple[str, str, int]] = []

@@ -11,7 +11,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ...client.rest_client import NON_ADMIN_TOKEN_WARNING, HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
 from ..component_api import component_supports, get_component_caps
-from ..config_entry_flow import FLOW_HELPER_TYPES
+from ..helper_flows import helper_flow_types
 from ..helpers import exception_to_structured_error, safe_progress
 from ..tools_config_dashboards import (
     _dashboards_via_component,
@@ -1588,6 +1588,7 @@ class DeepSearchMixin(SceneSearchMixin):
         """
         try:
             response = await self.client._request("GET", "/config/config_entries/entry")
+            flows = await helper_flow_types(self.client)
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"flow-helper search: list_entries failed: {exc}")
             return [], 1
@@ -1599,7 +1600,14 @@ class DeepSearchMixin(SceneSearchMixin):
             )
             return [], 1
 
-        flow_entries = [e for e in response if self._is_flow_helper_entry(e)]
+        # Options-flow config entries of a helper flow: only those have a body.
+        flow_entries = [
+            e
+            for e in response
+            if isinstance(e, dict)
+            and e.get("domain") in flows
+            and e.get("supports_options")
+        ]
         if not flow_entries:
             return [], 0
 
@@ -1633,15 +1641,6 @@ class DeepSearchMixin(SceneSearchMixin):
                 # One bad entry must not sink the whole multi-source deep_search.
                 logger.warning(f"flow-helper scoring failed: {item!r}")
         return out, probe_failures
-
-    @staticmethod
-    def _is_flow_helper_entry(entry: Any) -> bool:
-        """Return True for an options-flow config entry of a flow-helper domain."""
-        return (
-            isinstance(entry, dict)
-            and entry.get("domain") in FLOW_HELPER_TYPES
-            and bool(entry.get("supports_options"))
-        )
 
     async def _score_flow_entry(
         self,

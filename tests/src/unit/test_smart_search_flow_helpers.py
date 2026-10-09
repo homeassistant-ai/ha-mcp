@@ -183,6 +183,9 @@ class TestFlowHelperDeepSearch:
             include_config=False,
         )
         assert [r["entry_id"] for r in results] == ["01HXTEMPLATEAA"]
+        # The non-helper entry is not even probed for an options body.
+        probed = {c.args[0] for c in client.start_options_flow.await_args_list}
+        assert "01HXLIGHTHUE" not in probed
 
     async def test_skips_entries_without_supports_options(self) -> None:
         client = MagicMock()

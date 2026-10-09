@@ -5,7 +5,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
 from ...errors import ErrorCode, create_error_response
-from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..helpers import raise_tool_error
 from ..response_helpers import build_pagination_metadata
 from .schemas import SIMPLE_HELPER_TYPES
@@ -177,7 +176,7 @@ def _shape_component_helpers_response(
     """
     raw = result.get("helpers")
     records = raw if isinstance(raw, list) else []
-    want_flow = helper_type in FLOW_HELPER_TYPES
+    want_flow = helper_type not in SIMPLE_HELPER_TYPES
     helpers: list[dict[str, Any]] = []
     for rec in records:
         if not isinstance(rec, dict):
@@ -258,6 +257,8 @@ def _raise_all_requires_component() -> NoReturn:
 async def shape_all_helpers_response(
     result: dict[str, Any],
     legacy_list: Callable[[str], Awaitable[dict[str, Any]]],
+    *,
+    flow_types: frozenset[str],
 ) -> dict[str, Any]:
     """Map an all-types ``helpers_list`` result into the merged listing envelope.
 
@@ -290,7 +291,7 @@ async def shape_all_helpers_response(
     # component did not authoritatively cover one, a "successful" merged
     # listing would silently omit it. Mirror the single-type taxonomy:
     # hard error, never a partial inventory reported as complete.
-    uncovered_flow = sorted(FLOW_HELPER_TYPES - covered_set)
+    uncovered_flow = sorted(flow_types - covered_set)
     if uncovered_flow:
         raise_tool_error(
             create_error_response(

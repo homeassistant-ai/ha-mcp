@@ -9,8 +9,8 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
-from .config_entry_flow import FLOW_HELPER_TYPES
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
+from .helper_flows import helper_flow_types
 from .helpers import raise_tool_error, ws_failure_code
 
 logger = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ async def get_entry_id_for_flow_helper(
 
     Args:
         client: HomeAssistantClient instance.
-        helper_type: Flow-helper type (must be in FLOW_HELPER_TYPES).
+        helper_type: Flow-helper type (one of Core's helper flows).
         target: Full entity_id, e.g. "sensor.my_meter". Bare IDs not
             supported for flow helpers (caller must provide entity_id).
         warnings: Optional list — appended to on WebSocket failure.
@@ -178,7 +178,8 @@ async def get_entry_id_for_flow_helper(
         HomeAssistantAPIError: the state read that tells an unregistered
             entity from a missing one failed with a status other than 404.
     """
-    if helper_type not in FLOW_HELPER_TYPES:
+    flow_types = await helper_flow_types(client)
+    if helper_type not in flow_types:
         return None, "wrong_helper_type"
 
     if "." not in target:
@@ -192,7 +193,7 @@ async def get_entry_id_for_flow_helper(
     # foreign platform means the config_entry_id belongs to another integration.
     platform = entry.get("platform")
     if platform != helper_type:
-        _raise_platform_mismatch(target, helper_type, platform)
+        _raise_platform_mismatch(target, helper_type, platform, flow_types)
 
     config_entry_id = entry.get("config_entry_id")
     if not config_entry_id:
@@ -200,11 +201,13 @@ async def get_entry_id_for_flow_helper(
     return config_entry_id, "ok"
 
 
-def _raise_platform_mismatch(target: str, helper_type: str, platform: Any) -> NoReturn:
+def _raise_platform_mismatch(
+    target: str, helper_type: str, platform: Any, flow_types: frozenset[str]
+) -> NoReturn:
     """Refuse an explicit flow-helper type that the entity's registry
     platform contradicts, naming the platform so the caller can tell whether
     omitting helper_type can work."""
-    if platform in SIMPLE_HELPER_TYPES or platform in FLOW_HELPER_TYPES:
+    if platform in SIMPLE_HELPER_TYPES or platform in flow_types:
         retry = f"Pass helper_type='{platform}', or omit helper_type."
     else:
         retry = (
@@ -279,7 +282,7 @@ def raise_flow_helper_lookup_error(
             )
         )
     # wrong_helper_type cannot occur here because the dispatcher
-    # already checked SIMPLE_HELPER_TYPES / FLOW_HELPER_TYPES; the
+    # already checked the storage types and Core's helper flows; the
     # assertion enforces that contract at runtime.
     assert reason != "wrong_helper_type"
     if reason == "not_in_registry":
@@ -346,10 +349,10 @@ def raise_flow_helper_lookup_error(
 async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None, str]:
     """Return the ``(helper_type, target)`` that removes the helper behind ``entity_id``.
 
-    The registry ``platform`` names the integration that owns the entity. A
-    helper Core lists as a helper flow but not in FLOW_HELPER_TYPES (``otp``,
-    custom integrations) comes back as ``(None, config_entry_id)``: a direct
-    entry delete. An entity of any other integration is refused.
+    The registry ``platform`` names the integration that owns the entity: a
+    storage helper or one of Core's helper flows (custom helper integrations
+    included) is removed as that helper type; an entity of any other
+    integration is refused.
     """
     warnings: list[str] = []
     entry, reason = await _read_registry_entry(client, entity_id, warnings)
@@ -358,13 +361,8 @@ async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None
             reason, None, entity_id, detail="; ".join(warnings) or None
         )
     platform = entry.get("platform")
-    if platform in SIMPLE_HELPER_TYPES or platform in FLOW_HELPER_TYPES:
+    if platform in SIMPLE_HELPER_TYPES or platform in await helper_flow_types(client):
         return platform, entity_id
-    if platform in await _helper_flow_domains(client):
-        config_entry_id = entry.get("config_entry_id")
-        if not config_entry_id:
-            raise_flow_helper_lookup_error("no_config_entry", platform, entity_id)
-        return None, config_entry_id
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -383,18 +381,3 @@ async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None
         )
     )
     return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
-
-
-async def _helper_flow_domains(client: Any) -> frozenset[str]:
-    """Core's helper flows plus custom integrations of integration_type helper."""
-    domains = await client._request(
-        "GET", "/config/config_entries/flow_handlers", params={"type": "helper"}
-    )
-    # _request answers an unparseable body with {}; an empty set would refuse
-    # every helper outside the static lists as "not a helper".
-    if not isinstance(domains, list):
-        raise HomeAssistantConnectionError(
-            "flow_handlers returned an unexpected response shape: "
-            f"{type(domains).__name__}"
-        )
-    return frozenset(domains)

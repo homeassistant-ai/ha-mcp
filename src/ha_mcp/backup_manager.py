@@ -206,16 +206,20 @@ class _FlowHelperReadError(HomeAssistantError):
         self.reason = reason
 
 
-@functools.cache
-def _flow_helper_types() -> frozenset[str]:
-    from .tools.config_entry_flow import FLOW_HELPER_TYPES
-
-    return FLOW_HELPER_TYPES
-
-
 def _is_flow_helper_domain(domain: str) -> bool:
-    """A ``helper_<type>`` snapshot of a config-entry (flow) helper."""
-    return domain.startswith("helper_") and domain[7:] in _flow_helper_types()
+    """A ``helper_<type>`` snapshot domain of a config-entry (flow) helper.
+
+    Every ``helper_<type>`` domain is minted for a validated helper type, so one
+    that is neither a storage helper nor a config subentry is a flow helper; no
+    list of flow types is kept here. A domain derived from an arbitrary config
+    entry is checked against Core's helper flows instead
+    (``config_entry_backup.resolve_config_entry_backup_domain``).
+    """
+    helper_type = domain[7:] if domain.startswith("helper_") else None
+    return helper_type is not None and helper_type not in (
+        *_HELPER_LIST_TYPES,
+        "config_subentry",
+    )
 
 
 def _flow_failure_reason(step: str, error: BaseException) -> str:
@@ -626,7 +630,11 @@ class BackupManager:
         self._handlers[handler.domain] = handler
 
     def handler_for(self, domain: str) -> DomainHandler | None:
-        return self._handlers.get(domain)
+        handler = self._handlers.get(domain)
+        if handler is None and _is_flow_helper_domain(domain):
+            handler = _make_flow_helper_handler(domain[7:])
+            self.register(handler)
+        return handler
 
     def supported_domains(self) -> list[str]:
         """Return the sorted list of registered backup-domain keys.
@@ -636,7 +644,7 @@ class BackupManager:
         ``ha_manage_backup(scope='edits', action='create')`` handler
         when ``domain`` is unknown). Sorted for stable output.
         """
-        return sorted(self._handlers.keys())
+        return [*sorted(self._handlers.keys()), "helper_<flow helper type>"]
 
     # ----- capture -------------------------------------------------------
 
@@ -824,7 +832,7 @@ class BackupManager:
         if not entity_id:
             # Create-mode call with no ID yet — nothing to back up.
             return None
-        handler = self._handlers.get(domain)
+        handler = self.handler_for(domain)
         if handler is None:
             if mandatory:
                 raise MandatoryBackupError(
@@ -1457,7 +1465,7 @@ class BackupManager:
         domain = data["domain"]
         entity_id = data["entity_id"]
         config = data["config"]
-        handler = self._handlers.get(domain)
+        handler = self.handler_for(domain)
         if handler is None:
             raise BackupRestoreError(
                 f"No restore handler registered for domain {domain!r}",
@@ -1582,7 +1590,7 @@ class BackupManager:
                 data["entity_id"], data["config"], _flow_type(domain)
             )
             data["entity_id"] = snapshot["entry_id"]
-        handler = self._handlers.get(domain)
+        handler = self.handler_for(domain)
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
         current = await handler.fetch(self._client, data["entity_id"])
@@ -3126,9 +3134,14 @@ def _flow_options(config: Any, helper_type: str) -> dict[str, Any]:
     from .redaction import sentinel_option_keys
 
     label = _flow_label(helper_type)
-    if not isinstance(config, dict) or not config:
+    if not isinstance(config, dict):
         raise _FlowHelperReadError(
-            f"{label} helper options must be a non-empty object", "invalid_options"
+            f"{label} helper options must be an object", "invalid_options"
+        )
+    if not config:
+        raise _FlowHelperReadError(
+            f"{label} helper has no stored options, so it cannot be backed up",
+            "invalid_options",
         )
     # The component's resolved-!secret scrub predates the server sentinels.
     # Neither kind of placeholder is a usable recovery value.
@@ -3203,6 +3216,12 @@ async def _fetch_flow_helper(client: Any, entity_id: str, helper_type: str) -> A
     if matches:
         record = matches[0]
         entry_id = record["entry_id"]
+        if record.get("options_withheld"):
+            raise _FlowHelperReadError(
+                f"{_flow_label(helper_type)} helper belongs to a custom integration "
+                "whose options the component withholds, so it cannot be backed up",
+                "options_withheld",
+            )
         registry = await _entity_registry_rows(client)
         return {
             "entry_id": entry_id,
@@ -3899,7 +3918,7 @@ def _make_helper_handler(helper_type: str) -> DomainHandler:
 
 # The storage-collection helper types, snapshotted as ``helper_<type>`` through
 # ``<type>/list`` and restored through ``<type>/update``. Flow helpers (config
-# entries) are registered separately from ``_flow_helper_types()``.
+# entries) get their handler on first use (``BackupManager.handler_for``).
 _KNOWN_HELPER_TYPES = sorted(_HELPER_LIST_TYPES)
 
 
@@ -3939,8 +3958,6 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
         mgr.register(_make_blueprint_handler(blueprint_domain))
     for helper_type in _KNOWN_HELPER_TYPES:
         mgr.register(_make_helper_handler(helper_type))
-    for helper_type in sorted(_flow_helper_types()):
-        mgr.register(_make_flow_helper_handler(helper_type))
     mgr.register(
         DomainHandler(
             "helper_config_subentry", _fetch_config_subentry, _restore_config_subentry

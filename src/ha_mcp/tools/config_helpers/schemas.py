@@ -1,13 +1,14 @@
 """Helper type constants, per-type field schemas and the helper response shape."""
 
 from contextvars import ContextVar
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict, get_args
 
 from ..config_write_helpers import attach_skill_content
 
 __all__ = [
     "SIMPLE_HELPER_SCHEMAS",
     "SIMPLE_HELPER_TYPES",
+    "StorageHelperType",
     "_HELPER_SKILL_FILES",
     "_SIMPLE_CONFIG_KEYS_DESCRIPTION",
     "HelperResponse",
@@ -40,7 +41,7 @@ def _attach_helper_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
 
 
 # Simple helper types — managed via {type}/create and {type}/update WebSocket APIs
-# (not Config Entry Flow). Kept in parallel with FLOW_HELPER_TYPES for routing.
+# (not Config Entry Flow); every other helper type is one of Core's helper flows.
 SIMPLE_HELPER_TYPES: frozenset[str] = frozenset(
     {
         "input_button",
@@ -58,6 +59,24 @@ SIMPLE_HELPER_TYPES: frozenset[str] = frozenset(
     }
 )
 
+
+# The storage types as a schema enum, so the helper tools' schemas spell them
+# out; helper flows are any further string, checked against Core at call time.
+StorageHelperType = Literal[
+    "input_button",
+    "input_boolean",
+    "input_select",
+    "input_number",
+    "input_text",
+    "input_datetime",
+    "counter",
+    "timer",
+    "schedule",
+    "zone",
+    "person",
+    "tag",
+]
+assert set(get_args(StorageHelperType)) == SIMPLE_HELPER_TYPES
 
 # Stateful HA input helpers skip last-state restore when `initial` is stored in config
 # (including false/0). See input_boolean/input_number async_added_to_hass in HA core.
