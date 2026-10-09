@@ -138,7 +138,7 @@ async def test_flow_delete_finds_all_subentities_via_real_component(
     dumped."""
     monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: _multi_entity_view())
     ws = _real_component_ws(FakeHass())
-    # Step 1 (_get_entry_id_for_flow_helper) stays legacy: one targeted get.
+    # Step 1 (get_entry_id_for_flow_helper) stays legacy: one targeted get.
     client = _ContractClient(
         get_result={
             "success": True,

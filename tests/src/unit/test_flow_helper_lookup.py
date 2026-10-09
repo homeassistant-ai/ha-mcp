@@ -9,7 +9,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.flow_helper_lookup import _get_entry_id_for_flow_helper
+from ha_mcp.tools.flow_helper_lookup import get_entry_id_for_flow_helper
 
 
 def _make_client(ws_response: Any = None, raises: Exception | None = None) -> MagicMock:
@@ -32,7 +32,7 @@ class TestGetEntryIdForFlowHelper:
                 "result": {"platform": "utility_meter", "config_entry_id": "abc123"},
             }
         )
-        entry_id, reason = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await get_entry_id_for_flow_helper(
             client, "utility_meter", "sensor.peak"
         )
         assert entry_id == "abc123"
@@ -43,7 +43,7 @@ class TestGetEntryIdForFlowHelper:
         # completed because helper_type often differs from entity domain
         # (e.g. utility_meter → sensor.*, switch_as_x → switch/light.*).
         client = _make_client()
-        entry_id, reason = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await get_entry_id_for_flow_helper(
             client, "template", "my_sensor"
         )
         assert entry_id is None
@@ -52,7 +52,7 @@ class TestGetEntryIdForFlowHelper:
 
     async def test_returns_none_for_unknown_helper_type(self) -> None:
         client = _make_client()
-        entry_id, reason = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await get_entry_id_for_flow_helper(
             client,
             "input_button",
             "my_button",  # SIMPLE, not FLOW
@@ -63,7 +63,7 @@ class TestGetEntryIdForFlowHelper:
 
     async def test_returns_none_when_entity_not_in_registry(self) -> None:
         client = _make_client({"success": False, "error": "not_found"})
-        entry_id, reason = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await get_entry_id_for_flow_helper(
             client, "template", "template.ghost"
         )
         assert entry_id is None
@@ -77,7 +77,7 @@ class TestGetEntryIdForFlowHelper:
                 "result": {"platform": "template", "entity_id": "template.x"},
             }
         )
-        entry_id, reason = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await get_entry_id_for_flow_helper(
             client, "template", "template.x"
         )
         assert entry_id is None
@@ -86,7 +86,7 @@ class TestGetEntryIdForFlowHelper:
     async def test_websocket_exception_appends_to_warnings(self) -> None:
         client = _make_client(raises=ConnectionError("ws drop"))
         warnings: list[str] = []
-        entry_id, reason = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await get_entry_id_for_flow_helper(
             client, "utility_meter", "sensor.x", warnings=warnings
         )
         assert entry_id is None
@@ -97,7 +97,7 @@ class TestGetEntryIdForFlowHelper:
 
     async def test_websocket_exception_without_warnings_is_silent(self) -> None:
         client = _make_client(raises=ConnectionError("ws drop"))
-        entry_id, reason = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await get_entry_id_for_flow_helper(
             client, "utility_meter", "sensor.x", warnings=None
         )
         assert entry_id is None
@@ -106,7 +106,7 @@ class TestGetEntryIdForFlowHelper:
     async def test_unexpected_result_shape_returns_none(self) -> None:
         # success but result is not a dict
         client = _make_client({"success": True, "result": "garbage"})
-        entry_id, reason = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await get_entry_id_for_flow_helper(
             client, "template", "template.x"
         )
         assert entry_id is None
@@ -117,9 +117,9 @@ class TestGetEntryIdForFlowHelper:
         # not "lookup_failed", they are infrastructure failures.
         client = _make_client(raises=HomeAssistantConnectionError("network down"))
         with pytest.raises(HomeAssistantConnectionError):
-            await _get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")
+            await get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")
 
     async def test_auth_error_propagates(self) -> None:
         client = _make_client(raises=HomeAssistantAuthError("token expired"))
         with pytest.raises(HomeAssistantAuthError):
-            await _get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")
+            await get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")

@@ -56,8 +56,11 @@ from .config_helpers.registry import _get_entities_for_config_entry
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
 from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
 from .flow_helper_lookup import (
-    _get_entry_id_for_flow_helper,
+    YAML_HELPER_REMOVAL,
+    YAML_HELPER_SUGGESTION,
+    get_entry_id_for_flow_helper,
     raise_flow_helper_lookup_error,
+    resolve_helper_entity,
 )
 from .helpers import (
     exception_to_structured_error,
@@ -65,6 +68,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
+    ws_failure_code,
 )
 from .integration_reconfigure import (
     ReconfigureRunner,
@@ -2025,9 +2029,7 @@ class IntegrationTools:
         if not result.get("success"):
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND
-                    if result.get("error_code") == "not_found"
-                    else ErrorCode.SERVICE_CALL_FAILED,
+                    ws_failure_code(result),
                     f"Failed to set the log level for '{domain}': "
                     f"{result.get('error') or 'unknown error'}",
                     context={"domain": domain, "entry_id": entry_id},
@@ -2113,8 +2115,12 @@ class IntegrationTools:
         id_fn=removal_backup_id,
         domain_resolver=resolve_config_entry_backup_domain,
         # An explicit flow-helper removal validates and resolves its target
-        # through Core before the inner decorator captures the entry.
-        skip_fn=lambda kw: kw.get("helper_type") in FLOW_HELPER_TYPES,
+        # through Core before the inner decorator captures the entry; an
+        # entity_id without helper_type is captured by the resolved call.
+        skip_fn=lambda kw: (
+            kw.get("helper_type") in FLOW_HELPER_TYPES
+            or (kw.get("helper_type") is None and "." in str(kw.get("target", "")))
+        ),
     )
     @log_tool_usage
     async def ha_remove_helpers_integrations(
@@ -2138,10 +2144,11 @@ class IntegrationTools:
             HelperTypeLiteral | None,
             Field(
                 description=(
-                    "Helper type. Required when target is a helper_id (bare) "
-                    "or entity_id. Set to None when target is a config entry_id "
-                    "to remove any integration. Use 'config_subentry' to remove "
-                    "a config subentry under target."
+                    "Helper type. Required when target is a bare helper_id. "
+                    "Optional for an entity_id: omitted, the entity's registry "
+                    "entry identifies the helper. Omit when target is a config "
+                    "entry_id to remove any integration. Use 'config_subentry' "
+                    "to remove a config subentry under target."
                 ),
                 default=None,
             ),
@@ -2167,7 +2174,7 @@ class IntegrationTools:
             Field(
                 description=(
                     "Wait for entity removal. Default: True. "
-                    "Ignored when helper_type=None or "
+                    "Ignored for a config entry_id target or "
                     "helper_type='config_subentry' (no entity poll, "
                     "require_restart returned)."
                 ),
@@ -2199,6 +2206,10 @@ class IntegrationTools:
           sub-entities (e.g. utility_meter tariffs) are removed together. An
           entity registered by another integration is refused with
           VALIDATION_INVALID_PARAMETER and nothing is deleted.
+        - helper_type=None + entity_id → the entity's registry entry names its
+          helper, including helpers ha_config_set_helper cannot create (otp,
+          custom-integration helpers); an entity of any other integration is
+          refused with VALIDATION_INVALID_PARAMETER.
         - helper_type=None + entry_id → direct config entry delete (any
           integration).
         - helper_type="config_subentry" + parent entry_id + subentry_id →
@@ -2267,6 +2278,17 @@ class IntegrationTools:
         warnings: list[str] = []
 
         # === Routing dispatch ===
+        if helper_type is None and "." in target:
+            # An entity_id alone: its registry entry names the helper, and the
+            # resolved call runs the matching path with its own backup.
+            resolved_type, resolved_target = await self._resolve_helper_entity(target)
+            return await self.ha_remove_helpers_integrations(
+                target=resolved_target,
+                helper_type=resolved_type,
+                confirm=True,
+                wait=wait,
+            )
+
         if helper_type is None:
             # Path 3: Direct config entry delete (any integration)
             return await self._delete_direct_entry(target)
@@ -2310,6 +2332,19 @@ class IntegrationTools:
     # intentional and prevents future renames pulled by either side.
 
     # === Path 3: Direct config entry delete (any integration) ===
+    async def _resolve_helper_entity(self, entity_id: str) -> tuple[Any, str]:
+        """Map an entity_id to the (helper_type, target) that removes its helper."""
+        try:
+            return await resolve_helper_entity(self._client, entity_id)
+        except ToolError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            exception_to_structured_error(
+                e,
+                context={"target": entity_id},
+                suggestions=["Verify the entity exists using ha_get_entity()"],
+            )
+
     async def _delete_direct_entry(self, entry_id: str) -> dict[str, Any]:
         """Delete a config entry directly via the REST delete API."""
         try:
@@ -2397,7 +2432,7 @@ class IntegrationTools:
         client = self._client
         try:
             # Step 1: resolve target → entry_id (typed reason on failure)
-            entry_id, reason = await _get_entry_id_for_flow_helper(
+            entry_id, reason = await get_entry_id_for_flow_helper(
                 client, helper_type, target, warnings
             )
             if entry_id is None:
@@ -3055,24 +3090,21 @@ class IntegrationTools:
 
         # Core's storage collection holds only UI-created items; a YAML helper
         # keeps its registry unique_id but has no stored item to delete.
-        if result.get("error_code") == "not_found":
+        if ws_failure_code(result) is ErrorCode.RESOURCE_NOT_FOUND:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
                     (
                         f"Home Assistant has no stored {helper_type} "
                         f"'{unique_id}': {target} is YAML-configured or was "
-                        "already deleted. YAML-configured helpers must be "
-                        "removed by editing the configuration file."
+                        f"already deleted. {YAML_HELPER_REMOVAL}"
                     ),
                     context={
                         "target": target,
                         "entity_id": entity_id,
                         "unique_id": unique_id,
                     },
-                    suggestions=[
-                        "Edit the YAML file and reload the relevant integration.",
-                    ],
+                    suggestions=[YAML_HELPER_SUGGESTION],
                 )
             )
 
@@ -3082,7 +3114,7 @@ class IntegrationTools:
             error_msg = error_msg.get("message", str(error_msg))
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                ws_failure_code(result),
                 f"Failed to delete helper: {error_msg}",
                 suggestions=[
                     "Make sure the helper exists and is not being used "

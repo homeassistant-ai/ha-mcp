@@ -1,4 +1,4 @@
-"""Resolve a flow-helper entity to its config entry for ha_remove_helpers_integrations."""
+"""Resolve the helper behind an entity_id for ha_remove_helpers_integrations."""
 
 import logging
 from typing import Any, Literal, NoReturn
@@ -6,9 +6,15 @@ from typing import Any, Literal, NoReturn
 from ..client.rest_client import HomeAssistantAuthError, HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow import FLOW_HELPER_TYPES
+from .config_helpers.schemas import SIMPLE_HELPER_TYPES
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
+
+YAML_HELPER_REMOVAL = (
+    "YAML-configured helpers must be removed by editing the configuration file."
+)
+YAML_HELPER_SUGGESTION = "Edit the YAML file and reload the relevant integration."
 
 FlowLookupReason = Literal[
     "ok",
@@ -21,7 +27,43 @@ FlowLookupReason = Literal[
 ]
 
 
-async def _get_entry_id_for_flow_helper(
+async def _read_registry_entry(
+    client: Any, entity_id: str, warnings: list[str] | None = None
+) -> tuple[dict[str, Any] | None, FlowLookupReason]:
+    """Read ``entity_id``'s entity-registry entry; ``(None, reason)`` on failure.
+
+    HomeAssistantConnectionError and HomeAssistantAuthError propagate; the
+    caller's outer except chain converts them to structured errors.
+    """
+    try:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id}
+        )
+    except (HomeAssistantConnectionError, HomeAssistantAuthError):
+        # Typed errors must reach the outer handler — do not swallow.
+        raise
+    except (OSError, TimeoutError) as e:
+        # Network / transport errors from the WS layer (ConnectionError,
+        # BrokenPipeError, TimeoutError, …). Programmer-bug-shape
+        # exceptions (KeyError, AttributeError, TypeError) intentionally
+        # propagate — the response is shape-checked at the dict guard
+        # below, and a raise here would otherwise mask the bug as a
+        # transient WEBSOCKET_DISCONNECTED.
+        logger.debug(f"entity_registry/get failed for {entity_id}: {e}")
+        if warnings is not None:
+            warnings.append(f"entity_registry/get failed for {entity_id}: {e}")
+        return None, "lookup_failed"
+
+    if not isinstance(result, dict) or not result.get("success"):
+        return None, "not_in_registry"
+
+    entry = result.get("result") or {}
+    if not isinstance(entry, dict):
+        return None, "not_in_registry"
+    return entry, "ok"
+
+
+async def get_entry_id_for_flow_helper(
     client: Any,
     helper_type: str,
     target: str,
@@ -52,33 +94,10 @@ async def _get_entry_id_for_flow_helper(
 
     if "." not in target:
         return None, "bare_id_not_supported"
-    entity_id = target
 
-    try:
-        result = await client.send_websocket_message(
-            {"type": "config/entity_registry/get", "entity_id": entity_id}
-        )
-    except (HomeAssistantConnectionError, HomeAssistantAuthError):
-        # Typed errors must reach the outer handler — do not swallow.
-        raise
-    except (OSError, TimeoutError) as e:
-        # Network / transport errors from the WS layer (ConnectionError,
-        # BrokenPipeError, TimeoutError, …). Programmer-bug-shape
-        # exceptions (KeyError, AttributeError, TypeError) intentionally
-        # propagate — the response is shape-checked at the dict guard
-        # below, and a raise here would otherwise mask the bug as a
-        # transient WEBSOCKET_DISCONNECTED.
-        logger.debug(f"entity_registry/get failed for {entity_id}: {e}")
-        if warnings is not None:
-            warnings.append(f"entity_registry/get failed for {entity_id}: {e}")
-        return None, "lookup_failed"
-
-    if not isinstance(result, dict) or not result.get("success"):
-        return None, "not_in_registry"
-
-    entry = result.get("result") or {}
-    if not isinstance(entry, dict):
-        return None, "not_in_registry"
+    entry, reason = await _read_registry_entry(client, target, warnings)
+    if entry is None:
+        return None, reason
 
     # A helper's entities are registered under its own integration, so a
     # foreign platform means the config_entry_id belongs to another integration.
@@ -93,7 +112,7 @@ async def _get_entry_id_for_flow_helper(
 
 def raise_flow_helper_lookup_error(
     reason: FlowLookupReason,
-    helper_type: str,
+    helper_type: str | None,
     target: str,
 ) -> NoReturn:
     """Raise the structured error for a failed flow-helper entry_id lookup.
@@ -118,8 +137,8 @@ def raise_flow_helper_lookup_error(
                     "entity_id": entity_id,
                 },
                 suggestions=[
-                    "Check the entity's platform with ha_get_entity(); a "
-                    "helper's platform is its helper_type.",
+                    "Omit helper_type: the entity's registry entry then "
+                    "identifies the helper.",
                     "To delete an integration's config entry, pass its "
                     "entry_id as target and omit helper_type.",
                 ],
@@ -130,19 +149,15 @@ def raise_flow_helper_lookup_error(
             create_error_response(
                 ErrorCode.RESOURCE_NOT_FOUND,
                 (
-                    f"Helper {target} is not a storage-based "
-                    "helper (no config entry). YAML-configured "
-                    "helpers must be removed by editing the "
-                    "configuration file."
+                    f"Helper {target} is not a storage-based helper "
+                    f"(no config entry). {YAML_HELPER_REMOVAL}"
                 ),
                 context={
                     "target": target,
                     "helper_type": helper_type,
                     "entity_id": entity_id,
                 },
-                suggestions=[
-                    "Edit the YAML file and reload the relevant integration.",
-                ],
+                suggestions=[YAML_HELPER_SUGGESTION],
             )
         )
     if reason == "lookup_failed":
@@ -224,3 +239,45 @@ def raise_flow_helper_lookup_error(
             ],
         )
     )
+
+
+async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None, str]:
+    """Return the ``(helper_type, target)`` that removes the helper behind ``entity_id``.
+
+    The registry ``platform`` names the integration that owns the entity. A
+    helper Core lists as a helper flow but ha-mcp cannot drive (``otp``, custom
+    integrations) comes back as ``(None, config_entry_id)``: a direct entry
+    delete. An entity of any other integration is refused.
+    """
+    entry, reason = await _read_registry_entry(client, entity_id)
+    if entry is None:
+        raise_flow_helper_lookup_error(reason, None, entity_id)
+    platform = entry.get("platform")
+    if platform in SIMPLE_HELPER_TYPES or platform in FLOW_HELPER_TYPES:
+        return platform, entity_id
+    config_entry_id = entry.get("config_entry_id")
+    if config_entry_id and platform in await _helper_flow_domains(client):
+        return None, config_entry_id
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            (
+                f"{entity_id} belongs to the '{platform}' integration, which "
+                "is not a helper. Nothing was deleted."
+            ),
+            context={"target": entity_id, "platform": platform},
+            suggestions=[
+                "To remove only this entity, use ha_remove_entity().",
+                "To delete the integration's config entry, pass its entry_id "
+                "as target.",
+            ],
+        )
+    )
+
+
+async def _helper_flow_domains(client: Any) -> frozenset[str]:
+    """Core's helper flows plus custom integrations of integration_type helper."""
+    domains = await client._request(
+        "GET", "/config/config_entries/flow_handlers", params={"type": "helper"}
+    )
+    return frozenset(domains)

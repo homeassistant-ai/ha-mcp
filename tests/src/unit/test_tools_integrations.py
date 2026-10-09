@@ -483,7 +483,7 @@ class TestRemoveHelpersIntegrations:
     async def test_flow_path_happy_single_subentity(self, tools, mock_client):
         """FLOW helper resolves entity_id → entry_id → delete + wait."""
         # Sequence of WS calls in order:
-        # 1. _get_entry_id_for_flow_helper → registry/get → has config_entry_id
+        # 1. get_entry_id_for_flow_helper → registry/get → has config_entry_id
         # 2. _get_entities_for_config_entry → registry/list → 1 entity
         # 3. delete_config_entry (not WS, separate mock)
         # Then wait_for_entity_removed → state poll, returns None (gone)
@@ -623,12 +623,6 @@ class TestRemoveHelpersIntegrations:
         """FLOW: entity exists but config_entry_id is None (YAML) →
         RESOURCE_NOT_FOUND."""
         mock_client.send_websocket_message.side_effect = [
-            # initial lookup: success but no config_entry_id
-            {
-                "success": True,
-                "result": {"platform": "template", "config_entry_id": None},
-            },
-            # disambiguation: confirms entity is in registry
             {
                 "success": True,
                 "result": {"platform": "template", "config_entry_id": None},

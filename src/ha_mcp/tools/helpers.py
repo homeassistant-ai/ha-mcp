@@ -705,9 +705,13 @@ async def safe_progress(
 
 
 def ws_failure_code(result: dict[str, Any]) -> ErrorCode:
-    """Core answers a schema-invalid write with ``invalid_format``: the caller's input."""
-    if result.get("error_code") == "invalid_format":
+    """Map Core's WS error code: ``invalid_format`` is the caller's input,
+    ``not_found`` an item Core does not hold (e.g. a YAML-configured helper)."""
+    code = result.get("error_code")
+    if code == "invalid_format":
         return ErrorCode.VALIDATION_INVALID_PARAMETER
+    if code == "not_found":
+        return ErrorCode.RESOURCE_NOT_FOUND
     return ErrorCode.SERVICE_CALL_FAILED
 
 

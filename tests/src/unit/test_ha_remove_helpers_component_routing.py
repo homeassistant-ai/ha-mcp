@@ -88,7 +88,7 @@ class RoutingClient:
         self.token = "tok"
         self.verify_ssl = False
         # Reply for the SIMPLE-path config/entity_registry/get + FLOW-path
-        # _get_entry_id_for_flow_helper get (kept legacy, single targeted read).
+        # get_entry_id_for_flow_helper get (kept legacy, single targeted read).
         self._get_result = get_result
         self._entities = list(entities or [])
         self.entity_get_calls = 0
@@ -418,7 +418,7 @@ async def test_flow_delete_subentities_via_component_no_dump() -> None:
             ]
         },
     )
-    # Step 1 (_get_entry_id_for_flow_helper) stays legacy: a single targeted get.
+    # Step 1 (get_entry_id_for_flow_helper) stays legacy: a single targeted get.
     client = RoutingClient(
         get_result={
             "success": True,
