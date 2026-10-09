@@ -310,7 +310,8 @@ def create_error_response(
         # Include first suggestion as primary, all suggestions in list
         error_dict["suggestion"] = error_suggestions[0]
         if len(error_suggestions) > 1:
-            error_dict["suggestions"] = error_suggestions
+            # A copy: the defaults are module-level lists shared by every call.
+            error_dict["suggestions"] = list(error_suggestions)
 
     response: dict[str, Any] = {
         "success": False,
