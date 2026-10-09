@@ -89,19 +89,23 @@ class Shim:
 
 
 def main(argv: list[str]) -> None:
-    if len(argv) < 3:
+    command = argv[2] if len(argv) > 2 else ""
+    if command not in ("tools", "describe", "call") or (
+        command != "tools" and len(argv) < 4
+    ):
         sys.exit(__doc__)
     shim = Shim(Path(argv[1]))
-    command = argv[2]
     if command == "tools":
         for tool in shim.tools():
             summary = (tool.get("description") or "").strip().splitlines()
             print(f"{tool['name']}: {summary[0] if summary else ''}")
     elif command == "describe":
-        tool = next(t for t in shim.tools() if t["name"] == argv[3])
+        tool = next((t for t in shim.tools() if t["name"] == argv[3]), None)
+        if tool is None:
+            sys.exit(f"No tool named {argv[3]!r}; list them with the tools command.")
         print(tool.get("description", ""))
         print(json.dumps(tool["inputSchema"], indent=1))
-    elif command == "call":
+    else:
         arguments = json.loads(argv[4]) if len(argv) > 4 else {}
         reply = shim.rpc("tools/call", {"name": argv[3], "arguments": arguments})
         if "error" in reply:
@@ -111,8 +115,6 @@ def main(argv: list[str]) -> None:
         print("isError:", result.get("isError"))
         for item in result.get("content", []):
             print(item["text"] if item.get("type") == "text" else f"[{item['type']}]")
-    else:
-        sys.exit(__doc__)
 
 
 if __name__ == "__main__":
