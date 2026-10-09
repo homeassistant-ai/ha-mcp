@@ -103,9 +103,10 @@ class TestGetEntryIdForFlowHelper:
         assert entry_id is None
         assert reason == "lookup_failed"
 
-    async def test_unexpected_result_shape_returns_none(self) -> None:
-        # success but result is not a dict
-        client = _make_client({"success": True, "result": "garbage"})
+    @pytest.mark.parametrize("payload", ["garbage", {}])
+    async def test_unexpected_result_shape_returns_none(self, payload: Any) -> None:
+        """A non-entry payload is a missing entity, not a foreign platform."""
+        client = _make_client({"success": True, "result": payload})
         entry_id, reason = await get_entry_id_for_flow_helper(
             client, "template", "template.x"
         )
