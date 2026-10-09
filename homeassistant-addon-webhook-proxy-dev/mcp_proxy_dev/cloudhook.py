@@ -22,6 +22,10 @@ _LOGGER = logging.getLogger(__name__)
 # A cloudhook must buffer the whole reply, and a subscription stream never
 # ends: give up after this long instead of buffering it forever.
 CLOUDHOOK_REPLY_SECONDS = 60
+CLOUDHOOK_OAUTH_NEEDS_PUBLIC_URL = (
+    "OAuth over a cloudhook needs the app's public URL configured (public_base_url); "
+    "otherwise connect with the secret webhook URL and no OAuth."
+)
 
 
 def is_cloudhook(request: web.Request) -> bool:
@@ -57,3 +61,17 @@ async def buffered_response(
                 text="Streaming MCP replies cannot be relayed through a cloudhook",
             )
     return web.Response(status=upstream_resp.status, body=body, headers=headers)
+
+
+def discovery_rejection(
+    request: web.Request, public_base_url: str | None
+) -> web.Response | None:
+    """Refuse OAuth discovery over a cloudhook that has no configured public URL.
+
+    The relayed Host is ``hooks.nabu.casa``, which routes by cloudhook id and
+    cannot serve the discovery documents, so a 401 built from it would send the
+    client nowhere.
+    """
+    if not is_cloudhook(request) or public_base_url:
+        return None
+    return web.Response(status=400, text=CLOUDHOOK_OAUTH_NEEDS_PUBLIC_URL)

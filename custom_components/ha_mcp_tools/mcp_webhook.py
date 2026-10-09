@@ -37,7 +37,6 @@ authorization-server document pointing at :mod:`oauth_autoapprove`'s endpoints)
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
 from contextlib import suppress
@@ -50,11 +49,13 @@ from homeassistant.components.webhook import async_register, async_unregister
 from homeassistant.core import HomeAssistant
 from homeassistant.util.aiohttp import MockRequest
 
+from .cloudhook import OAUTH_NEEDS_EXTERNAL_URL, buffered_response
 from .const import (
     DATA_WEBHOOK,
     DATA_WEBHOOK_ID,
     DOMAIN,
     OAUTH_BASE,
+    OPT_EXTERNAL_URL,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
@@ -126,9 +127,6 @@ _ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream", "text/plain")
 # long-lived streams fails a new request in 30 s instead of hanging it forever.
 _CLIENT_TIMEOUT = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
 
-# A cloudhook relay (#2696) must buffer the whole reply, and a subscription
-# stream never ends: give up after this long instead of buffering it forever.
-_CLOUDHOOK_REPLY_SECONDS = 60
 
 # The in-process server closes an idle keep-alive connection after 5 s
 # (``const.SERVER_KEEPALIVE_SECONDS``); aiohttp pools one for 15 s. A
@@ -557,14 +555,24 @@ def _register_metadata_views(hass: HomeAssistant) -> None:
     hass.data[_OAUTH_VIEWS_REGISTERED_KEY] = True
 
 
-def _build_unauthorized_response(request: web.Request, webhook_id: str) -> web.Response:
+def _build_unauthorized_response(
+    request: web.Request, cfg: dict[str, Any]
+) -> web.Response:
     """Build the 401 + ``WWW-Authenticate`` challenge MCP clients use to discover.
 
     Per RFC 9728 §5.1 / MCP 2026-07-28 Authorization Server Discovery, the
     ``resource_metadata`` parameter points to the protected-resource metadata
-    URL where the client finds the authorization server.
+    URL where the client finds the authorization server. A cloudhook's Host is
+    ``hooks.nabu.casa``, which cannot serve that document, so only a configured
+    External URL can anchor the challenge there (#2696).
     """
-    base = _build_base_url(request)
+    webhook_id = cfg["webhook_id"]
+    if isinstance(request, MockRequest):
+        if not cfg.get("external_url"):
+            return web.Response(status=400, text=OAUTH_NEEDS_EXTERNAL_URL)
+        base = cfg["external_url"]
+    else:
+        base = _build_base_url(request)
     # RFC 9728 §3.1 path-scoped location. The pointer names the id, but this
     # 401 is only produced on a request TO /api/webhook/<id>, so the caller
     # already holds it; there is no fixed-path document to point at (see
@@ -606,34 +614,11 @@ async def _check_webhook_auth(
     if resource_server is not None and not await resource_server.validate_request(
         request
     ):
-        return _build_unauthorized_response(request, cfg["webhook_id"])
+        return _build_unauthorized_response(request, cfg)
     oauth_provider: LegacyOAuthProvider | None = cfg.get("oauth_provider")
     if oauth_provider is not None and not oauth_provider.validate_bearer(request):
-        return _build_unauthorized_response(request, cfg["webhook_id"])
+        return _build_unauthorized_response(request, cfg)
     return None
-
-
-async def _buffered_response(
-    cloudhook: bool, upstream_resp: aiohttp.ClientResponse, headers: dict[str, str]
-) -> web.Response:
-    """Buffer the upstream reply into a plain response, with a deadline for cloudhooks."""
-    if not cloudhook:
-        body = await upstream_resp.read()
-    else:
-        try:
-            async with asyncio.timeout(_CLOUDHOOK_REPLY_SECONDS):
-                body = await upstream_resp.read()
-        except TimeoutError:
-            _LOGGER.error(
-                "MCP webhook: cloudhook reply did not finish within %ds; "
-                "a streaming reply cannot be relayed through Home Assistant Cloud",
-                _CLOUDHOOK_REPLY_SECONDS,
-            )
-            return web.Response(
-                status=504,
-                text="Streaming MCP replies cannot be relayed through a cloudhook",
-            )
-    return web.Response(status=upstream_resp.status, body=body, headers=headers)
 
 
 async def _async_handle_webhook(
@@ -658,10 +643,8 @@ async def _async_handle_webhook(
     )
     session: aiohttp.ClientSession = cfg["session"]
 
-    # A Nabu Casa cloudhook (Settings → Home Assistant Cloud → Webhooks) is
-    # relayed in-process as ``MockRequest`` (#2696): it has no ``read()`` and
-    # no transport, and the relay returns only ``response.body`` — so the SSE
-    # reply must be buffered, not streamed.
+    # A cloudhook (#2696) arrives as ``MockRequest``: no ``read()``, no transport,
+    # and the relay returns only ``response.body`` — so buffer, never stream.
     cloudhook = isinstance(request, MockRequest)
     body = await (request.content.read() if cloudhook else request.read())
 
@@ -722,7 +705,7 @@ async def _async_handle_webhook(
             if not any(ct in content_type for ct in _ALLOWED_CONTENT_TYPES):
                 content_type = "application/json"
             resp_headers["Content-Type"] = content_type
-            return await _buffered_response(cloudhook, upstream_resp, resp_headers)
+            return await buffered_response(cloudhook, upstream_resp, resp_headers)
     except aiohttp.ClientError as err:
         _LOGGER.error("MCP webhook: upstream request failed: %s", err)
         return web.Response(status=502, text="MCP server unavailable")
@@ -908,6 +891,8 @@ async def async_register_webhook(
         "session": session,
         CFG_CIMD_SESSION: cimd_session,
         "auth_mode": auth_mode,
+        "external_url": str(entry.options.get(OPT_EXTERNAL_URL) or "").rstrip("/")
+        or None,
         "resource_server": None,
         "oauth_provider": None,
         CFG_AUTOAPPROVE_PROVIDER: None,

@@ -17,6 +17,7 @@ from ._embedded_stubs import FakeSession, FakeUpstream, install
 install()
 
 import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
+from custom_components.ha_mcp_tools import cloudhook  # noqa: E402
 from custom_components.ha_mcp_tools.const import WEBHOOK_AUTH_HA  # noqa: E402
 
 from .test_mcp_webhook import WEBHOOK_ID, _make_hass, _store_cfg  # noqa: E402
@@ -59,7 +60,7 @@ async def test_cloudhook_reply_that_never_ends_is_cut_off_with_504(
     session = FakeSession(upstream=upstream)
     hass = _make_hass()
     _store_cfg(hass, session=session)
-    monkeypatch.setattr(mw, "_CLOUDHOOK_REPLY_SECONDS", 0.01)
+    monkeypatch.setattr(cloudhook, "REPLY_SECONDS", 0.01)
 
     request = mw.MockRequest(content=b"{}", mock_source="cloud", method="POST")
     resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
@@ -68,9 +69,7 @@ async def test_cloudhook_reply_that_never_ends_is_cut_off_with_504(
     assert "did not finish within" in caplog.text
 
 
-async def test_cloudhook_without_bearer_gets_the_401_challenge() -> None:
-    # ``MockRequest`` has no ``scheme`` or ``path``; the discovery 401 must
-    # still be built from the relayed headers instead of raising.
+def _oauth_gated_hass(external_url: str | None) -> tuple:
     session = FakeSession(upstream=FakeUpstream(status=200))
     hass = _make_hass(validate_result=None)
     _store_cfg(
@@ -79,7 +78,29 @@ async def test_cloudhook_without_bearer_gets_the_401_challenge() -> None:
         auth_mode=WEBHOOK_AUTH_HA,
         resource_server=mw.ResourceServer(hass, WEBHOOK_ID),
     )
+    hass.data[mw.DOMAIN][mw.DATA_WEBHOOK]["external_url"] = external_url
+    return hass, session
 
+
+async def test_cloudhook_without_bearer_and_without_external_url_is_refused() -> None:
+    # hooks.nabu.casa cannot serve the discovery documents, so a 401 pointing
+    # there would send the client nowhere: say what is needed instead.
+    hass, session = _oauth_gated_hass(external_url=None)
+    request = mw.MockRequest(
+        content=b"{}",
+        mock_source="cloud",
+        method="POST",
+        headers={"Host": "hooks.nabu.casa"},
+    )
+    resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
+
+    assert resp.status == 400
+    assert "External URL" in resp.text
+    assert session.calls == []
+
+
+async def test_cloudhook_without_bearer_gets_the_401_on_the_external_url() -> None:
+    hass, session = _oauth_gated_hass(external_url="https://ha.example.com")
     request = mw.MockRequest(
         content=b"{}",
         mock_source="cloud",
@@ -91,6 +112,6 @@ async def test_cloudhook_without_bearer_gets_the_401_challenge() -> None:
     assert resp.status == 401
     assert session.calls == []
     assert (
-        f"https://hooks.nabu.casa/.well-known/oauth-protected-resource/api/webhook/{WEBHOOK_ID}"
+        f"https://ha.example.com/.well-known/oauth-protected-resource/api/webhook/{WEBHOOK_ID}"
         in resp.headers["WWW-Authenticate"]
     )
