@@ -37,6 +37,7 @@ authorization-server document pointing at :mod:`oauth_autoapprove`'s endpoints)
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from contextlib import suppress
@@ -124,6 +125,10 @@ _ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream", "text/plain")
 # (not just the TCP connect ``sock_connect`` bounds), so a pool exhausted by
 # long-lived streams fails a new request in 30 s instead of hanging it forever.
 _CLIENT_TIMEOUT = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
+
+# A cloudhook relay (#2696) must buffer the whole reply, and a subscription
+# stream never ends: give up after this long instead of buffering it forever.
+_CLOUDHOOK_REPLY_SECONDS = 60
 
 # The in-process server closes an idle keep-alive connection after 5 s
 # (``const.SERVER_KEEPALIVE_SECONDS``); aiohttp pools one for 15 s. A
@@ -606,6 +611,29 @@ async def _check_webhook_auth(
     return None
 
 
+async def _buffered_response(
+    cloudhook: bool, upstream_resp: aiohttp.ClientResponse, headers: dict[str, str]
+) -> web.Response:
+    """Buffer the upstream reply into a plain response, with a deadline for cloudhooks."""
+    if not cloudhook:
+        body = await upstream_resp.read()
+    else:
+        try:
+            async with asyncio.timeout(_CLOUDHOOK_REPLY_SECONDS):
+                body = await upstream_resp.read()
+        except TimeoutError:
+            _LOGGER.error(
+                "MCP webhook: cloudhook reply did not finish within %ds; "
+                "a streaming reply cannot be relayed through Home Assistant Cloud",
+                _CLOUDHOOK_REPLY_SECONDS,
+            )
+            return web.Response(
+                status=504,
+                text="Streaming MCP replies cannot be relayed through a cloudhook",
+            )
+    return web.Response(status=upstream_resp.status, body=body, headers=headers)
+
+
 async def _async_handle_webhook(
     hass: HomeAssistant,
     webhook_id: str,
@@ -692,10 +720,7 @@ async def _async_handle_webhook(
             if not any(ct in content_type for ct in _ALLOWED_CONTENT_TYPES):
                 content_type = "application/json"
             resp_headers["Content-Type"] = content_type
-            resp_body = await upstream_resp.read()
-            return web.Response(
-                status=upstream_resp.status, body=resp_body, headers=resp_headers
-            )
+            return await _buffered_response(cloudhook, upstream_resp, resp_headers)
     except aiohttp.ClientError as err:
         _LOGGER.error("MCP webhook: upstream request failed: %s", err)
         return web.Response(status=502, text="MCP server unavailable")

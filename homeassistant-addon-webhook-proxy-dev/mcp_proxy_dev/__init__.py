@@ -43,7 +43,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.typing import ConfigType
 
-from .cloudhook import is_cloudhook, read_body
+from .cloudhook import buffered_response, is_cloudhook, read_body
 from .readonly_webhook import (
     readonly_url,
     register_readonly_webhook,
@@ -1052,12 +1052,7 @@ async def _relay_upstream_response(
         if not any(ct in content_type for ct in allowed_content_types):
             content_type = "application/json"
         resp_headers["Content-Type"] = content_type
-        resp_body = await upstream_resp.read()
-        return web.Response(
-            status=upstream_resp.status,
-            body=resp_body,
-            headers=resp_headers,
-        )
+        return await buffered_response(request, upstream_resp, resp_headers)
 
 
 async def _handle_webhook(

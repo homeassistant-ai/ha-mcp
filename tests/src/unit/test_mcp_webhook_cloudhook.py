@@ -8,6 +8,10 @@ returns only ``response.body`` — so the forwarder must read the body via
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from ._embedded_stubs import FakeSession, FakeUpstream, install
 
 install()
@@ -43,3 +47,21 @@ async def test_cloudhook_relay_reads_body_and_buffers_sse() -> None:
     assert resp.status == 200
     assert resp.body == b"".join(chunks)
     assert resp.headers["Content-Type"] == "text/event-stream"
+
+
+async def test_cloudhook_reply_that_never_ends_is_cut_off_with_504(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A ``subscriptions/listen`` stream never ends; a cloudhook cannot carry it.
+    upstream = FakeUpstream(status=200, headers={"Content-Type": "text/event-stream"})
+    upstream.read = lambda: asyncio.sleep(5)  # type: ignore[method-assign]
+    session = FakeSession(upstream=upstream)
+    hass = _make_hass()
+    _store_cfg(hass, session=session)
+    monkeypatch.setattr(mw, "_CLOUDHOOK_REPLY_SECONDS", 0.01)
+
+    request = mw.MockRequest(content=b"{}", mock_source="cloud", method="POST")
+    resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
+
+    assert resp.status == 504
+    assert "did not finish within" in caplog.text

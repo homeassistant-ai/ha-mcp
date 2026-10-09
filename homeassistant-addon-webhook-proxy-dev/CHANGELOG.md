@@ -9,6 +9,12 @@ history from before the fork.
 -->
 
 
+## v3.0.4.dev4 (2026-10-09)
+
+- Relay Nabu Casa cloudhooks (Settings → Home Assistant Cloud → Webhooks): read
+  the body the relay provides and return SSE replies buffered, since the relay
+  cannot stream. A reply that does not finish within 60 s is answered with 504.
+
 ## v3.0.4.dev3 (2026-10-07)
 
 - Give `/readonly` connections matching OAuth protected-resource metadata while
