@@ -18,11 +18,11 @@ class TestRemovalCheckAfterSuccessfulDelete:
 
     @pytest.fixture
     def mock_client(self) -> MagicMock:
-        client = MagicMock()
-        client.get_entity_state = AsyncMock(return_value={"state": "on"})
-        client.send_websocket_message = AsyncMock()
-        client.delete_config_entry = AsyncMock(return_value={"require_restart": False})
-        return client
+        return MagicMock(
+            get_entity_state=AsyncMock(return_value={"state": "on"}),
+            send_websocket_message=AsyncMock(),
+            delete_config_entry=AsyncMock(return_value={"require_restart": False}),
+        )
 
     @pytest.fixture
     def tools(self, mock_client: MagicMock) -> IntegrationTools:
