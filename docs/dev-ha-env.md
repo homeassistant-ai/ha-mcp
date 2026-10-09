@@ -60,6 +60,12 @@ Run it **from your fork only**. The job refuses to run in
    `HA:` is the HA UI and API. `MCP:` is your branch's server (streamable
    HTTP, path included), ready to add to an MCP client.
 
+   A tunnel that fails to start or stops later is restarted, which gives it a
+   new URL, and the run uploads `dev-ha-env-urls` again: download it into an
+   empty directory and decrypt it again. A tunnel still being retried shows
+   as `down`. After three restarts, newer URLs are only in the job log, as a
+   `DEVENV_URLS` line holding the same encrypted file in base64.
+
    Test through `MCP:`, the way an agent uses the server: add it to your
    client as a regular MCP server, or, when the agent's client cannot load a
    new server mid-session, drive it one call at a time through a shim that

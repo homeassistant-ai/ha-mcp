@@ -252,15 +252,48 @@ jobs:
           name: dev-ha-env-urls
           path: out/dev-ha-env-urls.enc
           retention-days: 1
+      # A restarted tunnel has a new URL. Each Keep running step returns after
+      # one restart so the next step can upload the URLs again; after three,
+      # new URLs are in the job log only.
       - name: Keep running
-        run: |
-          source devenv/.github/dev-ha-env/tunnels.sh
-          while kill -0 "$(cat hold.pid)" 2>/dev/null; do
-            sleep 60
-            grep -E "STATUS|Traceback|Error" env.log | tail -3 || true
-            revive_tunnels
-          done
-          tail -80 env.log
+        id: keep-1
+        run: source devenv/.github/dev-ha-env/tunnels.sh && keep_running
+      - name: Upload the new URLs
+        if: steps.keep-1.outputs.revived == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dev-ha-env-urls
+          path: out/dev-ha-env-urls.enc
+          retention-days: 1
+          overwrite: true
+      - name: Keep running
+        id: keep-2
+        if: steps.keep-1.outputs.revived == 'true'
+        run: source devenv/.github/dev-ha-env/tunnels.sh && keep_running
+      - name: Upload the new URLs
+        if: steps.keep-2.outputs.revived == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dev-ha-env-urls
+          path: out/dev-ha-env-urls.enc
+          retention-days: 1
+          overwrite: true
+      - name: Keep running
+        id: keep-3
+        if: steps.keep-2.outputs.revived == 'true'
+        run: source devenv/.github/dev-ha-env/tunnels.sh && keep_running
+      - name: Upload the new URLs
+        if: steps.keep-3.outputs.revived == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dev-ha-env-urls
+          path: out/dev-ha-env-urls.enc
+          retention-days: 1
+          overwrite: true
+      - name: Keep running
+        id: keep-4
+        if: steps.keep-3.outputs.revived == 'true'
+        run: source devenv/.github/dev-ha-env/tunnels.sh && keep_running last
       - name: Logs
         if: always()
         run: |

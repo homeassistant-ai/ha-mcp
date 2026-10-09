@@ -2,7 +2,8 @@
 #
 # A quick tunnel gets a new URL every time it starts, so a tunnel that fails
 # to start is retried and one that dies is restarted; either way the URLs are
-# encrypted to the run's public key again and printed as a DEVENV_URLS line.
+# encrypted to the run's public key again: the workflow uploads them as the
+# dev-ha-env-urls artifact, and each publish also prints a DEVENV_URLS line.
 # State lives in tunnel-<name>.{target,pid,url,log} beside the workflow.
 
 # Start the <name> tunnel to <target>, retrying; return 1 if every attempt failed.
@@ -52,7 +53,8 @@ publish_urls() {
   echo "DEVENV_URLS $(openssl base64 -A -in out/dev-ha-env-urls.enc)"
 }
 
-# Restart every tunnel whose process has exited; publish once if any came back.
+# Restart every tunnel whose process has exited; publish once and set REVIVED
+# if any came back.
 revive_tunnels() {
   local name revived=""
   for name in ha mcp; do
@@ -62,5 +64,22 @@ revive_tunnels() {
       start_tunnel "$name" "$(cat "tunnel-$name.target")" && revived=1
     fi
   done
-  [ -z "$revived" ] || publish_urls
+  [ -z "$revived" ] || { publish_urls; REVIVED=1; }
+}
+
+# Watch the holder and revive tunnels. After a tunnel comes back with a new
+# URL, return with revived=true so the workflow uploads the URLs artifact
+# again; with "last", keep going and leave the new URLs in the job log only.
+keep_running() {
+  while kill -0 "$(cat hold.pid)" 2>/dev/null; do
+    sleep 60
+    grep -E "STATUS|Traceback|Error" env.log | tail -3 || true
+    REVIVED=""
+    revive_tunnels
+    if [ -n "$REVIVED" ] && [ "${1:-}" != last ]; then
+      echo "revived=true" >> "$GITHUB_OUTPUT"
+      return 0
+    fi
+  done
+  tail -80 env.log
 }
