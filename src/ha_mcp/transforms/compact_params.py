@@ -26,7 +26,8 @@ def _plain_type(branch: dict[str, Any], *, nested: bool) -> str:
     """Label of a branch without literal values."""
     kind = branch.get("type")
     if kind == "array":
-        return f"{_param_type(branch.get('items'))}[]"
+        items = _param_type(branch.get("items"))
+        return f"({items})[]" if "|" in items else f"{items}[]"
     if isinstance(kind, str) and kind:
         return kind
     if nested and (isinstance(kind, list) or "anyOf" in branch or "oneOf" in branch):

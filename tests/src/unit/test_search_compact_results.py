@@ -141,7 +141,7 @@ async def test_params_name_each_parameter_with_its_type(fragment: str) -> None:
         (
             {"kinds": {"type": "array", "items": {"enum": ["a", "b"]}}},
             [],
-            "kinds (a|b[])",
+            "kinds ((a|b)[])",
         ),
         (
             {"config": {"$ref": "#/$defs/Config"}},
