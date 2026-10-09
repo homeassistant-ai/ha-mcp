@@ -457,12 +457,13 @@ async def test_search_parity_badges_and_header_cards() -> None:
     assert comp_b[0]["card_type"] == "badge"
     assert comp_b[0]["matched"] == [{"field": "badges", "value": "sensor.badge_only"}]
 
-    # Dict badge: walked like a card (its own type + field taxonomy).
+    # Dict badge: its strings are searched; card_type stays "badge".
     comp_d, legacy_d = await _both("sensor.badge_dict")
     assert comp_d == legacy_d
     assert len(comp_d) == 1
     assert ".badges[" in comp_d[0]["jq_path"]
-    assert comp_d[0]["card_type"] == "entity"
+    assert comp_d[0]["card_type"] == "badge"
+    assert comp_d[0]["matched"] == [{"field": "entity", "value": "sensor.badge_dict"}]
 
     # Header-card-only: matched only in views[n].header.card.
     comp_h, legacy_h = await _both("sensor.header_only")
