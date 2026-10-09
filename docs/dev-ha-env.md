@@ -32,7 +32,7 @@ defaults to and is capped at 330. A HAOS run builds the HAOS image the first
 time the image build files, the test config or the proxy app change, and saves
 it to the fork's cache for later runs. A branch whose component differs from
 every cached image reuses one with the same base and applies its own component
-at boot with a Core restart, the way a pushed commit is applied.
+at boot with a Core restart.
 
 Run it **from your fork only**. The job refuses to run in
 `homeassistant-ai/ha-mcp`, whose runners are shared CI capacity.
@@ -66,18 +66,28 @@ Run it **from your fork only**. The job refuses to run in
    Do the setup and the checks with the tools as well. Creating or verifying
    state through `HA:`'s REST API routes around the tools under test, so a
    gap in them goes unnoticed.
-5. Push to the branch to iterate. Every 20 seconds the runner picks up new
-   commits and applies them the way a user's update would:
-   - A server change restarts the standalone server. The embedded server gets
-     a wheel built from the commit, as `ha_dev_manage_server(update_source)`
-     installs one. The app gets a version-bumped source and Supervisor's app
-     update.
-   - A change under `custom_components/ha_mcp_tools/` replaces the component,
-     as HACS does, and restarts Home Assistant.
+5. Iterate the way you would update ha-mcp on any Home Assistant. The run
+   stays on the commit it started from, with developer mode on:
+   - Embedded server: push, then call
+     `ha_dev_manage_server(action="update_source",
+     pip_spec="ha-mcp @ git+https://github.com/<you>/ha-mcp@<commit>")`.
+     The server reinstalls and comes back within a few minutes;
+     `ha_dev_manage_server(action="info")` shows the spec it runs. The run
+     starts from a wheel built from your branch's checkout.
+   - Component: add your fork to HACS once with
+     `ha_manage_hacs(action="add_repository", repository="<you>/ha-mcp",
+     category="integration")`, redownload your branch with
+     `ha_manage_hacs(action="download", repository_id=<id>, version="<branch>")`,
+     then restart Core with `ha_restart`. Right after a push, HACS can still
+     fetch the previous commit: wait a minute and read a changed `.py` file
+     with `ha_read_file` before restarting. The component keeps its pending
+     version number across dev builds, so HACS's `installed_version` (the
+     branch) is what names the build.
+   - Standalone server or app: start a new run on the new commit.
 
-   The job log's `STATUS` lines show the running commit and any update error.
-   An embedded server that fails to come up at boot is reported there too;
-   Home Assistant stays up, so push the fix to the branch.
+   The job log's `STATUS` lines show the commit the run started from and any
+   boot error. Home Assistant stays up if the embedded server fails at boot;
+   update the server as above.
 
    The instance is a normal HA you can change. On HAOS, change the Core
    version from Settings → System → Updates, or run
