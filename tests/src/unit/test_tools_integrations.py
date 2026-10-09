@@ -477,6 +477,7 @@ class TestRemoveHelpersIntegrations:
             )
         err = json.loads(str(exc_info.value))
         assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "YAML" in err["error"]["message"]
 
     # === Path 2: FLOW ===
 
