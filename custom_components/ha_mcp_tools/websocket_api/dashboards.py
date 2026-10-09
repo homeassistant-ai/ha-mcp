@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -32,8 +34,14 @@ _DASHBOARD_ROW_KEYS = (
 # Cap on ``search``-mode matches per call so one WS frame stays bounded.
 _DASHBOARD_MATCH_CAP = 200
 
-# Structural keys walked as containers (not scored as leaf strings) in a card.
-_DASHBOARD_STRUCTURAL_KEYS = frozenset({"cards", "sections"})
+# Keys that hold card configs at any depth inside a card: ``cards`` (a list),
+# ``card`` (one card), and the named ``custom_fields`` / ``states`` maps. Custom
+# cards file these under keys of their own (``groups[].cards[].card``), so the
+# search reads every node and only uses these keys to attribute a string to the
+# card it lives on.
+_CARD_LIST_KEY = "cards"
+_CARD_KEY = "card"
+_NAMED_CARD_MAP_KEYS = frozenset({"custom_fields", "states"})
 
 
 def _do_dashboards(
@@ -483,14 +491,17 @@ def _collect_one_card_matches(
     query_lower: str,
     matches: list[dict[str, Any]],
 ) -> None:
-    """Record matches for a SINGLE card at ``card_path`` and recurse its nested cards.
+    """Record matches for a SINGLE card at ``card_path`` and every card below it.
 
     Shared by :func:`_collect_card_matches` (list-indexed cards) and
     :func:`_collect_header_card_matches` (a header card is a single card, not
     list-indexed).
     """
+    leaves: list[tuple[str, str]] = []
+    nested: list[tuple[str, dict[str, Any]]] = []
+    _walk_card_nodes(card, card_path, "", leaves, nested)
     card_type = card.get("type")
-    for field, value in _card_string_leaves(card):
+    for field, value in leaves:
         if query_lower in value.lower():
             matches.append(
                 _dashboard_match(
@@ -504,11 +515,10 @@ def _collect_one_card_matches(
                     value,
                 )
             )
-    nested = card.get("cards")
-    if isinstance(nested, list):
-        _collect_card_matches(
-            nested,
-            f"{card_path}.cards",
+    for child_path, child in nested:
+        _collect_one_card_matches(
+            child,
+            child_path,
             url_path,
             dash_title,
             view_index,
@@ -605,36 +615,76 @@ def _collect_header_card_matches(
 
 
 def _card_string_leaves(card: dict[str, Any]) -> list[tuple[str, str]]:
-    """``(immediate_key, string)`` for every string leaf of a card.
+    """``(immediate_key, string)`` for every string leaf a card owns.
 
-    Descends into nested dicts/lists but NOT the structural ``cards``/``sections``
-    keys (those are walked as their own cards). The key attributed to a leaf is
-    the nearest dict key, so ``entities: [{entity: light.a}]`` yields
-    ``("entity", "light.a")`` and ``entities: [light.a]`` yields
-    ``("entities", "light.a")`` — matching the brief's field taxonomy.
+    Leaves of cards nested anywhere below it belong to those cards instead. The
+    key attributed to a leaf is the nearest dict key, so
+    ``entities: [{entity: light.a}]`` yields ``("entity", "light.a")`` and
+    ``entities: [light.a]`` yields ``("entities", "light.a")``.
     """
     out: list[tuple[str, str]] = []
-    _walk_card_leaves(card, "", out)
+    _walk_card_nodes(card, "", "", out, [])
     return out
 
 
-def _walk_card_leaves(value: Any, key: str, out: list[tuple[str, str]]) -> None:
-    """Recursive worker for :func:`_card_string_leaves` (module-level for clarity).
+def _walk_card_nodes(
+    value: Any,
+    path: str,
+    key: str,
+    leaves: list[tuple[str, str]],
+    nested: list[tuple[str, dict[str, Any]]],
+) -> None:
+    """Split a card's subtree into its own string leaves and its nested cards.
 
-    Descends dicts/lists collecting ``(nearest_key, string)`` leaves, skipping the
-    structural ``cards``/``sections`` keys (walked as their own cards). A top-level
-    card dict enters the ``dict`` branch, so its own keys attribute their leaves.
+    Every dict and list is descended. A typed dict in a card slot (a ``cards``
+    item, a ``card`` value or a ``custom_fields``/``states`` value) is a nested
+    card: it goes to ``nested`` with its path instead of contributing leaves.
+    Typed dicts elsewhere (tile ``features``, entity rows) stay leaves of the
+    card that holds them. Mirrors the server's ``_split_card_node``.
     """
     if isinstance(value, str):
         if value:
-            out.append((key, value))
+            leaves.append((key, value))
     elif isinstance(value, dict):
         for k, v in value.items():
-            if k not in _DASHBOARD_STRUCTURAL_KEYS:
-                _walk_card_leaves(v, str(k), out)
+            child_path = f"{path}{_path_key(k)}"
+            slots = _card_slot_items(k, v)
+            if slots is None:
+                _walk_card_nodes(v, child_path, str(k), leaves, nested)
+                continue
+            for segment, leaf_key, item in slots:
+                if _is_card(item):
+                    nested.append((f"{child_path}{segment}", item))
+                else:
+                    _walk_card_nodes(
+                        item, f"{child_path}{segment}", leaf_key, leaves, nested
+                    )
     elif isinstance(value, (list, tuple)):
-        for item in value:
-            _walk_card_leaves(item, key, out)
+        for i, item in enumerate(value):
+            _walk_card_nodes(item, f"{path}[{i}]", key, leaves, nested)
+
+
+def _card_slot_items(key: Any, value: Any) -> list[tuple[str, str, Any]] | None:
+    """``(path segment, leaf key, item)`` per card slot under ``key``, else ``None``."""
+    if key == _CARD_LIST_KEY and isinstance(value, list):
+        return [(f"[{i}]", key, item) for i, item in enumerate(value)]
+    if key == _CARD_KEY:
+        return [("", key, value)]
+    if key in _NAMED_CARD_MAP_KEYS and isinstance(value, dict):
+        return [(_path_key(name), str(name), item) for name, item in value.items()]
+    return None
+
+
+def _is_card(value: Any) -> bool:
+    return isinstance(value, dict) and "type" in value
+
+
+def _path_key(key: Any) -> str:
+    """``.key`` for a plain identifier, else a JSON-quoted ``["key"]`` segment."""
+    text = str(key)
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
+        return f".{text}"
+    return f"[{json.dumps(text)}]"
 
 
 async def _dashboard_edit_prep(

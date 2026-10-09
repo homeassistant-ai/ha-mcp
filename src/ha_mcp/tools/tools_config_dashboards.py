@@ -231,23 +231,19 @@ def _badge_matches(badge: Any, entity_id: str) -> bool:
     return entity_id == badge_entity
 
 
-# Keys under which a card nests other cards, by descent rule (issue #1599):
-#   - ``cards`` (list): vertical/horizontal-stack, grid, and any custom wrapper
-#     following the stack convention.
-#   - ``card`` (dict): conditional and wrapper cards such as
-#     ``custom:auto-entities``.
-#   - ``custom_fields`` (dict of field-configs): ``custom:button-card`` embeds
-#     sub-cards under ``custom_fields.<name>.card`` (a very common pattern that
-#     wraps an entire view in one button-card). Each field-config is descended
-#     as a node, so its own ``card`` / ``cards`` are picked up by the recursion.
-#   - ``states`` (name->card map): ``custom:state-switch`` swaps a whole card per
-#     source state. Each value is itself a card, descended directly as a node.
-# Picture-elements ``elements`` is deliberately NOT traversed: it is not one of
-# the descent keys above, so a node carrying it is disclosed at the response
-# boundary instead of being walked (see ``_UNTRAVERSED_NESTED_KEYS`` and the
-# find-card warnings). A blanket "descend every dict with a ``type``" walk is
-# intentionally avoided: tile ``features`` and view ``conditions`` also carry
-# ``type`` and would false-match as cards.
+# Card slots — keys whose typed values are card configs (issue #1599). They are
+# recognised at ANY depth inside a card, because custom cards file sub-cards
+# under keys of their own (``groups[].cards[].card``, ``tabs[].card``; #2694):
+#   - ``cards`` (list): stacks, grids and custom wrappers.
+#   - ``card`` (dict): conditional and wrapper cards.
+#   - ``custom_fields`` / ``states`` (name -> card map): ``custom:button-card``
+#     field cards and ``custom:state-switch`` state cards.
+# Every other dict/list is descended for further slots and string leaves, but a
+# typed dict outside a slot is never a card: tile ``features`` and view
+# ``conditions`` also carry ``type`` and would false-match as cards.
+# Picture-elements ``elements`` hold elements, not cards; a card carrying them
+# is disclosed (``_UNTRAVERSED_NESTED_KEYS``) because entity-ref matching does
+# not look inside them.
 _NESTED_CARDS_KEY = "cards"
 _NESTED_CARD_KEY = "card"
 _NESTED_CUSTOM_FIELDS_KEY = "custom_fields"
@@ -377,106 +373,88 @@ class _CardWalkFrame:
         )
 
 
-def _walk_card_list_key(
-    card: dict[str, Any],
+def _split_card_node(
+    node: Any,
+    path: tuple[str, str],
     key: str,
-    *,
-    jq_prefix: str,
-    python_prefix: str,
-    frame: _CardWalkFrame,
-) -> list[dict[str, Any]]:
-    """Descend a list-of-cards child (the ``cards`` key: stacks, grids, ...)."""
-    matches: list[dict[str, Any]] = []
-    child_list = card.get(key)
-    if isinstance(child_list, list):
-        child_frame = frame.descend()
-        for i, child in enumerate(child_list):
-            matches.extend(
-                _walk_card(
-                    child,
-                    jq_prefix=f"{jq_prefix}.{key}[{i}]",
-                    python_prefix=f"{python_prefix}['{key}'][{i}]",
-                    frame=child_frame,
-                )
-            )
-    elif child_list is not None:
-        # Key present but not a list — structurally malformed slot.
-        logger.debug(
-            "Card-search skipping non-list '%s' under %s (%s)",
-            key,
-            jq_prefix,
-            type(child_list).__name__,
-        )
-    return matches
+    leaves: list[tuple[str, str]],
+    cards: list[tuple[str, str, dict[str, Any]]],
+) -> None:
+    """Split a card's subtree into its own string leaves and the cards below it.
+
+    ``path`` is the (jq, python) suffix of ``node``. Every dict and list is
+    descended; a typed dict in a card slot goes to ``cards`` with its paths
+    instead of contributing leaves. Leaves carry their nearest dict key.
+    Mirrors the component's ``_walk_card_nodes``.
+    """
+    jq, py = path
+    if isinstance(node, str):
+        if node:
+            leaves.append((key, node))
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            _split_card_node(item, (f"{jq}[{i}]", f"{py}[{i}]"), key, leaves, cards)
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            if not isinstance(k, str):
+                _log_non_str_key("card", k, jq)
+                continue
+            child_jq, child_py = f"{jq}{_jq_key(k)}", f"{py}{_py_key(k)}"
+            for jq_seg, py_seg, leaf_key, item in _card_slots(k, v, child_jq):
+                item_path = (f"{child_jq}{jq_seg}", f"{child_py}{py_seg}")
+                if leaf_key is not None and isinstance(item, dict) and "type" in item:
+                    cards.append((*item_path, item))
+                else:
+                    _split_card_node(
+                        item,
+                        item_path,
+                        k if leaf_key is None else leaf_key,
+                        leaves,
+                        cards,
+                    )
 
 
-def _walk_card_dict_key(
-    card: dict[str, Any],
-    key: str,
-    *,
-    jq_prefix: str,
-    python_prefix: str,
-    frame: _CardWalkFrame,
+def _card_slots(
+    key: str, value: Any, jq: str
+) -> list[tuple[str, str, str | None, Any]]:
+    """``(jq segment, python segment, leaf key, item)`` for each slot under ``key``.
+
+    A key that holds no card slots yields one entry for the value itself with a
+    ``None`` leaf key, so the caller descends it as plain content.
+    """
+    if key == _NESTED_CARDS_KEY and isinstance(value, list):
+        return [(f"[{i}]", f"[{i}]", key, item) for i, item in enumerate(value)]
+    if key == _NESTED_CARD_KEY:
+        return [("", "", key, value)]
+    if key in (_NESTED_CUSTOM_FIELDS_KEY, _NESTED_STATES_KEY) and isinstance(
+        value, dict
+    ):
+        slots: list[tuple[str, str, str | None, Any]] = []
+        for name, item in value.items():
+            if isinstance(name, str):
+                slots.append((_jq_key(name), _py_key(name), name, item))
+            else:
+                _log_non_str_key(key, name, jq)
+        return slots
+    return [("", "", None, value)]
+
+
+def _walk_nested_cards(
+    card: dict[str, Any], *, jq_prefix: str, python_prefix: str, frame: _CardWalkFrame
 ) -> list[dict[str, Any]]:
-    """Descend a single-card dict child (the ``card`` key: conditional/wrapper cards)."""
+    """Matches in every card nested anywhere below ``card``, one level deeper."""
+    nested: list[tuple[str, str, dict[str, Any]]] = []
+    _split_card_node(card, ("", ""), "", [], nested)
+    child_frame = frame.descend()
     matches: list[dict[str, Any]] = []
-    child = card.get(key)
-    if isinstance(child, dict):
+    for jq_suffix, py_suffix, child in nested:
         matches.extend(
             _walk_card(
                 child,
-                jq_prefix=f"{jq_prefix}.{key}",
-                python_prefix=f"{python_prefix}['{key}']",
-                frame=frame.descend(),
+                jq_prefix=f"{jq_prefix}{jq_suffix}",
+                python_prefix=f"{python_prefix}{py_suffix}",
+                frame=child_frame,
             )
-        )
-    elif child is not None:
-        # Key present but not a dict — structurally malformed slot.
-        logger.debug(
-            "Card-search skipping non-dict '%s' under %s (%s)",
-            key,
-            jq_prefix,
-            type(child).__name__,
-        )
-    return matches
-
-
-def _walk_card_named_children(
-    card: dict[str, Any],
-    key: str,
-    *,
-    jq_prefix: str,
-    python_prefix: str,
-    frame: _CardWalkFrame,
-) -> list[dict[str, Any]]:
-    """Descend a name-keyed dict of card children (``custom_fields``, ``states``).
-
-    Each value is itself descended as a node (its own ``card``/``cards`` and the
-    ``type`` gate are handled by the recursion). Keys are rendered quote/dot-safe
-    so a name like ``o'brien`` yields a usable python_path/jq_path (issue #1599).
-    """
-    matches: list[dict[str, Any]] = []
-    children = card.get(key)
-    if isinstance(children, dict):
-        child_frame = frame.descend()
-        for name, child in children.items():
-            if not isinstance(name, str):
-                _log_non_str_key(key, name, jq_prefix)
-                continue
-            matches.extend(
-                _walk_card(
-                    child,
-                    jq_prefix=f"{jq_prefix}.{key}{_jq_key(name)}",
-                    python_prefix=f"{python_prefix}['{key}']{_py_key(name)}",
-                    frame=child_frame,
-                )
-            )
-    elif children is not None:
-        logger.debug(
-            "Card-search skipping non-dict '%s' under %s (%s)",
-            key,
-            jq_prefix,
-            type(children).__name__,
         )
     return matches
 
@@ -490,9 +468,9 @@ def _walk_card(
 ) -> list[dict[str, Any]]:
     """Return matches for ``card`` and every card nested beneath it.
 
-    Descends ``cards`` (list), ``card`` (dict), each ``custom_fields`` value, and
-    each ``states`` value (custom:state-switch), for nested as well as top-level
-    cards, up to ``_MAX_CARD_DEPTH``.
+    Descends every card slot (``cards`` / ``card`` / ``custom_fields`` /
+    ``states``) found at any depth inside the card, up to ``_MAX_CARD_DEPTH``
+    card levels.
 
     ``jq_prefix`` / ``python_prefix`` locate ``card`` itself — the former in jq
     dot-notation, the latter as a Python subscript chain usable (appended after
@@ -558,39 +536,8 @@ def _walk_card(
                     break
 
     matches.extend(
-        _walk_card_list_key(
-            card,
-            _NESTED_CARDS_KEY,
-            jq_prefix=jq_prefix,
-            python_prefix=python_prefix,
-            frame=frame,
-        )
-    )
-    matches.extend(
-        _walk_card_dict_key(
-            card,
-            _NESTED_CARD_KEY,
-            jq_prefix=jq_prefix,
-            python_prefix=python_prefix,
-            frame=frame,
-        )
-    )
-    matches.extend(
-        _walk_card_named_children(
-            card,
-            _NESTED_CUSTOM_FIELDS_KEY,
-            jq_prefix=jq_prefix,
-            python_prefix=python_prefix,
-            frame=frame,
-        )
-    )
-    matches.extend(
-        _walk_card_named_children(
-            card,
-            _NESTED_STATES_KEY,
-            jq_prefix=jq_prefix,
-            python_prefix=python_prefix,
-            frame=frame,
+        _walk_nested_cards(
+            card, jq_prefix=jq_prefix, python_prefix=python_prefix, frame=frame
         )
     )
     return matches
@@ -869,10 +816,6 @@ _DASHBOARD_STORAGE_MODE = "storage"
 # (parity pinned by test_component_dashboards_contract.py).
 _SEARCH_ALL_MATCH_CAP = 200
 
-# Structural keys walked as their own card containers, never scored as leaf
-# strings — mirrors the component's ``_DASHBOARD_STRUCTURAL_KEYS``.
-_SEARCH_ALL_STRUCTURAL_KEYS = frozenset({"cards", "sections"})
-
 
 async def _dashboards_via_component(
     client: Any,
@@ -1147,14 +1090,17 @@ def _collect_one_all_dashboard_card_matches(
     query_lower: str,
     matches: list[dict[str, Any]],
 ) -> None:
-    """Record matches for a SINGLE card at ``card_path`` and recurse its nested cards.
+    """Record matches for a SINGLE card at ``card_path`` and every card below it.
 
     Mirrors the component's ``_collect_one_card_matches`` — shared by the
     list-indexed card walk and the header-card walk (a header card is a single
     card, not list-indexed).
     """
+    leaves: list[tuple[str, str]] = []
+    nested: list[tuple[str, str, dict[str, Any]]] = []
+    _split_card_node(card, ("", ""), "", leaves, nested)
     card_type = card.get("type")
-    for field, value in _all_dashboard_card_string_leaves(card):
+    for field, value in leaves:
         if query_lower in value.lower():
             matches.append(
                 _all_dashboard_match(
@@ -1168,11 +1114,10 @@ def _collect_one_all_dashboard_card_matches(
                     value,
                 )
             )
-    nested = card.get("cards")
-    if isinstance(nested, list):
-        _collect_all_dashboard_card_matches(
-            nested,
-            f"{card_path}.cards",
+    for jq_suffix, _py_suffix, child in nested:
+        _collect_one_all_dashboard_card_matches(
+            child,
+            f"{card_path}{jq_suffix}",
             url_path,
             dash_title,
             view_index,
@@ -1267,31 +1212,10 @@ def _collect_all_dashboard_header_card_matches(
 
 
 def _all_dashboard_card_string_leaves(card: dict[str, Any]) -> list[tuple[str, str]]:
-    """``(immediate_key, string)`` for every string leaf of a card.
-
-    Descends nested dicts/lists but NOT the structural ``cards``/``sections`` keys
-    (those are walked as their own cards). The key attributed to a leaf is the
-    nearest dict key, matching the component's field taxonomy.
-    """
-    out: list[tuple[str, str]] = []
-    _walk_all_dashboard_card_leaves(card, "", out)
-    return out
-
-
-def _walk_all_dashboard_card_leaves(
-    value: Any, key: str, out: list[tuple[str, str]]
-) -> None:
-    """Recursive worker for :func:`_all_dashboard_card_string_leaves`."""
-    if isinstance(value, str):
-        if value:
-            out.append((key, value))
-    elif isinstance(value, dict):
-        for k, v in value.items():
-            if k not in _SEARCH_ALL_STRUCTURAL_KEYS:
-                _walk_all_dashboard_card_leaves(v, str(k), out)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            _walk_all_dashboard_card_leaves(item, key, out)
+    """``(nearest_key, string)`` for every string leaf a badge or card owns."""
+    leaves: list[tuple[str, str]] = []
+    _split_card_node(card, ("", ""), "", leaves, [])
+    return leaves
 
 
 async def fetch_dashboards_list(
@@ -1891,8 +1815,9 @@ class DashboardConfigTools:
 
         MODE 2 — Search: any of entity_id / card_type / heading provided
           Finds cards, badges, and header cards matching the criteria, including
-          cards nested inside stacks, grids, conditional cards, button-card
-          custom_fields, and state-switch states. Each match carries a
+          cards nested at any depth inside other cards (stacks, grids,
+          conditional cards, button-card custom_fields, state-switch states,
+          and custom cards' own keys such as groups[].cards[].card). Each match carries a
           python_path and a jq_path that locate the card for nested as well as
           top-level cards. The python_path is a Python subscript chain to be
           appended after `config` — e.g.
@@ -1900,8 +1825,8 @@ class DashboardConfigTools:
           NOT valid on its own without the `config` prefix). jq_path is the same
           location in jq dot-notation.
           Multiple criteria are AND-ed. Always fetches fresh config, bypassing the cache.
-          Search covers cards/card/custom_fields/states containers up to a depth
-          bound; if the dashboard carries a non-traversed child-bearing shape
+          Search covers cards/card/custom_fields/states slots at any depth up to
+          a depth bound; if the dashboard carries a non-traversed child-bearing shape
           (e.g. picture-elements `elements`), the result carries a `warnings`
           entry naming where, so its hidden content is not mistaken for absent.
           Strategy dashboards are not searchable (no explicit cards).
@@ -1920,8 +1845,10 @@ class DashboardConfigTools:
 
         MODE 4 — Search all: mode="search" with query=<entity_id or text>
           Answers "which dashboards contain this entity/card" by walking every
-          storage-mode dashboard's views/cards/sections for the query substring.
-          Each match names the url_path, view, card_path, card_type, and the
+          storage-mode dashboard's views/cards/sections for the query substring,
+          reading every value inside each card (including cards nested under a
+          custom card's own keys). Each match names the url_path, view, card_path
+          of the innermost card holding the value, card_type, and the
           matched field/value. Takes precedence over the other modes (list_only /
           entity_id / card_type / heading are ignored when mode="search").
           YAML-mode dashboards are never searched on either path — the component
