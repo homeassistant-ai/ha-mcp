@@ -11,8 +11,8 @@ Covered seams: ``list`` parity (component rows == the legacy
 ``lovelace/dashboards/list`` shape, YAML metadata rows KEPT on both paths),
 ``get`` parity (storage body + the default dashboard via ``url_path=None``), a
 YAML dashboard's per-call fall back to the legacy read (its body is never served
-in-process), cross-dashboard ``search`` parity (the component's in-process walk
-vs the server-side legacy walk over identical fixture configs), the set tool's
+in-process), search-across-dashboards parity (configs from the component's one
+``docs`` frame vs the legacy per-dashboard reads, same server walk), the set tool's
 existence check, and the auto-backup capture read.
 """
 
@@ -453,22 +453,22 @@ async def test_search_parity_badges_and_header_cards() -> None:
     comp_b, legacy_b = await _both("sensor.badge_only")
     assert comp_b == legacy_b
     assert len(comp_b) == 1
-    assert ".badges[" in comp_b[0]["card_path"]
+    assert ".badges[" in comp_b[0]["jq_path"]
     assert comp_b[0]["card_type"] == "badge"
-    assert comp_b[0]["matched_value"] == "sensor.badge_only"
+    assert comp_b[0]["matched"] == [{"field": "badges", "value": "sensor.badge_only"}]
 
     # Dict badge: walked like a card (its own type + field taxonomy).
     comp_d, legacy_d = await _both("sensor.badge_dict")
     assert comp_d == legacy_d
     assert len(comp_d) == 1
-    assert ".badges[" in comp_d[0]["card_path"]
+    assert ".badges[" in comp_d[0]["jq_path"]
     assert comp_d[0]["card_type"] == "entity"
 
     # Header-card-only: matched only in views[n].header.card.
     comp_h, legacy_h = await _both("sensor.header_only")
     assert comp_h == legacy_h
     assert len(comp_h) == 1
-    assert comp_h[0]["card_path"].endswith(".header.card")
+    assert comp_h[0]["jq_path"].endswith(".header.card")
     assert comp_h[0]["card_type"] == "markdown"
 
 
@@ -536,23 +536,23 @@ async def test_search_parity_cards_nested_under_custom_keys() -> None:
             mode="search", query="light.x"
         )
 
-    assert [(m["card_path"], m["card_type"]) for m in comp["matches"]] == [
-        ("views[0].cards[0].groups[0].cards[0].card", "tile"),
-        ("views[0].cards[0].groups[0].cards[1].card", "entities"),
-        ("views[0].cards[0].groups[0].cards[2]", "tile"),
-        ("views[0].cards[1].custom_fields.content.card.cards[0]", "tile"),
-        ("views[0].cards[2].tabs[0].card", "tile"),
-        ("views[0].cards[3]", "tile"),
+    assert [(m["jq_path"], m["card_type"]) for m in comp["matches"]] == [
+        (".views[0].cards[0].groups[0].cards[0].card", "tile"),
+        (".views[0].cards[0].groups[0].cards[1].card", "entities"),
+        (".views[0].cards[0].groups[0].cards[2]", "tile"),
+        (".views[0].cards[1].custom_fields.content.card.cards[0]", "tile"),
+        (".views[0].cards[2].tabs[0].card", "tile"),
+        (".views[0].cards[3]", "tile"),
     ]
     assert comp["matches"] == legacy["matches"]
 
 
 @pytest.mark.asyncio
 async def test_search_parity_truncation_cap() -> None:
-    """>200 matches truncate identically on both paths (mirrors the component cap)."""
-    cap = tools_config_dashboards._SEARCH_ALL_MATCH_CAP
-    entities = [f"light.e{i}" for i in range(cap + 25)]
-    body = {"views": [{"cards": [{"type": "entities", "entities": entities}]}]}
+    """More matches than the cap truncate identically on both paths."""
+    cap = tools_config_dashboards._SEARCH_MATCH_CAP
+    cards = [{"type": "tile", "entity": f"light.e{i}"} for i in range(cap + 25)]
+    body = {"views": [{"cards": cards}]}
     dmap = {"home": _storage_dash("home", "Home", body=body)}
 
     hass = _component_hass(dmap)
@@ -584,8 +584,8 @@ async def test_search_default_dashboard_asymmetry() -> None:
     """Documented asymmetry: the component walk covers the default (None-keyed)
     dashboard; the component-less legacy walk excludes it, because
     ``fetch_dashboards_list`` never returns the default so it is never fetched
-    for the server-side walk (see MODE 4 docstring caveat on
-    ``ha_config_get_dashboard``)."""
+    for the server-side walk (see the search caveat in the
+    ``ha_config_get_dashboard`` docstring)."""
     default_body = {
         "views": [{"cards": [{"type": "entities", "entities": ["light.default_only"]}]}]
     }

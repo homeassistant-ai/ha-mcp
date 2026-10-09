@@ -391,51 +391,66 @@ async def test_get_force_reload_bypasses_component() -> None:
     assert client.config_force_flags == [True]
 
 
-# --- cross-dashboard search ---------------------------------------------------
+# --- search across dashboards -------------------------------------------------
+_CAPS_DASHBOARDS_DOCS = {
+    **_CAPS_DASHBOARDS,
+    "capabilities": ["dashboards", "dashboards_docs"],
+}
+
+
 @pytest.mark.asyncio
-async def test_search_served_via_component() -> None:
-    """mode='search' served from the component ``search`` frame, no legacy reads."""
-    matches = [
-        {
-            "url_path": "home",
-            "title": "Home",
-            "view_index": 0,
-            "view_title": "Living",
-            "card_path": "views[0].cards[0]",
-            "card_type": "entities",
-            "matched_field": "entities",
-            "matched_value": "light.kitchen",
-        }
-    ]
+async def test_search_reads_configs_from_one_component_frame() -> None:
+    """An unscoped search reads every storage config from one ``docs`` frame."""
     ws = make_ws(
         "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
+        info_result=_CAPS_DASHBOARDS_DOCS,
         cmd_result={
-            "mode": "search",
+            "mode": "docs",
             "available": True,
-            "matches": matches,
-            "truncated": False,
+            "docs": [{"url_path": "home", "config": _HOME_BODY}],
+            "load_failed": 0,
         },
     )
     client = RoutingClient()
     get_dashboard = _build_get_dashboard(client)
 
     with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(mode="search", query="light.kitchen")
+        resp = await get_dashboard(query="light.kitchen")
 
-    assert resp["action"] == "search_all"
-    assert resp["query"] == "light.kitchen"
-    assert resp["matches"] == matches
+    assert resp["action"] == "search"
+    assert resp["search_criteria"]["query"] == "light.kitchen"
     assert resp["match_count"] == 1
     assert resp["truncated"] is False
+    m = resp["matches"][0]
+    assert m["url_path"] == "home"
+    assert m["jq_path"] == ".views[0].cards[0]"
+    assert m["python_path"] == "['views'][0]['cards'][0]"
+    assert m["matched"] == [{"field": "entities", "value": "light.kitchen"}]
+    assert m["config_hash"] == tools_config_dashboards.compute_config_hash(_HOME_BODY)
     assert client.list_calls == 0
     assert client.config_calls == []
-    assert _dash_calls(ws)[0].kwargs == {"mode": "search", "query": "light.kitchen"}
+    assert _dash_calls(ws)[0].kwargs == {"mode": "docs"}
 
 
 @pytest.mark.asyncio
-async def test_search_capability_miss_uses_legacy_walk() -> None:
-    """No capability → list + per-dashboard get + the same walk, server-side."""
+async def test_search_reports_unreadable_component_dashboards() -> None:
+    ws = make_ws(
+        "ha_mcp_tools/dashboards",
+        info_result=_CAPS_DASHBOARDS_DOCS,
+        cmd_result={"mode": "docs", "available": True, "docs": [], "load_failed": 2},
+    )
+    get_dashboard = _build_get_dashboard(RoutingClient())
+
+    with patch_ws(ws, tools_config_dashboards):
+        resp = await get_dashboard(query="light.kitchen")
+
+    assert resp["match_count"] == 0
+    assert any("2 storage dashboard(s)" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_search_capability_miss_uses_legacy_reads() -> None:
+    """No ``dashboards_docs`` capability → list + one get per storage dashboard."""
     ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     client = RoutingClient(
         dashboards_list=[_STORAGE_ROW],
@@ -446,18 +461,34 @@ async def test_search_capability_miss_uses_legacy_walk() -> None:
     with patch_ws(ws, tools_config_dashboards):
         resp = await get_dashboard(mode="search", query="light.kitchen")
 
-    assert resp["action"] == "search_all"
+    assert resp["action"] == "search"
     assert resp["match_count"] == 1
     m = resp["matches"][0]
     assert m["url_path"] == "home"
     assert m["card_type"] == "entities"
-    assert m["matched_field"] == "entities"
-    assert m["matched_value"] == "light.kitchen"
-    assert m["card_path"] == "views[0].cards[0]"
-    # Legacy walk: one dashboards/list + one lovelace/config per storage dash.
+    assert m["jq_path"] == ".views[0].cards[0]"
+    assert m["matched"] == [{"field": "entities", "value": "light.kitchen"}]
     assert client.list_calls == 1
     assert client.config_calls == ["home"]
     assert not _dash_calls(ws)
+
+
+@pytest.mark.asyncio
+async def test_search_with_url_path_searches_only_that_dashboard() -> None:
+    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    client = RoutingClient(dashboards_list=[_STORAGE_ROW], configs={"home": _HOME_BODY})
+    get_dashboard = _build_get_dashboard(client)
+
+    with patch_ws(ws, tools_config_dashboards):
+        resp = await get_dashboard(url_path="home", query="light.kitchen")
+
+    assert resp["url_path"] == "home"
+    assert resp["config_hash"] == tools_config_dashboards.compute_config_hash(
+        _HOME_BODY
+    )
+    assert resp["match_count"] == 1
+    assert "url_path" not in resp["matches"][0]
+    assert client.config_calls == ["home"]
 
 
 @pytest.mark.asyncio
@@ -479,7 +510,7 @@ async def test_legacy_search_walk_skips_yaml_body() -> None:
     with patch_ws(ws, tools_config_dashboards):
         resp = await get_dashboard(mode="search", query="light.kitchen")
 
-    assert resp["action"] == "search_all"
+    assert resp["action"] == "search"
     assert resp["match_count"] == 1
     assert resp["matches"][0]["url_path"] == "home"
     # Only the storage dashboard's body was read; the YAML row was skipped.
@@ -510,7 +541,7 @@ async def test_legacy_search_walk_skips_untagged_row() -> None:
     with patch_ws(ws, tools_config_dashboards):
         resp = await get_dashboard(mode="search", query="light.kitchen")
 
-    assert resp["action"] == "search_all"
+    assert resp["action"] == "search"
     assert resp["match_count"] == 0
     # The untagged row's body was NEVER requested (fail-closed).
     assert client.config_calls == []
@@ -518,7 +549,7 @@ async def test_legacy_search_walk_skips_untagged_row() -> None:
 
 @pytest.mark.asyncio
 async def test_search_requires_query() -> None:
-    """mode='search' with no query is a structured validation error (no WS)."""
+    """A search with only a blank query is a structured validation error (no WS)."""
     from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_DASHBOARDS)

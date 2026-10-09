@@ -227,14 +227,13 @@ async def test_view_path_in_search_mode_warns_ignored(get_dashboard_tool):
 
 
 @pytest.mark.asyncio
-async def test_view_path_in_search_all_mode_warns_ignored(mock_client):
-    """MODE 4 (mode='search') must warn like the other non-get modes instead
-    of silently dropping view_path."""
+async def test_view_path_in_unscoped_search_warns_ignored(mock_client):
+    """A search across dashboards warns about view_path instead of dropping it."""
     mock_client.send_websocket_message = AsyncMock(return_value={"result": []})
     tool = DashboardConfigTools(mock_client).ha_config_get_dashboard
 
-    result = await tool(mode="search", query="light.desk", view_path="office")
+    result = await tool(query="light.desk", view_path="office")
 
     assert result["success"] is True
-    assert result["action"] == "search_all"
+    assert result["action"] == "search"
     assert any("view_path" in w and "ignored" in w for w in result["warnings"])

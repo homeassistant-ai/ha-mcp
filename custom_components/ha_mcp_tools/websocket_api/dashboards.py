@@ -71,6 +71,8 @@ def _do_dashboards(
         elif mode == "search":
             result["matches"] = []
             result["truncated"] = False
+        elif mode == "docs":
+            result["docs"] = []
         return result
 
     if mode == "get":
@@ -80,6 +82,16 @@ def _do_dashboards(
             "status": prepped.get("status"),
             "url_path": prepped.get("url_path"),
             "config": prepped.get("config"),
+        }
+    if mode == "docs":
+        return {
+            "mode": "docs",
+            "available": True,
+            "docs": [
+                {"url_path": doc.get("url_path"), "config": doc.get("config")}
+                for doc in prepped.get("docs") or []
+            ],
+            "load_failed": prepped.get("load_failed", 0),
         }
     if mode == "search":
         query_lower = (params.get("query") or "").strip().lower()
@@ -121,7 +133,7 @@ async def _dashboards_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str
     prepped: dict[str, Any] = {"available": True}
     if mode == "get":
         prepped.update(await _dashboard_get_config(dashboards_map, msg.get("url_path")))
-    elif mode == "search":
+    elif mode in ("search", "docs"):
         (
             prepped["docs"],
             prepped["yaml_skipped"],
