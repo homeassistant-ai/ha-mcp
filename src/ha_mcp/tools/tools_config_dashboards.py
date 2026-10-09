@@ -330,7 +330,8 @@ class _SearchCriteria:
         return self.has_card_criteria() and self.card_type != _BADGE_CARD_TYPE
 
     def can_match_badges(self) -> bool:
-        """Whether view badges are in scope: no heading, card_type unset or 'badge'."""
+        """Whether view badges can match: they carry no heading, and any other
+        card_type names a card."""
         return self.heading is None and self.card_type in (None, _BADGE_CARD_TYPE)
 
     def is_empty(self) -> bool:
@@ -339,7 +340,11 @@ class _SearchCriteria:
 
 @dataclass(frozen=True, slots=True)
 class _SearchGaps:
-    """Where a search could not look; each list feeds one response warning."""
+    """Where a search could not look; each list feeds one response warning.
+
+    Frozen only against field reassignment: the lists are shared collectors
+    appended to in place.
+    """
 
     truncation: list[str] = field(default_factory=list)
     uncovered: list[str] = field(default_factory=list)
@@ -468,8 +473,8 @@ def _walk_card(
     container only.
 
     Only a dict carrying a ``type`` key is matched as a card. Subtrees past
-    ``_MAX_CARD_DEPTH`` card levels are recorded in ``frame.truncation``; cards
-    carrying ``_NON_CARD_CHILD_KEYS`` in ``frame.uncovered``.
+    ``_MAX_CARD_DEPTH`` card levels are recorded in ``frame.gaps.truncation``;
+    cards carrying ``_NON_CARD_CHILD_KEYS`` in ``frame.gaps.uncovered``.
     """
     if not isinstance(card, dict):
         # Structurally-present but malformed slot (e.g. a string where a card
@@ -573,7 +578,8 @@ def _find_badge_matches_in_view(
     matches: list[dict[str, Any]] = []
     for badge_idx, badge in enumerate(badges):
         is_dict_badge = isinstance(badge, dict)
-        if not (is_dict_badge or (isinstance(badge, str) and badge.strip())):
+        is_entity_badge = isinstance(badge, str) and bool(badge.strip())
+        if not (is_dict_badge or is_entity_badge):
             frame.gaps.malformed_badges.append(
                 f".views[{view_idx}].badges[{badge_idx}]"
             )
@@ -683,8 +689,9 @@ def _find_cards_matching(
     nested at any depth (see ``_split_card_node``), plus view-level badges and
     sections-view header cards.
 
-    Each match carries ``jq_path`` and ``python_path`` (appended after
-    ``config`` in ``ha_config_set_dashboard(python_transform)``). What the walk
+    Each match carries ``jq_path``, and ``python_path`` (appended after
+    ``config`` in ``ha_config_set_dashboard(python_transform)``) except a
+    bare-string badge, which is not subscript-assignable. What the walk
     could not search is recorded in ``gaps``: subtrees past the depth bound,
     cards holding one of ``_NON_CARD_CHILD_KEYS``, and malformed badges.
     Empty criteria match everything, so callers must reject them first (the
@@ -1454,11 +1461,10 @@ def _search_warnings(
 ) -> list[str]:
     """Warnings that keep an incomplete search from reading as complete.
 
-    Disclosure keys off the *presence* of a capped, depth-truncated,
-    uncovered or malformed shape, not off a 0-match. ``warn_uncovered`` is set
-    when the criteria could select cards whose picture-elements they skip.
+    Disclosure keys off the *presence* of a match cap, a depth-truncated
+    subtree, unsearched picture-elements or a malformed badge, not off a
+    0-match. ``warn_uncovered`` gates the picture-elements warning.
     """
-    truncation, malformed = gaps.truncation, gaps.malformed_badges
     uncovered = gaps.uncovered if warn_uncovered else []
     warnings: list[str] = []
     if truncated:
@@ -1466,11 +1472,11 @@ def _search_warnings(
             f"Results capped at {_SEARCH_MATCH_CAP} matches; narrow the search "
             "(url_path, card_type, query) for a complete list."
         )
-    if truncation:
+    if gaps.truncation:
         warnings.append(
             f"Search stopped at the nesting depth bound "
             f"(_MAX_CARD_DEPTH={_MAX_CARD_DEPTH}) in "
-            f"{len(truncation)} place(s); cards nested deeper were not "
+            f"{len(gaps.truncation)} place(s); cards nested deeper were not "
             "searched, so results may be incomplete."
         )
     if uncovered:
@@ -1480,10 +1486,10 @@ def _search_warnings(
             f"picture-elements 'elements', present at: {locations}. Use query= "
             "to search their text, or fetch the full config to inspect them."
         )
-    if malformed:
+    if gaps.malformed_badges:
         warnings.append(
             "Skipped badge entries that are neither an entity id nor a mapping, "
-            f"at: {', '.join(malformed)}. Fetch the config to repair them."
+            f"at: {', '.join(gaps.malformed_badges)}. Fetch the config to repair them."
         )
     return warnings
 

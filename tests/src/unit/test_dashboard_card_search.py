@@ -367,19 +367,39 @@ class TestBadgeCriteria:
         ]
         assert all("matched" not in m for m in matches)
 
-    def test_malformed_badge_entries_are_reported_not_listed(self):
-        config = {"views": [{"badges": [None, 5, "", "  ", "sensor.ok"], "cards": []}]}
-        result = DashboardConfigTools._build_search_result(
-            [{"url_path": "d", "config": config}],
-            criteria=_SearchCriteria(card_type="badge"),
+    MALFORMED: ClassVar[dict[str, Any]] = {
+        "views": [{"badges": [None, "  ", "sensor.ok"], "cards": []}]
+    }
+
+    def _malformed_search(
+        self, url_path: str | None, **criteria: str
+    ) -> dict[str, Any]:
+        return DashboardConfigTools._build_search_result(
+            [{"url_path": "d", "config": self.MALFORMED}],
+            criteria=_SearchCriteria(**criteria),
             include_config=False,
-            url_path="d",
+            url_path=url_path,
         )
-        assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[4]"]
-        assert any(
-            ".views[0].badges[0]" in w and ".views[0].badges[3]" in w
-            for w in result["warnings"]
-        )
+
+    @pytest.mark.parametrize(
+        ("url_path", "criteria", "prefix"),
+        [
+            ("d", {"card_type": "badge"}, ""),
+            (None, {"query": "sensor"}, "d:"),
+        ],
+    )
+    def test_malformed_badge_entries_are_reported_not_listed(
+        self, url_path: str | None, criteria: dict[str, str], prefix: str
+    ):
+        result = self._malformed_search(url_path, **criteria)
+        assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[2]"]
+        [warning] = result["warnings"]
+        assert f"{prefix}.views[0].badges[0]" in warning
+        assert f"{prefix}.views[0].badges[1]" in warning
+
+    def test_out_of_scope_badges_are_not_reported(self):
+        result = self._malformed_search("d", card_type="tile")
+        assert "warnings" not in result
 
     def test_heading_excludes_badges(self):
         matches = _find_cards_in_config(self.CONFIG, entity_id="light.a", heading="t")

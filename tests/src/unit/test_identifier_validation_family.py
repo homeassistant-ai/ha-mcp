@@ -712,8 +712,8 @@ class TestDashboardsIdentifierValidation:
     ):
         # Control: ``url_path=None`` without ``list_only`` is the
         # documented default-dashboard read. ``url_path`` must be absent
-        # from the WebSocket payload (``_lovelace_url_path`` maps ``None`` to
-        # no key) — HA returns the default dashboard when the key is absent —
+        # from the WebSocket payload (``_lovelace_url_path`` returns ``None``
+        # and the caller omits the key) — HA returns the default dashboard —
         # so a regression that sent it unconditionally would break that read.
         mock_ws_client.send_websocket_message = AsyncMock(
             return_value={"success": True, "result": {"views": []}}
