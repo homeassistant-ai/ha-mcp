@@ -2444,7 +2444,9 @@ class IntegrationTools:
                 client, helper_type, target, warnings
             )
             if entry_id is None:
-                raise_flow_helper_lookup_error(reason, helper_type, target)
+                raise_flow_helper_lookup_error(
+                    reason, helper_type, target, detail="; ".join(warnings) or None
+                )
 
             result: dict[str, Any] = await self._delete_resolved_flow_helper(
                 helper_type=helper_type,

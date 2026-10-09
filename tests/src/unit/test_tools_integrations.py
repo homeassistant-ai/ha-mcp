@@ -570,12 +570,8 @@ class TestRemoveHelpersIntegrations:
         target). Matches the existing bare_id_not_supported branch and
         sibling ha_remove_entity.
         """
-        # First lookup returns success=False → entry_id resolves to None
-        # Disambiguation re-query also returns success=False → reason
-        # discriminates as "not_in_registry"
         mock_client.send_websocket_message.side_effect = [
-            {"success": False, "error": "not found"},  # initial lookup
-            {"success": False, "error": "not found"},  # disambiguation
+            {"success": False, "error": "Entity not found", "error_code": "not_found"},
         ]
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(

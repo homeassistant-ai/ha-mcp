@@ -7,7 +7,7 @@ from ..client.rest_client import HomeAssistantAuthError, HomeAssistantConnection
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow import FLOW_HELPER_TYPES
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
-from .helpers import raise_tool_error
+from .helpers import raise_tool_error, ws_failure_code
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,21 @@ async def _read_registry_entry(
             warnings.append(f"entity_registry/get failed for {entity_id}: {e}")
         return None, "lookup_failed"
 
-    if not isinstance(result, dict) or not result.get("success"):
+    if not isinstance(result, dict):
+        return None, "not_in_registry"
+    if not result.get("success"):
+        # Core answers an unknown entity with not_found; any other failure (a
+        # proxy block, a malformed request) is no evidence of absence.
+        if result.get("error_code") != "not_found":
+            raise_tool_error(
+                create_error_response(
+                    ws_failure_code(result),
+                    f"Reading the entity registry for {entity_id} failed: "
+                    f"{result.get('error') or 'unknown error'}",
+                    context={"entity_id": entity_id},
+                    suggestions=result.get("suggestions"),
+                )
+            )
         return None, "not_in_registry"
 
     entry = result.get("result")
@@ -113,6 +127,7 @@ def raise_flow_helper_lookup_error(
     reason: FlowLookupReason,
     helper_type: str | None,
     target: str,
+    detail: str | None = None,
 ) -> NoReturn:
     """Raise the structured error for a failed flow-helper entry_id lookup.
 
@@ -167,8 +182,8 @@ def raise_flow_helper_lookup_error(
             create_error_response(
                 ErrorCode.WEBSOCKET_DISCONNECTED,
                 (
-                    f"Registry lookup for {entity_id} failed "
-                    "due to a WebSocket error."
+                    f"Registry lookup for {entity_id} failed due to a "
+                    f"WebSocket error{f': {detail}' if detail else '.'}"
                 ),
                 context={
                     "target": target,
@@ -250,9 +265,12 @@ async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None
     custom integrations) comes back as ``(None, config_entry_id)``: a direct
     entry delete. An entity of any other integration is refused.
     """
-    entry, reason = await _read_registry_entry(client, entity_id)
+    warnings: list[str] = []
+    entry, reason = await _read_registry_entry(client, entity_id, warnings)
     if entry is None:
-        raise_flow_helper_lookup_error(reason, None, entity_id)
+        raise_flow_helper_lookup_error(
+            reason, None, entity_id, detail="; ".join(warnings) or None
+        )
     platform = entry.get("platform")
     if platform in SIMPLE_HELPER_TYPES or platform in FLOW_HELPER_TYPES:
         return platform, entity_id
