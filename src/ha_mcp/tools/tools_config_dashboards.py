@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Annotated, Any, Literal, NoReturn, cast, overload
 
 from pydantic import Field
@@ -327,21 +327,35 @@ class _SearchCriteria:
 
     def targets_cards(self) -> bool:
         """Whether a card-field criterion can select cards (not only badges)."""
-        return (
-            self.entity_id is not None
-            or self.heading is not None
-            or self.card_type not in (None, _BADGE_CARD_TYPE)
-        )
+        return self.has_card_criteria() and self.card_type != _BADGE_CARD_TYPE
+
+    def can_match_badges(self) -> bool:
+        """Whether view badges are in scope: no heading, card_type unset or 'badge'."""
+        return self.heading is None and self.card_type in (None, _BADGE_CARD_TYPE)
 
     def is_empty(self) -> bool:
         return self.query is None and not self.has_card_criteria()
 
 
 @dataclass(frozen=True, slots=True)
+class _SearchGaps:
+    """Where a search could not look; each list feeds one response warning."""
+
+    truncation: list[str] = field(default_factory=list)
+    uncovered: list[str] = field(default_factory=list)
+    malformed_badges: list[str] = field(default_factory=list)
+
+    def extend(self, other: "_SearchGaps", prefix: str) -> None:
+        self.truncation.extend(prefix + p for p in other.truncation)
+        self.uncovered.extend(prefix + p for p in other.uncovered)
+        self.malformed_badges.extend(prefix + p for p in other.malformed_badges)
+
+
+@dataclass(frozen=True, slots=True)
 class _CardWalkFrame:
     """Context ``_walk_card`` carries through every nested card.
 
-    ``truncation`` / ``uncovered`` are shared collectors every copy appends to.
+    ``gaps`` is a shared collector every copy appends to.
     """
 
     criteria: _SearchCriteria
@@ -349,8 +363,7 @@ class _CardWalkFrame:
     section_index: int | None
     card_index: int | None
     depth: int
-    truncation: list[str]
-    uncovered: list[str]
+    gaps: _SearchGaps
 
     def with_indices(
         self, *, section_index: int | None, card_index: int | None
@@ -474,7 +487,7 @@ def _walk_card(
             _MAX_CARD_DEPTH,
             jq_prefix,
         )
-        frame.truncation.append(jq_prefix)
+        frame.gaps.truncation.append(jq_prefix)
         return []
 
     leaves: list[tuple[str, str]] = []
@@ -504,7 +517,7 @@ def _note_uncovered(
 ) -> None:
     for key in _NON_CARD_CHILD_KEYS:
         if card.get(key):
-            frame.uncovered.append(f"{jq_prefix}.{key}")
+            frame.gaps.uncovered.append(f"{jq_prefix}.{key}")
             return
 
 
@@ -549,26 +562,20 @@ def _find_badge_matches_in_view(
     """View-level badges matching ``frame``'s criteria.
 
     Badges are entity references, so they answer entity_id and text searches,
-    and ``card_type='badge'`` alone lists them all; a heading or another
-    card_type excludes them.
+    and ``card_type='badge'`` alone lists every well-formed badge (an entity id
+    or a mapping); malformed entries are reported in ``frame.gaps``.
     """
     view_idx = frame.view_index
     criteria = frame.criteria
     badges = view.get("badges")
-    if (
-        not isinstance(badges, list)
-        or criteria.heading is not None
-        or criteria.card_type not in (None, _BADGE_CARD_TYPE)
-    ):
+    if not isinstance(badges, list) or not criteria.can_match_badges():
         return []
     matches: list[dict[str, Any]] = []
     for badge_idx, badge in enumerate(badges):
-        if not isinstance(badge, dict) and not (isinstance(badge, str) and badge):
-            logger.debug(
-                "Card-search skipping malformed badge at .views[%d].badges[%d] (%s)",
-                view_idx,
-                badge_idx,
-                type(badge).__name__,
+        is_dict_badge = isinstance(badge, dict)
+        if not (is_dict_badge or (isinstance(badge, str) and badge.strip())):
+            frame.gaps.malformed_badges.append(
+                f".views[{view_idx}].badges[{badge_idx}]"
             )
             continue
         if criteria.entity_id is not None and not _badge_matches(
@@ -581,7 +588,6 @@ def _find_badge_matches_in_view(
         hits = _query_hits(leaves, criteria.query_lower)
         if hits == []:
             continue
-        is_dict_badge = isinstance(badge, dict)
         badge_match: dict[str, Any] = {
             "view_index": view_idx,
             "section_index": None,
@@ -667,9 +673,7 @@ def _find_view_card_matches(
 def _find_cards_matching(
     config: dict[str, Any],
     criteria: _SearchCriteria,
-    *,
-    truncation: list[str],
-    uncovered: list[str],
+    gaps: _SearchGaps,
 ) -> list[dict[str, Any]]:
     """Find cards, badges, and header cards in a dashboard config matching ``criteria``.
 
@@ -680,11 +684,11 @@ def _find_cards_matching(
     sections-view header cards.
 
     Each match carries ``jq_path`` and ``python_path`` (appended after
-    ``config`` in ``ha_config_set_dashboard(python_transform)``). The jq path
-    of each subtree skipped at the depth bound is appended to ``truncation``,
-    and the ``.<key>`` path of each card holding one of ``_NON_CARD_CHILD_KEYS``
-    to ``uncovered``. Empty criteria match everything, so callers reject them
-    first (as ``_get_dashboard_search_mode`` does).
+    ``config`` in ``ha_config_set_dashboard(python_transform)``). What the walk
+    could not search is recorded in ``gaps``: subtrees past the depth bound,
+    cards holding one of ``_NON_CARD_CHILD_KEYS``, and malformed badges.
+    Empty criteria match everything, so callers must reject them first (the
+    search entry point, ``_get_dashboard_search_mode``, does).
     """
     views = config.get("views")
     if "strategy" in config or not isinstance(views, list):
@@ -699,8 +703,7 @@ def _find_cards_matching(
             section_index=None,
             card_index=None,
             depth=0,
-            truncation=truncation,
-            uncovered=uncovered,
+            gaps=gaps,
         )
         matches.extend(_find_badge_matches_in_view(view, frame))
         matches.extend(_find_header_card_matches(view, frame))
@@ -1422,44 +1425,41 @@ def _attach_screenshot_tool_error(
 
 def _find_cards_in_docs(
     docs: list[dict[str, Any]], criteria: _SearchCriteria, *, name_dashboards: bool
-) -> tuple[list[dict[str, Any]], list[str], list[str]]:
-    """Matches over ``docs`` (``{url_path, config}``) plus truncated/uncovered spots.
+) -> tuple[list[dict[str, Any]], _SearchGaps]:
+    """Matches over ``docs`` (``{url_path, config}``) and where the search could not look.
 
     Each match is stamped with its dashboard's ``url_path`` and ``config_hash``;
-    with ``name_dashboards`` each location is prefixed with ``<url_path>:``.
+    with ``name_dashboards`` each gap location is prefixed with ``<url_path>:``.
     """
     matches: list[dict[str, Any]] = []
-    truncation: list[str] = []
-    uncovered: list[str] = []
+    gaps = _SearchGaps()
     for doc in docs:
         # The default dashboard has no url_path; "default" is what the get and
         # set tools accept for it.
         url_path = doc["url_path"] or "default"
-        doc_truncation: list[str] = []
-        doc_uncovered: list[str] = []
-        found = _find_cards_matching(
-            doc["config"], criteria, truncation=doc_truncation, uncovered=doc_uncovered
-        )
+        doc_gaps = _SearchGaps()
+        found = _find_cards_matching(doc["config"], criteria, doc_gaps)
         if found:
             config_hash = compute_config_hash(doc["config"])
             for match in found:
                 match["url_path"] = url_path
                 match["config_hash"] = config_hash
-        prefix = f"{url_path}:" if name_dashboards else ""
         matches.extend(found)
-        truncation.extend(prefix + path for path in doc_truncation)
-        uncovered.extend(prefix + path for path in doc_uncovered)
-    return matches, truncation, uncovered
+        gaps.extend(doc_gaps, f"{url_path}:" if name_dashboards else "")
+    return matches, gaps
 
 
 def _search_warnings(
-    *, truncated: bool, truncation: list[str], uncovered: list[str]
+    *, truncated: bool, gaps: _SearchGaps, warn_uncovered: bool
 ) -> list[str]:
     """Warnings that keep an incomplete search from reading as complete.
 
-    Disclosure keys off the *presence* of a capped, depth-truncated or
-    uncovered shape, not off a 0-match.
+    Disclosure keys off the *presence* of a capped, depth-truncated,
+    uncovered or malformed shape, not off a 0-match. ``warn_uncovered`` is set
+    when the criteria could select cards whose picture-elements they skip.
     """
+    truncation, malformed = gaps.truncation, gaps.malformed_badges
+    uncovered = gaps.uncovered if warn_uncovered else []
     warnings: list[str] = []
     if truncated:
         warnings.append(
@@ -1479,6 +1479,11 @@ def _search_warnings(
             "entity_id, card_type and heading do not match inside "
             f"picture-elements 'elements', present at: {locations}. Use query= "
             "to search their text, or fetch the full config to inspect them."
+        )
+    if malformed:
+        warnings.append(
+            "Skipped badge entries that are neither an entity id nor a mapping, "
+            f"at: {', '.join(malformed)}. Fetch the config to repair them."
         )
     return warnings
 
@@ -1852,7 +1857,7 @@ class DashboardConfigTools:
         a YAML dashboard may carry HA-resolved ``!secret`` plaintext. Match
         LOCATIONS are always reported.
         """
-        matches, truncation, uncovered = _find_cards_in_docs(
+        matches, gaps = _find_cards_in_docs(
             docs, criteria, name_dashboards=url_path is None
         )
         truncated = len(matches) > _SEARCH_MATCH_CAP
@@ -1861,12 +1866,11 @@ class DashboardConfigTools:
             for match in matches:
                 del match["card_config"]
 
-        # query reads picture-elements text, and a badge-only search never
-        # looks at cards; only criteria that select cards leave it unsearched.
+        # query reads picture-elements text, and card_type='badge' cannot match
+        # a card; only criteria that can select cards make unsearched
+        # 'elements' worth a warning.
         warnings = _search_warnings(
-            truncated=truncated,
-            truncation=truncation,
-            uncovered=uncovered if criteria.targets_cards() else [],
+            truncated=truncated, gaps=gaps, warn_uncovered=criteria.targets_cards()
         )
         if config_suppressed_note is not None and matches:
             warnings.insert(0, config_suppressed_note)

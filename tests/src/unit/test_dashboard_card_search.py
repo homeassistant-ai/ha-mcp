@@ -7,6 +7,8 @@ heading.
 
 from typing import Any, ClassVar
 
+import pytest
+
 from ha_mcp.tools.tools_config_dashboards import (
     DashboardConfigTools,
     _SearchCriteria,
@@ -346,7 +348,7 @@ class TestBlankCriteria:
 
 
 class TestBadgeCriteria:
-    """card_type='badge' alone lists every badge; a heading excludes them."""
+    """card_type='badge' alone lists every well-formed badge; a heading excludes them."""
 
     CONFIG: ClassVar[dict[str, Any]] = {
         "views": [
@@ -365,30 +367,19 @@ class TestBadgeCriteria:
         ]
         assert all("matched" not in m for m in matches)
 
-    def test_malformed_badge_entries_are_not_listed(self):
-        config = {"views": [{"badges": [None, 5, "", "sensor.ok"], "cards": []}]}
-        matches = _find_cards_in_config(config, card_type="badge")
-        assert [m["jq_path"] for m in matches] == [".views[0].badges[3]"]
-
-    def test_badge_search_does_not_warn_about_picture_elements(self):
-        config = {
-            "views": [
-                {
-                    "badges": ["light.a"],
-                    "cards": [
-                        {"type": "picture-elements", "elements": [{"type": "icon"}]}
-                    ],
-                }
-            ]
-        }
+    def test_malformed_badge_entries_are_reported_not_listed(self):
+        config = {"views": [{"badges": [None, 5, "", "  ", "sensor.ok"], "cards": []}]}
         result = DashboardConfigTools._build_search_result(
             [{"url_path": "d", "config": config}],
             criteria=_SearchCriteria(card_type="badge"),
             include_config=False,
             url_path="d",
         )
-        assert result["match_count"] == 1
-        assert "warnings" not in result
+        assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[4]"]
+        assert any(
+            ".views[0].badges[0]" in w and ".views[0].badges[3]" in w
+            for w in result["warnings"]
+        )
 
     def test_heading_excludes_badges(self):
         matches = _find_cards_in_config(self.CONFIG, entity_id="light.a", heading="t")
@@ -401,12 +392,13 @@ class TestPictureElementsDisclosure:
     CONFIG: ClassVar[dict[str, Any]] = {
         "views": [
             {
+                "badges": ["light.a"],
                 "cards": [
                     {
                         "type": "picture-elements",
                         "elements": [{"type": "state-badge", "entity": "sensor.pe"}],
                     }
-                ]
+                ],
             }
         ]
     }
@@ -423,6 +415,15 @@ class TestPictureElementsDisclosure:
         assert result["matches"][0]["matched"] == [
             {"field": "entity", "value": "sensor.pe"}
         ]
+        assert "warnings" not in result
+
+    @pytest.mark.parametrize(
+        "criteria",
+        [{"card_type": "badge"}, {"card_type": "badge", "entity_id": "light.a"}],
+    )
+    def test_badge_search_does_not_warn(self, criteria: dict[str, str]):
+        result = self._search(**criteria)
+        assert result["match_count"] == 1
         assert "warnings" not in result
 
     def test_card_criteria_warn_that_elements_are_not_matched(self):
