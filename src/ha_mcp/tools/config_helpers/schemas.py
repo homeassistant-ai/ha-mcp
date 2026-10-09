@@ -41,27 +41,9 @@ def _attach_helper_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
 
 
 # Simple helper types — managed via {type}/create and {type}/update WebSocket APIs
-# (not Config Entry Flow); every other helper type is one of Core's helper flows.
-SIMPLE_HELPER_TYPES: frozenset[str] = frozenset(
-    {
-        "input_button",
-        "input_boolean",
-        "input_select",
-        "input_number",
-        "input_text",
-        "input_datetime",
-        "counter",
-        "timer",
-        "schedule",
-        "zone",
-        "person",
-        "tag",
-    }
-)
-
-
-# The storage types as a schema enum, so the helper tools' schemas spell them
-# out; helper flows are any further string, checked against Core at call time.
+# (not Config Entry Flow). As a schema enum the helper tools' schemas spell them
+# out; every other helper type except config_subentry is a helper flow, checked
+# against Core at call time (``helper_flows``).
 StorageHelperType = Literal[
     "input_button",
     "input_boolean",
@@ -76,7 +58,7 @@ StorageHelperType = Literal[
     "person",
     "tag",
 ]
-assert set(get_args(StorageHelperType)) == SIMPLE_HELPER_TYPES
+SIMPLE_HELPER_TYPES: frozenset[str] = frozenset(get_args(StorageHelperType))
 
 # Stateful HA input helpers skip last-state restore when `initial` is stored in config
 # (including false/0). See input_boolean/input_number async_added_to_hass in HA core.

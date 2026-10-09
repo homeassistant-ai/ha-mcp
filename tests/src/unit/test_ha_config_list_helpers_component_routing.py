@@ -817,6 +817,52 @@ async def test_all_types_refuses_a_listing_that_misses_a_custom_helper_flow(
 
 
 @pytest.mark.asyncio
+async def test_all_types_reads_the_helper_flows_afresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A helper integration uninstalled since the cached read is not reported
+    as missing from the component's listing."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(side_effect=[STUB_HELPER_FLOWS | {"gone_helper"}, STUB_HELPER_FLOWS]),
+    )
+    client = RoutingClient()
+    await helper_flows.helper_flow_types(client)
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_all_result(),
+    )
+    with patch_ws(ws, tools_config_helpers):
+        resp = await _build_list_helpers(client)(helper_type="all")
+    assert resp["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_custom_helper_flow_left_out_by_a_failed_loader_read_names_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An installed component whose loader read failed is not told to update."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=STUB_HELPER_FLOWS | {"my_custom_helper"}),
+    )
+    result = _component_all_result() | {"helper_flows_degraded": True}
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
+    )
+    list_helpers = _build_list_helpers(RoutingClient())
+
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
+        await list_helpers(helper_type="my_custom_helper")
+
+    assert "SERVICE_CALL_FAILED" in str(excinfo.value)
+    assert "loader" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
 async def test_all_types_without_component_raises_component_required() -> None:
     """helper_type='all' with no component surface → hard COMPONENT_NOT_INSTALLED."""
     ws = make_ws(

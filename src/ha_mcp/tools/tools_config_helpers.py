@@ -40,6 +40,7 @@ from .config_helpers.listing import (
     _raise_all_requires_component,
     _raise_flow_requires_component,
     _shape_component_helpers_response,
+    raise_if_helper_flows_degraded,
     shape_all_helpers_response,
 )
 from .config_helpers.registry import (
@@ -152,7 +153,9 @@ class HelperConfigTools:
         """List Home Assistant helpers of a specific type with their configurations.
 
         Returns one page of helpers; `total_count` and `has_more` report the full
-        set. Each record carries the complete configuration for its helper:
+        set. Each record carries the complete configuration for its helper (a
+        custom helper integration's options are withheld, marked
+        `options_withheld`):
         id (immutable storage key), entity_id (current — address the helper by
         this, where available), name (current display name), original_name
         (creation-time name), icon, type-specific settings, and area and label
@@ -367,6 +370,7 @@ class HelperConfigTools:
             # covered when include_flow_helpers=True) raises the same
             # component-required error rather than emptying out.
             if is_flow:
+                raise_if_helper_flows_degraded(result, [helper_type])
                 _raise_flow_requires_component(helper_type)
             return None
         return _shape_component_helpers_response(helper_type, result)
@@ -483,7 +487,7 @@ class HelperConfigTools:
         return await shape_all_helpers_response(
             raw.get("result") or {},
             self._legacy_helper_list,
-            flow_types=await helper_flow_types(self._client),
+            flow_types=await helper_flow_types(self._client, refresh=True),
         )
 
     async def _send_component_all_helpers(self) -> dict[str, Any]:
@@ -734,7 +738,7 @@ class HelperConfigTools:
         BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
         """Create or update Home Assistant helper entities and config subentries
-        (30 types, unified interface).
+        (storage types, config subentries and every helper flow HA lists).
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
         ``helper-selection.md`` ships under ``skill_content`` by default.
@@ -748,8 +752,9 @@ class HelperConfigTools:
         utility_meter, derivative, min_max, threshold, integration, statistics,
         trend, ... and custom helper integrations. Create requires `name`; for updates pass the
         existing entry_id as `helper_id` (options flows reject the `name` key).
-        `otp` is not offered here: the user sets it up in the HA UI, since its
-        secret is a credential they enroll in an authenticator app.
+        Do not create `otp` here although Home Assistant lists it: the user sets
+        it up in the HA UI, since its secret is a credential they enroll in an
+        authenticator app.
 
         CONFIG_SUBENTRY type (Config Subentry Flow API): pass `entry_id`,
         `subentry_type` and `config`; pass `subentry_id` to reconfigure an existing

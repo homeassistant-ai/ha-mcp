@@ -409,7 +409,7 @@ class TestFlowHelperRouting:
     """Verify that ha_config_set_helper routes flow-based helper types (#967)
     to the Config Entry Flow API, not to the WebSocket {type}/create path.
 
-    Covers the unified-tool routing added in #967: types in FLOW_HELPER_TYPES
+    Covers the unified-tool routing added in #967: helper flow types
     (template, group, utility_meter, ...) are delegated to create_flow_helper /
     update_flow_helper; entity resolution and registry updates then run against
     all entities of the resulting config entry.

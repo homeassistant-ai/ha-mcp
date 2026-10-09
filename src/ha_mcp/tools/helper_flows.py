@@ -2,8 +2,10 @@
 
 ``flow_handlers?type=helper`` lists Core's own helper flows plus custom
 integrations of ``integration_type: "helper"`` — the list the HA UI offers under
-"Create helper". It replaces a hand-kept list that drifted from Core. Cached per
-client for a few minutes so a tool call does not pay a REST round-trip each time.
+"Create helper". Cached per client for a few minutes so a tool call does not pay
+a REST round-trip each time; a type missing from a cached copy is re-read once
+before it is refused (``listed_helper_flows``), so a newly installed helper
+integration is found.
 """
 
 from __future__ import annotations
@@ -12,10 +14,12 @@ import time
 import weakref
 from typing import Any, NoReturn
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
-from .helpers import raise_tool_error
+from .helpers import exception_to_structured_error, raise_tool_error
 
 _TTL_SECONDS = 300.0
 _CACHE: weakref.WeakKeyDictionary[Any, tuple[float, frozenset[str]]] = (
@@ -37,14 +41,21 @@ async def _fetch_helper_flow_types(client: Any) -> frozenset[str]:
     return frozenset(str(domain) for domain in domains)
 
 
-async def helper_flow_types(client: Any) -> frozenset[str]:
-    """The helper types the connected Home Assistant offers as config flows."""
+def _cached(client: Any) -> frozenset[str] | None:
     try:
         cached = _CACHE.get(client)
     except TypeError:
-        cached = None
+        return None
     if cached is not None and time.monotonic() - cached[0] < _TTL_SECONDS:
         return cached[1]
+    return None
+
+
+async def helper_flow_types(client: Any, *, refresh: bool = False) -> frozenset[str]:
+    """The helper types the connected Home Assistant offers as config flows."""
+    cached = None if refresh else _cached(client)
+    if cached is not None:
+        return cached
     types = await _fetch_helper_flow_types(client)
     try:
         _CACHE[client] = (time.monotonic(), types)
@@ -53,12 +64,33 @@ async def helper_flow_types(client: Any) -> frozenset[str]:
     return types
 
 
+async def listed_helper_flows(client: Any, name: str) -> frozenset[str]:
+    """The helper flow list, re-read once when ``name`` is missing from a cached
+    copy (a fresh read is not repeated)."""
+    cached = _cached(client)
+    if cached is not None and name in cached:
+        return cached
+    return await helper_flow_types(client, refresh=cached is not None)
+
+
 async def require_helper_type(client: Any, helper_type: str, *also: str) -> None:
     """Refuse a helper_type that is neither a storage helper, one of ``also``,
-    nor a helper flow this Home Assistant lists."""
+    nor a helper flow this Home Assistant lists. A failed read of that list is
+    raised as a structured tool error, never as the raw exception."""
     if helper_type in SIMPLE_HELPER_TYPES or helper_type in also:
         return
-    flow_types = await helper_flow_types(client)
+    try:
+        flow_types = await listed_helper_flows(client, helper_type)
+    except ToolError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        exception_to_structured_error(
+            e,
+            context={
+                "helper_type": helper_type,
+                "operation": "read Home Assistant's helper flow list",
+            },
+        )
     if helper_type not in flow_types:
         _raise_unknown_helper_type(helper_type, flow_types)
 

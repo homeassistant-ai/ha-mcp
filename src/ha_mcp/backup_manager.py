@@ -209,14 +209,14 @@ class _FlowHelperReadError(HomeAssistantError):
 def _is_flow_helper_domain(domain: str) -> bool:
     """A ``helper_<type>`` snapshot domain of a config-entry (flow) helper.
 
-    Every ``helper_<type>`` domain is minted for a validated helper type, so one
-    that is neither a storage helper nor a config subentry is a flow helper; no
-    list of flow types is kept here. A domain derived from an arbitrary config
-    entry is checked against Core's helper flows instead
-    (``config_entry_backup.resolve_config_entry_backup_domain``).
+    Any type that is neither a storage helper nor a config subentry counts; the
+    type itself is not checked here. Callers that take it from input check it
+    against ``helper_flows.helper_flow_types``, as does
+    ``config_entry_backup.resolve_config_entry_backup_domain`` for a domain
+    derived from an arbitrary config entry.
     """
     helper_type = domain[7:] if domain.startswith("helper_") else None
-    return helper_type is not None and helper_type not in (
+    return bool(helper_type) and helper_type not in (
         *_HELPER_LIST_TYPES,
         "config_subentry",
     )
@@ -632,12 +632,14 @@ class BackupManager:
     def handler_for(self, domain: str) -> DomainHandler | None:
         handler = self._handlers.get(domain)
         if handler is None and _is_flow_helper_domain(domain):
+            # Built per call and never registered, so a mistyped domain does not
+            # stay behind in supported_domains().
             handler = _make_flow_helper_handler(domain[7:])
-            self.register(handler)
         return handler
 
     def supported_domains(self) -> list[str]:
-        """Return the sorted list of registered backup-domain keys.
+        """Return the sorted registered backup-domain keys, plus a placeholder
+        for the flow helpers, whose handlers are built on use.
 
         Public accessor for callers that need to surface "what domains
         are supported?" in user-facing error messages (e.g., the

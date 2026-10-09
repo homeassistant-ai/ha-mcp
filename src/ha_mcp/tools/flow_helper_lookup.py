@@ -10,7 +10,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
-from .helper_flows import helper_flow_types
+from .helper_flows import helper_flow_types, listed_helper_flows
 from .helpers import raise_tool_error, ws_failure_code
 
 logger = logging.getLogger(__name__)
@@ -346,7 +346,7 @@ def raise_flow_helper_lookup_error(
     )
 
 
-async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None, str]:
+async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str, str]:
     """Return the ``(helper_type, target)`` that removes the helper behind ``entity_id``.
 
     The registry ``platform`` names the integration that owns the entity: a
@@ -361,7 +361,9 @@ async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str | None
             reason, None, entity_id, detail="; ".join(warnings) or None
         )
     platform = entry.get("platform")
-    if platform in SIMPLE_HELPER_TYPES or platform in await helper_flow_types(client):
+    if platform in SIMPLE_HELPER_TYPES or platform in await listed_helper_flows(
+        client, str(platform)
+    ):
         return platform, entity_id
     raise_tool_error(
         create_error_response(

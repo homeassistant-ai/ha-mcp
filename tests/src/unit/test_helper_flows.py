@@ -13,8 +13,10 @@ import pytest
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.tools import helper_flows
+from ha_mcp.tools import flow_helper_lookup, helper_flows
+from ha_mcp.tools.backup import _edits_create
 from ha_mcp.tools.config_entry_backup import resolve_config_entry_backup_domain
+from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
 from ha_mcp.tools.flow_helper_lookup import _raise_platform_mismatch
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 from ha_mcp.tools.tools_integrations import IntegrationTools
@@ -96,21 +98,62 @@ async def test_otp_is_accepted_like_any_helper_flow_core_lists() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda: HelperConfigTools(_Client([])).ha_config_list_helpers(
-            helper_type="no_such_helper"
-        ),
-        lambda: HelperConfigTools(_Client([])).ha_config_set_helper(
-            helper_type="no_such_helper", name="X"
-        ),
-        lambda: IntegrationTools(_Client([])).ha_remove_helpers_integrations(
-            target="no_such_helper.x", helper_type="no_such_helper", confirm=True
-        ),
-    ],
-    ids=["list", "set", "remove"],
-)
+async def test_a_helper_integration_installed_since_the_last_read_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetch = AsyncMock(side_effect=[frozenset({"template"}), frozenset({"new_helper"})])
+    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", fetch)
+    client = _Client([])
+    await helper_flows.helper_flow_types(client)  # cached before the install
+    await helper_flows.require_helper_type(client, "new_helper")
+    assert fetch.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_read_is_not_repeated_for_an_unknown_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetch = AsyncMock(return_value=frozenset({"template"}))
+    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", fetch)
+    with pytest.raises(ToolError):
+        await helper_flows.require_helper_type(_Client([]), "no_such_helper")
+    assert fetch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_an_entity_of_a_newly_installed_helper_integration_is_a_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetch = AsyncMock(side_effect=[frozenset({"template"}), frozenset({"new_helper"})])
+    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", fetch)
+    monkeypatch.setattr(
+        flow_helper_lookup,
+        "_read_registry_entry",
+        AsyncMock(return_value=({"platform": "new_helper"}, "ok")),
+    )
+    client = _Client([])
+    await helper_flows.helper_flow_types(client)  # cached before the install
+    assert await flow_helper_lookup.resolve_helper_entity(client, "sensor.new") == (
+        "new_helper",
+        "sensor.new",
+    )
+
+
+_UNKNOWN_TYPE_CALLS = [
+    lambda: HelperConfigTools(_Client([])).ha_config_list_helpers(
+        helper_type="no_such_helper"
+    ),
+    lambda: HelperConfigTools(_Client([])).ha_config_set_helper(
+        helper_type="no_such_helper", name="X"
+    ),
+    lambda: IntegrationTools(_Client([])).ha_remove_helpers_integrations(
+        target="no_such_helper.x", helper_type="no_such_helper", confirm=True
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", _UNKNOWN_TYPE_CALLS, ids=["list", "set", "remove"])
 async def test_an_unknown_helper_type_is_refused_naming_the_known_ones(
     call: Any,
 ) -> None:
@@ -119,6 +162,25 @@ async def test_an_unknown_helper_type_is_refused_naming_the_known_ones(
     error = _error(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "no_such_helper" in error["message"]
+    suggestions = " | ".join(error["suggestions"])
+    assert "Storage helpers: counter" in suggestions
+    assert "Helper flows on this instance: " in suggestions
+    assert "template" in suggestions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", _UNKNOWN_TYPE_CALLS, ids=["list", "set", "remove"])
+async def test_a_failed_helper_flow_read_is_a_structured_connection_error(
+    monkeypatch: pytest.MonkeyPatch, call: Any
+) -> None:
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(side_effect=HomeAssistantConnectionError("down")),
+    )
+    with pytest.raises(ToolError) as exc_info:
+        await call()
+    assert _error(exc_info)["code"] == "CONNECTION_FAILED"
 
 
 @pytest.mark.asyncio
@@ -169,6 +231,7 @@ def test_storage_and_subentry_domains_get_no_flow_handler(
         ("helper_my_custom_helper", True),
         ("helper_input_boolean", False),
         ("helper_config_subentry", False),
+        ("helper_", False),
         ("automation", False),
     ],
 )
@@ -176,6 +239,33 @@ def test_flow_helper_snapshot_domains_need_no_list_of_flow_types(
     domain: str, is_flow: bool
 ) -> None:
     assert bm._is_flow_helper_domain(domain) is is_flow
+
+
+def test_every_storage_type_is_snapshotted_as_storage_not_as_a_flow() -> None:
+    assert bm._HELPER_LIST_TYPES == SIMPLE_HELPER_TYPES
+
+
+def test_a_mistyped_flow_domain_does_not_stay_in_the_supported_domains(
+    tmp_path: Path,
+) -> None:
+    mgr = bm.get_backup_manager(
+        _StubClient(), _StubSettings(auto_backup_dir=str(tmp_path))
+    )
+    before = mgr.supported_domains()
+    assert mgr.handler_for("helper_input_bolean") is not None
+    assert mgr.supported_domains() == before
+
+
+@pytest.mark.asyncio
+async def test_an_on_demand_snapshot_of_an_unlisted_helper_type_is_refused(
+    tmp_path: Path,
+) -> None:
+    mgr = bm.get_backup_manager(
+        _StubClient(), _StubSettings(auto_backup_dir=str(tmp_path))
+    )
+    with pytest.raises(ToolError) as exc_info:
+        await _edits_create(mgr, "edits", "create", "helper_input_bolean", "x.y")
+    assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
 def test_a_platform_that_is_a_custom_helper_flow_is_offered_as_the_retry() -> None:

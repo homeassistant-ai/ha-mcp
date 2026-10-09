@@ -27,11 +27,9 @@ async def _flow_helper_domains(hass: HomeAssistant) -> dict[str, Any]:
     """Core's helper flows (what ``flow_handlers?type=helper`` returns) and the
     custom-only ones among them.
 
-    A custom-only domain's entries go out with ``options: None`` and
-    ``options_withheld`` (:data:`OPTIONS_WITHHELD_CUSTOM`): unlike
-    ``config_entries`` and ``ha_get_integration``, this path has no flow-schema
-    redaction. A custom override of a Core helper domain keeps its options, which
-    the auto-backup reads. A failed loader read falls back to Core's own list.
+    Custom-only entries go out with ``options: None`` and ``options_withheld``:
+    nothing here knows which fields hold credentials (no flow-schema redaction,
+    unlike ``ha_get_integration``). Core-domain overrides keep theirs for backups.
     """
     try:
         flows = frozenset(await async_get_config_flows(hass, "helper"))

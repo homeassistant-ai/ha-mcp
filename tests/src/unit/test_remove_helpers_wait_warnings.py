@@ -28,12 +28,18 @@ class TestRemovalCheckAfterSuccessfulDelete:
     def tools(self, mock_client: MagicMock) -> IntegrationTools:
         return IntegrationTools(mock_client)
 
+    @pytest.mark.parametrize(
+        "failure",
+        [HomeAssistantConnectionError("down"), ValueError("down")],
+        ids=["connection", "other"],
+    )
     async def test_flow_path_wait_true_reports_a_failed_check_as_a_warning(
-        self, tools, mock_client
+        self, tools, mock_client, failure
     ):
         """FLOW utility_meter wait=True: the entry is already deleted, so a
         connection error while checking one sub-entity is a warning on a
-        successful delete, and that entity is not reported as still present."""
+        successful delete that names the entity, which is not reported as still
+        present."""
         mock_client.send_websocket_message.side_effect = [
             {
                 "success": True,
@@ -58,7 +64,7 @@ class TestRemovalCheckAfterSuccessfulDelete:
             "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
-            mock_wait.side_effect = [True, HomeAssistantConnectionError("down")]
+            mock_wait.side_effect = [True, failure]
             result = await tools.ha_remove_helpers_integrations(
                 target="sensor.energy_peak",
                 helper_type="utility_meter",
@@ -67,7 +73,8 @@ class TestRemovalCheckAfterSuccessfulDelete:
             )
         assert result["success"] is True
         assert result["warnings"] == [
-            "Deletion confirmed but removal verification failed: down"
+            "Deletion confirmed but removal verification failed: "
+            "sensor.energy_offpeak: down"
         ]
         assert mock_wait.await_count == 2
 

@@ -273,7 +273,7 @@ Design notes that are load-bearing:
   match-corpus scrub and the scrub of emitted options — runs in the executor via
   the command wrapper's async pre-steps (:func:`_search_prep`,
   :func:`_helpers_list_prep`), never on the event loop; both also ask Core's
-  loader for the helper flows.
+  loader for the helper flows when flow helpers are in scope.
 
 Module layout. This package's ``__init__`` holds the registration seam
 (``async_register_commands``, ``_command_specs`` and ``_build_handler``). The command

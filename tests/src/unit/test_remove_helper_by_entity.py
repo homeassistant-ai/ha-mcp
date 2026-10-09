@@ -276,7 +276,7 @@ async def test_entity_without_a_registry_entry_is_not_reported_missing() -> None
 
 async def test_failed_registry_read_keeps_its_classified_suggestions() -> None:
     """An auth failure must keep its token guidance; the added route names
-    the config entry_id, since helper_type cannot name a helper like otp.
+    the config entry_id, since it needs no registry or helper-flow read.
     Adding it must not leak into the shared defaults every other tool's
     errors are built from."""
     failure = HomeAssistantAuthError("token expired")

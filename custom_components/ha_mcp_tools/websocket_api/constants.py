@@ -256,10 +256,8 @@ COLLECTION_HELPER_DOMAINS = frozenset(
         "schedule",
     }
 )
-# Flow (config-entry-backed) helpers. Indexed from ``entry.options`` / ``title``
-# directly — no OptionsFlow start/abort dance, and NEVER ``entry.data``.
-# Core's generated ``config_flows.FLOWS["helper"]``: the default when the async
-# pre-step is skipped, and the Core side of ``_flow_helper_domains``' split.
+# Core's generated FLOWS["helper"]: the default without the async pre-step and the
+# fallback when its loader read fails. Indexed from options/title, NEVER entry.data.
 FLOW_HELPER_DOMAINS = frozenset(FLOWS["helper"])
 
 # Collection helper domains enumerated by ``ha_mcp_tools/helpers_list``: the

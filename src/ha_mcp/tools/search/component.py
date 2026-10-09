@@ -66,8 +66,9 @@ def _normalize_component_config_record(
     records that agents, tests, and downstream consumers key on use
     ``friendly_name`` plus per-bucket id keys (``script_id``/``scene_id``) —
     so normalize here, at the single seam, rather than teaching the component
-    the MCP envelope's vocabulary. Extra component fields are deliberately
-    dropped for byte-level shape parity with the legacy path; enrichment
+    the MCP envelope's vocabulary. Extra component fields are dropped to keep
+    the legacy key set, except ``options_withheld``, which marks a custom
+    helper whose options the component did not read; enrichment
     (e.g. ``source: yaml``) can be added to BOTH paths together later.
 
     ``config`` key semantics mirror the legacy pipeline's include_config pop:

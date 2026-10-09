@@ -602,8 +602,9 @@ def exception_to_structured_error(
                     If False, returns the error dict for further modification.
         suggestions: Optional list of actionable suggestions to embed in the error.
                     Saves callers from manually inserting suggestions after the call.
-                    They replace the classified ones, except for auth and
-                    connection codes, where they follow them (duplicates dropped).
+                    They replace the classified ones, except for the AUTH_*,
+                    CONNECTION_FAILED and CONNECTION_TIMEOUT codes, where they
+                    follow them (duplicates dropped).
 
     Returns:
         Structured error response dictionary (only if raise_error=False)

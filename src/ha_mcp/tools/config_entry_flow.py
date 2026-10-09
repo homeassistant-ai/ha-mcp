@@ -8,8 +8,8 @@ Config Entry Flow API.
 The create/update entry point is the unified ha_config_set_helper tool in
 tools_config_helpers.py, which routes to create_flow_helper / update_flow_helper
 for every helper flow Home Assistant lists (``helper_flows.helper_flow_types``).
-`otp` is not offered: the user sets it up in the HA UI, since its secret is a
-credential they enroll in an authenticator app.
+The tool description tells callers to leave `otp` to the user in the HA UI,
+since its secret is a credential they enroll in an authenticator app.
 
 The same flow walkers drive every other config-entry surface, not just
 helpers: ``ha_set_integration`` creates entries for arbitrary domains through

@@ -1568,16 +1568,17 @@ class DeepSearchMixin(SceneSearchMixin):
         helper's current config — template body, group members, source
         entity, etc. — is searchable.
 
-        Cost: 1 REST call + one options-flow probe per flow-helper config
-        entry, parallelised under ``semaphore``. The probe is skipped when
-        the title alone already scores the maximum (a deeper config match can
-        only raise the total, never lower it); any title that leaves headroom
+        Cost: the entries call, the cached helper-flow list, and one
+        options-flow probe per flow-helper config entry, parallelised under
+        ``semaphore``. The probe is skipped when the title alone already
+        scores the maximum (a deeper config match can only raise the total,
+        never lower it); any title that leaves headroom
         is still probed for accurate scoring and ``match_in_config``.
 
         Returns ``(results, failed_count)``. ``failed_count`` counts flow-
         helper backend failures so the caller can route them to ``partial``:
-        the whole surface unreachable (config-entries list fetch raised or
-        returned an unexpected shape) counts as 1; otherwise it is the number
+        the whole surface unreachable (the config-entries or helper-flow read
+        raised, or the entries came back in an unexpected shape) counts as 1; otherwise it is the number
         of per-entry options-flow probes that failed (the flow raised or
         returned a non-form first step), so a helper whose config body could
         not be read is reported as incomplete rather than a silent clean
@@ -1590,7 +1591,7 @@ class DeepSearchMixin(SceneSearchMixin):
             response = await self.client._request("GET", "/config/config_entries/entry")
             flows = await helper_flow_types(self.client)
         except Exception as exc:  # noqa: BLE001
-            logger.debug(f"flow-helper search: list_entries failed: {exc}")
+            logger.debug(f"flow-helper search: entries or flows read failed: {exc}")
             return [], 1
 
         if not isinstance(response, list):

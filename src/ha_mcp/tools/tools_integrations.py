@@ -17,10 +17,8 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..backup_manager import _is_flow_helper_domain
 from ..client.rest_client import (
     HomeAssistantAPIError,
-    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
@@ -60,7 +58,7 @@ from .flow_helper_lookup import (
     raise_unregistered_entity_error,
     resolve_helper_entity,
 )
-from .helper_flows import helper_flow_types
+from .helper_flows import require_helper_type
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -2159,9 +2157,8 @@ class IntegrationTools:
                 description=(
                     "Wait for entity removal. Default: True. "
                     "Ignored for a direct config entry delete (an entry_id "
-                    "target, or an entity_id whose helper is outside the "
-                    "SIMPLE/FLOW types) or helper_type='config_subentry' (no "
-                    "entity poll, require_restart returned)."
+                    "target) or helper_type='config_subentry' (no entity "
+                    "poll, require_restart returned)."
                 ),
                 default=True,
             ),
@@ -2222,7 +2219,9 @@ class IntegrationTools:
         automations, scripts, or other integrations may cause those to fail.
         Use ha_search() / ha_get_integration() to verify before removal.
         ha_manage_backup(scope="edits", action="restore") recreates only removed FLOW
-        helpers and config subentries; re-add others yourself (otp: the user, HA UI).
+        helpers whose options could be snapshotted (not custom helper integrations,
+        whose options are withheld, nor otp) and config subentries; re-add others
+        yourself (otp: the user, in the HA UI).
         """
         # === Confirm gate (uniform for every path) ===
         if not confirm:
@@ -2272,8 +2271,6 @@ class IntegrationTools:
             resolved: dict[str, Any] = await self._remove_resolved_helper(
                 target=resolved_target, helper_type=resolved_type, wait=wait_bool
             )
-            if resolved_target != target:
-                resolved["resolved_from"] = target
             return resolved
 
         if helper_type is None:
@@ -2297,20 +2294,10 @@ class IntegrationTools:
             # Path 1: SIMPLE helper via websocket delete
             return await self._delete_simple_helper(helper_type, target, wait_bool)
 
-        if helper_type in await helper_flow_types(self._client):
-            # Path 2: FLOW helper via entity_id → config_entry_id lookup
-            return await self._delete_flow_helper(
-                helper_type, target, wait_bool, warnings
-            )
-
-        # Neither a storage helper nor one of Core's helper flows.
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Unknown helper_type: {helper_type!r}",
-                context={"target": target, "helper_type": helper_type},
-            )
-        )
+        # Path 2: FLOW helper via entity_id → config_entry_id lookup; a type
+        # Home Assistant does not list as a helper flow is refused first.
+        await require_helper_type(self._client, helper_type)
+        return await self._delete_flow_helper(helper_type, target, wait_bool, warnings)
 
     # Private helpers keep the ``_delete_*`` prefix because they wrap HA's
     # own backend verb — the WebSocket API is ``<type>/delete`` and the
@@ -2325,21 +2312,19 @@ class IntegrationTools:
         skip_fn=_skip_removal_capture,
     )
     async def _remove_resolved_helper(
-        self, *, target: str, helper_type: HelperTypeLiteral | None, wait: bool
+        self, *, target: str, helper_type: HelperTypeLiteral, wait: bool
     ) -> dict[str, Any]:
         """Remove the helper an entity_id resolved to, under the tool's backup.
 
         Not the public tool itself, so the removal logs a single tool call.
         """
-        if helper_type is None:
-            return await self._delete_direct_entry(target)
         if helper_type in SIMPLE_HELPER_TYPES:
             return await self._delete_simple_helper(helper_type, target, wait)
         return await self._delete_flow_helper(helper_type, target, wait, [])
 
     async def _resolve_helper_entity(
         self, entity_id: str
-    ) -> tuple[HelperTypeLiteral | None, str]:
+    ) -> tuple[HelperTypeLiteral, str]:
         """Map an entity_id to the (helper_type, target) that removes its helper."""
         try:
             return await resolve_helper_entity(self._client, entity_id)
@@ -2347,8 +2332,7 @@ class IntegrationTools:
             raise
         except Exception as e:  # noqa: BLE001
             # Keep the classified suggestions (auth, connection) and add the
-            # route that does not need helper_type, which cannot name a
-            # Core-listed helper such as otp.
+            # entry_id route, which needs no registry or helper-flow read.
             error = exception_to_structured_error(
                 e, context={"target": entity_id}, raise_error=False
             )
@@ -2533,19 +2517,21 @@ class IntegrationTools:
             )
             # The entry is already gone: a failed check is a warning, as in the
             # sibling delete tools, never an error for a delete that worked.
-            failed = [
-                r
-                for r in results
-                if isinstance(r, HomeAssistantConnectionError | HomeAssistantAuthError)
-            ]
+            checks = dict(zip(entity_ids, results, strict=True))
+            failed = {
+                eid: res
+                for eid, res in checks.items()
+                if isinstance(res, BaseException)
+            }
             if failed:
                 response.setdefault("warnings", []).append(
-                    f"Deletion confirmed but removal verification failed: {failed[0]}"
+                    "Deletion confirmed but removal verification failed: "
+                    + "; ".join(f"{eid}: {exc}" for eid, exc in sorted(failed.items()))
                 )
             not_removed = [
                 eid
-                for eid, res in zip(entity_ids, results, strict=True)
-                if res is not True and res not in failed
+                for eid, res in checks.items()
+                if res is not True and eid not in failed
             ]
             if not_removed:
                 response.setdefault("warnings", []).append(

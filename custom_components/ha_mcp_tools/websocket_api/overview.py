@@ -58,9 +58,9 @@ def _do_helpers_list(
     """List collection helpers (live state bodies) + flow helpers (config-entry options).
 
     Flow-helper ``options`` come straight from ``ConfigEntry.options`` (``None``
-    with ``options_withheld`` for a custom-only domain, and
-    ``helper_flows_degraded: true`` when the loader read failed; see
-    :func:`_flow_helper_domains`) — no
+    with ``options_withheld`` for a custom-only domain; see
+    :func:`_flow_helper_domains`; a failed loader read sets top-level
+    ``helper_flows_degraded: true`` and leaves custom-only domains out) — no
     OptionsFlow start/abort dance, and NEVER ``entry.data`` (integration
     credentials). Every record carries the CURRENT entity_id + display name from
     the entity registry so a renamed helper shows current values (issue #1794),
@@ -192,8 +192,8 @@ def _flow_helpers_list(
     ``options`` is passed through the same resolved-``!secret`` scrub
     ``config_entries`` applies (a flow helper is a config entry, so its ``options``
     share the same exposure class); an empty ``secret_values`` is a no-op. An entry
-    of a custom-only domain is emitted with ``options: None`` (see
-    :func:`_flow_helper_domains`).
+    of a custom-only domain is emitted with ``options: None`` and
+    ``options_withheld`` (see :func:`_flow_helper_domains`).
     """
     out: list[dict[str, Any]] = []
     entity_by_entry = _entities_by_config_entry(view)

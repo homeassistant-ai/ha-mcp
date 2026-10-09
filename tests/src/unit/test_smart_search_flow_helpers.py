@@ -3,7 +3,7 @@ helpers (template, group, utility_meter, derivative, ...).
 
 Issue #1457: deep_search previously hard-coded the helper list to
 ``input_*`` only, so config-entry helpers were invisible. The flow-helper
-branch now lists config entries for any domain in ``FLOW_HELPER_TYPES``
+branch now lists config entries for any helper flow Home Assistant lists
 and probes each entry's options flow so the helper's current config
 (template body, group members, etc.) is searchable alongside the
 storage-based helpers.
