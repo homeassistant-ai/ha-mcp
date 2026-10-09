@@ -31,7 +31,9 @@ _DASHBOARD_ROW_KEYS = (
     "require_admin",
 )
 
-# Cap on ``search``-mode matches per call so one WS frame stays bounded.
+# Cap on ``search``-mode matches per call so one WS frame stays bounded. ``docs``
+# is not capped: the server's card search needs whole configs, and the frame
+# stays far below the client's 64 MiB message limit on real installs.
 _DASHBOARD_MATCH_CAP = 200
 
 # Keys that hold card configs at any depth inside a card: ``cards`` (a list),
@@ -50,7 +52,7 @@ def _do_dashboards(
     *,
     prepped: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return Lovelace dashboards read in-process (``list`` / ``get`` / ``search``).
+    """Return Lovelace dashboards read in-process (``list``/``get``/``search``/``docs``).
 
     Pure assembler over the plain dicts :func:`_dashboards_prep` loads off the
     event loop — every Store load (``async_load``) happens in the prep, so this
@@ -59,7 +61,7 @@ def _do_dashboards(
     the server falls back to its legacy ``lovelace/*`` path in that case.
 
     YAML-mode dashboard bodies are NEVER emitted (``get`` returns a ``yaml_excluded``
-    status; ``search`` skips them) — their config may carry resolved ``!secret``
+    status; ``search``/``docs`` skip them) — their config may carry resolved ``!secret``
     plaintext, so body emission for YAML belongs to a future file-based tool.
     """
     mode = params.get("mode", "list")
@@ -235,13 +237,13 @@ async def _dashboard_get_config(
 async def _dashboard_search_docs(
     dashboards_map: Mapping[Any, Any],
 ) -> tuple[list[dict[str, Any]], int, int]:
-    """Load every STORAGE dashboard's config for the ``search`` walk.
+    """Load every STORAGE dashboard's config for ``search`` and ``docs``.
 
     Only storage dashboards are loaded — YAML bodies are never searched/emitted.
     Returns ``(docs, yaml_skipped, load_failed)``: ``docs`` are
     ``[{url_path, title, registry_title, config}, ...]`` plain dicts —
-    ``title`` stays the config body's (the card-scoped ``matches`` records pin
-    byte parity with the server's legacy MODE 4 walk on it) while the additive
+    ``title`` stays the config body's (carried by the card-scoped ``matches``
+    records released servers read) while the additive
     ``registry_title`` carries the list-row metadata title that
     ``document_matches`` emits (what the legacy ha_search bucket records
     carry); ``yaml_skipped`` counts
@@ -378,10 +380,10 @@ def _collect_dashboard_matches(
 
     Walks each view's card containers (``cards`` + sections-view ``sections.cards``,
     nested cards recursed), plus the two view-level containers the card walk never
-    visits: ``badges`` and a sections-view ``header.card``. This matches what the
-    single-dashboard (MODE 2) search covers, so a query answered "no match" here is
-    a real absence, not a blind spot for entities referenced only as a badge or in a
-    header card.
+    visits: ``badges`` and a sections-view ``header.card``, so a query answered
+    "no match" here is a real absence, not a blind spot for entities referenced
+    only as a badge or in a header card. Released servers read these matches; the
+    current server's card search reads ``docs`` instead.
     """
     config = doc.get("config")
     if not isinstance(config, dict):
@@ -441,10 +443,10 @@ def _dashboard_match(
     matched_field: str,
     matched_value: str,
 ) -> dict[str, Any]:
-    """One MODE 4 cross-dashboard search match record (shared, fixed shape).
+    """One ``search``-mode match record (shared, fixed shape).
 
     Every match site — cards, badges, header cards — builds its record here so the
-    wire shape stays identical (the server-side legacy walk mirrors it for parity).
+    wire shape released servers read stays identical.
     """
     return {
         "url_path": url_path,
@@ -468,13 +470,12 @@ def _collect_card_matches(
     query_lower: str,
     matches: list[dict[str, Any]],
 ) -> None:
-    """Recurse a card list, recording one match per string leaf containing the query.
+    """Record one match per string leaf containing the query, card by card.
 
     ``matched_field`` is the leaf's immediate key (``entity`` / ``entities`` /
-    ``camera_image`` / any plain-string field); nested ``cards`` are walked as
-    their own cards (their strings are attributed to the nested card, not the
-    parent), so ``card_path`` / ``card_type`` always name the card the string
-    actually lives on.
+    ``camera_image`` / any plain-string field). Cards nested in any card slot
+    below (see :func:`_walk_card_nodes`) are walked as their own cards, so
+    ``card_path`` / ``card_type`` always name the card the string lives on.
     """
     if not isinstance(cards, list):
         return
@@ -554,7 +555,7 @@ def _collect_badge_matches(
     View-level badges are entity references by construction: a bare string
     (``sensor.x``) or a dict (``{type: entity, entity: sensor.x}``). A bare-string
     badge is recorded as a ``badges`` leaf; a dict badge's string leaves are walked
-    like a card's. Mirrors the single-dashboard (MODE 2) badge coverage.
+    like a card's.
     """
     badges = view.get("badges")
     if not isinstance(badges, list):
@@ -605,8 +606,7 @@ def _collect_header_card_matches(
     """Record query hits in a sections-view header card (``views[n].header.card``).
 
     The header accepts a card (typically Markdown) that can carry entity refs; the
-    card walk never visits it. Mirrors the single-dashboard (MODE 2) header-card
-    coverage.
+    card walk never visits it.
     """
     header = view.get("header")
     if not isinstance(header, dict):
@@ -629,8 +629,9 @@ def _collect_header_card_matches(
 def _card_string_leaves(card: dict[str, Any]) -> list[tuple[str, str]]:
     """``(immediate_key, string)`` for every string leaf a card owns.
 
-    Leaves of cards nested anywhere below it belong to those cards instead. The
-    key attributed to a leaf is the nearest dict key, so
+    Leaves of cards nested below it are left out (callers that need them walk
+    those cards separately). The key attributed to a leaf is the nearest dict
+    key, so
     ``entities: [{entity: light.a}]`` yields ``("entity", "light.a")`` and
     ``entities: [light.a]`` yields ``("entities", "light.a")``.
     """
@@ -652,7 +653,7 @@ def _walk_card_nodes(
     item, a ``card`` value or a ``custom_fields``/``states`` value) is a nested
     card: it goes to ``nested`` with its path instead of contributing leaves.
     Typed dicts elsewhere (tile ``features``, entity rows) stay leaves of the
-    card that holds them. Mirrors the server's ``_split_card_node``.
+    card that holds them.
     """
     if isinstance(value, str):
         if value:

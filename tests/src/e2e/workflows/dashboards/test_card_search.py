@@ -6,7 +6,7 @@ reaches cards that custom cards nest under keys of their own (issue #2694).
 
 import logging
 
-from ...utilities.assertions import MCPAssertions
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ class TestCardSearch:
                 {"url_path": URL_PATH, "entity_id": ENTITY, "card_type": "tile"},
             )
             assert [m["jq_path"] for m in scoped["matches"]] == EXPECTED_PATHS
-            assert scoped["config_hash"] == ours[0]["config_hash"]
+            assert scoped["matches"][0]["config_hash"] == ours[0]["config_hash"]
 
             # A match from the search across dashboards is directly editable.
             nested = ours[0]
@@ -105,6 +105,6 @@ class TestCardSearch:
             )
             assert [m["jq_path"] for m in edited["matches"]] == [EXPECTED_PATHS[0]]
         finally:
-            await mcp.call_tool_success(
-                "ha_config_delete_dashboard", {"url_path": URL_PATH}
+            await safe_call_tool(
+                mcp_client, "ha_config_delete_dashboard", {"url_path": URL_PATH}
             )

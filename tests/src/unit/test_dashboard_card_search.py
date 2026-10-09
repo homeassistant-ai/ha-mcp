@@ -7,7 +7,11 @@ heading.
 
 from typing import Any, ClassVar
 
-from ha_mcp.tools.tools_config_dashboards import _find_cards_in_config
+from ha_mcp.tools.tools_config_dashboards import (
+    DashboardConfigTools,
+    _find_cards_in_config,
+    _SearchCriteria,
+)
 
 
 class TestCardsNestedUnderCustomKeys:
@@ -65,7 +69,11 @@ class TestCardsNestedUnderCustomKeys:
 
     def test_finds_custom_card_type_by_type(self):
         matches = _find_cards_in_config(self.CONFIG, card_type="tile")
-        assert len(matches) == 3
+        assert [m["jq_path"] for m in matches] == [
+            ".views[0].cards[0].groups[0].cards[0].card",
+            ".views[0].cards[0].groups[0].cards[2]",
+            ".views[0].cards[1].tabs[0].card",
+        ]
 
 
 class TestQueryCriterion:
@@ -152,3 +160,118 @@ class TestQueryCriterion:
     def test_no_query_leaves_out_matched(self):
         matches = _find_cards_in_config(self.CONFIG, card_type="tile")
         assert "matched" not in matches[0]
+
+
+class TestSearchSurvivesUnusualConfigs:
+    """Shapes HA stores that must neither hide cards nor fail a search."""
+
+    def test_untyped_view_with_sections_is_searched(self):
+        # The frontend renders a view with `sections` and no `type` as sections.
+        config = {
+            "views": [
+                {"sections": [{"cards": [{"type": "tile", "entity": "light.a"}]}]}
+            ]
+        }
+        matches = _find_cards_in_config(config, entity_id="light.a")
+        assert [m["jq_path"] for m in matches] == [".views[0].sections[0].cards[0]"]
+
+    def test_wildcard_entity_search_skips_rows_without_an_entity(self):
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "entities",
+                            "entities": [{"type": "divider"}, "light.a"],
+                        }
+                    ]
+                }
+            ]
+        }
+        assert len(_find_cards_in_config(config, entity_id="light.*")) == 1
+
+    def test_heading_search_reads_non_string_titles(self):
+        config = {
+            "views": [{"cards": [{"type": "entities", "title": 5, "entities": []}]}]
+        }
+        assert len(_find_cards_in_config(config, heading="5")) == 1
+        assert _find_cards_in_config(config, heading="x") == []
+
+    def test_null_badges_and_sections_do_not_fail_the_search(self):
+        config = {
+            "views": [
+                {
+                    "badges": None,
+                    "sections": None,
+                    "cards": [{"type": "tile", "entity": "light.a"}],
+                }
+            ]
+        }
+        assert len(_find_cards_in_config(config, query="light.a")) == 1
+
+    def test_typed_objects_outside_card_slots_are_not_cards(self):
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "tile",
+                            "entity": "light.a",
+                            "features": [{"type": "light-brightness"}],
+                        },
+                        {
+                            "type": "entities",
+                            "entities": [
+                                {
+                                    "type": "attribute",
+                                    "entity": "light.b",
+                                    "attribute": "x",
+                                }
+                            ],
+                        },
+                    ]
+                }
+            ]
+        }
+        assert _find_cards_in_config(config, card_type="light-brightness") == []
+        assert _find_cards_in_config(config, card_type="attribute") == []
+        row_owner = _find_cards_in_config(config, entity_id="light.b")
+        assert [m["jq_path"] for m in row_owner] == [".views[0].cards[1]"]
+        feature_owner = _find_cards_in_config(config, query="light-brightness")
+        assert [m["jq_path"] for m in feature_owner] == [".views[0].cards[0]"]
+
+
+class TestPictureElementsDisclosure:
+    """query reads picture-elements text; the card criteria are warned about."""
+
+    CONFIG: ClassVar[dict[str, Any]] = {
+        "views": [
+            {
+                "cards": [
+                    {
+                        "type": "picture-elements",
+                        "elements": [{"type": "state-badge", "entity": "sensor.pe"}],
+                    }
+                ]
+            }
+        ]
+    }
+
+    def _search(self, **criteria: str) -> dict[str, Any]:
+        return DashboardConfigTools._build_search_result(
+            [{"url_path": "d", "config": self.CONFIG}],
+            criteria=_SearchCriteria.from_params(**criteria),
+            include_config=False,
+        )
+
+    def test_query_finds_element_text_without_a_warning(self):
+        result = self._search(query="sensor.pe")
+        assert result["matches"][0]["matched"] == [
+            {"field": "entity", "value": "sensor.pe"}
+        ]
+        assert "warnings" not in result
+
+    def test_card_criteria_warn_that_elements_are_not_matched(self):
+        result = self._search(entity_id="sensor.pe", query="sensor.pe")
+        assert result["match_count"] == 0
+        assert any("picture-elements" in w for w in result["warnings"])
