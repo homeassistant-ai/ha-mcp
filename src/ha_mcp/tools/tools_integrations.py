@@ -1883,9 +1883,8 @@ class IntegrationTools:
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
-          ha_config_set_helper. The exception is `otp`, which is a helper in
-          the HA UI but is created HERE via domain="otp" — its flow needs a
-          live TOTP code, so ha_config_set_helper deliberately omits it.
+          ha_config_set_helper. `otp` is the user's to set up in the HA UI: its
+          secret is a credential enrolled in an authenticator app; do not create it.
         - Config subentries: use
           ha_config_set_helper(helper_type='config_subentry').
         - Removing an entry: use ha_remove_helpers_integrations.
@@ -2266,7 +2265,8 @@ class IntegrationTools:
         WARNING: Removing a helper or integration that is referenced by
         automations, scripts, or other integrations may cause those to fail.
         Use ha_search() / ha_get_integration() to verify before removal.
-        Recovery requires a usable backup and supported restore path.
+        Auto-backup recreates only removed FLOW helpers and config subentries; re-add
+        any other removed helper or entry yourself (otp: the user, in the HA UI).
         """
         # === Confirm gate (uniform for every path) ===
         if not confirm:

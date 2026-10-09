@@ -472,9 +472,8 @@ def _reject_redaction_sentinels(config_dict: dict[str, Any]) -> None:
 
 
 # 17 helpers that use Config Entry Flow API (Issue #324, #2187).
-# `otp` is the one helper-typed config flow deliberately left out: its confirm
-# step demands a live TOTP code derived from the secret, which no flow walker
-# can supply. It stays reachable through ha_set_integration(domain="otp").
+# `otp` is not offered: the user sets it up in the HA UI, since its secret is a
+# credential they enroll in an authenticator app.
 SUPPORTED_HELPERS = Literal[
     "template",
     "group",

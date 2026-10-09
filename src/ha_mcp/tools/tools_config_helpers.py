@@ -784,8 +784,8 @@ class HelperConfigTools:
         random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat,
         history_stats, mold_indicator. Create requires `name`; for updates pass the
         existing entry_id as `helper_id` (options flows reject the `name` key).
-        `otp` is a helper in the HA UI but not offered here — its flow needs a live
-        TOTP code; create it with ha_set_integration(domain="otp").
+        `otp` is not offered here: the user sets it up in the HA UI, since its
+        secret is a credential they enroll in an authenticator app.
 
         CONFIG_SUBENTRY type (Config Subentry Flow API): pass `entry_id`,
         `subentry_type` and `config`; pass `subentry_id` to reconfigure an existing
