@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.server.context import Context
 from ha_mcp._vendor.fastmcp.server.transforms import Transform
-from ha_mcp._vendor.fastmcp.server.transforms.search.base import _schema_type
 from ha_mcp._vendor.fastmcp.server.transforms.search.bm25 import BM25SearchTransform
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
@@ -102,9 +101,9 @@ SEARCH_QUERY_DESCRIPTION = (
 )
 
 SEARCH_TOOLS_DESCRIPTION = (
-    "Exact tool names whose FULL definition (input schema, annotations) to "
-    "return — the second hop before calling a tool found by query. "
-    "'query' is ignored when this is given."
+    "Exact tool names to return in full (description, input schema, "
+    "annotations); pinned tools come back as their stub. 'query' is ignored "
+    "when this is given."
 )
 
 _TOOL_NOT_FOUND = "Search by English keywords to find the right tool name."
@@ -327,52 +326,80 @@ def _execute_via(proxy: str, tool_name: str) -> str:
     )
 
 
-def _param_type(schema: Any) -> str:
-    """Type label for one parameter; enum values are spelled out inline."""
-    if not isinstance(schema, dict):
-        return _schema_type(schema)
-    kind = schema.get("type")
+# The compact-params renderer is duplicated verbatim in the component
+# (custom_components/ha_mcp_tools/llm_api_search.py), which cannot import
+# ha_mcp; tests/src/unit/test_llm_api_search.py checks the two agree.
+def _literal_labels(branch: dict[str, Any]) -> list[str]:
+    """Labels of the ``enum``/``const`` values *branch* admits; ``None`` is
+    kept as-is for the caller's nullable check."""
+    values = [*(branch.get("enum") or [])]
+    if "const" in branch:
+        values.append(branch["const"])
+    return [v if isinstance(v, str) or v is None else json.dumps(v) for v in values]
+
+
+def _plain_type(branch: dict[str, Any], *, nested: bool) -> str:
+    """Label of a branch without literal values."""
+    kind = branch.get("type")
+    if kind == "array":
+        return f"{_param_type(branch.get('items'))}[]"
+    if isinstance(kind, str) and kind:
+        return kind
+    if nested and (isinstance(kind, list) or "anyOf" in branch or "oneOf" in branch):
+        return _param_type(branch)
+    return "object" if {"$ref", "properties", "allOf"} & branch.keys() else "any"
+
+
+def _param_type(node: Any) -> str:
+    """Type label for one parameter: ``|`` joins union branches, enum and
+    const values are spelled out inline, ``?`` marks nullable, ``T[]`` an
+    array of ``T``."""
+    if not isinstance(node, dict):
+        return "any"
+    kind = node.get("type")
     if isinstance(kind, list):
-        branches: list[Any] = [{**schema, "type": k} for k in kind]
+        branches: list[Any] = [{**node, "type": k} for k in kind]
     else:
-        branches = schema.get("anyOf") or schema.get("oneOf") or [schema]
+        branches = node.get("anyOf") or node.get("oneOf") or [node]
     labels: dict[str, None] = {}
     nullable = False
     for branch in branches:
         if not isinstance(branch, dict):
             continue
-        values = branch.get("enum") or []
-        if "const" in branch:
-            values = [*values, branch["const"]]
-        if values:
+        if values := _literal_labels(branch):
             nullable = nullable or None in values
-            labels.update(
-                dict.fromkeys(
-                    v if isinstance(v, str) else json.dumps(v)
-                    for v in values
-                    if v is not None
-                )
-            )
+            labels.update(dict.fromkeys(v for v in values if v is not None))
         elif branch.get("type") == "null":
             nullable = True
         else:
-            labels[_schema_type(branch)] = None
+            labels[_plain_type(branch, nested=branch is not node)] = None
     if not labels:
-        return _schema_type(schema)
+        return "null" if nullable else "any"
     return "|".join(labels) + ("?" if nullable else "")
 
 
-def _compact_params(schema: dict[str, Any]) -> str:
-    """One line naming every parameter with its type and required marker."""
-    props = schema.get("properties") or {}
-    required = set(schema.get("required") or [])
-    return (
-        "; ".join(
-            f"{name} ({_param_type(field)}{', required' if name in required else ''})"
-            for name, field in props.items()
-        )
-        or "none"
+def _compact_params(schema: Any) -> str:
+    """One line naming every parameter with its type and required marker;
+    ``none`` for a tool without parameters."""
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict) or not props:
+        return "none"
+    required = schema.get("required")
+    required = set(required) if isinstance(required, list) else set()
+    return "; ".join(
+        f"{name} ({_param_type(field)}{', required' if name in required else ''})"
+        for name, field in props.items()
     )
+
+
+def _summary(description: str | None) -> str:
+    """The first paragraph of a tool description, on one line.
+
+    A docstring opens with its summary line; the paragraphs after it (and
+    the BM25 keyword list ``SearchKeywordsTransform`` appends) come back
+    with the full definition from ``tools=[...]``.
+    """
+    return " ".join((description or "").split("\n\n", 1)[0].split())
 
 
 def _read_only_mode() -> bool:
@@ -642,7 +669,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
             """
             catalog = await transform.get_tool_catalog(ctx)
             if tools:
-                return transform._render_full(catalog, tools)
+                return await transform._render_full(catalog, tools, ctx)
             if not query.strip():
                 raise ToolError(
                     json.dumps(
@@ -689,7 +716,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
         return results
 
     def _execute_via_hint(self, tool: Tool) -> str:
-        """Call form(s) for *tool* through every proxy that reaches it."""
+        """Call form(s) for *tool* through each proxy ``_advertised_routes`` lists."""
         proxy_map: dict[Capability, str] = {
             "read": self._call_read_name,
             "write": self._call_write_name,
@@ -725,34 +752,45 @@ class CategorizedSearchTransform(BM25SearchTransform):
             if tool.name in self._always_visible
             else {
                 "name": tool.name,
-                "description": tool.description or "",
+                "description": _summary(tool.description),
                 "params": _compact_params(tool.parameters),
                 "execute_via": self._execute_via_hint(tool),
             }
             for tool in tools
         ]
 
-    def _render_full(
-        self, catalog: Sequence[Tool], names: list[str]
+    async def _render_full(
+        self, catalog: Sequence[Tool], names: list[str], ctx: Context
     ) -> list[dict[str, Any]]:
-        """Full definitions of *names* from *catalog*, in the order given."""
+        """Full definitions of *names* from *catalog*, in the order given.
+
+        A pinned name gets the stub, an unknown one a not-found entry — or,
+        for a write tool Read Only Mode hides, the READ_ONLY_MODE error the
+        call proxies give, so the model learns why rather than concluding
+        the capability does not exist. When no name resolves the whole call
+        is an error.
+        """
         by_name = {tool.name: tool for tool in catalog}
+        hidden = await self._read_only_hidden(names, by_name, ctx)
         results: list[dict[str, Any]] = []
+        found = 0
         for name in names:
             tool = by_name.get(name)
             if tool is None:
-                results.append(
-                    {
-                        "name": name,
-                        **create_error_response(
-                            code=ErrorCode.RESOURCE_NOT_FOUND,
-                            message=f"Tool '{name}' not found.",
-                            suggestions=[_TOOL_NOT_FOUND],
-                            context={"tool_name": name},
-                        ),
-                    }
+                error = (
+                    hidden[name]
+                    if name in hidden
+                    else create_error_response(
+                        code=ErrorCode.RESOURCE_NOT_FOUND,
+                        message=f"Tool '{name}' not found.",
+                        suggestions=[_TOOL_NOT_FOUND],
+                        context={"tool_name": name},
+                    )
                 )
-            elif tool.name in self._always_visible:
+                results.append({"name": name, **error})
+                continue
+            found += 1
+            if tool.name in self._always_visible:
                 results.append(self._pinned_stub(tool))
             else:
                 data = tool.to_mcp_tool().model_dump(
@@ -760,7 +798,39 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 )
                 data["execute_via"] = self._execute_via_hint(tool)
                 results.append(data)
+        if not found:
+            error = (
+                results[0]
+                if len(results) == 1
+                else create_error_response(
+                    code=ErrorCode.RESOURCE_NOT_FOUND,
+                    message=f"None of the named tools were found: {', '.join(names)}.",
+                    suggestions=[_TOOL_NOT_FOUND],
+                    context={"results": results},
+                )
+            )
+            raise ToolError(json.dumps(error), log_level=TOOL_ERROR_LOG_LEVEL)
         return results
+
+    @staticmethod
+    async def _read_only_hidden(
+        names: list[str], visible: dict[str, Tool], ctx: Context
+    ) -> dict[str, dict[str, Any]]:
+        """READ_ONLY_MODE errors for the *names* Read Only Mode hides."""
+        if not _read_only_mode() or all(name in visible for name in names):
+            return {}
+        from ..read_only import read_only_error_response, read_only_visible
+
+        registered = {
+            tool.name: tool for tool in await ctx.fastmcp.local_provider._list_tools()
+        }
+        return {
+            name: read_only_error_response(name)
+            for name in names
+            if name not in visible
+            and name in registered
+            and not read_only_visible(registered[name])
+        }
 
     def _make_categorized_proxy(
         self,

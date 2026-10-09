@@ -1,13 +1,15 @@
 """Compact ``ha_search_tools`` hits and the ``tools=`` second hop (#2633).
 
-A keyword hit carries a one-line ``params`` summary instead of the full
-input schema, so a page of results fits a small context window. The full
-definition of a chosen tool comes back from ``ha_search_tools(tools=[...])``.
+A keyword hit carries the description's first paragraph and a one-line
+``params`` summary instead of the full docstring and input schema, so a
+page of results fits a small context window. The full definition of a
+chosen tool comes back from ``ha_search_tools(tools=[...])``.
 """
 
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any, Literal
 
 import pytest
@@ -17,6 +19,7 @@ from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
+from ha_mcp.read_only import ReadOnlyToolsTransform
 from ha_mcp.transforms.categorized_search import (
     CategorizedSearchTransform,
     _compact_params,
@@ -36,23 +39,50 @@ async def _typed(
     return "ok"
 
 
+async def _write(config: dict[str, Any]) -> str:
+    return "ok"
+
+
 _TYPED = Tool.from_function(
     fn=_typed,
     name="ha_typed_tool",
     description="typed helper writer",
     annotations=ToolAnnotations(read_only_hint=True),
 )
+_WRITE = Tool.from_function(
+    fn=_write,
+    name="ha_config_set_thing",
+    description="set a thing",
+    annotations=ToolAnnotations(destructive_hint=True),
+)
 _PINNED = _tool("ha_get_state", "get entity state")
+_ENTITY_DESCRIPTION = (
+    "Get entity details, with the\nsummary line wrapped.\n\n"
+    "Guidance the agent needs only once it calls the tool.\n\n"
+    "entity details attributes registry"
+)
 
 
 async def _call(arguments: dict[str, Any]) -> list[dict[str, Any]]:
     mcp = FastMCP("compact-search")
-    for tool in (_TYPED, _PINNED, _tool("ha_get_entity", "get entity details")):
+    for tool in (_TYPED, _WRITE, _PINNED, _tool("ha_get_entity", _ENTITY_DESCRIPTION)):
         mcp.add_tool(tool)
+    mcp.add_transform(ReadOnlyToolsTransform())
     mcp.add_transform(CategorizedSearchTransform(always_visible=["ha_get_state"]))
     async with Client(mcp) as client:
         result = await client.call_tool("ha_search_tools", arguments)
     return list(result.data)
+
+
+async def _error(arguments: dict[str, Any]) -> dict[str, Any]:
+    with pytest.raises(ToolError) as exc_info:
+        await _call(arguments)
+    return json.loads(str(exc_info.value))
+
+
+async def _entity_hit() -> dict[str, Any]:
+    hits = await _call({"query": "entity details"})
+    return next(h for h in hits if h["name"] == "ha_get_entity")
 
 
 async def _typed_params() -> str:
@@ -60,17 +90,26 @@ async def _typed_params() -> str:
     return next(h for h in hits if h["name"] == "ha_typed_tool")["params"]
 
 
+@pytest.fixture
+def read_only_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "ha_mcp.read_only.get_global_settings",
+        lambda: SimpleNamespace(read_only_mode=True),
+    )
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "fragment",
     [
-        # Enum values inline, so the model needs no second hop to pick one.
+        # Enum values inline, so the model can choose between tools from
+        # the hit alone.
         "helper_type (input_boolean|counter, required)",
         "name (string, required)",
         # A nullable enum keeps its values and marks the null branch.
         "action (create|update?)",
         "labels (string[]?)",
-        # A literal next to a plain type keeps both branches (Codex, #2670).
+        # A literal next to a plain type keeps both branches.
         "height (integer|auto)",
     ],
 )
@@ -90,11 +129,26 @@ def test_list_valued_type_renders_each_type() -> None:
     assert _compact_params(schema) == "limit (integer?); ids (string|string[])"
 
 
+def test_array_of_enum_spells_the_values() -> None:
+    schema = {"properties": {"kinds": {"type": "array", "items": {"enum": ["a", "b"]}}}}
+    assert _compact_params(schema) == "kinds (a|b[])"
+
+
 @pytest.mark.anyio
 async def test_tool_without_parameters_says_none() -> None:
     """An empty string would read as "params unknown", not "no params"."""
-    hits = await _call({"query": "entity details"})
-    assert next(h for h in hits if h["name"] == "ha_get_entity")["params"] == "none"
+    assert (await _entity_hit())["params"] == "none"
+
+
+@pytest.mark.anyio
+async def test_hit_description_is_the_first_paragraph_on_one_line() -> None:
+    """The summary line is what the model needs to pick a tool; the
+    guidance paragraphs and the BM25 keyword list come with ``tools=``."""
+    assert (await _entity_hit())["description"] == (
+        "Get entity details, with the summary line wrapped."
+    )
+    [entry] = await _call({"tools": ["ha_get_entity"]})
+    assert entry["description"] == _ENTITY_DESCRIPTION
 
 
 @pytest.mark.anyio
@@ -113,13 +167,29 @@ async def test_named_pinned_tool_returns_the_stub() -> None:
 
 
 @pytest.mark.anyio
-async def test_unknown_name_returns_an_error_entry() -> None:
-    [entry] = await _call({"tools": ["ha_no_such_tool"]})
-    assert entry["name"] == "ha_no_such_tool"
-    assert "inputSchema" not in entry
-    assert entry["success"] is False
-    assert entry["error"]["code"] == "RESOURCE_NOT_FOUND"
-    assert "search" in entry["error"]["suggestion"].lower()
+async def test_unknown_name_alone_is_an_error() -> None:
+    """A single hallucinated name is a failed call, not a successful page
+    with one failed entry."""
+    error = await _error({"tools": ["ha_no_such_tool"]})
+    assert error["name"] == "ha_no_such_tool"
+    assert error["success"] is False
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert "search" in error["error"]["suggestion"].lower()
+
+
+@pytest.mark.anyio
+async def test_only_unknown_names_is_an_error_listing_each() -> None:
+    error = await _error({"tools": ["ha_no_such_tool", "ha_nor_this"]})
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert [e["name"] for e in error["results"]] == ["ha_no_such_tool", "ha_nor_this"]
+
+
+@pytest.mark.anyio
+async def test_unknown_name_next_to_a_known_one_is_an_error_entry() -> None:
+    missing, found = await _call({"tools": ["ha_no_such_tool", "ha_typed_tool"]})
+    assert missing["success"] is False
+    assert missing["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert found["inputSchema"] == _TYPED.parameters
 
 
 @pytest.mark.anyio
@@ -138,10 +208,31 @@ async def test_query_is_ignored_when_tools_are_named() -> None:
 
 @pytest.mark.anyio
 async def test_call_without_query_or_tools_is_a_validation_error() -> None:
-    with pytest.raises(ToolError) as exc_info:
-        await _call({})
-    error = json.loads(str(exc_info.value))
+    error = await _error({})
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("read_only_on")
+async def test_read_only_mode_explains_a_hidden_write_tool() -> None:
+    """The proxies answer a hidden write tool with READ_ONLY_MODE; a
+    'not found' here would send the model searching for a capability it
+    then concludes does not exist."""
+    error = await _error({"tools": ["ha_config_set_thing"]})
+    assert error["error"]["code"] == "READ_ONLY_MODE"
+    assert error["read_only_mode"] is True
+    assert "inputSchema" not in error
+
+    found, hidden = await _call({"tools": ["ha_typed_tool", "ha_config_set_thing"]})
+    assert found["inputSchema"] == _TYPED.parameters
+    assert hidden["error"]["code"] == "READ_ONLY_MODE"
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("read_only_on")
+async def test_read_only_mode_still_says_not_found_for_a_made_up_name() -> None:
+    error = await _error({"tools": ["ha_no_such_tool"]})
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
 async def _hits_and_full(
@@ -168,13 +259,35 @@ async def test_compact_page_is_smaller_than_the_full_definitions(
 
 
 @pytest.mark.anyio
+async def test_real_hit_carries_the_summary_not_the_docstring(
+    toolsearch_server: server_module.HomeAssistantSmartMCPServer,
+) -> None:
+    """On the real catalog the description was 79% of a page; a hit now
+    carries the first paragraph, and the full entry the whole docstring
+    with its appended search keywords."""
+    hits, full = await _hits_and_full(toolsearch_server, "create helper")
+    by_name = {entry["name"]: entry for entry in full}
+    for hit in hits:
+        assert "\n" not in hit["description"], hit["name"]
+        assert by_name[hit["name"]]["description"].startswith(
+            hit["description"].split(" ")[0]
+        ), hit["name"]
+    helper = next(h for h in hits if h["name"] == "ha_config_set_helper")
+    assert "utility_meter" not in helper["description"]
+    assert "utility_meter" in by_name["ha_config_set_helper"]["description"]
+
+
+@pytest.mark.anyio
 async def test_full_definition_hop_matches_the_compact_hit(
     toolsearch_server: server_module.HomeAssistantSmartMCPServer,
 ) -> None:
     """On the real catalog, naming a hit returns the schema the compact
-    entry omitted, under the same name and proxy hint."""
+    entry omitted, under the same name and proxy hint — including the
+    manage tool whose hint names two proxies."""
     hits, full = await _hits_and_full(toolsearch_server, "energy dashboard preferences")
     by_name = {entry["name"]: entry for entry in full}
+    assert "ha_manage_energy_prefs" in by_name
+    assert "; " in by_name["ha_manage_energy_prefs"]["execute_via"]
     for hit in hits:
         entry = by_name[hit["name"]]
         assert "properties" in entry["inputSchema"], hit["name"]

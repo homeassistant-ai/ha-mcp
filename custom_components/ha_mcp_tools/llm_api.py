@@ -344,10 +344,11 @@ _TOOL_SEARCH_PROMPT = (
     "This assistant uses search-based tool discovery: most tools are NOT "
     "listed directly.\n"
     f"1. Call {_SEARCH_TOOL_NAME}(query=...) to find tools for the task; "
-    "results are compact: each tool's name, description, and params.\n"
-    f"2. Call {_SEARCH_TOOL_NAME}(tools=[...]) for the full input schema of "
-    "the tool you will call — required before calling: compact params omit "
-    "nested fields, defaults, and descriptions.\n"
+    "results are compact: each tool's name, one-line description, and params.\n"
+    f"2. Call {_SEARCH_TOOL_NAME}(tools=[...]) for the full description and "
+    "input schema of the tool you will call — required before calling: the "
+    "compact hit omits usage guidance, nested fields, defaults, and parameter "
+    "descriptions.\n"
     f"3. Execute it with {_CALL_TOOL_NAME}(name=..., arguments={{...}}) — "
     "discovered tools are NOT directly callable here.\n"
     "4. The few tools listed directly can be called as usual.\n"
@@ -832,7 +833,7 @@ class HaMcpLlmApi(llm.API):
                 parameters = self._convert_parameters(tool, schema)
                 if parameters is not None:
                     tools.append(self._mirror(tool, parameters))
-        tools.append(HaMcpSearchTool(catalog))
+        tools.append(HaMcpSearchTool(catalog, pinned & exposed_names))
         tools.append(HaMcpCallTool(self.server_url, exposed_names))
         return tools
 
