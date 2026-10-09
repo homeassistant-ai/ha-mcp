@@ -815,6 +815,22 @@ async def test_mode2_search_yaml_dashboard_suppresses_config() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_on_yaml_dashboard_withholds_matched_values() -> None:
+    """A query match on a YAML dashboard names the matched fields but not their
+    values, which may be resolved !secret plaintext."""
+    client = RoutingClient(
+        dashboards_list=[_YAML_ROW], configs={"yaml-dash": _MODE2_BODY}
+    )
+
+    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    with patch_ws(legacy_ws, tools_config_dashboards):
+        resp = await _build_get_dashboard(client)(url_path="yaml-dash", query="kitchen")
+
+    assert resp["matches"][0]["matched"] == [{"field": "entities"}]
+    assert any("withheld" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
 async def test_mode2_search_untagged_dashboard_suppresses_config() -> None:
     """A dashboard whose list row carries no mode tag is not provably storage, so
     its matched-card config is withheld (fail-closed)."""

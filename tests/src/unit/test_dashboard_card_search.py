@@ -496,3 +496,81 @@ class TestPictureElementsDisclosure:
         result = self._search(entity_id="sensor.pe", query="sensor.pe")
         assert result["match_count"] == 0
         assert any("picture-elements" in w for w in result["warnings"])
+
+
+class TestReviewedSearchEdges:
+    """Search edges where a result was wrong or a failure went unreported."""
+
+    @staticmethod
+    def _search(config: dict[str, Any], **criteria: str) -> dict[str, Any]:
+        return DashboardConfigTools._build_search_result(
+            [{"url_path": "d", "config": config}],
+            criteria=_SearchCriteria(**criteria),
+            include_config=False,
+            url_path="d",
+        )
+
+    def test_deeply_nested_card_options_do_not_fail_the_search(self):
+        options: dict[str, Any] = {"entity": "light.deep"}
+        for _ in range(600):
+            options = {"n": options}
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {"type": "custom:x", "options": options},
+                        {"type": "tile", "entity": "light.a"},
+                    ]
+                }
+            ]
+        }
+        result = self._search(config, entity_id="light.a")
+        assert [m["jq_path"] for m in result["matches"]] == [".views[0].cards[1]"]
+        assert any("depth bound" in w for w in result["warnings"])
+
+    def test_badge_search_does_not_list_header_cards(self):
+        config = {
+            "views": [
+                {
+                    "badges": ["light.a"],
+                    "header": {"card": {"type": "badge", "entity": "light.a"}},
+                }
+            ]
+        }
+        result = self._search(config, card_type="badge")
+        assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[0]"]
+
+    def test_cards_mapping_is_reported_as_malformed(self):
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "vertical-stack",
+                            "cards": {"type": "tile", "entity": "light.a"},
+                        }
+                    ]
+                }
+            ]
+        }
+        result = self._search(config, entity_id="light.a")
+        assert result["match_count"] == 0
+        assert any(".views[0].cards[0].cards" in w for w in result["warnings"])
+
+    def test_alarm_panel_states_list_is_not_malformed(self):
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "alarm-panel",
+                            "entity": "alarm_control_panel.home",
+                            "states": ["arm_home", "arm_away"],
+                        }
+                    ]
+                }
+            ]
+        }
+        result = self._search(config, card_type="alarm-panel")
+        assert result["match_count"] == 1
+        assert "warnings" not in result

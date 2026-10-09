@@ -44,6 +44,8 @@ _DASHBOARD_MATCH_CAP = 200
 _CARD_LIST_KEY = "cards"
 _CARD_KEY = "card"
 _NAMED_CARD_MAP_KEYS = frozenset({"custom_fields", "states"})
+# Bound on non-card nesting inside one card, against pathological configs.
+_MAX_NODE_DEPTH = 100
 
 
 def _do_dashboards(
@@ -140,7 +142,7 @@ async def _dashboards_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str
             prepped["docs"],
             prepped["yaml_skipped"],
             prepped["load_failed"],
-        ) = await _dashboard_search_docs(dashboards_map)
+        ) = await _dashboard_search_docs(dashboards_map, force=mode == "docs")
     else:
         prepped["rows"] = _dashboard_list_rows(dashboards_map)
     return {"prepped": prepped}
@@ -235,9 +237,12 @@ async def _dashboard_get_config(
 
 
 async def _dashboard_search_docs(
-    dashboards_map: Mapping[Any, Any],
+    dashboards_map: Mapping[Any, Any], *, force: bool = False
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Load every STORAGE dashboard's config for ``search`` and ``docs``.
+
+    ``force`` bypasses Lovelace's config cache, as the server's card search
+    (``docs``) promises fresh config like its per-dashboard reads.
 
     Only storage dashboards are loaded — YAML bodies are never searched/emitted.
     Returns ``(docs, yaml_skipped, load_failed)``.
@@ -281,7 +286,7 @@ async def _dashboard_search_docs(
         if not callable(loader):
             continue
         try:
-            config = await loader(False)
+            config = await loader(force)
         except Exception as err:  # noqa: BLE001
             if ConfigNotFound is not None and isinstance(err, ConfigNotFound):
                 # Auto-generated dashboard: nothing stored, nothing to scan.
@@ -648,6 +653,7 @@ def _walk_card_nodes(
     key: str,
     leaves: list[tuple[str, str]],
     nested: list[tuple[str, dict[str, Any]]],
+    depth: int = 0,
 ) -> None:
     """Split a card's subtree into its own string leaves and its nested cards.
 
@@ -655,28 +661,40 @@ def _walk_card_nodes(
     item, a ``card`` value or a ``custom_fields``/``states`` value) is a nested
     card: it goes to ``nested`` with its path instead of contributing leaves.
     Typed dicts elsewhere (tile ``features``, entity rows) stay leaves of the
-    card that holds them.
+    card that holds them. Descent stops ``_MAX_NODE_DEPTH`` levels down, far
+    below Python's recursion limit.
     """
     if isinstance(value, str):
         if value:
             leaves.append((key, value))
+    elif depth > _MAX_NODE_DEPTH:
+        return
     elif isinstance(value, dict):
         for k, v in value.items():
-            child_path = f"{path}{_path_key(k)}"
-            slots = _card_slot_items(k, v)
-            if slots is None:
-                _walk_card_nodes(v, child_path, str(k), leaves, nested)
-                continue
-            for segment, leaf_key, item in slots:
-                if _is_card(item):
-                    nested.append((f"{child_path}{segment}", item))
-                else:
-                    _walk_card_nodes(
-                        item, f"{child_path}{segment}", leaf_key, leaves, nested
-                    )
+            _walk_card_entry(k, v, f"{path}{_path_key(k)}", leaves, nested, depth + 1)
     elif isinstance(value, (list, tuple)):
         for i, item in enumerate(value):
-            _walk_card_nodes(item, f"{path}[{i}]", key, leaves, nested)
+            _walk_card_nodes(item, f"{path}[{i}]", key, leaves, nested, depth + 1)
+
+
+def _walk_card_entry(
+    key: Any,
+    value: Any,
+    path: str,
+    leaves: list[tuple[str, str]],
+    nested: list[tuple[str, dict[str, Any]]],
+    depth: int,
+) -> None:
+    """``_walk_card_nodes`` for one ``key: value`` entry found at ``path``."""
+    slots = _card_slot_items(key, value)
+    if slots is None:
+        _walk_card_nodes(value, path, str(key), leaves, nested, depth)
+        return
+    for segment, leaf_key, item in slots:
+        if _is_card(item):
+            nested.append((f"{path}{segment}", item))
+        else:
+            _walk_card_nodes(item, f"{path}{segment}", leaf_key, leaves, nested, depth)
 
 
 def _card_slot_items(key: Any, value: Any) -> list[tuple[str, str, Any]] | None:

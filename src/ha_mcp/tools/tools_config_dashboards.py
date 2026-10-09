@@ -257,6 +257,9 @@ _BADGE_CARD_TYPE = "badge"
 # Bound on card nesting levels against pathological configs; real dashboards
 # nest a handful.
 _MAX_CARD_DEPTH = 50
+# Bound on non-card nesting inside one card, which keeps the recursive split far
+# below Python's recursion limit even at the card bound.
+_MAX_NODE_DEPTH = 100
 
 
 def _py_key(name: str) -> str:
@@ -393,54 +396,76 @@ class _CardWalkFrame:
         return replace(self, depth=self.depth + 1)
 
 
+@dataclass(slots=True)
+class _CardSplit:
+    """A card's own string leaves, the cards below it, and where descent stopped."""
+
+    leaves: list[tuple[str, str]] = field(default_factory=list)
+    cards: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
+    cut: list[str] = field(default_factory=list)
+    malformed: list[str] = field(default_factory=list)
+
+
 def _split_card_node(
-    node: Any,
-    path: tuple[str, str],
-    key: str,
-    leaves: list[tuple[str, str]],
-    cards: list[tuple[str, str, dict[str, Any]]],
+    node: Any, path: tuple[str, str], key: str, out: _CardSplit, depth: int = 0
 ) -> None:
     """Split a card's subtree into its own string leaves and the cards below it.
 
     ``path`` is the (jq, python) suffix of ``node``. Every dict and list is
-    descended; a typed dict in a card slot goes to ``cards`` with its paths
-    instead of contributing leaves. Leaves carry their nearest dict key (a
-    ``custom_fields`` / ``states`` value carries its name).
+    descended, down to ``_MAX_NODE_DEPTH`` levels (deeper subtrees are recorded
+    in ``out.cut``); a typed dict in a card slot goes to ``out.cards`` with its
+    paths instead of contributing leaves. Leaves carry their nearest dict key
+    (a ``custom_fields`` / ``states`` value carries its name).
     """
     jq, py = path
     if isinstance(node, str):
         if node:
-            leaves.append((key, node))
-    elif isinstance(node, list):
+            out.leaves.append((key, node))
+        return
+    if not isinstance(node, (list, dict)):
+        return
+    if depth > _MAX_NODE_DEPTH:
+        out.cut.append(jq)
+        return
+    if isinstance(node, list):
         for i, item in enumerate(node):
-            _split_card_node(item, (f"{jq}[{i}]", f"{py}[{i}]"), key, leaves, cards)
-    elif isinstance(node, dict):
-        for k, v in node.items():
-            if isinstance(k, str):
-                _split_card_entry(k, v, path, leaves, cards)
-            else:
-                _log_non_str_key("card", k, jq)
+            _split_card_node(item, (f"{jq}[{i}]", f"{py}[{i}]"), key, out, depth + 1)
+        return
+    for k, v in node.items():
+        if isinstance(k, str):
+            _split_card_entry(k, v, path, out, depth + 1)
+        else:
+            _log_non_str_key("card", k, jq)
 
 
 def _split_card_entry(
-    key: str,
-    value: Any,
-    path: tuple[str, str],
-    leaves: list[tuple[str, str]],
-    cards: list[tuple[str, str, dict[str, Any]]],
+    key: str, value: Any, path: tuple[str, str], out: _CardSplit, depth: int
 ) -> None:
     """``_split_card_node`` for one ``key: value`` entry of a dict at ``path``."""
     child_jq, child_py = f"{path[0]}{_jq_key(key)}", f"{path[1]}{_py_key(key)}"
     slots = _card_slots(key, value, child_jq)
     if slots is None:
-        _split_card_node(value, (child_jq, child_py), key, leaves, cards)
+        if _is_swapped_card_container(key, value):
+            out.malformed.append(child_jq)
+        _split_card_node(value, (child_jq, child_py), key, out, depth)
         return
     for jq_seg, py_seg, leaf_key, item in slots:
         item_path = (f"{child_jq}{jq_seg}", f"{child_py}{py_seg}")
         if isinstance(item, dict) and "type" in item:
-            cards.append((*item_path, item))
+            out.cards.append((*item_path, item))
         else:
-            _split_card_node(item, item_path, leaf_key, leaves, cards)
+            _split_card_node(item, item_path, leaf_key, out, depth)
+
+
+def _is_swapped_card_container(key: str, value: Any) -> bool:
+    """``cards`` holding a mapping, or ``custom_fields`` holding a list.
+
+    Other shapes under slot keys are ordinary options (the alarm-panel card's
+    ``states`` is a list of modes), so they are read as text, not reported.
+    """
+    if key == _NESTED_CARDS_KEY:
+        return isinstance(value, dict)
+    return key == _NESTED_CUSTOM_FIELDS_KEY and isinstance(value, list)
 
 
 def _card_slots(
@@ -501,17 +526,19 @@ def _walk_card(
         frame.gaps.truncation.append(jq_prefix)
         return []
 
-    leaves: list[tuple[str, str]] = []
-    nested: list[tuple[str, str, dict[str, Any]]] = []
-    _split_card_node(card, ("", ""), "", leaves, nested)
+    split = _CardSplit()
+    _split_card_node(card, ("", ""), "", split)
+    frame.gaps.truncation.extend(jq_prefix + cut for cut in split.cut)
+    if frame.criteria.can_match_cards():
+        frame.gaps.malformed.extend(jq_prefix + path for path in split.malformed)
     matches: list[dict[str, Any]] = []
     if "type" in card:
-        match = _card_search_match(card, leaves, jq_prefix, python_prefix, frame)
+        match = _card_search_match(card, split.leaves, jq_prefix, python_prefix, frame)
         if match is not None:
             matches.append(match)
         _note_uncovered(card, jq_prefix, frame)
     child_frame = frame.descend()
-    for jq_suffix, py_suffix, child in nested:
+    for jq_suffix, py_suffix, child in split.cards:
         matches.extend(
             _walk_card(
                 child,
@@ -595,10 +622,10 @@ def _find_badge_matches_in_view(
             badge, criteria.entity_id
         ):
             continue
-        leaves: list[tuple[str, str]] = []
+        split = _CardSplit()
         if criteria.query is not None:
-            _split_card_node(badge, ("", ""), "badges", leaves, [])
-        hits = _query_hits(leaves, criteria.query_lower)
+            _split_card_node(badge, ("", ""), "badges", split)
+        hits = _query_hits(split.leaves, criteria.query_lower)
         if hits == []:
             continue
         badge_match: dict[str, Any] = {
@@ -630,10 +657,11 @@ def _find_header_card_matches(
     The header accepts a card (typically Markdown) that can contain entity refs.
     """
     view_idx = frame.view_index
+    if not frame.criteria.can_match_cards():
+        return []
     header = view.get("header")
     if not isinstance(header, dict):
-        if frame.criteria.can_match_cards():
-            frame.gaps.note_malformed(header, f".views[{view_idx}].header")
+        frame.gaps.note_malformed(header, f".views[{view_idx}].header")
         return []
     if header.get("card") is None:
         return []
@@ -1520,10 +1548,9 @@ def _search_warnings(
         )
     if gaps.truncation:
         warnings.append(
-            f"Search stopped at the nesting depth bound "
-            f"(_MAX_CARD_DEPTH={_MAX_CARD_DEPTH}) in "
-            f"{len(gaps.truncation)} place(s); cards nested deeper were not "
-            "searched, so results may be incomplete."
+            f"Search stopped at a nesting depth bound in {len(gaps.truncation)} "
+            "place(s); content nested deeper was not searched, so results may "
+            "be incomplete."
         )
     if uncovered:
         locations = ", ".join(sorted(set(uncovered)))
@@ -1605,7 +1632,8 @@ class DashboardConfigTools:
         card_type: Annotated[
             str | None,
             Field(
-                description="Search: cards of this type, e.g. 'tile'. With "
+                description="Search: cards of this type, e.g. 'tile'; 'badge' selects "
+                "view badges instead (alone, it lists them all). With "
                 "describe=True: the type to describe."
             ),
         ] = None,
@@ -1664,12 +1692,11 @@ class DashboardConfigTools:
         use ha_search.
 
         The parameters pick the mode:
-        - list_only=True lists dashboard metadata, storage and YAML alike.
+        - list_only=True: storage and YAML dashboards alike.
         - Any of query / entity_id / card_type / heading searches cards and
           header cards, AND-ing the criteria, in url_path or, when it is
           omitted, every storage dashboard. View badges answer entity_id and
-          query; card_type='badge' keeps only badges (alone, it lists them all),
-          and heading excludes them.
+          query, and heading excludes them.
           Cards nested at any depth count, including
           custom cards' own keys such as groups[].cards[].card. Each match has a
           jq_path and a python_path to append to `config` in
@@ -1906,9 +1933,9 @@ class DashboardConfigTools:
         ``url_path`` names the one dashboard a scoped search read; its
         ``config_hash`` then also appears at the top level (``None`` across
         dashboards). ``config_suppressed_note`` (a dashboard not provably
-        storage-mode) withholds card bodies even with ``include_config=True`` —
-        a YAML dashboard may carry HA-resolved ``!secret`` plaintext. Match
-        LOCATIONS are always reported.
+        storage-mode) withholds card bodies and the matched values ``query``
+        found — a YAML dashboard may carry HA-resolved ``!secret`` plaintext.
+        Match LOCATIONS and the matched field names are always reported.
         """
         matches, gaps = _find_cards_in_docs(
             docs, criteria, name_dashboards=url_path is None
@@ -1918,6 +1945,10 @@ class DashboardConfigTools:
         if not include_config or config_suppressed_note is not None:
             for match in matches:
                 del match["card_config"]
+        if config_suppressed_note is not None:
+            for match in matches:
+                if "matched" in match:
+                    match["matched"] = [{"field": h["field"]} for h in match["matched"]]
 
         # query reads picture-elements text, and card_type='badge' cannot match
         # a card; only criteria that can select cards make unsearched
@@ -2016,17 +2047,19 @@ class DashboardConfigTools:
             # an unexpected exception below still reports the resolved
             # identifier (see ha_config_get_dashboard's except block).
             resolved_url_path[0] = url_path
-            # Fail-closed storage guard: bodies are surfaced ONLY for a
-            # dashboard PROVABLY tagged mode="storage". A YAML or unconfirmed
-            # (untagged, default) dashboard may carry resolved !secret
-            # plaintext. Only paid when the caller asked for bodies.
+            # Fail-closed storage guard: bodies and query-matched values are
+            # surfaced ONLY for a dashboard PROVABLY tagged mode="storage". A
+            # YAML or unconfirmed (untagged, default) dashboard may carry
+            # resolved !secret plaintext. Only paid when either was asked for.
             config_suppressed_note: str | None = None
-            if include_config and not await self._dashboard_is_storage_mode(url_path):
+            if (
+                include_config or criteria.query is not None
+            ) and not await self._dashboard_is_storage_mode(url_path):
                 config_suppressed_note = (
-                    "Matched-card config bodies were withheld: dashboard "
-                    f"{url_path!r} is not provably storage-mode (a YAML "
+                    "Matched values and card config bodies were withheld: "
+                    f"dashboard {url_path!r} is not provably storage-mode (a YAML "
                     "dashboard's config can carry resolved !secret values). Match "
-                    "locations are reported; the config was not surfaced."
+                    "locations and field names are reported."
                 )
             search_result = self._build_search_result(
                 [{"url_path": url_path, "config": config}],

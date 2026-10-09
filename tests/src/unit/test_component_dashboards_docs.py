@@ -98,6 +98,47 @@ def test_search_reaches_cards_under_a_custom_cards_own_keys(monkeypatch: Any) ->
     ]
 
 
+class _ForceRecordingDashboard(FakeDashboard):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.forces: list[bool] = []
+
+    async def async_load(self, force: bool) -> Any:
+        self.forces.append(force)
+        return await super().async_load(force)
+
+
+def test_docs_reads_fresh_config_not_the_cache(monkeypatch: Any) -> None:
+    """The server's search promises fresh config, so ``docs`` bypasses the cache."""
+    dash = _ForceRecordingDashboard("home", "storage", config={}, body=_BODY)
+    _dashboards(monkeypatch, {"home": dash})
+
+    _run_dashboards(FakeHass(), {"mode": "docs"})
+
+    assert dash.forces == [True]
+
+
+def test_search_survives_deeply_nested_card_options(monkeypatch: Any) -> None:
+    options: dict[str, Any] = {"entity": "light.deep"}
+    for _ in range(1500):
+        options = {"n": options}
+    body = {
+        "views": [
+            {
+                "cards": [
+                    {"type": "custom:x", "options": options},
+                    {"type": "tile", "entity": "light.a"},
+                ]
+            }
+        ]
+    }
+    _dashboards(monkeypatch, {"home": _storage_dash("home", "Home", body=body)})
+
+    result = _run_dashboards(FakeHass(), {"mode": "search", "query": "light.a"})
+
+    assert [m["card_path"] for m in result["matches"]] == ["views[0].cards[1]"]
+
+
 def test_docs_capability_is_advertised() -> None:
     """The component advertises ``dashboards_docs``, which gates the server's ``docs`` read."""
     assert "dashboards_docs" in wsapi._do_info(FakeHass())["capabilities"]
