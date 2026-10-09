@@ -1,7 +1,7 @@
 """Regressions reported by Patch76 and reproduced on embedded HA 2026.10."""
 
 import asyncio
-import time
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -154,12 +154,27 @@ def test_looping_editor_cannot_consume_later_cards_budget():
       customElements.define('looping-editor-card', Card);
     """
     bundle = cc._Bundle(dom, source)
+    limits: list[float] = []
+    context_call = bundle._context_call
+
+    def record_limits(method: str, *args: Any) -> Any:
+        if method == "set_time_limit":
+            limits.append(args[0])
+        return context_call(method, *args)
+
+    bundle._context_call = record_limits  # type: ignore[method-assign]
     try:
-        started = time.monotonic()
         assert bundle.check("looping-editor-card", {}) == [
             {"source": "card", "message": "card verdict"}
         ]
-        assert time.monotonic() - started < 2
+        # The looping editor (preparing it included) runs under its own short
+        # budget, and the card budget is restored afterwards, so later cards keep
+        # theirs.
+        assert cc._EDITOR_SECONDS in limits
+        assert all(
+            limit <= cc._EDITOR_SECONDS for limit in limits if limit != cc._CALL_SECONDS
+        )
+        assert limits[-1] == cc._CALL_SECONDS
         assert bundle.check("looping-editor-card", {}) == [
             {"source": "card", "message": "card verdict"}
         ]
