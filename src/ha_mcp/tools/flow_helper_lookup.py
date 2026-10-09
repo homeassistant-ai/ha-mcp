@@ -133,10 +133,14 @@ def raise_unregistered_entity_error(
                 "entity_id": entity_id,
             },
             suggestions=[
-                "Remove it where it is defined, e.g. delete it from its YAML "
-                "file and reload that integration.",
-                "Entities Home Assistant builds from its core configuration, "
-                "such as zone.home, cannot be removed.",
+                (
+                    "Remove it where it is defined, e.g. delete it from its "
+                    "YAML file and reload that integration."
+                ),
+                (
+                    "Entities Home Assistant builds from its core "
+                    "configuration, such as zone.home, cannot be removed."
+                ),
             ],
         )
     )
