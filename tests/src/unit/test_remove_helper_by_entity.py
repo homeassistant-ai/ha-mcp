@@ -6,12 +6,14 @@ refused instead of deleting that integration's config entry.
 """
 
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.tools import auto_backup
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 # What Core's GET /api/config/config_entries/flow_handlers?type=helper returns:
@@ -174,3 +176,75 @@ async def test_registry_transport_failure_names_its_cause() -> None:
     err = json.loads(str(exc_info.value))["error"]
     assert err["code"] == "WEBSOCKET_DISCONNECTED"
     assert "ws drop" in err["message"]
+
+
+@pytest.mark.parametrize(
+    "registry_row",
+    [
+        {
+            "entity_id": "sensor.energy_peak",
+            "platform": "utility_meter",
+            "config_entry_id": "um_entry",
+        },
+        {"entity_id": "sensor.my_otp", "platform": "otp", "config_entry_id": "e"},
+        {
+            "entity_id": "input_boolean.guest_mode",
+            "platform": "input_boolean",
+            "unique_id": "guest_mode",
+            "config_entry_id": None,
+        },
+    ],
+    ids=["flow", "core_listed", "storage"],
+)
+async def test_entity_route_logs_one_tool_call(
+    registry_row: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The resolved removal must not log a second, synthetic tool call."""
+    logged: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "ha_mcp.tools.helpers.log_tool_call", lambda **kw: logged.append(kw)
+    )
+    await _remove(_client(registry_row), registry_row["entity_id"])
+    assert [(c["tool_name"], c["parameters"]["target"]) for c in logged] == [
+        ("ha_remove_helpers_integrations", registry_row["entity_id"])
+    ]
+
+
+@pytest.mark.parametrize(
+    ("registry_row", "captured"),
+    [
+        (
+            {"entity_id": "sensor.my_otp", "platform": "otp", "config_entry_id": "e"},
+            ("e", None),
+        ),
+        (
+            {
+                "entity_id": "input_boolean.guest_mode",
+                "platform": "input_boolean",
+                "unique_id": "guest_mode",
+                "config_entry_id": None,
+            },
+            ("input_boolean.guest_mode", "input_boolean"),
+        ),
+    ],
+    ids=["core_listed", "storage"],
+)
+async def test_entity_route_captures_the_resolved_helper(
+    registry_row: dict[str, Any],
+    captured: tuple[str, str | None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Helpers the flow path does not back up are captured by the resolved call."""
+    targets: list[tuple[str, str | None]] = []
+
+    async def record(_func: Any, _args: Any, kwargs: dict[str, Any], **_: Any) -> None:
+        targets.append((kwargs["target"], kwargs["helper_type"]))
+
+    monkeypatch.setattr(
+        auto_backup,
+        "get_global_settings",
+        lambda: SimpleNamespace(enable_auto_backup=True),
+    )
+    monkeypatch.setattr(auto_backup, "_capture_pre_write_snapshot", record)
+    await _remove(_client(registry_row), registry_row["entity_id"])
+    assert targets == [captured]

@@ -85,6 +85,29 @@ logger = logging.getLogger(__name__)
 _REGISTRY_RETRY_BASE_DELAY = 0.5
 
 
+def _removal_backup_domain(kwargs: dict[str, Any]) -> str:
+    # ``target`` is one of three shapes: a flow-helper entity_id like
+    # ``sensor.my_meter`` (routes through the matching ``helper_<type>``
+    # domain when ``helper_type`` is also passed), a bare config-entry
+    # id, or a parent.subentry pair. Dispatch to ``helper_<type>``
+    # when the kw is supplied so storage-backed helpers (input_*,
+    # counter, timer, ...) get a snapshot via the same handler the
+    # ``ha_config_set_helper`` decorator uses; otherwise fall back to
+    # the integration domain.
+    helper_type = kwargs.get("helper_type")
+    return f"helper_{helper_type}" if helper_type else "integration"
+
+
+def _skip_removal_capture(kwargs: dict[str, Any]) -> bool:
+    # An explicit flow-helper removal validates and resolves its target
+    # through Core before the inner decorator captures the entry; an
+    # entity_id without helper_type is captured by the resolved call.
+    helper_type = kwargs.get("helper_type")
+    return helper_type in FLOW_HELPER_TYPES or (
+        helper_type is None and "." in str(kwargs.get("target", ""))
+    )
+
+
 def _reject_set_integration_mode_conflicts(
     entry_id: str | None,
     domain: str | None,
@@ -2101,26 +2124,10 @@ class IntegrationTools:
         ),
     )
     @with_auto_backup(
-        # ``target`` is one of three shapes: a flow-helper entity_id like
-        # ``sensor.my_meter`` (routes through the matching ``helper_<type>``
-        # domain when ``helper_type`` is also passed), a bare config-entry
-        # id, or a parent.subentry pair. Dispatch to ``helper_<type>``
-        # when the kw is supplied so storage-backed helpers (input_*,
-        # counter, timer, ...) get a snapshot via the same handler the
-        # ``ha_config_set_helper`` decorator uses; otherwise fall back to
-        # the integration domain.
-        domain_fn=lambda kw: (
-            f"helper_{kw['helper_type']}" if kw.get("helper_type") else "integration"
-        ),
+        domain_fn=_removal_backup_domain,
         id_fn=removal_backup_id,
         domain_resolver=resolve_config_entry_backup_domain,
-        # An explicit flow-helper removal validates and resolves its target
-        # through Core before the inner decorator captures the entry; an
-        # entity_id without helper_type is captured by the resolved call.
-        skip_fn=lambda kw: (
-            kw.get("helper_type") in FLOW_HELPER_TYPES
-            or (kw.get("helper_type") is None and "." in str(kw.get("target", "")))
-        ),
+        skip_fn=_skip_removal_capture,
     )
     @log_tool_usage
     async def ha_remove_helpers_integrations(
@@ -2284,11 +2291,8 @@ class IntegrationTools:
             # An entity_id alone: its registry entry names the helper, and the
             # resolved call runs the matching path with its own backup.
             resolved_type, resolved_target = await self._resolve_helper_entity(target)
-            resolved: dict[str, Any] = await self.ha_remove_helpers_integrations(
-                target=resolved_target,
-                helper_type=resolved_type,
-                confirm=True,
-                wait=wait,
+            resolved: dict[str, Any] = await self._remove_resolved_helper(
+                target=resolved_target, helper_type=resolved_type, wait=wait_bool
             )
             if resolved_target != target:
                 resolved["resolved_from"] = target
@@ -2335,6 +2339,25 @@ class IntegrationTools:
     # REST API is HTTP DELETE. The public tool surface uses ``remove`` to
     # join the ``ha_remove_*`` behavioural family; the prefix asymmetry is
     # intentional and prevents future renames pulled by either side.
+
+    @with_auto_backup(
+        domain_fn=_removal_backup_domain,
+        id_fn=removal_backup_id,
+        domain_resolver=resolve_config_entry_backup_domain,
+        skip_fn=_skip_removal_capture,
+    )
+    async def _remove_resolved_helper(
+        self, *, target: str, helper_type: Any, wait: bool
+    ) -> dict[str, Any]:
+        """Remove the helper an entity_id resolved to, under the tool's backup.
+
+        Not the public tool itself, so the removal logs a single tool call.
+        """
+        if helper_type is None:
+            return await self._delete_direct_entry(target)
+        if helper_type in SIMPLE_HELPER_TYPES:
+            return await self._delete_simple_helper(helper_type, target, wait)
+        return await self._delete_flow_helper(helper_type, target, wait, [])
 
     async def _resolve_helper_entity(self, entity_id: str) -> tuple[Any, str]:
         """Map an entity_id to the (helper_type, target) that removes its helper."""
