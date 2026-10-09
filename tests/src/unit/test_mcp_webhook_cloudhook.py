@@ -17,7 +17,7 @@ import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
 from .test_mcp_webhook import WEBHOOK_ID, _make_hass, _store_cfg  # noqa: E402
 
 
-async def test_cloudhook_relay_reads_body_and_buffers_sse():
+async def test_cloudhook_relay_reads_body_and_buffers_sse() -> None:
     chunks = [b"event: message\ndata: 1\n\n", b"data: 2\n\n"]
     upstream = FakeUpstream(
         status=200,

@@ -8,6 +8,7 @@ reads via ``content`` and buffers an SSE reply instead of streaming it.
 from __future__ import annotations
 
 import os
+from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,10 +29,10 @@ def _cloudhook_relay_supported() -> bool:
 
 class TestCloudhookRelay:
     @pytest.fixture
-    def mod(self):
+    def mod(self) -> ModuleType:
         return proxy._import_mcp_proxy()
 
-    async def test_cloudhook_reads_body_and_buffers_sse(self, mod):
+    async def test_cloudhook_reads_body_and_buffers_sse(self, mod: ModuleType) -> None:
         if not _cloudhook_relay_supported():
             pytest.skip("flavor does not relay cloudhooks yet")
         body = b'{"jsonrpc":"2.0","id":1,"method":"ping"}'
