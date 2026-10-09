@@ -26,7 +26,7 @@ on:
         description: "How the server runs: standalone beside HA, embedded in the component, or the app (haos only)"
         type: choice
         options: [standalone, embedded, app]
-        default: standalone
+        default: embedded
       no_component:
         description: Without the ha_mcp_tools File & YAML Tools entry (like the no-tools E2E lanes)
         type: boolean

@@ -17,6 +17,11 @@ the tracked branch's E2E directory only for the run.
 | `haos` | `embedded` | HAOS VM; the server runs inside the component |
 | `haos` | `app` | HAOS VM; the server runs as the app (add-on) |
 
+Test on `server=embedded` with the File & YAML Tools entry in place first (the
+defaults): the server running in-process inside the component, with the
+filesystem tools beside it, is ha-mcp's main install. Use `standalone` or `app`
+for a change specific to that mode.
+
 `no_component=true` removes the component's File & YAML Tools entry, like the
 no-tools E2E lanes. `strict_bps` (default on, as agents meet it) sets strict
 best-practices mode for the standalone and embedded servers. `ha_image`
@@ -43,7 +48,7 @@ Run it **from your fork only**. The job refuses to run in
 3. Start it against any branch of your fork, passing the public key:
    ```bash
    gh workflow run dev-ha-env.yml -R <you>/ha-mcp -f track_ref=<branch> \
-     -f platform=haos -f server=app \
+     -f platform=docker -f server=embedded \
      -f public_key="$(openssl pkey -in devenv-key.pem -pubout | openssl base64 -A)"
    ```
 4. Once the run reaches "Keep running", download and decrypt the URLs:
