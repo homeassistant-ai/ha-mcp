@@ -472,6 +472,76 @@ async def test_search_parity_badges_and_header_cards() -> None:
     assert comp_h[0]["card_type"] == "markdown"
 
 
+# Card configs nested under a custom card's own keys (issue #2694): his
+# ``groups[].cards[].card`` page card, a button-card's ``custom_fields`` stack and
+# a ``tabs[].card`` tab, beside a plain top-level control card.
+_CUSTOM_NESTING_BODY = {
+    "views": [
+        {
+            "title": "Repro",
+            "cards": [
+                {
+                    "type": "custom:page-card",
+                    "groups": [
+                        {
+                            "cards": [
+                                {"card": {"type": "tile", "entity": "light.x"}},
+                                {"card": {"type": "entities", "entities": ["light.x"]}},
+                            ]
+                        }
+                    ],
+                },
+                {
+                    "type": "custom:button-card",
+                    "custom_fields": {
+                        "content": {
+                            "card": {
+                                "type": "vertical-stack",
+                                "cards": [{"type": "tile", "entity": "light.x"}],
+                            }
+                        }
+                    },
+                },
+                {
+                    "type": "custom:tabbed-card",
+                    "tabs": [{"card": {"type": "tile", "entity": "light.x"}}],
+                },
+                {"type": "tile", "entity": "light.x"},
+            ],
+        }
+    ]
+}
+
+
+@pytest.mark.asyncio
+async def test_search_parity_cards_nested_under_custom_keys() -> None:
+    """Every card slot inside a custom card is searched on BOTH paths (#2694)."""
+    dmap = {"repro": _storage_dash("repro", "Repro", body=_CUSTOM_NESTING_BODY)}
+    hass = _component_hass(dmap)
+    with patch_ws(_real_component_ws(hass), tools_config_dashboards):
+        comp = await _build_get_dashboard(RoutingClient())(
+            mode="search", query="light.x"
+        )
+    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
+    legacy_client = RoutingClient(
+        dashboards_list=[{**_storage_dash("repro", "Repro").config, "mode": "storage"}],
+        configs={"repro": _CUSTOM_NESTING_BODY},
+    )
+    with patch_ws(legacy_ws, tools_config_dashboards):
+        legacy = await _build_get_dashboard(legacy_client)(
+            mode="search", query="light.x"
+        )
+
+    assert [(m["card_path"], m["card_type"]) for m in comp["matches"]] == [
+        ("views[0].cards[0].groups[0].cards[0].card", "tile"),
+        ("views[0].cards[0].groups[0].cards[1].card", "entities"),
+        ("views[0].cards[1].custom_fields.content.card.cards[0]", "tile"),
+        ("views[0].cards[2].tabs[0].card", "tile"),
+        ("views[0].cards[3]", "tile"),
+    ]
+    assert comp["matches"] == legacy["matches"]
+
+
 @pytest.mark.asyncio
 async def test_search_parity_truncation_cap() -> None:
     """>200 matches truncate identically on both paths (mirrors the component cap)."""
