@@ -1014,13 +1014,17 @@ class TestCardsNestedUnderCustomKeys:
                         "groups": [
                             {
                                 "cards": [
-                                    {"card": {"type": "tile", "entity": "light.x"}},
+                                    {
+                                        "card": {"type": "tile", "entity": "light.x"},
+                                        "width": 12,
+                                    },
                                     {
                                         "card": {
                                             "type": "entities",
                                             "entities": ["light.x"],
                                         }
                                     },
+                                    {"type": "tile", "entity": "light.x"},
                                 ]
                             }
                         ],
@@ -1039,6 +1043,7 @@ class TestCardsNestedUnderCustomKeys:
         assert [(m["jq_path"], m["card_type"]) for m in matches] == [
             (".views[0].cards[0].groups[0].cards[0].card", "tile"),
             (".views[0].cards[0].groups[0].cards[1].card", "entities"),
+            (".views[0].cards[0].groups[0].cards[2]", "tile"),
             (".views[0].cards[1].tabs[0].card", "tile"),
         ]
         assert matches[0]["python_path"] == (
@@ -1047,4 +1052,4 @@ class TestCardsNestedUnderCustomKeys:
 
     def test_finds_custom_card_type_by_type(self):
         matches = _find_cards_in_config(self.CONFIG, card_type="tile")
-        assert len(matches) == 2
+        assert len(matches) == 3
