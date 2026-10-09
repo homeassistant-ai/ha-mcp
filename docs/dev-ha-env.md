@@ -81,7 +81,8 @@ Run it **from your fork only**. The job refuses to run in
    state through `HA:`'s REST API routes around the tools under test, so a
    gap in them goes unnoticed.
 5. Iterate the way you would update ha-mcp on any Home Assistant. The run
-   stays on the commit it started from, with developer mode on:
+   stays on the commit it started from; the standalone and embedded servers
+   run in developer mode:
    - Embedded server: push, then call
      `ha_dev_manage_server(action="update_source",
      pip_spec="ha-mcp @ git+https://github.com/<you>/ha-mcp@<commit>")`.
@@ -100,8 +101,11 @@ Run it **from your fork only**. The job refuses to run in
    - Standalone server or app: start a new run on the new commit.
 
    The job log's `STATUS` lines show the commit the run started from and any
-   boot error. Home Assistant stays up if the embedded server fails at boot;
-   update the server as above.
+   boot error. If the embedded server fails at boot, Home Assistant stays up
+   but the server's own tools are gone: log in to `HA:` as `mcp` / `mcp`,
+   open the HA-MCP Custom Component integration's server entry under
+   Settings → Devices & services, and put the fixed spec in Configure →
+   "Developer: ha-mcp package override".
 
    The instance is a normal HA you can change. On HAOS, change the Core
    version from Settings → System → Updates, or run

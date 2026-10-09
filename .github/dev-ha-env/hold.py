@@ -4,9 +4,10 @@ The workflow copies this file into the tracked checkout's tests/src/e2e/ and
 runs it with pytest, so the E2E session fixture does the whole bring-up for the
 selected backend: the Docker container (standalone or embedded server) or HAOS
 (external, embedded or app). It writes the local targets to tunnel to
-DEVENV_TARGETS and keeps the instance up. Developer mode is on, so a branch is
-iterated on with the same tools as on any live HA: ha_dev_manage_server
-(update_source) for the embedded server, HACS for the component, ha_restart.
+DEVENV_TARGETS and keeps the instance up. The standalone and embedded servers
+run in developer mode, so a branch is iterated on with the same tools as on any
+live HA: ha_dev_manage_server (update_source) for the embedded server, HACS for
+the component, ha_restart. The app is changed by a new run.
 
 Status lines (STATUS {...}) go to the job log.
 """
