@@ -326,3 +326,40 @@ async def test_flow_helper_removal_captures_once_and_only_when_confirmed(
     assert result["success"] is True
     snapshots = entry_backup.mutations[0]["snapshots"]
     assert [s["domain"] for s in snapshots] == ["helper_utility_meter"]
+
+
+async def test_entity_only_removal_captures_only_the_resolved_helper(
+    entry_backup: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without helper_type the registry names the helper; the removal captures
+    that helper once, and the unresolved outer call attempts no snapshot (it
+    would list every config entry looking for the entity_id)."""
+    entry_backup.entry["domain"] = "utility_meter"
+    capture = auto_backup._capture_pre_write_snapshot
+    captured_by: list[str] = []
+
+    async def record(func: Any, *args: Any, **kwargs: Any) -> Any:
+        captured_by.append(func.__name__)
+        return await capture(func, *args, **kwargs)
+
+    monkeypatch.setattr(auto_backup, "_capture_pre_write_snapshot", record)
+
+    async def registry_read(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == "config/entity_registry/get":
+            return {
+                "success": True,
+                "result": {
+                    "platform": "utility_meter",
+                    "config_entry_id": "template-entry",
+                },
+            }
+        return {"success": True, "result": []}
+
+    entry_backup.client.send_websocket_message.side_effect = registry_read
+    result = await entry_backup.tools.ha_remove_helpers_integrations(
+        target="sensor.example", confirm=True
+    )
+    assert result["success"] is True
+    snapshots = entry_backup.mutations[0]["snapshots"]
+    assert [s["domain"] for s in snapshots] == ["helper_utility_meter"]
+    assert "ha_remove_helpers_integrations" not in captured_by

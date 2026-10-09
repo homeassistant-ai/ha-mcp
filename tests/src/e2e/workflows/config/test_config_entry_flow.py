@@ -535,3 +535,67 @@ class TestConfigEntryFlow:
         assert "light" in menu_options, (
             f"Group menu_options should include 'light': {menu_options}"
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.config
+class TestRemoveHelperByEntity:
+    """ha_remove_helpers_integrations with an entity_id and no helper_type."""
+
+    async def test_entity_id_alone_removes_its_helper(self, mcp_client):
+        """The entity's registry entry names the helper, so the caller need not
+        know which helper type created it."""
+        async with MCPAssertions(mcp_client) as mcp:
+            created = await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "min_max",
+                    "name": "test_remove_by_entity_e2e",
+                    "config": {
+                        "name": "test_remove_by_entity_e2e",
+                        "entity_ids": ["sensor.demo_temperature"],
+                        "type": "max",
+                    },
+                },
+            )
+        entry_id = created["entry_id"]
+        entity_ids = created.get("entity_ids") or []
+        assert entity_ids, f"No entity_ids in response: {created}"
+        try:
+            await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_entity",
+                arguments={"entity_id": entity_ids[0]},
+                predicate=lambda d: d.get("count") == 1,
+                description="min_max helper entity is registered",
+            )
+            async with MCPAssertions(mcp_client) as mcp:
+                removed = await mcp.call_tool_success(
+                    "ha_remove_helpers_integrations",
+                    {"target": entity_ids[0], "confirm": True},
+                )
+            assert removed["entry_id"] == entry_id
+            assert removed["helper_type"] == "min_max"
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
+            )
+
+    async def test_entity_of_a_non_helper_integration_is_refused(self, mcp_client):
+        """An entity of a non-helper integration (sun) is refused instead of
+        deleting that integration's config entry."""
+        target = "sensor.sun_next_dawn"
+        async with MCPAssertions(mcp_client) as mcp:
+            refused = await mcp.call_tool_failure(
+                "ha_remove_helpers_integrations",
+                {"target": target, "confirm": True},
+            )
+            assert refused.get("error", {}).get("code") == (
+                "VALIDATION_INVALID_PARAMETER"
+            )
+            still_there = await mcp.call_tool_success(
+                "ha_get_entity", {"entity_id": target}
+            )
+        assert still_there.get("count") == 1
