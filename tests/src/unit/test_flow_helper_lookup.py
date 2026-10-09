@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
