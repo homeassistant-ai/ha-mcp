@@ -459,7 +459,7 @@ async def test_search_capability_miss_uses_legacy_reads() -> None:
     get_dashboard = _build_get_dashboard(client)
 
     with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(mode="search", query="light.kitchen")
+        resp = await get_dashboard(query="light.kitchen")
 
     assert resp["action"] == "search"
     assert resp["match_count"] == 1
@@ -508,7 +508,7 @@ async def test_legacy_search_walk_skips_yaml_body() -> None:
     get_dashboard = _build_get_dashboard(client)
 
     with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(mode="search", query="light.kitchen")
+        resp = await get_dashboard(query="light.kitchen")
 
     assert resp["action"] == "search"
     assert resp["match_count"] == 1
@@ -539,7 +539,7 @@ async def test_legacy_search_walk_skips_untagged_row() -> None:
     get_dashboard = _build_get_dashboard(client)
 
     with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(mode="search", query="light.kitchen")
+        resp = await get_dashboard(query="light.kitchen")
 
     assert resp["action"] == "search"
     assert resp["match_count"] == 0
@@ -557,7 +557,7 @@ async def test_search_requires_query() -> None:
     get_dashboard = _build_get_dashboard(client)
 
     with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError):
-        await get_dashboard(mode="search", query="   ")
+        await get_dashboard(query="   ")
     assert not _dash_calls(ws)
     assert client.list_calls == 0
 

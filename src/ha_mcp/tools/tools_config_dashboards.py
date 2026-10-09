@@ -1556,51 +1556,53 @@ class DashboardConfigTools:
         url_path: Annotated[
             str | None,
             Field(
-                description="Dashboard URL path (e.g., 'lovelace-home'). Use 'default' for default "
-                "dashboard."
+                description="Dashboard URL path (e.g. 'lovelace-home'); 'default' for the "
+                "default dashboard."
             ),
         ] = None,
         list_only: Annotated[
             bool,
             Field(
-                description="When True, url_path is ignored.",
+                description="List every dashboard's metadata instead of reading one.",
             ),
         ] = False,
         force_reload: Annotated[
             bool,
             Field(
-                description="Force reload from storage (bypass cache). Not applicable in search mode."
+                description="Get only: bypass the config cache (searches always read "
+                "fresh config)."
             ),
         ] = False,
         entity_id: Annotated[
             str | None,
             Field(
-                description="Find cards by entity ID. Supports wildcards, e.g. "
-                "'sensor.temperature_*'. Matches cards with this entity in "
-                "'entity' or 'entities' field, view-level badges, and header cards."
+                description="Search: cards whose entity/entities field holds this "
+                "entity ID (wildcards, e.g. 'sensor.temperature_*'), plus view "
+                "badges and header cards."
             ),
         ] = None,
         card_type: Annotated[
             str | None,
-            Field(description="Find cards by type, e.g. 'tile', 'button', 'heading'."),
+            Field(
+                description="Search: cards of this type, e.g. 'tile'. With "
+                "describe=True: the type to describe."
+            ),
         ] = None,
         heading: Annotated[
             str | None,
             Field(
-                description="Find cards by heading/title text (case-insensitive partial match)."
+                description="Search: cards whose heading/title contains this text "
+                "(case-insensitive)."
             ),
         ] = None,
         include_config: Annotated[
             bool,
             Field(
-                description="In search mode: include each matched card's own configuration object "
-                "in results. A container card's body includes its descendants, which "
-                "are also separate matches with their own bodies, so nested stacks "
-                "multiply the payload. Bodies are returned only for dashboards provably"
-                " in storage mode; for a YAML or unconfirmed dashboard they are "
-                "withheld (they may carry resolved !secret values) and the response "
-                "says so, with match locations still reported. Ignored outside search "
-                "mode."
+                description="Search: include each matched card's own config. A "
+                "container's body includes its nested cards, which are also matches, "
+                "so nested stacks multiply the payload. Withheld, with a warning, for "
+                "a dashboard not provably storage-mode (a YAML config may carry "
+                "resolved !secret values)."
             ),
         ] = False,
         include_screenshot: Annotated[
@@ -1610,7 +1612,7 @@ class DashboardConfigTools:
                 "visual verification. Requires the 'dashboard screenshot' beta feature "
                 "+ engine app (add-on)/sidecar. If the feature is disabled the config "
                 "is returned with a warning; if the engine is configured but the render"
-                " fails, the call errors. Ignored in list/search mode."
+                " fails, the call errors."
             ),
         ] = False,
         view_path: Annotated[
@@ -1618,20 +1620,15 @@ class DashboardConfigTools:
             Field(
                 description="Get mode: return ONLY the view whose Lovelace views[].path matches "
                 "(response carries 'view' + 'view_index' instead of the full 'config')."
-                " With include_screenshot, also selects the view to render. Ignored in "
-                "list/search mode."
+                " With include_screenshot, also selects the view to render."
             ),
-        ] = None,
-        mode: Annotated[
-            Literal["search"] | None,
-            Field(description="Optional; any search parameter already searches."),
         ] = None,
         query: Annotated[
             str | None,
             Field(
-                description="Search: text or entity_id to find in any value a card "
-                "holds (case-insensitive substring). Searches every storage "
-                "dashboard unless url_path is given."
+                description="Search: text or entity ID contained in any value a card "
+                "holds (case-insensitive); the matching values are listed under "
+                "`matched`."
             ),
         ] = None,
         describe: Annotated[
@@ -1639,45 +1636,33 @@ class DashboardConfigTools:
             Field(description="Return card_type's fields from HA's card editor"),
         ] = False,
     ) -> "dict[str, Any] | ToolResult":
-        """Get dashboard info - list all dashboards, get config, or search for cards.
+        """Get Lovelace dashboards: list them, read one config, or search their cards.
 
-        MODE 1 — List: list_only=True
-          Lists every dashboard's metadata (url_path, title, icon), storage and
-          YAML alike (metadata only — bodies are never included here).
+        Not for a render alone: ha_get_dashboard_screenshot (screenshot beta
+        feature) returns images without the config. Not for entity discovery:
+        use ha_search.
 
-        MODE 2 — Search: any of query / entity_id / card_type / heading
-          Finds cards, badges, and header cards in one dashboard (url_path) or,
-          without url_path, in every storage-mode dashboard. Cards nested at any
-          depth are searched (stacks, grids, conditional cards, button-card
-          custom_fields, state-switch states, and custom cards' own keys such as
-          groups[].cards[].card). Criteria are AND-ed: query matches any value
-          the card holds (listed under `matched`); entity_id matches the
-          card's entity/entities (wildcards allowed), badges, and header cards.
-          Each match carries a python_path and a jq_path. The python_path is a
-          Python subscript chain to be appended after `config` — e.g.
-          python_transform=f'config{m["python_path"]}["icon"] = "mdi:x"' (it is
-          NOT valid on its own without the `config` prefix). jq_path is the same
-          location in jq dot-notation. A one-dashboard search returns its
-          config_hash; across dashboards each match carries url_path and its
-          dashboard's config_hash. Always fetches fresh config. Capped at 200
-          matches (`truncated`). YAML-mode dashboards are searched only by
-          url_path, with card bodies withheld (HA resolves `!secret` in them).
-          Without the ha_mcp_tools component, the default dashboard is searched
-          only by url_path. Strategy dashboards have no explicit cards.
+        The parameters pick the mode:
+        - list_only=True lists dashboard metadata, storage and YAML alike.
+        - Any of query / entity_id / card_type / heading searches cards, badges
+          and header cards, AND-ing the criteria, in url_path or, without it, in
+          every storage dashboard. Cards nested at any depth count, including
+          custom cards' own keys such as groups[].cards[].card. Each match has a
+          jq_path and a python_path to append to `config` in
+          ha_config_set_dashboard(python_transform=...), e.g.
+          f'config{m["python_path"]}["icon"] = "mdi:x"'. A one-dashboard search
+          returns its config_hash; across dashboards each match carries its
+          url_path and config_hash.
+        - Otherwise the full config of url_path (the default dashboard when
+          omitted) is returned; with view_path only that view, while config_hash
+          still covers the full config.
 
-        MODE 3 — Get: Active when list_only=False and no search parameters are provided.
-          Returns the full Lovelace dashboard config, defaulting to the
-          main dashboard if url_path is omitted.
-          With view_path, `config_hash` still covers the FULL config, so a follow-up
-          ha_config_set_dashboard(python_transform=...) addressing
-          config['views'][view_index] validates unchanged. An unknown
-          view_path errors and lists the available view paths.
-          When you only need the render and not the config, use the
-          dedicated ha_get_dashboard_screenshot tool (registered when the
-          dashboard screenshot beta feature is on) instead; it returns images
-          without echoing the config.
-
-        MODE 2 (Search) and MODE 3 (Get) return a `config_hash` that stays the same across consecutive reads of an unchanged config; MODE 1 does not return one.
+        Caveats: config_hash stays the same across reads of an unchanged config.
+        Searches stop at 200 matches (`truncated`). A search across dashboards
+        skips YAML dashboards (HA resolves !secret in them) and, without the
+        ha_mcp_tools component, the default dashboard; name either by url_path.
+        Strategy dashboards have no stored cards to search. An unknown view_path
+        errors and lists the available ones.
 
         EXAMPLES:
         - List all dashboards: ha_config_get_dashboard(list_only=True)
@@ -1697,9 +1682,7 @@ class DashboardConfigTools:
             "card_type": card_type,
             "heading": heading,
         }
-        search_mode = mode == "search" or any(
-            value is not None for value in criteria.values()
-        )
+        search_mode = any(value is not None for value in criteria.values())
         # Mutable single-element holder so the mode helpers can surface the
         # lazy-resolved/canonicalized url_path back to this scope even when
         # they raise an unexpected (non-ToolError) exception instead of

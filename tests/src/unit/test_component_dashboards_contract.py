@@ -360,9 +360,7 @@ async def test_search_parity_component_vs_legacy_walk() -> None:
     ws = _real_component_ws(hass)
     comp_client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(
-            mode="search", query="light"
-        )
+        comp_resp = await _build_get_dashboard(comp_client)(query="light")
 
     # Legacy path: list + per-dashboard get + the same walk, server-side.
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
@@ -374,9 +372,7 @@ async def test_search_parity_component_vs_legacy_walk() -> None:
         configs={"home": _HOME_BODY, "office": _OFFICE_BODY},
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
-        legacy_resp = await _build_get_dashboard(legacy_client)(
-            mode="search", query="light"
-        )
+        legacy_resp = await _build_get_dashboard(legacy_client)(query="light")
 
     assert comp_resp["matches"]  # non-empty (light.kitchen / light.hall / light.desk)
     assert comp_resp["matches"] == legacy_resp["matches"]
@@ -399,9 +395,7 @@ async def test_search_parity_case_insensitive_query() -> None:
     ws = _real_component_ws(hass)
     comp_client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(
-            mode="search", query="LIGHT"
-        )
+        comp_resp = await _build_get_dashboard(comp_client)(query="LIGHT")
 
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     legacy_client = RoutingClient(
@@ -412,9 +406,7 @@ async def test_search_parity_case_insensitive_query() -> None:
         configs={"home": _HOME_BODY, "office": _OFFICE_BODY},
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
-        legacy_resp = await _build_get_dashboard(legacy_client)(
-            mode="search", query="LIGHT"
-        )
+        legacy_resp = await _build_get_dashboard(legacy_client)(query="LIGHT")
 
     assert comp_resp["matches"]  # uppercase query still hits lowercase content
     assert comp_resp["matches"] == legacy_resp["matches"]
@@ -436,17 +428,13 @@ async def test_search_parity_badges_and_header_cards() -> None:
         hass = _component_hass(dmap)
         ws = _real_component_ws(hass)
         with patch_ws(ws, tools_config_dashboards):
-            comp = await _build_get_dashboard(RoutingClient())(
-                mode="search", query=query
-            )
+            comp = await _build_get_dashboard(RoutingClient())(query=query)
         legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
         legacy_client = RoutingClient(
             dashboards_list=legacy_rows, configs=legacy_configs
         )
         with patch_ws(legacy_ws, tools_config_dashboards):
-            legacy = await _build_get_dashboard(legacy_client)(
-                mode="search", query=query
-            )
+            legacy = await _build_get_dashboard(legacy_client)(query=query)
         return comp["matches"], legacy["matches"]
 
     # Badge-only (bare string): matched nowhere else.
@@ -524,18 +512,14 @@ async def test_search_parity_cards_nested_under_custom_keys() -> None:
     dmap = {"repro": _storage_dash("repro", "Repro", body=_CUSTOM_NESTING_BODY)}
     hass = _component_hass(dmap)
     with patch_ws(_real_component_ws(hass), tools_config_dashboards):
-        comp = await _build_get_dashboard(RoutingClient())(
-            mode="search", query="light.x"
-        )
+        comp = await _build_get_dashboard(RoutingClient())(query="light.x")
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     legacy_client = RoutingClient(
         dashboards_list=[{**_storage_dash("repro", "Repro").config, "mode": "storage"}],
         configs={"repro": _CUSTOM_NESTING_BODY},
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
-        legacy = await _build_get_dashboard(legacy_client)(
-            mode="search", query="light.x"
-        )
+        legacy = await _build_get_dashboard(legacy_client)(query="light.x")
 
     assert [(m["jq_path"], m["card_type"]) for m in comp["matches"]] == [
         (".views[0].cards[0].groups[0].cards[0].card", "tile"),
@@ -560,9 +544,7 @@ async def test_search_parity_truncation_cap() -> None:
     ws = _real_component_ws(hass)
     comp_client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(
-            mode="search", query="light.e"
-        )
+        comp_resp = await _build_get_dashboard(comp_client)(query="light.e")
 
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     legacy_client = RoutingClient(
@@ -570,9 +552,7 @@ async def test_search_parity_truncation_cap() -> None:
         configs={"home": body},
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
-        legacy_resp = await _build_get_dashboard(legacy_client)(
-            mode="search", query="light.e"
-        )
+        legacy_resp = await _build_get_dashboard(legacy_client)(query="light.e")
 
     assert comp_resp["truncated"] is True
     assert legacy_resp["truncated"] is True
@@ -599,9 +579,7 @@ async def test_search_default_dashboard_asymmetry() -> None:
     ws = _real_component_ws(hass)
     comp_client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(
-            mode="search", query="light.default_only"
-        )
+        comp_resp = await _build_get_dashboard(comp_client)(query="light.default_only")
 
     # Legacy: fetch_dashboards_list never returns the default (None key), so
     # its dashboard is never fetched for the walk.
@@ -612,7 +590,7 @@ async def test_search_default_dashboard_asymmetry() -> None:
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
         legacy_resp = await _build_get_dashboard(legacy_client)(
-            mode="search", query="light.default_only"
+            query="light.default_only"
         )
 
     assert comp_resp["matches"]
