@@ -53,6 +53,14 @@ Run it **from your fork only**. The job refuses to run in
    ```
    `HA:` is the HA UI and API. `MCP:` is your branch's server (streamable
    HTTP, path included), ready to add to an MCP client.
+
+   Test through `MCP:`, the way an agent uses the server: add it to your
+   client as a regular MCP server, or, when the agent's client cannot load a
+   new server mid-session, have the agent build a small shim that sends
+   `tools/list` and `tools/call` to that URL and drive it one call at a time.
+   Do the setup and the checks with the tools as well. Creating or verifying
+   state through `HA:`'s REST API routes around the tools under test, so a
+   gap in them goes unnoticed.
 5. Push to the branch to iterate. Every 20 seconds the runner picks up new
    commits and applies them the way a user's update would:
    - A server change restarts the standalone server. The embedded server gets
