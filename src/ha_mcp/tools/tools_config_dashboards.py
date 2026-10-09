@@ -355,7 +355,10 @@ class _SearchGaps:
     malformed: list[str] = field(default_factory=list)
 
     def note_malformed(self, value: Any, path: str) -> None:
-        """Record ``path`` when its ``value`` is present but not searchable."""
+        """Record container key ``path`` when present (not ``None``) in the wrong shape.
+
+        A list entry in the wrong shape, ``None`` included, is recorded directly.
+        """
         if value is not None:
             self.malformed.append(path)
 
@@ -487,7 +490,7 @@ def _walk_card(
     """
     if not isinstance(card, dict):
         if frame.criteria.can_match_cards():
-            frame.gaps.note_malformed(card, jq_prefix)
+            frame.gaps.malformed.append(jq_prefix)
         return []
     if frame.depth > _MAX_CARD_DEPTH:
         logger.warning(
@@ -586,7 +589,7 @@ def _find_badge_matches_in_view(
         is_dict_badge = isinstance(badge, dict)
         is_entity_badge = isinstance(badge, str) and bool(badge.strip())
         if not (is_dict_badge or is_entity_badge):
-            frame.gaps.note_malformed(badge, f".views[{view_idx}].badges[{badge_idx}]")
+            frame.gaps.malformed.append(f".views[{view_idx}].badges[{badge_idx}]")
             continue
         if criteria.entity_id is not None and not _badge_matches(
             badge, criteria.entity_id
@@ -697,7 +700,7 @@ def _view_card_lists(
     for section_idx, section in enumerate(sections):
         path = f".views[{view_idx}].sections[{section_idx}]"
         if not isinstance(section, dict):
-            frame.gaps.note_malformed(section, path)
+            frame.gaps.malformed.append(path)
             continue
         section_cards = section.get("cards")
         if not isinstance(section_cards, list):
@@ -745,7 +748,7 @@ def _find_cards_matching(
     matches: list[dict[str, Any]] = []
     for view_idx, view in enumerate(views):
         if not isinstance(view, dict):
-            gaps.note_malformed(view, f".views[{view_idx}]")
+            gaps.malformed.append(f".views[{view_idx}]")
             continue
         frame = _CardWalkFrame(
             criteria,
