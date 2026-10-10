@@ -75,8 +75,7 @@ from .backup_diff import (
     _summarize_patch_counts,
 )
 from .backup_entity_ids import _restore_entity_ids
-from .backup_tags import restore_tag, tag_snapshot
-from .backup_zones import restore_zone, zone_snapshot
+from .backup_registry_icons import REGISTRY_RESTORES, REGISTRY_SNAPSHOTS
 from .client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
@@ -2526,7 +2525,7 @@ async def _fetch_zone(client: Any, entity_id: str) -> Any:
     items = _require_list(await _ws_send(client, {"type": "zone/list"}), "zone/list")
     for item in items:
         if item.get("id") == entity_id or item.get("name") == entity_id:
-            return await zone_snapshot(client, item)
+            return await REGISTRY_SNAPSHOTS["zone"](client, item)
     return await _fetch_helper(client, entity_id, "zone") if "." in entity_id else None
 
 
@@ -2810,15 +2809,14 @@ async def _restore_helper(
     payload = _strip_readonly(config, "id")
     payload["type"] = f"{helper_type}/update"
     payload[f"{helper_type}_id"] = config.get("id", entity_id)
-    if helper_type in ("tag", "zone"):
-        restore = restore_tag if helper_type == "tag" else restore_zone
+    if restore := REGISTRY_RESTORES.get(helper_type):
         return await restore(client, payload[f"{helper_type}_id"], payload)
     return await _ws_send(client, payload)
 
 
 async def _registry_snapshot(client: Any, helper_type: str, item: dict) -> Any:
     """The stored item, plus for tag and zone the registry fields they restore."""
-    snapshot = {"tag": tag_snapshot, "zone": zone_snapshot}.get(helper_type)
+    snapshot = REGISTRY_SNAPSHOTS.get(helper_type)
     return await snapshot(client, item) if snapshot else item
 
 

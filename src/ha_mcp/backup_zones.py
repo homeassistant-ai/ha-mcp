@@ -11,27 +11,15 @@ back, not an area, labels or a renamed entity_id.
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from .backup_entity_ids import _manager, registry_row
-from .client.rest_client import HomeAssistantCommandError, HomeAssistantError
-
-logger = logging.getLogger(__name__)
+from .backup_entity_ids import _manager, restore_registry_icon, with_registry_icon
+from .client.rest_client import HomeAssistantCommandError
 
 
 async def zone_snapshot(client: Any, item: dict[str, Any]) -> dict[str, Any]:
-    """The stored zone with the icon its registry entry sets, if any.
-
-    A registry that cannot be read leaves the key out, so the stored zone is
-    still captured and a restore leaves the registry icon alone.
-    """
-    try:
-        entity = await registry_row(client, "zone", str(item.get("id")))
-    except HomeAssistantError as err:
-        logger.warning("zone snapshot without its registry icon: %s", err)
-        return dict(item)
-    return {**item, "registry_icon": entity.get("icon") if entity else None}
+    """The stored zone with the icon its registry entry sets, if any."""
+    return await with_registry_icon(client, "zone", item)
 
 
 async def _recreate(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
@@ -39,8 +27,9 @@ async def _recreate(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
 
     Core picks a created zone's id from its name, so a zone an earlier restore
     of this snapshot created has a new id and this restore's update fails too.
-    A stored zone holding exactly the snapshot's fields is that zone, and it is
-    left as it is; any other zone, even one with the same name, is not touched.
+    A stored zone holding all of the snapshot's fields unchanged is that zone,
+    and it is left as it is; any other zone, even one with the same name, is
+    not touched.
     """
     bm = _manager()
     fields = {k: v for k, v in payload.items() if k not in ("type", "zone_id")}
@@ -50,9 +39,10 @@ async def _recreate(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
     restored = next(
         (z for z in zones if all(z.get(k) == v for k, v in fields.items())), None
     )
-    if restored is None:
-        restored = await bm._ws_send(client, {**fields, "type": "zone/create"})
-    return {**restored, "restore_mode": "recreated"}
+    if restored is not None:
+        return {**restored, "restore_mode": "already_recreated"}
+    created = await bm._ws_send(client, {**fields, "type": "zone/create"})
+    return {**created, "restore_mode": "recreated"}
 
 
 async def restore_zone(client: Any, zone_id: str, payload: dict[str, Any]) -> Any:
@@ -77,32 +67,5 @@ async def restore_zone(client: Any, zone_id: str, payload: dict[str, Any]) -> An
             "update cannot remove an icon stored after the snapshot."
         )
     if recorded:
-        warnings += await _restore_registry_icon(client, zone_id, registry_icon)
+        warnings += await restore_registry_icon(client, "zone", zone_id, registry_icon)
     return {**result, "warnings": warnings} if warnings else result
-
-
-async def _restore_registry_icon(
-    client: Any, zone_id: str, registry_icon: str | None
-) -> list[str]:
-    bm = _manager()
-    try:
-        entity = await registry_row(client, "zone", zone_id)
-        if entity is None:
-            if registry_icon is None:
-                return []
-            return [
-                f"The registry icon {registry_icon} was not restored: "
-                f"zone {zone_id} has no entity."
-            ]
-        async with bm.registry_update_lock("entity", entity["entity_id"]):
-            await bm._ws_send(
-                client,
-                {
-                    "type": "config/entity_registry/update",
-                    "entity_id": entity["entity_id"],
-                    "icon": registry_icon,
-                },
-            )
-    except HomeAssistantError as err:
-        return [f"The zone was restored, but its registry icon was not: {err}"]
-    return []

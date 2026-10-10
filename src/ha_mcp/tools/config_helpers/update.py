@@ -9,6 +9,7 @@ component writes it in-process; without the component the item is read from
 
 from typing import Any
 
+from ...client.rest_client import HomeAssistantError
 from ...errors import ErrorCode, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_helper_collections import (
@@ -256,12 +257,28 @@ async def _execute_update_simple_helper(
         updated_data = await _execute_legacy_update(
             client, helper_type, entity_id, tag_id, name, icon, fields
         )
-        tag_entity = await tag_entity_id(client, tag_id)
-        if not tag_entity and (icon is not None or area_id is not None or labels):
-            warnings.append(
-                f"tag {tag_id} updated, but its entity is not in the entity "
-                "registry, so the icon, area and labels given were not applied."
+        lookup_failed = False
+        try:
+            tag_entity = await tag_entity_id(client, tag_id)
+            reason = "its entity is not in the entity registry"
+        except (HomeAssistantError, OSError, TimeoutError) as err:
+            tag_entity, reason = None, f"its entity could not be read ({err})"
+            lookup_failed = True
+        given = [
+            field
+            for field, value in (
+                ("icon", icon),
+                ("area", area_id),
+                ("labels", labels),
+                ("category", category),
             )
+            if value is not None
+        ]
+        if lookup_failed or (not tag_entity and given):
+            not_applied = (
+                f", so the {', '.join(given)} given were not applied" if given else ""
+            )
+            warnings.append(f"tag {tag_id} updated, but {reason}{not_applied}.")
         if tag_entity:
             entity_id = tag_entity
             await _apply_update_registry_and_category(

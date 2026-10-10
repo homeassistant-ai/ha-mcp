@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from ...client.rest_client import HomeAssistantError
 from ...errors import ErrorCode, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_helper_collections import (
@@ -158,12 +159,27 @@ async def _execute_create_simple_helper(
 
     helper_data = result.get("result", {})
     warnings: list[str] = []
-    entity_id = await _created_entity_id(client, helper_type, helper_data)
-    if not entity_id and (registry_icon or area_id is not None or labels):
-        warnings.append(
-            f"{helper_type} created, but its entity is not in the entity "
-            "registry, so the icon, area and labels given were not applied."
+    entity_id, lookup_error = await _created_entity_id(client, helper_type, helper_data)
+    given = [
+        field
+        for field, value in (
+            ("icon", registry_icon or None),
+            ("area", area_id),
+            ("labels", labels),
+            ("category", category),
         )
+        if value is not None
+    ]
+    if lookup_error or (not entity_id and given):
+        reason = (
+            f"its entity could not be read ({lookup_error})"
+            if lookup_error
+            else "its entity is not in the entity registry"
+        )
+        not_applied = (
+            f", so the {', '.join(given)} given were not applied" if given else ""
+        )
+        warnings.append(f"{helper_type} created, but {reason}{not_applied}.")
 
     # Tags live in their own tag registry and never appear in /api/states/<entity_id> —
     # polling there always 404s for the full timeout (~10s per tag), burning CI time.
@@ -204,15 +220,25 @@ async def _execute_create_simple_helper(
 
 async def _created_entity_id(
     client: Any, helper_type: str, helper_data: dict[str, Any]
-) -> str | None:
-    """The new helper's entity_id. A tag's, zone's or person's follows its name,
-    not its ID, so only the registry knows it."""
+) -> tuple[str | None, str | None]:
+    """The new helper's entity_id, and why it could not be read.
+
+    A tag's, zone's or person's entity_id follows its name, not its ID, so only
+    the registry knows it. The helper already exists, so a failed read is
+    reported rather than raised: a caller retrying would create it twice.
+    """
     if helper_type in REGISTRY_ICON_ON_CREATE:
-        return await registry_entity_id(client, helper_type, helper_data.get("id"))
+        try:
+            entity_id = await registry_entity_id(
+                client, helper_type, helper_data.get("id")
+            )
+        except (HomeAssistantError, OSError, TimeoutError) as err:
+            return None, str(err)
+        return entity_id, None
     entity_id = helper_data.get("entity_id")
     if not entity_id and helper_data.get("id"):
         entity_id = f"{helper_type}.{helper_data['id']}"
-    return entity_id
+    return entity_id, None
 
 
 async def _create_via_component(

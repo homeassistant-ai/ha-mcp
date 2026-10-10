@@ -13,7 +13,7 @@ import time
 import weakref
 from typing import Any, NoReturn
 
-from ..client.rest_client import HomeAssistantCommandNotSent
+from ..client.rest_client import HomeAssistantAPIError, HomeAssistantCommandNotSent
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
@@ -207,9 +207,14 @@ def native_result(
 
 
 async def _platform_entities(client: Any, platform: str) -> list[dict[str, Any]]:
+    """The platform's registry entries; a failed read raises, never reads as none."""
     listed = await client.send_websocket_message(
         {"type": "config/entity_registry/list"}
     )
+    if not listed.get("success"):
+        raise HomeAssistantAPIError(
+            f"entity registry read failed: {listed.get('error', 'Unknown error')}"
+        )
     return [e for e in listed.get("result") or [] if e.get("platform") == platform]
 
 
