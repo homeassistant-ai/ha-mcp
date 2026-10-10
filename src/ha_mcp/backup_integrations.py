@@ -35,7 +35,7 @@ async def restore_integration(client: Any, entity_id: str, config: Any) -> Any:
             reason="entry_deleted",
             suggestions=[
                 "Add it again with ha_set_integration, or have the user add it in "
-                "the HA UI when it needs their credentials (otp)."
+                "the HA UI when it needs their credentials."
             ],
         )
     disabled = config.get("disabled_by") is not None

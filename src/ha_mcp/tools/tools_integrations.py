@@ -2127,9 +2127,7 @@ class IntegrationTools:
             HelperTypeLiteral | None,
             Field(
                 description=(
-                    "Helper type: a storage helper (input_boolean, counter, "
-                    "...), or a helper flow Home Assistant lists (template, "
-                    "group, ...). Required when target is a bare helper_id. "
+                    "Helper type. Required when target is a bare helper_id. "
                     "Omit when target is a config entry_id to remove any "
                     "integration. Use 'config_subentry' to remove a config "
                     "subentry under target."
@@ -2220,10 +2218,11 @@ class IntegrationTools:
         WARNING: Removing a helper or integration that is referenced by
         automations, scripts, or other integrations may cause those to fail.
         Use ha_search() / ha_get_integration() to verify before removal.
-        ha_manage_backup(scope="edits", action="restore") recreates only removed FLOW
-        helpers whose options could be snapshotted (not custom helper integrations,
-        whose options are withheld, nor otp) and config subentries; re-add others
-        yourself (otp: the user, in the HA UI).
+        ha_manage_backup(scope="edits", action="restore") recreates removed FLOW
+        helpers whose options could be snapshotted, and config subentries. It
+        cannot recreate custom helper integrations (their options are withheld)
+        or otp (no stored options); re-add those yourself, otp through the user
+        in the HA UI.
         """
         # === Confirm gate (uniform for every path) ===
         if not confirm:
@@ -2334,7 +2333,7 @@ class IntegrationTools:
             raise
         except Exception as e:  # noqa: BLE001
             # Keep the classified suggestions (auth, connection) and add the
-            # entry_id route, which needs no registry or helper-flow read.
+            # entry_id route, which does not resolve the entity in the registry.
             error = exception_to_structured_error(
                 e, context={"target": entity_id}, raise_error=False
             )

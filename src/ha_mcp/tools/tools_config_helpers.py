@@ -97,9 +97,7 @@ class HelperConfigTools:
                     "Helper type to list: a storage type (input_boolean, "
                     "counter, timer, ...), a helper flow Home Assistant lists "
                     "(template, group, utility_meter, ...), or 'all' for every "
-                    "type in one call. Storage types are listed on all "
-                    "installs; flow types and 'all' require the ha_mcp_tools "
-                    "custom component."
+                    "type in one call."
                 )
             ),
         ],
@@ -153,13 +151,12 @@ class HelperConfigTools:
         """List Home Assistant helpers of a specific type with their configurations.
 
         Returns one page of helpers; `total_count` and `has_more` report the full
-        set. Each record carries the complete configuration for its helper (a
-        custom helper integration's options are withheld, marked
-        `options_withheld`):
+        set. Each record carries the complete configuration for its helper:
         id (immutable storage key), entity_id (current — address the helper by
         this, where available), name (current display name), original_name
         (creation-time name), icon, type-specific settings, and area and label
-        assignments.
+        assignments. A custom helper integration's options are withheld, marked
+        `options_withheld`.
 
         For a helper renamed in the UI, id/original_name keep the storage values while
         entity_id/name reflect the current entity registry (entity_id is the identifier
@@ -173,9 +170,8 @@ class HelperConfigTools:
         ``person`` is the exception — HA lists its YAML-configured persons
         alongside the storage ones, so both appear here.
 
-        Flow-based types (template / group / utility_meter / derivative / etc.)
-        require the ha_mcp_tools custom component (>= 1.1.0) and are served only
-        through it. Requesting a flow type without the component returns a
+        Flow types require the ha_mcp_tools custom component (>= 1.1.0) and are
+        served only through it. Requesting a flow type without the component returns a
         COMPONENT_NOT_INSTALLED error.
 
         With helper_type="all", each record carries its own ``helper_type``.
@@ -366,9 +362,9 @@ class HelperConfigTools:
             # The component did not authoritatively enumerate this type (tag has
             # no state entity for the from-states scan; or an older component
             # sent no covered_types). Don't trust a partial/empty list: storage
-            # types fall back to the legacy path silently; a flow type (always
-            # covered when include_flow_helpers=True) raises the same
-            # component-required error rather than emptying out.
+            # types fall back to the legacy path silently; a flow type raises,
+            # naming the failed loader read when the component reports one, else
+            # the component-required error, rather than emptying out.
             if is_flow:
                 raise_if_helper_flows_degraded(result, [helper_type])
                 _raise_flow_requires_component(helper_type)
@@ -473,9 +469,10 @@ class HelperConfigTools:
         """Serve all-types from the component; ``None`` ⇒ raise component-required.
 
         There is no legacy all-types path, so — unlike single-type storage
-        listing — every component failure resolves to the same hard error the
-        caller raises (mirroring the flow-helper taxonomy). ``unknown_command``
-        additionally invalidates the now-stale positive caps.
+        listing — a failed component command resolves to the same hard error the
+        caller raises (mirroring the flow-helper taxonomy); a listing that misses
+        a helper flow Core lists raises in ``shape_all_helpers_response``.
+        ``unknown_command`` additionally invalidates the now-stale positive caps.
         """
         try:
             raw = await self._send_component_all_helpers()
@@ -526,13 +523,7 @@ class HelperConfigTools:
         self,
         helper_type: Annotated[
             StorageHelperType | Literal["config_subentry"] | str,
-            Field(
-                description=(
-                    "Type of helper to create or update: a storage type "
-                    "(input_boolean, counter, timer, ...), 'config_subentry', or "
-                    "a helper flow Home Assistant lists (template, group, ...)."
-                )
-            ),
+            Field(description="Type of helper to create or update."),
         ],
         name: Annotated[
             str | None,
@@ -737,8 +728,8 @@ class HelperConfigTools:
         # here — see strict_bps.py for the declaration contract.
         BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
-        """Create or update Home Assistant helper entities and config subentries
-        (storage types, config subentries and every helper flow HA lists).
+        """Create or update Home Assistant helpers: storage types, every helper
+        flow HA lists, and config subentries.
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
         ``helper-selection.md`` ships under ``skill_content`` by default.
@@ -750,8 +741,9 @@ class HelperConfigTools:
         FLOW types (pass `config` dict, Config Entry Flow API): every helper flow
         Home Assistant lists, read from it at call time — template, group,
         utility_meter, derivative, min_max, threshold, integration, statistics,
-        trend, ... and custom helper integrations. Create requires `name`; for updates pass the
-        existing entry_id as `helper_id` (options flows reject the `name` key).
+        trend, ... and custom helper integrations. Create requires `name`; for
+        updates pass the existing entry_id as `helper_id` (options flows reject
+        the `name` key).
         Do not create `otp` here although Home Assistant lists it: the user sets
         it up in the HA UI, since its secret is a credential they enroll in an
         authenticator app.
