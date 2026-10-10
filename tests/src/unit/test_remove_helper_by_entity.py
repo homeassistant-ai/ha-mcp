@@ -6,6 +6,7 @@ refused instead of deleting that integration's config entry.
 """
 
 import json
+import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -16,9 +17,12 @@ from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAuthError
 from ha_mcp.errors import DEFAULT_SUGGESTIONS
-from ha_mcp.tools import auto_backup
+from ha_mcp.tools import auto_backup, helper_flows
 from ha_mcp.tools.helpers import exception_to_structured_error
 from ha_mcp.tools.tools_integrations import IntegrationTools
+
+# The real Core read, kept before conftest's autouse fixture replaces it.
+_REAL_FETCH = helper_flows._fetch_helper_flow_types
 
 # What Core's GET /api/config/config_entries/flow_handlers?type=helper returns:
 # its helper flows plus custom integrations of integration_type "helper".
@@ -105,9 +109,9 @@ async def test_flow_helper_is_removed_without_naming_its_type() -> None:
     client.delete_config_entry.assert_awaited_once_with("um_entry")
 
 
-async def test_helper_that_only_core_lists_is_removed_by_its_entity() -> None:
-    """otp (and custom-integration helpers) are helpers in Core's list but not
-    flow types ha-mcp can create, so the entity alone must still remove them."""
+async def test_otp_is_removed_by_its_entity_like_any_helper_flow() -> None:
+    """otp and custom helper integrations are helper flows in Core's list, so
+    the entity alone removes them through the flow path."""
     client = _client(
         {
             "entity_id": "sensor.my_otp",
@@ -116,7 +120,7 @@ async def test_helper_that_only_core_lists_is_removed_by_its_entity() -> None:
         }
     )
     result = await _remove(client, "sensor.my_otp")
-    assert result["resolved_from"] == "sensor.my_otp"
+    assert result["helper_type"] == "otp"
     client.delete_config_entry.assert_awaited_once_with("otp_entry")
 
 
@@ -149,8 +153,11 @@ async def test_unconfirmed_entity_only_call_deletes_nothing() -> None:
     assert code == "VALIDATION_INVALID_PARAMETER"
 
 
-async def test_unreadable_helper_list_is_a_connection_error_not_a_refusal() -> None:
+async def test_unreadable_helper_list_is_a_connection_error_not_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An unparseable flow_handlers reply must not read as 'not a helper'."""
+    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", _REAL_FETCH)
     client = _client(
         {"entity_id": "sensor.my_otp", "platform": "otp", "config_entry_id": "e"},
         helper_flow_domains={},
@@ -219,7 +226,7 @@ async def test_entity_route_logs_one_tool_call(
     [
         (
             {"entity_id": "sensor.my_otp", "platform": "otp", "config_entry_id": "e"},
-            ("integration", "e"),
+            ("helper_otp", "e"),
         ),
         (
             {
@@ -231,7 +238,7 @@ async def test_entity_route_logs_one_tool_call(
             ("helper_input_boolean", "input_boolean.guest_mode"),
         ),
     ],
-    ids=["core_listed", "storage"],
+    ids=["flow", "storage"],
 )
 async def test_entity_route_backs_up_the_resolved_helper_before_deleting(
     registry_row: dict[str, Any],
@@ -239,9 +246,8 @@ async def test_entity_route_backs_up_the_resolved_helper_before_deleting(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """A helper the flow path does not back up, removed by its entity_id, must
-    stay restorable: one snapshot of the resolved helper, taken before the
-    delete."""
+    """A helper removed by its entity_id gets one snapshot attempt for the
+    resolved helper, made before the delete."""
     client = _client(registry_row)
     client.get_config_entry = AsyncMock(return_value={"domain": "otp"})
     taken: list[tuple[str, str, int]] = []
@@ -260,6 +266,103 @@ async def test_entity_route_backs_up_the_resolved_helper_before_deleting(
     assert taken == [(*snapshot, 0)]
 
 
+@pytest.mark.parametrize(
+    ("platform", "record", "reason"),
+    [
+        ("otp", {"options": {}}, "has no stored options to back up or restore"),
+        (
+            "my_custom_helper",
+            {"options": None, "options_withheld": "custom_integration"},
+            "whose options the component withholds",
+        ),
+    ],
+    ids=["otp", "custom_only"],
+)
+async def test_a_helper_whose_options_are_not_backed_up_is_removed_with_the_reason(
+    platform: str,
+    record: dict[str, Any],
+    reason: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Through the real capture: the by-design skip lets the delete run, tells
+    the caller why no backup was taken, and is not logged as a fetch failure."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=frozenset({*_HELPER_FLOW_DOMAINS, "my_custom_helper"})),
+    )
+    row = {"entity_id": "sensor.h", "platform": platform, "config_entry_id": "e"}
+    client = _client(row)
+
+    async def fake_ws_send(_client: Any, message: dict[str, Any]) -> Any:
+        if message["type"] == "config/entity_registry/list":
+            return [row]
+        assert message["type"] == "ha_mcp_tools/helpers_list"
+        return {
+            "covered_types": [platform],
+            "helpers": [
+                {"kind": "flow", "helper_type": platform, "entry_id": "e"} | record
+            ],
+        }
+
+    monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
+    monkeypatch.setattr(
+        auto_backup,
+        "get_global_settings",
+        lambda: SimpleNamespace(enable_auto_backup=True, auto_backup_dir=str(tmp_path)),
+    )
+    with caplog.at_level(logging.INFO, logger=bm.logger.name):
+        result = await _remove(client, "sensor.h")
+    client.delete_config_entry.assert_awaited_once_with("e")
+    [warning] = result["warnings"]
+    assert warning.startswith(f"No pre-write backup of helper_{platform}:e was taken")
+    assert reason in warning
+    backup_logs = [r for r in caplog.records if r.name == bm.logger.name]
+    assert all(r.levelno < logging.WARNING for r in backup_logs)
+    assert any(
+        r.levelno == logging.INFO and reason in r.getMessage() for r in backup_logs
+    )
+
+
+async def test_a_custom_helper_named_by_type_is_snapshotted_once_before_deleting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """An explicit custom helper_type is a flow type: the outer capture leaves
+    it to the flow path, which snapshots the resolved entry once."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=frozenset({*_HELPER_FLOW_DOMAINS, "my_custom_helper"})),
+    )
+    client = _client(
+        {
+            "entity_id": "sensor.h",
+            "platform": "my_custom_helper",
+            "config_entry_id": "e",
+        }
+    )
+    taken: list[tuple[str, str, int]] = []
+
+    async def record(_mgr: Any, domain: str, entity_id: str, **_: Any) -> None:
+        taken.append((domain, entity_id, client.delete_config_entry.await_count))
+
+    monkeypatch.setattr(bm.BackupManager, "maybe_snapshot", record)
+    monkeypatch.setattr(
+        auto_backup,
+        "get_global_settings",
+        lambda: SimpleNamespace(enable_auto_backup=True, auto_backup_dir=str(tmp_path)),
+    )
+    result: dict[str, Any] = await IntegrationTools(
+        client
+    ).ha_remove_helpers_integrations(
+        target="sensor.h", helper_type="my_custom_helper", confirm=True, wait=False
+    )
+    assert result["success"] is True
+    assert taken == [("helper_my_custom_helper", "e", 0)]
+
+
 async def test_entity_without_a_registry_entry_is_not_reported_missing() -> None:
     """zone.home and a YAML template sensor without unique_id have a state but
     no registry entry; telling the caller they are missing sends them to
@@ -271,7 +374,7 @@ async def test_entity_without_a_registry_entry_is_not_reported_missing() -> None
 
 async def test_failed_registry_read_keeps_its_classified_suggestions() -> None:
     """An auth failure must keep its token guidance; the added route names
-    the config entry_id, since helper_type cannot name a helper like otp.
+    the config entry_id, since it needs no registry or helper-flow read.
     Adding it must not leak into the shared defaults every other tool's
     errors are built from."""
     failure = HomeAssistantAuthError("token expired")

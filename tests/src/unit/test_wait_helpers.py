@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
@@ -502,20 +503,19 @@ class TestWsPathRegistered:
 
         assert result is False  # Timed out — noise event was correctly filtered.
 
-    async def test_subscribe_failure_falls_back_to_rest(self, ws_client, mock_client):
-        """If subscribe_events raises a connection/transport error on the
-        first event_type, we degrade to the legacy REST poll."""
-        ws_client.set_subscribe_failure(OSError("subscribe down"))
+    @pytest.mark.parametrize("failure", [OSError("down"), ConnectionClosed(None, None)])
+    async def test_subscribe_failure_falls_back_to_rest(
+        self, ws_client, mock_client, failure
+    ):
+        """A transport error from subscribe_events (it re-raises a closed
+        socket from its send as is) degrades to the legacy REST poll."""
+        ws_client.set_subscribe_failure(failure)
         mock_client.get_entity_state.return_value = {"state": "on"}
-
         result = await wait_for_entity_registered(
             mock_client, "light.test", timeout=2.0, poll_interval=0.01
         )
-
         assert result is True  # REST fallback succeeds.
-        # We attached handlers but never landed a subscription, so nothing
-        # to unsubscribe.
-        assert ws_client.unsubscribed == []
+        assert ws_client.unsubscribed == []  # No subscription landed.
 
 
 class TestWsPathRemoved:

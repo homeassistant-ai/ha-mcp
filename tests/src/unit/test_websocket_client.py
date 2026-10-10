@@ -896,7 +896,7 @@ class TestSubscribeEventsContract:
     async def test_a_lost_transport_during_release_is_not_a_warning(self, caplog):
         """The connection going away IS the cleanup, so it is not news.
 
-        Pinned on the level, not just on "it did not raise": the same call
+        Pinned on the level, not just on "it did not raise": a rejection
         in ``unsubscribe_events`` logs a warning, because there the
         subscription was known to exist. Here the ordinary outcome is that
         there was nothing to release, and a warning would train the reader

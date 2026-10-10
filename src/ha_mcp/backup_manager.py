@@ -35,9 +35,9 @@ Domain handlers
 - ``fetch(client, entity_id) -> config dict``  — read pre-write state
 - ``restore(client, entity_id, config) -> result`` — re-apply the saved state
 
-One handler per backed-up domain. Helper types each register their own
-handler keyed ``helper_<type>`` since each helper type has a distinct
-WS endpoint shape.
+One handler per backed-up domain. Storage helper types each register one keyed
+``helper_<type>``; a flow helper gets one built on each lookup
+(``BackupManager.handler_for``).
 """
 
 from __future__ import annotations
@@ -64,6 +64,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 import yaml  # type: ignore[import-untyped]
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
 from .backup_diff import (
     _TEXT_KIND,
@@ -75,6 +76,7 @@ from .backup_diff import (
     _summarize_patch_counts,
 )
 from .backup_entity_ids import _restore_entity_ids
+from .backup_integrations import fetch_integration, restore_integration
 from .backup_tags import restore_tag, tag_snapshot
 from .client.rest_client import (
     HomeAssistantCommandError,
@@ -108,6 +110,7 @@ _CAPTURE_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
     TimeoutError,
     asyncio.TimeoutError,
     ConnectionError,
+    ConnectionClosed,
     yaml.YAMLError,
     ToolError,
 )
@@ -205,16 +208,21 @@ class _FlowHelperReadError(HomeAssistantError):
         self.reason = reason
 
 
-@functools.cache
-def _flow_helper_types() -> frozenset[str]:
-    from .tools.config_entry_flow import FLOW_HELPER_TYPES
-
-    return FLOW_HELPER_TYPES
+class _FlowHelperBackupSkip(_FlowHelperReadError):
+    """A flow helper without options to back up; best-effort capture logs it at INFO."""
 
 
 def _is_flow_helper_domain(domain: str) -> bool:
-    """A ``helper_<type>`` snapshot of a config-entry (flow) helper."""
-    return domain.startswith("helper_") and domain[7:] in _flow_helper_types()
+    """A ``helper_<type>`` snapshot domain of a config-entry (flow) helper.
+
+    Any type that is neither a storage helper nor a config subentry counts; the
+    type itself is not checked here. Callers check it against
+    ``helper_flows.helper_flow_types`` (ha_config_set_helper only after its
+    auto-backup capture), as does ``resolve_config_entry_backup_domain`` for the
+    domain of an arbitrary config entry.
+    """
+    helper_type = domain[7:] if domain.startswith("helper_") else ""
+    return helper_type not in ("", *_HELPER_LIST_TYPES, "config_subentry")
 
 
 def _flow_failure_reason(step: str, error: BaseException) -> str:
@@ -625,17 +633,22 @@ class BackupManager:
         self._handlers[handler.domain] = handler
 
     def handler_for(self, domain: str) -> DomainHandler | None:
-        return self._handlers.get(domain)
+        handler = self._handlers.get(domain)
+        if handler is None and _is_flow_helper_domain(domain):
+            # Built per call, never registered: a typo stays out of supported_domains().
+            handler = _make_flow_helper_handler(domain[7:])
+        return handler
 
     def supported_domains(self) -> list[str]:
-        """Return the sorted list of registered backup-domain keys.
+        """Return the sorted registered backup-domain keys, plus a placeholder
+        for the flow helpers, whose handlers are built on use.
 
         Public accessor for callers that need to surface "what domains
         are supported?" in user-facing error messages (e.g., the
         ``ha_manage_backup(scope='edits', action='create')`` handler
         when ``domain`` is unknown). Sorted for stable output.
         """
-        return sorted(self._handlers.keys())
+        return [*sorted(self._handlers.keys()), "helper_<flow helper type>"]
 
     # ----- capture -------------------------------------------------------
 
@@ -722,8 +735,8 @@ class BackupManager:
         """Capture a snapshot for ``domain:entity_id`` if throttle elapsed.
 
         Returns the Path written or None if skipped. In the default
-        (best-effort) mode it never raises — all errors are logged at WARNING
-        and swallowed so the wrapped write can proceed regardless.
+        (best-effort) mode it never raises — errors are logged at WARNING (INFO for
+        a by-design skip) and swallowed so the wrapped write can proceed regardless.
 
         ``mandatory=True`` makes the snapshot a precondition (file/YAML writes,
         #1579): a *genuine* capture failure — an unusable backup dir, a failed
@@ -823,7 +836,7 @@ class BackupManager:
         if not entity_id:
             # Create-mode call with no ID yet — nothing to back up.
             return None
-        handler = self._handlers.get(domain)
+        handler = self.handler_for(domain)
         if handler is None:
             if mandatory:
                 raise MandatoryBackupError(
@@ -847,34 +860,33 @@ class BackupManager:
     ) -> Any:
         """Fetch the pre-write config; return ``_SNAPSHOT_SKIP`` to skip capture.
 
-        A handled transient fetch failure logs a WARNING and returns the
-        sentinel (or raises ``MandatoryBackupError`` under ``mandatory``); a
-        fetch that returns None because the entity did not exist logs a DEBUG
-        and returns the sentinel. Any other value is the config to snapshot.
+        A handled transient fetch failure logs a WARNING, a ``_FlowHelperBackupSkip``
+        an INFO; both return the sentinel (or raise ``MandatoryBackupError`` under
+        ``mandatory``). A fetch that returns None because the entity did not exist
+        logs a DEBUG and returns the sentinel. Any other value is the config.
         """
         try:
             config = await handler.fetch(self._client, entity_id)
         except _CAPTURE_TRANSIENT_ERRORS as err:
-            # Degraded fetches (a non-list WS envelope from an
-            # auth-scope change or API drift) raise rather than return
-            # None — see ``_require_list``. During auto-backup we skip
-            # the snapshot with a WARNING (operator-visible) instead of
-            # crashing the pipeline; the same error during a diff/
-            # restore propagates to the tool layer as a structured
-            # error. The warning level (vs the debug log below) is what
-            # distinguishes "fetch broke" from "entity didn't exist".
+            # Degraded fetches (a non-list WS envelope from an auth-scope change
+            # or API drift) raise rather than return None (``_require_list``).
+            # Auto-backup skips the snapshot instead of crashing the pipeline;
+            # in a diff/restore the error reaches the tool layer. WARNING marks
+            # "fetch broke", INFO a by-design skip, DEBUG "entity didn't exist".
             if mandatory:
                 raise MandatoryBackupError(
-                    f"could not read the current state of {key} to back "
-                    f"it up: {type(err).__name__}: {err}",
+                    f"could not back up {key}: {type(err).__name__}: {err}",
                     safe_detail=_flow_safe_failure_detail("capture", err),
                 ) from err
-            logger.warning(
-                "Auto-backup: fetch failed for %s — %s: %s",
-                key,
-                type(err).__name__,
-                err,
-            )
+            if isinstance(err, _FlowHelperBackupSkip):
+                logger.info("Auto-backup: not backing up %s — %s", key, err)
+            else:
+                logger.warning(
+                    "Auto-backup: fetch failed for %s — %s: %s",
+                    key,
+                    type(err).__name__,
+                    err,
+                )
             if skip_reasons is not None:
                 # Only locally authored detail: a remote error may carry values.
                 detail = _flow_safe_failure_detail("capture", err)
@@ -1456,7 +1468,7 @@ class BackupManager:
         domain = data["domain"]
         entity_id = data["entity_id"]
         config = data["config"]
-        handler = self._handlers.get(domain)
+        handler = self.handler_for(domain)
         if handler is None:
             raise BackupRestoreError(
                 f"No restore handler registered for domain {domain!r}",
@@ -1581,7 +1593,7 @@ class BackupManager:
                 data["entity_id"], data["config"], _flow_type(domain)
             )
             data["entity_id"] = snapshot["entry_id"]
-        handler = self._handlers.get(domain)
+        handler = self.handler_for(domain)
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
         current = await handler.fetch(self._client, data["entity_id"])
@@ -2710,28 +2722,6 @@ async def _restore_device(client: Any, entity_id: str, config: Any) -> Any:
 # Integration enable/disable — restore re-applies the disabled flag.
 
 
-async def _fetch_integration(client: Any, entity_id: str) -> Any:
-    items = _require_list(
-        await _ws_send(client, {"type": "config_entries/get"}), "config_entries/get"
-    )
-    for item in items:
-        if item.get("entry_id") == entity_id:
-            return item
-    return None
-
-
-async def _restore_integration(client: Any, entity_id: str, config: Any) -> Any:
-    disabled = config.get("disabled_by") is not None
-    return await _ws_send(
-        client,
-        {
-            "type": "config_entries/disable",
-            "entry_id": entity_id,
-            "disabled_by": "user" if disabled else None,
-        },
-    )
-
-
 # Helpers — one handler family. Entity ID is "<helper_type>:<id>" so each
 # helper type lists/restores via its native WS endpoints. The decorator
 # constructs the domain key as ``helper_<type>`` so files group naturally.
@@ -3147,9 +3137,14 @@ def _flow_options(config: Any, helper_type: str) -> dict[str, Any]:
     from .redaction import sentinel_option_keys
 
     label = _flow_label(helper_type)
-    if not isinstance(config, dict) or not config:
+    if not isinstance(config, dict):
         raise _FlowHelperReadError(
-            f"{label} helper options must be a non-empty object", "invalid_options"
+            f"{label} helper options must be an object", "invalid_options"
+        )
+    if not config:
+        raise _FlowHelperBackupSkip(  # e.g. otp: all of it is in entry.data
+            f"{label} helper has no stored options to back up or restore",
+            "invalid_options",
         )
     # The component's resolved-!secret scrub predates the server sentinels.
     # Neither kind of placeholder is a usable recovery value.
@@ -3224,6 +3219,12 @@ async def _fetch_flow_helper(client: Any, entity_id: str, helper_type: str) -> A
     if matches:
         record = matches[0]
         entry_id = record["entry_id"]
+        if record.get("options_withheld"):
+            raise _FlowHelperBackupSkip(
+                f"{_flow_label(helper_type)} helper belongs to a custom integration "
+                "whose options the component withholds: none to back up or restore",
+                "options_withheld",
+            )
         registry = await _entity_registry_rows(client)
         return {
             "entry_id": entry_id,
@@ -3920,7 +3921,7 @@ def _make_helper_handler(helper_type: str) -> DomainHandler:
 
 # The storage-collection helper types, snapshotted as ``helper_<type>`` through
 # ``<type>/list`` and restored through ``<type>/update``. Flow helpers (config
-# entries) are registered separately from ``_flow_helper_types()``.
+# entries) get a handler built on each lookup (``BackupManager.handler_for``).
 _KNOWN_HELPER_TYPES = sorted(_HELPER_LIST_TYPES)
 
 
@@ -3947,7 +3948,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(DomainHandler("todo_item", _fetch_todo_item, _restore_todo_item))
     mgr.register(DomainHandler("entity", _fetch_entity_state, _restore_entity_state))
     mgr.register(DomainHandler("device", _fetch_device, _restore_device))
-    mgr.register(DomainHandler("integration", _fetch_integration, _restore_integration))
+    mgr.register(DomainHandler("integration", fetch_integration, restore_integration))
     mgr.register(DomainHandler("file", _fetch_file, _restore_file))
     mgr.register(DomainHandler("yaml", _fetch_yaml, _restore_yaml))
     # Whole-file YAML config: same fetch as "file" (read_file), but restored via
@@ -3960,8 +3961,6 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
         mgr.register(_make_blueprint_handler(blueprint_domain))
     for helper_type in _KNOWN_HELPER_TYPES:
         mgr.register(_make_helper_handler(helper_type))
-    for helper_type in sorted(_flow_helper_types()):
-        mgr.register(_make_flow_helper_handler(helper_type))
     mgr.register(
         DomainHandler(
             "helper_config_subentry", _fetch_config_subentry, _restore_config_subentry

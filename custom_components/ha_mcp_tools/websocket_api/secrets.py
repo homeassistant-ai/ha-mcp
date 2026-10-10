@@ -22,7 +22,8 @@ def _load_secret_scrub(hass: HomeAssistant) -> tuple[frozenset[str], bool]:
     out of two surfaces: the config-body match corpus (so ``ha_search`` cannot be a
     probe oracle — a query equal to a suspected secret confirmed via
     ``match_in_config``) and the ``options`` emitted by ``config_entries`` /
-    ``helpers_list`` (so a resolved secret never leaves the component).
+    ``helpers_list`` / a helper ``search`` (so a resolved secret never leaves the
+    component).
 
     Both string AND numeric scalars are collected as their ``str()`` form: an
     unquoted ``alarm_code: 1234`` is a YAML int, and a config-entry option can carry
@@ -31,10 +32,10 @@ def _load_secret_scrub(hass: HomeAssistant) -> tuple[frozenset[str], bool]:
     never credentials and would over-redact).
 
     ``degraded`` is True ONLY when a ``secrets.yaml`` is PRESENT but could not be
-    read/parsed: the scrub then silently turns OFF, and a caller emitting options can
-    surface ``degraded`` so an unredacted response is not mistaken for a cleanly
-    scrubbed one. An ABSENT ``secrets.yaml`` (the common case) is NOT degraded —
-    there is simply nothing to scrub.
+    read/parsed: the scrub then silently turns OFF, and a caller can surface
+    ``degraded`` so unredacted options or an unscrubbed match corpus are not
+    mistaken for cleanly scrubbed ones. An ABSENT ``secrets.yaml`` (the common
+    case) is NOT degraded — there is simply nothing to scrub.
 
     Defensive by design — never raises into the WS handler. Loaded off the event loop
     by the async preps once per call, never cached, so an edited ``secrets.yaml``
@@ -58,11 +59,11 @@ def _load_secret_scrub(hass: HomeAssistant) -> tuple[frozenset[str], bool]:
     except Exception:
         # Present-but-unreadable / malformed / permission error: unexpected, so warn
         # once (this runs once per call) AND report degraded so the emission callers
-        # can signal that options were NOT redacted, rather than raising into the WS
-        # handler.
+        # can signal that options were NOT redacted, and the helper search that its
+        # match corpus was not scrubbed, rather than raising into the WS handler.
         _LOGGER.warning(
             "Could not read secrets.yaml for the secret-scrub; continuing WITHOUT "
-            "redaction (emitted options may be unredacted)",
+            "redaction (emitted options may be unredacted, search matches unscrubbed)",
             exc_info=True,
         )
         return frozenset(), True
@@ -89,13 +90,28 @@ def _collect_secret_strings(raw: dict[Any, Any]) -> frozenset[str]:
     return frozenset(values)
 
 
+# Added to a helper ``search``'s ``warnings`` when the scrub degraded: the first
+# when the response emits flow-helper options (``include_config``), the second
+# when it does not. Either way the whole match corpus went unscrubbed. The server
+# merges them into ``ha_search``.
+SCRUB_DEGRADED_WARNING = (
+    "secrets.yaml could not be read, so flow-helper options in this response "
+    "were not scrubbed of resolved !secret values, and a match_in_config hit "
+    "may confirm a secret value."
+)
+SCRUB_DEGRADED_MATCH_WARNING = (
+    "secrets.yaml could not be read, so this search matched config bodies "
+    "without the !secret scrub; a match_in_config hit may confirm a secret value."
+)
+
+
 def _load_secret_values(hass: HomeAssistant) -> frozenset[str]:
     """The ``secrets.yaml`` scrub set (see :func:`_load_secret_scrub`); degraded dropped.
 
-    The ``search`` corpus scrub is best-effort and does not surface the degraded
-    signal (its filtering degrading open is the pre-PR behaviour); the
-    ``config_entries`` / ``helpers_list`` emission preps call
-    :func:`_load_secret_scrub` directly so they can surface it.
+    :func:`_search_prep` uses it for a ``search`` without the helper surface, which
+    only filters its match corpus and reports no scrub warnings. The
+    ``config_entries`` / ``helpers_list`` / helper ``search`` preps call
+    :func:`_load_secret_scrub` directly so they can surface the degraded signal.
     """
     values, _degraded = _load_secret_scrub(hass)
     return values

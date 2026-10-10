@@ -31,7 +31,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
 from ha_mcp.tools.config_helpers.flow import (
     _extract_menu_choice_from_config,
     _flow_helper_error_context,
@@ -43,6 +42,8 @@ from ha_mcp.tools.config_helpers.schemas import (
     _simple_helper_error_context,
     get_simple_helper_schema,
 )
+
+from ._stub_helper_flows import STUB_HELPER_FLOWS
 
 
 def _parse_tool_error(te: ToolError) -> dict[str, Any]:
@@ -152,7 +153,7 @@ class TestGetSimpleHelperSchema:
     def test_returns_none_for_flow_types(self) -> None:
         # Flow helpers go through the HA flow API; the static dict has no
         # entry, and callers branch on the None to fall back.
-        for helper_type in FLOW_HELPER_TYPES:
+        for helper_type in STUB_HELPER_FLOWS:
             assert get_simple_helper_schema(helper_type) is None
 
     def test_returns_none_for_unknown_helper_type(self) -> None:

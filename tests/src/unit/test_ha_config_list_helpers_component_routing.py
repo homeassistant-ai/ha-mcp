@@ -32,6 +32,7 @@ fetch so a test can assert it never ran on the component path.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -43,8 +44,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, tools_config_helpers
-from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
+from ha_mcp.tools import component_api, helper_flows, tools_config_helpers
 from ha_mcp.tools.config_helpers import registry as helper_registry
 from ha_mcp.tools.config_helpers.listing import _shape_collection_helper_record
 from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
@@ -55,6 +55,7 @@ from ._component_routing_helpers import (
     patch_ws,
     patch_ws_establish_failure,
 )
+from ._stub_helper_flows import STUB_HELPER_FLOWS
 
 # person is the one storage type whose {type}/list does not return a flat list:
 # HA's PersonStorageCollectionWebsocket overrides the base ws_list_item to send
@@ -410,7 +411,7 @@ async def test_all_types_merge_surfaces_legacy_enrichment_warning() -> None:
     ``_legacy_helper_list("tag")``; its registry read then fails, and the
     degrade-open warning must reach the merged response rather than vanish.
     """
-    covered = sorted((SIMPLE_HELPER_TYPES - {"tag"}) | FLOW_HELPER_TYPES)
+    covered = sorted((SIMPLE_HELPER_TYPES - {"tag"}) | STUB_HELPER_FLOWS)
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
@@ -751,7 +752,7 @@ def _component_all_result() -> dict[str, Any]:
             },
         ],
         "count": 2,
-        "covered_types": sorted((SIMPLE_HELPER_TYPES - {"tag"}) | FLOW_HELPER_TYPES),
+        "covered_types": sorted((SIMPLE_HELPER_TYPES - {"tag"}) | STUB_HELPER_FLOWS),
     }
 
 
@@ -789,6 +790,107 @@ async def test_all_types_via_component_returns_merged_listing() -> None:
     (call,) = _helpers_calls(ws)
     assert "helper_types" not in call.kwargs
     assert call.kwargs["include_flow_helpers"] is True
+
+
+@pytest.mark.asyncio
+async def test_all_types_refuses_a_listing_that_misses_a_custom_helper_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A helper flow Core lists but the component did not cover (an older
+    component without custom helpers) -> hard error, not a partial listing."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=STUB_HELPER_FLOWS | {"my_custom_helper"}),
+    )
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_all_result(),
+    )
+    list_helpers = _build_list_helpers(RoutingClient())
+
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
+        await list_helpers(helper_type="all")
+
+    assert "COMPONENT_NOT_INSTALLED" in str(excinfo.value)
+    assert "my_custom_helper" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_all_types_reads_the_helper_flows_afresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A helper integration uninstalled since the cached read is not reported
+    as missing from the component's listing."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(side_effect=[STUB_HELPER_FLOWS | {"gone_helper"}, STUB_HELPER_FLOWS]),
+    )
+    client = RoutingClient()
+    await helper_flows.helper_flow_types(client)
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_all_result(),
+    )
+    with patch_ws(ws, tools_config_helpers):
+        resp = await _build_list_helpers(client)(helper_type="all")
+    assert resp["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_all_types_with_an_unreadable_helper_flow_list_is_a_structured_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fresh helper-flow read that checks the component's coverage fails:
+    a structured connection error, not a raw exception or a partial listing."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(side_effect=HomeAssistantConnectionError("flow_handlers down")),
+    )
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_all_result(),
+    )
+    client = RoutingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
+        await list_helpers(helper_type="all")
+
+    payload = json.loads(str(excinfo.value))
+    assert payload["error"]["code"] == "CONNECTION_FAILED"
+    assert payload["helper_type"] == "all"
+    assert client.list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_a_custom_helper_flow_left_out_by_a_failed_loader_read_names_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An installed component whose loader read failed is not told to update."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=STUB_HELPER_FLOWS | {"my_custom_helper"}),
+    )
+    result = _component_all_result() | {"helper_flows_degraded": True}
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
+    )
+    list_helpers = _build_list_helpers(RoutingClient())
+
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
+        await list_helpers(helper_type="my_custom_helper")
+
+    error = json.loads(str(excinfo.value))["error"]
+    assert error["code"] == "SERVICE_CALL_FAILED"
+    assert "loader" in error["message"]
+    assert "my_custom_helper" in error["message"]
 
 
 @pytest.mark.asyncio

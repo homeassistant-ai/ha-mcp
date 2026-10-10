@@ -3,19 +3,21 @@ helpers (template, group, utility_meter, derivative, ...).
 
 Issue #1457: deep_search previously hard-coded the helper list to
 ``input_*`` only, so config-entry helpers were invisible. The flow-helper
-branch now lists config entries for any domain in ``FLOW_HELPER_TYPES``
+branch now lists config entries for any helper flow Home Assistant lists
 and probes each entry's options flow so the helper's current config
 (template body, group members, etc.) is searchable alongside the
 storage-based helpers.
 """
 
 import asyncio
+import json
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ha_mcp.tools import helper_flows, tools_integrations
 from ha_mcp.tools.smart_search import SmartSearchTools
 
 
@@ -183,27 +185,35 @@ class TestFlowHelperDeepSearch:
             include_config=False,
         )
         assert [r["entry_id"] for r in results] == ["01HXTEMPLATEAA"]
+        # The non-helper entry is not even probed for an options body.
+        probed = {c.args[0] for c in client.start_options_flow.await_args_list}
+        assert "01HXLIGHTHUE" not in probed
 
-    async def test_skips_entries_without_supports_options(self) -> None:
+    async def test_optionless_entry_matches_on_title_without_a_probe(self) -> None:
+        # A helper flow with no options flow (otp) has no body to probe, but
+        # its title is still searchable.
         client = MagicMock()
         client._request = AsyncMock(
             return_value=[
                 {
                     "entry_id": "01HXNOOPTS",
-                    "domain": "template",
-                    "title": "Locked Template",
+                    "domain": "otp",
+                    "title": "Router Login",
                     "supports_options": False,
                 }
             ]
         )
+        client.start_options_flow = AsyncMock()
         tools = _make_tools(client)
-        results, _ = await tools._search_flow_helpers(
-            "locked",
+        results, failed = await tools._search_flow_helpers(
+            "router",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
-            include_config=False,
+            include_config=True,
         )
-        assert results == []
+        assert [(r["entry_id"], r["config"]) for r in results] == [("01HXNOOPTS", {})]
+        assert failed == 0
+        client.start_options_flow.assert_not_awaited()
 
     async def test_rest_call_failure_signals_failed_for_partial(self) -> None:
         # The config-entries list fetch raising means the whole flow-helper
@@ -509,3 +519,104 @@ class TestFlowHelperDeepSearch:
             )
         client.start_options_flow.assert_awaited_once_with("01HXFUZZY")
         assert [r["entry_id"] for r in results] == ["01HXFUZZY"]
+
+
+@pytest.mark.asyncio
+async def test_custom_helper_flow_options_are_probed_with_passwords_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the component, a helper flow outside Core's built-in list is
+    probed like a built-in one: a plain field is searchable and returned, a
+    password field leaves redacted, and its value is no config match."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=frozenset({"template", "my_custom_helper"})),
+    )
+    monkeypatch.setattr(tools_integrations, "redaction_enabled", lambda: True)
+    client = MagicMock()
+    client._request = AsyncMock(
+        return_value=[
+            {
+                "entry_id": "01HXCUSTOMGATE",
+                "domain": "my_custom_helper",
+                "title": "Gate Opener",
+                "supports_options": True,
+            }
+        ]
+    )
+    client.start_options_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-1",
+            "type": "form",
+            "step_id": "init",
+            "data_schema": [
+                {
+                    "name": "api_key",
+                    "selector": {"text": {"type": "password"}},
+                    "description": {"suggested_value": "hunter2-gate-key"},
+                },
+                {
+                    "name": "host",
+                    "selector": {"text": {}},
+                    "description": {"suggested_value": "gate-controller.lan"},
+                },
+            ],
+        }
+    )
+    client.abort_options_flow = AsyncMock()
+    tools = _make_tools(client)
+
+    found, failed = await tools._search_flow_helpers(
+        "gate-controller.lan",
+        exact_match=True,
+        semaphore=asyncio.Semaphore(8),
+        include_config=True,
+    )
+    assert failed == 0
+    [match] = found
+    assert match["helper_type"] == "my_custom_helper"
+    assert match["match_in_config"] is True
+    assert match["config"]["host"] == "gate-controller.lan"
+    assert "hunter2-gate-key" not in json.dumps(match)
+
+    by_secret, failed = await tools._search_flow_helpers(
+        "hunter2-gate-key",
+        exact_match=True,
+        semaphore=asyncio.Semaphore(8),
+        include_config=True,
+    )
+    assert failed == 0
+    assert all(not result["match_in_config"] for result in by_secret)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_helper_flow_read_after_the_entries_is_one_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The entries read succeeds and the helper flow read raises: the surface
+    counts as one failure instead of raising out of the search."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(side_effect=RuntimeError("flow_handlers down")),
+    )
+    client = MagicMock()
+    client._request = AsyncMock(
+        return_value=[
+            {
+                "entry_id": "01HXTEMPLATEA",
+                "domain": "template",
+                "title": "Anything",
+                "supports_options": True,
+            }
+        ]
+    )
+    tools = _make_tools(client)
+    results, failed = await tools._search_flow_helpers(
+        "anything",
+        exact_match=True,
+        semaphore=asyncio.Semaphore(8),
+        include_config=False,
+    )
+    assert (results, failed) == ([], 1)

@@ -670,10 +670,13 @@ class TestLifecycleWriteWarningsShape:
 
     Per the narrow exception tuple decision (#1340 thread with kingpanther13):
     only HomeAssistantConnectionError and HomeAssistantAuthError propagate
-    from wait_for_entity_registered / wait_for_entity_removed to the call
-    sites — TimeoutError returns False (handled separately), HomeAssistantAPIError
-    is fully swallowed by the helpers (ws_waiters.py).
-    Tests only the two exception types that actually reach the call sites.
+    from wait_for_entity_registered to the set call sites — TimeoutError
+    returns False (handled separately), HomeAssistantAPIError is fully
+    swallowed by the helpers (ws_waiters.py). The set paths test those two
+    exception types. The remove paths go through ``verify_entity_removed``,
+    which turns any failed check after a successful delete into a warning
+    (its branches are tested in test_remove_helpers_wait_warnings.py), so
+    each remove path tests one failure, which pins the wiring.
     """
 
     # ------------------------------------------------------------------
@@ -782,7 +785,7 @@ class TestLifecycleWriteWarningsShape:
         return ConfigSceneTools(client)
 
     # ------------------------------------------------------------------
-    # Groups: set + remove × 2 exception types
+    # Groups: set × 2 exception types, remove wiring
     # ------------------------------------------------------------------
 
     async def test_groups_set_connection_error_yields_top_level_warnings_list(
@@ -815,27 +818,13 @@ class TestLifecycleWriteWarningsShape:
         _assert_warnings_list_shape(result)
         assert any("verification failed" in w for w in result["warnings"])
 
-    async def test_groups_remove_connection_error_yields_top_level_warnings_list(
-        self, groups_tools
-    ):
+    async def test_groups_remove_check_error_yields_top_level_warnings_list(
+        self, groups_tools: Any
+    ) -> None:
         with patch(
-            "ha_mcp.tools.tools_groups.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("forced for test"),
-        ):
-            result = await groups_tools.ha_config_remove_group(
-                object_id="test_group",
-            )
-        _assert_warnings_list_shape(result)
-        assert any("removal verification failed" in w for w in result["warnings"])
-
-    async def test_groups_remove_auth_error_yields_top_level_warnings_list(
-        self, groups_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_groups.wait_for_entity_removed",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantAuthError("forced for test"),
+            side_effect=ValueError("forced for test"),
         ):
             result = await groups_tools.ha_config_remove_group(
                 object_id="test_group",
@@ -862,7 +851,7 @@ class TestLifecycleWriteWarningsShape:
         assert not any("created but" in w for w in result["warnings"])
 
     # ------------------------------------------------------------------
-    # Scripts: set + remove × 2 exception types
+    # Scripts: set × 2 exception types, remove wiring
     # ------------------------------------------------------------------
 
     async def test_scripts_set_connection_error_yields_top_level_warnings_list(
@@ -895,27 +884,13 @@ class TestLifecycleWriteWarningsShape:
         _assert_warnings_list_shape(result)
         assert any("verification failed" in w for w in result["warnings"])
 
-    async def test_scripts_remove_connection_error_yields_top_level_warnings_list(
-        self, scripts_tools
-    ):
+    async def test_scripts_remove_check_error_yields_top_level_warnings_list(
+        self, scripts_tools: Any
+    ) -> None:
         with patch(
-            "ha_mcp.tools.tools_config_scripts.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("forced for test"),
-        ):
-            result = await scripts_tools.ha_config_remove_script(
-                script_id="test_script",
-            )
-        _assert_warnings_list_shape(result)
-        assert any("removal verification failed" in w for w in result["warnings"])
-
-    async def test_scripts_remove_auth_error_yields_top_level_warnings_list(
-        self, scripts_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_config_scripts.wait_for_entity_removed",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantAuthError("forced for test"),
+            side_effect=ValueError("forced for test"),
         ):
             result = await scripts_tools.ha_config_remove_script(
                 script_id="test_script",
@@ -924,7 +899,7 @@ class TestLifecycleWriteWarningsShape:
         assert any("removal verification failed" in w for w in result["warnings"])
 
     # ------------------------------------------------------------------
-    # Automations: set + remove × 2 exception types
+    # Automations: set × 2 exception types, remove wiring
     # ------------------------------------------------------------------
 
     async def test_automations_set_connection_error_yields_top_level_warnings_list(
@@ -963,27 +938,13 @@ class TestLifecycleWriteWarningsShape:
         _assert_warnings_list_shape(result)
         assert any("verification failed" in w for w in result["warnings"])
 
-    async def test_automations_remove_connection_error_yields_top_level_warnings_list(
-        self, automations_tools
-    ):
+    async def test_automations_remove_check_error_yields_top_level_warnings_list(
+        self, automations_tools: Any
+    ) -> None:
         with patch(
-            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("forced for test"),
-        ):
-            result = await automations_tools.ha_config_remove_automation(
-                identifier="automation.test_auto",
-            )
-        _assert_warnings_list_shape(result)
-        assert any("removal verification failed" in w for w in result["warnings"])
-
-    async def test_automations_remove_auth_error_yields_top_level_warnings_list(
-        self, automations_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantAuthError("forced for test"),
+            side_effect=ValueError("forced for test"),
         ):
             result = await automations_tools.ha_config_remove_automation(
                 identifier="automation.test_auto",
@@ -1015,7 +976,7 @@ class TestLifecycleWriteWarningsShape:
         assert not any("created but" in w for w in result["warnings"])
 
     # ------------------------------------------------------------------
-    # Scenes: set + remove × 2 exception types
+    # Scenes: set × 2 exception types, remove wiring
     # ------------------------------------------------------------------
 
     async def test_scenes_set_connection_error_yields_top_level_warnings_list(
@@ -1054,27 +1015,13 @@ class TestLifecycleWriteWarningsShape:
         _assert_warnings_list_shape(result)
         assert any("verification failed" in w for w in result["warnings"])
 
-    async def test_scenes_remove_connection_error_yields_top_level_warnings_list(
-        self, scenes_tools
-    ):
+    async def test_scenes_remove_check_error_yields_top_level_warnings_list(
+        self, scenes_tools: Any
+    ) -> None:
         with patch(
-            "ha_mcp.tools.tools_config_scenes.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("forced for test"),
-        ):
-            result = await scenes_tools.ha_config_remove_scene(
-                scene_id="test_scene",
-            )
-        _assert_warnings_list_shape(result)
-        assert any("removal verification failed" in w for w in result["warnings"])
-
-    async def test_scenes_remove_auth_error_yields_top_level_warnings_list(
-        self, scenes_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_config_scenes.wait_for_entity_removed",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantAuthError("forced for test"),
+            side_effect=ValueError("forced for test"),
         ):
             result = await scenes_tools.ha_config_remove_scene(
                 scene_id="test_scene",

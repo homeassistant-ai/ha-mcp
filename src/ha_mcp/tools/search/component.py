@@ -66,8 +66,9 @@ def _normalize_component_config_record(
     records that agents, tests, and downstream consumers key on use
     ``friendly_name`` plus per-bucket id keys (``script_id``/``scene_id``) —
     so normalize here, at the single seam, rather than teaching the component
-    the MCP envelope's vocabulary. Extra component fields are deliberately
-    dropped for byte-level shape parity with the legacy path; enrichment
+    the MCP envelope's vocabulary. Extra component fields are dropped to keep
+    the legacy key set, except ``options_withheld``, which marks a custom
+    helper whose options the component did not read; enrichment
     (e.g. ``source: yaml``) can be added to BOTH paths together later.
 
     ``config`` key semantics mirror the legacy pipeline's include_config pop:
@@ -86,6 +87,8 @@ def _normalize_component_config_record(
             out["entity_id"] = entity_id
         out["helper_type"] = rec.get("helper_type")
         out["name"] = name
+        if rec.get("options_withheld") is not None:
+            out["options_withheld"] = rec["options_withheld"]
     else:
         out["entity_id"] = entity_id
         if bucket == "scripts":
@@ -425,10 +428,13 @@ def _apply_dashboard_leg_state(response: dict[str, Any], leg: _DashboardLeg) -> 
 def _merge_component_visibility_warnings(
     response: dict[str, Any], component_result: dict[str, Any]
 ) -> None:
-    """Fold component visibility and location warnings into the response.
+    """Fold the component's visibility, location and helper warnings into the response.
 
     The component emits these when a hide dimension fails open (unknown category /
-    empty-registry allowlist / Assist unavailable). Merged into the same top-level
+    empty-registry allowlist / Assist unavailable), when a location scan is
+    incomplete, or when a helper search ran degraded: secrets.yaml could not be
+    read (options or matches went unscrubbed), or Core's helper flow list could
+    not be read (custom helper integrations are missing). Merged into the same top-level
     warnings surface the legacy path fills via ``merge_visibility_warnings``, so the
     fast path is no longer silent about incomplete filtering.
     """

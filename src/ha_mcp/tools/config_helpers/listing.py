@@ -5,12 +5,54 @@ from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
 from ...errors import ErrorCode, create_error_response
-from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..helpers import raise_tool_error
 from ..response_helpers import build_pagination_metadata
 from .schemas import SIMPLE_HELPER_TYPES
 
 logger = logging.getLogger(__name__)
+
+# The component reports ``secret_scrub_degraded`` when secrets.yaml exists but
+# cannot be read (its flow-helper options then went out unscrubbed).
+_SCRUB_DEGRADED_WARNING = (
+    "secrets.yaml could not be read, so flow-helper options in this listing were "
+    "not scrubbed of resolved !secret values."
+)
+
+
+def _component_warnings(result: dict[str, Any]) -> list[str]:
+    """The warnings for a component result whose secret scrub degraded.
+
+    Maps only ``secret_scrub_degraded``. ``helper_flows_degraded`` matters only
+    when a requested flow type is missing from the result; then
+    :func:`raise_if_helper_flows_degraded` raises with it.
+    """
+    if result.get("secret_scrub_degraded") is True:
+        return [_SCRUB_DEGRADED_WARNING]
+    return []
+
+
+def raise_if_helper_flows_degraded(
+    result: dict[str, Any], helper_types: list[str]
+) -> None:
+    """Name the cause when the component left out helper flows Core lists.
+
+    With ``helper_flows_degraded`` the component's loader read failed and it
+    listed only Core's built-in helper flows, so custom ones are missing from
+    an installed, current component; "update the component" would mislead.
+    """
+    if result.get("helper_flows_degraded") is not True:
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "Home Assistant's loader could not list its helper flows for the "
+            f"ha_mcp_tools component, so it cannot list {', '.join(helper_types)}.",
+            context={"helper_types": helper_types},
+            suggestions=[
+                "Check the Home Assistant log for the loader error, then retry",
+            ],
+        )
+    )
 
 
 def listed_items(listed: Any) -> list[Any]:
@@ -72,8 +114,9 @@ def _shape_flow_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
     component sources them from the config entry. The record carries the
     ``entry_id`` (config-entry id), the current ``entity_id`` + display
     ``name``, the ``helper_type``, and the data-minimized ``options`` body
-    (``ConfigEntry.options`` only, never ``entry.data``). Mirrors the
-    collection shaper's current-fields layering.
+    (``ConfigEntry.options`` only, never ``entry.data``), or
+    ``options_withheld`` for a custom-only domain. Mirrors the collection
+    shaper's current-fields layering.
     """
     out: dict[str, Any] = {"helper_type": rec.get("helper_type")}
     entry_id = rec.get("entry_id")
@@ -88,6 +131,9 @@ def _shape_flow_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
     options = rec.get("options")
     if isinstance(options, dict):
         out["options"] = options
+    withheld = rec.get("options_withheld")
+    if withheld is not None:
+        out["options_withheld"] = withheld
     return out
 
 
@@ -146,14 +192,15 @@ def _shape_component_helpers_response(
     Emits the exact legacy top-level keys (``success``/``helper_type``/
     ``count``/``helpers``/``message``). Records are shaped to the requested
     universe: a flow ``helper_type`` yields flow records (``entry_id`` +
-    current ``entity_id``/``name`` + ``options``); a storage type yields the
-    storage-body records. A record of the other kind is dropped defensively.
+    current ``entity_id``/``name`` + ``options``, or ``options_withheld`` for a
+    custom-only domain); a storage type yields the storage-body records. A
+    record of the other kind is dropped defensively.
     ``count`` is the length of the emitted list, mirroring the legacy
     ``count == len(helpers)`` guarantee.
     """
     raw = result.get("helpers")
     records = raw if isinstance(raw, list) else []
-    want_flow = helper_type in FLOW_HELPER_TYPES
+    want_flow = helper_type not in SIMPLE_HELPER_TYPES
     helpers: list[dict[str, Any]] = []
     for rec in records:
         if not isinstance(rec, dict):
@@ -165,13 +212,16 @@ def _shape_component_helpers_response(
             if want_flow
             else _shape_collection_helper_record(rec)
         )
-    return {
+    response: dict[str, Any] = {
         "success": True,
         "helper_type": helper_type,
         "count": len(helpers),
         "helpers": helpers,
         "message": f"Found {len(helpers)} {helper_type} helper(s)",
     }
+    if want_flow and (warnings := _component_warnings(result)):
+        response["warnings"] = warnings
+    return response
 
 
 def _component_covers(result: dict[str, Any], helper_type: str) -> bool:
@@ -231,6 +281,8 @@ def _raise_all_requires_component() -> NoReturn:
 async def shape_all_helpers_response(
     result: dict[str, Any],
     legacy_list: Callable[[str], Awaitable[dict[str, Any]]],
+    *,
+    flow_types: frozenset[str],
 ) -> dict[str, Any]:
     """Map an all-types ``helpers_list`` result into the merged listing envelope.
 
@@ -241,6 +293,9 @@ async def shape_all_helpers_response(
     path): a simple type the component could not enumerate from the state
     machine — ``tag`` has no state entity — is fetched per-type via its
     legacy ``{type}/list`` (``legacy_list``) and merged, so ``all`` never silently drops it.
+
+    ``flow_types`` is Core's current set of helper flow types; one the component
+    did not cover raises instead of being left out.
     """
     raw = result.get("helpers")
     records = raw if isinstance(raw, list) else []
@@ -263,8 +318,9 @@ async def shape_all_helpers_response(
     # component did not authoritatively cover one, a "successful" merged
     # listing would silently omit it. Mirror the single-type taxonomy:
     # hard error, never a partial inventory reported as complete.
-    uncovered_flow = sorted(FLOW_HELPER_TYPES - covered_set)
+    uncovered_flow = sorted(flow_types - covered_set)
     if uncovered_flow:
+        raise_if_helper_flows_degraded(result, uncovered_flow)
         raise_tool_error(
             create_error_response(
                 ErrorCode.COMPONENT_NOT_INSTALLED,
@@ -278,7 +334,7 @@ async def shape_all_helpers_response(
                 ],
             )
         )
-    merge_warnings: list[str] = []
+    merge_warnings = _component_warnings(result)
     for helper_type in sorted(SIMPLE_HELPER_TYPES - covered_set):
         legacy = await legacy_list(helper_type)
         # legacy_list joins the registry (issue #1945) and, degrade-

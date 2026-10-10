@@ -10,6 +10,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from .._vendor.websockets.exceptions import ConnectionClosed
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 # --- WS-event-driven wait helpers (#1152) -----------------------------------
 #
 # Background: every config write tool (`ha_config_set_helper`, set_automation,
-# set_script, …) calls one of these three helpers after the API write returns,
+# set_script, …) calls one of these helpers after the API write returns,
 # to confirm the operation reached the entity registry / state machine before
 # the tool itself returns. Until #1152, those checks polled REST every 300ms
 # up to a 10s budget. On a slow HA instance the poll could time out before
@@ -175,6 +176,8 @@ async def _ws_subscribe_all(
             HomeAssistantCommandError,
             OSError,
             TimeoutError,
+            # subscribe_events re-raises a socket closed under its send as is.
+            ConnectionClosed,
         ) as e:
             logger.debug(
                 "subscribe_events(%s) failed during %s for %s: %s — falling back to REST polling",
@@ -525,6 +528,33 @@ async def wait_for_entity_removed(
         return True
     logger.warning(f"Entity {entity_id} still exists after {timeout}s")
     return False
+
+
+async def verify_entity_removed(
+    client: Any, entity_id: str, response: dict[str, Any]
+) -> None:
+    """After a delete that succeeded, warn when ``entity_id`` lingers or its removal
+    cannot be checked; the delete itself is never reported as failed."""
+    try:
+        removed = await wait_for_entity_removed(client, entity_id)
+    except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+        response.setdefault("warnings", []).append(
+            f"Deletion confirmed but removal verification failed: {e}"
+        )
+        return
+    except Exception as e:  # cancellation is a BaseException and propagates
+        logger.warning(
+            f"Unexpected error verifying removal of {entity_id}: {e}", exc_info=True
+        )
+        response.setdefault("warnings", []).append(
+            f"Deletion confirmed but removal verification failed: {e}"
+        )
+        return
+    if not removed:
+        response.setdefault("warnings", []).append(
+            f"Deletion confirmed but {entity_id} is still present after the "
+            "wait window."
+        )
 
 
 async def _sample_state_change(

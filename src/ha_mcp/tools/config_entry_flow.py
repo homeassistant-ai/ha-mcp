@@ -7,7 +7,9 @@ Config Entry Flow API.
 
 The create/update entry point is the unified ha_config_set_helper tool in
 tools_config_helpers.py, which routes to create_flow_helper / update_flow_helper
-for the 17 helper types listed in FLOW_HELPER_TYPES.
+for every helper flow Home Assistant lists (``helper_flows.helper_flow_types``).
+The tool description tells callers to leave `otp` to the user in the HA UI,
+since its secret is a credential they enroll in an authenticator app.
 
 The same flow walkers drive every other config-entry surface, not just
 helpers: ``ha_set_integration`` creates entries for arbitrary domains through
@@ -469,55 +471,6 @@ def _reject_redaction_sentinels(config_dict: dict[str, Any]) -> None:
                 context={"parameter": "config"},
             )
         )
-
-
-# 17 helpers that use Config Entry Flow API (Issue #324, #2187).
-# `otp` is the one helper-typed config flow deliberately left out: its confirm
-# step demands a live TOTP code derived from the secret, which no flow walker
-# can supply. It stays reachable through ha_set_integration(domain="otp").
-SUPPORTED_HELPERS = Literal[
-    "template",
-    "group",
-    "utility_meter",
-    "derivative",
-    "min_max",
-    "threshold",
-    "integration",
-    "statistics",
-    "trend",
-    "random",
-    "filter",
-    "tod",
-    "generic_thermostat",
-    "switch_as_x",
-    "generic_hygrostat",
-    "history_stats",
-    "mold_indicator",
-]
-
-# Value-set form of SUPPORTED_HELPERS for runtime routing checks.
-# Exported for import by tools_config_helpers.ha_config_set_helper.
-FLOW_HELPER_TYPES: frozenset[str] = frozenset(
-    {
-        "template",
-        "group",
-        "utility_meter",
-        "derivative",
-        "min_max",
-        "threshold",
-        "integration",
-        "statistics",
-        "trend",
-        "random",
-        "filter",
-        "tod",
-        "generic_thermostat",
-        "switch_as_x",
-        "generic_hygrostat",
-        "history_stats",
-        "mold_indicator",
-    }
-)
 
 
 # ---------------------------------------------------------------------------
