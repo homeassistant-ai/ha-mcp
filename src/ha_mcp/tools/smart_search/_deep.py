@@ -998,8 +998,7 @@ class DeepSearchMixin(SceneSearchMixin):
 
         Returns ``(records, failed_count)``. The component's in-process
         ``search`` frame (issue #2008) serves the exact-match, no-body shape
-        — the default ``ha_search`` call — mirroring the
-        ``ha_config_get_dashboard(mode="search")`` routing; fuzzy scoring and
+        (the default ``ha_search`` call); fuzzy scoring and
         ``include_config`` bodies are legacy-only (the component walk is
         substring and its matches carry no bodies), as is every ``None``
         fallback case of :meth:`_component_dashboard_search` — including a

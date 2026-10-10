@@ -144,6 +144,9 @@ CAPABILITIES: list[str] = [
     # when this is advertised — an older component without the keys would
     # silently narrow coverage to the card-scoped walk and hide load failures.
     "dashboards_doc_search",
+    # A flag on ``ha_mcp_tools/dashboards``: gates mode=docs, every storage
+    # dashboard's config in one frame for the server's card search (#2694).
+    "dashboards_docs",
     "services_list",
     "reference_data",
     # A flag, not a standalone command: gates the optional ``visibility`` param

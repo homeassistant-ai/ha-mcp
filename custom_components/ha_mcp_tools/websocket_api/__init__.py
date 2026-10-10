@@ -86,7 +86,7 @@ the info handshake carries no capability entry:
   the not-exposed default (the legacy path never raises on junk); and a missing
   ``hass.states.get(id)`` omits the live-state fields (friendly_name/state) rather
   than crashing.
-* ``ha_mcp_tools/dashboards`` — Lovelace dashboards read in-process, three modes.
+* ``ha_mcp_tools/dashboards`` — Lovelace dashboards read in-process, four modes.
   ``list`` mirrors the ``lovelace/dashboards/list`` row shape (id/url_path/title/
   icon/show_in_sidebar/require_admin) with an additive per-row ``mode`` so the
   server can exclude YAML dashboards; ``get`` returns one dashboard's config body
@@ -95,7 +95,8 @@ the info handshake carries no capability entry:
   legacy for those — a YAML body may carry resolved ``!secret`` plaintext);
   ``search`` walks every STORAGE dashboard's views/cards/sections (plus view-level
   badges and sections-view header cards) for a query substring (capped at 200 with a
-  ``truncated`` flag). YAML-dashboard bodies are never emitted — storage-only. All
+  ``truncated`` flag); ``docs`` returns every STORAGE dashboard's config in one
+  frame for the server's card search. YAML-dashboard bodies are never emitted. All
   Store loads run in :func:`_dashboards_prep`.
 * ``ha_mcp_tools/services_list`` — the REST ``/api/services`` service catalog
   (``async_get_all_descriptions``) joined with the ``services`` backend

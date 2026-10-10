@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -29,11 +31,23 @@ _DASHBOARD_ROW_KEYS = (
     "require_admin",
 )
 
-# Cap on ``search``-mode matches per call so one WS frame stays bounded.
+# Cap on ``search``-mode matches per call so one WS frame stays bounded. ``docs``
+# is not capped: the server's card search needs whole configs, and the frame
+# stays far below the client's 64 MiB message limit on real installs.
 _DASHBOARD_MATCH_CAP = 200
 
-# Structural keys walked as containers (not scored as leaf strings) in a card.
-_DASHBOARD_STRUCTURAL_KEYS = frozenset({"cards", "sections"})
+# Keys that hold card configs at any depth inside a card: ``cards`` (a list),
+# ``card`` (one card), and the named ``custom_fields`` / ``states`` maps. Custom
+# cards file these under keys of their own (``groups[].cards[].card``), so the
+# search reads every node and only uses these keys to attribute a string to the
+# card it lives on.
+_CARD_LIST_KEY = "cards"
+_CARD_KEY = "card"
+_NAMED_CARD_MAP_KEYS = frozenset({"custom_fields", "states"})
+# Bounds on non-card nesting inside one card and on card nesting, against
+# pathological configs.
+_MAX_NODE_DEPTH = 100
+_MAX_CARD_DEPTH = 50
 
 
 def _do_dashboards(
@@ -42,7 +56,7 @@ def _do_dashboards(
     *,
     prepped: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return Lovelace dashboards read in-process (``list`` / ``get`` / ``search``).
+    """Return Lovelace dashboards read in-process (``list``/``get``/``search``/``docs``).
 
     Pure assembler over the plain dicts :func:`_dashboards_prep` loads off the
     event loop — every Store load (``async_load``) happens in the prep, so this
@@ -51,7 +65,7 @@ def _do_dashboards(
     the server falls back to its legacy ``lovelace/*`` path in that case.
 
     YAML-mode dashboard bodies are NEVER emitted (``get`` returns a ``yaml_excluded``
-    status; ``search`` skips them) — their config may carry resolved ``!secret``
+    status; ``search``/``docs`` skip them) — their config may carry resolved ``!secret``
     plaintext, so body emission for YAML belongs to a future file-based tool.
     """
     mode = params.get("mode", "list")
@@ -63,6 +77,8 @@ def _do_dashboards(
         elif mode == "search":
             result["matches"] = []
             result["truncated"] = False
+        elif mode == "docs":
+            result["docs"] = []
         return result
 
     if mode == "get":
@@ -72,6 +88,16 @@ def _do_dashboards(
             "status": prepped.get("status"),
             "url_path": prepped.get("url_path"),
             "config": prepped.get("config"),
+        }
+    if mode == "docs":
+        return {
+            "mode": "docs",
+            "available": True,
+            "docs": [
+                {"url_path": doc.get("url_path"), "config": doc.get("config")}
+                for doc in prepped.get("docs") or []
+            ],
+            "load_failed": prepped.get("load_failed", 0),
         }
     if mode == "search":
         query_lower = (params.get("query") or "").strip().lower()
@@ -113,12 +139,12 @@ async def _dashboards_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str
     prepped: dict[str, Any] = {"available": True}
     if mode == "get":
         prepped.update(await _dashboard_get_config(dashboards_map, msg.get("url_path")))
-    elif mode == "search":
+    elif mode in ("search", "docs"):
         (
             prepped["docs"],
             prepped["yaml_skipped"],
             prepped["load_failed"],
-        ) = await _dashboard_search_docs(dashboards_map)
+        ) = await _dashboard_search_docs(dashboards_map, force=mode == "docs")
     else:
         prepped["rows"] = _dashboard_list_rows(dashboards_map)
     return {"prepped": prepped}
@@ -213,30 +239,36 @@ async def _dashboard_get_config(
 
 
 async def _dashboard_search_docs(
-    dashboards_map: Mapping[Any, Any],
+    dashboards_map: Mapping[Any, Any], *, force: bool = False
 ) -> tuple[list[dict[str, Any]], int, int]:
-    """Load every STORAGE dashboard's config for the ``search`` walk.
+    """Load every STORAGE dashboard's config for ``search`` and ``docs``.
+
+    ``force`` bypasses Lovelace's config cache, as the server's card search
+    (``docs``) promises fresh config like its per-dashboard reads.
 
     Only storage dashboards are loaded — YAML bodies are never searched/emitted.
-    Returns ``(docs, yaml_skipped, load_failed)``: ``docs`` are
-    ``[{url_path, title, registry_title, config}, ...]`` plain dicts —
-    ``title`` stays the config body's (the card-scoped ``matches`` records pin
-    byte parity with the server's legacy MODE 4 walk on it) while the additive
-    ``registry_title`` carries the list-row metadata title that
-    ``document_matches`` emits (what the legacy ha_search bucket records
-    carry); ``yaml_skipped`` counts
-    the YAML-mode entries this walk never reads, INCLUDING a default dashboard
-    forced to YAML (``lovelace: mode: yaml``), which has no ``list`` row for
-    the server to count — the server treats a non-zero count as its
-    fall-back-to-legacy signal, since the legacy walk DOES read YAML bodies
-    and coverage must not depend on which path served (issue #2008 review);
-    ``load_failed`` counts storage
-    dashboards whose config load raised or returned a non-dict — real gaps the
-    caller must surface as partial rather than fail-soft into a clean-looking
-    result. A ``ConfigNotFound`` load is a clean skip, not a failure: an
-    auto-generated (never taken control of) dashboard has no stored config to
-    scan. If core drift breaks the guarded ``ConfigNotFound`` import, those
-    loads degrade to ``load_failed`` — over-reported as partial, never silent.
+    Returns ``(docs, yaml_skipped, load_failed)``.
+
+    ``docs`` are ``[{url_path, title, registry_title, config}, ...]`` plain
+    dicts. ``title`` stays the config body's, carried by the card-scoped
+    ``matches`` records that servers predating ``dashboards_docs`` read;
+    ``registry_title`` carries the list-row metadata title ``document_matches``
+    emits (what the legacy ha_search bucket records carry).
+
+    ``yaml_skipped`` counts the YAML-mode entries this walk never reads,
+    INCLUDING a default dashboard forced to YAML (``lovelace: mode: yaml``),
+    which has no ``list`` row for the server to count. The server's ha_search
+    treats a non-zero count as its fall-back-to-legacy signal, since its legacy
+    walk DOES read YAML bodies and coverage must not depend on which path
+    served (issue #2008 review).
+
+    ``load_failed`` counts storage dashboards whose config load raised or
+    returned a non-dict — real gaps the caller must surface as partial rather
+    than fail-soft into a clean-looking result. A ``ConfigNotFound`` load is a
+    clean skip, not a failure: an auto-generated (never taken control of)
+    dashboard has no stored config to scan. If core drift breaks the guarded
+    ``ConfigNotFound`` import, those loads degrade to ``load_failed`` —
+    over-reported as partial, never silent.
     """
     try:
         from homeassistant.components.lovelace.const import ConfigNotFound
@@ -256,7 +288,7 @@ async def _dashboard_search_docs(
         if not callable(loader):
             continue
         try:
-            config = await loader(False)
+            config = await loader(force)
         except Exception as err:  # noqa: BLE001
             if ConfigNotFound is not None and isinstance(err, ConfigNotFound):
                 # Auto-generated dashboard: nothing stored, nothing to scan.
@@ -316,21 +348,21 @@ def _dashboard_document_matches(
 def _doc_contains(data: Any, query_lower: str) -> bool:
     """Case-insensitive substring test over keys and every leaf of a config.
 
-    Exact port of the server's ``_search_in_dict_exact`` (keys + string
-    leaves + ``str()`` of non-None scalars) so the component-served verdict
-    matches the legacy walk's, leaf for leaf.
+    Port of the server's ``_search_in_dict_exact`` (keys + ``str()`` of every
+    non-None leaf) so the component-served verdict matches the legacy walk's,
+    leaf for leaf; iterative, so a config of any depth is read in full.
     """
-    if isinstance(data, dict):
-        return any(
-            query_lower in str(key).lower() or _doc_contains(value, query_lower)
-            for key, value in data.items()
-        )
-    if isinstance(data, list):
-        return any(_doc_contains(item, query_lower) for item in data)
-    if isinstance(data, str):
-        return query_lower in data.lower()
-    if data is not None:
-        return query_lower in str(data).lower()
+    pending = [data]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            if any(query_lower in str(key).lower() for key in node):
+                return True
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+        elif node is not None and query_lower in str(node).lower():
+            return True
     return False
 
 
@@ -358,10 +390,10 @@ def _collect_dashboard_matches(
 
     Walks each view's card containers (``cards`` + sections-view ``sections.cards``,
     nested cards recursed), plus the two view-level containers the card walk never
-    visits: ``badges`` and a sections-view ``header.card``. This matches what the
-    single-dashboard (MODE 2) search covers, so a query answered "no match" here is
-    a real absence, not a blind spot for entities referenced only as a badge or in a
-    header card.
+    visits: ``badges`` and a sections-view ``header.card``, so a query answered
+    "no match" here is a real absence, not a blind spot for entities referenced
+    only as a badge or in a header card. Servers predating ``dashboards_docs``
+    read these matches; newer ones search the configs ``docs`` returns.
     """
     config = doc.get("config")
     if not isinstance(config, dict):
@@ -421,10 +453,10 @@ def _dashboard_match(
     matched_field: str,
     matched_value: str,
 ) -> dict[str, Any]:
-    """One MODE 4 cross-dashboard search match record (shared, fixed shape).
+    """One ``search``-mode match record (shared, fixed shape).
 
     Every match site — cards, badges, header cards — builds its record here so the
-    wire shape stays identical (the server-side legacy walk mirrors it for parity).
+    wire shape servers predating ``dashboards_docs`` read stays identical.
     """
     return {
         "url_path": url_path,
@@ -448,13 +480,12 @@ def _collect_card_matches(
     query_lower: str,
     matches: list[dict[str, Any]],
 ) -> None:
-    """Recurse a card list, recording one match per string leaf containing the query.
+    """Record one match per string leaf containing the query, card by card.
 
     ``matched_field`` is the leaf's immediate key (``entity`` / ``entities`` /
-    ``camera_image`` / any plain-string field); nested ``cards`` are walked as
-    their own cards (their strings are attributed to the nested card, not the
-    parent), so ``card_path`` / ``card_type`` always name the card the string
-    actually lives on.
+    ``camera_image`` / any plain-string field). Cards nested in any card slot
+    below (see :func:`_walk_card_nodes`) are walked as their own cards, so
+    ``card_path`` / ``card_type`` always name the card the string lives on.
     """
     if not isinstance(cards, list):
         return
@@ -482,15 +513,22 @@ def _collect_one_card_matches(
     view_title: Any,
     query_lower: str,
     matches: list[dict[str, Any]],
+    card_depth: int = 0,
 ) -> None:
-    """Record matches for a SINGLE card at ``card_path`` and recurse its nested cards.
+    """Record matches for a SINGLE card at ``card_path`` and every card below it.
 
     Shared by :func:`_collect_card_matches` (list-indexed cards) and
     :func:`_collect_header_card_matches` (a header card is a single card, not
-    list-indexed).
+    list-indexed). Cards nested more than ``_MAX_CARD_DEPTH`` levels down are
+    not read.
     """
+    if card_depth > _MAX_CARD_DEPTH:
+        return
+    leaves: list[tuple[str, str]] = []
+    nested: list[tuple[str, dict[str, Any]]] = []
+    _walk_card_nodes(card, card_path, "", leaves, nested)
     card_type = card.get("type")
-    for field, value in _card_string_leaves(card):
+    for field, value in leaves:
         if query_lower in value.lower():
             matches.append(
                 _dashboard_match(
@@ -504,17 +542,17 @@ def _collect_one_card_matches(
                     value,
                 )
             )
-    nested = card.get("cards")
-    if isinstance(nested, list):
-        _collect_card_matches(
-            nested,
-            f"{card_path}.cards",
+    for child_path, child in nested:
+        _collect_one_card_matches(
+            child,
+            child_path,
             url_path,
             dash_title,
             view_index,
             view_title,
             query_lower,
             matches,
+            card_depth + 1,
         )
 
 
@@ -532,7 +570,7 @@ def _collect_badge_matches(
     View-level badges are entity references by construction: a bare string
     (``sensor.x``) or a dict (``{type: entity, entity: sensor.x}``). A bare-string
     badge is recorded as a ``badges`` leaf; a dict badge's string leaves are walked
-    like a card's. Mirrors the single-dashboard (MODE 2) badge coverage.
+    like a card's.
     """
     badges = view.get("badges")
     if not isinstance(badges, list):
@@ -583,8 +621,7 @@ def _collect_header_card_matches(
     """Record query hits in a sections-view header card (``views[n].header.card``).
 
     The header accepts a card (typically Markdown) that can carry entity refs; the
-    card walk never visits it. Mirrors the single-dashboard (MODE 2) header-card
-    coverage.
+    card walk never visits it.
     """
     header = view.get("header")
     if not isinstance(header, dict):
@@ -605,36 +642,91 @@ def _collect_header_card_matches(
 
 
 def _card_string_leaves(card: dict[str, Any]) -> list[tuple[str, str]]:
-    """``(immediate_key, string)`` for every string leaf of a card.
+    """``(immediate_key, string)`` for every string leaf a card owns.
 
-    Descends into nested dicts/lists but NOT the structural ``cards``/``sections``
-    keys (those are walked as their own cards). The key attributed to a leaf is
-    the nearest dict key, so ``entities: [{entity: light.a}]`` yields
-    ``("entity", "light.a")`` and ``entities: [light.a]`` yields
-    ``("entities", "light.a")`` — matching the brief's field taxonomy.
+    Leaves of cards nested below it are left out (callers that need them walk
+    those cards separately). The key attributed to a leaf is the nearest dict
+    key, so ``entities: [{entity: light.a}]`` yields ``("entity", "light.a")``
+    and ``entities: [light.a]`` yields ``("entities", "light.a")``.
     """
     out: list[tuple[str, str]] = []
-    _walk_card_leaves(card, "", out)
+    _walk_card_nodes(card, "", "", out, [])
     return out
 
 
-def _walk_card_leaves(value: Any, key: str, out: list[tuple[str, str]]) -> None:
-    """Recursive worker for :func:`_card_string_leaves` (module-level for clarity).
+def _walk_card_nodes(
+    value: Any,
+    path: str,
+    key: str,
+    leaves: list[tuple[str, str]],
+    nested: list[tuple[str, dict[str, Any]]],
+    depth: int = 0,
+) -> None:
+    """Split a card's subtree into its own string leaves and its nested cards.
 
-    Descends dicts/lists collecting ``(nearest_key, string)`` leaves, skipping the
-    structural ``cards``/``sections`` keys (walked as their own cards). A top-level
-    card dict enters the ``dict`` branch, so its own keys attribute their leaves.
+    Every dict and list is descended. A typed dict in a card slot (a ``cards``
+    item, a ``card`` value or a ``custom_fields``/``states`` value) is a nested
+    card: it goes to ``nested`` with its path instead of contributing leaves.
+    Typed dicts elsewhere (tile ``features``, entity rows) stay leaves of the
+    card that holds them. Descent stops ``_MAX_NODE_DEPTH`` levels down, far
+    below Python's recursion limit.
     """
     if isinstance(value, str):
         if value:
-            out.append((key, value))
+            leaves.append((key, value))
+    elif isinstance(value, (bool, int, float)):
+        leaves.append((key, str(value)))
+    elif depth > _MAX_NODE_DEPTH:
+        return
     elif isinstance(value, dict):
         for k, v in value.items():
-            if k not in _DASHBOARD_STRUCTURAL_KEYS:
-                _walk_card_leaves(v, str(k), out)
+            _walk_card_entry(k, v, f"{path}{_path_key(k)}", leaves, nested, depth + 1)
     elif isinstance(value, (list, tuple)):
-        for item in value:
-            _walk_card_leaves(item, key, out)
+        for i, item in enumerate(value):
+            _walk_card_nodes(item, f"{path}[{i}]", key, leaves, nested, depth + 1)
+
+
+def _walk_card_entry(
+    key: Any,
+    value: Any,
+    path: str,
+    leaves: list[tuple[str, str]],
+    nested: list[tuple[str, dict[str, Any]]],
+    depth: int,
+) -> None:
+    """``_walk_card_nodes`` for one ``key: value`` entry found at ``path``."""
+    slots = _card_slot_items(key, value)
+    if slots is None:
+        _walk_card_nodes(value, path, str(key), leaves, nested, depth)
+        return
+    for segment, leaf_key, item in slots:
+        if _is_card(item):
+            nested.append((f"{path}{segment}", item))
+        else:
+            _walk_card_nodes(item, f"{path}{segment}", leaf_key, leaves, nested, depth)
+
+
+def _card_slot_items(key: Any, value: Any) -> list[tuple[str, str, Any]] | None:
+    """``(path segment, leaf key, item)`` per card slot under ``key``, else ``None``."""
+    if key == _CARD_LIST_KEY and isinstance(value, list):
+        return [(f"[{i}]", key, item) for i, item in enumerate(value)]
+    if key == _CARD_KEY:
+        return [("", key, value)]
+    if key in _NAMED_CARD_MAP_KEYS and isinstance(value, dict):
+        return [(_path_key(name), str(name), item) for name, item in value.items()]
+    return None
+
+
+def _is_card(value: Any) -> bool:
+    return isinstance(value, dict) and "type" in value
+
+
+def _path_key(key: Any) -> str:
+    """``.key`` for a plain identifier, else a JSON-quoted ``["key"]`` segment."""
+    text = str(key)
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
+        return f".{text}"
+    return f"[{json.dumps(text)}]"
 
 
 async def _dashboard_edit_prep(
