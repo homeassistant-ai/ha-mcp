@@ -35,8 +35,6 @@ def flow_helper_backup_domain(kwargs: dict[str, Any]) -> str:
 
 
 def skip_unless_flow_helper(kwargs: dict[str, Any]) -> bool:
-    if not kwargs.get("helper_type"):
-        return True
     return not _is_flow_helper_domain(flow_helper_backup_domain(kwargs))
 
 
