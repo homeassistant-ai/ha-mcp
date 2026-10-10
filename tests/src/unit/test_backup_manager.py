@@ -24,6 +24,7 @@ import yaml
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 from ha_mcp.backup_manager import (
     _MAX_PATCH_OPS,
     SCHEMA_VERSION,
@@ -1088,13 +1089,17 @@ class TestCapture:
         assert path is None
         assert not any(tmp_path.iterdir())
 
+    @pytest.mark.parametrize(
+        "error", [OSError("disk gone"), ConnectionClosed(None, None)], ids=str
+    )
     async def test_fetch_transient_exception_does_not_raise(
-        self, tmp_path: Path
+        self, tmp_path: Path, error: Exception
     ) -> None:
         mgr = _mk_manager(tmp_path)
-        # Transient/expected exceptions (HA / network / FS / yaml errors) are
-        # swallowed — capture is best-effort, the wrapped write must still run.
-        mgr.register(_mk_handler(raise_on_fetch=OSError("disk gone")))
+        # Transient/expected exceptions (HA / network / FS / yaml errors, a
+        # socket closed under the fetch) are swallowed — capture is
+        # best-effort, the wrapped write must still run.
+        mgr.register(_mk_handler(raise_on_fetch=error))
         path = await mgr.maybe_snapshot("automation", "x", tool_name="t")
         assert path is None
 

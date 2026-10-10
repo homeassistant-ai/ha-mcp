@@ -64,6 +64,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 import yaml  # type: ignore[import-untyped]
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
 from .backup_diff import (
     _TEXT_KIND,
@@ -109,6 +110,7 @@ _CAPTURE_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
     TimeoutError,
     asyncio.TimeoutError,
     ConnectionError,
+    ConnectionClosed,
     yaml.YAMLError,
     ToolError,
 )
