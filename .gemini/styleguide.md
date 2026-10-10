@@ -33,8 +33,10 @@ that policy.
 Apply the [live-review procedure](../docs/agents/github-workflow.md#live-testing-in-pr-reviews)
 as part of every PR review. Assess the live evidence and its coverage of the
 current revision, whether testing was performed by the author or a reviewer.
-Testing by both is preferred, not required. If adequate live evidence is absent,
+Testing by both is preferred, not required. If required live evidence is absent,
 state that the review is partial and live validation remains required before merge.
+For pure prose or policy changes, assess the documented reason live testing is
+not applicable and the structural and consistency checks instead.
 
 Flag missing coverage as HIGH severity when the root policy requires it. If the
 change's scope or an allowed exception is unclear, flag test adequacy as MEDIUM

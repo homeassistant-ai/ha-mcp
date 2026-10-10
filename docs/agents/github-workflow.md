@@ -61,7 +61,11 @@ Division of responsibility:
 
 Apply the [root live-testing requirement](../../AGENTS.md#testing-and-verification)
 to every PR, including documentation, tests-only, maintenance, dependencies,
-and bot-authored changes. Automatic-review exclusions do not waive it.
+and bot-authored changes, whenever they change behavior or executable
+instructions. Automatic-review exclusions do not waive it. Pure prose or policy
+changes with no changed behavior or executable procedure need structural and
+consistency checks, not an unrelated HA smoke test. Record why live testing is
+not applicable; do not claim it was performed.
 
 Either the PR author or the reviewer may perform the required live testing.
 If the author is unable or unwilling to do it, the reviewer may complete it.
@@ -77,8 +81,8 @@ adequate author testing solely to satisfy this requirement.
    affected behavior, relevant failure cases, and deployment modes. Perform
    setup and verification through the tools where they are the subject of
    the change. For documentation or guidance, follow the changed procedure
-   against live HA; for changes without a runtime effect, perform a relevant
-   live smoke check and state what it does and does not validate.
+   against live HA when it changes executable instructions. Use the pure-prose
+   checks above when there is no changed behavior or procedure to exercise.
 3. Incorporate the live observations into the review alongside source analysis
    and automated tests. Record who tested, the tested commit, environment and versions,
    scenarios, expected and observed behavior, and any gaps in the PR's Testing

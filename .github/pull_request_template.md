@@ -13,11 +13,13 @@
 ## Testing
 
 <!-- Describe what was exercised: the tests added or changed and what they
-     cover, plus any manual or agent checks. Live testing is mandatory for
-     every PR type before merge: see AGENTS.md#testing-and-verification and
+     cover, plus any manual or agent checks. Live-test changed behavior or
+     executable instructions before merge, regardless of PR type: see AGENTS.md#testing-and-verification and
      docs/agents/github-workflow.md#live-testing-in-pr-reviews. Record the
      tester (author or reviewer), tested commit, user-chosen environment and versions, scenarios, expected
-     and observed behavior, and remaining gaps. Do not include credentials or
+     and observed behavior, and remaining gaps. For pure prose or policy changes,
+     explain why live testing is not applicable and describe the documentation
+     checks instead. Do not include credentials or
      private URLs. Do NOT list CI results, pass
      counts, run links, or per-lane status. Reviewers see those in the PR's
      checks, and they go stale on the next push. -->

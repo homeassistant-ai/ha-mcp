@@ -96,10 +96,10 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 
 These rules apply to every pull request:
 
-- Every PR, of any type, requires live testing before merge on the [dev environment](docs/dev-ha-env.md) or another live HA chosen by the user. Reviews must incorporate live testing; static review and CI alone are insufficient. Follow the [live-review procedure](docs/agents/github-workflow.md#live-testing-in-pr-reviews) and keep unvalidated PRs unready for merge.
+- PRs of any type require live testing of changed behavior or executable instructions before merge, on the dev environment or another live HA chosen by the user. Reviews must incorporate it; static review and CI alone are insufficient. The [live-review procedure](docs/agents/github-workflow.md#live-testing-in-pr-reviews) defines evidence and pure-prose checks.
 - Bug fixes require a failing regression test first, then the minimal fix, unless the only possible test would restate a freely chosen configuration value (rule 4 in [`tests/AGENTS.md`](tests/AGENTS.md)).
 - New MCP tools need E2E coverage. Any existing tool without tests gains E2E coverage even when it is not otherwise part of the current pull request. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
-- Well-covered refactors, minor parameters, utilities, and documentation-only changes may need no new automated test; live testing still applies.
+- Well-covered refactors, minor parameters, utilities, and documentation-only changes may need no new automated test; assess live testing separately.
 - Run the smallest relevant tests after changes; follow [`tests/AGENTS.md`](tests/AGENTS.md) and the [test commands](docs/agents/development.md#test-commands).
 - Run relevant E2E tests without prompting; let pytest report missing prerequisites or skips.
 - Claim full-suite success only after running it; describe focused tests as partial evidence.

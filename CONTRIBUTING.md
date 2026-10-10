@@ -15,7 +15,7 @@ Thank you for your interest in contributing!
 
 See **[tests/README.md](tests/README.md)**. To try a branch against a live, throwaway Home Assistant (Docker or HAOS) from your fork, see **[docs/dev-ha-env.md](docs/dev-ha-env.md)**.
 
-Every PR requires live testing before merge under the
+Every PR that changes behavior or executable instructions requires live testing before merge under the
 [repository testing policy](AGENTS.md#testing-and-verification), regardless of
 change type. Use the dev environment or another live HA of the user's choice.
 Follow the [live-review procedure](docs/agents/github-workflow.md#live-testing-in-pr-reviews)
@@ -23,6 +23,8 @@ and include the evidence in the PR's Testing section. Reviews must incorporate
 live testing alongside code inspection and automated tests. If the author is
 unable or unwilling to live-test, a reviewer may do it. Testing by both is
 preferred, but either one's adequate live testing satisfies the requirement.
+Pure prose or policy changes need documentation checks; explain in Testing
+why live testing does not apply.
 
 ## 🛠️ Development
 
