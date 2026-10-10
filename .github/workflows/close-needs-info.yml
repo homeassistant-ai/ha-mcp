@@ -81,7 +81,8 @@ jobs:
               );
               if (labelEvents.length === 0) {
                 // The label is on the issue, so an event should always exist.
-                core.warning(`  needs-info present but no labeled event found — skipping`);
+                core.warning(`  Issue #${issueNumber} has needs-info but no labeled event — skipping`);
+                failedReads.push(`${issueNumber} (needs-info label event missing)`);
                 continue;
               }
               // Newest by timestamp, not array position — the events endpoint

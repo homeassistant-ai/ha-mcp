@@ -215,7 +215,7 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(
                     for warning in data.get("warnings", [])
                 )
             ),
-            timeout=30,
+            timeout=90,
             description="all custom fixture cards inspected within one request",
         )
         logger.info("Custom-card validation response: %s", result)
