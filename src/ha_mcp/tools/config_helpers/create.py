@@ -43,14 +43,17 @@ async def _apply_create_entity_registry(
     labels: list[str] | None,
     helper_data: dict[str, Any],
     warnings: list[str],
+    registry_icon: str | None = None,
 ) -> None:
-    """Apply area/labels registry update after a simple-helper create; echo into helper_data."""
-    if area_id is None and labels is None:
+    """Apply icon/area/labels registry update after a simple-helper create; echo into helper_data."""
+    if area_id is None and labels is None and not registry_icon:
         return
     update_message: dict[str, Any] = {
         "type": "config/entity_registry/update",
         "entity_id": entity_id,
     }
+    if registry_icon:
+        update_message["icon"] = registry_icon
     if area_id is not None:
         update_message["area_id"] = area_id if area_id else None
     if labels is not None:
@@ -118,9 +121,14 @@ async def _execute_create_simple_helper(
             )
         )
 
-    message = _build_create_message(helper_type, name, icon, fields)
+    # A zone keeps an icon from its stored item even after the registry's is
+    # cleared, so a new zone's icon goes to the registry only (#2643).
+    registry_icon = icon if helper_type == "zone" else None
+    message = _build_create_message(
+        helper_type, name, None if registry_icon else icon, fields
+    )
     native = await _create_via_component(
-        client, helper_type, message, area_id, labels, category
+        client, helper_type, message, area_id, labels, category, registry_icon
     )
     if native is not None:
         helper_data, entity_id, warnings = native
@@ -167,7 +175,14 @@ async def _execute_create_simple_helper(
 
     if entity_id:
         await _apply_create_entity_registry(
-            client, entity_id, icon, area_id, labels, helper_data, warnings
+            client,
+            entity_id,
+            icon,
+            area_id,
+            labels,
+            helper_data,
+            warnings,
+            registry_icon,
         )
         await _apply_create_category(client, entity_id, category, helper_data, warnings)
 
@@ -190,6 +205,7 @@ async def _create_via_component(
     area_id: str | None,
     labels: list[str] | None,
     category: str | None,
+    registry_icon: str | None = None,
 ) -> tuple[dict[str, Any], str, list[str]] | None:
     """Create through Core's collection in-process; ``None`` uses the WS command.
 
@@ -198,6 +214,7 @@ async def _create_via_component(
     registry = {
         key: value
         for key, value in (
+            ("icon", registry_icon),
             ("area_id", area_id),
             ("labels", labels),
             ("category", category),

@@ -76,6 +76,7 @@ from .backup_diff import (
 )
 from .backup_entity_ids import _restore_entity_ids
 from .backup_tags import restore_tag, tag_snapshot
+from .backup_zones import restore_zone, zone_snapshot
 from .client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
@@ -2525,15 +2526,8 @@ async def _fetch_zone(client: Any, entity_id: str) -> Any:
     items = _require_list(await _ws_send(client, {"type": "zone/list"}), "zone/list")
     for item in items:
         if item.get("id") == entity_id or item.get("name") == entity_id:
-            return item
+            return await zone_snapshot(client, item)
     return await _fetch_helper(client, entity_id, "zone") if "." in entity_id else None
-
-
-async def _restore_zone(client: Any, entity_id: str, config: Any) -> Any:
-    payload = _strip_readonly(config, "id")
-    payload["type"] = "zone/update"
-    payload["zone_id"] = config.get("id", entity_id)
-    return await _ws_send(client, payload)
 
 
 # Areas / floors — config/area_registry/{list,update}, config/floor_registry/{list,update}
@@ -2765,7 +2759,7 @@ async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
     object_id = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
     for item in items:
         if item.get("id") == object_id or item.get("id") == entity_id:
-            return await tag_snapshot(client, item) if helper_type == "tag" else item
+            return await _registry_snapshot(client, helper_type, item)
     # Fallback for renamed helpers: after an entity_id rename the object_id
     # no longer equals the storage collection id (which stays the original
     # create-time id == the registry unique_id), so the direct match above
@@ -2793,9 +2787,7 @@ async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
     if unique_id:
         for item in items:
             if str(item.get("id")) == str(unique_id):
-                return (
-                    await tag_snapshot(client, item) if helper_type == "tag" else item
-                )
+                return await _registry_snapshot(client, helper_type, item)
     return None
 
 
@@ -2818,9 +2810,16 @@ async def _restore_helper(
     payload = _strip_readonly(config, "id")
     payload["type"] = f"{helper_type}/update"
     payload[f"{helper_type}_id"] = config.get("id", entity_id)
-    if helper_type == "tag":
-        return await restore_tag(client, payload["tag_id"], payload)
+    if helper_type in ("tag", "zone"):
+        restore = restore_tag if helper_type == "tag" else restore_zone
+        return await restore(client, payload[f"{helper_type}_id"], payload)
     return await _ws_send(client, payload)
+
+
+async def _registry_snapshot(client: Any, helper_type: str, item: dict) -> Any:
+    """The stored item plus what of it the entity registry holds."""
+    snapshot = {"tag": tag_snapshot, "zone": zone_snapshot}.get(helper_type)
+    return await snapshot(client, item) if snapshot else item
 
 
 # Files & YAML (#1579 PR2) — capture is MCP-side via the ha_mcp_tools
@@ -3940,7 +3939,8 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(
         DomainHandler("calendar_event", _fetch_calendar_event, _restore_calendar_event)
     )
-    mgr.register(DomainHandler("zone", _fetch_zone, _restore_zone))
+    restore_zone_item = functools.partial(_restore_helper, helper_type="zone")
+    mgr.register(DomainHandler("zone", _fetch_zone, restore_zone_item))
     mgr.register(
         DomainHandler("area_or_floor", _fetch_area_or_floor, _restore_area_or_floor)
     )
