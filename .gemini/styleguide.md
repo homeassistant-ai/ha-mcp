@@ -30,6 +30,12 @@ The behavioral decision about when to write and run tests is canonical in
 Reviewers use the severity guidance below to assess whether a change satisfies
 that policy.
 
+Apply the [live-review procedure](../docs/agents/github-workflow.md#live-testing-in-pr-reviews)
+as part of every PR review. Assess the live evidence and its coverage of the
+current revision, whether testing was performed by the author or a reviewer.
+Testing by both is preferred, not required. If adequate live evidence is absent,
+state that the review is partial and live validation remains required before merge.
+
 Flag missing coverage as HIGH severity when the root policy requires it. If the
 change's scope or an allowed exception is unclear, flag test adequacy as MEDIUM
 severity for manual verification.

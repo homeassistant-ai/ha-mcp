@@ -69,10 +69,16 @@ minimum supported component consumer.
 The version gate cannot protect this direction because the older server is the
 caller and does not know to demand the new component.
 
-A component path cannot be fully exercised by pre-merge CI. After merge,
-live-test it promptly on the development server before the next stable cut.
-Before merge, the [live dev environment](../dev-ha-env.md)
-runs a branch's component and server against a throwaway HA from a fork.
+Follow the [repository live-testing requirement](../../AGENTS.md#testing-and-verification)
+before merge, using the user's choice of the
+[live dev environment](../dev-ha-env.md) or another live Home Assistant.
+The dev environment runs a fork branch's component
+and server against a throwaway Home Assistant on a GitHub runner, so live
+validation does not require merging or publishing a release first. Start
+with the embedded server and File & YAML Tools entry, then exercise the
+other affected topologies described below. Follow the environment guide for
+setup, iteration, and cleanup when using it; this manually dispatched environment is
+separate from automated CI.
 
 ## Dependencies shared with Core
 
