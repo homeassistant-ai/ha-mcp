@@ -663,15 +663,6 @@ def _assert_warnings_list_shape_no_success(result: dict[str, Any]) -> None:
     _assert_warnings_list_shape_core(result)
 
 
-# The delete already succeeded, so any failed removal check is a warning: the
-# expected connection/auth pair and anything else alike.
-_REMOVAL_CHECK_FAILURES = [
-    HomeAssistantConnectionError,
-    HomeAssistantAuthError,
-    ValueError,
-]
-
-
 class TestLifecycleWriteWarningsShape:
     """Cross-cutting shape regression for the 4 lifecycle-write families
     migrated under #1332. Asserts the warnings-list contract holds on
@@ -679,13 +670,13 @@ class TestLifecycleWriteWarningsShape:
 
     Per the narrow exception tuple decision (#1340 thread with kingpanther13):
     only HomeAssistantConnectionError and HomeAssistantAuthError propagate
-    from wait_for_entity_registered / wait_for_entity_removed to the call
-    sites — TimeoutError returns False (handled separately), HomeAssistantAPIError
-    is fully swallowed by the helpers (ws_waiters.py).
-    The set paths test only the two exception types that actually reach the
-    call sites. The remove paths go through ``verify_entity_removed``, which
-    turns any failed check after a successful delete into a warning, so they
-    also test an unexpected one.
+    from wait_for_entity_registered to the set call sites — TimeoutError
+    returns False (handled separately), HomeAssistantAPIError is fully
+    swallowed by the helpers (ws_waiters.py). The set paths test those two
+    exception types. The remove paths go through ``verify_entity_removed``,
+    which turns any failed check after a successful delete into a warning
+    (its branches are tested in test_remove_helpers_wait_warnings.py), so
+    each remove path tests one failure, which pins the wiring.
     """
 
     # ------------------------------------------------------------------
@@ -794,7 +785,7 @@ class TestLifecycleWriteWarningsShape:
         return ConfigSceneTools(client)
 
     # ------------------------------------------------------------------
-    # Groups: set × 2 exception types, remove × 3
+    # Groups: set × 2 exception types, remove wiring
     # ------------------------------------------------------------------
 
     async def test_groups_set_connection_error_yields_top_level_warnings_list(
@@ -827,14 +818,13 @@ class TestLifecycleWriteWarningsShape:
         _assert_warnings_list_shape(result)
         assert any("verification failed" in w for w in result["warnings"])
 
-    @pytest.mark.parametrize("failure", _REMOVAL_CHECK_FAILURES)
     async def test_groups_remove_check_error_yields_top_level_warnings_list(
-        self, groups_tools, failure
+        self, groups_tools
     ):
         with patch(
             "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
-            side_effect=failure("forced for test"),
+            side_effect=ValueError("forced for test"),
         ):
             result = await groups_tools.ha_config_remove_group(
                 object_id="test_group",
@@ -861,7 +851,7 @@ class TestLifecycleWriteWarningsShape:
         assert not any("created but" in w for w in result["warnings"])
 
     # ------------------------------------------------------------------
-    # Scripts: set × 2 exception types, remove × 3
+    # Scripts: set × 2 exception types, remove wiring
     # ------------------------------------------------------------------
 
     async def test_scripts_set_connection_error_yields_top_level_warnings_list(
@@ -894,14 +884,13 @@ class TestLifecycleWriteWarningsShape:
         _assert_warnings_list_shape(result)
         assert any("verification failed" in w for w in result["warnings"])
 
-    @pytest.mark.parametrize("failure", _REMOVAL_CHECK_FAILURES)
     async def test_scripts_remove_check_error_yields_top_level_warnings_list(
-        self, scripts_tools, failure
+        self, scripts_tools
     ):
         with patch(
             "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
-            side_effect=failure("forced for test"),
+            side_effect=ValueError("forced for test"),
         ):
             result = await scripts_tools.ha_config_remove_script(
                 script_id="test_script",
@@ -910,7 +899,7 @@ class TestLifecycleWriteWarningsShape:
         assert any("removal verification failed" in w for w in result["warnings"])
 
     # ------------------------------------------------------------------
-    # Automations: set × 2 exception types, remove × 3
+    # Automations: set × 2 exception types, remove wiring
     # ------------------------------------------------------------------
 
     async def test_automations_set_connection_error_yields_top_level_warnings_list(
@@ -949,14 +938,13 @@ class TestLifecycleWriteWarningsShape:
         _assert_warnings_list_shape(result)
         assert any("verification failed" in w for w in result["warnings"])
 
-    @pytest.mark.parametrize("failure", _REMOVAL_CHECK_FAILURES)
     async def test_automations_remove_check_error_yields_top_level_warnings_list(
-        self, automations_tools, failure
+        self, automations_tools
     ):
         with patch(
             "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
-            side_effect=failure("forced for test"),
+            side_effect=ValueError("forced for test"),
         ):
             result = await automations_tools.ha_config_remove_automation(
                 identifier="automation.test_auto",
@@ -988,7 +976,7 @@ class TestLifecycleWriteWarningsShape:
         assert not any("created but" in w for w in result["warnings"])
 
     # ------------------------------------------------------------------
-    # Scenes: set × 2 exception types, remove × 3
+    # Scenes: set × 2 exception types, remove wiring
     # ------------------------------------------------------------------
 
     async def test_scenes_set_connection_error_yields_top_level_warnings_list(
@@ -1027,14 +1015,13 @@ class TestLifecycleWriteWarningsShape:
         _assert_warnings_list_shape(result)
         assert any("verification failed" in w for w in result["warnings"])
 
-    @pytest.mark.parametrize("failure", _REMOVAL_CHECK_FAILURES)
     async def test_scenes_remove_check_error_yields_top_level_warnings_list(
-        self, scenes_tools, failure
+        self, scenes_tools
     ):
         with patch(
             "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
-            side_effect=failure("forced for test"),
+            side_effect=ValueError("forced for test"),
         ):
             result = await scenes_tools.ha_config_remove_scene(
                 scene_id="test_scene",

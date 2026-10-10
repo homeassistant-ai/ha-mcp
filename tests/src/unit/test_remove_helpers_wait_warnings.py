@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 
@@ -31,8 +34,8 @@ class TestRemovalCheckAfterSuccessfulDelete:
         return IntegrationTools(mock_client)
 
     @pytest.mark.parametrize(
-        "failure",
-        [HomeAssistantConnectionError("down"), ValueError("down")],
+        ("failure", "logs_traceback"),
+        [(HomeAssistantConnectionError("down"), False), (ValueError("down"), True)],
         ids=["connection", "other"],
     )
     async def test_flow_path_wait_true_reports_a_failed_check_as_a_warning(
@@ -40,11 +43,13 @@ class TestRemovalCheckAfterSuccessfulDelete:
         tools: IntegrationTools,
         mock_client: MagicMock,
         failure: Exception,
+        logs_traceback: bool,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """FLOW utility_meter wait=True: the entry is already deleted, so a
-        connection error while checking one sub-entity is a warning on a
-        successful delete that names the entity, which is not reported as still
-        present."""
+        """FLOW utility_meter wait=True: the entry is already deleted, so any
+        error while checking one sub-entity is a warning on a successful delete
+        that names the entity, which is not reported as still present. An
+        unexpected error is also logged with its traceback."""
         mock_client.send_websocket_message.side_effect = [
             {
                 "success": True,
@@ -65,11 +70,14 @@ class TestRemovalCheckAfterSuccessfulDelete:
             },
         ]
         mock_client.delete_config_entry.return_value = {"require_restart": False}
-        with patch(
-            "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
-            new_callable=AsyncMock,
-        ) as mock_wait:
-            mock_wait.side_effect = [True, failure]
+        with (
+            patch(
+                "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
+                new_callable=AsyncMock,
+                side_effect=[True, failure],
+            ) as mock_wait,
+            caplog.at_level(logging.WARNING),
+        ):
             result = await tools.ha_remove_helpers_integrations(
                 target="sensor.energy_peak",
                 helper_type="utility_meter",
@@ -82,14 +90,18 @@ class TestRemovalCheckAfterSuccessfulDelete:
             "sensor.energy_offpeak: down"
         ]
         assert mock_wait.await_count == 2
+        assert [r.exc_info[1] for r in caplog.records if r.exc_info] == (
+            [failure] if logs_traceback else []
+        )
 
     @pytest.mark.parametrize(
         ("failure", "logs_traceback"),
         [
             (HomeAssistantConnectionError("network down during poll"), False),
+            (HomeAssistantAuthError("network down during poll"), False),
             (ValueError("network down during poll"), True),
         ],
-        ids=["connection", "other"],
+        ids=["connection", "auth", "other"],
     )
     async def test_simple_path_wait_true_reports_a_failed_check_as_a_warning(
         self,
@@ -114,7 +126,7 @@ class TestRemovalCheckAfterSuccessfulDelete:
                 new_callable=AsyncMock,
                 side_effect=failure,
             ),
-            caplog.at_level(logging.WARNING, logger="ha_mcp.tools.ws_waiters"),
+            caplog.at_level(logging.WARNING),
         ):
             result = await tools.ha_remove_helpers_integrations(
                 target="my_button",
@@ -127,8 +139,7 @@ class TestRemovalCheckAfterSuccessfulDelete:
             "Deletion confirmed but removal verification failed: "
             "network down during poll"
         ]
-        logged = [r for r in caplog.records if r.exc_info is not None]
-        assert [r.exc_info[1] for r in logged if r.exc_info] == (
+        assert [r.exc_info[1] for r in caplog.records if r.exc_info] == (
             [failure] if logs_traceback else []
         )
 

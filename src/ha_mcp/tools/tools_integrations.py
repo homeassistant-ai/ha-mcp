@@ -17,8 +17,10 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..backup_manager import _is_flow_helper_domain
 from ..client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
@@ -2523,6 +2525,14 @@ class IntegrationTools:
                 for eid, res in checks.items()
                 if isinstance(res, BaseException)
             }
+            for eid, exc in failed.items():
+                if not isinstance(
+                    exc, (HomeAssistantConnectionError, HomeAssistantAuthError)
+                ):
+                    logger.warning(
+                        f"Unexpected error verifying removal of {eid}: {exc}",
+                        exc_info=exc,
+                    )
             if failed:
                 response.setdefault("warnings", []).append(
                     "Deletion confirmed but removal verification failed: "

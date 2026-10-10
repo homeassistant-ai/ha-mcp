@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # --- WS-event-driven wait helpers (#1152) -----------------------------------
 #
 # Background: every config write tool (`ha_config_set_helper`, set_automation,
-# set_script, …) calls one of these three helpers after the API write returns,
+# set_script, …) calls one of these helpers after the API write returns,
 # to confirm the operation reached the entity registry / state machine before
 # the tool itself returns. Until #1152, those checks polled REST every 300ms
 # up to a 10s budget. On a slow HA instance the poll could time out before

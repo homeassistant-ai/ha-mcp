@@ -845,11 +845,10 @@ class TestSetRemoveScriptAcceptEntityIdForm:
     async def test_remove_script_wait_watcher_target_is_post_strip(
         self, tools, mock_client
     ):
-        # The strip's load-bearing job on the remove path is preventing the
-        # ``script.script.foo`` watcher phantom — ``entity_id = f"script.
-        # {script_id}"`` at tools_config_scripts.py:848 builds the watcher
-        # target post-strip. A future refactor that drops the strip would
-        # regress silently if only the ``wait=False`` test exists.
+        # The strip keeps the removal check on the real entity: a
+        # ``script.script.foo`` target would 404, which counts as removed.
+        # A future refactor that drops the strip would regress silently if
+        # only the ``wait=False`` test exists.
         from unittest.mock import patch
 
         with patch(

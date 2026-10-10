@@ -1139,9 +1139,10 @@ class ConfigScriptTools:
             # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
             # than slipping through validate (non-empty pre-strip) and
             # producing a ``script.script.foo`` entity_id for the
-            # ``verify_entity_removed`` watcher below — that mis-formed
-            # entity_id never registers so the watcher times out on a
-            # phantom. Behavioral parity with ``ha_config_get_script``.
+            # ``verify_entity_removed`` check below — that mis-formed
+            # entity_id 404s, which counts as removed, so the real entity
+            # would never be checked. Behavioral parity with
+            # ``ha_config_get_script``.
             script_id = script_id.removeprefix("script.")
             # Empty/whitespace would surface as a misleading HA delete-failure.
             validate_identifier_not_empty(
