@@ -20,10 +20,11 @@ _SCRUB_DEGRADED_WARNING = (
 
 
 def _component_warnings(result: dict[str, Any]) -> list[str]:
-    """The warnings for a component result whose flow-helper read degraded.
+    """The warnings for a component result whose secret scrub degraded.
 
-    Maps only ``secret_scrub_degraded``; ``helper_flows_degraded`` is an error,
-    raised by :func:`raise_if_helper_flows_degraded`.
+    Maps only ``secret_scrub_degraded``. ``helper_flows_degraded`` matters only
+    when a requested flow type is missing from the result; then
+    :func:`raise_if_helper_flows_degraded` raises with it.
     """
     if result.get("secret_scrub_degraded") is True:
         return [_SCRUB_DEGRADED_WARNING]

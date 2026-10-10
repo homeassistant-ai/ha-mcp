@@ -209,17 +209,17 @@ class _FlowHelperReadError(HomeAssistantError):
 
 
 class _FlowHelperBackupSkip(_FlowHelperReadError):
-    """A flow helper without options to back up; logged at INFO, not as a failure."""
+    """A flow helper without options to back up; best-effort capture logs it at INFO."""
 
 
 def _is_flow_helper_domain(domain: str) -> bool:
     """A ``helper_<type>`` snapshot domain of a config-entry (flow) helper.
 
     Any type that is neither a storage helper nor a config subentry counts; the
-    type itself is not checked here. ha_config_set_helper refuses a type outside
-    ``helper_flows.helper_flow_types`` only after its auto-backup capture;
-    ``config_entry_backup.resolve_config_entry_backup_domain`` checks a domain
-    derived from an arbitrary config entry against the same list.
+    type itself is not checked here. Callers check it against
+    ``helper_flows.helper_flow_types`` (ha_config_set_helper only after its
+    auto-backup capture), as does ``resolve_config_entry_backup_domain`` for the
+    domain of an arbitrary config entry.
     """
     helper_type = domain[7:] if domain.startswith("helper_") else ""
     return helper_type not in ("", *_HELPER_LIST_TYPES, "config_subentry")
