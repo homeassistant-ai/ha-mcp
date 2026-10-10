@@ -123,7 +123,7 @@ export function renderState(state, repository) {
     : "";
   const body =
     `Slash agent: **${state.status}**${link}\n\n${prose(state.summary || "Preparing the requested work.")}\n\n` +
-    `Round ${state.rounds}/${MAX_ROUNDS}. ${state.status === "closed" ? "This session is closed; start a new request on a separate open issue or PR." : "Maintainers can pause, resume, or send a new `/astra`, `/sol`, or `/terra` request."}\n\n` +
+    `Round ${state.rounds}/${MAX_ROUNDS}. ${state.status === "closed" ? "This session is stopped; send a fresh command on an open issue or PR." : "Maintainers can pause, resume, or send a new `/astra`, `/sol`, or `/terra` request."}\n\n` +
     `${STATE_MARKER}${encoded} -->`;
   if (Buffer.byteLength(body, "utf8") > 65000)
     throw Error("Slash checkpoint exceeds GitHub's comment size limit");
@@ -206,6 +206,10 @@ export function decide(snapshot, trigger) {
     !previous ||
     previous.commandId !== latest.id ||
     previous.commandUpdatedAt !== latest.updated_at;
+  if (previous?.status === "closed" && !changed) return { mode: "idle" };
+  if (snapshot.closedAfter && Date.parse(latest.updated_at) <= Date.parse(snapshot.closedAfter))
+    return { mode: "closed", latest, parsed, rounds: previous?.rounds ?? 0,
+      task: parsed.action === "work" ? parsed.text : previous?.task };
   if (snapshot.issue.state !== "open" || snapshot.pr?.state === "closed") {
     return changed && trigger.commandId === latest.id
       ? { mode: "closed", latest, parsed, rounds: previous?.rounds ?? 0,

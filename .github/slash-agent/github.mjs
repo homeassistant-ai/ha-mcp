@@ -81,6 +81,29 @@ export class API extends GitHub {
     if (response.errors?.length) throw Error("GitHub GraphQL request failed");
     return response.data;
   }
+  lastClosure(number) {
+    const [owner, name] = this.repository.split("/");
+    const item = this.graphql(
+      `query($owner:String!,$name:String!,$number:Int!) {
+        repository(owner:$owner,name:$name) { issueOrPullRequest(number:$number) {
+          ... on Issue { issueHistory: timelineItems(last:1,itemTypes:[CLOSED_EVENT,REOPENED_EVENT]) {
+            nodes { ... on ClosedEvent { createdAt } ... on ReopenedEvent { createdAt } }
+          } }
+          ... on PullRequest { prHistory: timelineItems(last:1,itemTypes:[CLOSED_EVENT,REOPENED_EVENT,MERGED_EVENT]) {
+            nodes { ... on ClosedEvent { createdAt } ... on ReopenedEvent { createdAt } ... on MergedEvent { createdAt } }
+          } }
+        } }
+      }`, { owner, name, number },
+    )?.repository?.issueOrPullRequest;
+    const nodes = (item?.issueHistory ?? item?.prHistory)?.nodes;
+    if (!Array.isArray(nodes) || nodes.length > 1)
+      throw Error("Closure history is unavailable");
+    if (!nodes.length) return null;
+    const timestamp = nodes[0]?.createdAt;
+    if (typeof timestamp !== "string" || !Number.isFinite(Date.parse(timestamp)))
+      throw Error("Closure timestamp is invalid");
+    return timestamp;
+  }
   edits(comments) {
     const output = [];
     for (let offset = 0; offset < comments.length; offset += 100) {
@@ -328,6 +351,9 @@ export function collect(api, number, app, options = {}) {
   const source = sessionSource(api, number, app, options);
   if (!source) return null;
   const { issue, pr, root, rootComments, session } = source;
+  const transitions = [...new Set([root, ...(pr ? [pr.number] : [])])]
+    .map((target) => api.lastClosure(target)).filter(Boolean);
+  const closedAfter = transitions.sort((a, b) => Date.parse(a) - Date.parse(b)).at(-1) ?? null;
   const comments = rootComments.concat(
     pr && pr.number !== root
       ? api.edits(api.pages(`issues/${pr.number}/comments`))
@@ -442,6 +468,7 @@ export function collect(api, number, app, options = {}) {
     base,
     branch,
     head,
+    closedAfter,
   };
   return snapshot;
 }
@@ -468,6 +495,7 @@ function guardFields(snapshot) {
     roles: snapshot.roles,
     session: snapshot.session,
     head: snapshot.head,
+    closedAfter: snapshot.closedAfter,
   };
 }
 

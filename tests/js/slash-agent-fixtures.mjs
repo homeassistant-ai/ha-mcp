@@ -116,6 +116,9 @@ class FakeAPI {
   role(login) {
     return this.roles[login] ?? "none";
   }
+  lastClosure() {
+    return null;
+  }
   edits(comments) {
     return structuredClone(
       comments.map((c) => ({

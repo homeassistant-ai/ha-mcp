@@ -181,8 +181,13 @@ outer quotes), to prevent escaped text from consuming the checkpoint budget.
 Checkpoint and public-comment sizes are still checked independently.
 
 A new explicit command on a session whose issue or PR is closed/merged records
-a visible refusal without a model call. It does not reopen the session; start
-a separate request on an open issue or PR. Automatic events remain idle.
+a visible refusal without a model call. Reopening cannot reactivate a refused
+request. Admission reads the latest close/reopen/merge timestamp for both the
+root and linked PR from GitHub, so even a closure that occurred between wakeups
+invalidates earlier commands. A new command must follow that transition.
+Publication rechecks the same history; unavailable history fails closed.
+The agent does not reopen sessions; send a fresh command after reopening or
+start a separate request on an open issue or PR.
 The worker instructions explicitly prohibit all `.env`/`.env.*` templates.
 Managed PR descriptions update their delimited section even when a maintainer
 has inserted a note above it; surrounding text remains unchanged.

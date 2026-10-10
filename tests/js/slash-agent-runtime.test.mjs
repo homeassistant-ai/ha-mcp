@@ -35,6 +35,13 @@ test("event admission rereads commands and rejects unauthorized rerunners and re
   );
 });
 
+test("unknown or malformed closure history cannot silently restore authorization", () => {
+  for (const item of [null, { issueHistory: { nodes: null } }, { prHistory: { nodes: [{}] } }]) {
+    const api = new API("test/repo", () => JSON.stringify({ data: { repository: { issueOrPullRequest: item } } }));
+    assert.throws(() => api.lastClosure(9), /Closure/);
+  }
+});
+
 test("manual dispatch and status wakeups require exact authority and one current same-repo PR", () => {
   const api = new FakeAPI();
   const manual = { inputs: { issue_number: "9", comment_id: "1" } };

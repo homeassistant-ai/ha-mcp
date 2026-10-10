@@ -35,7 +35,8 @@ function accountStaleAttempt(api, plan, fresh, app) {
     .sort(commandOrder).at(-1);
   if (!latest || latest.id !== plan.decision.latest.id ||
       latest.updated_at !== plan.decision.latest.updated_at ||
-      latest.body !== plan.decision.latest.body) return;
+      latest.body !== plan.decision.latest.body ||
+      (fresh.closedAfter && Date.parse(latest.updated_at) <= Date.parse(fresh.closedAfter))) return;
   // Publication acceptance and resource accounting are separate. The unchanged
   // checkpoint makes retries idempotent; a newer command/session is never debited.
   const rounds = plan.decision.rounds + 1;
@@ -91,6 +92,7 @@ function assertCurrent(api, plan, app, expectedHead, checkThreads = true) {
     current.issue.locked ||
     current.pr?.state === "closed" ||
     current.issue.body !== plan.snapshot.issue.body ||
+    current.closedAfter !== plan.snapshot.closedAfter ||
     digest(current.sourceComments) !== digest(plan.snapshot.sourceComments) ||
     digest(current.feedback) !== digest(plan.snapshot.feedback) ||
     digest(current.roles) !== digest(plan.snapshot.roles) ||
@@ -279,7 +281,7 @@ export function publish(
     delete state.pendingSummary;
   if (d.mode === "closed") {
     state.status = "closed";
-    state.summary = "This request cannot run because the session's issue or PR is closed or merged. Start a new request on a separate open issue or PR; the agent will not reopen or modify the closed session.";
+    state.summary = "This request cannot run because the issue or PR is closed/merged, or the command predates its latest close/reopen. Send a fresh command after reopening, or start a separate request on an open issue or PR. The agent will not reopen a closed session.";
     save(api, state, app);
     return state;
   }

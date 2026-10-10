@@ -68,6 +68,9 @@ for (const closed of ["issue", "pr"]) {
     assert.equal(wake(api), null);
     assert.equal(prepare(api, { number: 10, commandId: 501, automatic: false }, APP), null);
     assert.equal(api.pr.state, closed === "pr" ? "closed" : "open");
+    api[closed].state = "open";
+    green(api);
+    assert.equal(wake(api), null, "Reopening cannot activate the refused request");
   });
 }
 
@@ -177,4 +180,32 @@ test("discarding a new task on a ready PR must retry its work before restoring r
   api.issue.body += " Reporter edit during the new task";
   assert.equal(publish(api, plan, artifact(), APP, { runId: "44" }).skipped, true);
   assert.equal(wake(api).decision.mode, "code");
+});
+
+for (const number of [9, 10]) {
+  test(`closure history (${number === 9 ? "issue" : "PR"}) invalidates earlier authorization even if closure was never observed`, () => {
+    const api = new FakeAPI();
+    start(api);
+    green(api);
+    api.lastClosure = (target) => target === number ? "2026-09-15T14:00:00Z" : null;
+    const stopped = wake(api);
+    assert.ok(stopped);
+    assert.notEqual(stopped.decision.mode, "code");
+    assert.notEqual(stopped.decision.mode, "ready");
+    const state = publish(api, stopped, null, APP, { runId: "44" });
+    assert.equal(state.rounds, 1);
+    assert.equal(wake(api), null);
+    api.checks[0].conclusion = "failure";
+    assert.equal(wake(api), null);
+    api.prComments.push({ id: 501, user, body: "/sol continue after reopening", updated_at: "2026-09-15T15:00:00Z" });
+    assert.equal(prepare(api, { number: 10, commandId: 501, automatic: false }, APP).decision.mode, "code");
+  });
+}
+
+test("a close/reopen cycle during worker execution invalidates output without reviving its task", () => {
+  const api = new FakeAPI();
+  const plan = prepare(api, { number: 9, commandId: 1, automatic: false }, APP);
+  api.lastClosure = () => "2026-09-15T14:00:00Z";
+  assert.equal(publish(api, plan, artifact(), APP, { runId: "44" }).skipped, true);
+  assert.equal(api.calls.length, 0);
 });
