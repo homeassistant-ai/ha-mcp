@@ -7,13 +7,17 @@ from ...utils.registry_update_lock import registry_update_lock
 from ..component_helper_collections import (
     collection_payload,
     native_result,
-    tag_entity_id,
+    registry_entity_id,
     write_helper_item,
 )
 from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
-from .core_payload import check_core_gaps, with_create_defaults
+from .core_payload import (
+    REGISTRY_ICON_ON_CREATE,
+    check_core_gaps,
+    with_create_defaults,
+)
 from .registry import _ws_error_msg
 from .schemas import (
     _attach_helper_skill,
@@ -45,7 +49,8 @@ async def _apply_create_entity_registry(
     warnings: list[str],
     registry_icon: str | None = None,
 ) -> None:
-    """Apply icon/area/labels registry update after a simple-helper create; echo into helper_data."""
+    """Write area, labels and ``registry_icon`` to the entity registry after a
+    create; echo icon, area and labels into helper_data once it succeeds."""
     if area_id is None and labels is None and not registry_icon:
         return
     update_message: dict[str, Any] = {
@@ -121,9 +126,7 @@ async def _execute_create_simple_helper(
             )
         )
 
-    # A zone keeps an icon from its stored item even after the registry's is
-    # cleared, so a new zone's icon goes to the registry only (#2643).
-    registry_icon = icon if helper_type == "zone" else None
+    registry_icon = icon if helper_type in REGISTRY_ICON_ON_CREATE else None
     message = _build_create_message(
         helper_type, name, None if registry_icon else icon, fields
     )
@@ -131,14 +134,14 @@ async def _execute_create_simple_helper(
         client, helper_type, message, area_id, labels, category, registry_icon
     )
     if native is not None:
-        helper_data, entity_id, warnings = native
+        native_data, native_entity_id, native_warnings = native
         create_response = _helper_response(
             "create",
             helper_type,
-            data=helper_data,
-            entity_id=entity_id,
+            data=native_data,
+            entity_id=native_entity_id,
             message=f"Successfully created {helper_type}: {name}",
-            warnings=warnings,
+            warnings=native_warnings,
         )
         _attach_helper_skill(create_response, MandatoryBPS)
         return create_response
@@ -154,13 +157,14 @@ async def _execute_create_simple_helper(
         )
 
     helper_data = result.get("result", {})
-    entity_id = helper_data.get("entity_id")
-    if helper_type == "tag":
-        entity_id = await tag_entity_id(client, helper_data.get("id")) or entity_id
-    if not entity_id and helper_data.get("id"):
-        entity_id = f"{helper_type}.{helper_data['id']}"
+    warnings: list[str] = []
+    entity_id = await _created_entity_id(client, helper_type, helper_data)
+    if not entity_id and (registry_icon or area_id is not None or labels):
+        warnings.append(
+            f"{helper_type} created, but its entity is not in the entity "
+            "registry, so the icon, area and labels given were not applied."
+        )
 
-    warnings = []
     # Tags live in their own tag registry and never appear in /api/states/<entity_id> —
     # polling there always 404s for the full timeout (~10s per tag), burning CI time.
     if wait and entity_id and helper_type != "tag":
@@ -196,6 +200,19 @@ async def _execute_create_simple_helper(
     )
     _attach_helper_skill(create_response, MandatoryBPS)
     return create_response
+
+
+async def _created_entity_id(
+    client: Any, helper_type: str, helper_data: dict[str, Any]
+) -> str | None:
+    """The new helper's entity_id. A tag's, zone's or person's follows its name,
+    not its ID, so only the registry knows it."""
+    if helper_type in REGISTRY_ICON_ON_CREATE:
+        return await registry_entity_id(client, helper_type, helper_data.get("id"))
+    entity_id = helper_data.get("entity_id")
+    if not entity_id and helper_data.get("id"):
+        entity_id = f"{helper_type}.{helper_data['id']}"
+    return entity_id
 
 
 async def _create_via_component(

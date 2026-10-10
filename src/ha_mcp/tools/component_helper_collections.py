@@ -206,25 +206,33 @@ def native_result(
     return data, entity_id, list(result.get("warnings") or [])
 
 
-async def _tag_entities(client: Any) -> list[dict[str, Any]]:
+async def _platform_entities(client: Any, platform: str) -> list[dict[str, Any]]:
     listed = await client.send_websocket_message(
         {"type": "config/entity_registry/list"}
     )
-    return [e for e in listed.get("result") or [] if e.get("platform") == "tag"]
+    return [e for e in listed.get("result") or [] if e.get("platform") == platform]
 
 
-async def tag_entity_id(client: Any, tag_id: str | None) -> str | None:
-    """The entity of a tag: its entity_id follows the tag's name, not its ID."""
-    if not tag_id:
+async def registry_entity_id(
+    client: Any, platform: str, item_id: str | None
+) -> str | None:
+    """The entity of a stored item whose entity_id follows its name, not its ID
+    (tag, zone, person): the registry entry whose unique_id is the item's ID."""
+    if not item_id:
         return None
     return next(
         (
             e.get("entity_id")
-            for e in await _tag_entities(client)
-            if e.get("unique_id") == tag_id
+            for e in await _platform_entities(client, platform)
+            if e.get("unique_id") == item_id
         ),
         None,
     )
+
+
+async def tag_entity_id(client: Any, tag_id: str | None) -> str | None:
+    """The entity of a tag: its entity_id follows the tag's name, not its ID."""
+    return await registry_entity_id(client, "tag", tag_id)
 
 
 async def tag_item_id(client: Any, helper_id: str) -> str:
@@ -234,7 +242,7 @@ async def tag_item_id(client: Any, helper_id: str) -> str:
     return next(
         (
             e["unique_id"]
-            for e in await _tag_entities(client)
+            for e in await _platform_entities(client, "tag")
             if e.get("entity_id") == helper_id and e.get("unique_id")
         ),
         helper_id.removeprefix("tag."),

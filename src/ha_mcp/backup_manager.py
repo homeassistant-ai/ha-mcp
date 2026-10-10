@@ -2518,8 +2518,8 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
     return await _recreate_calendar_event(client, cal, event, start, end)
 
 
-# Zones — zone/{list,update} (no ``config/`` prefix per HA's actual WS API). The
-# zone tools take a zone_id or the zone's entity_id, which follows its name.
+# Zones — zone/list, then zone/update or zone/create (backup_zones.py). ha_set_zone
+# and ha_remove_zone take a zone_id or entity_id; a create backup passes the name.
 
 
 async def _fetch_zone(client: Any, entity_id: str) -> Any:
@@ -2794,7 +2794,7 @@ async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
 async def _restore_helper(
     client: Any, entity_id: str, config: Any, helper_type: str
 ) -> Any:
-    """Restore a storage-backed helper via ``<helper_type>/update``.
+    """Restore a storage helper via ``<helper_type>/update`` (tag, zone: restore_*).
 
     Symmetric with ``_fetch_helper``: only list-backed types are
     supported. Unsupported types raise ``LookupError`` so the restore
@@ -2817,7 +2817,7 @@ async def _restore_helper(
 
 
 async def _registry_snapshot(client: Any, helper_type: str, item: dict) -> Any:
-    """The stored item plus what of it the entity registry holds."""
+    """The stored item, plus for tag and zone the registry fields they restore."""
     snapshot = {"tag": tag_snapshot, "zone": zone_snapshot}.get(helper_type)
     return await snapshot(client, item) if snapshot else item
 

@@ -257,12 +257,17 @@ async def _execute_update_simple_helper(
             client, helper_type, entity_id, tag_id, name, icon, fields
         )
         tag_entity = await tag_entity_id(client, tag_id)
+        if not tag_entity and (icon is not None or area_id is not None or labels):
+            warnings.append(
+                f"tag {tag_id} updated, but its entity is not in the entity "
+                "registry, so the icon, area and labels given were not applied."
+            )
         if tag_entity:
             entity_id = tag_entity
             await _apply_update_registry_and_category(
                 client,
                 entity_id,
-                None,
+                icon,
                 area_id,
                 labels,
                 category,

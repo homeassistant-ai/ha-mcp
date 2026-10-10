@@ -11,19 +11,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .backup_entity_ids import _manager
+from .backup_entity_ids import _manager, registry_row
 
 
 async def _tag_entity(client: Any, tag_id: str) -> dict[str, Any] | None:
-    bm = _manager()
-    return next(
-        (
-            row
-            for row in await bm._entity_registry_rows(client)
-            if row.get("platform") == "tag" and row.get("unique_id") == tag_id
-        ),
-        None,
-    )
+    return await registry_row(client, "tag", tag_id)
 
 
 async def tag_snapshot(client: Any, item: dict[str, Any]) -> dict[str, Any]:
