@@ -45,6 +45,12 @@ function assertCurrent(api, plan, app, expectedHead, checkThreads = true) {
   const command = current.comments.find(
     (c) => c.id === plan.decision.latest.id,
   );
+  // GitHub can briefly cache the PR's previous head after our ref append. The
+  // Git ref must still name exactly our commit; any other advance is stale.
+  const headIsCurrent = current.head === expectedHead ||
+    (expectedHead !== plan.snapshot.head && current.head === plan.snapshot.head &&
+      current.branch === plan.snapshot.branch &&
+      api.optional(`git/ref/heads/${encodeURIComponent(current.branch)}`)?.object.sha === expectedHead);
   if (
     current.issue.state !== "open" ||
     current.issue.locked ||
@@ -57,7 +63,7 @@ function assertCurrent(api, plan, app, expectedHead, checkThreads = true) {
       digest(current.threads.map(threadSignature)) !==
         digest(plan.snapshot.threads.map(threadSignature))) ||
     (plan.snapshot.pr && current.pr?.body !== plan.snapshot.pr.body) ||
-    current.head !== expectedHead ||
+    !headIsCurrent ||
     !command ||
     command.updated_at !== plan.decision.latest.updated_at ||
     principal(command)?.type !== "User" ||
@@ -423,7 +429,7 @@ export function publish(
     const current = collect(api, state.root, app);
     // A clarification-only round can finish after the final CI event. Complete
     // readiness here instead of depending on a future unrelated notification.
-    if (decide(current, { automatic: true }).mode === "ready") {
+    if (current.head === head && decide(current, { automatic: true }).mode === "ready") {
       if (current.pr.draft)
         api.graphql(
           "mutation($id:ID!) { markPullRequestReadyForReview(input:{pullRequestId:$id}) { pullRequest { id } } }",

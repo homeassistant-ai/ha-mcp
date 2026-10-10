@@ -92,3 +92,42 @@ test("command admission bounds JSON escaping before a paid turn", () => {
   assert.ok(command(`/sol ${"x".repeat(12000)}`));
   assert.ok(command(`/sol ${"漢".repeat(4000)}`));
 });
+
+for (const concurrent of [false, true]) {
+  test(`PR head caching after our append ${concurrent ? "cannot hide a concurrent branch update" : "does not interrupt replies or mark stale checks ready"}`, () => {
+    const api = new FakeAPI();
+    start(api);
+    green(api);
+    api.reviewThreads = [{ id: "review-1", isResolved: false, comments: [{ id: 500, user, body: "Add the regression", updated_at: "2026-09-15T13:00:00Z" }] }];
+    const plan = wake(api);
+    const oldHead = api.pr.head.sha;
+    const nextHead = "c".repeat(40);
+    const write = api.write.bind(api);
+    api.write = (path, data, method) => {
+      const result = write(path, data, method);
+      if (path === "git/commits") return { sha: nextHead };
+      if (path.startsWith("git/refs/heads/")) {
+        api.pr.head.sha = oldHead;
+        if (concurrent) api.branches[api.pr.head.ref] = "d".repeat(40);
+      }
+      return result;
+    };
+    const work = artifact();
+    work.result.responses = [{ thread_id: "review-1", body: "Added the regression; focused tests passed.", resolve: true }];
+    if (concurrent) {
+      assert.throws(() => publish(api, plan, work, APP, { runId: "44" }), /changed during publication/);
+      assert.equal(api.reviewThreads[0].isResolved, false);
+      return;
+    }
+    const state = publish(api, plan, work, APP, { runId: "44" });
+    assert.equal(state.lastHead, nextHead);
+    assert.equal(state.status, "waiting");
+    assert.equal(api.pr.draft, true);
+    assert.equal(api.reviewThreads[0].isResolved, true);
+    api.pr.head.sha = nextHead;
+    api.checks = [];
+    assert.equal(wake(api), null);
+    green(api);
+    assert.equal(wake(api).decision.mode, "ready");
+  });
+}
