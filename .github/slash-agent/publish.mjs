@@ -6,6 +6,7 @@ import {
   feedbackHash,
   feedbackItems,
   failureHash,
+  MAX_ROUNDS,
   commandOrder,
   maintainerCommand,
   ORIGIN_MARKER,
@@ -22,6 +23,37 @@ function save(api, state, app) {
   if (state.commentId)
     api.write(`issues/comments/${state.commentId}`, data, "PATCH");
   else state.commentId = api.write(`issues/${state.root}/comments`, data).id;
+}
+
+function accountStaleAttempt(api, plan, fresh, app) {
+  if (plan.decision.mode !== "code" || fresh.issue.state !== "open" ||
+      fresh.issue.locked || fresh.pr?.state === "closed" ||
+      fresh.branch !== plan.snapshot.branch ||
+      fresh.pr?.number !== plan.snapshot.pr?.number ||
+      digest(fresh.session) !== digest(plan.snapshot.session)) return;
+  const latest = fresh.comments.filter((c) => maintainerCommand(c, fresh.roles))
+    .sort(commandOrder).at(-1);
+  if (!latest || latest.id !== plan.decision.latest.id ||
+      latest.updated_at !== plan.decision.latest.updated_at ||
+      latest.body !== plan.decision.latest.body) return;
+  // Publication acceptance and resource accounting are separate. The unchanged
+  // checkpoint makes retries idempotent; a newer command/session is never debited.
+  const rounds = (fresh.session?.rounds ?? 0) + 1;
+  save(api, {
+    ...(fresh.session ?? {}),
+    version: 1,
+    root: fresh.root,
+    branch: fresh.branch,
+    base: fresh.base,
+    pr: fresh.pr?.number ?? null,
+    commandId: latest.id,
+    commandUpdatedAt: latest.updated_at,
+    model: plan.decision.parsed.model,
+    task: plan.decision.task,
+    rounds,
+    status: rounds >= MAX_ROUNDS ? "blocked" : "waiting",
+    summary: `${(fresh.session?.summary ?? "").slice(0, 10000)}\n\nWorker output was discarded because source/head/authorization changed. No worker output was published; this attempt counts against the turn budget.${rounds >= MAX_ROUNDS ? " Budget exhausted; send a new maintainer command to continue." : " A later authorized event can continue, or send a fresh slash command."}`,
+  }, app);
 }
 
 function threadSignature(thread) {
@@ -213,6 +245,7 @@ export function publish(
     throw Error("Publication identity mismatch");
   const fresh = collect(api, plan.snapshot.root, app);
   if (snapshotGuard(fresh) !== plan.guard) {
+    accountStaleAttempt(api, plan, fresh, app);
     console.warn(
       "::warning::Slash source changed; stale output was not published. Use a fresh slash command if no new event follows.",
     );

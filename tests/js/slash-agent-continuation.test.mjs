@@ -131,3 +131,32 @@ for (const concurrent of [false, true]) {
     assert.equal(wake(api).decision.mode, "ready");
   });
 }
+
+test("discarded paid work consumes its budget once even when public source changes repeatedly", () => {
+  const api = new FakeAPI();
+  for (let round = 1; round <= 4; round++) {
+    const plan = prepare(api, { number: 9, commandId: 1, automatic: false }, APP);
+    assert.equal(plan.decision.mode, "code");
+    api.issue.body += ` Reporter edit ${round}`;
+    const skipped = publish(api, plan, artifact(), APP, { runId: String(40 + round) });
+    assert.equal(skipped.skipped, true);
+    assert.equal(checkpoint(api).rounds, round);
+    publish(api, plan, artifact(), APP, { runId: String(40 + round) });
+    assert.equal(checkpoint(api).rounds, round);
+    assert.equal(api.pr, null);
+    assert.equal(api.calls.filter((c) => c.path === "git/commits").length, 0);
+  }
+  assert.equal(prepare(api, { number: 9, commandId: 1, automatic: false }, APP), null);
+  assert.equal(checkpoint(api).status, "blocked");
+});
+
+test("stale-attempt accounting cannot overwrite a newer command or revoked authority", () => {
+  for (const change of ["command", "role"]) {
+    const api = new FakeAPI();
+    const plan = prepare(api, { number: 9, commandId: 1, automatic: false }, APP);
+    if (change === "command") api.comments.push({ id: 501, user, body: "/sol a different authorized task", updated_at: "2026-09-15T14:00:00Z" });
+    else api.roles.maintainer = "write";
+    assert.equal(publish(api, plan, artifact(), APP, { runId: "44" }).skipped, true);
+    assert.equal(api.calls.length, 0);
+  }
+});

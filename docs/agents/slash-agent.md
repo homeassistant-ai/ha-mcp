@@ -149,8 +149,11 @@ feedback; retries reuse their App-owned reply. The pending review-summary key
 survives a failure during resolution, summary creation or final checkpoint save,
 so recovery does not duplicate replies or summaries. A partial publication stays
 resumable within the iteration budget; inspect a failure and send a new command
-when intervention is needed. Stale work writes nothing and fails its Actions run
-with the changed snapshot fields. App-owned PR descriptions update their marked
+when intervention is needed. Stale work publishes no worker output and fails
+its Actions run with the changed snapshot fields. If the command, authority and
+checkpoint are still current, the discarded attempt is counted once against
+the budget; a newer command/session or revoked authority is never overwritten.
+App-owned PR descriptions update their marked
 section while preserving generated review sections. Do not delete an ownership checkpoint
 while its branch is in use. Pause or disable the workflow to stop new work;
 avoid cancelling an active OAuth consumer before its auth-persistence step.
