@@ -148,6 +148,12 @@ test("discarded paid work consumes its budget once even when public source chang
   }
   assert.equal(prepare(api, { number: 9, commandId: 1, automatic: false }, APP), null);
   assert.equal(checkpoint(api).status, "blocked");
+  api.comments.push({ id: 501, user, body: "/sol a renewed task", updated_at: "2026-09-15T14:00:00Z" });
+  const renewed = prepare(api, { number: 9, commandId: 501, automatic: false }, APP);
+  api.issue.body += " Another reporter edit";
+  publish(api, renewed, artifact(), APP, { runId: "50" });
+  assert.equal(checkpoint(api).rounds, 1);
+  assert.equal(checkpoint(api).status, "waiting");
 });
 
 test("stale-attempt accounting cannot overwrite a newer command or revoked authority", () => {

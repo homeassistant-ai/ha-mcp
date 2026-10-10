@@ -411,15 +411,15 @@ test("existing checkpoints remain readable while new commands use the current mo
   assert.equal(plan.decision.parsed.model, command(api.command.body).model);
 });
 
-test("stale work, repo/App mismatch and protected branches perform no publication", () => {
+test("stale work, repo/App mismatch and protected branches cannot publish worker output", () => {
   const api = new FakeAPI();
   const plan = initial(api);
   api.issue.body += " New scope";
   const skipped = publish(api, plan, artifact(), APP, { runId: "42" });
   assert.equal(skipped.skipped, true);
   assert.deepEqual(skipped.changed, ["issue"]);
-  assert.deepEqual(snapshotDifferences(plan.snapshot, collect(api, 9, APP)), ["issue"]);
-  assert.equal(api.calls.length, 0);
+  assert.deepEqual(snapshotDifferences(plan.snapshot, collect(api, 9, APP)), ["issue", "session"]);
+  assert.ok(api.calls.every((call) => call.path === "issues/9/comments"));
   assert.throws(
     () =>
       publish(api, { ...plan, repository: "other/repo" }, artifact(), APP, {

@@ -38,7 +38,7 @@ function accountStaleAttempt(api, plan, fresh, app) {
       latest.body !== plan.decision.latest.body) return;
   // Publication acceptance and resource accounting are separate. The unchanged
   // checkpoint makes retries idempotent; a newer command/session is never debited.
-  const rounds = (fresh.session?.rounds ?? 0) + 1;
+  const rounds = plan.decision.rounds + 1;
   save(api, {
     ...(fresh.session ?? {}),
     version: 1,
