@@ -2,18 +2,23 @@
 
 from typing import Any
 
+from ...client.rest_client import HomeAssistantError
 from ...errors import ErrorCode, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_helper_collections import (
     collection_payload,
     native_result,
-    tag_entity_id,
+    registry_entity_id,
     write_helper_item,
 )
 from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
-from .core_payload import check_core_gaps, with_create_defaults
+from .core_payload import (
+    REGISTRY_ICON_ON_CREATE,
+    check_core_gaps,
+    with_create_defaults,
+)
 from .registry import _ws_error_msg
 from .schemas import (
     _attach_helper_skill,
@@ -43,14 +48,18 @@ async def _apply_create_entity_registry(
     labels: list[str] | None,
     helper_data: dict[str, Any],
     warnings: list[str],
+    registry_icon: str | None = None,
 ) -> None:
-    """Apply area/labels registry update after a simple-helper create; echo into helper_data."""
-    if area_id is None and labels is None:
+    """Write area, labels and ``registry_icon`` to the entity registry after a
+    create; echo icon, area and labels into helper_data once it succeeds."""
+    if area_id is None and labels is None and not registry_icon:
         return
     update_message: dict[str, Any] = {
         "type": "config/entity_registry/update",
         "entity_id": entity_id,
     }
+    if registry_icon:
+        update_message["icon"] = registry_icon
     if area_id is not None:
         update_message["area_id"] = area_id if area_id else None
     if labels is not None:
@@ -118,19 +127,22 @@ async def _execute_create_simple_helper(
             )
         )
 
-    message = _build_create_message(helper_type, name, icon, fields)
+    registry_icon = icon if helper_type in REGISTRY_ICON_ON_CREATE else None
+    message = _build_create_message(
+        helper_type, name, None if registry_icon else icon, fields
+    )
     native = await _create_via_component(
-        client, helper_type, message, area_id, labels, category
+        client, helper_type, message, area_id, labels, category, registry_icon
     )
     if native is not None:
-        helper_data, entity_id, warnings = native
+        native_data, native_entity_id, native_warnings = native
         create_response = _helper_response(
             "create",
             helper_type,
-            data=helper_data,
-            entity_id=entity_id,
+            data=native_data,
+            entity_id=native_entity_id,
             message=f"Successfully created {helper_type}: {name}",
-            warnings=warnings,
+            warnings=native_warnings,
         )
         _attach_helper_skill(create_response, MandatoryBPS)
         return create_response
@@ -146,13 +158,29 @@ async def _execute_create_simple_helper(
         )
 
     helper_data = result.get("result", {})
-    entity_id = helper_data.get("entity_id")
-    if helper_type == "tag":
-        entity_id = await tag_entity_id(client, helper_data.get("id")) or entity_id
-    if not entity_id and helper_data.get("id"):
-        entity_id = f"{helper_type}.{helper_data['id']}"
+    warnings: list[str] = []
+    entity_id, lookup_error = await _created_entity_id(client, helper_type, helper_data)
+    given = [
+        field
+        for field, value in (
+            ("icon", registry_icon or None),
+            ("area", area_id),
+            ("labels", labels),
+            ("category", category),
+        )
+        if value is not None
+    ]
+    if lookup_error or (not entity_id and given):
+        reason = (
+            f"its entity could not be read ({lookup_error})"
+            if lookup_error
+            else "its entity is not in the entity registry"
+        )
+        not_applied = (
+            f", so the {', '.join(given)} given were not applied" if given else ""
+        )
+        warnings.append(f"{helper_type} created, but {reason}{not_applied}.")
 
-    warnings = []
     # Tags live in their own tag registry and never appear in /api/states/<entity_id> —
     # polling there always 404s for the full timeout (~10s per tag), burning CI time.
     if wait and entity_id and helper_type != "tag":
@@ -167,7 +195,14 @@ async def _execute_create_simple_helper(
 
     if entity_id:
         await _apply_create_entity_registry(
-            client, entity_id, icon, area_id, labels, helper_data, warnings
+            client,
+            entity_id,
+            icon,
+            area_id,
+            labels,
+            helper_data,
+            warnings,
+            registry_icon,
         )
         await _apply_create_category(client, entity_id, category, helper_data, warnings)
 
@@ -183,6 +218,29 @@ async def _execute_create_simple_helper(
     return create_response
 
 
+async def _created_entity_id(
+    client: Any, helper_type: str, helper_data: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    """The new helper's entity_id, and why it could not be read.
+
+    A tag's, zone's or person's entity_id follows its name, not its ID, so only
+    the registry knows it. The helper already exists, so a failed read is
+    reported rather than raised: a caller retrying would create it twice.
+    """
+    if helper_type in REGISTRY_ICON_ON_CREATE:
+        try:
+            entity_id = await registry_entity_id(
+                client, helper_type, helper_data.get("id")
+            )
+        except (HomeAssistantError, OSError, TimeoutError) as err:
+            return None, str(err)
+        return entity_id, None
+    entity_id = helper_data.get("entity_id")
+    if not entity_id and helper_data.get("id"):
+        entity_id = f"{helper_type}.{helper_data['id']}"
+    return entity_id, None
+
+
 async def _create_via_component(
     client: Any,
     helper_type: str,
@@ -190,6 +248,7 @@ async def _create_via_component(
     area_id: str | None,
     labels: list[str] | None,
     category: str | None,
+    registry_icon: str | None = None,
 ) -> tuple[dict[str, Any], str, list[str]] | None:
     """Create through Core's collection in-process; ``None`` uses the WS command.
 
@@ -198,6 +257,7 @@ async def _create_via_component(
     registry = {
         key: value
         for key, value in (
+            ("icon", registry_icon),
             ("area_id", area_id),
             ("labels", labels),
             ("category", category),

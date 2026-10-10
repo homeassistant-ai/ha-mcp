@@ -146,6 +146,7 @@ class TestZoneGetMissingReturnsResourceNotFound:
             "success": True,
             "result": [{"id": "existing_zone", "name": "Existing"}],
         }
+        mock_ws_client.get_states = AsyncMock(return_value=[])
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_zone(zone_id="missing_zone")
@@ -360,44 +361,6 @@ class TestCategoryMutationRoutesNotFoundToResourceNotFound:
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-
-
-class TestZoneMutationRoutesNotFoundToResourceNotFound:
-    """Zone set-update / remove with a non-existent ``zone_id`` must surface
-    ``RESOURCE_NOT_FOUND``.
-    """
-
-    @pytest.fixture
-    def tools(self, mock_ws_client):
-        from ha_mcp.tools.tools_zones import ZoneTools
-
-        return ZoneTools(mock_ws_client)
-
-    async def test_set_update_with_missing_zone_id(self, tools, mock_ws_client):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Zone not found",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_zone(name="X", zone_id="missing")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert any("ha_get_zone" in s for s in _all_suggestions(error_data["error"]))
-
-    async def test_remove_with_missing_zone_id(self, tools, mock_ws_client):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Zone not found",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_remove_zone(zone_id="missing")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert any("ha_get_zone" in s for s in _all_suggestions(error_data["error"]))
 
 
 # ---------------------------------------------------------------------------

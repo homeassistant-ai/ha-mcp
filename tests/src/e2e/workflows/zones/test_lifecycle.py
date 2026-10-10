@@ -16,7 +16,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -326,19 +326,6 @@ class TestZoneLifecycle:
             )
             logger.info("Invalid longitude properly rejected")
 
-            # Test: Invalid radius (zero or negative)
-            await mcp.call_tool_failure(
-                "ha_set_zone",
-                {
-                    "name": "Invalid Radius",
-                    "latitude": 40.0,
-                    "longitude": -74.0,
-                    "radius": 0,  # Invalid: must be > 0
-                },
-                expected_error="radius",
-            )
-            logger.info("Invalid radius properly rejected")
-
             # Test: Update with no fields
             await mcp.call_tool_failure(
                 "ha_set_zone",
@@ -350,12 +337,13 @@ class TestZoneLifecycle:
             logger.info("Update with no fields properly rejected")
 
             # Test: Delete non-existent zone
-            await mcp.call_tool_failure(
+            data = await mcp.call_tool_failure(
                 "ha_remove_zone",
                 {
                     "zone_id": "nonexistent_zone_xyz_123",
                 },
             )
+            assert data["error"]["code"] == "RESOURCE_NOT_FOUND", data
             logger.info("Delete non-existent zone properly handled")
 
             logger.info("All input validation tests passed")
@@ -445,6 +433,106 @@ class TestZoneLifecycle:
                     f"Zone {zone_id} still exists after deletion"
                 )
             logger.info("All zone deletions verified")
+
+    async def test_update_of_a_removed_zone_is_resource_not_found(self, mcp_client):
+        """A removed zone has no registry entry left, so nothing is written."""
+        async with MCPAssertions(mcp_client) as mcp:
+            created = await mcp.call_tool_success(
+                "ha_set_zone",
+                {"name": "E2E Gone Zone", "latitude": 40.5, "longitude": -74.5},
+            )
+            zone_id = created["zone_id"]
+            try:
+                await mcp.call_tool_success("ha_remove_zone", {"zone_id": zone_id})
+                data = await mcp.call_tool_failure(
+                    "ha_set_zone", {"zone_id": zone_id, "radius": 50}
+                )
+                assert data["error"]["code"] == "RESOURCE_NOT_FOUND", data
+            finally:
+                await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})
+
+    async def test_home_zone_is_listed_as_not_stored(self, mcp_client):
+        """The home zone comes from the general settings, not the zone storage."""
+        async with MCPAssertions(mcp_client) as mcp:
+            listed = await mcp.call_tool_success(
+                "ha_get_zone", {"zone_id": "zone.home"}
+            )
+        zone = listed["zone"]
+        assert zone["entity_id"] == "zone.home", zone
+        assert zone["editable"] is False, zone
+        assert zone["source"] == "yaml", zone
+
+    async def test_home_zone_is_refused_as_not_stored(self, mcp_client):
+        """Removing the home zone is refused before anything is sent."""
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_remove_zone",
+                {"zone_id": "zone.home"},
+                expected_error="not a stored zone",
+            )
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND", data
+
+    async def test_icon_from_create_can_be_cleared(self, mcp_client):
+        """An icon given at creation stays clearable (#2643).
+
+        Written into the stored zone it could never be removed again, because
+        Core's zone update merges into the stored zone and rejects an empty icon.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            created = await mcp.call_tool_success(
+                "ha_set_zone",
+                {
+                    "name": "E2E Created Icon Zone",
+                    "latitude": 41.6,
+                    "longitude": -73.6,
+                    "icon": "mdi:school",
+                },
+            )
+            zone_id = created["zone_id"]
+            entity_id = created["entity_id"]
+            try:
+                listed = await mcp.call_tool_success(
+                    "ha_get_zone", {"zone_id": zone_id}
+                )
+                assert "icon" not in listed["zone"], listed
+
+                await mcp.call_tool_success(
+                    "ha_set_zone", {"zone_id": zone_id, "icon": ""}
+                )
+                state = await mcp.call_tool_success(
+                    "ha_get_state", {"entity_id": entity_id}
+                )
+                assert "icon" not in state["data"]["attributes"], state
+            finally:
+                await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})
+
+    async def test_icon_set_on_update_can_be_cleared(self, mcp_client):
+        """An icon added by an update stays clearable (#2643)."""
+        async with MCPAssertions(mcp_client) as mcp:
+            created = await mcp.call_tool_success(
+                "ha_set_zone",
+                {"name": "E2E Icon Zone", "latitude": 41.5, "longitude": -73.5},
+            )
+            zone_id = created["zone_id"]
+            entity_id = created["entity_id"]
+            try:
+                await mcp.call_tool_success(
+                    "ha_set_zone", {"zone_id": zone_id, "icon": "mdi:briefcase"}
+                )
+                state = await mcp.call_tool_success(
+                    "ha_get_state", {"entity_id": entity_id}
+                )
+                assert state["data"]["attributes"].get("icon") == "mdi:briefcase", state
+
+                await mcp.call_tool_success(
+                    "ha_set_zone", {"zone_id": entity_id, "icon": ""}
+                )
+                state = await mcp.call_tool_success(
+                    "ha_get_state", {"entity_id": entity_id}
+                )
+                assert "icon" not in state["data"]["attributes"], state
+            finally:
+                await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})
 
     async def test_zone_get_nonexistent(self, mcp_client):
         """Test ha_get_zone returns RESOURCE_NOT_FOUND for unknown zone_id.

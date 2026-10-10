@@ -79,7 +79,10 @@ def test_ha_config_set_helper_edits_have_a_backup_handler(helper_type: str) -> N
 @pytest.mark.parametrize("helper_type", ["zone", "person"])
 async def test_capture_reads_the_stored_item(ws: AsyncMock, helper_type: str) -> None:
     item = _stored(helper_type)
-    assert await bm._fetch_helper(None, item["id"], helper_type) == item
+    snapshot = await bm._fetch_helper(None, item["id"], helper_type)
+    # A zone's snapshot also records its registry icon (backup_zones.py).
+    snapshot.pop("registry_icon", None)
+    assert snapshot == item
 
 
 @pytest.mark.asyncio
@@ -109,7 +112,12 @@ async def test_tag_capture_records_the_registry_name_not_the_listed_default(
 ) -> None:
     registry[0]["name"] = registry_name
     snapshot = await bm._fetch_helper(None, "abc-1", "tag")
-    assert snapshot == {"id": "abc-1", "name": captured, "description": "door"}
+    assert snapshot == {
+        "id": "abc-1",
+        "name": captured,
+        "description": "door",
+        "registry_icon": None,
+    }
 
 
 @pytest.mark.asyncio

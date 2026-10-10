@@ -1,16 +1,16 @@
 """Routing tests for ``ha_get_zone`` over the ``ha_mcp_tools`` component gate.
 
-Core's ``zone/list`` WS command serves only the storage collection, so
-YAML-defined zones — including the auto-synthesized ``home`` zone — are
-structurally absent from it. When the component advertises the ``helpers_list``
-capability, ``ha_get_zone`` enumerates zones through one
-``ha_mcp_tools/helpers_list`` call instead: YAML zones come back with
-``storage_id=None`` and are surfaced as additive rows carrying an
-``editable`` / ``source`` discriminator, while storage zones keep their exact
-legacy body plus the discriminator.
+Core's ``zone/list`` WS command serves only the storage collection, so the
+home zone (built from the general settings) and YAML zones are absent from it.
+When the component advertises the ``helpers_list`` capability, ``ha_get_zone``
+enumerates zones through one ``ha_mcp_tools/helpers_list`` call instead: zones
+outside the storage come back with ``storage_id=None`` and are surfaced as
+additive rows carrying an
+``editable`` / ``source`` discriminator, while storage zones keep their stored
+body plus the discriminator and their ``entity_id``.
 
-These tests pin that fast path, the record shape (storage byte-identical modulo
-the additive discriminator; YAML ``home`` present and flagged), get-by-id via the
+These tests pin that fast path, the record shape (a storage row equal to the
+legacy path's; YAML ``home`` present and flagged), get-by-id via the
 component, and the error-taxonomy fallbacks (silent on ``unknown_command``;
 legacy + ``warnings[]`` on any other command error; legacy pin when the
 component has no WS surface or omits ``covered_types``).
@@ -54,6 +54,21 @@ _LEGACY_STORAGE_ZONE = {
     "icon": "mdi:briefcase",
 }
 
+# A storage zone's registry unique_id is its zone_id.
+_WORK_REGISTRY_ENTRY = {
+    "entity_id": "zone.work",
+    "platform": "zone",
+    "unique_id": "work",
+}
+
+# The legacy path's row: the stored body plus what the component path adds.
+_LEGACY_STORAGE_ROW = {
+    **_LEGACY_STORAGE_ZONE,
+    "entity_id": "zone.work",
+    "editable": True,
+    "source": "storage",
+}
+
 _CAPS_HELPERS = {
     "schema_version": 1,
     "component_version": "1.1.0",
@@ -81,18 +96,17 @@ def _component_zone_result() -> dict[str, Any]:
                 "entity_id": "zone.home",
                 "object_id": "home",
                 "name": "Home",
-                # YAML/config zone: state-only record. The component backfills
-                # storage_id with the registry unique_id or object_id (it is
-                # NOT None), and the state-attribute body carries core's
-                # editable=False — the actual YAML discriminator.
-                "storage_id": "home",
+                # The home zone: the component reads the entity's _config, which
+                # Core builds from the core configuration, with no id, so there
+                # is no storage id.
+                "storage_id": None,
                 "config": {
                     "name": "Home",
                     "latitude": 41.0,
                     "longitude": -75.0,
                     "radius": 100,
+                    "icon": "mdi:home",
                     "passive": False,
-                    "editable": False,
                 },
             },
         ],
@@ -110,10 +124,15 @@ class RoutingClient:
         self.list_calls = 0
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        self.list_calls += 1
         if msg.get("type") == "zone/list":
+            self.list_calls += 1
             return {"success": True, "result": [dict(_LEGACY_STORAGE_ZONE)]}
+        if msg.get("type") == "config/entity_registry/list":
+            return {"success": True, "result": [_WORK_REGISTRY_ENTRY]}
         return {"success": False, "error": "unexpected list type"}
+
+    async def get_states(self) -> list[dict[str, Any]]:
+        return []
 
 
 def _build_get_zone(client: Any) -> Any:
@@ -189,8 +208,8 @@ async def test_component_fast_path_lists_yaml_and_storage_zones() -> None:
 
 
 @pytest.mark.asyncio
-async def test_storage_zone_byte_identical_plus_discriminator() -> None:
-    """A storage zone keeps its exact legacy body; only the discriminator is added."""
+async def test_storage_zone_row_matches_the_legacy_row() -> None:
+    """A storage zone reads the same through the component as without it."""
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
@@ -202,16 +221,12 @@ async def test_storage_zone_byte_identical_plus_discriminator() -> None:
         resp = await get_zone()
 
     work = next(z for z in resp["zones"] if z.get("id") == "work")
-    assert work["editable"] is True
-    assert work["source"] == "storage"
-    # Stripping the additive discriminator leaves the legacy zone/list body.
-    stripped = {k: v for k, v in work.items() if k not in ("editable", "source")}
-    assert stripped == _LEGACY_STORAGE_ZONE
+    assert work == _LEGACY_STORAGE_ROW
 
 
 @pytest.mark.asyncio
 async def test_yaml_home_zone_additive_row_with_discriminator() -> None:
-    """The YAML home zone appears as an additive, non-editable row."""
+    """The home zone appears as an additive, non-editable row."""
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
@@ -228,6 +243,34 @@ async def test_yaml_home_zone_additive_row_with_discriminator() -> None:
     assert home["latitude"] == 41.0
     # YAML zones carry the object_id so they remain fetchable by zone_id.
     assert home["id"] == "home"
+
+
+@pytest.mark.asyncio
+async def test_yaml_zone_from_state_attributes_is_not_stored() -> None:
+    """Without a ``_config`` the component sends the state attributes and fills
+    the storage id in; Core's ``editable: False`` then marks the YAML zone."""
+    result = _component_zone_result()
+    result["helpers"].append(
+        {
+            "helper_type": "zone",
+            "kind": "collection",
+            "entity_id": "zone.school",
+            "object_id": "school",
+            "name": "School",
+            "storage_id": "school",
+            "config": {"latitude": 1.0, "longitude": 2.0, "editable": False},
+        }
+    )
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
+    )
+    get_zone = _build_get_zone(RoutingClient())
+
+    with patch_ws(ws, tools_zones):
+        resp = await get_zone()
+
+    school = next(z for z in resp["zones"] if z.get("entity_id") == "zone.school")
+    assert school["source"] == "yaml"
 
 
 @pytest.mark.asyncio
@@ -269,7 +312,7 @@ async def test_get_missing_zone_raises_not_found() -> None:
 
 @pytest.mark.asyncio
 async def test_capsless_component_pins_legacy_path() -> None:
-    """Old component (info unknown_command) → legacy path, only storage zones."""
+    """Old component (info unknown_command) → legacy path (zone/list + registry + states)."""
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_exc=HomeAssistantCommandError(
@@ -284,7 +327,7 @@ async def test_capsless_component_pins_legacy_path() -> None:
 
     assert resp["success"] is True
     assert resp["count"] == 1
-    assert resp["zones"] == [dict(_LEGACY_STORAGE_ZONE)]
+    assert resp["zones"] == [_LEGACY_STORAGE_ROW]
     assert client.list_calls == 1
     # The component listing command must never be attempted without the capability.
     assert not _zone_calls(ws)
