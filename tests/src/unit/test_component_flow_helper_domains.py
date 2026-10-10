@@ -86,8 +86,9 @@ def test_search_indexes_only_the_helpers_core_lists(domain: str, listed: bool) -
 async def test_custom_helper_integrations_reach_listing_and_search(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, prep: str, msg: dict
 ) -> None:
-    """Both commands take Core's helper flows, custom helper integrations
-    included, and withhold only the custom-only domains' options."""
+    """Both commands' pre-steps take Core's helper flows, custom helper
+    integrations included, and mark only the custom-only domains for withheld
+    options."""
     loader = _loader(monkeypatch, {"template", "my_helper"})
     hass = _hass(tmp_path)
     extra = await getattr(wsapi, prep)(hass, msg)

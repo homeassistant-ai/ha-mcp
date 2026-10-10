@@ -212,7 +212,8 @@ def _core_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
     flows in their async pre-steps. The loader is a ``MagicMock`` stub in unit
     tests, which cannot be awaited, so this answers with the ``FLOWS["helper"]``
     stub above, i.e. no custom helper integrations. It does nothing until the
-    component is loaded; a test that loads it later fails loudly on that await.
+    component is loaded; in a test that loads it later the await fails and the
+    pre-step degrades to Core's built-in list with ``helper_flows_degraded``.
     A test that needs custom helper integrations patches the name again.
     """
     from unittest.mock import AsyncMock

@@ -171,6 +171,7 @@ def test_looping_editor_cannot_consume_later_cards_budget():
         # budget, and the card budget is restored afterwards, so later cards keep
         # theirs.
         assert cc._EDITOR_SECONDS in limits
+        assert min(limits) < cc._CALL_SECONDS
         assert all(
             limit <= cc._EDITOR_SECONDS for limit in limits if limit != cc._CALL_SECONDS
         )

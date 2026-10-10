@@ -78,4 +78,23 @@ async def test_a_refused_restore_is_not_found_with_the_handlers_guidance(
     error = json.loads(str(exc_info.value))["error"]
     assert error["code"] == "RESOURCE_NOT_FOUND"
     suggestions = error.get("suggestions") or [error["suggestion"]]
-    assert [s[: len(e)] for s, e in zip(suggestions, expected, strict=True)] == expected
+    assert len(suggestions) == len(expected)
+    for suggestion, prefix in zip(suggestions, expected, strict=True):
+        assert suggestion.startswith(prefix)
+
+
+@pytest.mark.asyncio
+async def test_a_refused_restore_without_handler_guidance_gets_the_generic_hint() -> (
+    None
+):
+    mgr = MagicMock()
+    mgr.restore_snapshot = AsyncMock(
+        side_effect=bm.BackupRestoreError("refused", reason="restore_refused")
+    )
+    with pytest.raises(ToolError) as exc_info:
+        await backup_tool._edits_restore(mgr, "edits", "restore", "b.yaml")
+    error = json.loads(str(exc_info.value))["error"]
+    suggestions = error.get("suggestions") or [error["suggestion"]]
+    assert suggestions == [
+        "Inspect the current configuration and restore outcome before retrying"
+    ]

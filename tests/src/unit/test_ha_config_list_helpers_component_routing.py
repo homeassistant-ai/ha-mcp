@@ -32,6 +32,7 @@ fetch so a test can assert it never ran on the component path.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -840,6 +841,34 @@ async def test_all_types_reads_the_helper_flows_afresh(
 
 
 @pytest.mark.asyncio
+async def test_all_types_with_an_unreadable_helper_flow_list_is_a_structured_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fresh helper-flow read that checks the component's coverage fails:
+    a structured connection error, not a raw exception or a partial listing."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(side_effect=HomeAssistantConnectionError("flow_handlers down")),
+    )
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_all_result(),
+    )
+    client = RoutingClient()
+    list_helpers = _build_list_helpers(client)
+
+    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
+        await list_helpers(helper_type="all")
+
+    payload = json.loads(str(excinfo.value))
+    assert payload["error"]["code"] == "CONNECTION_FAILED"
+    assert payload["helper_type"] == "all"
+    assert client.list_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_a_custom_helper_flow_left_out_by_a_failed_loader_read_names_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -860,6 +889,7 @@ async def test_a_custom_helper_flow_left_out_by_a_failed_loader_read_names_it(
 
     assert "SERVICE_CALL_FAILED" in str(excinfo.value)
     assert "loader" in str(excinfo.value)
+    assert "my_custom_helper" in str(excinfo.value)
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ refused instead of deleting that integration's config entry.
 """
 
 import json
+import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -245,8 +246,8 @@ async def test_entity_route_backs_up_the_resolved_helper_before_deleting(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """A helper removed by its entity_id gets one snapshot of the resolved
-    helper, taken before the delete."""
+    """A helper removed by its entity_id gets one snapshot attempt for the
+    resolved helper, made before the delete."""
     client = _client(registry_row)
     client.get_config_entry = AsyncMock(return_value={"domain": "otp"})
     taken: list[tuple[str, str, int]] = []
@@ -263,6 +264,101 @@ async def test_entity_route_backs_up_the_resolved_helper_before_deleting(
     )
     await _remove(client, registry_row["entity_id"])
     assert taken == [(*snapshot, 0)]
+
+
+@pytest.mark.parametrize(
+    ("platform", "record", "reason"),
+    [
+        ("otp", {"options": {}}, "has no stored options to back up or restore"),
+        (
+            "my_custom_helper",
+            {"options": None, "options_withheld": "custom_integration"},
+            "whose options the component withholds",
+        ),
+    ],
+    ids=["otp", "custom_only"],
+)
+async def test_a_helper_whose_options_are_not_backed_up_is_removed_with_the_reason(
+    platform: str,
+    record: dict[str, Any],
+    reason: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Through the real capture: the by-design skip lets the delete run, tells
+    the caller why no backup was taken, and is not logged as a fetch failure."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=frozenset({*_HELPER_FLOW_DOMAINS, "my_custom_helper"})),
+    )
+    row = {"entity_id": "sensor.h", "platform": platform, "config_entry_id": "e"}
+    client = _client(row)
+
+    async def fake_ws_send(_client: Any, message: dict[str, Any]) -> Any:
+        if message["type"] == "config/entity_registry/list":
+            return [row]
+        assert message["type"] == "ha_mcp_tools/helpers_list"
+        return {
+            "covered_types": [platform],
+            "helpers": [
+                {"kind": "flow", "helper_type": platform, "entry_id": "e"} | record
+            ],
+        }
+
+    monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
+    monkeypatch.setattr(
+        auto_backup,
+        "get_global_settings",
+        lambda: SimpleNamespace(enable_auto_backup=True, auto_backup_dir=str(tmp_path)),
+    )
+    with caplog.at_level(logging.INFO, logger=bm.logger.name):
+        result = await _remove(client, "sensor.h")
+    client.delete_config_entry.assert_awaited_once_with("e")
+    [warning] = result["warnings"]
+    assert warning.startswith(f"No pre-write backup of helper_{platform}:e was taken")
+    assert reason in warning
+    backup_logs = [r for r in caplog.records if r.name == bm.logger.name]
+    assert [r.levelno for r in backup_logs] == [logging.INFO]
+    assert reason in backup_logs[0].getMessage()
+
+
+async def test_a_custom_helper_named_by_type_is_snapshotted_once_before_deleting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """An explicit custom helper_type is a flow type: the outer capture leaves
+    it to the flow path, which snapshots the resolved entry once."""
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=frozenset({*_HELPER_FLOW_DOMAINS, "my_custom_helper"})),
+    )
+    client = _client(
+        {
+            "entity_id": "sensor.h",
+            "platform": "my_custom_helper",
+            "config_entry_id": "e",
+        }
+    )
+    taken: list[tuple[str, str, int]] = []
+
+    async def record(_mgr: Any, domain: str, entity_id: str, **_: Any) -> None:
+        taken.append((domain, entity_id, client.delete_config_entry.await_count))
+
+    monkeypatch.setattr(bm.BackupManager, "maybe_snapshot", record)
+    monkeypatch.setattr(
+        auto_backup,
+        "get_global_settings",
+        lambda: SimpleNamespace(enable_auto_backup=True, auto_backup_dir=str(tmp_path)),
+    )
+    result: dict[str, Any] = await IntegrationTools(
+        client
+    ).ha_remove_helpers_integrations(
+        target="sensor.h", helper_type="my_custom_helper", confirm=True, wait=False
+    )
+    assert result["success"] is True
+    assert taken == [("helper_my_custom_helper", "e", 0)]
 
 
 async def test_entity_without_a_registry_entry_is_not_reported_missing() -> None:
