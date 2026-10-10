@@ -47,7 +47,9 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.webhook import async_register, async_unregister
 from homeassistant.core import HomeAssistant
+from homeassistant.util.aiohttp import MockRequest
 
+from .cloudhook import OAUTH_UNAVAILABLE, buffered_response
 from .const import (
     DATA_WEBHOOK,
     DATA_WEBHOOK_ID,
@@ -124,6 +126,7 @@ _ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream", "text/plain")
 # long-lived streams fails a new request in 30 s instead of hanging it forever.
 _CLIENT_TIMEOUT = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
 
+
 # The in-process server closes an idle keep-alive connection after 5 s
 # (``const.SERVER_KEEPALIVE_SECONDS``); aiohttp pools one for 15 s. A
 # request sent as the server closes a pooled connection fails with a connection
@@ -160,7 +163,9 @@ def _build_base_url(request: web.Request) -> str:
     hardening.
     """
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "")
-    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    scheme = request.headers.get(
+        "X-Forwarded-Proto", getattr(request, "scheme", "https")
+    )
     return f"{scheme}://{host}"
 
 
@@ -549,13 +554,20 @@ def _register_metadata_views(hass: HomeAssistant) -> None:
     hass.data[_OAUTH_VIEWS_REGISTERED_KEY] = True
 
 
-def _build_unauthorized_response(request: web.Request, webhook_id: str) -> web.Response:
+def _build_unauthorized_response(
+    request: web.Request, cfg: dict[str, Any]
+) -> web.Response:
     """Build the 401 + ``WWW-Authenticate`` challenge MCP clients use to discover.
 
     Per RFC 9728 §5.1 / MCP 2026-07-28 Authorization Server Discovery, the
     ``resource_metadata`` parameter points to the protected-resource metadata
-    URL where the client finds the authorization server.
+    URL where the client finds the authorization server. Home Assistant Cloud
+    relays only ``Content-Type`` back from a cloudhook, so the challenge can
+    never reach that client and sign-in cannot start: say so instead (#2696).
     """
+    webhook_id = cfg["webhook_id"]
+    if isinstance(request, MockRequest):
+        return web.Response(status=400, text=OAUTH_UNAVAILABLE)
     base = _build_base_url(request)
     # RFC 9728 §3.1 path-scoped location. The pointer names the id, but this
     # 401 is only produced on a request TO /api/webhook/<id>, so the caller
@@ -564,7 +576,7 @@ def _build_unauthorized_response(request: web.Request, webhook_id: str) -> web.R
     metadata_url = (
         f"{base}/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
     )
-    if request.path == f"/api/webhook/{webhook_id}/readonly":
+    if getattr(request, "path", "") == f"/api/webhook/{webhook_id}/readonly":
         metadata_url += "/readonly"
     return web.Response(
         status=401,
@@ -598,10 +610,10 @@ async def _check_webhook_auth(
     if resource_server is not None and not await resource_server.validate_request(
         request
     ):
-        return _build_unauthorized_response(request, cfg["webhook_id"])
+        return _build_unauthorized_response(request, cfg)
     oauth_provider: LegacyOAuthProvider | None = cfg.get("oauth_provider")
     if oauth_provider is not None and not oauth_provider.validate_bearer(request):
-        return _build_unauthorized_response(request, cfg["webhook_id"])
+        return _build_unauthorized_response(request, cfg)
     return None
 
 
@@ -627,7 +639,10 @@ async def _async_handle_webhook(
     )
     session: aiohttp.ClientSession = cfg["session"]
 
-    body = await request.read()
+    # A cloudhook (#2696) arrives as ``MockRequest``: no ``read()``, no transport,
+    # and the relay returns only ``response.body`` — so buffer, never stream.
+    cloudhook = isinstance(request, MockRequest)
+    body = await (request.content.read() if cloudhook else request.read())
 
     forward_headers = {
         key: value
@@ -652,7 +667,7 @@ async def _async_handle_webhook(
             if mcp_session:
                 resp_headers["Mcp-Session-Id"] = mcp_session
 
-            if "text/event-stream" in content_type:
+            if "text/event-stream" in content_type and not cloudhook:
                 # SSE streaming: prevent HA's compression middleware from
                 # buffering/breaking the stream (supervisor#6470).
                 resp_headers["Content-Type"] = "text/event-stream"
@@ -686,10 +701,7 @@ async def _async_handle_webhook(
             if not any(ct in content_type for ct in _ALLOWED_CONTENT_TYPES):
                 content_type = "application/json"
             resp_headers["Content-Type"] = content_type
-            resp_body = await upstream_resp.read()
-            return web.Response(
-                status=upstream_resp.status, body=resp_body, headers=resp_headers
-            )
+            return await buffered_response(cloudhook, upstream_resp, resp_headers)
     except aiohttp.ClientError as err:
         _LOGGER.error("MCP webhook: upstream request failed: %s", err)
         return web.Response(status=502, text="MCP server unavailable")

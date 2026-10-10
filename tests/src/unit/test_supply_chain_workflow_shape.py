@@ -250,6 +250,9 @@ def _tracked_dockerfiles() -> set[Path]:
     return {_REPO_ROOT / rel for rel in listing.stdout.split("\0") if rel}
 
 
+_PYTHON_IMAGE_MIRROR = "public.ecr.aws/docker/library/python"
+
+
 def test_python_runtime_automation_is_digest_only() -> None:
     config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
     package_rules = config["packageRules"]
@@ -259,6 +262,12 @@ def test_python_runtime_automation_is_digest_only() -> None:
         if "dockerfile" in rule.get("matchManagers", [])
         and "python" in rule.get("matchPackageNames", [])
     ]
+    # The runtime is pulled from the ECR Public mirror of the Docker Hub
+    # official image (same digests, no anonymous rate limit); Renovate tracks
+    # it under that name.
+    assert all(
+        _PYTHON_IMAGE_MIRROR in rule["matchPackageNames"] for rule in python_rules
+    )
 
     version_rule = next(
         rule
@@ -278,7 +287,8 @@ def test_python_runtime_automation_is_digest_only() -> None:
     python_dockerfiles = {
         path.relative_to(_REPO_ROOT).as_posix()
         for path in _tracked_dockerfiles()
-        if "FROM python:" in path.read_text(encoding="utf-8")
+        if f"FROM {_PYTHON_IMAGE_MIRROR}:" in path.read_text(encoding="utf-8")
+        or "FROM python:" in path.read_text(encoding="utf-8")
     }
     assert python_dockerfiles - set(proxy_rule["matchFileNames"]) == {
         "Dockerfile",

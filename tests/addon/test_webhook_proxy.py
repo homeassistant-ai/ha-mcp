@@ -269,15 +269,10 @@ def _import_mcp_proxy(preload_oauth=None):
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     init_path = os.path.join(component_dir, "__init__.py")
     mod_name = f"mcp_proxy_init_{CURRENT['key']}"
-    for suffix in (
-        "",
-        ".oauth",
-        ".oauth_autoapprove",
-        ".oauth_dcr",
-        ".oauth_indirect",
-        ".readonly_webhook",
-    ):
-        sys.modules.pop(f"{mod_name}{suffix}", None)
+    for name in [
+        m for m in sys.modules if m == mod_name or m.startswith(f"{mod_name}.")
+    ]:
+        sys.modules.pop(name)
     spec = importlib.util.spec_from_file_location(
         mod_name,
         init_path,
