@@ -68,8 +68,10 @@ def _build_zone_result(
             response["warnings"] = list(gaps)
         return response
 
-    zone = next(
-        (z for z in zones if zone_id in (z.get("id"), z.get("entity_id"))), None
+    # A stored zone named "Home" has the id "home", like the home zone's row.
+    matches = [z for z in zones if zone_id in (z.get("id"), z.get("entity_id"))]
+    zone = next((z for z in matches if z.get("editable")), None) or next(
+        iter(matches), None
     )
     if zone is None and gaps:
         raise_tool_error(
@@ -368,7 +370,15 @@ class ZoneTools:
             if exc.status_code == 404:
                 return None
             raise
-        return state if isinstance(state, dict) and state else None
+        if not isinstance(state, dict) or not state:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Could not read the state of {entity_id}",
+                    context={"entity_id": entity_id},
+                )
+            )
+        return state
 
     async def _resolve_zone(self, zone_id: str) -> tuple[str, str]:
         """The entity_id and storage zone_id of a stored zone, given either.
