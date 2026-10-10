@@ -27,6 +27,7 @@ import anyio
 # it in place (#2135/#2146). The private copy is immune, and CI tests
 # exactly the version production runs.
 from .._vendor import websockets
+from .._vendor.websockets.exceptions import ConnectionClosed
 from ..config import get_global_settings
 from .rest_client import (
     HomeAssistantAuthError,
@@ -580,7 +581,7 @@ class HomeAssistantWebSocketClient:
                     logger.error(f"Invalid JSON received: {e}")
                 except Exception as e:  # noqa: BLE001
                     logger.error(f"Error processing message: {e}")
-        except websockets.exceptions.ConnectionClosed as e:
+        except ConnectionClosed as e:
             # Prefer the frame we received (the peer closed on us); fall
             # back to the frame we sent (we failed the connection
             # ourselves, e.g. an over-max_size frame produces a sent
@@ -1025,16 +1026,14 @@ class HomeAssistantWebSocketClient:
 
         Exception policy (narrow, distinct log levels — Gemini #1382):
 
-        - Transport-level loss (``OSError``): subscription is implicitly
-          gone with the connection. Logged at ``debug`` so HA-mid-restart
-          cleanup doesn't spam warnings.
+        - Transport-level loss (socket closed during the send or before the
+          answer): the subscription went with the connection. Logged at
+          ``debug`` so HA-mid-restart cleanup doesn't spam warnings.
         - HA-side rejection (``HomeAssistantCommandError``, e.g. "Subscription
-          not found" after a server-side reset): unexpected during normal
-          cleanup. Logged at ``warning`` so a real subscription leak is
-          discoverable.
-        - Everything else: propagates to the caller's ``finally`` so a
-          programming bug (TypeError, AttributeError) fails loudly instead
-          of being buried under a broad ``except``.
+          not found" after a server-side reset): logged at ``warning`` so a
+          real subscription leak is discoverable.
+        - Everything else, a timeout or a programming bug (TypeError),
+          propagates to the caller's ``finally`` instead of a broad ``except``.
         """
         if not self._state.is_ready:
             logger.debug(
@@ -1044,7 +1043,7 @@ class HomeAssistantWebSocketClient:
             return
         try:
             await self.send_command("unsubscribe_events", subscription=subscription_id)
-        except OSError as e:
+        except (OSError, ConnectionClosed, HomeAssistantConnectionError) as e:
             logger.debug(
                 "unsubscribe_events(%s): transport lost during cleanup: %s",
                 subscription_id,
@@ -1308,7 +1307,7 @@ class HomeAssistantWebSocketClient:
             (
                 HomeAssistantConnectionError,
                 HomeAssistantCommandTimeout,
-                websockets.exceptions.ConnectionClosed,
+                ConnectionClosed,
             ),
         ):
             logger.debug("Background subscription release failed: %s", error)
@@ -1354,7 +1353,7 @@ class HomeAssistantWebSocketClient:
             return
         try:
             await self.send_command(unsubscribe_type, subscription=subscription_id)
-        except OSError as e:
+        except (OSError, ConnectionClosed, HomeAssistantConnectionError) as e:
             logger.debug(
                 "unsubscribe_command(%s): transport lost during cleanup: %s",
                 subscription_id,

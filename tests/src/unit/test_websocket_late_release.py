@@ -1,4 +1,9 @@
-"""Background subscription cleanup must collect failures on its original socket."""
+"""Subscription cleanup must survive the connection going away under it.
+
+Background cleanup collects failures on its original socket; a direct
+``unsubscribe_events`` / ``unsubscribe_command`` treats a socket closed during
+the send or before the answer as the transport loss it is.
+"""
 
 import asyncio
 import gc
@@ -131,3 +136,39 @@ async def test_background_release_collects_outcome(  # noqa: PLR0915
             assert not errors
     finally:
         loop.set_exception_handler(previous_handler)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", ["during_send", "before_ack"])
+@pytest.mark.parametrize("method", ["unsubscribe_events", "unsubscribe_command"])
+async def test_unsubscribe_treats_a_closed_socket_as_transport_loss(
+    method: str, closed: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The subscription went with the connection.
+
+    ``send_command`` re-raises a ``ConnectionClosed`` from ``send`` unchanged;
+    out of a waiter's cleanup it replaced the result the wait already had, e.g.
+    turned a confirmed removal into a failed check. A socket closing before the
+    answer fails the pending future with a connection error, which replaced
+    the repository the HACS registration wait had found.
+    """
+    client = HomeAssistantWebSocketClient("http://ha.local:8123", "test-token")
+    client._state.mark_connected()
+    client._state.mark_authenticated()
+
+    async def send(_payload: str) -> None:
+        if closed == "during_send":
+            raise ConnectionClosed(None, None)
+        # Sent, then the socket closes before Home Assistant's answer arrives.
+        client._state.mark_disconnected("closed before the ack")
+
+    client.websocket = AsyncMock(send=send)
+    caplog.set_level(logging.DEBUG, logger="ha_mcp.client.websocket_client")
+
+    await getattr(client, method)(7)
+
+    assert [
+        record.levelno
+        for record in caplog.records
+        if f"{method}(7)" in record.getMessage()
+    ] == [logging.DEBUG]

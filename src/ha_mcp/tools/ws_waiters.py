@@ -10,6 +10,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from .._vendor.websockets.exceptions import ConnectionClosed
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -175,6 +176,8 @@ async def _ws_subscribe_all(
             HomeAssistantCommandError,
             OSError,
             TimeoutError,
+            # subscribe_events re-raises a socket closed under its send as is.
+            ConnectionClosed,
         ) as e:
             logger.debug(
                 "subscribe_events(%s) failed during %s for %s: %s — falling back to REST polling",
