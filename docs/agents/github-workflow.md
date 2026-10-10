@@ -226,9 +226,11 @@ that target `master`; HAOS E2E and a few path-filtered
 workflows run for any base. Open a stacked pull request against `master` and
 say in its body which pull request must merge first.
 
-Before declaring the pull request ready, verify the current head, live-testing
+Before recommending merge, verify the current head, applicable live-testing
 evidence, the complete required-check state, and the review-thread state. Post
 an implementation summary only when the pull request actually reaches that state.
+A PR may be marked ready for review before the reviewer completes live testing;
+missing required live-testing evidence blocks merging, not requesting review.
 
 ## CI/CD workflows
 

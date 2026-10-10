@@ -102,7 +102,7 @@ Testing behavior belongs in this root because it applies to every code change:
 - New MCP tools need E2E coverage. Any existing tool without tests gains E2E coverage even when it is not otherwise part of the current pull request. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
 - Refactors with strong existing coverage, documentation-only changes, minor parameters on well-tested tools, and utilities whose behaviour an existing test already asserts may not need a new test; assess live testing separately.
 - Run the smallest relevant tests after changes; follow the [test rules](tests/AGENTS.md) and [commands](docs/agents/development.md#test-commands).
-- Check E2E prerequisites, resources, and user permissions first. If local execution is unsuitable, run the tests on GitHub Actions against a branch in the user's fork.
+- Before E2E, ask the user to choose local execution or a GitHub runner on a fork branch, unless already chosen; check prerequisites and resources in that environment.
 - Claim full-suite success only after running it; a focused file is partial evidence.
 - Fix unrelated CI test failures, even when time-consuming, under the Boy Scout scope rules below.
 - Match verification to risk: documentation-only work needs structural checks (links, generated-file drift, size, workflow syntax), not unrelated application E2E.
