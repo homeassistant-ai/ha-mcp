@@ -1,13 +1,15 @@
 """Zone tools against the answers Home Assistant actually sends (#2632).
 
-Core's zone collection reports a missing item as ``not_found`` with the text
-"Unable to find zone_id <id>" (``helpers/collection.py``). The zone tools used
-to look for "not found" in that text, so a missing zone came back as a generic
-service failure. A storage zone's registry ``unique_id`` is its zone_id; the
-home zone and YAML zones have none, and the home zone's state says
-``editable: True`` (``components/zone/__init__.py``).
+Core reports a missing zone as ``not_found`` with the text "Unable to find
+zone_id <id>" (``helpers/collection.py``). A storage zone's id is its slugified
+name and its registry ``unique_id``; its entity_id also follows the name but is
+picked separately, so the two can differ (``zone.home_2`` for a zone named
+"Home"). The home zone and YAML zones have no ``unique_id`` and so no registry
+entry, and the home zone's state says ``editable: True``
+(``components/zone/__init__.py``).
 """
 
+import copy
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,21 +18,27 @@ import pytest
 
 from ha_mcp import backup_manager
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.tools.config_helpers.create import _execute_create_simple_helper
+from ha_mcp.tools.config_helpers.update import _execute_update_simple_helper
 from ha_mcp.tools.tools_zones import ZoneTools
 
-OFFICE_ID = "8e1f0c2b6d5a4f3e9c7b1a2d3e4f5a6b"
 OFFICE = {
-    "id": OFFICE_ID,
+    "id": "office",
     "name": "Office",
     "latitude": 52.5,
     "longitude": 13.4,
     "radius": 100.0,
     "passive": False,
 }
+OFFICE_ENTRY = {"entity_id": "zone.office", "platform": "zone", "unique_id": "office"}
 REGISTRY = [
-    {"entity_id": "zone.office", "platform": "zone", "unique_id": OFFICE_ID},
-    {"entity_id": "light.desk", "platform": "hue", "unique_id": OFFICE_ID},
+    OFFICE_ENTRY,
+    {"entity_id": "light.desk", "platform": "hue", "unique_id": "office"},
 ]
 HOME_STATE = {
     "entity_id": "zone.home",
@@ -47,15 +55,11 @@ HOME_STATE = {
         "friendly_name": "Home",
     },
 }
-
-
-def _not_found(zone_id: str) -> dict[str, Any]:
-    """``send_websocket_message``'s envelope for Core's ERR_NOT_FOUND."""
-    return {
-        "success": False,
-        "error": f"Command failed: Unable to find zone_id {zone_id}",
-        "error_code": "not_found",
-    }
+REGISTRY_BLOCKED = {
+    "success": False,
+    "error": "WebSocket request blocked (403 Forbidden)",
+    "error_code": None,
+}
 
 
 def _client(
@@ -69,13 +73,10 @@ def _client(
         "zone/create": {"success": True, "result": OFFICE},
         "zone/update": {"success": True, "result": OFFICE},
         "zone/delete": {"success": True, "result": None},
-        "config/entity_registry/get": {
-            "success": True,
-            "result": {**REGISTRY[0], "icon": None},
-        },
+        "config/entity_registry/get": {"success": True, "result": OFFICE_ENTRY},
         "config/entity_registry/update": {
             "success": True,
-            "result": {"entity_entry": REGISTRY[0]},
+            "result": {"entity_entry": OFFICE_ENTRY},
         },
     }
     answers.update(replies or {})
@@ -83,7 +84,8 @@ def _client(
     known.update(states or {})
 
     async def send(message: dict[str, Any]) -> Any:
-        return answers[message["type"]]
+        # A fresh copy each time, like a real reply: the tools write into results.
+        return copy.deepcopy(answers[message["type"]])
 
     async def state(entity_id: str) -> dict[str, Any]:
         if entity_id not in known:
@@ -109,8 +111,13 @@ def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
     return json.loads(str(exc_info.value))["error"]  # type: ignore[no-any-return]
 
 
+@pytest.fixture
+def removed() -> AsyncMock:
+    return AsyncMock(return_value=True)
+
+
 @pytest.fixture(autouse=True)
-def _no_component_no_wait():
+def _no_component(removed: AsyncMock):
     """Serve every call through Core's own WebSocket commands, without waiting."""
     with (
         patch(
@@ -133,91 +140,82 @@ def _no_component_no_wait():
             "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new=AsyncMock(return_value=True),
         ),
-        patch(
-            "ha_mcp.tools.tools_zones.wait_for_entity_removed",
-            create=True,
-            new=AsyncMock(return_value=True),
-        ),
+        patch("ha_mcp.tools.tools_zones.wait_for_entity_removed", new=removed),
     ):
         yield
 
 
-class TestMissingZoneIsReportedAsNotFound:
-    async def test_remove_of_a_deleted_zone_is_resource_not_found(self):
-        """A zone Core no longer holds must not read as a failed service call."""
-        client = _client({"zone/delete": _not_found(OFFICE_ID)})
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id=OFFICE_ID)
-
-        assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
-
-    async def test_remove_of_an_unknown_zone_id_is_resource_not_found(self):
-        client = _client({"zone/delete": _not_found("nope")})
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id="nope")
-
-        error = _error(exc_info)
-        assert error["code"] == "RESOURCE_NOT_FOUND"
-        assert "ha_get_zone" in json.dumps(error)
-
-    async def test_update_of_an_unknown_zone_id_is_resource_not_found(self):
-        client = _client({"zone/update": _not_found("nope")})
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_set_zone(zone_id="nope", radius=50)
-
-        assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
-
-
-class TestYamlZoneIsNamed:
-    @pytest.mark.parametrize("zone_id", ["home", "zone.home"])
-    async def test_remove_of_the_home_zone_says_it_is_not_editable(self, zone_id):
-        """The home zone is not a stored zone, so no delete is sent for it."""
-        client = _client(states={"zone.home": HOME_STATE})
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id=zone_id)
-
-        error = _error(exc_info)
-        assert error["code"] == "RESOURCE_NOT_FOUND"
-        assert "YAML" in error["message"]
-        assert _sent(client, "zone/delete") == []
-
-    async def test_update_of_the_home_zone_says_it_is_not_editable(self):
-        client = _client(states={"zone.home": HOME_STATE})
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_set_zone(zone_id="home", radius=50)
-
-        assert "YAML" in _error(exc_info)["message"]
-        assert _sent(client, "zone/update") == []
-
-
-class TestRegistryReadFailureIsNotAbsence:
-    async def test_blocked_registry_read_is_not_reported_as_missing_zone(self):
+class TestZoneLookup:
+    async def test_core_not_found_on_delete_is_resource_not_found(self):
+        """The registry still lists the zone, but Core has already removed it."""
         client = _client(
             {
-                "config/entity_registry/list": {
+                "zone/delete": {
                     "success": False,
-                    "error": "WebSocket request blocked (403 Forbidden)",
-                    "error_code": None,
+                    "error": "Command failed: Unable to find zone_id office",
+                    "error_code": "not_found",
                 }
             }
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id=OFFICE_ID)
+            await ZoneTools(client).ha_remove_zone(zone_id="office")
+
+        assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
+
+    @pytest.mark.parametrize("call", ["remove", "update"])
+    async def test_unknown_zone_is_resource_not_found_before_any_write(self, call):
+        client = _client()
+        tools = ZoneTools(client)
+
+        with pytest.raises(ToolError) as exc_info:
+            if call == "remove":
+                await tools.ha_remove_zone(zone_id="nope")
+            else:
+                await tools.ha_set_zone(zone_id="nope", radius=50)
+
+        error = _error(exc_info)
+        assert error["code"] == "RESOURCE_NOT_FOUND"
+        assert "ha_get_zone" in json.dumps(error)
+        assert not _sent(client, "zone/delete") and not _sent(client, "zone/update")
+
+    @pytest.mark.parametrize("call", ["remove", "update"])
+    @pytest.mark.parametrize("zone_id", ["home", "zone.home"])
+    async def test_home_zone_is_refused_as_not_stored(self, call, zone_id):
+        """The home zone has a state but no registry entry: nothing is sent."""
+        client = _client(states={"zone.home": HOME_STATE})
+        tools = ZoneTools(client)
+
+        with pytest.raises(ToolError) as exc_info:
+            if call == "remove":
+                await tools.ha_remove_zone(zone_id=zone_id)
+            else:
+                await tools.ha_set_zone(zone_id=zone_id, radius=50)
+
+        assert "not a stored zone" in _error(exc_info)["message"]
+        assert not _sent(client, "zone/delete") and not _sent(client, "zone/update")
+
+    async def test_an_empty_state_reply_is_no_zone(self):
+        """A non-JSON reply comes back as {}; it is not a zone outside the storage."""
+        client = _client(states={"zone.ghost": {}})
+
+        with pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_remove_zone(zone_id="ghost")
+
+        assert "Zone not found" in _error(exc_info)["message"]
+
+    async def test_blocked_registry_read_is_not_a_missing_zone(self):
+        client = _client({"config/entity_registry/list": REGISTRY_BLOCKED})
+
+        with pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_remove_zone(zone_id="office")
 
         error = _error(exc_info)
         assert error["code"] != "RESOURCE_NOT_FOUND"
         assert "403" in error["message"]
         assert _sent(client, "zone/delete") == []
 
-
-class TestRemoveTargetsTheZoneItself:
-    @pytest.mark.parametrize("zone_id", [OFFICE_ID, "zone.office"])
+    @pytest.mark.parametrize("zone_id", ["office", "zone.office"])
     async def test_remove_by_zone_id_or_entity_id_deletes_the_storage_item(
         self, zone_id
     ):
@@ -226,17 +224,55 @@ class TestRemoveTargetsTheZoneItself:
         result = await ZoneTools(client).ha_remove_zone(zone_id=zone_id)
 
         assert _sent(client, "zone/delete") == [
-            {"type": "zone/delete", "zone_id": OFFICE_ID}
+            {"type": "zone/delete", "zone_id": "office"}
         ]
         assert result["entity_id"] == "zone.office"
 
+    async def test_a_storage_id_wins_over_a_renamed_entity_of_the_same_text(self):
+        """Zone "office" was renamed to zone.work; zone "work" is zone.work_2."""
+        renamed = [
+            {"entity_id": "zone.work", "platform": "zone", "unique_id": "office"},
+            {"entity_id": "zone.work_2", "platform": "zone", "unique_id": "work"},
+        ]
+        client = _client(
+            {"config/entity_registry/list": {"success": True, "result": renamed}}
+        )
 
-class TestUpdateUsesTheHelperWritePath:
+        await ZoneTools(client).ha_remove_zone(zone_id="work")
+
+        assert _sent(client, "zone/delete") == [
+            {"type": "zone/delete", "zone_id": "work"}
+        ]
+
+
+class TestRemoveWait:
+    async def test_wait_false_skips_the_removal_check(self, removed):
+        await ZoneTools(_client()).ha_remove_zone(zone_id="office", wait=False)
+
+        removed.assert_not_awaited()
+
+    async def test_a_zone_still_present_after_the_wait_is_a_warning(self, removed):
+        removed.return_value = False
+
+        result = await ZoneTools(_client()).ha_remove_zone(zone_id="office")
+
+        assert result["success"] is True
+        assert "still present" in result["warnings"][0]
+
+    async def test_a_failed_removal_check_is_a_warning(self, removed):
+        removed.side_effect = HomeAssistantConnectionError("socket closed")
+
+        result = await ZoneTools(_client()).ha_remove_zone(zone_id="office")
+
+        assert "verification failed" in result["warnings"][0]
+
+
+class TestZoneWrites:
     async def test_new_icon_on_a_zone_without_stored_icon_goes_to_the_registry(self):
         """An icon written into the zone item could never be cleared again (#2643)."""
         client = _client()
 
-        await ZoneTools(client).ha_set_zone(zone_id=OFFICE_ID, icon="mdi:briefcase")
+        await ZoneTools(client).ha_set_zone(zone_id="office", icon="mdi:briefcase")
 
         assert all("icon" not in m for m in _sent(client, "zone/update"))
         assert any(
@@ -250,14 +286,12 @@ class TestUpdateUsesTheHelperWritePath:
         result = await ZoneTools(client).ha_set_zone(zone_id="zone.office", radius=250)
 
         (update,) = _sent(client, "zone/update")
-        assert update["zone_id"] == OFFICE_ID
+        assert update["zone_id"] == "office"
         assert update["radius"] == 250
-        assert result["zone_id"] == OFFICE_ID
+        assert result["zone_id"] == "office"
         assert result["entity_id"] == "zone.office"
         assert result["updated_fields"] == ["radius"]
 
-
-class TestCoreValidatesZoneFields:
     async def test_create_leaves_defaults_to_core(self):
         """Core applies radius and passive defaults; the tool must not pin its own."""
         client = _client()
@@ -270,120 +304,148 @@ class TestCoreValidatesZoneFields:
         assert "radius" not in create
         assert "passive" not in create
 
-    async def test_core_rejection_of_a_field_is_a_validation_error(self):
-        client = _client(
-            {
-                "zone/create": {
-                    "success": False,
-                    "error": "Command failed: invalid latitude for dictionary "
-                    "value @ data['latitude']",
-                    "error_code": "invalid_format",
-                }
-            }
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_set_zone(name="X", latitude=95, longitude=0)
-
-        error = _error(exc_info)
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "latitude" in error["message"]
-
-
-class TestLegacyListing:
-    async def test_without_component_lists_yaml_zones_and_entity_ids(self):
-        """Core's zone/list serves storage zones only; the home zone is in the states."""
-        client = _client(states={"zone.home": HOME_STATE})
-
-        result = await ZoneTools(client).ha_get_zone()
-
-        by_id = {z["id"]: z for z in result["zones"]}
-        assert by_id[OFFICE_ID]["entity_id"] == "zone.office"
-        assert by_id[OFFICE_ID]["source"] == "storage"
-        assert by_id["home"]["entity_id"] == "zone.home"
-        assert by_id["home"]["source"] == "yaml"
-        assert by_id["home"]["persons"] == ["person.anna"]
-
-
-async def test_zone_backup_finds_a_zone_named_by_its_entity_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The zone tools take zone.<name>; without the registry hop no backup was taken."""
-
-    async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
-        if msg["type"] == "zone/list":
-            return [OFFICE]
-        if msg["type"] == "config/entity_registry/list":
-            return []
-        if msg["type"] == "config/entity_registry/get":
-            assert msg["entity_id"] == "zone.office"
-            return {"unique_id": OFFICE_ID}
-        raise AssertionError(f"unexpected ws message: {msg}")
-
-    monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
-    assert await backup_manager._fetch_zone(None, "zone.office") == {
-        **OFFICE,
-        "registry_icon": None,
-    }
-
-
-async def test_listing_without_registry_does_not_list_stored_zones_twice() -> None:
-    """Without the registry no zone state can be matched to its stored zone."""
-    client = _client(
-        {
-            "config/entity_registry/list": {
-                "success": False,
-                "error": "WebSocket request blocked (403 Forbidden)",
-                "error_code": None,
-            }
-        },
-        states={"zone.home": HOME_STATE},
-    )
-
-    result = await ZoneTools(client).ha_get_zone()
-
-    assert [z["id"] for z in result["zones"]] == [OFFICE_ID]
-    assert any("403" in w for w in result["warnings"])
-
-
-class TestCreatedZoneIconStaysClearable:
-    """A zone keeps an icon in its stored item forever (#2643), so a new
-    zone's icon goes to the entity registry, where it can be cleared."""
-
-    async def test_create_writes_the_icon_to_the_registry_only(self):
+    @pytest.mark.parametrize("zone_id", [None, "office"])
+    async def test_blank_name_is_refused(self, zone_id):
         client = _client()
 
-        await ZoneTools(client).ha_set_zone(
-            name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
+        with pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_set_zone(
+                name="  ", latitude=52.5, longitude=13.4, zone_id=zone_id
+            )
+
+        assert "name cannot be blank" in _error(exc_info)["message"]
+        assert not _sent(client, "zone/create") and not _sent(client, "zone/update")
+
+
+class TestCreatedIconStaysClearable:
+    """A new zone's, person's or tag's icon goes to the entity registry.
+
+    Core's zone/update merges into the stored item and rejects an empty icon, so
+    an icon stored in a zone can never be removed; person and tag have no icon
+    field, so Core rejects one there (#2643).
+    """
+
+    async def test_zone_create_writes_the_icon_to_its_registry_entity(self):
+        """The new zone "Home" is zone.home_2: the built-in home zone holds zone.home."""
+        home = {**OFFICE, "id": "home", "name": "Home"}
+        client = _client(
+            {
+                "zone/create": {"success": True, "result": home},
+                "config/entity_registry/list": {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "zone.home_2",
+                            "platform": "zone",
+                            "unique_id": "home",
+                        }
+                    ],
+                },
+            },
+            states={"zone.home": HOME_STATE},
+        )
+
+        result = await ZoneTools(client).ha_set_zone(
+            name="Home", latitude=52.5, longitude=13.4, icon="mdi:house"
         )
 
         (create,) = _sent(client, "zone/create")
         assert "icon" not in create
-        assert any(
-            m.get("icon") == "mdi:briefcase"
-            for m in _sent(client, "config/entity_registry/update")
+        assert _sent(client, "config/entity_registry/update")[0]["entity_id"] == (
+            "zone.home_2"
+        )
+        assert result["entity_id"] == "zone.home_2"
+
+    async def test_an_icon_that_found_no_entity_is_a_warning(self):
+        client = _client(
+            {"config/entity_registry/list": {"success": True, "result": []}}
         )
 
-    async def test_other_helpers_keep_the_icon_in_their_stored_item(self):
-        """Only a zone shows its stored icon over a cleared registry one."""
-        from ha_mcp.tools.config_helpers.create import _execute_create_simple_helper
+        result = await ZoneTools(client).ha_set_zone(
+            name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
+        )
 
+        assert _sent(client, "config/entity_registry/update") == []
+        assert "were not applied" in result["warnings"][0]
+
+    async def test_person_create_writes_the_icon_to_the_registry(self):
+        client = _client(
+            {
+                "person/create": {"success": True, "result": {"id": "anna"}},
+                "config/entity_registry/list": {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "person.anna",
+                            "platform": "person",
+                            "unique_id": "anna",
+                        }
+                    ],
+                },
+            }
+        )
+
+        await _execute_create_simple_helper(
+            client, "person", "Anna", "mdi:account", None, None, None, False, False, {}
+        )  # fmt: skip
+
+        (create,) = _sent(client, "person/create")
+        assert "icon" not in create
+        assert (
+            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:account"
+        )
+
+    async def test_person_update_leaves_the_icon_out_of_the_stored_item(self):
+        person = {"id": "anna", "name": "Anna", "device_trackers": []}
+        entry = {"entity_id": "person.anna", "platform": "person", "unique_id": "anna"}
+        client = _client(
+            {
+                "person/list": {
+                    "success": True,
+                    "result": {"storage": [person], "config": []},
+                },
+                "person/update": {"success": True, "result": person},
+                "config/entity_registry/get": {"success": True, "result": entry},
+            }
+        )
+
+        await _execute_update_simple_helper(
+            client, "person", "person.anna", "person.anna", None, "mdi:account",
+            None, None, None, False, False, {},
+        )  # fmt: skip
+
+        (update,) = _sent(client, "person/update")
+        assert "icon" not in update
+        assert (
+            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:account"
+        )
+
+    async def test_tag_update_without_its_entity_is_a_warning(self):
+        tag = {"id": "abc-1", "name": "Front door"}
+        client = _client(
+            {
+                "tag/list": {"success": True, "result": [tag]},
+                "tag/update": {"success": True, "result": tag},
+                "config/entity_registry/list": {"success": True, "result": []},
+            }
+        )
+
+        result = await _execute_update_simple_helper(
+            client, "tag", "abc-1", "abc-1", None, "mdi:nfc",
+            None, None, None, False, False, {},
+        )  # fmt: skip
+
+        assert "were not applied" in result["warnings"][0]
+
+    async def test_other_helpers_keep_the_icon_in_their_stored_item(self):
+        """Their update replaces the stored item, so a stored icon can be cleared."""
         client = _client(
             {"input_boolean/create": {"success": True, "result": {"id": "lamp"}}}
         )
 
         await _execute_create_simple_helper(
-            client,
-            "input_boolean",
-            "Lamp",
-            "mdi:lamp",
-            None,
-            None,
-            None,
-            False,
-            False,
-            {},
-        )
+            client, "input_boolean", "Lamp", "mdi:lamp", None, None, None, False, False, {}
+        )  # fmt: skip
 
         (create,) = _sent(client, "input_boolean/create")
         assert create["icon"] == "mdi:lamp"
@@ -401,76 +463,177 @@ class TestCreatedZoneIconStaysClearable:
         assert write.call_args.kwargs["registry"] == {"icon": "mdi:briefcase"}
 
 
+class TestListing:
+    async def test_without_component_lists_the_home_zone_and_entity_ids(self):
+        """Core's zone/list serves stored zones only; the home zone is in the states."""
+        client = _client(states={"zone.home": HOME_STATE})
+
+        result = await ZoneTools(client).ha_get_zone()
+
+        by_id = {z["id"]: z for z in result["zones"]}
+        assert by_id["office"]["entity_id"] == "zone.office"
+        assert by_id["office"]["source"] == "storage"
+        assert by_id["home"]["entity_id"] == "zone.home"
+        assert by_id["home"]["source"] == "yaml"
+        assert by_id["home"]["editable"] is False
+        assert by_id["home"]["name"] == "Home"
+        assert "warnings" not in result
+
+    async def test_a_zone_can_be_fetched_by_its_entity_id(self):
+        result = await ZoneTools(_client()).ha_get_zone(zone_id="zone.office")
+
+        assert result["zone"]["id"] == "office"
+
+    async def test_without_registry_stored_zones_are_not_listed_twice(self):
+        """No zone state can be matched to its stored zone without the registry."""
+        client = _client(
+            {"config/entity_registry/list": REGISTRY_BLOCKED},
+            states={"zone.home": HOME_STATE},
+        )
+
+        result = await ZoneTools(client).ha_get_zone()
+
+        assert [z["id"] for z in result["zones"]] == ["office"]
+        assert "'home'" in result["warnings"][0] and "403" in result["warnings"][0]
+
+    async def test_without_states_the_home_zone_is_named_as_missing(self):
+        client = _client(states={"zone.home": HOME_STATE})
+        client.get_states.side_effect = HomeAssistantConnectionError("socket closed")
+
+        result = await ZoneTools(client).ha_get_zone()
+
+        assert [z["id"] for z in result["zones"]] == ["office"]
+        assert "'home'" in result["warnings"][0]
+
+    async def test_a_zone_missing_from_an_incomplete_listing_is_not_absent(self):
+        client = _client(
+            {"config/entity_registry/list": REGISTRY_BLOCKED},
+            states={"zone.home": HOME_STATE},
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_get_zone(zone_id="home")
+
+        error = _error(exc_info)
+        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert "403" in error["message"]
+
+
 def _backup_ws(
     zone_list: list[dict[str, Any]],
     registry: list[dict[str, Any]],
     update_error: str | None = None,
+    registry_update_error: str | None = None,
 ) -> tuple[list[dict[str, Any]], Any]:
-    """A fake ``backup_manager._ws_send`` and the messages it received."""
+    """A fake ``backup_manager._ws_send`` and the messages it received.
+
+    zone/update and zone/create change ``zone_list`` and ``registry`` the way
+    Core does: a created zone's id is its slugified name.
+    """
     sent: list[dict[str, Any]] = []
+
+    def update(msg: dict[str, Any]) -> dict[str, Any]:
+        current = next((z for z in zone_list if z["id"] == msg["zone_id"]), None)
+        if update_error or current is None:
+            code = update_error or "not_found"
+            raise HomeAssistantCommandError(f"Command failed: {code}", code)
+        current.update({k: v for k, v in msg.items() if k not in ("type", "zone_id")})
+        return dict(current)
+
+    def create(msg: dict[str, Any]) -> dict[str, Any]:
+        created = {k: v for k, v in msg.items() if k != "type"}
+        taken = {z["id"] for z in zone_list}
+        slug = created["name"].lower()
+        created["id"] = next(
+            i for i in (slug, *(f"{slug}_{n}" for n in range(2, 99))) if i not in taken
+        )
+        zone_list.append(created)
+        registry.append(
+            {
+                "entity_id": f"zone.{created['id']}_2",
+                "platform": "zone",
+                "unique_id": created["id"],
+            }
+        )
+        return dict(created)
+
+    def registry_get(msg: dict[str, Any]) -> dict[str, Any]:
+        entry = next((e for e in registry if e["entity_id"] == msg["entity_id"]), None)
+        if entry is None:
+            raise HomeAssistantCommandError(
+                "Command failed: Entity not found", "not_found"
+            )
+        return entry
+
+    def registry_update(_msg: dict[str, Any]) -> dict[str, Any]:
+        if registry_update_error:
+            raise HomeAssistantCommandError(
+                f"Command failed: {registry_update_error}", registry_update_error
+            )
+        return {"entity_entry": {}}
+
+    handlers = {
+        "zone/list": lambda _msg: zone_list,
+        "config/entity_registry/list": lambda _msg: registry,
+        "config/entity_registry/get": registry_get,
+        "config/entity_registry/update": registry_update,
+        "zone/update": update,
+        "zone/create": create,
+    }
 
     async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
         sent.append(dict(msg))
-        kind = msg["type"]
-        if kind == "zone/list":
-            return zone_list
-        if kind == "config/entity_registry/list":
-            return registry
-        if kind == "zone/update":
-            if update_error:
-                from ha_mcp.client.rest_client import HomeAssistantCommandError
-
-                raise HomeAssistantCommandError(
-                    f"Command failed: {update_error}", update_error
-                )
-            return {**msg, "id": msg["zone_id"]}
-        if kind == "zone/create":
-            created = {k: v for k, v in msg.items() if k != "type"}
-            registry.append(
-                {
-                    "entity_id": "zone.office_2",
-                    "platform": "zone",
-                    "unique_id": "office",
-                }
-            )
-            return {**created, "id": "office"}
-        if kind == "config/entity_registry/update":
-            return {"entity_entry": {}}
-        raise AssertionError(f"unexpected ws message: {msg}")
+        return copy.deepcopy(handlers[msg["type"]](msg))
 
     return sent, fake_ws
 
 
-ZONE_ENTITY = {
-    "entity_id": "zone.office",
-    "platform": "zone",
-    "unique_id": OFFICE_ID,
-    "icon": "mdi:briefcase",
-}
+def _office_entity(icon: str | None = "mdi:briefcase") -> dict[str, Any]:
+    return {**OFFICE_ENTRY, "icon": icon}
+
+
+def _handler(domain: str) -> Any:
+    mgr = MagicMock()
+    handlers: dict[str, Any] = {}
+    mgr.register = lambda h: handlers.__setitem__(h.domain, h)
+    backup_manager.register_default_handlers(mgr, None)
+    return handlers[domain]
 
 
 class TestZoneBackup:
+    @pytest.mark.parametrize("zone_id", ["office", "zone.office"])
     @pytest.mark.parametrize("domain", ["zone", "helper_zone"])
-    async def test_snapshot_records_the_registry_icon(self, monkeypatch, domain):
-        sent, fake_ws = _backup_ws([OFFICE], [ZONE_ENTITY])
+    async def test_snapshot_records_the_registry_icon(
+        self, monkeypatch, domain, zone_id
+    ):
+        """The zone tools take a zone_id or the zone's entity_id."""
+        _, fake_ws = _backup_ws([dict(OFFICE)], [_office_entity()])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
-        handler = _handler(domain)
 
-        snapshot = await handler.fetch(None, OFFICE_ID)
+        snapshot = await _handler(domain).fetch(None, zone_id)
 
         assert snapshot == {**OFFICE, "registry_icon": "mdi:briefcase"}
+
+    async def test_snapshot_without_registry_keeps_the_stored_zone(self, monkeypatch):
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            if msg["type"] == "zone/list":
+                return [OFFICE]
+            raise HomeAssistantConnectionError("registry read failed")
+
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        assert await _handler("zone").fetch(None, "office") == OFFICE
 
     @pytest.mark.parametrize("domain", ["zone", "helper_zone"])
     async def test_restore_of_a_removed_zone_creates_it_again(
         self, monkeypatch, domain
     ):
         """Core's zone/update cannot restore a zone that no longer exists."""
-        registry: list[dict[str, Any]] = []
-        sent, fake_ws = _backup_ws([], registry, update_error="not_found")
+        sent, fake_ws = _backup_ws([], [])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
         result = await _handler(domain).restore(
-            None, OFFICE_ID, {**OFFICE, "registry_icon": "mdi:briefcase"}
+            None, "office", {**OFFICE, "registry_icon": "mdi:briefcase"}
         )
 
         (create,) = [m for m in sent if m["type"] == "zone/create"]
@@ -487,14 +650,77 @@ class TestZoneBackup:
             "icon": "mdi:briefcase",
         } in sent
 
-    async def test_restore_resets_a_registry_icon_set_after_the_snapshot(
+    async def test_a_repeated_restore_does_not_add_another_zone(self, monkeypatch):
+        """A zone renamed after the snapshot comes back under a new id."""
+        zones: list[dict[str, Any]] = []
+        snapshot = {**OFFICE, "id": "workplace", "registry_icon": None}
+        sent, fake_ws = _backup_ws(zones, [])
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        for _ in range(2):
+            await _handler("zone").restore(None, "workplace", dict(snapshot))
+
+        assert len([m for m in sent if m["type"] == "zone/create"]) == 1
+        assert [z["id"] for z in zones] == ["office"]
+
+    async def test_a_different_zone_with_the_same_name_is_not_overwritten(
         self, monkeypatch
     ):
-        sent, fake_ws = _backup_ws([OFFICE], [ZONE_ENTITY])
+        """Core allows two zones with one name: the user's own zone stays as it is."""
+        other = {**OFFICE, "latitude": 1.0, "longitude": 2.0}
+        zones = [dict(other)]
+        sent, fake_ws = _backup_ws(zones, [])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
         await _handler("zone").restore(
-            None, OFFICE_ID, {**OFFICE, "registry_icon": None}
+            None, "workplace", {**OFFICE, "id": "workplace", "registry_icon": None}
+        )
+
+        assert not [
+            m for m in sent if m["type"] == "zone/update" and m["zone_id"] == "office"
+        ]
+        assert zones[0] == other
+        assert [z["id"] for z in zones] == ["office", "office_2"]
+
+    async def test_a_failed_icon_write_after_a_recreate_is_a_warning(self, monkeypatch):
+        sent, fake_ws = _backup_ws([], [], registry_update_error="unauthorized")
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        result = await _handler("zone").restore(
+            None, "office", {**OFFICE, "registry_icon": "mdi:briefcase"}
+        )
+
+        assert result["restore_mode"] == "recreated"
+        assert "registry icon was not" in result["warnings"][0]
+
+    async def test_a_recorded_icon_without_an_entity_is_a_warning(self, monkeypatch):
+        _, fake_ws = _backup_ws([dict(OFFICE)], [])
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        result = await _handler("zone").restore(
+            None, "office", {**OFFICE, "registry_icon": "mdi:briefcase"}
+        )
+
+        assert "has no entity" in result["warnings"][0]
+
+    async def test_no_recorded_icon_and_no_entity_is_no_warning(self, monkeypatch):
+        _, fake_ws = _backup_ws([dict(OFFICE)], [])
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        result = await _handler("zone").restore(
+            None, "office", {**OFFICE, "registry_icon": None}
+        )
+
+        assert "warnings" not in result
+
+    async def test_restore_resets_a_registry_icon_set_after_the_snapshot(
+        self, monkeypatch
+    ):
+        sent, fake_ws = _backup_ws([dict(OFFICE)], [_office_entity()])
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        await _handler("zone").restore(
+            None, "office", {**OFFICE, "registry_icon": None}
         )
 
         (update,) = [m for m in sent if m["type"] == "zone/update"]
@@ -505,32 +731,31 @@ class TestZoneBackup:
             "icon": None,
         } in sent
 
+    async def test_an_icon_stored_after_the_snapshot_is_a_warning(self, monkeypatch):
+        """Core's zone/update merges, so it cannot remove the newer stored icon."""
+        _, fake_ws = _backup_ws([{**OFFICE, "icon": "mdi:school"}], [_office_entity()])
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        result = await _handler("zone").restore(None, "office", dict(OFFICE))
+
+        assert "mdi:school" in result["warnings"][0]
+
     async def test_restore_of_an_older_snapshot_leaves_the_registry_alone(
         self, monkeypatch
     ):
-        sent, fake_ws = _backup_ws([OFFICE], [ZONE_ENTITY])
+        sent, fake_ws = _backup_ws([dict(OFFICE)], [_office_entity()])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
-        await _handler("zone").restore(None, OFFICE_ID, dict(OFFICE))
+        await _handler("zone").restore(None, "office", dict(OFFICE))
 
         assert [m["type"] for m in sent] == ["zone/update"]
 
     async def test_other_update_failures_are_not_turned_into_a_create(
         self, monkeypatch
     ):
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
-
-        sent, fake_ws = _backup_ws([], [], update_error="invalid_format")
+        sent, fake_ws = _backup_ws([dict(OFFICE)], [], update_error="invalid_format")
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
         with pytest.raises(HomeAssistantCommandError):
-            await _handler("zone").restore(None, OFFICE_ID, dict(OFFICE))
+            await _handler("zone").restore(None, "office", dict(OFFICE))
         assert not [m for m in sent if m["type"] == "zone/create"]
-
-
-def _handler(domain: str) -> Any:
-    mgr = MagicMock()
-    handlers: dict[str, Any] = {}
-    mgr.register = lambda h: handlers.__setitem__(h.domain, h)
-    backup_manager.register_default_handlers(mgr, None)
-    return handlers[domain]

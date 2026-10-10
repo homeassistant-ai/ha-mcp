@@ -3,7 +3,8 @@ E2E: ha_config_set_helper backs up every helper type it edits (#2632).
 
 A flow helper other than template is snapshotted from its options and
 restored through its options flow; zone, a storage helper the backup family
-used to skip, is restored through ``zone/update``.
+used to skip, is restored through ``zone/update``, or created again when
+ha_remove_zone removed it.
 """
 
 from __future__ import annotations
@@ -346,3 +347,33 @@ async def test_deleted_subentry_is_backed_up_and_created_again(
         )
         new_id = restored["data"]["result"]["subentry_id"]
         assert (await _plane_titles(mcp, entry_id)) == {new_id: "30° / 180° / 1000W"}
+
+
+@pytest.mark.cleanup
+async def test_removed_zone_is_created_again_from_its_backup(
+    mcp_client: Client,
+) -> None:
+    """Core's zone/update cannot restore a removed zone: the restore creates it."""
+    name = f"e2e_zone_gone_{uuid.uuid4().hex[:8]}"
+    async with MCPAssertions(mcp_client) as mcp:
+        created = await mcp.call_tool_success(
+            "ha_set_zone",
+            {"name": name, "latitude": 52.2, "longitude": 4.4, "radius": 120},
+        )
+        zone_id = created["zone_id"]
+        try:
+            await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
+            await mcp.call_tool_success("ha_remove_zone", {"zone_id": zone_id})
+            backup_name = await _wait_for_backup(
+                mcp_client, domain="zone", entity_id=zone_id
+            )
+            restored = await mcp.call_tool_success(
+                "ha_manage_backup",
+                {"scope": "edits", "action": "restore", "backup_name": backup_name},
+            )
+            assert restored["data"]["result"]["restore_mode"] == "recreated", restored
+            listed = await mcp.call_tool_success("ha_get_zone", {})
+            zone = next((z for z in listed["zones"] if z.get("name") == name), None)
+            assert zone is not None and zone["radius"] == 120, listed
+        finally:
+            await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})

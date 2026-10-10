@@ -621,8 +621,8 @@ async def test_websocket_tag_update_resolves_the_tag_id(helper_id: str) -> None:
     assert result["entity_id"] == "tag.front_door"
 
 
-async def test_websocket_tag_update_sends_an_icon_for_core_to_judge() -> None:
-    """A tag has no icon field; Core says so rather than the icon vanishing."""
+async def test_websocket_tag_update_writes_the_icon_to_the_registry() -> None:
+    """A tag has no icon field, so Core would reject one: it goes to the registry."""
     client = _ws_by_type(_TAG_REPLIES)
     with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
         await hc_update._execute_update_simple_helper(
@@ -630,7 +630,11 @@ async def test_websocket_tag_update_sends_an_icon_for_core_to_judge() -> None:
             None, None, None, False, False, {},
         )  # fmt: skip
     (update,) = _sent(client, "tag/update")
-    assert update["icon"] == "mdi:nfc"
+    assert "icon" not in update
+    assert any(
+        m.get("entity_id") == "tag.front_door" and m.get("icon") == "mdi:nfc"
+        for m in _sent(client, "config/entity_registry/update")
+    )
 
 
 async def test_websocket_tag_update_applies_registry_fields() -> None:
