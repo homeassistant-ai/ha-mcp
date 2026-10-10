@@ -71,9 +71,9 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import (
+    verify_entity_removed,
     wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
-    wait_for_entity_removed,
     wait_for_state_change,
 )
 
@@ -1938,18 +1938,7 @@ class AutomationConfigTools:
 
             # Wait for entity to be removed
             if wait and entity_id_for_wait:
-                try:
-                    removed = await wait_for_entity_removed(
-                        self._client, entity_id_for_wait
-                    )
-                    if not removed:
-                        result.setdefault("warnings", []).append(
-                            f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
-                        )
-                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                    result.setdefault("warnings", []).append(
-                        f"Deletion confirmed but removal verification failed: {e}"
-                    )
+                await verify_entity_removed(self._client, entity_id_for_wait, result)
 
             return {
                 "success": True,

@@ -853,7 +853,7 @@ class TestSetRemoveScriptAcceptEntityIdForm:
         from unittest.mock import patch
 
         with patch(
-            "ha_mcp.tools.tools_config_scripts.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new=AsyncMock(return_value=True),
         ) as mock_watcher:
             await tools.ha_config_remove_script(

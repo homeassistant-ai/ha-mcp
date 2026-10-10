@@ -2642,12 +2642,12 @@ class TestSceneVerificationFailureWarnings:
         warning ("Deletion confirmed but removal verification failed"),
         while the response still reports ``success=True`` (the delete
         REST call itself completed) and threads the storage key."""
-        from ha_mcp.tools import tools_config_scenes as scene_mod
+        from ha_mcp.tools import ws_waiters
 
         async def _raise(*_args, **_kwargs):
             raise HomeAssistantConnectionError("forced for test")
 
-        monkeypatch.setattr(scene_mod, "wait_for_entity_removed", _raise)
+        monkeypatch.setattr(ws_waiters, "wait_for_entity_removed", _raise)
 
         result = await tools.ha_config_remove_scene(scene_id="test_scene")
 
@@ -2672,12 +2672,12 @@ class TestSceneVerificationFailureWarnings:
     ):
         """Remove path: ``HomeAssistantAuthError`` reaches the same
         warning path as the connection-error case."""
-        from ha_mcp.tools import tools_config_scenes as scene_mod
+        from ha_mcp.tools import ws_waiters
 
         async def _raise(*_args, **_kwargs):
             raise HomeAssistantAuthError("forced for test")
 
-        monkeypatch.setattr(scene_mod, "wait_for_entity_removed", _raise)
+        monkeypatch.setattr(ws_waiters, "wait_for_entity_removed", _raise)
 
         result = await tools.ha_config_remove_scene(scene_id="test_scene")
 

@@ -60,7 +60,7 @@ from .helpers import (
 )
 from .reference_validator import validate_config_references
 from .tool_hints import read_only_hints, write_hints
-from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
+from .ws_waiters import verify_entity_removed, wait_for_entity_registered
 
 logger = logging.getLogger(__name__)
 
@@ -1139,7 +1139,7 @@ class ConfigScriptTools:
             # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
             # than slipping through validate (non-empty pre-strip) and
             # producing a ``script.script.foo`` entity_id for the
-            # ``wait_for_entity_removed`` watcher below — that mis-formed
+            # ``verify_entity_removed`` watcher below — that mis-formed
             # entity_id never registers so the watcher times out on a
             # phantom. Behavioral parity with ``ha_config_get_script``.
             script_id = script_id.removeprefix("script.")
@@ -1157,16 +1157,7 @@ class ConfigScriptTools:
             # Wait for script to be removed
             entity_id = f"script.{script_id}"
             if wait:
-                try:
-                    removed = await wait_for_entity_removed(self._client, entity_id)
-                    if not removed:
-                        result.setdefault("warnings", []).append(
-                            f"Deletion confirmed by API but {entity_id} may still appear briefly."
-                        )
-                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                    result.setdefault("warnings", []).append(
-                        f"Deletion confirmed but removal verification failed: {e}"
-                    )
+                await verify_entity_removed(self._client, entity_id, result)
 
             return {"success": True, "action": "delete", **result}
         except ToolError:

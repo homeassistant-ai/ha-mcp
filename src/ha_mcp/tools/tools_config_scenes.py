@@ -59,7 +59,7 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .scene_discovery import discover_scenes
 from .tool_hints import read_only_hints, write_hints
-from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
+from .ws_waiters import verify_entity_removed, wait_for_entity_registered
 
 # No scene-specific reference file exists in home-assistant-best-practices;
 # SKILL.md is the top-level generic best-practice doc covering entity-naming,
@@ -1422,16 +1422,7 @@ class ConfigSceneTools:
             )
 
             if wait:
-                try:
-                    removed = await wait_for_entity_removed(self._client, entity_id)
-                    if not removed:
-                        result.setdefault("warnings", []).append(
-                            f"Deletion confirmed by API but {entity_id} may still appear briefly."
-                        )
-                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                    result.setdefault("warnings", []).append(
-                        f"Deletion confirmed but removal verification failed: {e}"
-                    )
+                await verify_entity_removed(self._client, entity_id, result)
 
             return {
                 "success": True,
