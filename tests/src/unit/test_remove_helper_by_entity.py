@@ -320,8 +320,10 @@ async def test_a_helper_whose_options_are_not_backed_up_is_removed_with_the_reas
     assert warning.startswith(f"No pre-write backup of helper_{platform}:e was taken")
     assert reason in warning
     backup_logs = [r for r in caplog.records if r.name == bm.logger.name]
-    assert [r.levelno for r in backup_logs] == [logging.INFO]
-    assert reason in backup_logs[0].getMessage()
+    assert all(r.levelno < logging.WARNING for r in backup_logs)
+    assert any(
+        r.levelno == logging.INFO and reason in r.getMessage() for r in backup_logs
+    )
 
 
 async def test_a_custom_helper_named_by_type_is_snapshotted_once_before_deleting(

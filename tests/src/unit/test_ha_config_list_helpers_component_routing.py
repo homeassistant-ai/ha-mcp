@@ -887,9 +887,10 @@ async def test_a_custom_helper_flow_left_out_by_a_failed_loader_read_names_it(
     with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
         await list_helpers(helper_type="my_custom_helper")
 
-    assert "SERVICE_CALL_FAILED" in str(excinfo.value)
-    assert "loader" in str(excinfo.value)
-    assert "my_custom_helper" in str(excinfo.value)
+    error = json.loads(str(excinfo.value))["error"]
+    assert error["code"] == "SERVICE_CALL_FAILED"
+    assert "loader" in error["message"]
+    assert "my_custom_helper" in error["message"]
 
 
 @pytest.mark.asyncio

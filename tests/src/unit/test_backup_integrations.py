@@ -78,7 +78,6 @@ async def test_a_refused_restore_is_not_found_with_the_handlers_guidance(
     error = json.loads(str(exc_info.value))["error"]
     assert error["code"] == "RESOURCE_NOT_FOUND"
     suggestions = error.get("suggestions") or [error["suggestion"]]
-    assert len(suggestions) == len(expected)
     for suggestion, prefix in zip(suggestions, expected, strict=True):
         assert suggestion.startswith(prefix)
 

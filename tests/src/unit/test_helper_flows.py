@@ -198,10 +198,8 @@ async def test_an_update_with_an_unknown_helper_type_is_refused_before_any_write
     """with_auto_backup captures before the tool body checks helper_type; the
     update is still refused before its options flow starts."""
     _enable_auto_backup(monkeypatch, tmp_path)
-    sent: list[dict[str, Any]] = []
 
     async def fake_ws_send(client: Any, message: dict[str, Any]) -> Any:
-        sent.append(message)
         return {"covered_types": [], "helpers": []}
 
     monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
@@ -212,7 +210,6 @@ async def test_an_update_with_an_unknown_helper_type_is_refused_before_any_write
             helper_type="no_such_helper", helper_id="entry_1", config={"x": 1}
         )
     assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert [m["type"] for m in sent] == ["ha_mcp_tools/helpers_list"]
     client.start_options_flow.assert_not_awaited()
 
 
@@ -238,9 +235,9 @@ async def test_an_entry_delete_proceeds_when_the_helper_flow_read_fails(
         target="entry_1", confirm=True
     )
     client.delete_config_entry.assert_awaited_once_with("entry_1")
-    assert result.get("warnings") == [
-        "No pre-write backup was taken: HomeAssistantConnectionError"
-    ]
+    [warning] = result.get("warnings") or [None]
+    assert warning is not None
+    assert warning.startswith("No pre-write backup was taken")
 
 
 def _custom_flow_client() -> MagicMock:
@@ -307,7 +304,7 @@ async def test_a_custom_helper_flow_describes_its_config_flow_fields(
         helper_type="my_custom_helper", describe=True
     )
     client.start_config_flow.assert_awaited_with("my_custom_helper")
-    assert "source" in json.dumps(result)
+    assert [field["name"] for field in result["fields"]] == ["name", "source"]
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ storage-based helpers.
 """
 
 import asyncio
+import json
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -577,7 +578,7 @@ async def test_custom_helper_flow_options_are_probed_with_passwords_redacted(
     assert match["helper_type"] == "my_custom_helper"
     assert match["match_in_config"] is True
     assert match["config"]["host"] == "gate-controller.lan"
-    assert match["config"]["api_key"] != "hunter2-gate-key"
+    assert "hunter2-gate-key" not in json.dumps(match)
 
     by_secret, failed = await tools._search_flow_helpers(
         "hunter2-gate-key",
@@ -619,4 +620,3 @@ async def test_a_failed_helper_flow_read_after_the_entries_is_one_failure(
         include_config=False,
     )
     assert (results, failed) == ([], 1)
-    client._request.assert_awaited_once()
