@@ -2517,8 +2517,8 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
     return await _recreate_calendar_event(client, cal, event, start, end)
 
 
-# Zones — zone/{list,update} (no ``config/`` prefix per HA's actual WS API;
-# matches ``tools_zones.py`` which is the authoritative usage).
+# Zones — zone/{list,update} (no ``config/`` prefix per HA's actual WS API). The
+# zone tools take a zone_id or the zone's entity_id, which follows its name.
 
 
 async def _fetch_zone(client: Any, entity_id: str) -> Any:
@@ -2526,7 +2526,7 @@ async def _fetch_zone(client: Any, entity_id: str) -> Any:
     for item in items:
         if item.get("id") == entity_id or item.get("name") == entity_id:
             return item
-    return None
+    return await _fetch_helper(client, entity_id, "zone") if "." in entity_id else None
 
 
 async def _restore_zone(client: Any, entity_id: str, config: Any) -> Any:
