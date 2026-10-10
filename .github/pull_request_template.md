@@ -23,7 +23,7 @@
      counts, run links, or per-lane status. Reviewers see those in the PR's
      checks, and they go stale on the next push. -->
 
-- [ ] The author or a reviewer has live-tested this PR with an LLM agent on the dev environment or another live HA chosen by the user
+- [ ] The author or a reviewer has live-tested this PR with an LLM agent on the dev environment or another live HA chosen by the user (if applicable)
 - [ ] All automated tests pass (`uv run pytest`)
 - [ ] Code passes lint, format, and type checks (`uv run ruff check`, `uv run ruff format --check` on changed files, `uv run mypy src/`)
 
