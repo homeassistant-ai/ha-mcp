@@ -819,8 +819,8 @@ class TestLifecycleWriteWarningsShape:
         assert any("verification failed" in w for w in result["warnings"])
 
     async def test_groups_remove_check_error_yields_top_level_warnings_list(
-        self, groups_tools
-    ):
+        self, groups_tools: Any
+    ) -> None:
         with patch(
             "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
@@ -885,8 +885,8 @@ class TestLifecycleWriteWarningsShape:
         assert any("verification failed" in w for w in result["warnings"])
 
     async def test_scripts_remove_check_error_yields_top_level_warnings_list(
-        self, scripts_tools
-    ):
+        self, scripts_tools: Any
+    ) -> None:
         with patch(
             "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
@@ -939,8 +939,8 @@ class TestLifecycleWriteWarningsShape:
         assert any("verification failed" in w for w in result["warnings"])
 
     async def test_automations_remove_check_error_yields_top_level_warnings_list(
-        self, automations_tools
-    ):
+        self, automations_tools: Any
+    ) -> None:
         with patch(
             "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
@@ -1016,8 +1016,8 @@ class TestLifecycleWriteWarningsShape:
         assert any("verification failed" in w for w in result["warnings"])
 
     async def test_scenes_remove_check_error_yields_top_level_warnings_list(
-        self, scenes_tools
-    ):
+        self, scenes_tools: Any
+    ) -> None:
         with patch(
             "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
