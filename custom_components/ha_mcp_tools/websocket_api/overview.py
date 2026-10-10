@@ -59,12 +59,12 @@ def _do_helpers_list(
 
     Flow-helper ``options`` come straight from ``ConfigEntry.options`` (``None``
     with ``options_withheld`` for a custom-only domain; see
-    :func:`_flow_helper_domains`; a failed loader read sets top-level
-    ``helper_flows_degraded: true`` and leaves custom-only domains out) — no
-    OptionsFlow start/abort dance, and NEVER ``entry.data`` (integration
-    credentials). Every record carries the CURRENT entity_id + display name from
-    the entity registry so a renamed helper shows current values (issue #1794),
-    not the stale storage-collection name.
+    :func:`_flow_helper_domains`) — no OptionsFlow start/abort dance, and NEVER
+    ``entry.data`` (integration credentials). A failed loader read sets top-level
+    ``helper_flows_degraded: true`` and leaves custom-only domains out. Every
+    record carries the CURRENT entity_id + display name from the entity registry
+    so a renamed helper shows current values (issue #1794), not the stale
+    storage-collection name.
 
     Flow-helper ``options`` share the credential-bearing exposure class of
     ``config_entries``'s ``options`` (a flow helper IS a config entry), so they pass

@@ -552,7 +552,8 @@ async def verify_entity_removed(
         return
     if not removed:
         response.setdefault("warnings", []).append(
-            f"Deletion confirmed but {entity_id} is still present after the wait window."
+            f"Deletion confirmed but {entity_id} is still present after the "
+            "wait window."
         )
 
 

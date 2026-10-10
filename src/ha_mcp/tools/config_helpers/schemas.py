@@ -41,9 +41,9 @@ def _attach_helper_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
 
 
 # Simple helper types — managed via {type}/create and {type}/update WebSocket APIs
-# (not Config Entry Flow). As a schema enum the helper tools' schemas spell them
-# out; every other helper type except config_subentry is a helper flow, checked
-# against Core at call time (``helper_flows``).
+# (not Config Entry Flow). The helper tools' schemas spell them out as an enum.
+# Any other value is a helper flow type, checked against Core at call time
+# (``helper_flows``), except config_subentry and ha_config_list_helpers' "all".
 StorageHelperType = Literal[
     "input_button",
     "input_boolean",

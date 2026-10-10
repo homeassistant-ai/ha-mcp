@@ -1026,8 +1026,9 @@ class HomeAssistantWebSocketClient:
 
         Exception policy (narrow, distinct log levels — Gemini #1382):
 
-        - Transport-level loss (socket closed during the send or before the
-          answer): the subscription went with the connection. Logged at
+        - Transport-level loss (``OSError``, ``ConnectionClosed``,
+          ``HomeAssistantConnectionError``): the socket closed during the send
+          or before the answer, and the subscription went with it. Logged at
           ``debug`` so HA-mid-restart cleanup doesn't spam warnings.
         - HA-side rejection (``HomeAssistantCommandError``, e.g. "Subscription
           not found" after a server-side reset): logged at ``warning`` so a

@@ -259,8 +259,10 @@ COLLECTION_HELPER_DOMAINS = frozenset(
         "schedule",
     }
 )
-# Core's generated FLOWS["helper"]: the default without the async pre-step and the
-# fallback when its loader read fails. Indexed from options/title, NEVER entry.data.
+# Core's generated FLOWS["helper"]: the default without the async pre-step, the
+# fallback when its loader read fails, and the split that decides whose options are
+# withheld (``custom_domains = flows - FLOW_HELPER_DOMAINS``). Indexed from
+# options/title, NEVER entry.data.
 FLOW_HELPER_DOMAINS = frozenset(FLOWS["helper"])
 
 # Collection helper domains enumerated by ``ha_mcp_tools/helpers_list``: the

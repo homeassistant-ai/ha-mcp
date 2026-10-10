@@ -910,16 +910,16 @@ class DeepSearchMixin(SceneSearchMixin):
         Returns ``(results, failed_type_count)`` — ``failed_type_count`` counts
         each helper backend that failed: an ``input_*`` ``<type>/list`` fetch
         that raised or returned a non-success response, plus the flow-helper
-        config-entries list fetch when it is unreachable or returns an
-        unexpected shape, plus each per-entry flow-helper options-flow probe
-        that failed (the flow raised or returned a non-form first step — the
-        config body was then never searched). Per-entry flow-helper *scoring*
-        failures (a code bug processing a response the backend did return) stay
-        tolerated inside ``_search_flow_helpers`` (one bad entry must not sink
-        the gather) and don't surface here. Helpers run on every default
-        ``ha_search`` call, so silent failures here mean the caller cannot
-        tell "no helpers match" from "helper backend partially down" —
-        surfaced via ``partial: True``.
+        surface when its config-entries or helper-flow read fails or the entries
+        come back in an unexpected shape, plus each per-entry flow-helper
+        options-flow probe that failed (the flow raised or returned a non-form
+        first step — the config body was then never searched). Per-entry
+        flow-helper *scoring* failures (a code bug processing a response the
+        backend did return) stay tolerated inside ``_search_flow_helpers`` (one
+        bad entry must not sink the gather) and don't surface here. Helpers run
+        on every default ``ha_search`` call, so silent failures here mean the
+        caller cannot tell "no helpers match" from "helper backend partially
+        down" — surfaced via ``partial: True``.
 
         ``prefetched_registry`` is the orchestrator's already-fetched
         ``config/entity_registry/list`` response, reused (never re-fetched
@@ -1572,20 +1572,20 @@ class DeepSearchMixin(SceneSearchMixin):
         options-flow probe per entry with an options flow, parallelised under
         ``semaphore``. The probe is skipped when the title alone already
         scores the maximum (a deeper config match can only raise the total,
-        never lower it); any title that leaves headroom
-        is still probed for accurate scoring and ``match_in_config``.
+        never lower it); any title that leaves headroom is still probed for
+        accurate scoring and ``match_in_config``.
 
         Returns ``(results, failed_count)``. ``failed_count`` counts flow-
         helper backend failures so the caller can route them to ``partial``:
         the whole surface unreachable (the config-entries or helper-flow read
-        raised, or the entries came back in an unexpected shape) counts as 1; otherwise it is the number
-        of per-entry options-flow probes that failed (the flow raised or
-        returned a non-form first step), so a helper whose config body could
-        not be read is reported as incomplete rather than a silent clean
-        non-match. Per-entry *scoring* failures (a bug processing a response
-        the backend did return) are logged at warning and dropped without
-        counting — one bad entry must not sink the gather, and a code bug is
-        not a backend outage.
+        raised, or the entries came back in an unexpected shape) counts as 1;
+        otherwise it is the number of per-entry options-flow probes that failed
+        (the flow raised or returned a non-form first step), so a helper whose
+        config body could not be read is reported as incomplete rather than a
+        silent clean non-match. Per-entry *scoring* failures (a bug processing a
+        response the backend did return) are logged at warning and dropped
+        without counting — one bad entry must not sink the gather, and a code
+        bug is not a backend outage.
         """
         try:
             response = await self.client._request("GET", "/config/config_entries/entry")
@@ -1601,8 +1601,6 @@ class DeepSearchMixin(SceneSearchMixin):
             )
             return [], 1
 
-        # Config entries of a helper flow; only those with an options flow
-        # have a body to probe, the rest are matched on title and domain.
         flow_entries = [
             e for e in response if isinstance(e, dict) and e.get("domain") in flows
         ]

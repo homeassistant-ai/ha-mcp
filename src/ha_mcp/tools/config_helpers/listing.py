@@ -20,7 +20,11 @@ _SCRUB_DEGRADED_WARNING = (
 
 
 def _component_warnings(result: dict[str, Any]) -> list[str]:
-    """The warnings for a component result whose flow-helper read degraded."""
+    """The warnings for a component result whose flow-helper read degraded.
+
+    Maps only ``secret_scrub_degraded``; ``helper_flows_degraded`` is an error,
+    raised by :func:`raise_if_helper_flows_degraded`.
+    """
     if result.get("secret_scrub_degraded") is True:
         return [_SCRUB_DEGRADED_WARNING]
     return []
@@ -109,8 +113,9 @@ def _shape_flow_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
     component sources them from the config entry. The record carries the
     ``entry_id`` (config-entry id), the current ``entity_id`` + display
     ``name``, the ``helper_type``, and the data-minimized ``options`` body
-    (``ConfigEntry.options`` only, never ``entry.data``). Mirrors the
-    collection shaper's current-fields layering.
+    (``ConfigEntry.options`` only, never ``entry.data``), or
+    ``options_withheld`` for a custom-only domain. Mirrors the collection
+    shaper's current-fields layering.
     """
     out: dict[str, Any] = {"helper_type": rec.get("helper_type")}
     entry_id = rec.get("entry_id")
@@ -187,8 +192,8 @@ def _shape_component_helpers_response(
     ``count``/``helpers``/``message``). Records are shaped to the requested
     universe: a flow ``helper_type`` yields flow records (``entry_id`` +
     current ``entity_id``/``name`` + ``options``, or ``options_withheld`` for a
-    custom-only domain); a storage type yields the
-    storage-body records. A record of the other kind is dropped defensively.
+    custom-only domain); a storage type yields the storage-body records. A
+    record of the other kind is dropped defensively.
     ``count`` is the length of the emitted list, mirroring the legacy
     ``count == len(helpers)`` guarantee.
     """
@@ -287,6 +292,9 @@ async def shape_all_helpers_response(
     path): a simple type the component could not enumerate from the state
     machine — ``tag`` has no state entity — is fetched per-type via its
     legacy ``{type}/list`` (``legacy_list``) and merged, so ``all`` never silently drops it.
+
+    ``flow_types`` is Core's current set of helper flow types; one the component
+    did not cover raises instead of being left out.
     """
     raw = result.get("helpers")
     records = raw if isinstance(raw, list) else []

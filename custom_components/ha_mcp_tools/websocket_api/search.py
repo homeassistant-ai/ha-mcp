@@ -72,10 +72,13 @@ def _do_search(  # noqa: PLR0915
     loop by :func:`_search_prep` and passed in (default empty — the loader is
     skipped for an entity-only search, and direct callers/tests supply it
     explicitly). It keeps this function a pure, synchronous in-memory read.
-    A degraded scrub (reported by the pre-step for a helper search) adds
-    :data:`SCRUB_DEGRADED_WARNING` to ``warnings`` when ``include_config`` is set
-    and :data:`SCRUB_DEGRADED_MATCH_WARNING` when it is not; a failed loader read
-    adds :data:`HELPER_FLOWS_DEGRADED_WARNING`.
+    ``flow_domains`` / ``custom_domains`` name the helper flows and the custom-only
+    ones among them (:func:`_flow_helper_domains`); the defaults, Core's built-in
+    list and no custom domains, serve direct callers. A degraded scrub (reported by
+    the pre-step for a helper search) adds :data:`SCRUB_DEGRADED_WARNING` to
+    ``warnings`` when ``include_config`` is set and
+    :data:`SCRUB_DEGRADED_MATCH_WARNING` when it is not; a failed read of Core's
+    helper flows adds :data:`HELPER_FLOWS_DEGRADED_WARNING`.
     """
     query_lower = (params.get("query") or "").strip().lower()
     match_all = not query_lower
@@ -110,10 +113,11 @@ def _do_search(  # noqa: PLR0915
     )
 
     # ``secret_values`` (loaded off-loop by _search_prep) scrubs resolved-!secret
-    # plaintext from the config-body match corpus: a YAML-loaded automation/script/
-    # scene body (or a flow-helper's options) can carry a secret resolved to
-    # plaintext, and matching inside it would make ha_search a probe oracle (query
-    # a suspected secret, confirm via match_in_config). See _load_secret_values.
+    # plaintext from the config-body match corpus and from emitted flow-helper
+    # options: a YAML-loaded automation/script/scene body (or a flow-helper's
+    # options) can carry a secret resolved to plaintext, and matching inside it
+    # would make ha_search a probe oracle (query a suspected secret, confirm via
+    # match_in_config). See _load_secret_scrub.
 
     # --- Entities ------------------------------------------------------------
     entities: list[dict[str, Any]] = []
@@ -312,7 +316,9 @@ async def _search_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, An
     skips the ``secrets.yaml`` read entirely (perf gate). When a scrubbed surface
     is requested, the blocking ``open()`` + ``yaml.safe_load`` runs in the
     executor via :meth:`hass.async_add_executor_job` so the WS handler never
-    blocks the event loop. The loaded set is handed to :func:`_do_search`.
+    blocks the event loop. The loaded set, and for a helper search the degraded
+    flag and the :func:`_flow_helper_domains` keys, are handed to
+    :func:`_do_search`.
     """
     search_types = msg.get("search_types") or ALL_SEARCH_TYPES
     scrub_surfaces = (*CONFIG_SEARCH_TYPES, SEARCH_TYPE_HELPER)
