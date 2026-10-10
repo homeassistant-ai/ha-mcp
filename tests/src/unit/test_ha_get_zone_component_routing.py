@@ -1,11 +1,11 @@
 """Routing tests for ``ha_get_zone`` over the ``ha_mcp_tools`` component gate.
 
-Core's ``zone/list`` WS command serves only the storage collection, so
-YAML-defined zones — including the auto-synthesized ``home`` zone — are
-structurally absent from it. When the component advertises the ``helpers_list``
-capability, ``ha_get_zone`` enumerates zones through one
-``ha_mcp_tools/helpers_list`` call instead: YAML zones come back with
-``storage_id=None`` and are surfaced as additive rows carrying an
+Core's ``zone/list`` WS command serves only the storage collection, so the
+home zone (built from the general settings) and YAML zones are absent from it.
+When the component advertises the ``helpers_list`` capability, ``ha_get_zone``
+enumerates zones through one ``ha_mcp_tools/helpers_list`` call instead: zones
+outside the storage come back with ``storage_id=None`` and are surfaced as
+additive rows carrying an
 ``editable`` / ``source`` discriminator, while storage zones keep their stored
 body plus the discriminator and their ``entity_id``.
 
@@ -226,7 +226,7 @@ async def test_storage_zone_row_matches_the_legacy_row() -> None:
 
 @pytest.mark.asyncio
 async def test_yaml_home_zone_additive_row_with_discriminator() -> None:
-    """The YAML home zone appears as an additive, non-editable row."""
+    """The home zone appears as an additive, non-editable row."""
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_result=_CAPS_HELPERS,
@@ -243,6 +243,34 @@ async def test_yaml_home_zone_additive_row_with_discriminator() -> None:
     assert home["latitude"] == 41.0
     # YAML zones carry the object_id so they remain fetchable by zone_id.
     assert home["id"] == "home"
+
+
+@pytest.mark.asyncio
+async def test_yaml_zone_from_state_attributes_is_not_stored() -> None:
+    """Without a ``_config`` the component sends the state attributes and fills
+    the storage id in; Core's ``editable: False`` then marks the YAML zone."""
+    result = _component_zone_result()
+    result["helpers"].append(
+        {
+            "helper_type": "zone",
+            "kind": "collection",
+            "entity_id": "zone.school",
+            "object_id": "school",
+            "name": "School",
+            "storage_id": "school",
+            "config": {"latitude": 1.0, "longitude": 2.0, "editable": False},
+        }
+    )
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
+    )
+    get_zone = _build_get_zone(RoutingClient())
+
+    with patch_ws(ws, tools_zones):
+        resp = await get_zone()
+
+    school = next(z for z in resp["zones"] if z.get("entity_id") == "zone.school")
+    assert school["source"] == "yaml"
 
 
 @pytest.mark.asyncio
@@ -284,7 +312,7 @@ async def test_get_missing_zone_raises_not_found() -> None:
 
 @pytest.mark.asyncio
 async def test_capsless_component_pins_legacy_path() -> None:
-    """Old component (info unknown_command) → legacy path, only storage zones."""
+    """Old component (info unknown_command) → legacy path (zone/list + registry + states)."""
     ws = make_ws(
         "ha_mcp_tools/helpers_list",
         info_exc=HomeAssistantCommandError(
