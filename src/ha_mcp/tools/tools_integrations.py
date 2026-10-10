@@ -2127,10 +2127,8 @@ class IntegrationTools:
             HelperTypeLiteral | None,
             Field(
                 description=(
-                    "Helper type. Required when target is a bare helper_id. "
-                    "Omit when target is a config entry_id to remove any "
-                    "integration. Use 'config_subentry' to remove a config "
-                    "subentry under target."
+                    "Helper type of target; ROUTING says which value takes "
+                    "which removal path."
                 ),
                 default=None,
             ),

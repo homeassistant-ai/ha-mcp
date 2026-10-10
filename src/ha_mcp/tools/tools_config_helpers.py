@@ -151,11 +151,12 @@ class HelperConfigTools:
         """List Home Assistant helpers of a specific type with their configurations.
 
         Returns one page of helpers; `total_count` and `has_more` report the full
-        set. Each record carries the complete configuration for its helper:
+        set. Each record carries the configuration for its helper:
         id (immutable storage key), entity_id (current — address the helper by
         this, where available), name (current display name), original_name
         (creation-time name), icon, type-specific settings, and area and label
-        assignments. A custom helper integration's options are withheld, marked
+        assignments. A flow helper record carries entry_id and options instead of
+        id; a custom helper integration's options are withheld, marked
         `options_withheld`.
 
         For a helper renamed in the UI, id/original_name keep the storage values while
@@ -170,9 +171,8 @@ class HelperConfigTools:
         ``person`` is the exception — HA lists its YAML-configured persons
         alongside the storage ones, so both appear here.
 
-        Flow types require the ha_mcp_tools custom component (>= 1.1.0) and are
-        served only through it. Requesting a flow type without the component returns a
-        COMPONENT_NOT_INSTALLED error.
+        Listing flow types requires the ha_mcp_tools custom component (>= 1.1.0);
+        without it, such a listing returns a COMPONENT_NOT_INSTALLED error.
 
         With helper_type="all", each record carries its own ``helper_type``.
         This mode is component-only (there is no single built-in command that
