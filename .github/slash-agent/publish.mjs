@@ -1,0 +1,481 @@
+import { prose } from "../issue-intake/intake.mjs";
+import {
+  checksReady,
+  decide,
+  digest,
+  feedbackHash,
+  feedbackItems,
+  failureHash,
+  MAX_ROUNDS,
+  commandOrder,
+  maintainerCommand,
+  ORIGIN_MARKER,
+  principal,
+  trustedComment,
+  renderState,
+  validateChanges,
+  validateResult,
+} from "./core.mjs";
+import { collect, snapshotDifferences, snapshotGuard } from "./github.mjs";
+
+function save(api, state, app) {
+  const data = { body: renderState(state, api.repository) };
+  if (state.commentId)
+    api.write(`issues/comments/${state.commentId}`, data, "PATCH");
+  else state.commentId = api.write(`issues/${state.root}/comments`, data).id;
+}
+
+function accountStaleAttempt(api, plan, fresh, app) {
+  if (plan.decision.mode !== "code" || fresh.issue.state !== "open" ||
+      fresh.issue.locked || fresh.pr?.state === "closed" ||
+      fresh.branch !== plan.snapshot.branch ||
+      fresh.pr?.number !== plan.snapshot.pr?.number ||
+      digest(fresh.session) !== digest(plan.snapshot.session)) return;
+  const latest = fresh.comments.filter((c) => maintainerCommand(c, fresh.roles))
+    .sort(commandOrder).at(-1);
+  if (!latest || latest.id !== plan.decision.latest.id ||
+      latest.updated_at !== plan.decision.latest.updated_at ||
+      latest.body !== plan.decision.latest.body ||
+      (fresh.closedAfter && Date.parse(latest.updated_at) <= Date.parse(fresh.closedAfter))) return;
+  // Publication acceptance and resource accounting are separate. The unchanged
+  // checkpoint makes retries idempotent; a newer command/session is never debited.
+  const rounds = plan.decision.rounds + 1;
+  const state = {
+    ...(fresh.session ?? {}),
+    version: 1,
+    root: fresh.root,
+    branch: fresh.branch,
+    base: fresh.base,
+    pr: fresh.pr?.number ?? null,
+    commandId: latest.id,
+    commandUpdatedAt: latest.updated_at,
+    model: plan.decision.parsed.model,
+    task: plan.decision.task,
+    rounds,
+    status: rounds >= MAX_ROUNDS ? "blocked" : "retry",
+    summary: `${(fresh.session?.summary ?? "").slice(0, 10000)}\n\nWorker output was discarded because source/head/authorization changed. No worker output was published; this attempt counts against the turn budget.${rounds >= MAX_ROUNDS ? " Budget exhausted; send a new maintainer command to continue." : " A later authorized event can continue, or send a fresh slash command."}`,
+  };
+  if (fresh.session?.commandId !== latest.id ||
+      fresh.session?.commandUpdatedAt !== latest.updated_at) delete state.pendingSummary;
+  save(api, state, app);
+}
+
+function threadSignature(thread) {
+  return {
+    id: thread.id,
+    isResolved: thread.isResolved,
+    comments: thread.comments.map((c) => ({
+      id: c.id,
+      body: c.body,
+      updated_at: c.updated_at,
+      edited_at: c.edited_at ?? null,
+      editor: c.editor ?? null,
+      editingVerified: c.editingVerified === true,
+      user: c.user && { login: c.user.login, type: c.user.type },
+    })),
+  };
+}
+
+function assertCurrent(api, plan, app, expectedHead, checkThreads = true) {
+  const current = collect(api, plan.snapshot.root, app);
+  const command = current.comments.find(
+    (c) => c.id === plan.decision.latest.id,
+  );
+  // GitHub can briefly cache the PR's previous head after our ref append. The
+  // Git ref must still name exactly our commit; any other advance is stale.
+  const headIsCurrent = current.head === expectedHead ||
+    (expectedHead !== plan.snapshot.head && current.head === plan.snapshot.head &&
+      current.branch === plan.snapshot.branch &&
+      api.optional(`git/ref/heads/${encodeURIComponent(current.branch)}`)?.object.sha === expectedHead);
+  if (
+    current.issue.state !== "open" ||
+    current.issue.locked ||
+    current.pr?.state === "closed" ||
+    current.issue.body !== plan.snapshot.issue.body ||
+    current.closedAfter !== plan.snapshot.closedAfter ||
+    digest(current.sourceComments) !== digest(plan.snapshot.sourceComments) ||
+    digest(current.feedback) !== digest(plan.snapshot.feedback) ||
+    digest(current.roles) !== digest(plan.snapshot.roles) ||
+    (checkThreads &&
+      digest(current.threads.map(threadSignature)) !==
+        digest(plan.snapshot.threads.map(threadSignature))) ||
+    (plan.snapshot.pr && current.pr?.body !== plan.snapshot.pr.body) ||
+    !headIsCurrent ||
+    !command ||
+    command.updated_at !== plan.decision.latest.updated_at ||
+    principal(command)?.type !== "User" ||
+    !trustedComment(command, current.roles)
+  )
+    throw Error("Source/head/authorization changed during publication");
+  const laterControl = current.comments.some(
+    (c) =>
+      maintainerCommand(c, current.roles) && commandOrder(c, command) > 0,
+  );
+  if (laterControl)
+    throw Error("A newer maintainer command superseded this run");
+  return current;
+}
+
+function ownedComment(comment, app) {
+  return (
+    comment.user?.type === "Bot" &&
+    comment.user.login === `${app}[bot]` &&
+    principal(comment)?.type === "Bot" &&
+    principal(comment).login === `${app}[bot]`
+  );
+}
+
+function externalThread(thread, app) {
+  return threadSignature({
+    ...thread,
+    isResolved: false,
+    comments: thread.comments.filter((c) => !ownedComment(c, app)),
+  });
+}
+
+function respond(api, plan, app, state, result, head) {
+  for (const response of result.responses) {
+    const current = assertCurrent(api, plan, app, head, false);
+    validateResult({ ...result, responses: [response] }, current);
+    const original = plan.snapshot.threads.find(
+      (t) => t.id === response.thread_id,
+    );
+    const thread = current.threads.find((t) => t.id === response.thread_id);
+    if (
+      digest(externalThread(thread, app)) !==
+      digest(externalThread(original, app))
+    )
+      throw Error("Review thread changed before response");
+    // This key survives a fresh workflow run after partial publication. Only
+    // external feedback, command revision or code changes require a new reply.
+    const marker = `<!-- slash-response:${digest({
+      head,
+      command: state.commandId,
+      revision: state.commandUpdatedAt,
+      source: externalThread(original, app),
+    })} -->`;
+    const body = `${prose(response.body)}\n\n${marker}`;
+    const existing = thread.comments.find(
+      (c) => ownedComment(c, app) && c.body.includes(marker),
+    );
+    let reply = existing;
+    if (!existing)
+      reply = api.edits([
+        api.write(
+          `pulls/${state.pr}/comments/${thread.comments[0].id}/replies`,
+          { body },
+        ),
+      ])[0];
+    else if (existing.body !== body)
+      reply = api.edits([
+        api.write(`pulls/comments/${existing.id}`, { body }, "PATCH"),
+      ])[0];
+    if (!ownedComment(reply, app) || reply.body !== body)
+      throw Error("Published reply changed before verification");
+    if (response.resolve) {
+      const expected = {
+        ...thread,
+        comments: existing
+          ? thread.comments.map((c) => (c.id === existing.id ? reply : c))
+          : [...thread.comments, reply],
+      };
+      const after = assertCurrent(api, plan, app, head, false).threads.find(
+        (t) => t.id === response.thread_id,
+      );
+      if (
+        !after ||
+        digest(threadSignature(after)) !== digest(threadSignature(expected))
+      )
+        throw Error("Review thread changed before resolution");
+      api.graphql(
+        "mutation($id:ID!) { resolveReviewThread(input:{threadId:$id}) { thread { id } } }",
+        { id: response.thread_id },
+      );
+    }
+  }
+  if (state.pendingSummary) {
+    const marker = `<!-- slash-review-summary:${state.pendingSummary} -->`;
+    const existing = api
+      .edits(api.pages(`issues/${state.pr}/comments`))
+      .find((c) => ownedComment(c, app) && c.body.includes(marker));
+    const body = `Review update: ${prose(result.summary)}\n\nTests: ${prose(result.tests)}\n\n${result.outcome === "blocked" ? "A maintainer decision is needed; use a new slash command to continue." : "Addressed findings are explained in their threads."}\n\n${marker}`;
+    if (!existing)
+      api.write(`issues/${state.pr}/comments`, {
+        body,
+      });
+    else if (existing.body !== body)
+      api.write(`issues/comments/${existing.id}`, { body }, "PATCH");
+  }
+}
+
+const DESCRIPTION_START = "<!-- slash-description:start -->";
+const DESCRIPTION_END = "<!-- slash-description:end -->";
+
+function description(result, root, previous = null) {
+  let kind = "maintenance";
+  if (/^[a-z]+(?:\([^)]*\))?!:/i.test(result.title)) kind = "breaking";
+  else if (/^fix(?:\([^)]*\))?:/i.test(result.title)) kind = "bug";
+  else if (/^feat(?:\([^)]*\))?:/i.test(result.title)) kind = "feature";
+  else if (/^docs(?:\([^)]*\))?:/i.test(result.title)) kind = "docs";
+  else if (/^test(?:\([^)]*\))?:/i.test(result.title)) kind = "tests";
+  const type = (name, label) => `- [${kind === name ? "x" : " "}] ${label}`;
+  const managed = `${DESCRIPTION_START}\n## What does this PR do?\n\n${prose(result.summary)}\n\nRefs #${root}.\n\n## Type of change\n\n${[
+    type("bug", "🐛 Bug fix"),
+    type("feature", "✨ New feature"),
+    type("docs", "📚 Documentation"),
+    type("maintenance", "🔧 Maintenance/refactor"),
+    type("tests", "🧪 Tests only"),
+    type("breaking", "💥 Breaking change"),
+  ].join("\n")}\n\n## Testing\n\n- [x] I have tested these changes with a LLM agent\n- [ ] All automated tests pass (\`uv run pytest\`)\n- [ ] Code follows style guidelines (\`uv run ruff check\`)\n\n${prose(result.tests)}\n\n## Checklist\n\n- [ ] I have updated documentation if needed\n${DESCRIPTION_END}`;
+  if (previous === null) return `${managed}\n\n${ORIGIN_MARKER}${root} -->`;
+  const start = previous.indexOf(`${DESCRIPTION_START}\n`);
+  const end = previous.indexOf(DESCRIPTION_END, start);
+  // Older App PRs lack delimiters. Preserve their author and review sections.
+  if (start < 0 || end < start) return previous;
+  return previous.slice(0, start) + managed + previous.slice(end + DESCRIPTION_END.length);
+}
+
+export function publish(
+  api,
+  plan,
+  artifact,
+  app,
+  { runId, workerSucceeded = true } = {},
+) {
+  if (
+    plan.repository !== api.repository ||
+    plan.app !== app ||
+    !/^\d+$/.test(String(runId))
+  )
+    throw Error("Publication identity mismatch");
+  const fresh = collect(api, plan.snapshot.root, app);
+  if (snapshotGuard(fresh) !== plan.guard) {
+    accountStaleAttempt(api, plan, fresh, app);
+    console.warn(
+      "::warning::Slash source changed; stale output was not published. Use a fresh slash command if no new event follows.",
+    );
+    return { skipped: true, changed: snapshotDifferences(plan.snapshot, fresh) };
+  }
+  const d = plan.decision;
+  if (d.mode === "idle") return { skipped: true };
+  const state = {
+    ...(fresh.session ?? {}),
+    version: 1,
+    root: fresh.root,
+    branch: fresh.branch,
+    base: fresh.base,
+    pr: fresh.pr?.number ?? null,
+    commandId: d.latest.id,
+    commandUpdatedAt: d.latest.updated_at,
+    model: d.parsed.model,
+    task: d.task ?? fresh.session?.task ?? "",
+    rounds: d.rounds ?? fresh.session?.rounds ?? 0,
+    summary: fresh.session?.summary ?? "",
+    status: "working",
+  };
+  if (
+    fresh.session &&
+    (state.commandId !== fresh.session.commandId ||
+      state.commandUpdatedAt !== fresh.session.commandUpdatedAt)
+  )
+    delete state.pendingSummary;
+  if (d.mode === "closed") {
+    state.status = "closed";
+    state.summary = "This request cannot run because the issue or PR is closed/merged, or the command predates its latest close/reopen. Send a fresh command after reopening, or start a separate request on an open issue or PR. The agent will not reopen a closed session.";
+    save(api, state, app);
+    return state;
+  }
+  if (d.mode === "pause" || d.mode === "limit") {
+    state.status = d.mode === "pause" ? "paused" : "blocked";
+    state.summary =
+      d.mode === "pause"
+        ? "Paused by a maintainer."
+        : "Automatic iteration budget reached. Review the remaining work and send a new slash command to continue.";
+    save(api, state, app);
+    return state;
+  }
+  if (d.mode === "ready") {
+    if (!checksReady(fresh))
+      throw Error("Current checks or review threads are not ready");
+    if (fresh.pr.draft)
+      api.graphql(
+        "mutation($id:ID!) { markPullRequestReadyForReview(input:{pullRequestId:$id}) { pullRequest { id } } }",
+        { id: fresh.pr.node_id },
+      );
+    state.status = "ready";
+    state.lastHead = fresh.head;
+    state.checkedHead = fresh.head;
+    state.checkedFailure = failureHash(fresh);
+    state.handled = feedbackHash(fresh);
+    state.handledFeedback = feedbackItems(fresh);
+    save(api, state, app);
+    return state;
+  }
+  if (!workerSucceeded) {
+    state.status = "blocked";
+    state.rounds += 1;
+    state.summary = `Worker failed before producing validated output. Inspect the failed step and safe failure metadata in Actions run ${runId}, then send a new slash command to retry. The private Codex transcript is not retained.`;
+    save(api, state, app);
+    return state;
+  }
+  validateResult(artifact.result, fresh);
+  validateChanges(artifact.changes);
+  if (!/^[a-f0-9-]{36}$/.test(artifact.threadId ?? ""))
+    throw Error("Invalid Codex session ID");
+  const { result, changes } = artifact;
+  if ((result.outcome === "changed") !== changes.length > 0)
+    throw Error("Model outcome disagrees with patch contents");
+  state.rounds += 1;
+  state.summary = `${result.summary}\n\nTests: ${result.tests}\n\nContinuation: ${result.memory}`;
+  if (state.summary.length > 12000)
+    throw Error("Continuation checkpoint is too large");
+  if (result.responses.length && !state.pendingSummary)
+    state.pendingSummary = digest({
+      command: state.commandId,
+      revision: state.commandUpdatedAt,
+      head: fresh.head,
+      feedback: d.feedback,
+    });
+  if (result.outcome === "blocked") {
+    if (changes.length || result.responses.some((r) => r.resolve))
+      throw Error("Blocked output cannot publish code or resolve findings");
+    if (state.pr && state.pendingSummary) {
+      state.status = "publishing";
+      save(api, state, app);
+      respond(api, plan, app, state, result, fresh.head);
+      delete state.pendingSummary;
+    }
+    state.status = "blocked";
+    save(api, state, app);
+    return state;
+  }
+  // Reserve ownership before creating the deterministic branch. Failed publication
+  // remains visible and can be resumed with a new command without adopting a stranger's branch.
+  state.status = "publishing";
+  save(api, state, app);
+  let head = fresh.head;
+  if (changes.length) {
+    const tree = changes.map((f) => ({
+      path: f.path,
+      mode: f.mode,
+      type: "blob",
+      sha:
+        f.content === null
+          ? null
+          : api.write("git/blobs", { encoding: "base64", content: f.content })
+              .sha,
+    }));
+    const parent = api.get(`git/commits/${head}`);
+    const nextTree = api.write("git/trees", {
+      base_tree: parent.tree.sha,
+      tree,
+    });
+    const commit = api.write("git/commits", {
+      message: `${result.title.replace(/[\r\n]/g, " ")}\n\nCodex-Session: ${artifact.threadId}\nSlash-Agent-Run: ${runId}`,
+      tree: nextTree.sha,
+      parents: [head],
+    });
+    assertCurrent(api, plan, app, head);
+    const ref = api.optional(
+      `git/ref/heads/${encodeURIComponent(state.branch)}`,
+    );
+    if (ref) {
+      if (ref.object.sha !== head)
+        throw Error("Branch advanced; refusing to overwrite concurrent work");
+      api.write(
+        `git/refs/heads/${encodeURIComponent(state.branch)}`,
+        { sha: commit.sha, force: false },
+        "PATCH",
+      );
+    } else
+      api.write("git/refs", {
+        ref: `refs/heads/${state.branch}`,
+        sha: commit.sha,
+      });
+    head = commit.sha;
+  }
+  const ownedBranch =
+    fresh.session &&
+    api.optional(`git/ref/heads/${encodeURIComponent(state.branch)}`);
+  if (!state.pr && (changes.length || ownedBranch)) {
+    assertCurrent(api, plan, app, head);
+    const matches = api.pages(
+      `pulls?state=open&head=${encodeURIComponent(api.repository.split("/")[0] + ":" + state.branch)}`,
+    );
+    if (matches.length) {
+      if (
+        matches.length !== 1 ||
+        matches[0].user?.login !== `${app}[bot]` ||
+        !matches[0].body?.includes(`${ORIGIN_MARKER}${state.root} -->`)
+      )
+        throw Error("Existing PR ownership mismatch");
+      state.pr = matches[0].number;
+    } else {
+      state.pr = api.write("pulls", {
+        head: state.branch,
+        base: state.base,
+        draft: true,
+        title: result.title.replace(/[\r\n]/g, " "),
+        body: description(result, state.root),
+      }).number;
+    }
+    // Bind the new PR before resolving review feedback or waiting for its CI.
+    state.lastHead = head;
+    save(api, state, app);
+  }
+  if (state.pr) {
+    assertCurrent(api, plan, app, head);
+    respond(api, plan, app, state, result, head);
+    delete state.pendingSummary;
+    if (
+      fresh.pr?.user?.type === "Bot" &&
+      fresh.pr.user.login === `${app}[bot]`
+    ) {
+      api.write(
+        `pulls/${state.pr}`,
+        {
+          title: result.title.replace(/[\r\n]/g, " "),
+          body: description(result, state.root, fresh.pr.body),
+        },
+        "PATCH",
+      );
+    }
+  }
+  state.lastHead = head;
+  // Resolve changes are ours. Retain the admission snapshot's other feedback so
+  // new human input during publication still causes a later turn.
+  state.handled = feedbackHash({
+    ...fresh,
+    threads: fresh.threads.map((t) =>
+      result.responses.some((r) => r.thread_id === t.id && r.resolve)
+        ? { ...t, isResolved: true }
+        : t,
+    ),
+  });
+  state.handledFeedback = feedbackItems(fresh);
+  state.checkedHead = fresh.head;
+  // A new failure appearing during execution was not in the worker's prompt.
+  state.checkedFailure = failureHash(plan.snapshot);
+  // A changed result has already bound a PR above; an unchanged issue result
+  // completes in its checkpoint without creating one.
+  state.status = state.pr ? "waiting" : "complete";
+  if (!state.pr)
+    state.summary +=
+      "\n\nCompleted on the issue without repository changes; no PR was created.";
+  save(api, state, app);
+  if (state.pr) {
+    const current = collect(api, state.root, app);
+    // A clarification-only round can finish after the final CI event. Complete
+    // readiness here instead of depending on a future unrelated notification.
+    if (current.head === head && decide(current, { automatic: true }).mode === "ready") {
+      if (current.pr.draft)
+        api.graphql(
+          "mutation($id:ID!) { markPullRequestReadyForReview(input:{pullRequestId:$id}) { pullRequest { id } } }",
+          { id: current.pr.node_id },
+        );
+      state.status = "ready";
+      save(api, state, app);
+    }
+  }
+  return state;
+}

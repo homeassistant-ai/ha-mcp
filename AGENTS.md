@@ -7,7 +7,7 @@ Canonical agent guidance for HA-MCP.
 - `AGENTS.md` is the canonical source. `CLAUDE.md` is a symlink to it; edit `AGENTS.md` only.
 - This root file owns repository-wide behavior, permissions, scope, and testing policy. Linked documents own topic-specific detail.
 - Before working, read every applicable `AGENTS.md` from the repository root through the target directory; narrower files supplement every broader ancestor.
-- Follow ordinary Markdown links when the task enters their scope. Do not replace them with `@imports`: imports load every linked byte at startup and defeat progressive disclosure.
+- Read linked guidance when relevant; use Markdown links rather than startup-loading `@imports`.
 - If linked guidance conflicts with this file's behavioral rules, this file controls. Repair the conflicting duplicate rather than choosing silently.
 
 ## Repository Structure
@@ -57,8 +57,8 @@ Keep this file short enough to load on every task:
 - Keep only broadly applicable, high-value behavior in the root. Put coding conventions and subsystem procedures in their closest durable owner.
 - Retain a short section here for each major topic and state when and why to read its linked document.
 - Use ordinary Markdown links, not imports. A link must name the document's scope; avoid blind “see also” references.
-- Give each rule one canonical owner. Link instead of copying exact lists, commands, examples, or policy prose into multiple files.
-- Keep volatile counts, file inventories, workflow catalogs, historical incidents, and tutorials out of startup context; place them beside the code or process they describe.
+- Give each rule one canonical owner; link instead of copying its details.
+- Keep counts, inventories, workflow catalogs, incidents and tutorials beside their code or process, outside startup guidance.
 - Prefer short directives with concrete triggers. Explain rationale where a future editor might otherwise “simplify” a load-bearing rule.
 - Use descriptive headings, fenced code blocks, and CommonMark blank lines around headings and lists. Do not use decorative formatting as structure.
 - When guidance changes, check `AGENTS.md`, scoped `AGENTS.md` files, the style guide, contributing docs, tests, and inline references for drift.
@@ -67,7 +67,7 @@ Keep this file short enough to load on every task:
 
 Do not create, edit, label, close, or comment on an issue or pull request without user authorization for that write. Draft the exact proposed text first when approval has not already been given.
 
-Every bug or agent-behavior issue filed here must contain the report `ha_report_issue` generates (its `issue_body`, unchanged), or a `### Why there is no ha_report_issue report` section saying why there is none (even "N/A"); feature requests should too. `issue-intake.yml` labels a new one that has neither `missing bug report output`, and `report-gate.yml` closes it after 24 hours unless one is added or a maintainer removes the label.
+Bug and agent-behavior issues require the unchanged `ha_report_issue` body or a `### Why there is no ha_report_issue report` explanation; feature requests should too. The [report gate](docs/agents/issue-intake.md#report-gate) labels missing reports and closes them after 24 hours unless corrected or waived by a maintainer.
 
 The detailed label taxonomy, issue-analysis query, bot behavior, review commands, CI loop, and release automation live in the [GitHub workflow reference](docs/agents/github-workflow.md).
 
@@ -86,6 +86,7 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 - Never commit directly to `master` or `main` except for a documentation-only adjustment.
 - Never push or open a pull request without explicit user permission.
 - Open every pull request as a draft. Mark it ready only when explicitly asked, after refreshing its description and verifying required CI and reviews.
+- A maintainer slash command authorizes the [slash lifecycle](docs/agents/slash-agent.md) through readiness, including review replies and thread resolution. It never authorizes merging or requesting reviewers.
 - Never merge, close, delete branches, publish, release, or otherwise finalize work without explicit approval for that exact action.
 - Preserve the pull-request template headings and generated review sections.
 - Make routine, reversible implementation decisions autonomously. Ask before a choice materially changes scope, public behavior, architecture, or review surface; do not create competing pull requests without approval.
