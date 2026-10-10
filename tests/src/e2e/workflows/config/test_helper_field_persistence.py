@@ -697,31 +697,34 @@ class TestInputNumberPartialUpdatePreservesFields:
 
 
 @pytest.fixture
-async def icon_zone(mcp_client: Client) -> AsyncIterator[tuple[str, str]]:
-    """A zone created with ``mdi:school``, removed afterwards: (entity_id, id)."""
-    async with MCPAssertions(mcp_client) as mcp:
-        create_data = await mcp.call_tool_success(
-            "ha_config_set_helper",
-            {
-                "helper_type": "zone",
-                "name": "E2E Zone Icon Test",
-                "icon": "mdi:school",
-                "config": {"latitude": 40.7128, "longitude": -74.0060},
-            },
-        )
-    entity_id = _entity_id_from_create(create_data, "zone")
-    zone_id = create_data.get("data", {}).get("id")
+async def icon_zone(
+    mcp_client: Client, ha_client: Any
+) -> AsyncIterator[tuple[str, str]]:
+    """A zone storing ``mdi:school``, removed afterwards: (entity_id, id).
+
+    Created through Core's zone/create, as the Home Assistant UI does: the
+    helper tools keep a new zone's icon in the entity registry instead.
+    """
+    created = await ha_client.send_websocket_message(
+        {
+            "type": "zone/create",
+            "name": "E2E Zone Icon Test",
+            "icon": "mdi:school",
+            "latitude": 40.7128,
+            "longitude": -74.0060,
+        }
+    )
+    zone_id = (created.get("result") or {}).get("id")
     try:
-        assert entity_id and zone_id, f"Missing ids: {create_data}"
+        assert zone_id, f"Missing zone id: {created}"
+        async with MCPAssertions(mcp_client) as mcp:
+            listed = await mcp.call_tool_success("ha_get_zone", {"zone_id": zone_id})
+        entity_id = listed["zone"]["entity_id"]
         assert await _wait_for_entity_registration(mcp_client, entity_id)
         yield entity_id, zone_id
     finally:
-        if entity_id:
-            await safe_call_tool(
-                mcp_client,
-                "ha_remove_helpers_integrations",
-                {"helper_type": "zone", "target": entity_id, "confirm": True},
-            )
+        if zone_id:
+            await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})
 
 
 async def _stored_icon(mcp: MCPAssertions, zone_id: str) -> str | None:

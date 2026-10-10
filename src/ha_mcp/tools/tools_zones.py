@@ -451,7 +451,7 @@ class ZoneTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:briefcase'). On update, '' clears it, except an icon the zone was created with, which cannot be removed",
+                description="Material Design Icon (e.g., 'mdi:briefcase'). On update, '' clears it, except an icon stored in the zone itself (as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed",
                 default=None,
             ),
         ] = None,
