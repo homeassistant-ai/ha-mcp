@@ -1,6 +1,8 @@
 """ha_remove_helpers_integrations reports a failed removal check after a delete
 that succeeded as a warning, as the sibling delete tools do."""
 
+import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,8 +36,11 @@ class TestRemovalCheckAfterSuccessfulDelete:
         ids=["connection", "other"],
     )
     async def test_flow_path_wait_true_reports_a_failed_check_as_a_warning(
-        self, tools, mock_client, failure
-    ):
+        self,
+        tools: IntegrationTools,
+        mock_client: MagicMock,
+        failure: Exception,
+    ) -> None:
         """FLOW utility_meter wait=True: the entry is already deleted, so a
         connection error while checking one sub-entity is a warning on a
         successful delete that names the entity, which is not reported as still
@@ -78,24 +83,39 @@ class TestRemovalCheckAfterSuccessfulDelete:
         ]
         assert mock_wait.await_count == 2
 
+    @pytest.mark.parametrize(
+        ("failure", "logs_traceback"),
+        [
+            (HomeAssistantConnectionError("network down during poll"), False),
+            (ValueError("network down during poll"), True),
+        ],
+        ids=["connection", "other"],
+    )
     async def test_simple_path_wait_true_reports_a_failed_check_as_a_warning(
-        self, tools, mock_client
-    ):
-        """SIMPLE standard wait=True: the helper is already deleted, so a
-        connection error while checking its removal is a warning on a
-        successful delete, as in the sibling delete tools, not an error."""
+        self,
+        tools: IntegrationTools,
+        mock_client: MagicMock,
+        failure: Exception,
+        logs_traceback: bool,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """SIMPLE standard wait=True: the helper is already deleted, so any
+        error while checking its removal is a warning on a successful delete,
+        as in the sibling delete tools, not an error. An unexpected error is
+        also logged with its traceback."""
         mock_client.send_websocket_message.side_effect = [
             {"success": True, "result": {"unique_id": "uid-w3"}},
             {"success": True},
         ]
         mock_client.get_entity_state.return_value = {"state": "off"}
-        with patch(
-            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
-            new_callable=AsyncMock,
-        ) as mock_wait:
-            mock_wait.side_effect = HomeAssistantConnectionError(
-                "network down during poll"
-            )
+        with (
+            patch(
+                "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
+                new_callable=AsyncMock,
+                side_effect=failure,
+            ),
+            caplog.at_level(logging.WARNING, logger="ha_mcp.tools.ws_waiters"),
+        ):
             result = await tools.ha_remove_helpers_integrations(
                 target="my_button",
                 helper_type="input_button",
@@ -107,3 +127,32 @@ class TestRemovalCheckAfterSuccessfulDelete:
             "Deletion confirmed but removal verification failed: "
             "network down during poll"
         ]
+        logged = [r for r in caplog.records if r.exc_info is not None]
+        assert [r.exc_info[1] for r in logged if r.exc_info] == (
+            [failure] if logs_traceback else []
+        )
+
+    async def test_simple_path_wait_true_lets_cancellation_propagate(
+        self, tools: IntegrationTools, mock_client: MagicMock
+    ) -> None:
+        """Cancelling the removal check cancels the call; it is not turned
+        into a warning."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"unique_id": "uid-w3"}},
+            {"success": True},
+        ]
+        mock_client.get_entity_state.return_value = {"state": "off"}
+        with (
+            patch(
+                "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await tools.ha_remove_helpers_integrations(
+                target="my_button",
+                helper_type="input_button",
+                confirm=True,
+                wait=True,
+            )

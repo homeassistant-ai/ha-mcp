@@ -539,6 +539,14 @@ async def verify_entity_removed(
             f"Deletion confirmed but removal verification failed: {e}"
         )
         return
+    except Exception as e:  # cancellation is a BaseException and propagates
+        logger.warning(
+            f"Unexpected error verifying removal of {entity_id}: {e}", exc_info=True
+        )
+        response.setdefault("warnings", []).append(
+            f"Deletion confirmed but removal verification failed: {e}"
+        )
+        return
     if not removed:
         response.setdefault("warnings", []).append(
             f"Deletion confirmed but {entity_id} is still present after the wait window."
