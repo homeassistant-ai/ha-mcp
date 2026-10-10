@@ -244,6 +244,7 @@ export function decide(snapshot, trigger) {
   if (
     !changed &&
     previous.status !== "publishing" &&
+    previous.status !== "retry" &&
     !newFailure &&
     !newFeedback
   ) {

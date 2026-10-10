@@ -153,7 +153,7 @@ test("discarded paid work consumes its budget once even when public source chang
   api.issue.body += " Another reporter edit";
   publish(api, renewed, artifact(), APP, { runId: "50" });
   assert.equal(checkpoint(api).rounds, 1);
-  assert.equal(checkpoint(api).status, "waiting");
+  assert.equal(prepare(api, { number: 9, automatic: true }, APP).decision.mode, "code");
 });
 
 test("stale-attempt accounting cannot overwrite a newer command or revoked authority", () => {
@@ -165,4 +165,16 @@ test("stale-attempt accounting cannot overwrite a newer command or revoked autho
     assert.equal(publish(api, plan, artifact(), APP, { runId: "44" }).skipped, true);
     assert.equal(api.calls.length, 0);
   }
+});
+
+test("discarding a new task on a ready PR must retry its work before restoring readiness", () => {
+  const api = new FakeAPI();
+  start(api);
+  green(api);
+  publish(api, wake(api), null, APP, { runId: "43" });
+  api.prComments.push({ id: 501, user, body: "/sol implement the next requested change", updated_at: "2026-09-15T14:00:00Z" });
+  const plan = prepare(api, { number: 10, commandId: 501, automatic: false }, APP);
+  api.issue.body += " Reporter edit during the new task";
+  assert.equal(publish(api, plan, artifact(), APP, { runId: "44" }).skipped, true);
+  assert.equal(wake(api).decision.mode, "code");
 });

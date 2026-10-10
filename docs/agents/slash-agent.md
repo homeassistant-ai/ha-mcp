@@ -152,7 +152,8 @@ resumable within the iteration budget; inspect a failure and send a new command
 when intervention is needed. Stale work publishes no worker output and fails
 its Actions run with the changed snapshot fields. If the command, authority and
 checkpoint are still current, the discarded attempt is counted once against
-the budget; a newer command/session or revoked authority is never overwritten.
+the budget and stays in `retry` until a fresh worker completes or the budget
+is exhausted; a newer command/session or revoked authority is never overwritten.
 App-owned PR descriptions update their marked
 section while preserving generated review sections. Do not delete an ownership checkpoint
 while its branch is in use. Pause or disable the workflow to stop new work;

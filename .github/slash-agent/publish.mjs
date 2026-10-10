@@ -39,7 +39,7 @@ function accountStaleAttempt(api, plan, fresh, app) {
   // Publication acceptance and resource accounting are separate. The unchanged
   // checkpoint makes retries idempotent; a newer command/session is never debited.
   const rounds = plan.decision.rounds + 1;
-  save(api, {
+  const state = {
     ...(fresh.session ?? {}),
     version: 1,
     root: fresh.root,
@@ -51,9 +51,12 @@ function accountStaleAttempt(api, plan, fresh, app) {
     model: plan.decision.parsed.model,
     task: plan.decision.task,
     rounds,
-    status: rounds >= MAX_ROUNDS ? "blocked" : "waiting",
+    status: rounds >= MAX_ROUNDS ? "blocked" : "retry",
     summary: `${(fresh.session?.summary ?? "").slice(0, 10000)}\n\nWorker output was discarded because source/head/authorization changed. No worker output was published; this attempt counts against the turn budget.${rounds >= MAX_ROUNDS ? " Budget exhausted; send a new maintainer command to continue." : " A later authorized event can continue, or send a fresh slash command."}`,
-  }, app);
+  };
+  if (fresh.session?.commandId !== latest.id ||
+      fresh.session?.commandUpdatedAt !== latest.updated_at) delete state.pendingSummary;
+  save(api, state, app);
 }
 
 function threadSignature(thread) {
