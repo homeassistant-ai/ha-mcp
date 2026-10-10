@@ -1565,10 +1565,11 @@ class DeepSearchMixin(SceneSearchMixin):
         no ``<type>/list`` endpoint. Lists them via the standard config
         entries REST endpoint, then probes each entry's options flow so the
         helper's current config — template body, group members, source
-        entity, etc. — is searchable.
+        entity, etc. — is searchable. An entry without an options flow (otp)
+        is matched on its title and domain.
 
         Cost: the entries call, the cached helper-flow list, and one
-        options-flow probe per flow-helper config entry, parallelised under
+        options-flow probe per entry with an options flow, parallelised under
         ``semaphore``. The probe is skipped when the title alone already
         scores the maximum (a deeper config match can only raise the total,
         never lower it); any title that leaves headroom
@@ -1600,13 +1601,10 @@ class DeepSearchMixin(SceneSearchMixin):
             )
             return [], 1
 
-        # Options-flow config entries of a helper flow: only those have a body.
+        # Config entries of a helper flow; only those with an options flow
+        # have a body to probe, the rest are matched on title and domain.
         flow_entries = [
-            e
-            for e in response
-            if isinstance(e, dict)
-            and e.get("domain") in flows
-            and e.get("supports_options")
+            e for e in response if isinstance(e, dict) and e.get("domain") in flows
         ]
         if not flow_entries:
             return [], 0
@@ -1682,12 +1680,14 @@ class DeepSearchMixin(SceneSearchMixin):
 
         options: dict[str, Any] = {}
         probe_failed = False
-        # Only a perfect title match (score 100) makes the deeper options probe
-        # redundant — the probe can only raise the total, never lower it, so
-        # anything below 100 is worth probing (in both exact and fuzzy modes)
-        # for accurate scoring and ``match_in_config``.
-        need_probe = include_config or (
-            self._score_deep_match(
+        # Only an entry with an options flow has a body to probe. Among those,
+        # only a perfect title match (score 100) makes the probe redundant — it
+        # can only raise the total, never lower it, so anything below 100 is
+        # worth probing (in both exact and fuzzy modes) for accurate scoring
+        # and ``match_in_config``.
+        need_probe = bool(entry.get("supports_options")) and (
+            include_config
+            or self._score_deep_match(
                 title_pseudo_eid, title, name_score, 0, query_lower, exact_match
             )[0]
             < 100

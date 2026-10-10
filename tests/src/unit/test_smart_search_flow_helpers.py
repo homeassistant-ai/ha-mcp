@@ -187,26 +187,31 @@ class TestFlowHelperDeepSearch:
         probed = {c.args[0] for c in client.start_options_flow.await_args_list}
         assert "01HXLIGHTHUE" not in probed
 
-    async def test_skips_entries_without_supports_options(self) -> None:
+    async def test_optionless_entry_matches_on_title_without_a_probe(self) -> None:
+        # A helper flow with no options flow (otp) has no body to probe, but
+        # its title is still searchable.
         client = MagicMock()
         client._request = AsyncMock(
             return_value=[
                 {
                     "entry_id": "01HXNOOPTS",
-                    "domain": "template",
-                    "title": "Locked Template",
+                    "domain": "otp",
+                    "title": "Router Login",
                     "supports_options": False,
                 }
             ]
         )
+        client.start_options_flow = AsyncMock()
         tools = _make_tools(client)
-        results, _ = await tools._search_flow_helpers(
-            "locked",
+        results, failed = await tools._search_flow_helpers(
+            "router",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
-            include_config=False,
+            include_config=True,
         )
-        assert results == []
+        assert [(r["entry_id"], r["config"]) for r in results] == [("01HXNOOPTS", {})]
+        assert failed == 0
+        client.start_options_flow.assert_not_awaited()
 
     async def test_rest_call_failure_signals_failed_for_partial(self) -> None:
         # The config-entries list fetch raising means the whole flow-helper
