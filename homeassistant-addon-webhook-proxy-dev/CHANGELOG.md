@@ -14,8 +14,9 @@ history from before the fork.
 - Relay Nabu Casa cloudhooks (Settings → Home Assistant Cloud → Webhooks): read
   the body the relay provides and return SSE replies buffered, since the relay
   cannot stream. A reply that does not finish within 60 s is answered with 504,
-  and an OAuth-gated cloudhook is refused with 400 (the relay drops the
-  `WWW-Authenticate` challenge, so only the secret-URL mode works there).
+  and an unauthenticated request to an OAuth-gated cloudhook is refused with 400,
+  because the relay drops the `WWW-Authenticate` challenge so OAuth sign-in cannot
+  start there.
 
 ## v3.0.4.dev3 (2026-10-07)
 

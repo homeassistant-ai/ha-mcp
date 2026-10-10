@@ -563,7 +563,7 @@ def _build_unauthorized_response(
     ``resource_metadata`` parameter points to the protected-resource metadata
     URL where the client finds the authorization server. Home Assistant Cloud
     relays only ``Content-Type`` back from a cloudhook, so the challenge can
-    never reach that client: refuse with the reason instead (#2696).
+    never reach that client and sign-in cannot start: say so instead (#2696).
     """
     webhook_id = cfg["webhook_id"]
     if isinstance(request, MockRequest):
