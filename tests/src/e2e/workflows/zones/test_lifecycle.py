@@ -466,6 +466,35 @@ class TestZoneLifecycle:
             )
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND", data
 
+    async def test_icon_from_create_can_be_cleared(self, mcp_client, cleanup_tracker):
+        """An icon given at creation stays clearable (#2643).
+
+        Written into the stored zone it could never be removed again, because
+        Core's zone update rejects an empty icon.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            created = await mcp.call_tool_success(
+                "ha_set_zone",
+                {
+                    "name": "E2E Created Icon Zone",
+                    "latitude": 41.6,
+                    "longitude": -73.6,
+                    "icon": "mdi:school",
+                },
+            )
+            zone_id = created["zone_id"]
+            entity_id = created["entity_id"]
+            cleanup_tracker.track("zone", zone_id)
+            listed = await mcp.call_tool_success("ha_get_zone", {"zone_id": zone_id})
+            assert "icon" not in listed["zone"], listed
+
+            await mcp.call_tool_success("ha_set_zone", {"zone_id": zone_id, "icon": ""})
+            state = await mcp.call_tool_success(
+                "ha_get_state", {"entity_id": entity_id}
+            )
+            assert "icon" not in state["data"]["attributes"], state
+            await mcp.call_tool_success("ha_remove_zone", {"zone_id": zone_id})
+
     async def test_icon_set_on_update_can_be_cleared(self, mcp_client, cleanup_tracker):
         """An icon added by an update stays clearable (#2643).
 

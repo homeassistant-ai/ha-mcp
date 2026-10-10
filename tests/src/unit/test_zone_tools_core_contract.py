@@ -122,7 +122,7 @@ def _no_component_no_wait():
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "ha_mcp.tools.config_helpers.create._create_via_component",
+            "ha_mcp.tools.config_helpers.create.write_helper_item",
             new=AsyncMock(return_value=None),
         ),
         patch(
@@ -313,13 +313,18 @@ async def test_zone_backup_finds_a_zone_named_by_its_entity_id(
     async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
         if msg["type"] == "zone/list":
             return [OFFICE]
+        if msg["type"] == "config/entity_registry/list":
+            return []
         if msg["type"] == "config/entity_registry/get":
             assert msg["entity_id"] == "zone.office"
             return {"unique_id": OFFICE_ID}
         raise AssertionError(f"unexpected ws message: {msg}")
 
     monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
-    assert await backup_manager._fetch_zone(None, "zone.office") == OFFICE
+    assert await backup_manager._fetch_zone(None, "zone.office") == {
+        **OFFICE,
+        "registry_icon": None,
+    }
 
 
 async def test_listing_without_registry_does_not_list_stored_zones_twice() -> None:
@@ -339,3 +344,193 @@ async def test_listing_without_registry_does_not_list_stored_zones_twice() -> No
 
     assert [z["id"] for z in result["zones"]] == [OFFICE_ID]
     assert any("403" in w for w in result["warnings"])
+
+
+class TestCreatedZoneIconStaysClearable:
+    """A zone keeps an icon in its stored item forever (#2643), so a new
+    zone's icon goes to the entity registry, where it can be cleared."""
+
+    async def test_create_writes_the_icon_to_the_registry_only(self):
+        client = _client()
+
+        await ZoneTools(client).ha_set_zone(
+            name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
+        )
+
+        (create,) = _sent(client, "zone/create")
+        assert "icon" not in create
+        assert any(
+            m.get("icon") == "mdi:briefcase"
+            for m in _sent(client, "config/entity_registry/update")
+        )
+
+    async def test_other_helpers_keep_the_icon_in_their_stored_item(self):
+        """Only a zone shows its stored icon over a cleared registry one."""
+        from ha_mcp.tools.config_helpers.create import _execute_create_simple_helper
+
+        client = _client(
+            {"input_boolean/create": {"success": True, "result": {"id": "lamp"}}}
+        )
+
+        await _execute_create_simple_helper(
+            client,
+            "input_boolean",
+            "Lamp",
+            "mdi:lamp",
+            None,
+            None,
+            None,
+            False,
+            False,
+            {},
+        )
+
+        (create,) = _sent(client, "input_boolean/create")
+        assert create["icon"] == "mdi:lamp"
+        assert _sent(client, "config/entity_registry/update") == []
+
+    async def test_component_create_sends_the_icon_as_a_registry_field(self):
+        write = AsyncMock(return_value=None)
+        with patch("ha_mcp.tools.config_helpers.create.write_helper_item", write):
+            await ZoneTools(_client()).ha_set_zone(
+                name="Office", latitude=52.5, longitude=13.4, icon="mdi:briefcase"
+            )
+
+        payload = write.call_args.args[3]
+        assert "icon" not in payload
+        assert write.call_args.kwargs["registry"] == {"icon": "mdi:briefcase"}
+
+
+def _backup_ws(
+    zone_list: list[dict[str, Any]],
+    registry: list[dict[str, Any]],
+    update_error: str | None = None,
+) -> tuple[list[dict[str, Any]], Any]:
+    """A fake ``backup_manager._ws_send`` and the messages it received."""
+    sent: list[dict[str, Any]] = []
+
+    async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+        sent.append(dict(msg))
+        kind = msg["type"]
+        if kind == "zone/list":
+            return zone_list
+        if kind == "config/entity_registry/list":
+            return registry
+        if kind == "zone/update":
+            if update_error:
+                from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+                raise HomeAssistantCommandError(
+                    f"Command failed: {update_error}", update_error
+                )
+            return {**msg, "id": msg["zone_id"]}
+        if kind == "zone/create":
+            created = {k: v for k, v in msg.items() if k != "type"}
+            registry.append(
+                {
+                    "entity_id": "zone.office_2",
+                    "platform": "zone",
+                    "unique_id": "office",
+                }
+            )
+            return {**created, "id": "office"}
+        if kind == "config/entity_registry/update":
+            return {"entity_entry": {}}
+        raise AssertionError(f"unexpected ws message: {msg}")
+
+    return sent, fake_ws
+
+
+ZONE_ENTITY = {
+    "entity_id": "zone.office",
+    "platform": "zone",
+    "unique_id": OFFICE_ID,
+    "icon": "mdi:briefcase",
+}
+
+
+class TestZoneBackup:
+    @pytest.mark.parametrize("domain", ["zone", "helper_zone"])
+    async def test_snapshot_records_the_registry_icon(self, monkeypatch, domain):
+        sent, fake_ws = _backup_ws([OFFICE], [ZONE_ENTITY])
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+        handler = _handler(domain)
+
+        snapshot = await handler.fetch(None, OFFICE_ID)
+
+        assert snapshot == {**OFFICE, "registry_icon": "mdi:briefcase"}
+
+    @pytest.mark.parametrize("domain", ["zone", "helper_zone"])
+    async def test_restore_of_a_removed_zone_creates_it_again(
+        self, monkeypatch, domain
+    ):
+        """Core's zone/update cannot restore a zone that no longer exists."""
+        registry: list[dict[str, Any]] = []
+        sent, fake_ws = _backup_ws([], registry, update_error="not_found")
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        result = await _handler(domain).restore(
+            None, OFFICE_ID, {**OFFICE, "registry_icon": "mdi:briefcase"}
+        )
+
+        (create,) = [m for m in sent if m["type"] == "zone/create"]
+        assert {k: create[k] for k in ("name", "latitude", "longitude")} == {
+            "name": "Office",
+            "latitude": 52.5,
+            "longitude": 13.4,
+        }
+        assert "registry_icon" not in create
+        assert result["restore_mode"] == "recreated"
+        assert {
+            "type": "config/entity_registry/update",
+            "entity_id": "zone.office_2",
+            "icon": "mdi:briefcase",
+        } in sent
+
+    async def test_restore_resets_a_registry_icon_set_after_the_snapshot(
+        self, monkeypatch
+    ):
+        sent, fake_ws = _backup_ws([OFFICE], [ZONE_ENTITY])
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        await _handler("zone").restore(
+            None, OFFICE_ID, {**OFFICE, "registry_icon": None}
+        )
+
+        (update,) = [m for m in sent if m["type"] == "zone/update"]
+        assert "registry_icon" not in update
+        assert {
+            "type": "config/entity_registry/update",
+            "entity_id": "zone.office",
+            "icon": None,
+        } in sent
+
+    async def test_restore_of_an_older_snapshot_leaves_the_registry_alone(
+        self, monkeypatch
+    ):
+        sent, fake_ws = _backup_ws([OFFICE], [ZONE_ENTITY])
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        await _handler("zone").restore(None, OFFICE_ID, dict(OFFICE))
+
+        assert [m["type"] for m in sent] == ["zone/update"]
+
+    async def test_other_update_failures_are_not_turned_into_a_create(
+        self, monkeypatch
+    ):
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        sent, fake_ws = _backup_ws([], [], update_error="invalid_format")
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+
+        with pytest.raises(HomeAssistantCommandError):
+            await _handler("zone").restore(None, OFFICE_ID, dict(OFFICE))
+        assert not [m for m in sent if m["type"] == "zone/create"]
+
+
+def _handler(domain: str) -> Any:
+    mgr = MagicMock()
+    handlers: dict[str, Any] = {}
+    mgr.register = lambda h: handlers.__setitem__(h.domain, h)
+    backup_manager.register_default_handlers(mgr, None)
+    return handlers[domain]
