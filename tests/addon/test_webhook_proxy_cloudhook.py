@@ -107,7 +107,7 @@ class TestCloudhookRelay:
 
         assert response_cls.call_args.kwargs["status"] == 504
 
-    async def test_oauth_gated_cloudhook_without_public_url_is_refused(
+    async def test_oauth_gated_cloudhook_is_refused_with_the_reason(
         self, mod: ModuleType
     ) -> None:
         if not _cloudhook_relay_supported():
@@ -136,35 +136,3 @@ class TestCloudhookRelay:
 
         assert response_cls.call_args.kwargs["status"] == 400
         hass.data[mod.DOMAIN]["session"].request.assert_not_called()
-
-    async def test_oauth_gated_cloudhook_with_public_url_gets_the_401(
-        self, mod: ModuleType
-    ) -> None:
-        if not _cloudhook_relay_supported():
-            pytest.skip("flavor does not relay cloudhooks yet")
-        provider = MagicMock()
-        provider.validate_bearer = MagicMock(return_value=False)
-        provider.webhook_id = "mcp_test"
-        provider.base_url_for = MagicMock(return_value="https://ha.example.com")
-        hass = MagicMock()
-        hass.data = {
-            mod.DOMAIN: {
-                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
-                "webhook_id": "mcp_test",
-                "session": MagicMock(),
-                "oauth": provider,
-                "oauth_mode": "legacy",
-                "public_base_url": "https://ha.example.com",
-            }
-        }
-        request = MockRequest(content=b"{}", mock_source="cloud", method="POST")
-
-        with patch.object(mod.web, "Response") as response_cls:
-            await mod._handle_webhook(hass, "mcp_test", request)
-
-        kwargs = response_cls.call_args.kwargs
-        assert kwargs["status"] == 401
-        assert (
-            "https://ha.example.com/.well-known/oauth-protected-resource/api/webhook/mcp_test"
-            in kwargs["headers"]["WWW-Authenticate"]
-        )

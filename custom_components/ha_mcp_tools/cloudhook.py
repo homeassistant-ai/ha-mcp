@@ -20,10 +20,10 @@ _LOGGER = logging.getLogger(__name__)
 # A cloudhook must buffer the whole reply, and a subscription stream never
 # ends: give up after this long instead of buffering it forever.
 REPLY_SECONDS = 60
-OAUTH_NEEDS_EXTERNAL_URL = (
-    "OAuth over a cloudhook needs the integration's External URL option set to a "
-    "reachable Home Assistant URL; otherwise connect with the secret webhook URL "
-    "and auth mode 'none'."
+OAUTH_UNAVAILABLE = (
+    "OAuth cannot be used over a cloudhook: Home Assistant Cloud relays only the "
+    "Content-Type header back, so the WWW-Authenticate challenge never reaches the "
+    "client. Connect with the secret webhook URL and auth mode 'none' instead."
 )
 
 

@@ -49,13 +49,12 @@ from homeassistant.components.webhook import async_register, async_unregister
 from homeassistant.core import HomeAssistant
 from homeassistant.util.aiohttp import MockRequest
 
-from .cloudhook import OAUTH_NEEDS_EXTERNAL_URL, buffered_response
+from .cloudhook import OAUTH_UNAVAILABLE, buffered_response
 from .const import (
     DATA_WEBHOOK,
     DATA_WEBHOOK_ID,
     DOMAIN,
     OAUTH_BASE,
-    OPT_EXTERNAL_URL,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
@@ -562,17 +561,14 @@ def _build_unauthorized_response(
 
     Per RFC 9728 §5.1 / MCP 2026-07-28 Authorization Server Discovery, the
     ``resource_metadata`` parameter points to the protected-resource metadata
-    URL where the client finds the authorization server. A cloudhook's Host is
-    ``hooks.nabu.casa``, which cannot serve that document, so only a configured
-    External URL can anchor the challenge there (#2696).
+    URL where the client finds the authorization server. Home Assistant Cloud
+    relays only ``Content-Type`` back from a cloudhook, so the challenge can
+    never reach that client: refuse with the reason instead (#2696).
     """
     webhook_id = cfg["webhook_id"]
     if isinstance(request, MockRequest):
-        if not cfg.get("external_url"):
-            return web.Response(status=400, text=OAUTH_NEEDS_EXTERNAL_URL)
-        base = cfg["external_url"]
-    else:
-        base = _build_base_url(request)
+        return web.Response(status=400, text=OAUTH_UNAVAILABLE)
+    base = _build_base_url(request)
     # RFC 9728 §3.1 path-scoped location. The pointer names the id, but this
     # 401 is only produced on a request TO /api/webhook/<id>, so the caller
     # already holds it; there is no fixed-path document to point at (see
@@ -891,8 +887,6 @@ async def async_register_webhook(
         "session": session,
         CFG_CIMD_SESSION: cimd_session,
         "auth_mode": auth_mode,
-        "external_url": str(entry.options.get(OPT_EXTERNAL_URL) or "").rstrip("/")
-        or None,
         "resource_server": None,
         "oauth_provider": None,
         CFG_AUTOAPPROVE_PROVIDER: None,

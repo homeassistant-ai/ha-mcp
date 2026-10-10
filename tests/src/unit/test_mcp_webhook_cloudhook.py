@@ -69,7 +69,9 @@ async def test_cloudhook_reply_that_never_ends_is_cut_off_with_504(
     assert "did not finish within" in caplog.text
 
 
-def _oauth_gated_hass(external_url: str | None) -> tuple:
+async def test_oauth_gated_cloudhook_is_refused_with_the_reason() -> None:
+    # Home Assistant Cloud relays only Content-Type back, so the 401's
+    # WWW-Authenticate challenge could never reach the client.
     session = FakeSession(upstream=FakeUpstream(status=200))
     hass = _make_hass(validate_result=None)
     _store_cfg(
@@ -78,14 +80,6 @@ def _oauth_gated_hass(external_url: str | None) -> tuple:
         auth_mode=WEBHOOK_AUTH_HA,
         resource_server=mw.ResourceServer(hass, WEBHOOK_ID),
     )
-    hass.data[mw.DOMAIN][mw.DATA_WEBHOOK]["external_url"] = external_url
-    return hass, session
-
-
-async def test_cloudhook_without_bearer_and_without_external_url_is_refused() -> None:
-    # hooks.nabu.casa cannot serve the discovery documents, so a 401 pointing
-    # there would send the client nowhere: say what is needed instead.
-    hass, session = _oauth_gated_hass(external_url=None)
     request = mw.MockRequest(
         content=b"{}",
         mock_source="cloud",
@@ -95,23 +89,5 @@ async def test_cloudhook_without_bearer_and_without_external_url_is_refused() ->
     resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
 
     assert resp.status == 400
-    assert "External URL" in resp.text
+    assert "auth mode 'none'" in resp.text
     assert session.calls == []
-
-
-async def test_cloudhook_without_bearer_gets_the_401_on_the_external_url() -> None:
-    hass, session = _oauth_gated_hass(external_url="https://ha.example.com")
-    request = mw.MockRequest(
-        content=b"{}",
-        mock_source="cloud",
-        method="POST",
-        headers={"Host": "hooks.nabu.casa"},
-    )
-    resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, request)
-
-    assert resp.status == 401
-    assert session.calls == []
-    assert (
-        f"https://ha.example.com/.well-known/oauth-protected-resource/api/webhook/{WEBHOOK_ID}"
-        in resp.headers["WWW-Authenticate"]
-    )

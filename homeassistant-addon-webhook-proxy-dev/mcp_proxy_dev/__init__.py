@@ -685,7 +685,6 @@ async def _setup_legacy_oauth(
     )
     hass_data["oauth"] = oauth_provider
     hass_data["oauth_mode"] = OAUTH_MODE_LEGACY
-    hass_data["public_base_url"] = public_base_url
     return oauth_restart_needed
 
 
@@ -1102,7 +1101,7 @@ async def _handle_webhook(
                     f"MCP Proxy [inbound]: -> 401 Unauthorized ({reject_reason}; "
                     "expected for the initial discovery probe)",
                 )
-            rejection = discovery_rejection(request, data.get("public_base_url"))
+            rejection = discovery_rejection(request)
             if rejection is not None:
                 return rejection
             from .oauth import build_unauthorized_response
