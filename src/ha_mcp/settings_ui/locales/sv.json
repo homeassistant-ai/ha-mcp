@@ -572,7 +572,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "Hämta Dashboard",
-      "description": "Hämta dashboardinformation - lista alla dashboards, hämta konfiguration eller sök efter kort."
+      "description": "Hämta Lovelace-vyer: lista dem, läs en konfiguration eller sök bland deras kort."
     },
     "ha_config_get_label": {
       "title": "Hämta Etikett",

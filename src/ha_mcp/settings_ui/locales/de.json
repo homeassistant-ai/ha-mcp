@@ -603,7 +603,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "Dashboard abrufen",
-      "description": "Zeigt Dashboards, deren Konfiguration oder findet Karten."
+      "description": "Lovelace-Dashboards abrufen: auflisten, eine Konfiguration lesen oder ihre Karten durchsuchen."
     },
     "ha_config_get_label": {
       "title": "Label abrufen",

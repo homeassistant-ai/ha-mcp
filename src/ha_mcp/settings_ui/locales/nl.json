@@ -572,7 +572,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "Haal Dashboard op",
-      "description": "Haal dashboardinformatie op - lijst alle dashboards, haal configuratie op, of zoek naar kaarten."
+      "description": "Haal Lovelace-dashboards op: lijst ze op, lees één configuratie of doorzoek hun kaarten."
     },
     "ha_config_get_label": {
       "title": "Haal Label op",

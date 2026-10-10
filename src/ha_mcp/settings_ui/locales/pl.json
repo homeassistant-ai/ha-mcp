@@ -572,7 +572,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "Pobierz pulpit nawigacyjny",
-      "description": "Pobierz informacje o pulpicie nawigacyjnym - wyświetl wszystkie pulpity, pobierz konfigurację lub wyszukaj karty."
+      "description": "Pobierz pulpity Lovelace: wyświetl ich listę, odczytaj jedną konfigurację lub wyszukaj ich karty."
     },
     "ha_config_get_label": {
       "title": "Pobierz etykietę",

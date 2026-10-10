@@ -603,7 +603,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "Obtener panel",
-      "description": "Lista los paneles, obtiene su configuración o busca tarjetas dentro de ellos."
+      "description": "Obtén los paneles de Lovelace: enuméralos, lee una configuración o busca en sus tarjetas."
     },
     "ha_config_get_label": {
       "title": "Obtener etiqueta",

@@ -572,7 +572,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "Získat panel",
-      "description": "Získat informace o panelu – vypsat všechny panely, získat konfiguraci nebo vyhledat karty."
+      "description": "Získat řídicí panely Lovelace: vypsat je, přečíst jednu konfiguraci nebo vyhledat v jejich kartách."
     },
     "ha_config_get_label": {
       "title": "Získat štítek",

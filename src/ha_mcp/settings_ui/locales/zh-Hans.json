@@ -603,7 +603,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "获取仪表盘",
-      "description": "获取仪表盘信息——列出所有仪表盘、获取配置，或搜索卡片。"
+      "description": "获取 Lovelace 仪表盘：列出它们、读取单个配置或搜索其卡片。"
     },
     "ha_config_get_label": {
       "title": "获取标签",

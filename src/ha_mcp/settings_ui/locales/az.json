@@ -603,7 +603,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "İdarə panelini al",
-      "description": "İdarə paneli haqqında məlumat alın: bütün idarə panellərini siyahı şəklində göstərin, konfiqurasiyanı alın və ya kartları axtarın."
+      "description": "Lovelace idarəetmə panellərini əldə edin: onları sadalayın, bir konfiqurasiyanı oxuyun və ya kartlarında axtarış edin."
     },
     "ha_config_get_label": {
       "title": "Etiketi al",

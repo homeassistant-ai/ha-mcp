@@ -603,7 +603,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "Ottieni una dashboard",
-      "description": "Ottiene informazioni sulle dashboard: elenca tutte le dashboard, ne restituisce la configurazione o cerca le schede."
+      "description": "Ottieni i dashboard Lovelace: elenca, leggi una configurazione o cerca le loro schede."
     },
     "ha_config_get_label": {
       "title": "Ottieni un'etichetta",

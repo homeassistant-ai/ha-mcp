@@ -603,7 +603,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "대시보드 조회",
-      "description": "대시보드 정보를 가져옵니다. 전체 목록을 보거나 설정을 확인하거나 카드를 검색합니다."
+      "description": "Lovelace 대시보드를 가져옵니다. 목록 조회, 단일 설정 읽기, 또는 카드 검색을 수행합니다."
     },
     "ha_config_get_label": {
       "title": "라벨 조회",

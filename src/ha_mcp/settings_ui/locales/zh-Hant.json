@@ -572,7 +572,7 @@
     },
     "ha_config_get_dashboard": {
       "title": "取得儀表板",
-      "description": "取得儀表板資訊 - 列出所有儀表板、取得設定，或搜尋卡片。"
+      "description": "取得 Lovelace 儀表板：列出它們、讀取一個設定，或搜尋其卡片。"
     },
     "ha_config_get_label": {
       "title": "取得標籤",
