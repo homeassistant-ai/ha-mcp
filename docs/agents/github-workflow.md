@@ -60,12 +60,13 @@ Division of responsibility:
 ## Live testing in PR reviews
 
 Apply the [root live-testing requirement](../../AGENTS.md#testing-and-verification)
-to every PR, including documentation, tests-only, maintenance, dependencies,
-and bot-authored changes, whenever they change behavior or executable
-instructions. Automatic-review exclusions do not waive it. Pure prose or policy
-changes with no changed behavior or executable procedure need structural and
-consistency checks, not an unrelated HA smoke test. Record why live testing is
-not applicable; do not claim it was performed.
+when a PR changes behavior or executable instructions, regardless of its type.
+Dependency-only updates retain their existing validation and auto-merge
+workflows; this clarification adds no live-test gate for those updates.
+Pure prose or policy changes with no changed behavior or executable procedure
+need structural and consistency checks, not an unrelated HA smoke test.
+Documenting live-testing policy does not itself create something to live-test.
+Record why live testing is not applicable; do not claim it was performed.
 
 Either the PR author or the reviewer may perform the required live testing.
 If the author is unable or unwilling to do it, the reviewer may complete it.
@@ -73,20 +74,24 @@ Independent live testing by both is preferred, but not required. Reviewers
 must assess the supplied evidence and its coverage; they need not repeat
 adequate author testing solely to satisfy this requirement.
 
-1. Use the user's chosen environment: the fork-based
+1. For HA behavior, use the user's chosen environment: the fork-based
    [live dev environment](../dev-ha-env.md) or another live Home Assistant.
    Honor an existing choice; if none is established, ask before deploying.
    A review request does not authorize arbitrary changes to a user's HA.
-2. Exercise the PR revision with an LLM agent through MCP, including the
-   affected behavior, relevant failure cases, and deployment modes. Perform
-   setup and verification through the tools where they are the subject of
-   the change. For documentation or guidance, follow the changed procedure
-   against live HA when it changes executable instructions. Use the pure-prose
-   checks above when there is no changed behavior or procedure to exercise.
+2. Exercise the PR revision's affected behavior, relevant failure cases, and
+   deployment modes. Test HA behavior with an LLM agent through MCP, including
+   setup and verification through the tools where they are the subject of the
+   change. Test other executable behavior in its actual runtime, such as a
+   GitHub runner for workflow changes or a browser for website interactions.
+   An actual run of a changed workflow can be live evidence; an unrelated
+   passing CI suite cannot. Follow changed executable documentation in the
+   relevant runtime. Use the pure-prose checks above when there is no changed
+   behavior or procedure to exercise.
 3. Incorporate the live observations into the review alongside source analysis
-   and automated tests. Record who tested, the tested commit, environment and versions,
-   scenarios, expected and observed behavior, and any gaps in the PR's Testing
-   section and review summary. Keep credentials and private URLs out of reports.
+   and automated tests. Record who tested, the tested commit, environment and
+   versions, scenarios, expected and observed behavior, and any gaps in the PR's
+   Testing section and review summary. Keep credentials and private URLs out of
+   reports.
 4. Before recommending merge, verify that the evidence covers the current PR
    head. Re-run affected scenarios after changes; explain why earlier evidence
    still applies to anything not rerun. If live testing is unavailable, fails,
@@ -99,7 +104,7 @@ Reviewers without live access can assess live evidence supplied by the author
 or another reviewer. If adequate evidence is absent, report the review as
 partial until the author or a reviewer completes the live portion.
 This is a review requirement; existing CI checks and automatic approvals do not
-by themselves enforce or prove it.
+by themselves enforce or prove it for changes that require live testing.
 
 ## Issue labels
 

@@ -96,7 +96,7 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 
 These rules apply to every pull request:
 
-- PRs of any type require live testing of changed behavior or executable instructions before merge, on the dev environment or another live HA chosen by the user. Reviews must incorporate it; static review and CI alone are insufficient. The [live-review procedure](docs/agents/github-workflow.md#live-testing-in-pr-reviews) defines evidence and pure-prose checks.
+- Complete applicable live testing before merge under the [live-review procedure](docs/agents/github-workflow.md#live-testing-in-pr-reviews). Test HA behavior on the dev environment or another live HA chosen by the user. Reviews must incorporate the evidence; static review and CI alone cannot replace required live testing.
 - Bug fixes require a failing regression test first, then the minimal fix, unless the only possible test would restate a freely chosen configuration value (rule 4 in [`tests/AGENTS.md`](tests/AGENTS.md)).
 - New MCP tools need E2E coverage. Any existing tool without tests gains E2E coverage even when it is not otherwise part of the current pull request. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
 - Well-covered refactors, minor parameters, utilities, and documentation-only changes may need no new automated test; assess live testing separately.
