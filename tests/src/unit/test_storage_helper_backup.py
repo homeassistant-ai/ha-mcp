@@ -112,7 +112,12 @@ async def test_tag_capture_records_the_registry_name_not_the_listed_default(
 ) -> None:
     registry[0]["name"] = registry_name
     snapshot = await bm._fetch_helper(None, "abc-1", "tag")
-    assert snapshot == {"id": "abc-1", "name": captured, "description": "door"}
+    assert snapshot == {
+        "id": "abc-1",
+        "name": captured,
+        "description": "door",
+        "registry_icon": None,
+    }
 
 
 @pytest.mark.asyncio
