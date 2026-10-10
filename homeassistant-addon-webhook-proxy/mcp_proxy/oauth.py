@@ -37,12 +37,14 @@ import secrets
 import time
 from html import escape
 from pathlib import Path
-from typing import Any, Protocol, TypedDict
+from typing import Any, TypedDict
 from urllib.parse import unquote_plus, urlparse
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
+
+from .oauth_metadata import MetadataProvider as MetadataProvider
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -339,46 +341,21 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
 def _build_base_url(request: web.Request, public_base_url: str | None = None) -> str:
     """Build the public base URL used in OAuth metadata and redirects.
 
-    When `public_base_url` is provided (the operator-configured
-    `remote_url`/Nabu Casa URL written into proxy_config by start.py),
-    it wins and per-request headers are ignored. This pins canonical
-    URLs to the operator's intent and prevents an attacker who can hit
-    the addon via a forged Host header from poisoning the metadata.
+    When `public_base_url` is provided (the operator-configured `remote_url`/Nabu
+    Casa URL written into proxy_config by start.py) it wins and per-request headers
+    are ignored: canonical URLs follow the operator's intent, so a forged Host
+    header cannot poison the metadata.
 
-    Falls back to X-Forwarded-Proto/Host or request.scheme/Host when
-    no public base URL is configured (e.g. cloudflared/custom proxy
-    setups where start.py couldn't auto-detect the public URL).
+    Falls back to X-Forwarded-Proto/Host, else request.scheme/Host, when no public
+    base URL is configured; a relayed cloudhook MockRequest has no scheme (https).
     """
     if public_base_url:
         return public_base_url.rstrip("/")
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "")
-    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    scheme = request.headers.get(
+        "X-Forwarded-Proto", getattr(request, "scheme", "https")
+    )
     return f"{scheme}://{host}"
-
-
-class MetadataProvider(Protocol):
-    """Interface the mode-aware discovery-document views need from a provider.
-
-    Satisfied structurally by both `OAuthProvider` (legacy) and
-    `auth_native.ResourceServer` (ha_auth). The views additionally read the
-    implementation's `_hass` via ``getattr`` (see `_active_oauth_mode` /
-    `_active_provider`), which a Protocol cannot express for a private
-    attribute — both implementations carry it.
-    """
-
-    @property
-    def webhook_id(self) -> str:
-        """This install's private webhook id."""
-
-    def resource_url(self, base_url: str) -> str:
-        """Absolute URL of the protected webhook resource under ``base_url``."""
-
-    def authorization_server_url(self, base_url: str) -> str:
-        """Issuer / authorization-server URL under ``base_url``."""
-
-    def base_url_for(self, request: web.Request) -> str:
-        """Public base URL for ``request`` per the provider's policy
-        (legacy: pinned to the configured URL; ha_auth: request-host-derived)."""
 
 
 def _active_oauth_mode(provider: object) -> str | None:
@@ -834,8 +811,7 @@ class AuthorizationServerMetadataView(HomeAssistantView):
 
 
 class WellKnownProtectedResourceView(HomeAssistantView):
-    """RFC 9728 §3.1 path-scoped Protected Resource Metadata — the ONLY
-    protected-resource document this integration serves.
+    """RFC 9728 §3.1 metadata for the webhook and its read-only alias.
 
     Served at the well-known location derived from the webhook resource URL
     (`/.well-known/oauth-protected-resource/api/webhook/<id>`), which is also
@@ -882,6 +858,7 @@ class WellKnownProtectedResourceView(HomeAssistantView):
         self.url = (
             f"/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
         )
+        self.extra_urls = [f"{self.url}/readonly"]
 
     async def get(self, request: web.Request) -> web.Response:
         hass = getattr(self._provider, "_hass", None)
@@ -901,9 +878,12 @@ class WellKnownProtectedResourceView(HomeAssistantView):
         if provider.webhook_id != self._bound_webhook_id:
             return _json_not_found()
         base = provider.base_url_for(request)
+        resource = provider.resource_url(base)
+        if request.path == f"{self.url}/readonly":
+            resource += "/readonly"
         return web.json_response(
             {
-                "resource": provider.resource_url(base),
+                "resource": resource,
                 "authorization_servers": [provider.authorization_server_url(base)],
                 "bearer_methods_supported": ["header"],
                 "resource_documentation": (
@@ -1321,6 +1301,8 @@ def build_unauthorized_response(
     metadata_url = (
         f"{base}/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
     )
+    if getattr(request, "path", "") == f"/api/webhook/{provider.webhook_id}/readonly":
+        metadata_url += "/readonly"
     return web.Response(
         status=401,
         text="Unauthorized",
