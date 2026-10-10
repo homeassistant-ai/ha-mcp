@@ -16,11 +16,19 @@
   because the relay drops the `WWW-Authenticate` challenge so OAuth sign-in cannot
   start there.
 
+### Documentation
+
+- Add **Read-only agent connections** to the app documentation: append
+  `/readonly` to the webhook URL to hide write tools and block write calls for
+  that connection.
+
 ### Maintenance
 
 - Pull the Python base image from the ECR Public mirror of the Docker Hub
   official image (same pinned digest), so building the app no longer depends on
   Docker Hub's anonymous pull rate limit.
+- Move the OAuth discovery views' provider contract into its own module
+  (`oauth_metadata.py`), without changing behavior.
 
 ## v3.0.3 (2026-09-13)
 
