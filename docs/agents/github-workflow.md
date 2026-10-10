@@ -57,6 +57,55 @@ Division of responsibility:
   pull-request size, and issue linkage.
 - `/my-pr-checker`: lifecycle management, review threads, CI, and fixes.
 
+## Live testing in PR reviews
+
+Apply the [root live-testing requirement](../../AGENTS.md#testing-and-verification)
+when a PR changes behavior or executable instructions, regardless of its type.
+Dependency-only updates retain their existing validation and auto-merge
+workflows; this clarification adds no live-test gate for those updates.
+Pure prose or policy changes with no changed behavior or executable procedure
+need structural and consistency checks, not an unrelated HA smoke test.
+Documenting live-testing policy does not itself create something to live-test.
+Record why live testing is not applicable; do not claim it was performed.
+
+Either the PR author or the reviewer may perform the required live testing.
+If the author is unable or unwilling to do it, the reviewer may complete it.
+Independent live testing by both is preferred, but not required. Reviewers
+must assess the supplied evidence and its coverage; they need not repeat
+adequate author testing solely to satisfy this requirement.
+
+1. For HA behavior, use the user's chosen environment: the fork-based
+   [live dev environment](../dev-ha-env.md) or another live Home Assistant.
+   Honor an existing choice; if none is established, ask before deploying.
+   A review request does not authorize arbitrary changes to a user's HA.
+2. Exercise the PR revision's affected behavior, relevant failure cases, and
+   deployment modes. Test HA behavior with an LLM agent through MCP, including
+   setup and verification through the tools where they are the subject of the
+   change. Test other executable behavior in its actual runtime, such as a
+   GitHub runner for workflow changes or a browser for website interactions.
+   An actual run of a changed workflow can be live evidence; an unrelated
+   passing CI suite cannot. Follow changed executable documentation in the
+   relevant runtime. Use the pure-prose checks above when there is no changed
+   behavior or procedure to exercise.
+3. Incorporate the live observations into the review alongside source analysis
+   and automated tests. Record who tested, the tested commit, environment and
+   versions, scenarios, expected and observed behavior, and any gaps in the PR's
+   Testing section and review summary. Keep credentials and private URLs out of
+   reports.
+4. Before recommending merge, verify that the evidence covers the current PR
+   head. Re-run affected scenarios after changes; explain why earlier evidence
+   still applies to anything not rerun. If live testing is unavailable, fails,
+   or leaves required behavior unverified, report validation as incomplete and
+   keep the PR unready for merge. Static review, green CI, or a checked box
+   without supporting evidence does not satisfy the requirement.
+5. Clean up test resources and cancel a dev-environment run when finished.
+
+Reviewers without live access can assess live evidence supplied by the author
+or another reviewer. If adequate evidence is absent, report the review as
+partial until the author or a reviewer completes the live portion.
+This is a review requirement; existing CI checks and automatic approvals do not
+by themselves enforce or prove it for changes that require live testing.
+
 ## Issue labels
 
 Triage-state labels:
@@ -168,6 +217,8 @@ The permission, worktree, draft, testing, scope, and completion rules are in
    pass and every addressed thread is resolved.
 7. If the pull request is already ready for review, refresh the description
    whenever the implemented scope has changed.
+8. Complete the [live review](#live-testing-in-pr-reviews), address its findings,
+   and update its evidence after changes before recommending merge.
 
 `pr.yml` (unit tests, lint, E2E validation and the required gates),
 `codeql-quality.yml` and `performance-tests.yml` run only for pull requests
@@ -175,9 +226,11 @@ that target `master`; HAOS E2E and a few path-filtered
 workflows run for any base. Open a stacked pull request against `master` and
 say in its body which pull request must merge first.
 
-Before declaring the pull request ready, verify the current head, the complete
-required-check state, and the review-thread state. Post an implementation
-summary only when the pull request actually reaches that state.
+Before recommending merge, verify the current head, applicable live-testing
+evidence, the complete required-check state, and the review-thread state. Post
+an implementation summary only when the pull request actually reaches that state.
+A PR may be marked ready for review before the reviewer completes live testing;
+missing required live-testing evidence blocks merging, not requesting review.
 
 ## CI/CD workflows
 

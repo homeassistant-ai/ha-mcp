@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { command, stateFrom } from "../../.github/slash-agent/core.mjs";
 import { prepare } from "../../.github/slash-agent/main.mjs";
 import { publish } from "../../.github/slash-agent/publish.mjs";
-import { APP, user, artifact, FakeAPI, start, green } from "./slash-agent-fixtures.mjs";
+import { APP, user, artifact, FakeAPI, initial, start, green } from "./slash-agent-fixtures.mjs";
 
 const wake = (api) => prepare(api, { number: 10, automatic: true }, APP);
 const unchanged = () => {
@@ -74,16 +74,34 @@ for (const closed of ["issue", "pr"]) {
   });
 }
 
-test("a note above the managed description survives while its summary updates", () => {
+for (const refresh of [false, true]) {
+  test(`publishing ${refresh ? "updated" : "new"} descriptions does not attest to unperformed live testing`, () => {
+    const api = new FakeAPI();
+    const work = refresh ? unchanged() : artifact();
+    work.result.tests = "Live testing was not performed.";
+    if (refresh) {
+      start(api);
+      api.reviews.push({ id: 501, user, body: "Clarify test coverage", state: "COMMENTED", submitted_at: "2026-09-15T14:00:00Z" });
+    }
+    publish(api, refresh ? wake(api) : initial(api), work, APP, { runId: "44" });
+    const testing = api.pr.body.split("## Testing\n")[1].split("## Checklist")[0];
+    assert.doesNotMatch(testing, /^- \[x\]/im);
+    assert.match(testing, /^- \[ \].*live-tested.*\(if applicable\)$/m);
+    assert.match(testing, /Live testing was not performed\./);
+  });
+}
+
+test("maintainer notes and CodeRabbit release notes survive a managed summary update", () => {
   const api = new FakeAPI();
   start(api);
-  api.pr.body = `Maintainer note\n\n${api.pr.body}\n\nBot release notes`;
+  const releaseNotes = "<!-- This is an auto-generated comment: release notes by coderabbit.ai -->\n## Summary by CodeRabbit\n\n* Fixed automation scope.\n<!-- end of auto-generated comment: release notes by coderabbit.ai -->";
+  api.pr.body = `Maintainer note\n\n${api.pr.body}\n\n${releaseNotes}`;
   api.reviews.push({ id: 501, user, body: "Clarify the summary", state: "COMMENTED", submitted_at: "2026-09-15T14:00:00Z" });
   const work = unchanged();
   work.result.summary = "Updated the explanation.";
   publish(api, wake(api), work, APP, { runId: "44" });
   assert.ok(api.pr.body.startsWith("Maintainer note\n\n"));
-  assert.ok(api.pr.body.endsWith("Bot release notes"));
+  assert.ok(api.pr.body.endsWith(releaseNotes));
   assert.match(api.pr.body, /Updated the explanation/);
   assert.ok(!api.pr.body.includes("Fixed the accepted scope"));
 });

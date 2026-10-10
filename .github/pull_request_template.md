@@ -13,11 +13,17 @@
 ## Testing
 
 <!-- Describe what was exercised: the tests added or changed and what they
-     cover, plus any manual or agent checks. Do NOT list CI results, pass
+     cover, plus any manual or agent checks. For live-testing applicability,
+     follow AGENTS.md#testing-and-verification and
+     docs/agents/github-workflow.md#live-testing-in-pr-reviews. Record the tester
+     (author or reviewer), tested commit, user-chosen environment and versions,
+     scenarios, expected and observed behavior, and remaining gaps. Where live
+     HA testing does not apply, explain why and describe the relevant checks.
+     Do not include credentials or private URLs. Do NOT list CI results, pass
      counts, run links, or per-lane status. Reviewers see those in the PR's
      checks, and they go stale on the next push. -->
 
-- [ ] I have tested these changes with a LLM agent (tested directly on a live HA instance, or directly on an emulated HA instance such as the live dev environment)
+- [ ] The author or a reviewer has live-tested this PR with an LLM agent on the dev environment or another live HA chosen by the user (if applicable)
 - [ ] All automated tests pass (`uv run pytest`)
 - [ ] Code passes lint, format, and type checks (`uv run ruff check`, `uv run ruff format --check` on changed files, `uv run mypy src/`)
 
