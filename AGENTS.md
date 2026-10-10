@@ -7,7 +7,7 @@ Canonical agent guidance for HA-MCP.
 - `AGENTS.md` is the canonical source. `CLAUDE.md` is a symlink to it; edit `AGENTS.md` only.
 - This root file owns repository-wide behavior, permissions, scope, and testing policy. Linked documents own topic-specific detail.
 - Before working, read every applicable `AGENTS.md` from the repository root through the target directory; narrower files supplement every broader ancestor.
-- Follow ordinary Markdown links when the task enters their scope. Do not replace them with `@imports`: imports load every linked byte at startup and defeat progressive disclosure.
+- Read linked guidance when relevant; use Markdown links rather than startup-loading `@imports`.
 - If linked guidance conflicts with this file's behavioral rules, this file controls. Repair the conflicting duplicate rather than choosing silently.
 
 ## Repository Structure
@@ -57,8 +57,8 @@ Keep this file short enough to load on every task:
 - Keep only broadly applicable, high-value behavior in the root. Put coding conventions and subsystem procedures in their closest durable owner.
 - Retain a short section here for each major topic and state when and why to read its linked document.
 - Use ordinary Markdown links, not imports. A link must name the document's scope; avoid blind “see also” references.
-- Give each rule one canonical owner. Link instead of copying exact lists, commands, examples, or policy prose into multiple files.
-- Keep volatile counts, file inventories, workflow catalogs, historical incidents, and tutorials out of startup context; place them beside the code or process they describe.
+- Give each rule one canonical owner; link instead of copying its details.
+- Keep counts, inventories, workflow catalogs, incidents and tutorials beside their code or process, outside startup guidance.
 - Prefer short directives with concrete triggers. Explain rationale where a future editor might otherwise “simplify” a load-bearing rule.
 - Use descriptive headings, fenced code blocks, and CommonMark blank lines around headings and lists. Do not use decorative formatting as structure.
 - When guidance changes, check `AGENTS.md`, scoped `AGENTS.md` files, the style guide, contributing docs, tests, and inline references for drift.
