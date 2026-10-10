@@ -775,3 +775,40 @@ class TestZoneIconPersistence:
                 expected_error="cannot be removed",
             )
             assert await _stored_icon(mcp, zone_id) == "mdi:school"
+
+
+@pytest.mark.asyncio
+@pytest.mark.config
+async def test_person_icon_lands_in_the_registry_and_can_be_cleared(
+    mcp_client: Client,
+) -> None:
+    """Core's person schema has no icon field: the icon goes to the registry."""
+    async with MCPAssertions(mcp_client) as mcp:
+        created = await mcp.call_tool_success(
+            "ha_config_set_helper",
+            {"helper_type": "person", "name": "E2E Icon Person", "icon": "mdi:star"},
+        )
+        entity_id = _entity_id_from_create(created, "person")
+        try:
+            assert entity_id, created
+            assert await _wait_for_entity_registration(mcp_client, entity_id)
+            state = await mcp.call_tool_success(
+                "ha_get_state", {"entity_id": entity_id}
+            )
+            assert state["data"]["attributes"].get("icon") == "mdi:star", state
+
+            await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {"helper_type": "person", "helper_id": entity_id, "icon": ""},
+            )
+            state = await mcp.call_tool_success(
+                "ha_get_state", {"entity_id": entity_id}
+            )
+            assert "icon" not in state["data"]["attributes"], state
+        finally:
+            if entity_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {"helper_type": "person", "target": entity_id, "confirm": True},
+                )
