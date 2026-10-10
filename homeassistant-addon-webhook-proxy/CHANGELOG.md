@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v3.0.4 (2026-10-10)
+
+### Features
+
+- Add `/api/webhook/<id>/readonly` connections using the existing
+  authentication, with matching OAuth protected-resource metadata. Requires an
+  MCP server with read-only endpoint support.
+- Relay Nabu Casa cloudhooks (Settings → Home Assistant Cloud → Webhooks): read
+  the body the relay provides and return SSE replies buffered, since the relay
+  cannot stream. A reply that does not finish within 60 s is answered with 504,
+  and an unauthenticated request to an OAuth-gated cloudhook is refused with 400,
+  because the relay drops the `WWW-Authenticate` challenge so OAuth sign-in cannot
+  start there.
+
+### Maintenance
+
+- Pull the Python base image from the ECR Public mirror of the Docker Hub
+  official image (same pinned digest), so building the app no longer depends on
+  Docker Hub's anonymous pull rate limit.
+
 ## v3.0.3 (2026-09-13)
 
 ### Security
