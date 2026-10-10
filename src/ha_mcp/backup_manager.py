@@ -209,17 +209,18 @@ class _FlowHelperReadError(HomeAssistantError):
 
 
 class _FlowHelperBackupSkip(_FlowHelperReadError):
-    """A flow helper without options to back up; best-effort capture logs it at INFO."""
+    """Nothing to back up: no stored or disclosed options, or no helper flow Core
+    lists. Best-effort capture logs it at INFO."""
 
 
 def _is_flow_helper_domain(domain: str) -> bool:
     """A ``helper_<type>`` snapshot domain of a config-entry (flow) helper.
 
     Any type that is neither a storage helper nor a config subentry counts; the
-    type itself is not checked here. Callers check it against
-    ``helper_flows.helper_flow_types`` (ha_config_set_helper only after its
-    auto-backup capture), as does ``resolve_config_entry_backup_domain`` for the
-    domain of an arbitrary config entry.
+    type itself is not checked here. The tools check it against Core's helper
+    flow list (``helper_flows.require_helper_type``; ha_config_set_helper only
+    after its auto-backup capture, which checks an uncovered type itself), as
+    does ``resolve_config_entry_backup_domain`` for an arbitrary config entry.
     """
     helper_type = domain[7:] if domain.startswith("helper_") else ""
     return helper_type not in ("", *_HELPER_LIST_TYPES, "config_subentry")
@@ -3190,10 +3191,9 @@ async def _fetch_flow_helper(client: Any, entity_id: str, helper_type: str) -> A
         )
     covered = _require_list(result.get("covered_types"), "helpers_list.covered_types")
     if helper_type not in covered:
-        raise _FlowHelperReadError(
-            f"The component cannot authoritatively read {helper_type} helpers",
-            f"{helper_type}_read_unsupported",
-        )
+        from .tools.config_entry_backup import uncovered_flow_helper_error
+
+        raise await uncovered_flow_helper_error(client, helper_type)
     records = _require_list(result.get("helpers"), "ha_mcp_tools/helpers_list.helpers")
     entries: dict[str, dict[str, Any]] = {}
     for raw_record in records:

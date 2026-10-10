@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -191,12 +192,11 @@ def _enable_auto_backup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
     )
 
 
-@pytest.mark.asyncio
-async def test_an_update_with_an_unknown_helper_type_is_refused_before_any_write(
+async def _update_unknown_helper_type(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """with_auto_backup captures before the tool body checks helper_type; the
-    update is still refused before its options flow starts."""
+) -> tuple[dict[str, Any], _Client]:
+    """Update a ``no_such_helper`` the component does not cover and Core does
+    not list; return the refusal and the client."""
     _enable_auto_backup(monkeypatch, tmp_path)
 
     async def fake_ws_send(client: Any, message: dict[str, Any]) -> Any:
@@ -209,8 +209,34 @@ async def test_an_update_with_an_unknown_helper_type_is_refused_before_any_write
         await HelperConfigTools(client).ha_config_set_helper(
             helper_type="no_such_helper", helper_id="entry_1", config={"x": 1}
         )
-    assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    return _error(exc_info), client
+
+
+@pytest.mark.asyncio
+async def test_an_update_with_an_unknown_helper_type_is_refused_before_any_write(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """with_auto_backup captures before the tool body checks helper_type; the
+    update is still refused before its options flow starts."""
+    error, client = await _update_unknown_helper_type(monkeypatch, tmp_path)
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     client.start_options_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_skipped_capture_of_an_unknown_helper_type_is_not_a_failed_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A type Core does not list has nothing to back up: the capture logs the
+    skip at INFO, not a failed fetch at WARNING."""
+    with caplog.at_level(logging.INFO):
+        await _update_unknown_helper_type(monkeypatch, tmp_path)
+    records = [r for r in caplog.records if r.name == bm.logger.name]
+    assert [r for r in records if r.levelno >= logging.WARNING] == []
+    assert any(
+        r.levelno == logging.INFO and "no_such_helper" in r.getMessage()
+        for r in records
+    )
 
 
 @pytest.mark.asyncio

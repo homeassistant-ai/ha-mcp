@@ -4,7 +4,7 @@
 integrations of ``integration_type: "helper"`` — the list the HA UI offers under
 "Create helper". Cached per client for a few minutes so a tool call does not pay
 a REST round-trip each time; a type missing from a cached copy is re-read once
-before it is refused (``listed_helper_flows``), so a newly installed helper
+before it counts as unlisted (``listed_helper_flows``), so a newly installed helper
 integration is found.
 """
 
