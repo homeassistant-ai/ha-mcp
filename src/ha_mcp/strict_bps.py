@@ -45,7 +45,6 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
 
 from .errors import ErrorCode, create_error_response
 from .tools.helpers import raise_tool_error
-from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +81,7 @@ def _warn_degraded_once(branch: str, message: str, *, exc_info: bool = False) ->
 #   principle intact.
 #
 # The key is published ONLY by ``strict_bps_ack_line`` (surfaced through
-# ha_get_skill_guide Tier 3 when strict mode is effective) and validated ONLY
+# every ha_get_skill_guide read when strict mode is effective) and validated ONLY
 # by the middleware — it must never appear in a block error, a tool
 # docstring, or a skill_content embed.
 STRICT_BPS_ACK_KEY_PREFIX = "I-HAVE-READ-THE-BEST-PRACTICES-GUIDE"
@@ -143,8 +142,8 @@ BestPracticeKeyParam = Annotated[
 #   ha_config_set_dashboard  → _DASHBOARD_SKILL_FILES[0]
 #   ha_config_set_yaml       → _YAML_SKILL_FILES[0]
 STRICT_BPS_GATED_TOOLS: dict[str, str] = {
-    "ha_config_set_automation": "references/automation-patterns.md",
-    "ha_config_set_script": "references/automation-patterns.md",
+    "ha_config_set_automation": "references/triggers-and-conditions.md",
+    "ha_config_set_script": "references/automation-actions.md",
     "ha_config_set_scene": "SKILL.md",
     "ha_config_set_helper": "references/helper-selection.md",
     "ha_config_set_dashboard": "references/dashboard-guide.md",
@@ -165,13 +164,14 @@ def strict_bps_effective() -> bool:
 
     * A ``ValidationError`` from the settings load — a corrupt settings env
       must not brick every gated write. Mirrors the narrow degrade in
-      ``build_skill_content`` (util_helpers.py).
-    * ``get_skills_dir()`` returns None (skills-vendor submodule absent) —
-      with the vendor missing the key is unobtainable, so the gate would
-      otherwise lock out every gated write with no recovery path.
+      ``build_skill_content`` (config_write_helpers.py).
+    * No best-practices skill the guide can serve (skills-vendor
+      submodule absent, skill folder missing or symlinked, or SKILL.md
+      frontmatter unparseable). The key is then unobtainable, so the gate
+      would otherwise lock out every gated write with no recovery path.
     """
     from .config import get_global_settings
-    from .utils.skill_loader import get_skills_dir
+    from .utils.skill_loader import best_practices_skill, get_skills_dir
 
     try:
         settings = get_global_settings()
@@ -186,13 +186,13 @@ def strict_bps_effective() -> bool:
     if not (settings.enable_mandatory_bps and settings.enable_strict_mandatory_bps):
         return False
 
-    if get_skills_dir() is None:
+    if best_practices_skill(get_skills_dir()) is None:
         _warn_degraded_once(
             "skills-vendor",
-            "strict-BPS gate disabled: skills-vendor submodule is missing, so "
-            "the acknowledgment key is unobtainable — allowing gated writes "
-            "through rather than locking them out. Run "
-            "`git submodule update --init` on the server install.",
+            "strict-BPS gate disabled: the best-practices skill in skills-vendor "
+            "is missing or unreadable, so the acknowledgment key is "
+            "unobtainable. Allowing gated writes through rather than locking "
+            "them out. Run `git submodule update --init` on the server install.",
         )
         return False
 
@@ -202,8 +202,8 @@ def strict_bps_effective() -> bool:
 def strict_bps_ack_line() -> str:
     """Return the single line that publishes the acknowledgment key.
 
-    Prepended to the ha_get_skill_guide Tier-3 best-practices content when
-    strict mode is effective (server.py). This is the ONLY place the actual
+    Prepended to every file ha_get_skill_guide serves when strict mode is
+    effective (server.py). This is the ONLY place the actual
     key value is emitted to a caller.
     """
     return (
@@ -240,8 +240,8 @@ def _raise_bps_ack_required_error(name: str) -> NoReturn:
             ErrorCode.BPS_ACKNOWLEDGMENT_REQUIRED,
             message,
             suggestions=[
-                f"Call ha_get_skill_guide(skill={_HA_BEST_PRACTICES_SKILL_NAME!r}, "
-                f"file={reference_file!r}), read the content, then retry with "
+                f"Call ha_get_skill_guide(file={reference_file!r}), read the "
+                f"content, then retry with "
                 f"{STRICT_BPS_KEY_PARAM} set.",
                 f"If your client then rejects the retry with a schema-validation "
                 f"error such as 'must NOT have additional properties', it is "

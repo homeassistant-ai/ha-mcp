@@ -19,6 +19,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -26,12 +27,9 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    build_pagination_metadata,
-    wait_for_entity_registered,
-    wait_for_entity_removed,
-)
+from .response_helpers import build_pagination_metadata
+from .tool_hints import read_only_hints, write_hints
+from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 
@@ -137,12 +135,7 @@ class GroupTools:
     @tool(
         name="ha_config_list_groups",
         tags={"Groups"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Groups",
-        },
+        annotations=read_only_hints("List Groups", open_world=False),
     )
     @log_tool_usage
     async def ha_config_list_groups(
@@ -219,7 +212,7 @@ class GroupTools:
                 "message": f"Found {total_count} group(s)",
             }
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error listing groups: {e}")
             exception_to_structured_error(
                 e,
@@ -234,11 +227,12 @@ class GroupTools:
     @tool(
         name="ha_config_set_group",
         tags={"Groups"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Group",
-        },
+        annotations=write_hints(
+            "Create or Update Group",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage
@@ -395,7 +389,7 @@ class GroupTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error setting group {object_id!r}: {e}")
             exception_to_structured_error(
                 e,
@@ -412,12 +406,9 @@ class GroupTools:
     @tool(
         name="ha_config_remove_group",
         tags={"Groups"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Group",
-        },
+        annotations=write_hints(
+            "Remove Group", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage
@@ -512,7 +503,7 @@ class GroupTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing group {object_id!r}: {e}")
             exception_to_structured_error(
                 e,

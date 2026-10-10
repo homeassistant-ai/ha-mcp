@@ -1,25 +1,35 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/sv.json (keys addon.*, features.*,
-# addon_dev.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/sv.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Verifiera TLS-certifikat
+    description: 'Verifiera Home Assistant-serverns TLS-certifikat. Stäng bara av
+      detta på ett betrott nätverk, för ett självsignerat certifikat eller om värdnamnet
+      inte matchar: det försvagar transportsäkerheten.'
+  ha_tool_concurrency:
+    name: Samtidighet för Home Assistant-verktyg
+    description: Valfri gräns för yttre Home Assistant-verktygsanrop över alla sessioner.
+      Intern REST-, WebSocket- och per-verktyg-samtidighet förblir oförändrad. 0 behåller
+      obegränsat beteende. Ett anrop som väntar på kapacitet misslyckas efter 60 sekunder.
+      Intervall 0–32.
   backup_hint:
-    name: Förslagsläge för fullständig HA-ögonblicksbild (LLM-riktad)
-    description: 'Justerar formuleringen av tipset som LLM ser i verktygsbeskrivningen
-      för `ha_manage_backup(scope=''snapshot'')` för när en fullständig Home Assistant
-      tarball-säkerhetskopia ska föreslås före riskfyllda operationer (t.ex. massborttagning
-      av enheter). Påverkar ENDAST denna LLM-riktade uppmaningsmening.
-
-
-      För automatiska ögonblicksbilder per redigering av automationer / skript / hjälpare
-      / etc., använd den separata växlingsknappen **Aktivera automatisk säkerhetskopiering
-      av redigeringar** nedan.'
-  secret_path:
-    name: Åsidosättning av hemlig sökväg
-    description: 'Valfri anpassad HTTP-sökväg för MCP-servern. Lämna tom för att använda
-      den automatiskt genererade säkra sökvägen.
-
-      '
+    name: Nivå för säkerhetskopieringstips
+    description: Hur starkt AI-assistenter uppmanas att föreslå en fullständig Home
+      Assistant-säkerhetskopia före riskabla ändringar. Det ändrar bara detta tips;
+      automatiska redigeringssäkerhetskopior har sin egen inställning.
+  enable_beta_features:
+    name: Aktivera beta-funktioner (huvud)
+    description: ⚠ FARA — dessa verktyg kan PERMANENT SKADA din Home Assistant-installation.
+      De skriver till din YAML-konfiguration, ditt filsystem, installerar anpassade
+      komponenter, kör godtycklig sandlådad Python och redigerar verktygsdokumentsträngar
+      som AI:n ser. Det finns ingen garanti och ingen supportgaranti — du aktiverar
+      dem på EGEN RISK. Ta en Home Assistant-säkerhetskopia innan du aktiverar detta,
+      och aktivera aldrig i produktion utan en. Huvudgrind för de experimentella underflaggorna
+      nedan; underflaggor ignoreras vid körning när denna huvudgrind är avstängd,
+      även när de uttryckligen är inställda på sant. Samma växling visas också i webbinställningsgränssnittet
+      under "Betafunktioner (farliga)" — båda ytorna återspeglar den andra vid omstart.
   enable_tool_search:
     name: Aktivera verktygssökning
     description: 'Ersätter hela verktygskatalogen med sökbaserad upptäckt. Minskar
@@ -36,6 +46,13 @@ configuration:
       så att du inte lämnar detta aktiverat i onödan. Verktyg hittas via ha_search_tools
       och exekveras via kategoriserade proxys (läs/skriv/radera). Kräver omstart för
       att träda i kraft.'
+  tool_search_max_results:
+    name: Max antal resultat för verktygssökning
+    description: Maximalt antal dolda verktyg som returneras per ha_search_tools-anrop
+      när verktygssökning är aktiverad; ett fastnålat verktyg som rankas inom det
+      översta antalet läggs till som en kort post enbart med namn ovanför det. Lägre
+      värden (2–3) sparar kontext-tokens men kan missa relevanta verktyg. Kräver omstart.
+      Intervall 2–10.
   enable_tool_security_policies:
     name: Aktivera verktygssäkerhetspolicyer (avancerat)
     description: Spärra verktygsanrop med hög risk (lås-/larmkontroll, automatiseringsskrivningar,
@@ -72,91 +89,6 @@ configuration:
       över, eftersom utbyte av små fragment skulle korruptera orelaterad utdata).
       Fält som inte är markerade som lösenord av sitt schema kan inte upptäckas. Av
       som standard.
-  enable_beta_features:
-    name: Aktivera beta-funktioner (huvud)
-    description: ⚠ FARA — dessa verktyg kan PERMANENT SKADA din Home Assistant-installation.
-      De skriver till din YAML-konfiguration, ditt filsystem, installerar anpassade
-      komponenter, kör godtycklig sandlådad Python och redigerar verktygsdokumentsträngar
-      som AI:n ser. Det finns ingen garanti och ingen supportgaranti — du aktiverar
-      dem på EGEN RISK. Ta en Home Assistant-säkerhetskopia innan du aktiverar detta,
-      och aktivera aldrig i produktion utan en. Huvudgrind för de experimentella underflaggorna
-      nedan; underflaggor ignoreras vid körning när denna huvudgrind är avstängd,
-      även när de uttryckligen är inställda på sant. Samma växling visas också i webbinställningsgränssnittet
-      under "Betafunktioner (farliga)" — båda ytorna återspeglar den andra vid omstart.
-  enable_yaml_config_editing:
-    name: Aktivera redigering av YAML-konfiguration (beta)
-    description: Betafunktion. Tillåter AI-assistenter att lägga till, ersätta eller
-      ta bort toppnivånycklar i configuration.yaml och packages/*.yaml. Endast vitlistade
-      nycklar är tillåtna (t.ex. template, sensor, command_line, mqtt, knx); kärnnycklar
-      som homeassistant, http och recorder är blockerade. Varje redigering validerar
-      YAML-syntax, kör en konfigurationskontroll och skapar en automatisk säkerhetskopia.
-      Ändringar av de flesta nycklar kräver en fullständig HA-omstart för att träda
-      i kraft. Se docs/beta.md för kända begränsningar. Dedikerade verktyg (automations,
-      scripts, scenes, helpers, template sensors) bör föredras när de är tillgängliga.
-      KRÄVER att huvudbrytaren "Aktivera betafunktioner" ovan (och i webbgränssnittet)
-      är påslagen — annars ignoreras denna underflagga vid körning oavsett dess värde
-      här.
-  enable_yaml_packages_automation:
-    name: Tillåt automation i packages/*.yaml
-    description: Underbrytare för YAML-konfigurationsredigering. När den är på, accepterar
-      ha_config_set_yaml yaml_path='automation' inuti packages/*.yaml. När den är
-      av, avvisas anropet både klient- och serversidan. Lagringslägesverktyget (ha_config_set_automation)
-      påverkas inte. Standard AV; träder endast i kraft när "Aktivera redigering av
-      YAML-konfiguration" ovan också är påslagen.
-  enable_yaml_packages_script:
-    name: Tillåt script i packages/*.yaml
-    description: Underbrytare för YAML-konfigurationsredigering. När den är på, accepterar
-      ha_config_set_yaml yaml_path='script' inuti packages/*.yaml. När den är av,
-      avvisas anropet både klient- och serversidan. Lagringslägesverktyget (ha_config_set_script)
-      påverkas inte. Standard AV; träder endast i kraft när "Aktivera redigering av
-      YAML-konfiguration" ovan också är påslagen.
-  enable_yaml_packages_scene:
-    name: Tillåt scene i packages/*.yaml
-    description: Underbrytare för YAML-konfigurationsredigering. När den är på, accepterar
-      ha_config_set_yaml yaml_path='scene' inuti packages/*.yaml. När den är av, avvisas
-      anropet både klient- och serversidan. Lagringslägesverktyget (ha_config_set_scene)
-      påverkas inte. Standard AV; träder endast i kraft när "Aktivera redigering av
-      YAML-konfiguration" ovan också är påslagen.
-  enable_yaml_edit_confirm:
-    name: Kräv bekräftelse för YAML-redigeringar (diff-förhandsvisning)
-    description: 'Underbrytare för YAML-konfigurationsredigering, PÅ som standard
-      (rekommenderas). Det första anropet till ha_config_set_yaml returnerar en enhetlig
-      diff av exakt vad som skulle ändras på disken plus en bekräftelsetoken och skriver
-      ingenting; redigeringen sparas endast när anropet upprepas med den token. Finns
-      för att oavsiktliga ändringar utanför den begärda redigeringen ska upptäckas
-      innan de når disken (ärende #1720). Stäng endast av för att spara en tur och
-      retur per redigering.'
-  enable_code_mode:
-    name: Aktivera sandlåda för anpassade verktyg (beta)
-    description: Betafunktion. Aktiverar verktyget ha_manage_custom_tool, som låter
-      AI-assistenter skapa, köra, spara och ta bort anpassad Python-kod i en säker
-      sandlåda när inget inbyggt verktyg kan hantera begäran. Koden körs i en isolerad
-      tolkningsmiljö utan åtkomst till filsystem eller godtyckligt nätverk. Sandlådekod
-      kan nå HA REST API (api_get/api_post), skicka WebSocket-kommandon (ws_send),
-      anropa befintliga MCP-verktyg (call_tool) eller ta bort ett sparat verktyg (delete_saved_tool).
-      Sparade verktyg sparas i /data/saved_tools.json som standard så att de överlever
-      omstart av appen (tillägget), och är synliga för alla klienter som kan ansluta.
-      Se docs/beta.md för kända begränsningar. Kräver omstart för att träda i kraft.
-      KRÄVER att huvudreglaget "Enable betafeatures" ovan (och i webbgränssnittet)
-      är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
-  enable_lite_docstrings:
-    name: Aktivera lätta verktygsdocstrings (beta)
-    description: 'Betafunktion. Ersätter docstrings på 15 tunga ha-mcp-verktyg (ha_config_get_automation,
-      ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
-      ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
-      ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
-      ha_report_issue) med kortare varianter som flyttar schema- och exempletaljer
-      till ha_get_skill_guide-verktyget (eller dess skill://-resurs). Ett undantag:
-      ha_report_issue hänvisar till instruktionsfältet i sitt eget svar istället.
-      Justering av säkerhetskopieringsinställningen gäller fortfarande i lättlöst
-      läge. VARNING: detta minskar tokenanvändningen vid inaktivitet, men kan försämra
-      LLM-prestandan — de nedskurna beskrivningarna förlitar sig på att LLM faktiskt
-      anropar färdighetsverktyget eller läser färdighetsresursen för detaljer, vilket
-      inte garanteras (vissa modeller hoppar över det extra verktygsanropet och hamnar
-      med mindre vägledning än tidigare). Passar bäst med en klient som stöder MCP-resurser
-      eller med enable_tool_search. Kräver omstart för att träda i kraft. KRÄVER att
-      masterreglaget "Enable beta features" ovan (och i webbgränssnittet) är aktiverat
-      — annars ignoreras denna underflagga vid körning oavsett dess värde här.'
   enable_mandatory_bps:
     name: Bifoga bästa praxis-färdigheter vid skrivningar
     description: 'Huvudbrytare för funktionen för leverans av skrivverktygsfärdighetsinnehåll
@@ -183,12 +115,67 @@ configuration:
       alternativet ”Bifoga bästa praxis-färdigheter vid skrivningar” ovan och inaktivt
       när det överordnade alternativet är avstängt. Kräver omstart för att träda i
       kraft.'
-  ha_tool_concurrency:
-    name: Samtidighet för Home Assistant-verktyg
-    description: Valfri gräns för yttre anrop av Home Assistant-verktyg över alla
-      sessioner. Intern samtidighet för REST, WebSocket och per-verktyg-grenar är
-      oförändrad. 0 behåller obegränsat beteende. Ett anrop som väntar på kapacitet
-      misslyckas efter 60 sekunder.
+  enable_yaml_config_editing:
+    name: Aktivera redigering av YAML-konfiguration (beta)
+    description: Betafunktion. Tillåter AI-assistenter att lägga till, ersätta eller
+      ta bort toppnivånycklar i configuration.yaml och packages/*.yaml. Endast vitlistade
+      nycklar är tillåtna (t.ex. template, sensor, command_line, mqtt, knx); kärnnycklar
+      som homeassistant, http och recorder är blockerade. Varje redigering validerar
+      YAML-syntax, kör en konfigurationskontroll och skapar en automatisk säkerhetskopia.
+      Ändringar av de flesta nycklar kräver en fullständig HA-omstart för att träda
+      i kraft. Se docs/beta.md för kända begränsningar. Dedikerade verktyg (automations,
+      scripts, scenes, helpers, template sensors) bör föredras när de är tillgängliga.
+      KRÄVER att huvudbrytaren "Aktivera betafunktioner" ovan (och i webbgränssnittet)
+      är påslagen — annars ignoreras denna underflagga vid körning oavsett dess värde
+      här.
+  enable_yaml_edit_confirm:
+    name: Kräv bekräftelse för YAML-redigeringar (diff-förhandsvisning)
+    description: 'Underbrytare för YAML-konfigurationsredigering, PÅ som standard
+      (rekommenderas). Det första anropet till ha_config_set_yaml returnerar en enhetlig
+      diff av exakt vad som skulle ändras på disken plus en bekräftelsetoken och skriver
+      ingenting; redigeringen sparas endast när anropet upprepas med den token. Finns
+      för att oavsiktliga ändringar utanför den begärda redigeringen ska upptäckas
+      innan de når disken (ärende #1720). Stäng endast av för att spara en tur och
+      retur per redigering.'
+  enable_yaml_packages_automation:
+    name: Tillåt automation i packages/*.yaml
+    description: Underbrytare för YAML-konfigurationsredigering. När den är på, accepterar
+      ha_config_set_yaml yaml_path='automation' inuti packages/*.yaml. När den är
+      av, avvisas anropet både klient- och serversidan. Lagringslägesverktyget (ha_config_set_automation)
+      påverkas inte. Standard AV; träder endast i kraft när "Aktivera redigering av
+      YAML-konfiguration" ovan också är påslagen.
+  enable_yaml_packages_script:
+    name: Tillåt script i packages/*.yaml
+    description: Underbrytare för YAML-konfigurationsredigering. När den är på, accepterar
+      ha_config_set_yaml yaml_path='script' inuti packages/*.yaml. När den är av,
+      avvisas anropet både klient- och serversidan. Lagringslägesverktyget (ha_config_set_script)
+      påverkas inte. Standard AV; träder endast i kraft när "Aktivera redigering av
+      YAML-konfiguration" ovan också är påslagen.
+  enable_yaml_packages_scene:
+    name: Tillåt scene i packages/*.yaml
+    description: Underbrytare för YAML-konfigurationsredigering. När den är på, accepterar
+      ha_config_set_yaml yaml_path='scene' inuti packages/*.yaml. När den är av, avvisas
+      anropet både klient- och serversidan. Lagringslägesverktyget (ha_config_set_scene)
+      påverkas inte. Standard AV; träder endast i kraft när "Aktivera redigering av
+      YAML-konfiguration" ovan också är påslagen.
+  enable_lite_docstrings:
+    name: Aktivera lätta verktygsdocstrings (beta)
+    description: 'Betafunktion. Ersätter docstrings på 15 tunga ha-mcp-verktyg (ha_config_get_automation,
+      ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
+      ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
+      ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
+      ha_report_issue) med kortare varianter som flyttar schema- och exempletaljer
+      till ha_get_skill_guide-verktyget (eller dess skill://-resurs). Ett undantag:
+      ha_report_issue hänvisar till instruktionsfältet i sitt eget svar istället.
+      Justering av säkerhetskopieringsinställningen gäller fortfarande i lättlöst
+      läge. VARNING: detta minskar tokenanvändningen vid inaktivitet, men kan försämra
+      LLM-prestandan — de nedskurna beskrivningarna förlitar sig på att LLM faktiskt
+      anropar färdighetsverktyget eller läser färdighetsresursen för detaljer, vilket
+      inte garanteras (vissa modeller hoppar över det extra verktygsanropet och hamnar
+      med mindre vägledning än tidigare). Passar bäst med en klient som stöder MCP-resurser
+      eller med enable_tool_search. Kräver omstart för att träda i kraft. KRÄVER att
+      masterreglaget "Enable beta features" ovan (och i webbgränssnittet) är aktiverat
+      — annars ignoreras denna underflagga vid körning oavsett dess värde här.'
   enable_filesystem_tools:
     name: Aktivera filsystemverktyg (beta)
     description: 'Sätter HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiverar direkt läs-/skrivåtkomst
@@ -197,6 +184,19 @@ configuration:
       filoperationer. Kräver omstart för att träda i kraft. KRÄVER att huvudbrytaren
       "Aktivera betafunktioner" ovan (och i webbgränssnittet) är påslagen — annars
       ignoreras denna underflagga vid körning oavsett dess värde här.'
+  enable_code_mode:
+    name: Aktivera sandlåda för anpassade verktyg (beta)
+    description: Betafunktion. Aktiverar verktyget ha_manage_custom_tool, som låter
+      AI-assistenter skapa, köra, spara och ta bort anpassad Python-kod i en säker
+      sandlåda när inget inbyggt verktyg kan hantera begäran. Koden körs i en isolerad
+      tolkningsmiljö utan åtkomst till filsystem eller godtyckligt nätverk. Sandlådekod
+      kan nå HA REST API (api_get/api_post), skicka WebSocket-kommandon (ws_send),
+      anropa befintliga MCP-verktyg (call_tool) eller ta bort ett sparat verktyg (delete_saved_tool).
+      Sparade verktyg sparas i /data/saved_tools.json som standard så att de överlever
+      omstart av appen (tillägget), och är synliga för alla klienter som kan ansluta.
+      Se docs/beta.md för kända begränsningar. Kräver omstart för att träda i kraft.
+      KRÄVER att huvudreglaget "Enable betafeatures" ovan (och i webbgränssnittet)
+      är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
   enable_dashboard_screenshot:
     name: Aktivera skärmbildsläge för instrumentpanel (beta)
     description: Betafunktion – av som standard. Lägger till verktyget ha_get_dashboard_screenshot
@@ -213,51 +213,49 @@ configuration:
       träda i kraft. KRÄVER att huvudreglaget "Enable betafeatures" ovan (och i webbgränssnittet)
       är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
   enable_auto_backup:
-    name: Aktivera automatisk säkerhetskopiering av redigeringar
-    description: 'Fångar en ögonblicksbild per entitet före varje omslutet skriv-/destruktivt
-      MCP-verktygsanrop (automation, skript, scen, hjälpare, instrumentpanel, instrumentpanelsresurs,
-      etikett, kategori, grupp, zon, område, kalender, att göra, entitet, enhet, integration
-      och relaterade borttagnings-/raderingsverktyg). Begränsningen för automatisk
-      säkerhetskopiering styr hur ofta detta sker: 0 (standard) fångar vid varje sådant
-      anrop, N>0 högst en ögonblicksbild per N minuter per entitet. Ögonblicksbilder
-      sparas som YAML-filer under /data/ha_mcp_backups/ (åsidosätts via HAMCP_BACKUP_DIR)
-      och listas, återställs eller raderas via fliken Säkerhetskopior i webbinställningsgränssnittet
-      eller via ha_manage_backup(scope=''edits'', ...). För dessa domäner är fångsten
-      ''best-effort'' — ett misslyckande loggar en VARNING och skrivningen fortsätter.
-      Fil- och rå-YAML-verktygen är undantaget: ha_write_file, ha_delete_file och
-      ha_config_set_yaml behandlar ögonblicksbilden som ett förhandsvillkor, så en
-      skrivning genom dem nekas när detta är avstängt, och en misslyckad fångst blockerar
-      den. På som standard; avmarkering avaktiverar ''best-effort''-fångsterna och
-      tar fil- och rå-YAML-verktygen ur bruk med dem. Kräver omstart för att träda
-      i kraft.'
+    name: Automatisk säkerhetskopiering av redigeringar
+    description: Spara en ögonblicksbild av en entitet innan varje skriv- eller ta
+      bort-verktygsanrop ändrar den. Medan detta är avstängt vägrar fil- och rå-YAML-verktygen
+      (ha_write_file, ha_delete_file, ha_config_set_yaml) att skriva.
   auto_backup_throttle_minutes:
-    name: Begränsning för automatisk säkerhetskopiering (minuter)
-    description: Begränsningsfönster per entitet. 0 (standard) tar en ögonblicksbild
-      vid varje omsluten skrivning. N>0 tar högst en ögonblicksbild per N minuter
-      per entitet. Intervall 0–1440.
+    name: Tidsbegränsning för automatisk säkerhetskopiering (minuter)
+    description: Hur ofta automatisk säkerhetskopiering får ta en ögonblicksbild av
+      samma entitet. 0 tar en vid varje skrivning; N över 0 tar högst en ögonblicksbild
+      per N minuter per entitet. Intervall 0–1440.
   auto_backup_retain_per_entity:
-    name: Bevarande av automatisk säkerhetskopiering (per entitet)
-    description: Maximalt antal ögonblicksbilder som behålls per entitet. Äldre ögonblicksbilder
-      utöver denna gräns roteras ut vid varje lyckad fångst. Standard 100, intervall
+    name: Sparade säkerhetskopior (per entitet)
+    description: De flesta ögonblicksbilder som sparas per entitet. Varje ny ögonblicksbild
+      tar bort de äldsta ögonblicksbilderna som överstiger detta antal. Intervall
       1–10000.
+  enable_snapshot_actions:
+    name: Tillåt fullständiga HA-ögonblicksbildsåtgärder
+    description: Tillåt AI-assistenter att hantera fullständiga Home Assistant-ögonblicksbilder
+      genom ha_manage_backup och motsvarande säkerhetskopieringstjänster och kommandon
+      i ha_call_service. Att stänga av detta blockerar alla ögonblicksbildsåtgärder,
+      inklusive listning. Borttagning av ögonblicksbilder är endast tillgänglig via
+      ha_manage_backup och kräver dessutom Tillåt borttagning av ögonblicksbilder.
+      Redigera säkerhetskopior och de säkerhetskopieringsåtgärder som en person utför
+      i webbinställningarnas gränssnitt förblir tillgängliga.
+  backup_read_only:
+    name: Gör säkerhetskopieringshanteringen skrivskyddad
+    description: Tillåt AI-assistenter att lista, visa och göra diff på redigeringssäkerhetskopior,
+      samt lista fullständiga HA-ögonblicksbilder när ögonblicksbildsåtgärder är aktiverade.
+      Blockera manuell skapande, återställning (inklusive redigeringsåterställningar)
+      och borttagning av säkerhetskopior, inklusive motsvarande säkerhetskopieringstjänster
+      och kommandon i ha_call_service. Automatiska säkerhetskopior före redigering
+      fortsätter. De säkerhetskopieringsåtgärder som en person utför i webbinställningarnas
+      gränssnitt förblir tillgängliga.
   enable_snapshot_delete:
-    name: Tillåt radering av ögonblicksbilder
-    description: Låter ha_manage_backup radera fullständiga HA-ögonblicksbilds-tarballar
-      (scope='snapshot', action='delete'). Avstängt som standard – en ögonblicksbild
-      kan vara den sista återställningspunkten efter en felaktig ändring, så en människa
-      måste välja att aktivera detta här. Även när det är aktiverat förblir schemalagda
-      säkerhetskopior, den nyaste kvarvarande ögonblicksbilden och allt som är yngre
-      än åldersgränsen nedan skyddat.
+    name: Tillåt borttagning av ögonblicksbilder
+    description: Tillåt ha_manage_backup att ta bort fullständiga Home Assistant-ögonblicksbilder.
+      En ögonblicksbild kan vara den sista utvägen efter en felaktig ändring, så en
+      person måste aktivera detta. Schemalagda säkerhetskopior, den nyaste ögonblicksbilden
+      och ögonblicksbilder som är yngre än minimiåldern förblir skyddade.
   snapshot_delete_min_age_days:
-    name: Minsta ålder för ögonblicksbild att radera (dagar)
-    description: En ögonblicksbild måste vara minst så här gammal innan den kan raderas.
-      Intervall 0–365; 0 inaktiverar gränsen (skydden för nyaste ögonblicksbild och
-      schemalagd säkerhetskopiering gäller fortfarande). Standard 7.
-  tool_search_max_results:
-    name: Max antal resultat för verktygssökning
-    description: 'Maximalt antal verktyg som returneras av ha_search_tools när verktygssökning
-      är aktiverad. Lägre värden (2-3) sparar kontext-tokens men kan missa relevanta
-      verktyg. Omfång: 2-10. Kräver omstart.'
+    name: Minsta ålder för ögonblicksbild att ta bort (dagar)
+    description: Hur gammal en ögonblicksbild måste vara, i dagar, innan den kan tas
+      bort. 0 stänger av åldersgränsen; den nyaste ögonblicksbilden och schemalagda
+      säkerhetskopior förblir skyddade. Intervall 0–365.
   disabled_tools:
     name: Inaktiverade verktyg (kommaseparerade)
     description: Verktyg som listas här är tvingade att vara avstängda och låsta i
@@ -273,12 +271,9 @@ configuration:
       Verktyg och kan inte lossas från webbinställningsgränssnittet utan att först
       avmarkera detta alternativ. Användbart i kombination med Verktygssökning. Kommaseparerade
       verktygsnamn.
-  verify_ssl:
-    name: Verifiera TLS-certifikat
-    description: Verifiera Home Assistant-serverns TLS-certifikat. Appen (tillägget)
-      ansluter via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli
-      aktiverat. Inaktivera endast om du har konfigurerat om appen (tillägget) för
-      att kommunicera med HA över ett offentligt HTTPS-värdnamn med ett självsignerat
-      certifikat eller matchningsfel för värdnamn. Inaktivering försvagar transportsäkerheten
-      – lämna på om du inte vet att du behöver det. Kräver omstart för att träda i
-      kraft.
+  secret_path:
+    name: Åsidosättning av hemlig sökväg
+    description: 'Valfri anpassad HTTP-sökväg för MCP-servern. Lämna tom för att använda
+      den automatiskt genererade säkra sökvägen.
+
+      '

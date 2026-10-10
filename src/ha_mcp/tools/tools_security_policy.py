@@ -22,12 +22,13 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..policy.editing import PolicyCaller, get_policy, set_policy
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     register_tool_methods,
 )
-from .util_helpers import JSON_STRING_COERCION
+from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +55,12 @@ class SecurityPolicyTools:
     @tool(
         name="ha_manage_security_policy",
         tags={"System"},
-        annotations={
-            "title": "Manage Security Policy",
-            "readOnlyHint": False,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "openWorldHint": False,
-        },
+        annotations=write_hints(
+            "Manage Security Policy",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_manage_security_policy(
@@ -81,8 +81,11 @@ class SecurityPolicyTools:
                 default=None,
                 description=(
                     "set: the full policy object "
-                    "{wait_seconds, approval_ttl_minutes, "
-                    "event_decisions_enabled, rules, version}"
+                    "{rule_effect, wait_seconds, approval_ttl_minutes, "
+                    "event_decisions_enabled, rules, version}. rule_effect "
+                    "'require_approval' (default): a matching rule gates the "
+                    "call; 'allow': a matching rule approves the call and "
+                    "every other call requires approval"
                 ),
             ),
         ] = None,
@@ -106,14 +109,16 @@ class SecurityPolicyTools:
         automation, or dashboard work use the ha_config_* tools.
 
         When to use: to read the current policy, to add or remove per-tool
-        approval rules and their matching conditions, and to change the
+        approval rules and their matching conditions, to switch the rule list
+        between gating and approving the calls it matches, and to change the
         approval wait time or how long an approval is remembered.
 
         Caveats: set replaces the WHOLE document, so send back an edited
         copy of what get returned, not a fragment. An omitted field is not
         left alone, it reverts to its default: dropping
         event_decisions_enabled switches off approving from Home Assistant
-        events, and the response says so in a warning when it does. Writes are
+        events, and the response says so in a warning when it does, while
+        dropping rule_effect from an allow list is refused. Writes are
         version-guarded: a concurrent edit is rejected instead of
         silently overwritten. Rule edits apply to the running server
         immediately and can remove approval gates. Whether this tool itself
@@ -131,7 +136,7 @@ class SecurityPolicyTools:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"action": action},

@@ -24,6 +24,10 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_connect_path": "#, ?, %, 공백을 포함할 수 없습니다.",
+      "invalid_webhook_id": "웹훅 ID에는 슬래시(/)를 포함할 수 없습니다."
+    },
     "step": {
       "tools_info": {
         "title": "HA-MCP 파일 및 YAML 도구",

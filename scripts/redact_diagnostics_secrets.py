@@ -2,7 +2,7 @@
 """Redact credential values from HAOS diagnostics before artifact upload.
 
 The HAOS e2e workflows tar ``.storage`` out of the booted qcow2 into a
-diagnostics artifact. Since conftest injects ``GITHUB_TOKEN`` into the HACS
+diagnostics artifact. Since _conftest_haos.py injects ``GITHUB_TOKEN`` into the HACS
 config entry pre-boot (see ``haos_runtime.inject_hacs_token_in_qcow2``),
 ``core.config_entries`` inside that tar carries the token — expired by the
 time anyone can download the artifact (``GITHUB_TOKEN`` is revoked when the
@@ -93,7 +93,7 @@ def main(argv: list[str]) -> int:
         try:
             n = redact_storage_tar(tar_path)
             print(f"redact: {tar_path} — {n} value(s) redacted")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Could not guarantee redaction — drop the tar so the artifact
             # cannot carry an unredacted credential. Diagnostics loss beats
             # credential persistence.

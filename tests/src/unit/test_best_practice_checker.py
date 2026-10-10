@@ -1636,7 +1636,7 @@ class TestBestPracticeCheckResultShape:
             }
         )
         assert (
-            "references/automation-patterns.md#native-conditions"
+            "references/triggers-and-conditions.md#native-conditions"
             in result.referenced_files
         )
 
@@ -1658,7 +1658,7 @@ class TestBestPracticeCheckResultShape:
             }
         )
         assert result.referenced_files == {
-            "references/automation-patterns.md#native-conditions"
+            "references/triggers-and-conditions.md#native-conditions"
         }
 
     def test_referenced_files_tracked_even_when_skill_prefix_none(self):
@@ -1680,7 +1680,7 @@ class TestBestPracticeCheckResultShape:
             skill_prefix=None,
         )
         assert result.referenced_files == {
-            "references/automation-patterns.md#native-conditions"
+            "references/triggers-and-conditions.md#native-conditions"
         }
 
 
@@ -1720,14 +1720,13 @@ class TestTwoRouteWarningSuffix:
     def test_default_warning_names_skill_uri_route(self):
         msg = self._first_warning()
         assert (
-            "skill://home-assistant-best-practices/references/automation-patterns.md"
+            "skill://home-assistant-best-practices/references/triggers-and-conditions.md"
             in msg
         )
 
     def test_default_warning_names_ha_get_skill_guide_route(self):
         msg = self._first_warning()
-        assert "ha_get_skill_guide(skill='home-assistant-best-practices'" in msg
-        assert "file='references/automation-patterns.md'" in msg
+        assert "ha_get_skill_guide(file='references/triggers-and-conditions.md')" in msg
 
     def test_warning_does_not_mention_MandatoryBPS_param(self):
         """MandatoryBPS must not appear in warnings. The param is visible
@@ -1739,7 +1738,7 @@ class TestTwoRouteWarningSuffix:
 
     def test_custom_prefix_replaces_skill_uri_keeps_tool_route(self):
         msg = self._first_warning(prefix="https://example.com/refs")
-        assert "https://example.com/refs/automation-patterns.md" in msg
+        assert "https://example.com/refs/triggers-and-conditions.md" in msg
         assert "skill://" not in msg
         # Tool route always present when skills are on
         assert "ha_get_skill_guide" in msg
@@ -1752,9 +1751,9 @@ class TestTwoRouteWarningSuffix:
         the ha_get_skill_guide call uses bare file path (tool reads the whole file)."""
         msg = self._first_warning()
         # URI: anchor preserved
-        assert "automation-patterns.md#native-conditions" in msg
+        assert "triggers-and-conditions.md#native-conditions" in msg
         # Tool route: bare file path, no anchor
-        assert "file='references/automation-patterns.md'" in msg
+        assert "file='references/triggers-and-conditions.md'" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -1842,7 +1841,7 @@ class TestDurationMathDetector:
         }
         warnings = check_automation_config(config, skill_prefix=SKILL_PREFIX)
         assert _has_warning_containing(
-            warnings, "automation-patterns.md#native-conditions"
+            warnings, "triggers-and-conditions.md#native-conditions"
         )
 
     def test_no_generic_fallback_when_duration_fires(self):
@@ -1876,7 +1875,7 @@ class TestDurationMathDetector:
         }
         warnings = check_automation_config(config, skill_prefix=SKILL_PREFIX)
         assert _has_warning_containing(
-            warnings, "automation-patterns.md#trigger-types"
+            warnings, "triggers-and-conditions.md#trigger-types"
         ), "Trigger warning should reference #trigger-types anchor"
 
     def test_no_false_positive_bare_last_changed_variable(self):
@@ -2800,11 +2799,9 @@ class TestVariablesForwardReferenceMessage:
     def test_skill_route_and_referenced_file(self):
         warnings = check_automation_config(_FORWARD_REF_CONFIG)
         assert _has_warning_containing(
-            warnings, f"{SKILL_PREFIX}/automation-patterns.md#variables"
+            warnings, f"{SKILL_PREFIX}/automation-actions.md#variables"
         )
-        assert (
-            "references/automation-patterns.md#variables" in warnings.referenced_files
-        )
+        assert "references/automation-actions.md#variables" in warnings.referenced_files
 
     def test_skill_prefix_none_suppresses_suffix(self):
         warnings = check_automation_config(_FORWARD_REF_CONFIG, skill_prefix=None)

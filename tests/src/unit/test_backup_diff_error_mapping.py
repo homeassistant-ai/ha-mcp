@@ -24,11 +24,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.config import Settings
 from ha_mcp.errors import ErrorCode
 
 # A well-formed auto-backup name so the pre-dispatch ``_require`` guard passes
 # and control reaches the ``diff_snapshot`` call under test.
 _BNAME = "automation.kitchen_lights.20260521_153000.yaml"
+
+
+def _backup_settings() -> Settings:
+    """Keep tool access independent of the developer's env and dotenv files."""
+    return Settings(
+        _env_file=None,
+        ENABLE_SNAPSHOT_ACTIONS=True,
+        BACKUP_READ_ONLY=False,
+        READ_ONLY_MODE=False,
+    )
 
 
 def _dispatcher() -> Any:
@@ -60,15 +71,16 @@ def _dispatcher() -> Any:
 def _patched(diff_exc: BaseException) -> tuple[Any, Any]:
     """Patch the ``scope="edits"`` dispatch seams.
 
-    ``settings`` is irrelevant to the diff path (it is threaded through but
-    unused by ``_edits_diff``), so a bare ``MagicMock`` suffices;
+    Real settings keep the dispatcher's access checks representative;
     ``get_backup_manager`` yields a manager whose ``diff_snapshot`` raises
     ``diff_exc``.
     """
     mgr = MagicMock()
     mgr.diff_snapshot = AsyncMock(side_effect=diff_exc)
     return (
-        patch("ha_mcp.tools.backup.get_global_settings", return_value=MagicMock()),
+        patch(
+            "ha_mcp.tools.backup.get_global_settings", return_value=_backup_settings()
+        ),
         patch("ha_mcp.tools.backup.get_backup_manager", return_value=mgr),
     )
 

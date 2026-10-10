@@ -42,8 +42,9 @@ from ..dashboard_screenshot.paths import (
     resolve_dashboard_render_target,
 )
 from ..errors import ErrorCode, create_error_response
+from .coercion import JSON_STRING_COERCION
 from .helpers import log_tool_usage, raise_tool_error, register_tool_methods
-from .util_helpers import JSON_STRING_COERCION
+from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ def _package_screenshot_result(
         )
     except ToolError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         error_payload = create_error_response(
             ErrorCode.IMAGE_SERIALIZATION_FAILED,
             "Rendered dashboard images could not be packaged into the MCP response.",
@@ -109,11 +110,7 @@ class DashboardScreenshotTools:
     @tool(
         name="ha_get_dashboard_screenshot",
         tags={"Dashboard", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "title": "Get Dashboard Screenshot",
-        },
+        annotations=read_only_hints("Get Dashboard Screenshot", open_world=False),
     )
     @log_tool_usage
     async def ha_get_dashboard_screenshot(
@@ -280,7 +277,7 @@ class DashboardScreenshotTools:
             )
         except ToolError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,

@@ -1,8 +1,9 @@
-"""Integration of the visibility filter into tools_search._exact_match_search."""
+"""Integration of the visibility filter into search_entities._exact_match_search."""
 
 import asyncio
 
 from ha_mcp.tools import tools_search
+from ha_mcp.tools.search import entities as search_entities
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
@@ -41,7 +42,7 @@ def _run_search(tmp_path, monkeypatch, config: VisibilityConfig):
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
     client = _FakeClient(_STATES, _REGISTRY)
     return asyncio.run(
-        tools_search._exact_match_search(
+        search_entities._exact_match_search(
             client, query="foo", domain_filter=None, limit=10
         )
     )
@@ -72,7 +73,7 @@ def test_corrupt_config_fails_open_returns_both(tmp_path, monkeypatch):
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
     client = _FakeClient(_STATES, _REGISTRY)
     res = asyncio.run(
-        tools_search._exact_match_search(
+        search_entities._exact_match_search(
             client, query="foo", domain_filter=None, limit=10
         )
     )
@@ -282,7 +283,7 @@ def test_search_seam_allow_and_exclude_both_active(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
     res = asyncio.run(
-        tools_search._exact_match_search(
+        search_entities._exact_match_search(
             _FakeClient(states, registry),
             query="foo",
             domain_filter=None,

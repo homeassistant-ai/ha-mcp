@@ -90,8 +90,8 @@ _UPDATE_PATH_ENV = "E2E_UPDATE_PATH"
 # test_embedded_server.py), so a minutes-scale budget.
 _PHASE1_READY_TIMEOUT_S = 600
 # Phase 2 force-installs only the ha-mcp wheel (its deps are already satisfied
-# from phase 1) and restarts the worker; bounded like conftest's
-# _EMBEDDED_BRINGUP_TIMEOUT.
+# from phase 1) and restarts the worker; bounded like
+# _conftest_testcontainer._EMBEDDED_BRINGUP_TIMEOUT.
 _PHASE2_READY_TIMEOUT_S = 300
 _READY_POLL_S = 5
 _API_READY_TIMEOUT_S = 120
@@ -173,7 +173,7 @@ def _docker_probe_error() -> str | None:
         import docker as docker_sdk
 
         docker_sdk.from_env().ping()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return f"{type(exc).__name__}: {exc}"
     return None
 
@@ -519,7 +519,7 @@ def update_path_ha(request):
       tag (git-archive export) — proves a new server release won't break existing
       installs.
     - ``head``: the working tree's ``custom_components/ha_mcp_tools`` (the same
-      source conftest's ``_install_custom_component`` copies) — proves the PR's
+      source ``_conftest_seed._install_custom_component`` copies) — proves the PR's
       own component update machinery still works.
 
     Both containers run sequentially in one job. Yields a context dict once the
@@ -546,8 +546,8 @@ def update_path_ha(request):
         if request.param == "stable":
             component_src = _export_released_component(work_dir / "released")
         else:
-            # Working-tree component, sourced the same way conftest's
-            # _install_custom_component does (the copytree in _seed_config below
+            # Working-tree component, sourced the same way
+            # _conftest_seed._install_custom_component does (the copytree in _seed_config below
             # installs it into the container's custom_components).
             component_src = _REPO_ROOT / "custom_components" / _DOMAIN
             if not component_src.is_dir():

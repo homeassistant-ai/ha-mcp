@@ -34,6 +34,8 @@ Apply these rules:
   push-to-master leg right after a merge and again at release time.
   In the PR gate, equal means a bump is needed to open the pending version;
   behind means a stale tree or bad merge resurrected an older version.
+- Any byte change under `custom_components/ha_mcp_tools/` counts, comments
+  included: the gate and the mirror sync compare file content, not behaviour.
 
 The mirror drift check prevents changes from being stranded under a version
 that already shipped and therefore has no new installable release. The gap it
@@ -69,6 +71,8 @@ caller and does not know to demand the new component.
 
 A component path cannot be fully exercised by pre-merge CI. After merge,
 live-test it promptly on the development server before the next stable cut.
+Before merge, the [live dev environment](../dev-ha-env.md)
+runs a branch's component and server against a throwaway HA from a fork.
 
 ## Dependencies shared with Core
 

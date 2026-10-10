@@ -35,7 +35,8 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import build_pagination_metadata
+from .response_helpers import build_pagination_metadata
+from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +228,7 @@ def _decode_data_uri(url: str) -> str | None:
         return None
     try:
         return base64.b64decode(url[len(prefix) :], validate=True).decode("utf-8")
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -339,7 +340,7 @@ def _decode_legacy_worker_url(url: str) -> str | None:
         # silently DISCARDS non-alphabet characters, so a junk path could
         # decode to plausible text and be masked as inline content.
         return base64.urlsafe_b64decode(_pad_b64(encoded)).decode("utf-8")
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -352,12 +353,7 @@ class ResourceTools:
     @tool(
         name="ha_config_list_dashboard_resources",
         tags={"Dashboards"},
-        annotations={
-            "openWorldHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Dashboard Resources",
-        },
+        annotations=read_only_hints("List Dashboard Resources", open_world=True),
     )
     @log_tool_usage
     async def ha_config_list_dashboard_resources(
@@ -470,11 +466,12 @@ class ResourceTools:
     @tool(
         name="ha_config_set_dashboard_resource",
         tags={"Dashboards"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Set Dashboard Resource",
-        },
+        annotations=write_hints(
+            "Set Dashboard Resource",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(domain="dashboard_resource", id_param="resource_id")
     @log_tool_usage
@@ -775,7 +772,7 @@ class ResourceTools:
             result = await self._client.send_websocket_message(
                 {"type": "lovelace/resources"}
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _unverifiable(f"listing the resources failed: {e}")
         error_msg = _check_ws_error(result)
         if error_msg:
@@ -926,11 +923,12 @@ class ResourceTools:
     @tool(
         name="ha_config_delete_dashboard_resource",
         tags={"Dashboards"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Delete Dashboard Resource",
-        },
+        annotations=write_hints(
+            "Delete Dashboard Resource",
+            destructive=True,
+            idempotent=True,
+            open_world=False,
+        ),
     )
     @with_auto_backup(domain="dashboard_resource", id_param="resource_id")
     @log_tool_usage

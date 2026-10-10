@@ -107,7 +107,7 @@ async def test_malformed_json_container_preserves_decoder_location():
     """JSON-like strings retain the decoder detail through FastMCP middleware."""
     from typing import Annotated
 
-    from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+    from ha_mcp.tools.coercion import JSON_STRING_COERCION
 
     mcp = FastMCP("test")
     mcp.add_middleware(ValidationErrorMiddleware())
@@ -186,7 +186,7 @@ async def test_union_param_malformed_container_names_param_not_union_tags():
     """
     from typing import Annotated
 
-    from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+    from ha_mcp.tools.coercion import JSON_STRING_COERCION
 
     mcp = FastMCP("test")
     mcp.add_middleware(ValidationErrorMiddleware())
@@ -235,7 +235,7 @@ async def test_union_error_details_are_deduped():
     """`details` collapses duplicate error types from union arms (#1601)."""
     from typing import Annotated
 
-    from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+    from ha_mcp.tools.coercion import JSON_STRING_COERCION
 
     mcp = FastMCP("test")
     mcp.add_middleware(ValidationErrorMiddleware())
@@ -393,6 +393,85 @@ async def test_unknown_parameter_on_a_tool_without_parameters():
 
 def test_shared_word_outranks_closer_spelling():
     assert _closest_parameter("force", ["forced", "force_reload"]) == "force_reload"
+
+
+def _make_config_set_like_mcp() -> FastMCP:
+    """Tools shaped like ha_config_set_automation/_script for the config-key hint."""
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_config_set_automation(
+        config: dict | None = None,
+        identifier: str | None = None,
+        python_transform: str | None = None,
+    ) -> dict:
+        return {"ok": True}
+
+    @mcp.tool()
+    async def ha_config_set_script(
+        script_id: str,
+        config: dict | None = None,
+        python_transform: str | None = None,
+    ) -> dict:
+        return {"ok": True}
+
+    return mcp
+
+
+@pytest.mark.asyncio
+async def test_misplaced_automation_config_key_says_it_belongs_in_config() -> None:
+    """A config root key passed as a top-level argument says it belongs inside
+    `config` instead of only listing valid parameters (issue #2649 section 1)."""
+    mcp = _make_config_set_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_config_set_automation", {"alias": "Goodnight"})
+
+    body = json.loads(str(exc_info.value))
+    msg = body["error"]["message"]
+    assert "`alias`: unknown parameter" in msg
+    assert "inside `config`" in msg
+    assert msg.endswith("Valid parameters: config, identifier, python_transform.")
+    # The guidance is repeated in the suggestions, not only in the message.
+    error = body["error"]
+    all_suggestions = [error.get("suggestion")] + (error.get("suggestions") or [])
+    assert any(
+        s and "Move `alias` inside the `config` argument" in s for s in all_suggestions
+    )
+
+
+@pytest.mark.asyncio
+async def test_misplaced_script_config_key_says_it_belongs_in_config() -> None:
+    """Same as above for ha_config_set_script (issue #2649 section 1)."""
+    mcp = _make_config_set_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_config_set_script",
+            {"script_id": "blink", "sequence": [{"action": "x"}]},
+        )
+
+    body = json.loads(str(exc_info.value))
+    msg = body["error"]["message"]
+    assert "`sequence`: unknown parameter" in msg
+    assert "inside `config`" in msg
+    error = body["error"]
+    all_suggestions = [error.get("suggestion")] + (error.get("suggestions") or [])
+    assert any(
+        s and "Move `sequence` inside the `config` argument" in s
+        for s in all_suggestions
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_config_key_on_config_tool_still_gets_did_you_mean() -> None:
+    """Unknown arguments that are NOT config keys keep the did-you-mean hint."""
+    mcp = _make_config_set_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_config_set_automation", {"configg": {"alias": "x"}})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`configg`: unknown parameter, did you mean `config`?" in msg
+    assert "inside `config`" not in msg
 
 
 def test_trailing_declared_name_outranks_closer_spelling():

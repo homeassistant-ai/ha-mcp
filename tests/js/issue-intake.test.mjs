@@ -1,6 +1,14 @@
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
-import { runCloseWorkflow } from "./issue-intake-helpers.mjs";
+import {
+  FakeGitHub,
+  bot,
+  comment,
+  runCloseWorkflow,
+  snapshot,
+  user,
+} from "./issue-intake-helpers.mjs";
 import {
   collect,
   control,
@@ -11,9 +19,10 @@ import {
   render,
   validateResult,
   marker,
+  reportMarker,
+  reportVersionLine,
 } from "../../.github/issue-intake/intake.mjs";
 
-const bot = "ha-mcp[bot]";
 
 test("needs-info issue closure never acts on pull requests returned by the issues API", async () => {
   const calls = [];
@@ -295,33 +304,6 @@ test("non-English reports require an English translation", () => {
   );
 });
 
-const user = (login) => ({ login, type: "User" });
-const comment = (id, login, body, extra = {}) => ({
-  id,
-  user: user(login),
-  body,
-  html_url: `https://github.com/test/repo/issues/1#issuecomment-${id}`,
-  created_at: `2026-09-${String(id + 10).padStart(2, "0")}T00:00:00Z`,
-  ...extra,
-});
-function snapshot() {
-  return {
-    repository: "test/repo",
-    issue: {
-      number: 1,
-      title: "Dashboard call hangs",
-      body: "Using Claude Desktop on Windows. The dashboard call hangs.",
-      html_url: "https://github.com/test/repo/issues/1",
-      user: user("reporter"),
-      state: "open",
-      locked: false,
-      labels: [],
-    },
-    comments: [],
-    events: [],
-    roles: { reporter: "read", maintainer: "maintain", writer: "write" },
-  };
-}
 function result() {
   return {
     needs_translation: false,
@@ -343,50 +325,6 @@ function result() {
     missing_fields: ["ha_mcp_version", "install_method"],
     already_requested: [],
   };
-}
-class FakeGitHub {
-  constructor(data) {
-    this.data = structuredClone(data);
-    this.writes = [];
-    this.failLabel = false;
-    this.delays = [];
-    this.delay = async (milliseconds) => this.delays.push(milliseconds);
-  }
-  request(path, options = {}) {
-    if (options.method && options.method !== "GET") {
-      this.writes.push({ path, ...options });
-      if (path.endsWith("/labels")) {
-        if (this.failLabel) throw Error("Label write failed");
-        this.data.issue.labels.push({ name: "needs-info" });
-        this.data.events.push({
-          id: 99,
-          event: "labeled",
-          label: { name: "needs-info" },
-          actor: { login: bot, type: "Bot" },
-          created_at: "2026-09-25T00:00:00Z",
-        });
-      } else if (path.endsWith("/labels/needs-info")) {
-        this.data.issue.labels = [];
-      } else if (path.endsWith("/comments")) {
-        this.data.comments.push(
-          comment(10, bot, options.data.body, {
-            user: { login: bot, type: "Bot" },
-          }),
-        );
-        return { id: 10 };
-      } else if (path.includes("/comments/")) {
-        this.data.comments.find(
-          (c) => c.id === Number(path.split("/").at(-1)),
-        ).body = options.data.body;
-      }
-      return {};
-    }
-    if (path.includes("/collaborators/"))
-      return { role_name: this.data.roles[path.split("/").at(-2)] || "none" };
-    if (path.includes("/comments?")) return structuredClone(this.data.comments);
-    if (path.includes("/events?")) return structuredClone(this.data.events);
-    return structuredClone(this.data.issue);
-  }
 }
 
 test("human replies and maintainer authority survive; bot theories do not enter context", () => {
@@ -666,4 +604,128 @@ test("real close workflow ages needs-info regardless of who applied it", async (
     await runCloseWorkflow(github);
     assert.deepEqual(writes, ["comment", "close", "remove"]);
   }
+});
+
+function reportSnapshot(title) {
+  const s = snapshot();
+  s.issue.title = title;
+  s.issue.body = `## 🚨 ${reportMarker}\n\n${s.issue.body}\n\n${reportVersionLine} 8.6.0`;
+  return s;
+}
+const labelWrites = (api) =>
+  api.writes
+    .filter((w) => w.path.endsWith("/labels"))
+    .flatMap((w) => w.data.labels);
+
+test("a filed ha_report_issue report gets the type label its form would have added", async () => {
+  for (const [title, expected] of [
+    ["[BUG] Dashboard call hangs", ["bug"]],
+    ["[AGENT] Searched three times", ["agent-behavior"]],
+    ["[FEATURE] Manage Thread datasets", ["enhancement"]],
+  ]) {
+    const s = reportSnapshot(title);
+    const r = result();
+    r.missing_fields = [];
+    const api = new FakeGitHub(s);
+    await publish(api, prepare(s, bot), r, bot);
+    assert.deepEqual(labelWrites(api), expected);
+    assert.doesNotMatch(api.data.comments[0].body, /pending -->/);
+  }
+});
+
+test("type labels are not added without the report heading, or back after a human removed them", async () => {
+  const plain = snapshot();
+  plain.issue.title = "[BUG] Dashboard call hangs";
+  const mention = snapshot();
+  mention.issue.title = "[BUG] Dashboard call hangs";
+  mention.issue.body += ` The ${reportMarker} heading is missing from my paste.`;
+  const removed = reportSnapshot("[BUG] Dashboard call hangs");
+  removed.events.push({
+    id: 1,
+    event: "unlabeled",
+    actor: user("maintainer"),
+    label: { name: "bug" },
+    created_at: "2026-09-10T00:00:00Z",
+  });
+  for (const [s, expected] of [
+    [plain, []],
+    [mention, []],
+    [removed, []],
+  ]) {
+    const r = result();
+    r.missing_fields = [];
+    const api = new FakeGitHub(s);
+    await publish(api, prepare(s, bot), r, bot);
+    assert.deepEqual(labelWrites(api), expected);
+  }
+});
+
+test("a bug report without ha_report_issue output is asked for one, without needs-info", async () => {
+  const plain = snapshot();
+  plain.issue.title = "[BUG] Dashboard call hangs";
+  // Naming the heading in prose is not a report.
+  const mention = structuredClone(plain);
+  mention.issue.body += ` The ${reportMarker} heading is missing from my paste.`;
+  for (const s of [plain, mention]) {
+    const r = result();
+    r.missing_fields = [];
+    const api = new FakeGitHub(s);
+    await publish(api, prepare(s, bot), r, bot);
+    assert.match(api.data.comments[0].body, /### Diagnostic report/);
+    assert.deepEqual(labelWrites(api), []);
+  }
+});
+
+test("a label a maintainer adds while the model runs decides the report request", async () => {
+  // Label changes do not alter the fingerprint, so a comment rendered from
+  // the pre-inference snapshot would still ask a feature request for a report.
+  const s = snapshot();
+  s.issue.title = "[BUG] Dashboard call hangs";
+  const prepared = prepare(s, bot);
+  const r = result();
+  r.missing_fields = [];
+  const api = new FakeGitHub(s);
+  api.data.issue.labels.push({ name: "enhancement" });
+  await publish(api, prepared, r, bot);
+  assert.doesNotMatch(api.data.comments[0].body, /Diagnostic report/);
+});
+
+test("no report request when one is present or the issue is not a bug", () => {
+  const withReport = reportSnapshot("[BUG] Dashboard call hangs");
+  const replied = snapshot();
+  replied.issue.title = "[BUG] Dashboard call hangs";
+  replied.comments.push(
+    comment(2, "reporter", `## 🚨 ${reportMarker}\n...\n${reportVersionLine} 8.6.0`),
+  );
+  const feature = snapshot();
+  feature.issue.title = "[FEATURE] Faster dashboards";
+  const unclear = snapshot();
+  for (const s of [withReport, replied, feature, unclear])
+    assert.doesNotMatch(render(result(), prepare(s, bot)), /Diagnostic report/);
+});
+
+test("an untitled report with a stated error is asked for the tool output", () => {
+  const s = snapshot();
+  s.issue.body += " Every write fails with Unable to determine action.";
+  const r = result();
+  r.facts.push({
+    field: "error",
+    value: "Unable to determine action",
+    evidence: [{ source_id: "body", quote: "Unable to determine action" }],
+  });
+  assert.match(render(r, prepare(s, bot)), /### Diagnostic report/);
+});
+
+test("the report heading matches what ha_report_issue writes", () => {
+  // If the two drift apart, filed reports lose their type label and are
+  // asked for a report they already contain.
+  const tool = readFileSync(
+    new URL("../../src/ha_mcp/tools/bug_report_templates.py", import.meta.url),
+    "utf8",
+  );
+  for (const heading of ["## 🚨 ", "## 🤖 ", "## 💡 "])
+    assert.ok(tool.includes(`${heading}${reportMarker}`), heading);
+  // The gate also needs the environment block's version line; every report
+  // type carrying it is pinned on the Python side.
+  assert.ok(tool.includes(`\n${reportVersionLine} `));
 });

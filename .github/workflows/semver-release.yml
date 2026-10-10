@@ -18,11 +18,11 @@ permissions:
   contents: read
 
 # Serialize with every other workflow that pushes to master (sync-tool-docs,
-# addon-publish-dev, locale-sync). semantic-release's internal push aborts
-# hard when origin/master moves mid-run ("Upstream branch ... has changed") and
-# that abort is not retryable from inside the action, so the only safe fix is
-# to keep master writers from overlapping. cancel-in-progress stays false: a
-# queued release must run, not be cancelled.
+# addon-publish-dev, locale-sync, sync-ratchet-baselines). semantic-release's
+# internal push aborts hard when origin/master moves mid-run ("Upstream branch
+# ... has changed") and that abort is not retryable from inside the action, so
+# the only safe fix is to keep master writers from overlapping.
+# cancel-in-progress stays false: a queued release must run, not be cancelled.
 concurrency:
   group: master-write
   cancel-in-progress: false
@@ -120,10 +120,10 @@ jobs:
           submodules: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build addon image (no push)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ./homeassistant-addon/Dockerfile
@@ -168,7 +168,7 @@ jobs:
 
     - name: Python Semantic Release
       id: semantic
-      uses: python-semantic-release/python-semantic-release@9a026e9303981c866c3425723009becb2437c757 # v10.6.2
+      uses: python-semantic-release/python-semantic-release@b700dbeb1f431a0fcc30a79f3f0869407fe07278 # v10.7.0
       with:
         # Use GitHub App token with bypass permissions
         github_token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
@@ -198,13 +198,13 @@ jobs:
           echo "Release v${VERSION}" > release_notes.md
         fi
 
-        # Create draft release (build-binary.yml will add binaries and publish)
+        # A draft until the last step of this job publishes it.
         gh release create "$TAG" \
           --title "$TAG" \
           --notes-file release_notes.md \
           --draft
 
-        echo "✓ Created draft release $TAG (waiting for binaries)"
+        echo "✓ Created draft release $TAG"
 
     - name: Copy changelog to addon directory
       if: steps.semantic.outputs.released == 'true'
@@ -252,16 +252,14 @@ jobs:
 
         echo "✓ 'stable' tag now points to v$VERSION"
 
-  # Build binaries and attach to release
-  build-and-release:
-    needs: semantic-release
-    if: needs.semantic-release.outputs.released == 'true'
-    uses: ./.github/workflows/_build-and-release.yml
-    with:
-      release_tag: v${{ needs.semantic-release.outputs.version }}
-      is_prerelease: false
-    permissions:
-      contents: write
+    - name: Publish GitHub release
+      if: steps.semantic.outputs.released == 'true'
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      run: |
+        # Last, so a failed changelog push or stable-tag update leaves a draft
+        # instead of a public release with no PyPI or Docker publish behind it.
+        gh release edit "v${{ steps.semantic.outputs.version }}" --draft=false
 
   # Build and push addon Docker images
   build-addon:

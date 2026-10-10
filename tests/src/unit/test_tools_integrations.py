@@ -5,7 +5,7 @@ IntegrationTools.ha_remove_helpers_integrations dispatch.
 
 import json
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,7 +13,6 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
-    HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.config_entry_flow_walker import ReconfigureStatus
@@ -22,115 +21,9 @@ from ha_mcp.tools.config_entry_reconfigure import PreparedReconfigure
 from ha_mcp.tools.integration_reconfigure import ReconfigureRunner
 from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
-    _get_entry_id_for_flow_helper,
     fetch_entry_options_with_status,
     options_from_form_flow,
 )
-
-
-def _make_client(ws_response: Any = None, raises: Exception | None = None) -> MagicMock:
-    """Build a mock client whose send_websocket_message returns / raises."""
-    client = MagicMock()
-    if raises is not None:
-        client.send_websocket_message = AsyncMock(side_effect=raises)
-    else:
-        client.send_websocket_message = AsyncMock(return_value=ws_response)
-    return client
-
-
-class TestGetEntryIdForFlowHelper:
-    """Unit tests for the flow-helper entry_id lookup."""
-
-    async def test_returns_entry_id_for_full_entity_id(self) -> None:
-        client = _make_client(
-            {"success": True, "result": {"config_entry_id": "abc123"}}
-        )
-        entry_id, reason = await _get_entry_id_for_flow_helper(
-            client, "utility_meter", "sensor.peak"
-        )
-        assert entry_id == "abc123"
-        assert reason == "ok"
-
-    async def test_returns_none_for_bare_id_flow_helper(self) -> None:
-        # Flow helpers require full entity_id — bare IDs cannot be safely
-        # completed because helper_type often differs from entity domain
-        # (e.g. utility_meter → sensor.*, switch_as_x → switch/light.*).
-        client = _make_client()
-        entry_id, reason = await _get_entry_id_for_flow_helper(
-            client, "template", "my_sensor"
-        )
-        assert entry_id is None
-        assert reason == "bare_id_not_supported"
-        client.send_websocket_message.assert_not_awaited()
-
-    async def test_returns_none_for_unknown_helper_type(self) -> None:
-        client = _make_client()
-        entry_id, reason = await _get_entry_id_for_flow_helper(
-            client,
-            "input_button",
-            "my_button",  # SIMPLE, not FLOW
-        )
-        assert entry_id is None
-        assert reason == "wrong_helper_type"
-        client.send_websocket_message.assert_not_awaited()
-
-    async def test_returns_none_when_entity_not_in_registry(self) -> None:
-        client = _make_client({"success": False, "error": "not_found"})
-        entry_id, reason = await _get_entry_id_for_flow_helper(
-            client, "template", "template.ghost"
-        )
-        assert entry_id is None
-        assert reason == "not_in_registry"
-
-    async def test_returns_none_when_entity_has_no_config_entry_id(self) -> None:
-        # YAML-defined helper: entity exists but no config_entry_id
-        client = _make_client({"success": True, "result": {"entity_id": "template.x"}})
-        entry_id, reason = await _get_entry_id_for_flow_helper(
-            client, "template", "template.x"
-        )
-        assert entry_id is None
-        assert reason == "no_config_entry"
-
-    async def test_websocket_exception_appends_to_warnings(self) -> None:
-        client = _make_client(raises=ConnectionError("ws drop"))
-        warnings: list[str] = []
-        entry_id, reason = await _get_entry_id_for_flow_helper(
-            client, "utility_meter", "sensor.x", warnings=warnings
-        )
-        assert entry_id is None
-        assert reason == "lookup_failed"
-        assert len(warnings) == 1
-        assert "entity_registry/get failed" in warnings[0]
-        assert "sensor.x" in warnings[0]
-
-    async def test_websocket_exception_without_warnings_is_silent(self) -> None:
-        client = _make_client(raises=ConnectionError("ws drop"))
-        entry_id, reason = await _get_entry_id_for_flow_helper(
-            client, "utility_meter", "sensor.x", warnings=None
-        )
-        assert entry_id is None
-        assert reason == "lookup_failed"
-
-    async def test_unexpected_result_shape_returns_none(self) -> None:
-        # success but result is not a dict
-        client = _make_client({"success": True, "result": "garbage"})
-        entry_id, reason = await _get_entry_id_for_flow_helper(
-            client, "template", "template.x"
-        )
-        assert entry_id is None
-        assert reason == "not_in_registry"
-
-    async def test_connection_error_propagates(self) -> None:
-        # Auth/connection errors must reach the outer handler — they are
-        # not "lookup_failed", they are infrastructure failures.
-        client = _make_client(raises=HomeAssistantConnectionError("network down"))
-        with pytest.raises(HomeAssistantConnectionError):
-            await _get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")
-
-    async def test_auth_error_propagates(self) -> None:
-        client = _make_client(raises=HomeAssistantAuthError("token expired"))
-        with pytest.raises(HomeAssistantAuthError):
-            await _get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")
 
 
 class TestRemoveHelpersIntegrations:
@@ -139,6 +32,13 @@ class TestRemoveHelpersIntegrations:
     Covers all three routing paths (SIMPLE / FLOW / DIRECT) plus the
     confirm gate and wait flag.
     """
+
+    @pytest.fixture(autouse=True)
+    def _immediate_registry_retries(self, monkeypatch):
+        """The client doubles answer at once; the retry backoff only adds time."""
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_integrations._REGISTRY_RETRY_BASE_DELAY", 0
+        )
 
     @pytest.fixture
     def mock_client(self):
@@ -343,17 +243,25 @@ class TestRemoveHelpersIntegrations:
         delete_call = mock_client.send_websocket_message.call_args_list[-1]
         assert delete_call[0][0]["input_button_id"] == "my_button"
 
+    @pytest.mark.parametrize("absent_code", ["not_found", "invalid_format"])
     async def test_simple_path_state_gone_raises_entity_not_found(
-        self, tools, mock_client
+        self, tools, mock_client, absent_code
     ):
         """Registry empty + direct delete fails + state=None + registry-verify
         confirms gone → raises ENTITY_NOT_FOUND (entity-shape target)."""
         # 3x registry no unique_id, 1x direct delete fails, 1x verify-registry
-        # confirms entity is truly gone (success=False)
+        # confirms entity is truly gone (Core's not_found, or invalid_format
+        # for an id that cannot name an entity)
         mock_client.send_websocket_message.side_effect = (
             [{"success": True, "result": {}}] * 3
             + [{"success": False, "error": "not found"}]
-            + [{"success": False, "error": "not_found"}]
+            + [
+                {
+                    "success": False,
+                    "error": "Entity not found",
+                    "error_code": absent_code,
+                }
+            ]
         )
         # State check at the end returns None → entity gone from state machine
         mock_client.get_entity_state.side_effect = (
@@ -391,10 +299,16 @@ class TestRemoveHelpersIntegrations:
         # 1x direct-id delete returns success=False → falls through to
         #   fallback-2
         # 1x verify-registry returns success=False → registry confirms absent
+        # Registry replies carry Core's not_found code, as a real Core sends.
+        not_found = {
+            "success": False,
+            "error": "Entity not found",
+            "error_code": "not_found",
+        }
         mock_client.send_websocket_message.side_effect = (
-            [{"success": False, "error": "Entity not found"}] * 3
+            [not_found] * 3
             + [{"success": False, "error": "Unable to find input_button_id"}]
-            + [{"success": False, "error": "Entity not found"}]
+            + [not_found]
         )
         # State check raises 404 throughout — never-existed entity case
         mock_client.get_entity_state.side_effect = HomeAssistantAPIError(
@@ -517,23 +431,62 @@ class TestRemoveHelpersIntegrations:
         assert result.get("fallback_used") is None
         assert result["unique_id"] == "uid-disabled-apierror"
 
-    async def test_simple_path_all_fallbacks_exhausted(self, tools, mock_client):
-        """Registry empty + direct fails + state still present → ENTITY_NOT_FOUND."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": False, "error": "no entity"}
-        ] * 3 + [{"success": False, "error": "still no"}]
-        # State check ALWAYS returns a state → no fallback path catches it
-        mock_client.get_entity_state.return_value = {"state": "off"}
+    _BLOCKED: ClassVar[dict[str, Any]] = {
+        "success": False,
+        "error": "WebSocket request blocked (403 Forbidden): denied",
+        "suggestions": ["Check the reverse proxy", "Allow the WebSocket path"],
+    }
+
+    @pytest.mark.parametrize(
+        ("state", "verify_reply", "cause"),
+        [
+            ({"state": "off"}, None, "403 Forbidden"),
+            (None, _BLOCKED, "403 Forbidden"),
+            (None, {"success": True, "result": {}}, "no registry entry"),
+        ],
+        ids=["state_present", "verify_blocked", "verify_without_entry"],
+    )
+    async def test_simple_path_unproven_registry_read_is_not_reported_missing(
+        self, tools, mock_client, state, verify_reply, cause
+    ):
+        """The registry lookup is blocked and the direct-id delete fails. With a
+        state the entity exists; without one, a disabled helper keeps its
+        registry entry (#2699). Unless Core answers not_found, the read failure
+        is reported with its cause, never ENTITY_NOT_FOUND."""
+        mock_client.send_websocket_message.side_effect = [self._BLOCKED] * 3 + [
+            {"success": False, "error": "not found"},
+            verify_reply,
+        ]
+        mock_client.get_entity_state.return_value = state
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
-                target="ghost_button",
-                helper_type="input_button",
-                confirm=True,
-                wait=False,
+                target="my_button", helper_type="input_button", confirm=True, wait=False
+            )
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "SERVICE_CALL_FAILED"
+        assert cause in err["message"]
+        if cause == "403 Forbidden":
+            assert err["suggestions"] == self._BLOCKED["suggestions"]
+
+    async def test_simple_path_entity_without_registry_entry_is_not_missing(
+        self, tools, mock_client
+    ):
+        """zone.home has a state but no registry entry (no unique_id); Core
+        answers the registry read with not_found. It exists, so the caller
+        must learn it is configured elsewhere, not that it is missing."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": False, "error": "Entity not found", "error_code": "not_found"}
+        ] * 3 + [{"success": False, "error": "not found"}]
+        mock_client.get_entity_state.return_value = {"state": "zoning"}
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_remove_helpers_integrations(
+                target="zone.home", helper_type="zone", confirm=True, wait=False
             )
         err = json.loads(str(exc_info.value))
-        assert err["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "no entity registry entry" in err["error"]["message"]
 
     async def test_simple_path_ws_delete_fails(self, tools, mock_client):
         """unique_id found, but {type}/delete returns success=False
@@ -555,12 +508,36 @@ class TestRemoveHelpersIntegrations:
         assert err["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "in use by automation" in err["error"]["message"]
 
+    async def test_simple_path_yaml_helper_reports_not_found(self, tools, mock_client):
+        """A YAML helper is in the registry but not in the storage collection,
+        so Core answers the delete with not_found. The caller must learn the
+        helper is not deletable here, not get a generic service failure."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"unique_id": "yaml_switch"}},
+            {
+                "success": False,
+                "error": "Unable to find input_boolean_id yaml_switch",
+                "error_code": "not_found",
+            },
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_remove_helpers_integrations(
+                target="yaml_switch",
+                helper_type="input_boolean",
+                confirm=True,
+                wait=False,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "YAML" in err["error"]["message"]
+
     # === Path 2: FLOW ===
 
     async def test_flow_path_happy_single_subentity(self, tools, mock_client):
         """FLOW helper resolves entity_id → entry_id → delete + wait."""
         # Sequence of WS calls in order:
-        # 1. _get_entry_id_for_flow_helper → registry/get → has config_entry_id
+        # 1. get_entry_id_for_flow_helper → registry/get → has config_entry_id
         # 2. _get_entities_for_config_entry → registry/list → 1 entity
         # 3. delete_config_entry (not WS, separate mock)
         # Then wait_for_entity_removed → state poll, returns None (gone)
@@ -568,7 +545,7 @@ class TestRemoveHelpersIntegrations:
             # registry/get (lookup)
             {
                 "success": True,
-                "result": {"config_entry_id": "entry_abc"},
+                "result": {"platform": "template", "config_entry_id": "entry_abc"},
             },
             # registry/list (sub-entities)
             {
@@ -606,7 +583,7 @@ class TestRemoveHelpersIntegrations:
             # lookup for sensor.energy_peak
             {
                 "success": True,
-                "result": {"config_entry_id": "um_entry"},
+                "result": {"platform": "utility_meter", "config_entry_id": "um_entry"},
             },
             # registry/list — three sub-entities for um_entry
             {
@@ -643,17 +620,14 @@ class TestRemoveHelpersIntegrations:
 
     async def test_flow_path_entity_not_in_registry_raises(self, tools, mock_client):
         """Path 2 not_in_registry: target FLOW entity_id confirmed absent
-        from the entity registry → raises ENTITY_NOT_FOUND (entity-shape
+        from the entity registry and the state machine → raises ENTITY_NOT_FOUND (entity-shape
         target). Matches the existing bare_id_not_supported branch and
         sibling ha_remove_entity.
         """
-        # First lookup returns success=False → entry_id resolves to None
-        # Disambiguation re-query also returns success=False → reason
-        # discriminates as "not_in_registry"
         mock_client.send_websocket_message.side_effect = [
-            {"success": False, "error": "not found"},  # initial lookup
-            {"success": False, "error": "not found"},  # disambiguation
+            {"success": False, "error": "Entity not found", "error_code": "not_found"},
         ]
+        mock_client.get_entity_state.return_value = None
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
                 target="template.ghost",
@@ -700,15 +674,9 @@ class TestRemoveHelpersIntegrations:
         """FLOW: entity exists but config_entry_id is None (YAML) →
         RESOURCE_NOT_FOUND."""
         mock_client.send_websocket_message.side_effect = [
-            # initial lookup: success but no config_entry_id
             {
                 "success": True,
-                "result": {"config_entry_id": None},
-            },
-            # disambiguation: confirms entity is in registry
-            {
-                "success": True,
-                "result": {"config_entry_id": None},
+                "result": {"platform": "template", "config_entry_id": None},
             },
         ]
         with pytest.raises(ToolError) as exc_info:
@@ -721,6 +689,33 @@ class TestRemoveHelpersIntegrations:
         assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert "storage-based" in err["error"]["message"]
 
+    async def test_flow_path_never_deletes_another_integrations_entry(
+        self, tools, mock_client
+    ):
+        """A helper_type that does not own the target entity must not delete
+        the config entry the entity belongs to: group + a Hue light would
+        otherwise remove the whole Hue integration."""
+        mock_client.send_websocket_message.side_effect = [
+            {
+                "success": True,
+                "result": {
+                    "entity_id": "light.hue_lamp",
+                    "platform": "hue",
+                    "config_entry_id": "hue_entry",
+                },
+            },
+        ]
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_remove_helpers_integrations(
+                target="light.hue_lamp",
+                helper_type="group",
+                confirm=True,
+                wait=False,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.delete_config_entry.assert_not_awaited()
+
     async def test_flow_path_entry_not_found_at_delete_raises(self, tools, mock_client):
         """Path 2 TOCTOU: entry_id resolved at step 1 but already deleted
         before step 3 reaches HA → raises RESOURCE_NOT_FOUND. Silent
@@ -730,7 +725,7 @@ class TestRemoveHelpersIntegrations:
         mock_client.send_websocket_message.side_effect = [
             {
                 "success": True,
-                "result": {"config_entry_id": "stale_entry"},
+                "result": {"platform": "template", "config_entry_id": "stale_entry"},
             },
             {"success": True, "result": []},  # empty registry/list
         ]
@@ -760,7 +755,7 @@ class TestRemoveHelpersIntegrations:
         mock_client.send_websocket_message.side_effect = [
             {
                 "success": True,
-                "result": {"config_entry_id": "entry_restart"},
+                "result": {"platform": "template", "config_entry_id": "entry_restart"},
             },
             {
                 "success": True,
@@ -894,7 +889,7 @@ class TestRemoveHelpersIntegrations:
         mock_client.send_websocket_message.side_effect = [
             {
                 "success": True,
-                "result": {"config_entry_id": "entry_um"},
+                "result": {"platform": "utility_meter", "config_entry_id": "entry_um"},
             },
             {
                 "success": True,

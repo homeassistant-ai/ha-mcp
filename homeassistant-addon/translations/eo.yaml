@@ -1,31 +1,24 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/eo.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/eo.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Konfirmi TLS-atestilojn
+    description: 'Konfirmi la TLS-atestilon de la servilo de Home Assistant. Malŝaltu
+      ĉi tion nur ĉe fidinda reto, por memsubskribita atestilo aŭ mita gastnomo: ĝi
+      malfortigas transportan sekurecon.'
+  ha_tool_concurrency:
+    name: Konkureco de hejmaŭtomatigaj iloj de Home Assistant
+    description: Laŭvola limo pri eksteraj Home Assistant ilvokoj tra ĉiuj seancoj.
+      Interna REST, WebSocket, kaj samtempeco de disbranĉigo po ilo estas senŝanĝaj.
+      0 konservas senliman konduton. Voko atendanta kapaciton malsukcesas post 60
+      sekundoj. Intervalo 0–32.
   backup_hint:
-    name: Nivelo de sugesto por plena HA-momentfoto (por LLM)
-    description: 'Agordas la vortumon de la sugesto, kiun la LLM vidas en la
-
-      `ha_manage_backup(scope=''snapshot'')` ilpriskribo pri kiam
-
-      sugesti plenan Home Assistant tarball-sekurkopion antaŭ riskaj operacioj
-
-      (ekz. amasa forigo de aparatoj). Influas NUR ĉi tiun unu LLM-alfrontan promptan
-
-      frazon.
-
-
-      Por aŭtomataj momentfotoj por ĉiu redakto de aŭtomatigoj / skriptoj / helpiloj
-      /
-
-      ktp., uzu la apartan ŝaltilon **Ebligi aŭtomatan sekurkopion de redaktoj** sube.'
-  secret_path:
-    name: Anstataŭigo de sekreta vojo
-    description: 'Laŭvola kutima HTTP-vojo por la MCP-servilo. Lasu malplena por uzi
-      la aŭtomate generitan sekuran vojon.
-
-      '
+    name: Nivelo de konsilo pri momentfotoj
+    description: Kiom forte oni diras al AI-asistantoj sugesti plenan momentfoton
+      de Home Assistant antaŭ riskaj ŝanĝoj. Ĝi ŝanĝas nur ĉi tiun konsilon; aŭtomataj
+      redaktaj momentfotoj havas sian propran agordon.
   enable_tool_search:
     name: Ebligi ilo-serĉon
     description: 'Anstataŭigu la plenan il-katalogon per serĉ-bazita malkovro. Reduktas
@@ -48,9 +41,11 @@ configuration:
       agordo ĉi tie.'
   tool_search_max_results:
     name: Maksimumaj rezultoj de ilo-serĉo
-    description: 'Maksimuma nombro de iloj redonitaj de ha_search_tools kiam ilo-serĉo
-      estas ebligita. Pli malaltaj valoroj (2-3) ŝparas kuntekstajn ĵetonojn sed povas
-      maltrafi gravajn ilojn. Gamo: 2-10. Postulas restartigon.'
+    description: Maksimuma nombro de kaŝitaj iloj redonitaj po voko al ha_search_tools
+      kiam ilserĉado estas ŝaltita; pinglita ilo kiu altas en tiu pinta nombro estas
+      aldonita kiel mallonga eniro nur laŭ nomo super ĝi. Pli malaltaj valoroj (2-3)
+      ŝparas kuntekstajn ĵetonojn, sed eble preterlasas rilatajn ilojn. Postulas restartigon.
+      Intervalo 2–10.
   enable_tool_security_policies:
     name: Ebligi Ilo-Sekurecajn Politikojn (altnivela)
     description: Gardu alt-riskajn ilo-vokojn (seruro/alarmo-kontrolo, aŭtomatigo-skriboj,
@@ -110,12 +105,47 @@ configuration:
       la sola eldonanto de la agnoska ŝlosilo. Infano de la opcio „Aligi plejbonajn
       praktikajn kapablojn ĉe skriboj” supre kaj inerta dum tiu gepatro estas malŝaltita.
       Postulas restartigon por ekvalidi.'
-  ha_tool_concurrency:
-    name: Konkureco de hejmaŭtomatigaj iloj de Home Assistant
-    description: Laŭvola limo pri eksteraj vokoj al Home Assistant-iloj tra ĉiuj sesioj.
-      Interna REST-, WebSocket-, kaj perila disbranĉiĝa konkureco restas neŝanĝita.
-      0 tenas la senliman konduton. Voko atendanta je kapablo malsukcesas post 60
-      sekundoj.
+  enable_auto_backup:
+    name: Aŭtomataj sekurkopioj de redaktoj
+    description: Konservi momentfoton de ento antaŭ ol ĉiu skriba aŭ foriga ilvoko
+      ŝanĝas ĝin. Dum ĉi tio estas malŝaltita, la dosieraj kaj krud-YAML-aj iloj (ha_write_file,
+      ha_delete_file, ha_config_set_yaml) rifuzas skribi.
+  auto_backup_throttle_minutes:
+    name: Limigo de aŭtomataj momentfotoj (minutoj)
+    description: Kiom ofte aŭtomata momentfoto povas kapti la saman enton. 0 kaptas
+      ĉe ĉiu skribo; N super 0 kaptas maksimume unu momentfoton po N minutoj po ento.
+      Intervalo 0–1440.
+  auto_backup_retain_per_entity:
+    name: Konservado de aŭtomataj momentfotoj (po ento)
+    description: La plej multaj momentfotoj konservitaj po ento. Ĉiu nova kapto forigas
+      la plej malnovajn momentfotojn super ĉi tiu nombro. Intervalo 1–10000.
+  enable_snapshot_actions:
+    name: Permesi plenajn akompanajn agojn de HA-momentfotoj
+    description: Permesi al AI-asistantoj administri plenajn momentfotojn de Home
+      Assistant per ha_manage_backup kaj la ekvivalentaj momentfotaj servoj kaj komandoj
+      en ha_call_service. Malŝalti ĉi tion blokas ĉiun momentfoton, inkluzive de listigado.
+      Forigo de momentfotoj nur disponeblas per ha_manage_backup kaj ankaŭ postulas
+      Permesi forigon de momentfotoj. Redakti momentfotojn kaj la momentfotajn agojn
+      kiujn homo faras en la retejaj agordaj agordoj restas disponeblaj.
+  backup_read_only:
+    name: Igi rezervadministradon nur-legebla
+    description: Permesi al AI-asistantoj listigi, vidi kaj kompari redaktajn momentfotojn,
+      kaj listigi plenajn HA-momentfotojn kiam momentfotaj agoj estas ebligitaj. Bloki
+      manan kreadon, restarigon (inkluzive de redaktaj restarigoj) kaj forigon de
+      momentfotoj, inkluzive de la ekvivalentaj momentfotaj servoj kaj komandoj en
+      ha_call_service. Aŭtomataj antaŭredaktaj momentfotoj daŭras. La momentfotaj
+      agoj kiujn homo faras en la retejaj agordaj agordoj restas disponeblaj.
+  enable_snapshot_delete:
+    name: Permesi forigon de momentfotoj
+    description: Permesi al ha_manage_backup forigi plenajn momentfotojn de Home Assistant.
+      Momentfoto eble estas la lasta ebleco reen post erara ŝanĝo, do homo devas ŝalti
+      ĉi tion. Planitaj momentfotoj, la plej nova momentfoto kaj momentfotoj pli junaj
+      ol la minimuma aĝo restas protektitaj.
+  snapshot_delete_min_age_days:
+    name: Minimuma aĝo de momentfoto por forigi (tagoj)
+    description: Kiom malnova devas esti momentfoto, en tagoj, antaŭ ol ĝi povas esti
+      forigita. 0 malŝaltas la aĝlimon; la plej nova momentfoto kaj planitaj momentfotoj
+      restas protektitaj. Intervalo 0–365.
   disabled_tools:
     name: Malaktivigitaj iloj (disigitaj per komoj)
     description: Iloj listigitaj ĉi tie estas devige malŝaltitaj kaj ŝlositaj en la
@@ -131,52 +161,9 @@ configuration:
       supro de la langeto 'Iloj' kaj ne povas esti malfiksitaj de la reta Agorda UI
       sen unue malaktivigi ĉi tiun opcion. Utila kombine kun 'Ilo-Serĉo'. Ilnomoj
       disigitaj per komoj.
-  enable_auto_backup:
-    name: Ebligi aŭtomatan sekurkopion de redaktoj
-    description: 'Kaptas momentfoton por ĉiu ento antaŭ ĉiu ĉirkaŭvolvita skriba/detrua
-      MCP-ilvoko (aŭtomatigo, skripto, sceno, helpilo, panelo, panelresurso, etikedo,
-      kategorio, grupo, zono, areo, kalendaro, farendaĵo, ento, aparato, integriĝo,
-      kaj parencaj forigaj/detruaj iloj). La aŭtomata sekurkopia limigo difinas kiom
-      ofte tio okazas: 0 (defaŭlte) kaptas ĉe ĉiu tia voko, N>0 maksimume unu momentfoton
-      po N minutoj por ĉiu ento. Momentfotoj estas konservitaj kiel YAML-dosieroj
-      sub /data/ha_mcp_backups/ (anstataŭigebla per HAMCP_BACKUP_DIR) kaj listigitaj,
-      restarigitaj, aŭ forigitaj per la langeto ''Sekurkopioj'' en la reta agorda
-      UI aŭ per ha_manage_backup(scope=''edits'', ...). Por tiuj domajnoj la kapto
-      estas plejbone klopoda — malsukceso registras AVERTON kaj la skribo daŭras.
-      La dosieraj kaj krud-YAML-iloj estas la escepto: ha_write_file, ha_delete_file
-      kaj ha_config_set_yaml traktas la momentfoton kiel antaŭkondiĉon, do skribo
-      tra ili estas rifuzita dum ĉi tio estas malŝaltita, kaj malsukcesa kapto blokas
-      ĝin. Defaŭlte ŝaltita; malmarkado malaktivigas la plejbone klopodajn kaptojn
-      kaj malfunkciigas la dosierajn kaj krud-YAML-ilojn kun ili. Postulas restartigon
-      por efektiviĝi.'
-  auto_backup_throttle_minutes:
-    name: Aŭtomata sekurkopia limigo (minutoj)
-    description: Limiga fenestro por ĉiu ento. 0 (defaŭlte) kaptas momentfoton ĉe
-      ĉiu ĉirkaŭvolvita skribo. N>0 kaptas maksimume unu momentfoton po N minutoj
-      por ĉiu ento. Gamo 0–1440.
-  auto_backup_retain_per_entity:
-    name: Aŭtomata sekurkopia reteno (por ĉiu ento)
-    description: Maksimuma nombro de momentfotoj konservitaj por ĉiu ento. Pli malnovaj
-      momentfotoj preter ĉi tiu limo estas forigitaj ĉe ĉiu sukcesa kapto. Defaŭlte
-      100, gamo 1–10000.
-  enable_snapshot_delete:
-    name: Permesi forigon de momentfotoj
-    description: Permesas al ha_manage_backup forigi plenajn HA-momentfotajn tarball-ojn
-      (scope='snapshot', action='delete'). Malŝaltita defaŭlte — momentfoto povas
-      esti la lasta reakira punkto post erara ŝanĝo, do homo devas elekti ĉi tie.
-      Eĉ kiam ŝaltita, planitaj sekurkopioj, la plej nova restanta momentfoto, kaj
-      io ajn pli juna ol la suba aĝlimo restas protektitaj.
-  snapshot_delete_min_age_days:
-    name: Minimuma aĝo de momentfoto por forigo (tagoj)
-    description: Momentfoto devas esti almenaŭ tiom aĝa antaŭ ol ĝi povas esti forigita.
-      Gamo 0–365; 0 malaktivigas la limon (la protektoj de la plej nova momentfoto
-      kaj planitaj sekurkopioj ankoraŭ validas). Defaŭlte 7.
-  verify_ssl:
-    name: Kontroli TLS-atestilon
-    description: Kontrolu la TLS-atestilon de la servilo Home Assistant. La programo
-      (aldonaĵo) konektiĝas per la provkuratora prokurservilo (Supervisor proxy),
-      do ĉi tio kutime havas neniun efikon kaj devas resti ebligita. Malŝaltu nur
-      se vi reagordis la programon (aldonaĵo) por komuniki kun HA per publika HTTPS-gastnomo
-      kun memsubskribita atestilo aŭ malkongruo de gastnomo. Malŝalto malfortigas
-      transportan sekurecon — lasu ebligita krom se vi scias, ke vi bezonas tion.
-      Postulas restartigon por ekvalidi.
+  secret_path:
+    name: Anstataŭigo de sekreta vojo
+    description: 'Laŭvola kutima HTTP-vojo por la MCP-servilo. Lasu malplena por uzi
+      la aŭtomate generitan sekuran vojon.
+
+      '

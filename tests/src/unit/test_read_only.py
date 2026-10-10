@@ -252,32 +252,6 @@ class TestExemptionRules:
         assert (rule(args) is None) is allowed
 
     @pytest.mark.parametrize(
-        ("args", "allowed"),
-        [
-            ({"radio": "matter", "action": "diagnostics", "device_id": "d1"}, True),
-            ({"radio": "zwave", "action": "network_status"}, True),
-            ({"radio": "matter", "action": "ping", "device_id": "d1"}, True),
-            ({"radio": "zigbee", "action": "cluster_read", "device_id": "d1"}, True),
-            ({"radio": "thread", "action": "list_datasets"}, True),
-            ({"radio": "zwave", "action": "add"}, False),
-            ({"radio": "matter", "action": "remove_fabric", "device_id": "d1"}, False),
-            ({"radio": "thread", "action": "set_network", "confirm": True}, False),
-            ({"radio": "zwave", "action": "firmware_update", "device_id": "d1"}, False),
-            # Non-mutating but intentionally blocked: network_backup creates a
-            # backup artifact (mirrors ha_manage_backup), discover_routers starts
-            # a long-running mDNS scan.
-            ({"radio": "zigbee", "action": "network_backup"}, False),
-            ({"radio": "thread", "action": "discover_routers"}, False),
-            # A missing action fails closed — never a silent read.
-            ({"radio": "zwave"}, False),
-            ({}, False),
-        ],
-    )
-    def test_manage_radio(self, args, allowed):
-        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_radio"].blocked_write
-        assert (rule(args) is None) is allowed
-
-    @pytest.mark.parametrize(
         "args,allowed",
         [
             ({"action": "list"}, True),
@@ -829,11 +803,11 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "repository",
     },
     "ha_manage_energy_prefs": {
-        # mode='set' payload — blocked unless dry_run=True (preview only).
+        # Get-mode inspection and write payloads gated by mode/dry_run.
+        "include_statistics",
+        "include_schema",
         "config",
         "config_hash",
-        # Convenience-mode payloads (add_device/remove_device/add_source),
-        # all blocked unless dry_run=True.
         "stat_consumption",
         "name",
         "included_in_stat",

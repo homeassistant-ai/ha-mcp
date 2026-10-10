@@ -1,8 +1,8 @@
-# E2E Test Infrastructure
+# Test Infrastructure and Rules
 
 ## Custom Component (ha_mcp_tools)
 
-- Component is installed into the Docker container by `_install_custom_component` in `src/e2e/conftest.py`
+- Component is installed into the Docker container by `_install_custom_component` in `src/e2e/_conftest_seed.py`
 - HA's `call_service(return_response=True)` wraps results in `{"changed_states": [], "service_response": {...}}`. Most tools unwrap it with `unwrap_service_response()` (`src/ha_mcp/tools/util_helpers.py`); `ha_call_service` instead *splits* it, projecting `changed_states` into `result` and surfacing `service_response` once at the top level (issue #2085)
 - `hass.async_add_executor_job` only passes positional args — use `lambda:` wrappers for calls needing kwargs (e.g., `mkdir(parents=True, exist_ok=True)`)
 - HA Docker image uses `annotatedyaml` (PyYAML wrapper), NOT `ruamel.yaml` — custom components needing ruamel must declare it in `manifest.json` requirements
@@ -13,7 +13,7 @@
 The suite runs on several backends, and a test that only makes sense on some
 of them is gated by a marker rather than a runtime `skip`. The markers and
 their exact skip conditions are defined in
-`src/e2e/conftest.py::pytest_collection_modifyitems` — read that docstring
+`src/e2e/_conftest_collection.py::pytest_collection_modifyitems` — read that docstring
 before adding a gate:
 
 | Marker | Runs on |
@@ -32,7 +32,7 @@ before adding a gate:
 
 Pick the marker by what the test *needs*, not by where it happens to pass:
 `external_only` is about needing an in-process server you can reconfigure,
-`inaddon_only` about needing the addon's supervisor context. Read the skip
+`inaddon_only` about needing the app (add-on) supervisor context. Read the skip
 expressions, not the summary docstring: `external_only` does not mean
 "HAOS external only".
 
@@ -88,8 +88,8 @@ It is orthogonal to the backend selectors, so each backend has its own shape:
 | HAOS `inaddon` | **no component** in effect — `remove_tools_entry_in_qcow2` drops the baked tools entry pre-boot; nothing else sets one up |
 | HAOS `embedded` | **server entry only** — same pre-boot removal, and the staged (disabled) server entry is deliberately kept |
 
-The staging lives in `conftest._prepare_testcontainer_config` (container) and
-`conftest._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
+The staging lives in `_conftest_testcontainer._prepare_testcontainer_config` (container) and
+`_conftest_haos._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
 (HAOS). The qcow2 edit is offline and per-worker, like the recorder / HACS
 refreshers, and raises rather than warning: a silent no-op would leave the
 entry in place and the lane would re-test the ordinary topology while
@@ -108,6 +108,55 @@ The server entry also registers the `ha_mcp_tools/*` WebSocket surface
 component capabilities answer while the privileged *services* stay gone —
 that split is the whole point of the lanes, and `test_tools_entry_absent.py`
 asserts both halves.
+
+## Test Design Rules
+
+Every test under `tests/` follows these. Reviewers check new and changed
+tests against them.
+
+1. **Test our code, not the platform.** Assert on behaviour this repository
+   owns, not that Python, FastMCP, pydantic or Home Assistant do what their
+   docs say. A dependency may set up the failure; the assertion is on how
+   our code handles it. See the FastMCP schema-validation note under
+   [E2E Test Patterns](#e2e-test-patterns).
+2. **Prove the test catches the bug.** Write the regression test first
+   and watch it fail, as the root `AGENTS.md` requires. When a test is
+   added to a fix that already exists (for example during review), revert
+   the fix, confirm the test fails, then restore it. A test that builds its
+   input by hand, or covers only a pure helper, can pass with the fix
+   reverted.
+3. **One property, one test.** Test each property at the lowest layer that
+   can see it: logic in unit tests; wiring, packaging and real Home
+   Assistant behaviour in E2E. Two tests that assert the same property are
+   one too many, whatever layer or client they use. Check for an existing
+   test first. In a parametrized table, keep one case per branch, plus any
+   value that failed in the wild. If deleting a case leaves coverage
+   unchanged, it was a duplicate.
+4. **Do not restate the implementation.** Assert the property that must
+   hold, not the code's own formula or literals. For example, assert that a
+   truncated response is under its size limit, not that its length equals
+   the number the code computed. This covers configuration too: a test that
+   asserts a value chosen freely (a path, a timeout, a version number) fails
+   on a change only because it restates the value, so the revert check in
+   rule 2 proves nothing for it. Explain such a value in a comment, or test
+   a property that holds across the file, such as every analysis output
+   being gated. When something outside the file requires the value, such as
+   a ruleset's required check name or a policy that a suite must run,
+   assert that requirement.
+5. **Make the untestable path testable.** A failure path a test cannot
+   reach gets a small, obvious seam the test can replace.
+6. **A test supplies its own world.** No reads from the real home directory
+   or `~/.ha-mcp`, no network beyond the test's own containers, no answer
+   taken from the wall clock, the local timezone or another test's
+   leftovers. Code that reads the clock takes `now` as a parameter, unless
+   the test harness already controls the clock (the JSDOM harness below
+   does). See **Config-dir isolation** below.
+   Installing a pinned dependency during job setup is not test network
+   access. Do not commit third-party or generated files to satisfy this
+   rule.
+7. **Name the defect.** The test name, and its docstring or the
+   framework's own description, say what breaks for the user, not the
+   function name.
 
 ## Test Patterns
 
@@ -155,7 +204,7 @@ Other available helpers: `wait_for_entity_state()`, `wait_for_condition()`, `wai
 ## JS Behaviour Testing (`tests/js/`, `tests/src/unit/_js_harness.py`)
 
 Every rendered `<script>` body in the repo (`src/ha_mcp/settings_ui/` — page
-HTML in `settings.html`, client JS in `settings.js`;
+HTML in `settings.html`, client JS in `settings_js/`;
 `src/ha_mcp/auth/consent_form.py`; every `.astro` page under `site/src/`)
 gets parse coverage automatically via
 `tests/src/unit/test_rendered_scripts_parse.py`. The discovery walker in
@@ -181,13 +230,15 @@ assert result.broadcasts_of_type("restart-required")
 
 The harness fakes `setTimeout` / `setInterval` / `Date.now` on a virtual clock, stubs `fetch` from a URL map, captures `location.reload` via JSDOM's `jsdomError` channel, and provides a `BroadcastChannel` shim. `new Date()` / `performance.now()` continue to report wall time — only the three sources above are faked.
 
+Each pytest worker sends all its runs to one long-lived node process, and every run gets a fresh JSDOM window. A run that times out, crashes node or garbles its reply ends that process; the next run starts a new one. `tests/src/unit/test_js_harness_worker.py` covers this.
+
 Astro `<script>` blocks without `define:vars` / `is:inline` are TypeScript by default — pass `language="ts"` to `run_script`. For Astro pages needing wizard data, use `extract_astro_frontmatter_vars` + `astro_vars_prelude` to inject production data.
 
-CI installs Node + jsdom in the `unit-tests` job. Local devs without `tests/js/node_modules/` get clean skips.
+CI installs Node + jsdom in the `unit-tests` job. Local devs without `tests/js/node_modules/` get clean skips. Each harness run has a 15s node timeout; set `HA_MCP_JS_HARNESS_TIMEOUT=<seconds>` to raise it on slower hardware.
 
 **Transient UI + the fake clock:** timed UI (e.g. the save toast, ~4s auto-dismiss) is gone from `result.dom` by capture time because the virtual clock fast-forwards. Stamp state into a `data-` attribute *inside* `invoke` to read it live. Avoid substring false-positives too — `"ha-toast" in result.dom` matches the always-present `#ha-toast-region`; assert the specific variant class.
 
-**Config-dir isolation:** `tests/src/unit/conftest.py` gives every unit test its own empty `HA_MCP_CONFIG_DIR` and sets `HA_MCP_DISABLE_SETTINGS_UI`, so no unit test reads or writes `~/.ha-mcp` or starts a settings sidecar. A sidecar or startup test that needs the sidecar unsets `HA_MCP_DISABLE_SETTINGS_UI` with `monkeypatch`; a test of the default data-dir resolution unsets `HA_MCP_CONFIG_DIR` and fakes `Path.home`.
+**Config-dir isolation:** `tests/src/unit/conftest.py` gives every unit test its own empty `HA_MCP_CONFIG_DIR` and sets `HA_MCP_DISABLE_SETTINGS_UI`, so no unit test reads or writes `~/.ha-mcp` or starts a settings sidecar. A sidecar or startup test that needs the sidecar unsets `HA_MCP_DISABLE_SETTINGS_UI` with `monkeypatch`; a test of the default data-dir resolution unsets `HA_MCP_CONFIG_DIR` and fakes `Path.home`. In E2E, `src/e2e/_collection_data_dir.py` does the same for collection, and the `in_process_data_dir` session fixture points the in-process server's `HA_MCP_CONFIG_DIR` and `HAMCP_BACKUP_DIR` at a temporary directory.
 
 When adding a new UI surface:
 - Python-rendered HTML: register the renderer in `_js_harness.py::_PY_RENDERERS`.

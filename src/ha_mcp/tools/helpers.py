@@ -5,6 +5,7 @@ Centralized utilities that can be shared across multiple tool implementations.
 """
 
 import functools
+import inspect
 import json
 import logging
 import re
@@ -16,6 +17,8 @@ from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
+    HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
@@ -33,6 +36,7 @@ from ..errors import (
     create_validation_error,
 )
 from ..utils.usage_logger import log_tool_call
+from .coercion import UNSET
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +72,8 @@ def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
     )
 
 
-def extract_tool_error_message(te: ToolError) -> str:
-    """Extract a human-readable error message from a ToolError.
+def extract_tool_error_message(te: ToolError | str) -> str:
+    """Extract a human-readable error message from a ToolError or its logged text.
 
     Pairs with raise_tool_error() which serializes error dicts as JSON.
     Falls back to str(te) if the message is not valid JSON.
@@ -115,6 +119,53 @@ def extract_structured_error_reason(exc: BaseException) -> str | None:
     if isinstance(first, str) and first:
         return f"{message} {first}"
     return message
+
+
+def reject_malformed_list_fields(
+    config: dict[str, Any],
+    list_keys: tuple[str, ...],
+    context: dict[str, Any],
+    *,
+    source: Literal["config", "patch", "python_transform"] = "config",
+) -> None:
+    """Reject list fields received as ``{"item": ...}`` or ``""`` (issue #2548).
+
+    Home Assistant either rejects these shapes with an error that does not name
+    them, or stores them and fails later, so the caller cannot tell what to fix.
+    """
+    received = {
+        k: '{"item": ...}' if isinstance(v, dict) and list(v) == ["item"] else '""'
+        for k in list_keys
+        if (v := config.get(k)) == "" or (isinstance(v, dict) and list(v) == ["item"])
+    }
+    if not received:
+        return
+    names = ", ".join(f"'{k}'" for k in received)
+    shapes = "; ".join(f"'{k}' as {shape}" for k, shape in received.items())
+    first = next(iter(received))
+    example = "[{...}, {...}]"
+    if re.fullmatch(r"\w+", first):
+        example = f'"{first}": {example}'
+    if source == "python_transform":
+        message = f"python_transform produced {shapes} instead of a list"
+        suggestions = [f"Assign {names} a list, e.g. {example}, or delete an empty one"]
+    else:
+        noun = "config" if source == "config" else "patch value"
+        message = f"Received {noun} {shapes} instead of a JSON array"
+        suggestions = [
+            f"Send {names} as a JSON array, e.g. {example}, or omit an empty one",
+            f"If it still arrives malformed, pass the whole {source} as one "
+            + "JSON-encoded string instead",
+            "If neither works, check the model or MCP client in use",
+        ]
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"{message}; nothing was saved in Home Assistant",
+            suggestions=suggestions,
+            context={**context, "malformed_list_fields": received},
+        )
+    )
 
 
 def validate_identifier_not_empty(
@@ -201,6 +252,49 @@ def validate_identifier_not_empty(
     )
 
 
+WHITESPACE_CLEARS_NOTE = (
+    "A whitespace-only value acts like '', for clients that cannot send an "
+    "empty string."
+)
+_QUOTE_ONLY = re.compile(r"[\s\"'‘’“”]+")
+
+
+def clear_hint(param_name: str) -> str:
+    return (
+        f"To clear {param_name}, pass an empty string '', or a single space ' ' "
+        "if your client cannot send an empty string"
+    )
+
+
+def clearable_value(
+    value: str | None,
+    param_name: str,
+    *,
+    hint: str | None = None,
+) -> str | None:
+    """Map an empty or whitespace-only value to None, the registry's clear value.
+
+    Other values are returned stripped. A model whose client cannot send ``''``
+    falls back to ``'""'`` (#2585); a value made only of quotes and whitespace
+    is never a real value, so reject it.
+    """
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if _QUOTE_ONLY.fullmatch(value):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"{param_name} {value!r} contains only quote characters and whitespace",
+                suggestions=[hint or clear_hint(param_name)],
+                context={"parameter": param_name, "value": value},
+            )
+        )
+    return value
+
+
 async def get_connected_ws_client(
     base_url: str, token: str, verify_ssl: bool | None = None
 ) -> tuple[HomeAssistantWebSocketClient | None, dict[str, Any] | None]:
@@ -275,6 +369,17 @@ def _classify_exception(
             result = create_connection_error(
                 error_msg, timeout="timeout" in error_str, context=context
             )
+        case HomeAssistantAdminRequiredError():
+            result = create_error_response(
+                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                error_msg,
+                suggestions=[
+                    "Use a long-lived access token from an administrator's profile",
+                    "Or use the in-process server, which provisions its own admin token",
+                ],
+                context=context,
+            )
+            result["warnings"] = [NON_ADMIN_TOKEN_WARNING]
         case HomeAssistantAuthError():
             result = create_auth_error(
                 error_msg, expired="expired" in error_str, context=context
@@ -559,7 +664,9 @@ def log_tool_usage(func: Any) -> Any:
             execution_time_ms = (time.time() - start_time) * 1000
             log_tool_call(
                 tool_name=tool_name,
-                parameters=kwargs,
+                # UNSET means the caller omitted the argument; ha_report_issue
+                # returns these entries as JSON, so the sentinel must not land.
+                parameters={k: v for k, v in kwargs.items() if v is not UNSET},
                 execution_time_ms=execution_time_ms,
                 success=success,
                 error_message=error_message,
@@ -593,8 +700,47 @@ async def safe_progress(
         logger.warning(
             "ctx.report_progress signature error (%s): %s", type(e).__name__, e
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug("ctx.report_progress failed (%s): %s", type(e).__name__, e)
+
+
+def ws_failure_code(result: dict[str, Any]) -> ErrorCode:
+    """Map Core's WS error code: ``invalid_format`` is the caller's input,
+    ``not_found`` an item Core does not hold (e.g. a YAML-configured helper)."""
+    code = result.get("error_code")
+    if code == "invalid_format":
+        return ErrorCode.VALIDATION_INVALID_PARAMETER
+    if code == "not_found":
+        return ErrorCode.RESOURCE_NOT_FOUND
+    return ErrorCode.SERVICE_CALL_FAILED
+
+
+def clear_or_keep(value: str | None, param_name: str) -> str | None:
+    """``clearable_value`` for params where None means "not passed": blank → ''."""
+    return None if value is None else clearable_value(value, param_name) or ""
+
+
+class _HiddenParam:
+    """Annotated marker for a parameter left out of the published input schema."""
+
+
+# Argument validation runs on the function signature, not the published schema,
+# so a hidden parameter is still accepted from callers that pass it.
+HIDDEN_PARAM = _HiddenParam()
+
+
+def hidden_param_names(fn: Any) -> frozenset[str]:
+    """Names of ``fn``'s parameters annotated with ``HIDDEN_PARAM``."""
+    try:
+        signature = inspect.signature(fn, eval_str=True)
+    except NameError:
+        # A string annotation naming a TYPE_CHECKING-only import can't resolve.
+        signature = inspect.signature(fn)
+    return frozenset(
+        name
+        for name, param in signature.parameters.items()
+        if HIDDEN_PARAM in getattr(param.annotation, "__metadata__", ())
+    )
 
 
 def register_tool_methods(mcp: Any, instance: Any) -> None:
@@ -602,13 +748,18 @@ def register_tool_methods(mcp: Any, instance: Any) -> None:
 
     Discovers methods bearing a ``__fastmcp__`` attribute (set by the outermost
     ``@tool`` decorator — must be listed above ``@log_tool_usage``) and registers
-    them via ``mcp.add_tool()``.
+    them via ``mcp.add_tool()``, dropping ``HIDDEN_PARAM`` parameters from the
+    published schema.
     """
     count = 0
     for attr in dir(instance):
         method = getattr(instance, attr)
         if callable(method) and hasattr(method, "__fastmcp__"):
-            mcp.add_tool(method)
+            registered = mcp.add_tool(method)
+            properties = getattr(registered, "parameters", {}).get("properties")
+            if isinstance(properties, dict):
+                for name in hidden_param_names(method):
+                    properties.pop(name, None)
             count += 1
     if count == 0:
         logger.warning(f"No @tool-decorated methods found on {type(instance).__name__}")

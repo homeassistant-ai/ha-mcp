@@ -26,7 +26,7 @@ async def _delete_template_helper(mcp_client, entity_id: str) -> None:
             "ha_remove_helpers_integrations",
             {"target": entity_id, "helper_type": "template", "confirm": True},
         )
-    except Exception as e:  # pragma: no cover - cleanup best-effort
+    except Exception as e:  # pragma: no cover - cleanup best-effort  # noqa: BLE001
         logger.warning(f"Cleanup of {entity_id} failed: {e}")
 
 

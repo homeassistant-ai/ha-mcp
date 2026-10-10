@@ -32,6 +32,26 @@ Consequences:
   [python_sandbox.py](src/ha_mcp/utils/python_sandbox.py) for the explicit
   "not a security boundary" note.
 
+### Custom dashboard cards are the user's own code
+
+To describe and check `custom:` cards, the `ha_mcp_tools` component runs the
+JavaScript files the user registered as dashboard resources (`/hacsfiles/...`,
+`/local/...`) in a QuickJS sandbox inside Home Assistant. ha-mcp installs no
+card; it only runs cards the user chose to install, the same files their
+browsers already run with a logged-in Home Assistant session. Deciding which
+cards are safe to install is the user's responsibility. The sandbox exposes no
+network, filesystem or process APIs, and caps each card's memory, file size and
+run time to contain a broken card, not an adversarial one. The DOM library it
+runs on (linkedom) is fetched from the npm registry at a pinned version and
+checked against its integrity hash before use.
+
+Inspection starts on the first relevant request, never at HA startup. QuickJS
+is an optional, exact-version dependency installed through HA's requirements
+manager under Core's constraints. An existing incompatible provider or
+dependency conflict disables this advice without replacing the provider or
+preventing the integration from loading. The shared `quickjs` module name
+means `quickjs` and `quickjs-ng` must not be installed over each other.
+
 ### Local network is the trusted zone for standard mode
 
 The HTTP entrypoint (`ha-mcp-web`) authenticates by URL-path
@@ -100,9 +120,14 @@ ha-mcp uses the long-lived access token the operator provides. That token's
 permissions in Home Assistant are what they are. If the configured token is an
 admin token, ha-mcp can perform admin-level operations. Reports stating "ha-mcp
 can do X" where X is permitted by the configured token are not vulnerabilities —
-they are the intended behavior. Restricting HA permissions is done in Home
-Assistant (e.g. by creating a non-admin user and generating a token for that
-user).
+they are the intended behavior. ha-mcp expects an administrator's token;
+non-admin tokens are not officially supported but still work, with
+limitations: admin-only operations fail. Home Assistant answers an
+admin-only REST request from a non-admin with a 401 that `http.ban` counts
+toward an IP ban, so ha-mcp refuses those locally and calls services over
+WebSocket, where a refusal is not counted.
+To limit what an agent can do, use ha-mcp's tool security policies or
+disable tools rather than a non-admin token.
 
 ### Entity visibility enforce mode is best-effort concealment
 
@@ -292,11 +317,12 @@ mode** option in the entry options:
     metadata-honoring clients are unaffected; metadata-ignoring clients that
     guess root paths reach the app instead.
 
-Discovery never publishes the webhook id, in any of the three modes. The only
-protected-resource document the entry serves is the path-scoped one at
-`/.well-known/oauth-protected-resource/api/webhook/<id>`, which a caller can
-reach only by already holding the id, and the webhook's 401 challenge points
-there rather than at a fixed, guessable path. Switching from `ha_auth` or
+Discovery never publishes the webhook id, in any of the three modes. The entry
+serves protected-resource metadata only at
+`/.well-known/oauth-protected-resource/api/webhook/<id>` and its `/readonly`
+variant. Both require the caller to already hold the id, and the webhook's
+401 challenge points to its matching document rather than a fixed, guessable
+path. Switching from `ha_auth` or
 `legacy` back to the secret-URL posture therefore does not promote a published
 value into the sole credential. Component versions before 2.1.1 also served the
 document at a fixed path, where it handed the full webhook URL to any
@@ -331,9 +357,9 @@ the proxy returns 503 whenever the server is not running.
 In the app's `ha_auth` mode the Home Assistant login is the credential, not
 the webhook URL. The URL without a Bearer gets a 401, and that 401 points at
 the RFC 9728 protected-resource document served under the webhook's own path
-(`/.well-known/oauth-protected-resource/api/webhook/<id>`) — the only
-protected-resource document the app serves, and one a caller can reach only by
-already holding the id. Discovery therefore never publishes the webhook id in
+(`/.well-known/oauth-protected-resource/api/webhook/<id>`). The dev flavor also
+serves its `/readonly` variant. These metadata paths require the caller to
+already hold the id. Discovery therefore never publishes the webhook id in
 any mode, which is what lets the default posture with OAuth disabled keep
 treating that URL as the sole credential.
 

@@ -10,6 +10,50 @@ import pytest
 from ha_mcp._version import get_version, is_dev_version, is_running_in_addon
 
 
+class _FakeDist:
+    def __init__(self, top_level: str | None, files: list[str]) -> None:
+        self._top_level = top_level
+        self.files = [importlib.metadata.PackagePath(f) for f in files]
+
+    def read_text(self, name: str) -> str | None:
+        return self._top_level if name == "top_level.txt" else None
+
+
+@pytest.fixture
+def installed(monkeypatch: pytest.MonkeyPatch):
+    """Replace the installed distributions with the given fakes.
+
+    Each value is ``(version, top_level_txt_or_None, files)``. Reading any
+    other distribution, or scanning all of them, fails the test: the tests
+    must not depend on the developer's environment.
+    """
+    monkeypatch.delenv("HA_MCP_BUILD_VERSION", raising=False)
+
+    def use(dists: dict[str, tuple[str, str | None, list[str]]]) -> None:
+        def lookup(name: str) -> tuple[str, str | None, list[str]]:
+            if name not in dists:
+                raise importlib.metadata.PackageNotFoundError(name)
+            return dists[name]
+
+        def scan_everything() -> None:
+            raise AssertionError("scanned every installed distribution")
+
+        monkeypatch.setattr(importlib.metadata, "version", lambda n: lookup(n)[0])
+        monkeypatch.setattr(
+            importlib.metadata,
+            "distribution",
+            lambda n: _FakeDist(lookup(n)[1], lookup(n)[2]),
+        )
+        monkeypatch.setattr(
+            importlib.metadata, "packages_distributions", scan_everything
+        )
+
+    return use
+
+
+_WHEEL_FILES = ["ha_mcp/__init__.py", "ha_mcp/server.py"]
+
+
 class TestGetVersion:
     """Tests for the version resolution helper."""
 
@@ -21,50 +65,27 @@ class TestGetVersion:
         monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.3.0.dev999")
         assert get_version() == "7.3.0.dev999"
 
-    def test_falls_back_to_ha_mcp_metadata(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_reads_the_installed_stable_package(self, installed) -> None:
+        """Without the env var, the version comes from the package metadata."""
+        installed({"ha-mcp": ("8.6.0", None, _WHEEL_FILES)})
+        assert get_version() == "8.6.0"
+
+    def test_reads_the_dev_channel_package_when_stable_is_absent(
+        self, installed
     ) -> None:
-        """Without the env var, resolve via installed package metadata."""
-        monkeypatch.delenv("HA_MCP_BUILD_VERSION", raising=False)
-        expected = importlib.metadata.version("ha-mcp")
-        assert get_version() == expected
-
-    def test_falls_back_to_ha_mcp_dev_when_ha_mcp_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """PyPI dev channel installs register as ``ha-mcp-dev`` (renamed package).
-
-        Simulate ``ha-mcp`` not being installed so the fallback loop must try
-        ``ha-mcp-dev`` next.
-        """
-        monkeypatch.delenv("HA_MCP_BUILD_VERSION", raising=False)
-
-        real_version = importlib.metadata.version
-
-        def fake_version(pkg_name: str) -> str:
-            if pkg_name == "ha-mcp":
-                raise importlib.metadata.PackageNotFoundError(pkg_name)
-            if pkg_name == "ha-mcp-dev":
-                return "7.3.0.dev42"
-            return real_version(pkg_name)
-
-        monkeypatch.setattr(importlib.metadata, "version", fake_version)
+        """PyPI dev channel installs register as ``ha-mcp-dev``."""
+        installed({"ha-mcp-dev": ("7.3.0.dev42", None, _WHEEL_FILES)})
         assert get_version() == "7.3.0.dev42"
 
     def test_returns_unknown_when_not_installed(
         self,
-        monkeypatch: pytest.MonkeyPatch,
+        installed,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """When neither env var nor package metadata resolves, return 'unknown'
         rather than raising — a missing version shouldn't crash startup — but
         emit a WARNING so the broken install is visible in logs."""
-        monkeypatch.delenv("HA_MCP_BUILD_VERSION", raising=False)
-
-        def always_missing(pkg_name: str) -> str:
-            raise importlib.metadata.PackageNotFoundError(pkg_name)
-
-        monkeypatch.setattr(importlib.metadata, "version", always_missing)
+        installed({})
         with caplog.at_level(logging.WARNING, logger="ha_mcp._version"):
             result = get_version()
         assert result == "unknown"
@@ -73,13 +94,13 @@ class TestGetVersion:
         assert "metadata not found" in warnings[0].getMessage()
 
     def test_empty_env_var_falls_through_to_metadata(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, installed, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An empty HA_MCP_BUILD_VERSION (stable Docker default from ARG="")
         must not override — otherwise stable builds would report '' as version."""
+        installed({"ha-mcp": ("8.6.0", None, _WHEEL_FILES)})
         monkeypatch.setenv("HA_MCP_BUILD_VERSION", "")
-        expected = importlib.metadata.version("ha-mcp")
-        assert get_version() == expected
+        assert get_version() == "8.6.0"
 
 
 class TestIsDevVersion:
@@ -301,36 +322,33 @@ class TestGetVersionDistOwnership:
     dist's version instead of the installed one.
     """
 
-    def test_prefers_owning_distribution(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from ha_mcp import _version
-
-        monkeypatch.delenv("HA_MCP_BUILD_VERSION", raising=False)
-        monkeypatch.setattr(
-            _version.importlib.metadata,
-            "packages_distributions",
-            lambda: {"ha_mcp": ["ha-mcp-dev"]},
-        )
-        monkeypatch.setattr(
-            _version.importlib.metadata,
-            "version",
-            lambda dist: {"ha-mcp": "1.0.0", "ha-mcp-dev": "2.0.0.dev5"}[dist],
+    def test_prefers_the_dist_whose_files_are_installed(self, installed) -> None:
+        installed(
+            {
+                "ha-mcp": ("1.0.0", None, ["ha_mcp-1.0.0.dist-info/METADATA"]),
+                "ha-mcp-dev": ("2.0.0.dev5", None, _WHEEL_FILES),
+            }
         )
         assert get_version() == "2.0.0.dev5"
 
-    def test_ambiguous_owners_fall_back_to_name_order(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_declared_top_level_decides_for_an_editable_install(
+        self, installed
     ) -> None:
-        from ha_mcp import _version
-
-        monkeypatch.delenv("HA_MCP_BUILD_VERSION", raising=False)
-        monkeypatch.setattr(
-            _version.importlib.metadata,
-            "packages_distributions",
-            lambda: {"ha_mcp": ["ha-mcp", "ha-mcp-dev"]},
+        """An editable install lists a .pth file, not ha_mcp/, and names the
+        package in top_level.txt instead."""
+        installed(
+            {
+                "ha-mcp": ("1.0.0", "tests\n", ["__editable__.ha_mcp.pth"]),
+                "ha-mcp-dev": ("2.0.0.dev5", "ha_mcp\n", ["__editable__.pth"]),
+            }
         )
-        monkeypatch.setattr(
-            _version.importlib.metadata,
-            "version",
-            lambda dist: {"ha-mcp": "1.0.0", "ha-mcp-dev": "2.0.0.dev5"}[dist],
+        assert get_version() == "2.0.0.dev5"
+
+    def test_ambiguous_owners_fall_back_to_name_order(self, installed) -> None:
+        installed(
+            {
+                "ha-mcp": ("1.0.0", None, _WHEEL_FILES),
+                "ha-mcp-dev": ("2.0.0.dev5", None, _WHEEL_FILES),
+            }
         )
         assert get_version() == "1.0.0"

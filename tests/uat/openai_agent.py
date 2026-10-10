@@ -45,6 +45,7 @@ DEFAULT_TIMEOUT = 600
 DEFAULT_MAX_RETRIES = 1
 DEFAULT_MAX_TOKENS = 8192
 MAX_TOOL_LOOP_ITERATIONS = 20
+SEARCH_TOOL_NAME = "ha_search_tools"
 
 
 _PYDANTIC_URL_LINE = re.compile(
@@ -158,7 +159,7 @@ async def detect_quantization(base_url: str, model_id: str) -> str | None:
                     if quant:
                         logger.info(f"Detected quantization: {quant}")
                     return quant
-    except Exception as e:  # best-effort enrichment, never fatal
+    except Exception as e:  # best-effort enrichment, never fatal  # noqa: BLE001
         logger.debug(f"Quantization detection skipped: {type(e).__name__}: {e}")
     return None
 
@@ -212,6 +213,27 @@ def extract_tool_result_text(result) -> str:
                 parts.append(str(block))
         return "\n".join(parts)
     return str(result)
+
+
+def _search_result_names(result: object) -> list[str] | None:
+    """Names of the tools a search call returned, in rank order.
+
+    ``None`` when the result is not the list of tool entries the search
+    transform renders.
+    """
+    data = getattr(result, "data", None)
+    if isinstance(data, list) and all(
+        isinstance(entry, dict) and "name" in entry for entry in data
+    ):
+        return [entry["name"] for entry in data]
+    return None
+
+
+def _trace(line: str, tool_trace_sink: list[str] | None) -> None:
+    """Log a ``[tool]`` line and copy it to the trace sink."""
+    logger.info(line)
+    if tool_trace_sink is not None:
+        tool_trace_sink.append(line.strip())
 
 
 def _maybe_warn_no_think(
@@ -272,12 +294,10 @@ async def _dispatch_tool_calls(
         try:
             tool_args = json.loads(tc.function.arguments)
         except json.JSONDecodeError as e:
-            malformed_line = (
-                f"  [tool] {tool_name}: malformed arguments: {tc.function.arguments!r}"
+            _trace(
+                f"  [tool] {tool_name}: malformed arguments: {tc.function.arguments!r}",
+                tool_trace_sink,
             )
-            logger.info(malformed_line)
-            if tool_trace_sink is not None:
-                tool_trace_sink.append(malformed_line.strip())
             total_fail += 1
             messages.append(
                 {
@@ -288,16 +308,13 @@ async def _dispatch_tool_calls(
             )
             continue
 
-        call_line = f"  [tool] {tool_name}({tool_args})"
-        logger.info(call_line)
-        if tool_trace_sink is not None:
-            tool_trace_sink.append(call_line.strip())
+        _trace(f"  [tool] {tool_name}({tool_args})", tool_trace_sink)
 
         try:
             result = await mcp_client.call_tool(tool_name, tool_args)
             result_text = extract_tool_result_text(result)
             total_success += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             err_text = _strip_pydantic_url(str(e))
             result_text = f"Error: {err_text}"
             total_fail += 1
@@ -305,6 +322,15 @@ async def _dispatch_tool_calls(
             # only record to the trace sink for test artifacts.
             if tool_trace_sink is not None:
                 tool_trace_sink.append(f"[tool] {tool_name} failed: {err_text}")
+        else:
+            if tool_name == SEARCH_TOOL_NAME:
+                names = _search_result_names(result)
+                outcome = (
+                    f"returned: {names}"
+                    if names is not None
+                    else "returned an unrecognised result"
+                )
+                _trace(f"  [tool] {tool_name} {outcome}", tool_trace_sink)
 
         messages.append(
             {
@@ -332,6 +358,8 @@ async def tool_call_loop(
     malformed-arguments and call failures) is appended as a stripped copy
     of the corresponding ``[tool]`` stderr line, so callers on the inline
     (non-subprocess) path can collect the trace without parsing stderr.
+    A ``ha_search_tools`` call adds a second line with the tool names it
+    returned.
     """
     num_turns = 0
     total_calls = 0

@@ -91,7 +91,7 @@ class TestStatisticTypesValidation:
         self._mock_client.send_websocket_message = capturing_send
         with patch(
             "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -116,7 +116,7 @@ class TestStatisticTypesValidation:
         self._mock_client.send_websocket_message = capturing_send
         with patch(
             "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -140,7 +140,7 @@ class TestStatisticTypesValidation:
         self._mock_client.send_websocket_message = capturing_send
         with patch(
             "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -168,14 +168,23 @@ class TestStatisticTypesValidation:
 
     @pytest.mark.asyncio
     async def test_invalid_type_raises(self, history_tool):
-        """Invalid type name must raise ToolError with VALIDATION_INVALID_PARAMETER."""
-        with self._patch_ws(), pytest.raises(ToolError) as exc_info:
+        """Native rejection is surfaced; the tool holds no copied type whitelist."""
+        sent_types = []
+
+        async def reject(message):
+            if message["type"] == "recorder/statistics_during_period":
+                sent_types.append(message["types"])
+            return {"success": False, "error": "Core rejected invalid_type"}
+
+        self._mock_client.send_websocket_message = reject
+        with pytest.raises(ToolError) as exc_info:
             await history_tool(
                 entity_ids="sensor.test",
                 source="statistics",
                 start_time="7d",
+                period="hour",
                 statistic_types=["invalid_type"],
             )
         error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "invalid_type" in error["message"]
+        assert sent_types == [["invalid_type"]]

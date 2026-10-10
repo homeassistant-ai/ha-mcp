@@ -24,7 +24,7 @@ _DESCRIPTION = (
     "Search Home Assistant entities and configuration contents.\n\n"
     "Use dedicated get/list tools first when the resource type is known: "
     "ha_config_get_scene lists or searches scenes, ha_config_get_dashboard "
-    "lists or reads dashboards (mode='search' searches across their contents), "
+    "lists, reads or searches dashboards (query= searches across their cards), "
     "and ha_config_get_automation, "
     "ha_config_get_script, and ha_config_list_helpers handle their own types.\n\n"
     "Use ha_search for broader discovery and deep searches across entities, "

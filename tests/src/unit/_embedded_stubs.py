@@ -325,6 +325,52 @@ class UpdateEntity:
     _attr_unique_id: str | None = None
 
 
+class MockStreamReader:
+    """Stand-in for ``homeassistant.util.aiohttp.MockStreamReader``."""
+
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+
+    async def read(self, byte_count: int = -1) -> bytes:
+        return self._content if byte_count == -1 else self._content[:byte_count]
+
+
+class MockRequest:
+    """Stand-in for ``homeassistant.util.aiohttp.MockRequest`` (#2696).
+
+    Mirrors the real surface a Nabu Casa cloudhook arrives with: ``content``,
+    ``text()``, ``json()`` — and deliberately NO ``read()``, which is the
+    attribute the relay bug tripped on.
+    """
+
+    def __init__(
+        self,
+        content: bytes,
+        mock_source: str,
+        method: str = "GET",
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+        query_string: str | None = None,
+        url: str = "",
+        remote: str | None = None,
+    ) -> None:
+        self.method = method
+        self.url = url
+        self.status = status
+        self.headers = dict(headers or {})
+        self.query_string = query_string or ""
+        self._content = content
+        self.mock_source = mock_source
+        self.remote = remote
+
+    @property
+    def content(self) -> MockStreamReader:
+        return MockStreamReader(self._content)
+
+    async def text(self) -> str:
+        return self._content.decode("utf-8")
+
+
 # ---------------------------------------------------------------------------
 # aiohttp web response fakes (attribute recorders)
 # ---------------------------------------------------------------------------
@@ -417,9 +463,10 @@ class ClientTimeout:
 
 @dataclass(frozen=True)
 class TCPConnector:
-    """Minimal connector stand-in retaining the configured pool limit."""
+    """Minimal connector stand-in retaining the configured pool settings."""
 
     limit: int = 100
+    keepalive_timeout: float = 15.0
 
 
 def _make_fake_aiohttp() -> ModuleType:
@@ -576,7 +623,8 @@ def install() -> None:
         async_process_requirements=AsyncMock(name="async_process_requirements"),
         pip_kwargs=MagicMock(name="pip_kwargs", return_value={}),
     )
-    setmod("homeassistant.util", package=None)
+    setmod("homeassistant.util", package=None, aiohttp=None)
+    setmod("homeassistant.util.aiohttp", MockRequest=MockRequest)
     setmod(
         "homeassistant.util.package",
         install_package=MagicMock(name="install_package", return_value=True),

@@ -17,8 +17,30 @@ pre-commit:
               - "src/ha_mcp/tools/**/*.py"
             run: uv run ast-grep scan {staged_files}
           - name: uv-lock
-            glob: "pyproject.toml"
+            glob:
+              - "pyproject.toml"
+              - "tests/test-env/pyproject.toml"
             run: uv lock
+
+    # Fails when a listed file grows or a new one crosses the limit. --check
+    # never writes the baseline: sync-ratchet-baselines.yml lowers it on
+    # master after a merge, so pull requests need not edit it or conflict
+    # over it.
+    # --staged counts the index, so the check judges what the commit holds.
+    - name: module-size-baseline
+      glob:
+        - "**/*.py"
+        - "**/*.js"
+        - "**/*.mjs"
+        - "**/*.ts"
+        - "**/*.astro"
+      run: uv run python scripts/module_size_ratchet.py --staged --check
+
+    # Fails on a new copy of a function or class; same --staged --check mode
+    # as the job above.
+    - name: duplicate-code-baseline
+      glob: "**/*.py"
+      run: uv run python scripts/duplicate_code_ratchet.py --staged --check
 
     - group:
         parallel: true
@@ -35,6 +57,35 @@ pre-commit:
           - name: mypy-webhook-proxy-dev
             glob: "**/*.py"
             run: uv run mypy homeassistant-addon-webhook-proxy-dev/start.py
+          # The unit-tests job runs this file only when a .py file is staged.
+          # It runs the intake Node suites and checks the intake workflow's
+          # event and credential rules. The last glob is the file whose report
+          # heading the Node suite checks.
+          - name: issue-intake
+            glob:
+              - ".github/issue-intake/**"
+              - ".github/workflows/issue-intake.yml"
+              - ".github/workflows/close-needs-info.yml"
+              - "tests/js/issue-intake*"
+              - "tests/src/unit/test_issue_intake.py"
+              - "src/ha_mcp/tools/tools_bug_report.py"
+            run: cd tests && uv run pytest src/unit/test_issue_intake.py -q
+          # The settings UI, consent form and site pages are tested by pytest
+          # files that run their scripts in JSDOM through tests/js. The
+          # unit-tests job reaches them only when a .py file is staged.
+          - name: ui-js-tests
+            glob:
+              - "src/ha_mcp/settings_ui/**"
+              - "src/ha_mcp/auth/consent_form.py"
+              - "site/src/**"
+              - "tests/js/harness.mjs"
+              - "tests/js/extract_astro_vars.mjs"
+            # git exports GIT_DIR to hooks in a linked worktree and then takes
+            # the current directory as the tree root, so the search runs from
+            # the repository root. An empty list would make pytest collect
+            # all of tests/, and a non-Python match (the duplicate-code
+            # baseline names these files) makes it collect nothing.
+            run: cd tests && uv run pytest $(git -C .. grep -l _js_harness -- 'tests/src/unit/*.py' | sed 's|^tests/||') -n auto -q
           - name: unit-tests
             glob:
               - "**/*.py"

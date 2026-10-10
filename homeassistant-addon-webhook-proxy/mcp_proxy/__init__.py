@@ -43,10 +43,24 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.typing import ConfigType
 
+from .cloudhook import buffered_response, discovery_rejection, is_cloudhook, read_body
+from .readonly_webhook import (
+    readonly_url,
+    register_readonly_webhook,
+    unregister_readonly_webhook,
+)
+
 if TYPE_CHECKING:
     from .oauth import OAuthProvider
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _unregister_webhook(hass: HomeAssistant, webhook_id: str) -> None:
+    """Remove both endpoint variants, including on partial setup failure."""
+    unregister_readonly_webhook(hass, webhook_id)
+    async_unregister(hass, webhook_id)
+
 
 # Tracks whether *this process* raised the logger to INFO for the debug toggle,
 # so the off path undoes only our own raise — never a level the user set via
@@ -468,7 +482,7 @@ async def _setup_ha_auth_oauth(
     # (a bad hand-edit or a bug) — refuse to guess which mode was intended
     # rather than risk serving with the wrong auth model.
     if "client_id" in oauth_section or "client_secret" in oauth_section:
-        async_unregister(hass, webhook_id)
+        _unregister_webhook(hass, webhook_id)
         await session.close()
         raise ConfigEntryError(
             "Ambiguous OAuth config: the oauth section is mode 'ha_auth' "
@@ -533,7 +547,7 @@ async def _setup_ha_auth_oauth(
         )
         # OAuth setup failed — unregister the webhook async_setup_entry registered so
         # we don't leave an unauthenticated endpoint live.
-        async_unregister(hass, webhook_id)
+        _unregister_webhook(hass, webhook_id)
         if cimd_session is not None:
             with suppress(Exception):
                 await cimd_session.close()
@@ -573,7 +587,7 @@ async def _setup_legacy_oauth(
     if not client_id or not client_secret:
         # OAuth setup failed — unregister the webhook async_setup_entry registered so
         # we don't leave an unauthenticated endpoint live.
-        async_unregister(hass, webhook_id)
+        _unregister_webhook(hass, webhook_id)
         await session.close()
         raise ConfigEntryError(
             "OAuth was enabled in the addon but client_id and/or "
@@ -594,7 +608,7 @@ async def _setup_legacy_oauth(
     # being *stopped* but its views still bound (see OAUTH_ROUTE_OWNER_KEY).
     route_owner = hass.data.get(OAUTH_ROUTE_OWNER_KEY)
     if route_owner is not None and route_owner != DOMAIN:
-        async_unregister(hass, webhook_id)
+        _unregister_webhook(hass, webhook_id)
         await session.close()
         raise ConfigEntryError(
             f"The other Webhook Proxy flavor ('{route_owner}') already owns "
@@ -620,7 +634,7 @@ async def _setup_legacy_oauth(
         # possible and the claim-or-refuse is atomic.
         route_owner = hass.data.get(OAUTH_ROUTE_OWNER_KEY)
         if route_owner is not None and route_owner != DOMAIN:
-            async_unregister(hass, webhook_id)
+            _unregister_webhook(hass, webhook_id)
             await session.close()
             raise ConfigEntryError(
                 f"The other Webhook Proxy flavor ('{route_owner}') claimed "
@@ -657,7 +671,7 @@ async def _setup_legacy_oauth(
         )
         # OAuth setup failed — unregister the webhook async_setup_entry registered so
         # we don't leave an unauthenticated endpoint live.
-        async_unregister(hass, webhook_id)
+        _unregister_webhook(hass, webhook_id)
         await session.close()
         raise ConfigEntryError(
             f"Failed to enable OAuth on the MCP webhook: {err}. "
@@ -762,7 +776,7 @@ async def _setup_oauth_section(
         OAUTH_MODE_LEGACY,
     ):
         # Unknown mode value — refuse loudly rather than silently guessing.
-        async_unregister(hass, webhook_id)
+        _unregister_webhook(hass, webhook_id)
         await session.close()
         raise ConfigEntryError(
             f"Unknown OAuth mode {oauth_mode!r} in "
@@ -836,6 +850,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         timeout=aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300),
     )
 
+    registered = False
     try:
         async_register(
             hass,
@@ -845,11 +860,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _handle_webhook,
             allowed_methods=["POST", "GET"],
         )
+        registered = True
+        register_readonly_webhook(hass, webhook_id, _handle_webhook)
     except Exception as err:
         _LOGGER.exception(
             "MCP Proxy: failed to register webhook endpoint /api/webhook/%s",
             masked_wh,
         )
+        if registered:
+            _unregister_webhook(hass, webhook_id)
         await session.close()
         raise ConfigEntryError(f"Failed to register webhook endpoint: {err}") from err
 
@@ -1014,9 +1033,8 @@ async def _relay_upstream_response(
     if mcp_session:
         resp_headers["Mcp-Session-Id"] = mcp_session
 
-    if "text/event-stream" in content_type:
-        # SSE streaming response - prevent HA compression middleware
-        # from breaking it (supervisor#6470)
+    if "text/event-stream" in content_type and not is_cloudhook(request):
+        # SSE streaming: keep HA's compression middleware off the stream (supervisor#6470)
         resp_headers["Content-Type"] = "text/event-stream"
         resp_headers["X-Accel-Buffering"] = "no"
 
@@ -1034,20 +1052,21 @@ async def _relay_upstream_response(
         if not any(ct in content_type for ct in allowed_content_types):
             content_type = "application/json"
         resp_headers["Content-Type"] = content_type
-        resp_body = await upstream_resp.read()
-        return web.Response(
-            status=upstream_resp.status,
-            body=resp_body,
-            headers=resp_headers,
-        )
+        return await buffered_response(request, upstream_resp, resp_headers)
 
 
 async def _handle_webhook(
-    hass: HomeAssistant, webhook_id: str, request: web.Request
+    hass: HomeAssistant,
+    webhook_id: str,
+    request: web.Request,
+    *,
+    read_only: bool = False,
 ) -> web.StreamResponse:
     """Forward the MCP request to the addon and stream the response back."""
     data = hass.data[DOMAIN]
     target_url = data["target_url"]
+    if read_only:
+        target_url = readonly_url(target_url)
 
     # Inbound-request debug logging (opt-in). Logged BEFORE the OAuth gate so
     # the unauthenticated discovery probe (which gets a 401) is captured too —
@@ -1082,11 +1101,14 @@ async def _handle_webhook(
                     f"MCP Proxy [inbound]: -> 401 Unauthorized ({reject_reason}; "
                     "expected for the initial discovery probe)",
                 )
+            rejection = discovery_rejection(request)
+            if rejection is not None:
+                return rejection
             from .oauth import build_unauthorized_response
 
             return build_unauthorized_response(request, oauth_provider)
 
-    body = await request.read()
+    body = await read_body(request)
 
     forward_headers = _forward_headers(request)
     session = data["session"]
@@ -1113,7 +1135,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data = hass.data.pop(DOMAIN, {})
     webhook_id = data.get("webhook_id")
     if webhook_id:
-        async_unregister(hass, webhook_id)
+        _unregister_webhook(hass, webhook_id)
     # Close each session independently: a failure closing one must not leak
     # the other's connector or fail the unload, matching how the
     # setup-failure path already suppresses close errors.

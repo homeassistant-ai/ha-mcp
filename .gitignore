@@ -86,11 +86,15 @@ docs/superpowers/
 local/
 worktree/
 /.claude/settings.local.json
+CLAUDE.local.md
 # Root-anchored so it doesn't ignore src/ha_mcp/_vendor/fastmcp.
 /fastmcp/
 
 # HACS frontend - large (~51MB) JavaScript assets, downloaded during test setup
 tests/initial_test_state/custom_components/hacs/hacs_frontend/
+
+# Card inspection populates this cache through the production download path.
+tests/initial_test_state/.storage/ha_mcp_tools/
 
 # Auto-Claude workspace files
 .auto-claude/

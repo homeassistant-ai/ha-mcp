@@ -37,6 +37,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ class VoiceAssistantTools:
             else:
                 logger.warning("%s failed; fell back to legacy: %r", WS_EXPOSURE, exc)
             return None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # HomeAssistantConnectionError / plain establish Exception → legacy (the
             # legacy expose_entity/list read rides the bridge).
             logger.warning(
@@ -199,12 +200,7 @@ class VoiceAssistantTools:
     @tool(
         name="ha_get_entity_exposure",
         tags={"Entity Registry"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Entity Exposure",
-        },
+        annotations=read_only_hints("Get Entity Exposure", open_world=False),
     )
     @log_tool_usage
     async def ha_get_entity_exposure(
@@ -320,7 +316,7 @@ class VoiceAssistantTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting entity exposure: {e}")
             exception_to_structured_error(e, context={"entity_id": entity_id})
             return None  # unreachable: exception_to_structured_error always raises

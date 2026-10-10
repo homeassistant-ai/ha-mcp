@@ -377,7 +377,7 @@ class HomeAssistantWebSocketClient:
         if verify_ssl is None:
             try:
                 verify_ssl = get_global_settings().verify_ssl
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 # A bad env var elsewhere should not silently flip TLS off:
                 # log which key tripped and fall back to the secure default.
                 logger.warning(
@@ -481,22 +481,15 @@ class HomeAssistantWebSocketClient:
             await self._send_auth()
 
             # Wait for auth response
-            auth_response = await self._wait_for_auth_message(
-                message_type="auth_ok", timeout=5
-            )
+            auth_response = await self._wait_for_auth_message("auth_ok", timeout=5)
             if not auth_response:
-                auth_invalid = await self._wait_for_auth_message(
-                    message_type="auth_invalid", timeout=1
-                )
-                if auth_invalid:
-                    raise HomeAssistantAuthError("Authentication failed: Invalid token")
                 raise HomeAssistantConnectionError("Authentication timeout")
 
             self._state.mark_authenticated()
             logger.info("WebSocket connected and authenticated successfully")
             return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self._last_connect_error = f"{type(e).__name__}: {e}"
             self._last_connect_exception = e
             if _is_ssl_error(e) and self.verify_ssl:
@@ -559,6 +552,8 @@ class HomeAssistantWebSocketClient:
         start_time = time.time()
 
         while time.time() - start_time < timeout:
+            if isinstance(self._last_connect_exception, HomeAssistantAuthError):
+                raise self._last_connect_exception
             message = self._state.consume_auth_message(message_type)
             if message:
                 return message
@@ -583,7 +578,7 @@ class HomeAssistantWebSocketClient:
                     await self._process_message(data)
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON received: {e}")
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"Error processing message: {e}")
         except websockets.exceptions.ConnectionClosed as e:
             # Prefer the frame we received (the peer closed on us); fall
@@ -604,7 +599,7 @@ class HomeAssistantWebSocketClient:
                 logger.warning(log_message)
             else:
                 logger.info(log_message)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             close_reason = str(e)
             logger.error(f"WebSocket message handler error: {e}")
         finally:
@@ -617,6 +612,10 @@ class HomeAssistantWebSocketClient:
 
         # Handle authentication messages (store for auth sequence)
         if message_type in ["auth_required", "auth_ok", "auth_invalid"]:
+            if message_type == "auth_invalid":
+                self._last_connect_exception = HomeAssistantAuthError(
+                    "Authentication failed: Invalid token"
+                )
             self._state.store_auth_message(message_type, data)
             return
 
@@ -686,7 +685,7 @@ class HomeAssistantWebSocketClient:
                     # dispatch loop keeps a single buggy handler from
                     # killing the WS, but the bug itself becomes
                     # invisible — handlers wired to ``asyncio.Event``
-                    # nudges (see ``util_helpers._ws_wait_for_condition``)
+                    # nudges (see ``ws_waiters._ws_wait_for_condition``)
                     # silently stop nudging and the calling waiter times
                     # out reporting "not found." #1395 silent-failure
                     # audit.
@@ -1020,7 +1019,7 @@ class HomeAssistantWebSocketClient:
     async def unsubscribe_events(self, subscription_id: int) -> None:
         """Release a subscription previously returned by ``subscribe_events``.
 
-        Used by short-lived waiters (``util_helpers.wait_for_*``) that need
+        Used by short-lived waiters (``ws_waiters.wait_for_*``) that need
         to drop the subscription as soon as their event arrives so the
         shared socket doesn't accumulate stale ``state_changed`` listeners.
 
@@ -1110,7 +1109,7 @@ class HomeAssistantWebSocketClient:
                 await asyncio.wait_for(
                     asyncio.shield(task), timeout=CLEANUP_TIMEOUT_SECONDS
                 )
-            except (Exception, TimeoutError) as e:
+            except (Exception, TimeoutError) as e:  # noqa: BLE001
                 logger.debug("%s: cleanup did not finish cleanly: %s", what, e)
             except asyncio.CancelledError:
                 logger.debug("%s: cleanup cancelled before it finished", what)
@@ -1433,7 +1432,7 @@ class HomeAssistantWebSocketClient:
         try:
             response = await self.send_command("ping")
             return response.get("type") == "pong"
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
 
     @property
@@ -1549,7 +1548,7 @@ class WebSocketManager:
             return verify_ssl
         try:
             return bool(get_global_settings().verify_ssl)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Mirror HomeAssistantWebSocketClient.__init__: a bad env var
             # elsewhere should not crash pooling or silently flip TLS off.
             logger.warning(

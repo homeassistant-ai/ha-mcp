@@ -30,6 +30,7 @@ from .evaluator import (
 )
 from .events import emit_approval_requested
 from .model import Policy, Rule
+from .mrtr import ApprovalContinuation, supports_mrtr
 
 if TYPE_CHECKING:
     from ..client.rest_client import HomeAssistantClient
@@ -119,8 +120,9 @@ class PolicyMiddleware(Middleware):
         # rewrites a retired name before it arrives. Resolving it again costs a
         # dict lookup and removes the ordering dependency, which here is the
         # difference between gated and ungated: rules are keyed on the current
-        # name, and ``evaluate`` returns ALLOW when nothing matches, so a gate
-        # reading a stale name lets the call through.
+        # name, and under a require-approval list ``evaluate`` returns ALLOW
+        # when nothing matches, so a gate reading a stale name lets the call
+        # through (under an allow list it would gate an approved call).
         name = current_tool_name(context.message.name)
         # Normalize stringified JSON containers (a client like Claude Desktop
         # stdio can send a nested parameter, e.g. `selector`, as a JSON
@@ -162,17 +164,48 @@ class PolicyMiddleware(Middleware):
         if _passes_ungated(name, args):
             return await call_next(context)
 
+        args_hash = compute_args_hash(args)
+        resumed = ApprovalContinuation.resume(
+            context, self._queue, name, args_hash, policy
+        )
         if evaluate(name, args, policy) != Verdict.REQUIRE_APPROVAL:
             return await call_next(context)
 
+        return await self._gate_approval(
+            context, call_next, policy, name, args, args_hash, resumed
+        )
+
+    async def _gate_approval(
+        self,
+        context: MiddlewareContext,
+        call_next: CallNext,
+        policy: Policy,
+        name: str,
+        args: dict[str, Any],
+        args_hash: str,
+        resumed: tuple[ApprovalContinuation, PendingApproval] | None,
+    ) -> Any:
+        """Wait on one approval, returning a continuation only while it is pending."""
         rule = find_matching_rule(name, args, policy)
-        args_hash = compute_args_hash(args)
         dynamic_targets = has_dynamic_selector_targets(name, args)
         remember_minutes = (
             0 if dynamic_targets else rule.remember_minutes if rule else 0
         )
+        # An allow list has no remember window (find_matching_rule returns no
+        # rule for it, so remember_minutes is 0). A remembered entry is then
+        # left over from a require-approval list: a call left pending there
+        # and approved after the switch, or a switch saved from the sidecar or
+        # by a hand edit, neither of which clears this cache. It must not
+        # approve a call the allow list gates.
+        reads_remembered = (
+            not dynamic_targets and policy.rule_effect == "require_approval"
+        )
 
-        if not dynamic_targets and self._queue.is_remembered(name, args_hash):
+        if (
+            resumed is None
+            and reads_remembered
+            and self._queue.is_remembered(name, args_hash)
+        ):
             return await call_next(context)
 
         # A dynamic selector call must never consume an entry it did not
@@ -197,16 +230,28 @@ class PolicyMiddleware(Middleware):
         # The accepted cost is that a retry never silently rides an earlier
         # approval: each blocked call gets its own approval row, and only
         # approving the row for the CURRENTLY-blocked call has any effect.
-        if self._resolve_already_decided(
+        if resumed is None and self._resolve_already_decided(
             name,
             args_hash,
             dynamic_targets=dynamic_targets,
+            reads_remembered=reads_remembered,
             remember_minutes=remember_minutes,
         ):
             return await call_next(context)
 
-        pending = await self._new_pending(
-            name, args_hash, args, policy=policy, dynamic_targets=dynamic_targets
+        continuation, pending = (
+            resumed
+            if resumed is not None
+            else (
+                None,
+                await self._new_pending(
+                    name,
+                    args_hash,
+                    args,
+                    policy=policy,
+                    dynamic_targets=dynamic_targets,
+                ),
+            )
         )
         await self._announce(pending, rule, dynamic_targets=dynamic_targets)
 
@@ -215,14 +260,20 @@ class PolicyMiddleware(Middleware):
             if self._wait_override is not None
             else policy.wait_seconds
         )
-        await self._wait_for_decision(context, pending, wait)
+        if continuation is None and supports_mrtr(context) and wait > 0:
+            continuation = ApprovalContinuation.start(
+                pending, policy, wait, dynamic_targets=dynamic_targets
+            )
+        await self._wait_for_decision(
+            context, pending, continuation.wait_seconds() if continuation else wait
+        )
 
         if pending.decision == "approved":
             if self._claim_approval(
                 pending,
                 name,
                 args_hash,
-                dynamic_targets=dynamic_targets,
+                reads_remembered=reads_remembered and resumed is None,
                 remember_minutes=remember_minutes,
             ):
                 return await call_next(context)
@@ -240,6 +291,11 @@ class PolicyMiddleware(Middleware):
         if pending.decision == "denied":
             self._queue.remove(pending.token)
             self._raise_denied_error()
+
+        if continuation is not None:
+            result = continuation.next_result(self._queue)
+            if result is not None:
+                return result
 
         pending = self._finalize_timed_out_pending(
             pending, dynamic_targets=dynamic_targets, policy=policy, name=name
@@ -357,6 +413,7 @@ class PolicyMiddleware(Middleware):
         args_hash: str,
         *,
         dynamic_targets: bool,
+        reads_remembered: bool,
         remember_minutes: int,
     ) -> bool:
         """Act on an entry this call did not create. True means dispatch now.
@@ -383,7 +440,7 @@ class PolicyMiddleware(Middleware):
                 existing,
                 name,
                 args_hash,
-                dynamic_targets=dynamic_targets,
+                reads_remembered=reads_remembered,
                 remember_minutes=remember_minutes,
             )
         if existing.decision == "denied":
@@ -397,7 +454,7 @@ class PolicyMiddleware(Middleware):
         name: str,
         args_hash: str,
         *,
-        dynamic_targets: bool,
+        reads_remembered: bool,
         remember_minutes: int,
     ) -> bool:
         """Consume an approved entry for this invocation.
@@ -411,22 +468,23 @@ class PolicyMiddleware(Middleware):
         earlier in ``on_call_tool`` ran before the approval existed, which
         is why it has to be re-checked here rather than relied upon.
 
-        A dynamic selector call never reads the remember-cache -- that
-        same gate skips the lookup for it, and ``remember_minutes`` is
-        forced to 0 -- so it must not consult one here either. No
-        reachable case arms such a key today (``has_dynamic_selector_targets``
-        is a pure function of the name and args that also produce
-        ``args_hash``, so static and dynamic calls cannot collide on one
-        key), but the guard keeps this branch degrading the same
-        direction as the defensive claim check in
-        ``_resolve_already_decided``: toward an extra prompt, never
-        toward a dispatch the caller was not entitled to.
+        A call that skips that gate (``reads_remembered`` is false for a
+        dynamic selector call and for every call under an allow list) must
+        not consult the cache here either. Under an allow list an entry left
+        over from a require-approval list can be live. For a dynamic
+        selector call no reachable case arms one today
+        (``has_dynamic_selector_targets`` is a pure function of the name and
+        args that also produce ``args_hash``, so static and dynamic calls
+        cannot collide on one key), but the guard keeps this branch
+        degrading the same direction as the defensive claim check in
+        ``_resolve_already_decided``: toward an extra prompt, never toward a
+        dispatch the caller was not entitled to.
         """
         if self._queue.consume_and_maybe_remember(
             entry, remember_minutes=remember_minutes
         ):
             return True
-        if dynamic_targets:
+        if not reads_remembered:
             return False
         return self._queue.is_remembered(name, args_hash)
 
@@ -530,7 +588,7 @@ class PolicyMiddleware(Middleware):
         self,
         context: MiddlewareContext,
         pending: PendingApproval,
-        wait_seconds: int,
+        wait_seconds: float,
     ) -> None:
         deadline = anyio.current_time() + wait_seconds
         while anyio.current_time() < deadline and pending.decision == "pending":

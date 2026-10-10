@@ -1,35 +1,24 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/nl.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/nl.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: TLS-certificaten verifiëren
+    description: 'Verifieer het TLS-certificaat van de Home Assistant-server. Schakel
+      dit alleen uit op een vertrouwd netwerk, voor een zelfondertekend certificaat
+      of een hostnaamafwijking: dit verzwakt de transportbeveiliging.'
+  ha_tool_concurrency:
+    name: Home Assistant-toolgelijktijdigheid
+    description: Optionele limiet voor uiterste Home Assistant-toolaanroepen over
+      alle sessies heen. Interne REST-, WebSocket- en per-tool fan-out-gelijktijdigheid
+      blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit
+      mislukt na 60 seconden. Bereik 0–32.
   backup_hint:
-    name: Suggestieniveau voor volledige HA-snapshot (LLM-gericht)
-    description: 'Stem de formulering af van de hint die de LLM ziet in de
-
-      beschrijving van de tool `ha_manage_backup(scope=''snapshot'')` voor wanneer
-      een
-
-      volledige Home Assistant tarball-backup moet worden voorgesteld vóór risicovolle
-      bewerkingen
-
-      (bijv. massale apparaatverwijderingen). Beïnvloedt ALLEEN deze ene LLM-gerichte
-      prompts
-
-      zin.
-
-
-      Voor automatische snapshots per bewerking van automatiseringen / scripts / helpers
-      /
-
-      enz., gebruik de afzonderlijke schakelaar **Automatische back-up van bewerkingen
-      inschakelen** hieronder.'
-  secret_path:
-    name: Overschrijving van geheim pad
-    description: 'Optioneel aangepast HTTP-pad voor de MCP-server. Laat leeg om het
-      automatisch gegenereerde veilige pad te gebruiken.
-
-      '
+    name: Niveau van back-uptip
+    description: Hoe sterk AI-assistenten worden aangespoord om een volledige Home
+      Assistant-back-up voor te stellen vóór risicovolle wijzigingen. Dit wijzigt
+      alleen deze tip; automatische bewerkingsback-ups hebben hun eigen instelling.
   enable_tool_search:
     name: Schakel tool-zoekfunctie in
     description: 'Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking.
@@ -52,9 +41,11 @@ configuration:
       na het wijzigen van een instelling hier.'
   tool_search_max_results:
     name: Max. resultaten tool-zoekfunctie
-    description: 'Maximaal aantal tools geretourneerd door ha_search_tools wanneer
-      de tool-zoekfunctie is ingeschakeld. Lagere waarden (2-3) besparen context-tokens,
-      maar kunnen relevante tools missen. Bereik: 2-10. Vereist een herstart.'
+    description: Maximum aantal verborgen tools geretourneerd per ha_search_tools
+      aanroep wanneer toolzoeken is ingeschakeld; een vastgezette tool die in die
+      top valt, wordt daarboven toegevoegd als een korte vermelding met alleen de
+      naam. Lagere waarden (2-3) besparen contexttokens, maar missen mogelijk relevante
+      tools. Vereist herstart. Bereik 2–10.
   enable_tool_security_policies:
     name: Schakel Tool Beveiligingsbeleid in (geavanceerd)
     description: Beveilig risicovolle tool-aanroepen (vergrendelings-/alarmbediening,
@@ -119,12 +110,48 @@ configuration:
       van de bevestigingssleutel. Onderdeel van de optie "Koppel best-practice vaardigheden
       aan schrijfbewerkingen" hierboven en inactief zolang die ouder uitgeschakeld
       is. Vereist een herstart om van kracht te worden.'
-  ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optionele limiet voor uiterste Home Assistant-toolaanroepen over
-      alle sessies. Interne REST-, WebSocket- en per-tool fan-out gelijktijdigheid
-      blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit
-      mislukt na 60 seconden.
+  enable_auto_backup:
+    name: Auto-backup bewerkingen
+    description: Sla een snapshot van een entiteit op voordat een toolaanroep voor
+      schrijven of verwijderen deze wijzigt. Zolang dit is uitgeschakeld, weigeren
+      de bestand- en ruwe-YAML-tools (ha_write_file, ha_delete_file, ha_config_set_yaml)
+      te schrijven.
+  auto_backup_throttle_minutes:
+    name: Throttle voor automatisch back-uppen (minuten)
+    description: Hoe vaak automatisch back-uppen dezelfde entiteit mag vastleggen.
+      0 legt bij elke schrijfaktie vast; N groter dan 0 legt maximaal één snapshot
+      per N minuten per entiteit vast. Bereik 0–1440.
+  auto_backup_retain_per_entity:
+    name: Bewaren van automatische back-ups (per entiteit)
+    description: Het maximum aantal bewaarde snapshots per entiteit. Elke nieuwe vastlegging
+      verwijdert de oudste snapshots boven dit getal. Bereik 1–10000.
+  enable_snapshot_actions:
+    name: Volledige acties voor HA-snapshots toestaan
+    description: Sta AI-assistenten toe om volledige Home Assistant-snapshots te beheren
+      via ha_manage_backup en de equivalente back-upservices en -commando's in ha_call_service.
+      Dit uitschakelen blokkeert elke snapshotactie, inclusief het weergeven van een
+      lijst. Het verwijderen van snapshots is alleen beschikbaar via ha_manage_backup
+      en vereist ook Sta het verwijderen van snapshots toe. Back-ups bewerken en de
+      back-upacties die een persoon uitvoert in de webinstellingen-UI blijven beschikbaar.
+  backup_read_only:
+    name: Beheer van back-ups alleen-lezen maken
+    description: Sta AI-assistenten toe om back-ups voor bewerken te tonen, te bekijken
+      en te vergelijken (diff), en volledige HA-snapshots weer te geven wanneer snapshotacties
+      zijn ingeschakeld. Blokkeer handmatig aanmaken, herstellen (inclusief bewerkingsherstel)
+      en verwijderen van back-ups, inclusief de equivalente back-upservices en -commando's
+      in ha_call_service. Automatische back-ups van vóór een bewerking gaan door.
+      De back-upacties die een persoon uitvoert in de webinstellingen-UI blijven beschikbaar.
+  enable_snapshot_delete:
+    name: Momentopname verwijdering toestaan
+    description: Sta ha_manage_backup toe om volledige Home Assistant-snapshots te
+      verwijderen. Een snapshot is mogelijk de laatste redding na een vergissing,
+      dus iemand moet dit inschakelen. Geplande back-ups, het nieuwste snapshot en
+      snapshots die jonger zijn dan de minimumleeftijd blijven beschermd.
+  snapshot_delete_min_age_days:
+    name: Minimale leeftijd momentopname om te verwijderen (dagen)
+    description: Hoe oud een snapshot moet zijn, in dagen, voordat het kan worden
+      verwijderd. 0 schakelt de leeftijdsgrens uit; het nieuwste snapshot en geplande
+      back-ups blijven beschermd. Bereik 0–365.
   disabled_tools:
     name: Uitgeschakelde tools (komma-gescheiden)
     description: Tools die hier worden vermeld, zijn geforceerd uitgeschakeld en vergrendeld
@@ -141,54 +168,9 @@ configuration:
       het tabblad 'Tools' en kunnen niet worden losgemaakt vanuit de webinstellingen-UI
       zonder eerst deze optie ongedaan te maken. Handig in combinatie met Tool Search.
       Door komma's gescheiden toolnamen.
-  enable_auto_backup:
-    name: Automatische back-up van bewerkingen inschakelen
-    description: 'Maakt een per-entiteit momentopname vóór elke omwikkelde schrijf-/destructieve
-      MCP-toolaanroep (automatisering, script, scène, helper, dashboard, dashboardbron,
-      label, categorie, groep, zone, gebied, kalender, todo, entiteit, apparaat, integratie
-      en gerelateerde verwijder-/wis-tools). De auto-back-up beperking bepaalt hoe
-      vaak dat gebeurt: 0 (standaard) maakt een momentopname bij elke dergelijke aanroep,
-      N>0 maximaal één momentopname per N minuten per entiteit. Momentopnamen worden
-      opgeslagen als YAML-bestanden onder /data/ha_mcp_backups/ (overschrijven via
-      HAMCP_BACKUP_DIR) en kunnen worden weergegeven, hersteld of verwijderd via het
-      tabblad Back-ups in de webinstellingen-UI of via ha_manage_backup(scope=''edits'',
-      ...). Voor die domeinen is de momentopname ''best-effort'' — een mislukking
-      logt een WAARSCHUWING en de schrijfbewerking gaat door. De bestand- en ruwe-YAML-tools
-      zijn de uitzondering: ha_write_file, ha_delete_file en ha_config_set_yaml behandelen
-      de momentopname als een voorwaarde, dus een schrijfbewerking via deze tools
-      wordt geweigerd wanneer dit uit staat, en een mislukte momentopname blokkeert
-      deze. Standaard ingeschakeld; uitschakelen annuleert de ''best-effort'' momentopnamen
-      en schakelt de bestand- en ruwe-YAML-tools hiermee uit. Vereist een herstart
-      om van kracht te worden.'
-  auto_backup_throttle_minutes:
-    name: Automatische back-up vertraging (minuten)
-    description: Vertragingsvenster per entiteit. 0 (standaard) maakt een snapshot
-      bij elke omwikkelde schrijfbewerking. N>0 maakt maximaal één snapshot per N
-      minuten per entiteit. Bereik 0–1440.
-  auto_backup_retain_per_entity:
-    name: Automatische back-up retentie (per entiteit)
-    description: Maximaal aantal snapshots per entiteit. Oudere snapshots die deze
-      limiet overschrijden, worden verwijderd bij elke succesvolle opname. Standaard
-      100, bereik 1–10000.
-  enable_snapshot_delete:
-    name: Snapshotverwijdering toestaan
-    description: Laat ha_manage_backup volledige HA snapshot tarballs verwijderen
-      (scope='snapshot', action='delete'). Standaard uitgeschakeld — een snapshot
-      kan het laatste herstelpunt zijn na een foutieve wijziging, dus een mens moet
-      hier expliciet toestemming geven. Zelfs wanneer ingeschakeld, blijven geplande
-      back-ups, de nieuwste resterende snapshot en alles wat jonger is dan de onderstaande
-      leeftijdsgrens beschermd.
-  snapshot_delete_min_age_days:
-    name: Minimale snapshotleeftijd om te verwijderen (dagen)
-    description: Een snapshot moet minstens zo oud zijn voordat het kan worden verwijderd.
-      Bereik 0–365; 0 schakelt de ondergrens uit (de nieuwste-snapshot en geplande-back-up
-      beschermingen blijven van toepassing). Standaard 7.
-  verify_ssl:
-    name: TLS-certificaat verifiëren
-    description: Verifieer het TLS-certificaat van de Home Assistant-server. De app
-      (add-on) maakt verbinding via de Supervisor-proxy, dus dit heeft normaal gesproken
-      geen effect en moet ingeschakeld blijven. Schakel dit alleen uit als je de app
-      (add-on) zo hebt geconfigureerd dat deze via een openbare HTTPS-hostnaam met
-      een zelfondertekend certificaat of een niet-overeenkomende hostnaam met HA communiceert.
-      Uitschakelen verzwakt de transportbeveiliging — laat ingeschakeld tenzij je
-      zeker weet dat je het nodig hebt. Vereist een herstart om van kracht te worden.
+  secret_path:
+    name: Overschrijving van geheim pad
+    description: 'Optioneel aangepast HTTP-pad voor de MCP-server. Laat leeg om het
+      automatisch gegenereerde veilige pad te gebruiken.
+
+      '

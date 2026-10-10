@@ -1,29 +1,24 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/cs.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/cs.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Ověřit certifikáty TLS
+    description: 'Ověřit certifikát TLS serveru Home Assistant. Vypněte tuto možnost
+      pouze v důvěryhodné síti pro autorsky podepsaný certifikát nebo neshodu názvů
+      hostitelů: oslabuje to zabezpečení přenosu.'
+  ha_tool_concurrency:
+    name: Souběžnost nástrojů Home Assistant
+    description: Volitelný limit pro vnější volání nástrojů Home Assistant napříč
+      všemi relacemi. Vnitřní souběh pro REST, WebSocket a rozbočení pro jednotlivé
+      nástroje zůstává nezměněn. 0 zachovává neomezené chování. Volání čekající na
+      kapacitu selže po 60 sekundách. Rozsah 0–32.
   backup_hint:
-    name: Úroveň návrhu snímku celé HA (pro LLM)
-    description: 'Upravuje znění nápovědy, kterou LLM vidí v popisu nástroje
-
-      `ha_manage_backup(scope=''snapshot'')` pro to, kdy navrhnout úplnou zálohu Home
-      Assistant tarballu před rizikovými operacemi
-
-      (např. hromadné mazání zařízení). Ovlivňuje POUZE tuto jednu větu výzvy směřující
-      k LLM.
-
-
-      Pro automatické snímky automatizací / skriptů / pomocníků /
-
-      atd. pro každou úpravu použijte samostatný přepínač **Povolit automatické zálohování
-      úprav** níže.'
-  secret_path:
-    name: Přepsání tajné cesty
-    description: 'Volitelná vlastní HTTP cesta pro server MCP. Ponechte prázdné pro
-      použití automaticky generované zabezpečené cesty.
-
-      '
+    name: Úroveň nápovědy zálohování
+    description: Jak důrazně jsou asistenti AI vyzýváni k doporučení úplné zálohy
+      Home Assistant před rizikovými změnami. Mění pouze tuto nápovědu; automatické
+      zálohy úprav mají své vlastní nastavení.
   enable_tool_search:
     name: Povolit vyhledávání nástrojů
     description: 'Nahradit úplný katalog nástrojů vyhledáváním. Snižuje klidový kontext
@@ -45,9 +40,11 @@ configuration:
       toto platí po změně jakéhokoli nastavení zde.'
   tool_search_max_results:
     name: Max. výsledků vyhledávání nástrojů
-    description: 'Maximální počet nástrojů vrácených ha_search_tools, když je povoleno
-      vyhledávání nástrojů. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou
-      přehlédnout relevantní nástroje. Rozsah: 2-10. Vyžaduje restart.'
+    description: Maximální počet skrytých nástrojů vrácených při volání ha_search_tools,
+      když je povoleno vyhledávání nástrojů; připnutý nástroj, který se umístí v rámci
+      tohoto horního počtu, je přidán jako krátká položka obsahující pouze název navíc.
+      Nižší hodnoty (2–3) šetří tokeny kontextu, ale mohou minout relevantní nástroje.
+      Vyžaduje restart. Rozsah 2–10.
   enable_tool_security_policies:
     name: Povolit zásady zabezpečení nástrojů (pokročilé)
     description: Podmiňuje vysoce rizikové volání nástrojů (ovládání zámků/alarmů,
@@ -110,12 +107,48 @@ configuration:
       vydavatelem potvrzovacího klíče. Je podřízeno výše uvedené možnosti „Připojit
       dovednosti osvědčených postupů při zápisu“ a je neaktivní, pokud je tato nadřazená
       možnost vypnuta. Vyžaduje restart, aby se projevilo.'
-  ha_tool_concurrency:
-    name: Souběžnost nástrojů Home Assistant
-    description: Volitelný limit pro vnější volání nástrojů Home Assistant napříč
-      všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé
-      nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající
-      na kapacitu selže po 60 sekundách.
+  enable_auto_backup:
+    name: Automatické zálohování úprav
+    description: Uložit snímek entity před každým voláním nástroje pro zápis nebo
+      smazání, které ji změní. Pokud je tato možnost vypnutá, nástroje pro práci se
+      soubory a surovým YAML (ha_write_file, ha_delete_file, ha_config_set_yaml) odmítnou
+      provést zápis.
+  auto_backup_throttle_minutes:
+    name: Omezení frekvence automatických záloh (minuty)
+    description: Jak často může automatická záloha zachytit stejnou entitu. Hodnota
+      0 zachytí každý zápis; hodnota N větší než 0 zachytí maximálně jeden snímek
+      za N minut na entitu. Rozsah 0–1440.
+  auto_backup_retain_per_entity:
+    name: Uchovávání automatických záloh (na entitu)
+    description: Maximální počet uchovávaných snímků na entitu. Každý nový záznam
+      odstraní nejstarší snímky nad toto číslo. Rozsah 1–10000.
+  enable_snapshot_actions:
+    name: Povolit akce s úplnými snapshoty HA
+    description: Umožnit asistentům AI spravovat úplné zálohy Home Assistant prostřednictvím
+      ha_manage_backup a odpovídajících zálohovacích služeb a příkazů v ha_call_service.
+      Vypnutím této možnosti zablokujete všechny akce se zálohami, včetně výpisu.
+      Smazání zálohy je k dispozici pouze prostřednictvím ha_manage_backup a vyžaduje
+      také povolení smazání zálohy. Úpravy záloh a akce se zálohami, které uživatel
+      provádí v uživatelském rozhraní nastavení webu, zůstávají k dispozici.
+  backup_read_only:
+    name: Nastavit správu záloh jako jen pro čtení
+    description: Umožnit asistentům AI vypisovat, zobrazovat a porovnávat zálohy úprav
+      a vypisovat úplné zálohy HA, když jsou povoleny akce se zálohami. Blokuje ruční
+      vytváření záloh, obnovení (včetně obnovení úprav) a mazání, včetně odpovídajících
+      zálohovacích služeb a příkazů v ha_call_service. Automatické zálohy před úpravami
+      pokračují. Akce se zálohami, které uživatel provádí v uživatelském rozhraní
+      nastavení webu, zůstávají k dispozici.
+  enable_snapshot_delete:
+    name: Povolit smazání snímků
+    description: Umožnit ha_manage_backup mazat úplné zálohy Home Assistant. Záloha
+      může být poslední záchranou po chybné změně, proto ji musí uživatel zapnout.
+      Plánované zálohy, nejnovější záloha a zálohy mladší než minimální stáří zůstávají
+      chráněny.
+  snapshot_delete_min_age_days:
+    name: Minimální stáří snímku pro smazání (dny)
+    description: Jak stará musí být záloha ve dnech, než ji bude možné smazat. Hodnota
+      0 vypíná časový limit; nejnovější záloha a plánované zálohy zůstávají chráněny.
+      Rozsah 0–365.
   disabled_tools:
     name: Zakázané nástroje (oddělené čárkami)
     description: Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém
@@ -131,51 +164,9 @@ configuration:
       horní části karty Nástroje a nelze je odepnout z webového uživatelského rozhraní
       Nastavení, aniž byste nejprve zrušili toto nastavení. Užitečné v kombinaci s
       vyhledáváním nástrojů. Názvy nástrojů oddělené čárkami.
-  enable_auto_backup:
-    name: Povolit automatické zálohování úprav
-    description: 'Pořídí snímek pro každou entitu před každým zabaleným zápisem/destruktivním
-      voláním nástroje MCP (automatizace, skript, scéna, pomocník, dashboard, zdroj
-      dashboardu, štítek, kategorie, skupina, zóna, oblast, kalendář, úkol, entita,
-      zařízení, integrace a související nástroje pro odebrání/smazání). Omezení automatické
-      zálohy určuje, jak často se to děje: 0 (výchozí) zachytí při každém takovém
-      volání, N>0 maximálně jeden snímek za N minut na entitu. Snímky jsou uloženy
-      jako soubory YAML pod /data/ha_mcp_backups/ (přepsání přes HAMCP_BACKUP_DIR)
-      a jsou uvedeny, obnoveny nebo smazány přes kartu Zálohy ve webovém uživatelském
-      rozhraní nastavení nebo přes ha_manage_backup(scope=''edits'', ...). Pro tyto
-      domény je zachycení nejlepším možným úsilím — selhání zaznamená VAROVÁNÍ a zápis
-      pokračuje. Nástroje pro soubory a raw-YAML jsou výjimkou: ha_write_file, ha_delete_file
-      a ha_config_set_yaml považují snímek za předpoklad, takže zápis přes ně je odmítnut,
-      pokud je tato možnost vypnuta, a neúspěšné zachycení jej blokuje. Ve výchozím
-      nastavení zapnuto; zrušení zaškrtnutí se odhlásí od zachycení nejlepším úsilím
-      a vyřadí s nimi nástroje pro soubory a raw-YAML z provozu. Vyžaduje restart,
-      aby se projevilo.'
-  auto_backup_throttle_minutes:
-    name: Omezení automatické zálohy (minuty)
-    description: Okno omezení pro každou entitu. 0 (výchozí) zachytí snímek při každém
-      zabaleném zápisu. N>0 zachytí maximálně jeden snímek za N minut na entitu. Rozsah
-      0–1440.
-  auto_backup_retain_per_entity:
-    name: Uchovávání automatických záloh (na entitu)
-    description: Maximální počet snímků uchovávaných na entitu. Starší snímky nad
-      tento limit jsou při každém úspěšném zachycení vyřazeny. Výchozí 100, rozsah
-      1–10000.
-  enable_snapshot_delete:
-    name: Povolit smazání snímků
-    description: Umožňuje ha_manage_backup mazat úplné HA snapshot tarbally (scope='snapshot',
-      action='delete'). Ve výchozím nastavení vypnuto — snímek může být posledním
-      bodem obnovy po chybné změně, takže zde musí člověk souhlasit. I když je zapnuto,
-      plánované zálohy, nejnovější zbývající snímek a cokoli mladšího než níže uvedený
-      věkový limit zůstávají chráněny.
-  snapshot_delete_min_age_days:
-    name: Minimální stáří snímku pro smazání (dny)
-    description: Snímek musí být alespoň takto starý, než může být smazán. Rozsah
-      0–365; 0 zakáže dolní hranici (ochrany nejnovějšího snímku a plánované zálohy
-      stále platí). Výchozí 7.
-  verify_ssl:
-    name: Ověřit certifikát TLS
-    description: Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk)
-      se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo
-      by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci
-      (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed
-      certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu –
-      nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.
+  secret_path:
+    name: Přepsání tajné cesty
+    description: 'Volitelná vlastní HTTP cesta pro server MCP. Ponechte prázdné pro
+      použití automaticky generované zabezpečené cesty.
+
+      '

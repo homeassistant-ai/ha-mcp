@@ -377,7 +377,7 @@ def _check_variables_order(
     action-level step, ``async_render`` for the top-level and
     ``trigger_variables`` blocks), so a name declared further down is undefined
     at render time. Which uses then raise ``UndefinedError`` and which stay
-    quiet is documented for users in ``automation-patterns.md#variables``; this
+    quiet is documented for users in ``automation-actions.md#variables``; this
     scan only has to find the forward read.
 
     Only *later* siblings count. Names coming from anywhere else — an earlier
@@ -428,5 +428,5 @@ def _check_variables_order(
             "name further down is not defined yet. Move the keys it reads "
             "above it.",
             skill_prefix,
-            "automation-patterns.md#variables",
+            "automation-actions.md#variables",
         )

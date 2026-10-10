@@ -821,7 +821,7 @@ async def _assert_template_degraded_scrub_refused(
 @pytest.mark.cleanup
 class TestTemplateHelperCaptureRestore:
     @pytest.mark.parametrize("template_type", ["sensor", "binary_sensor"])
-    async def test_template_options_full_loop(
+    async def test_template_options_full_loop(  # noqa: PLR0915
         self, mcp_client, ha_client, ha_container_with_fresh_config, template_type: str
     ) -> None:
         """Restore through either component entry; refuse absent-component reads.
@@ -836,8 +836,7 @@ class TestTemplateHelperCaptureRestore:
                     "ha_config_list_helpers", {"helper_type": "template"}
                 )
                 assert unavailable["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-                # No helper is created or edited in this topology. A capture
-                # cannot substitute entity state for unreadable persisted options.
+                # A made-up id's capture is refused either way; nothing is saved.
                 missing_id = uuid.uuid4().hex
                 snapshot = await mcp.call_tool_failure(
                     "ha_manage_backup",
@@ -848,7 +847,8 @@ class TestTemplateHelperCaptureRestore:
                         "entity_id": missing_id,
                     },
                 )
-                assert snapshot["error"]["code"] == "RESOURCE_NOT_FOUND"
+                refused = {"BACKUP_CAPTURE_FAILED", "RESOURCE_NOT_FOUND"}
+                assert snapshot["error"]["code"] in refused
                 listing = await mcp.call_tool_success(
                     "ha_manage_backup",
                     {

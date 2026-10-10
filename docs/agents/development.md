@@ -85,6 +85,65 @@ adding a `C901` per-file ignore. Lefthook runs `ruff --fix` on commit with
 non-`__init__` modules. Add an import and its first use in the same change or
 the hook may strip it without a separate Ruff invocation.
 
+Source files are capped at 1,000 lines by
+`tests/src/unit/test_module_size_ratchet.py`. Files that were already larger
+are listed with their line count in
+`tests/src/unit/module_size_baseline.json`; a listed file may shrink but not
+grow, so a file that grew has to be split. Vendored trees, test fixtures and
+the stable webhook-proxy copy are not counted.
+
+Do not edit either ratchet baseline in a pull request: nearly every change to
+a listed file would rewrite the same shared file, and those edits conflict
+with each other. A shrunk or deleted file, or an edited copy, passes the
+checks as it is; after the merge, `sync-ratchet-baselines.yml` updates the
+baselines on `master` with `python scripts/module_size_ratchet.py`, which only
+lowers or drops entries, and `python scripts/duplicate_code_ratchet.py`, which
+rewrites its baseline only when no group gained a copy. Neither accepts
+growth. Lowering an entry by hand remains possible as a maintainer escape
+hatch; the checks below reject only a raised entry or a new copy. The lefthook
+pre-commit hook runs both commands with `--staged --check`, which reports
+violations in the staged content without writing a baseline.
+
+Never raise or add a baseline entry by hand. The `Fast Checks` job compares
+each baseline with the one in the base commit the pull request was merged
+with, and fails when an entry was raised or added, or a group of copies was
+listed that the base does not allow. It also checks the files against the
+baselines the sync would write from that base, so an entry the sync has not
+lowered yet cannot let its file grow back, and a removed copy's group cannot
+take a new one.
+
+`tests/src/unit/test_duplicate_code_ratchet.py` fails when a Python function
+or class has the same code as another one: the same after docstrings,
+decorators, type hints and names are dropped, with at least two statements.
+Import the existing definition instead of copying it. Closures are not
+compared on their own, and a file with the same bytes as another counts once,
+because that is how the server and the component share code
+(`dashboard_patch.py`); such a file needs a test that the copies match.
+Copies that already existed are listed in
+`tests/src/unit/duplicate_code_baseline.json`. Removing, moving or editing a
+listed copy passes without a baseline edit; the post-merge sync rewrites it.
+`python scripts/duplicate_code_ratchet.py` refuses to write the baseline while
+a group has a new copy, so it cannot accept one.
+
+`BLE001` (a handler that catches `Exception` without re-raising it or logging
+its traceback) is enabled. Each handler that existed before carries
+`# noqa: BLE001`. Do not add that comment to a new handler: catch the specific
+exception, re-raise, or log with `logger.exception(...)` or `exc_info=True`.
+One case may add it: a tool-boundary handler that ends in
+`exception_to_structured_error(exc, ...)` or
+`raise_tool_error(create_error_response(...))`. Those calls raise a
+`ToolError` for the agent, which ruff cannot see. With `raise_error=False`,
+`exception_to_structured_error` returns the payload instead and the handler
+needs a real fix.
+Logging only the message does not satisfy the rule. `RUF100` fails a `noqa`
+that is no longer needed. The two webhook-proxy `start.py` files are exempt
+through `per-file-ignores` in `pyproject.toml` and carry no `noqa`.
+
+`PLR0915` caps a function at 50 statements. Functions that were already longer
+carry `# noqa: PLR0915` on their `def` line. Do not add that comment to a new
+function: extract helpers. `RUF100` fails the `noqa` once the function is short
+enough.
+
 ## Docker
 
 Stdio mode is local to the process and does not expose a network port:
@@ -128,7 +187,12 @@ The stable architectural map is:
 src/ha_mcp/
 ├── server.py                    FastMCP server and lifecycle
 ├── __main__.py                  CLI and transport entrypoints
-├── config.py                    Settings
+├── config.py                    Settings singleton, embedded connection, re-exports
+├── config_settings.py           Settings model and .env loading; one declaration per setting
+├── config_meta.py               Setting metadata: UI surface, app option, range, restart
+├── config_registry.py           Registries and bounds derived from the metadata
+├── config_overrides.py          Feature-flag and advanced override loader
+├── config_backup.py             Auto-backup override loader
 ├── errors.py                    Structured error contract
 ├── client/                      REST and WebSocket clients
 ├── auth/                        OAuth provider and consent UI
@@ -137,6 +201,11 @@ src/ha_mcp/
 │   ├── tools_*.py               Domain tool modules
 │   ├── smart_search/            Search service layer
 │   ├── device_control.py        Verified device control
+│   ├── ws_waiters.py            WebSocket-event-driven wait helpers
+│   ├── config_write_helpers.py  Helpers shared by the config set tools
+│   ├── diagnostics_helpers.py   Integration diagnostics fetch and pagination
+│   ├── coercion.py              Tool parameter coercion and parsing
+│   ├── response_helpers.py      Response projection, pagination, timestamps
 │   └── util_helpers.py          Shared tool utilities
 ├── settings_ui/                 Web settings interface
 ├── transforms/                  Shared tool categorization/transforms
@@ -150,8 +219,7 @@ Concrete owners worth preserving in the map are
 `client/websocket_listener.py`, `tools/best_practice_checker.py`,
 `utils/fuzzy_search.py`, `utils/operation_manager.py`,
 `utils/skill_loader.py`, `utils/python_sandbox.py`, and
-`utils/kill_signal_diagnostics.py`. Bundled UI knowledge lives in
-`resources/card_types.json` and `resources/dashboard_guide.md`.
+`utils/kill_signal_diagnostics.py`.
 `utils/config_hash.py` is the shared optimistic-locking implementation for
 automation, script, scene, dashboard, and energy configuration.
 

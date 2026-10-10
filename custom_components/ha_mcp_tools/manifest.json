@@ -4,10 +4,12 @@
     "after_dependencies": [
         "backup",
         "cloud",
+        "energy",
         "frontend",
         "http",
         "lovelace",
-        "network"
+        "network",
+        "recorder"
     ],
     "codeowners": [
         "@homeassistant-ai"
@@ -24,5 +26,5 @@
         "ruamel.yaml>=0.18.0",
         "voluptuous-openapi>=0.4.1"
     ],
-    "version": "2.2.1"
+    "version": "2.2.2"
 }

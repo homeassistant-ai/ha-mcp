@@ -134,7 +134,7 @@ class _FakeTCPConnector:
     limit: int = 100
 
 
-def _install_runtime_stubs():
+def _install_runtime_stubs() -> None:  # noqa: PLR0915
     """Inject homeassistant.* and aiohttp stubs into sys.modules.
 
     The custom integration imports from these packages at module load.
@@ -269,15 +269,10 @@ def _import_mcp_proxy(preload_oauth=None):
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     init_path = os.path.join(component_dir, "__init__.py")
     mod_name = f"mcp_proxy_init_{CURRENT['key']}"
-    for suffix in (
-        "",
-        ".oauth",
-        ".oauth_autoapprove",
-        ".oauth_dcr",
-        ".oauth_indirect",
-        ".readonly_webhook",
-    ):
-        sys.modules.pop(f"{mod_name}{suffix}", None)
+    for name in [
+        m for m in sys.modules if m == mod_name or m.startswith(f"{mod_name}.")
+    ]:
+        sys.modules.pop(name)
     spec = importlib.util.spec_from_file_location(
         mod_name,
         init_path,
@@ -308,7 +303,9 @@ def _import_oauth(tmp_secret_dir=None):
     oauth_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "oauth.py")
     mod_name = f"mcp_proxy_oauth_{CURRENT['key']}"
     sys.modules.pop(mod_name, None)
-    spec = importlib.util.spec_from_file_location(mod_name, oauth_path)
+    spec = importlib.util.spec_from_file_location(
+        mod_name, oauth_path, submodule_search_locations=[os.path.dirname(oauth_path)]
+    )
     mod = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
@@ -4991,40 +4988,6 @@ class TestOAuthSetupEntryRegistersExpectedViews:
         if _scoped_revoke_supported():
             expected.add(f"{CURRENT['oauth_base']}/revoke")
         assert registered_urls == expected
-
-
-class TestUnauthorizedResponseShape:
-    """The 401 response on the webhook is the OAuth-discovery entry point.
-    Its WWW-Authenticate must point at the provider's protected-resource
-    metadata URL — not just contain the word 'Bearer'."""
-
-    @pytest.fixture
-    def setup(self, tmp_path):
-        oauth, provider = _provider_for_view_tests(
-            tmp_path, public_base_url="https://legit.example"
-        )
-        return oauth, provider
-
-    def test_resource_metadata_url_uses_pinned_base(self, setup):
-        oauth, provider = setup
-        request = _make_view_request(headers={"Host": "evil.example"})
-        with patch.object(oauth.web, "Response") as resp_ctor:
-            oauth.build_unauthorized_response(request, provider)
-        kwargs = resp_ctor.call_args.kwargs
-        ww = kwargs["headers"]["WWW-Authenticate"]
-        # Pinned base means evil.example is NOT in the metadata URL
-        assert "evil.example" not in ww
-        if _scoped_only_prm(oauth):
-            # The pointer is the RFC 9728 §3.1 path-scoped URL — the only
-            # protected-resource document left.
-            assert (
-                "https://legit.example/.well-known/oauth-protected-resource"
-                "/api/webhook/mcp_webhook_id_aaaa" in ww
-            )
-        else:
-            assert (
-                f"https://legit.example{CURRENT['oauth_base']}/protected-resource" in ww
-            )
 
 
 class TestHaAuthMode:

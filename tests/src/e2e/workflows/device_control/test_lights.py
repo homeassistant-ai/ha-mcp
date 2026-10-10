@@ -91,7 +91,7 @@ async def wait_for_entity_state(
                 f"⏳ {entity_id} state: {current_state} (waiting for {expected_state})"
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"⚠️ Error checking state for {entity_id}: {e}")
 
         await asyncio.sleep(retry_interval)
@@ -138,7 +138,7 @@ async def _monitor_bulk_operation_status(mcp_client: Client, operation_ids) -> N
                 # Status monitoring is informational in test environment
                 # WebSocket verification may not work consistently in Docker
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning(f"⚠️ Could not get status for operation {i + 1}: {e}")
 
 
@@ -163,7 +163,7 @@ async def _verify_bulk_final_states(mcp_client: Client, test_lights) -> None:
             # In test environment, state consistency is informational only
             # Don't fail test due to Docker environment limitations
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"⚠️ Could not verify state for {light_entity}: {e}")
 
 
@@ -255,7 +255,7 @@ class TestDeviceControl:
                     logger.info(f"💡 Brightness verified: {brightness_attr}")
                 else:
                     logger.info("💡 Light does not support brightness attributes")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning(f"⚠️ Could not verify brightness: {e}")
 
     @pytest.mark.slow
@@ -466,7 +466,7 @@ class TestDeviceControl:
             logger.info(
                 f"🌡️ Final attributes: temperature={temp}, hvac_mode={hvac_mode}"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"⚠️ Could not verify climate attributes: {e}")
 
     async def test_cover_position_control(self, mcp_client: Client) -> None:
@@ -619,7 +619,7 @@ async def test_device_state_monitoring(mcp_client: Client) -> None:
         overview_data = parse_mcp_result(overview_result)
         # Overview may not have explicit success field, just check for content
         assert overview_data, "System overview should return data"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ Could not get system overview: {e}")
     logger.info("✅ System overview retrieved")
 
@@ -666,7 +666,7 @@ async def test_device_state_monitoring(mcp_client: Client) -> None:
                 else:
                     logger.debug(f"✅ {entity_id} has required field: {field}")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"⚠️ Could not inspect {entity_type} entity: {e}")
             continue
 

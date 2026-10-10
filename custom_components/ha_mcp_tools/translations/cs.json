@@ -24,6 +24,10 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_connect_path": "Nesmí obsahovat #, ?, % ani mezery.",
+      "invalid_webhook_id": "ID webhooků nesmí obsahovat lomítko (/)."
+    },
     "step": {
       "tools_info": {
         "title": "Nástroje souborů a YAML HA-MCP",

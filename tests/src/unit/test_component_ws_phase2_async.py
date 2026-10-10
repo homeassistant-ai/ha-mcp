@@ -41,6 +41,7 @@ from ha_mcp.tools.reference_validator import build_entity_set, build_service_ind
 # import (which loads homeassistant) is never hoisted above the stub install.
 # Mirrors test_component_search_contract.py's ``wsapi`` re-import.
 from . import test_component_ws_search as _base
+from ._component_ws_fakes import _FakeBulkServices, _FakeCallServices
 from .test_component_ws_search import (
     FakeChildDevice,
     FakeConfigEntry,
@@ -162,13 +163,10 @@ class TestCapabilityPresence:
         ):
             assert cap in wsapi.CAPABILITIES
 
-    # NOTE: no version pin here. Capabilities are advertised by name, never
-    # version-inferred, and the single authoritative version pin (lockstep +
-    # literal, downgrade/conscious-ack guard) is test_manifest_version_parity —
-    # duplicating the literal here only doubled per-bump churn and bred
-    # release-cycle narration in comments that rotted as soon as the next
-    # stable shipped (a "Pending 1.2.3" claim outlived its truth by one
-    # release). Bump rules live in docs/agents/custom-component.md.
+    # NOTE: no version check here. Capabilities are advertised by name, never
+    # version-inferred; test_manifest_version_parity keeps manifest.json and
+    # COMPONENT_VERSION in lockstep. Bump rules live in
+    # docs/agents/custom-component.md.
 
 
 # =============================================================================
@@ -1958,48 +1956,6 @@ class _FakeBus:
             cb(event)
 
 
-class _FakeCallServices:
-    """``hass.services`` stand-in with the write surface ``call_service`` drives.
-
-    ``has_service`` answers from a known ``{(domain, service)}`` set; ``async_call``
-    records its args, optionally runs an ``on_call`` hook (used to fire the
-    confirming state_changed event mid-dispatch), optionally raises, else returns a
-    canned ``response``.
-    """
-
-    def __init__(self, *, known=(), response=None, on_call=None, raises=None):
-        self._known = set(known)
-        self._response = response
-        self._on_call = on_call
-        self._raises = raises
-        self.calls = []
-
-    def has_service(self, domain, service):
-        return (domain, service) in self._known
-
-    async def async_call(
-        self, domain, service, service_data, blocking=True, return_response=False
-    ):
-        self.calls.append(
-            {
-                "domain": domain,
-                "service": service,
-                "service_data": service_data,
-                "blocking": blocking,
-                "return_response": return_response,
-            }
-        )
-        if self._raises is not None:
-            raise self._raises
-        if self._on_call is not None:
-            self._on_call()
-        return self._response
-
-    @property
-    def call_count(self):
-        return len(self.calls)
-
-
 def _call_hass(states, services, bus):
     hass = FakeHass(states=list(states), services=services)
     hass.bus = bus
@@ -2680,49 +2636,6 @@ class TestCallServiceSchema:
 # =============================================================================
 # bulk_call_service (Phase 3, D5a — the BATCH write capability, issue #1813)
 # =============================================================================
-class _FakeBulkServices:
-    """``hass.services`` stand-in with PER-``(domain, service)`` dispatch behavior.
-
-    ``behaviors`` maps ``(domain, service)`` to an optional dict carrying ``on_call``
-    (a hook run mid-dispatch, e.g. fire THIS op's confirming state_changed event),
-    ``raises`` (an exception to raise for THIS op only), and ``response``. Unlike the
-    single-call ``_FakeCallServices`` (one shared hook / raise), the per-op routing
-    lets one batch op raise while another confirms — the parallel-isolation case.
-    ``has_service`` answers from the behavior keys plus any extra ``known``.
-    """
-
-    def __init__(self, behaviors=None, known=()):
-        self._behaviors = {k: dict(v) for k, v in dict(behaviors or {}).items()}
-        self._known = set(known) | set(self._behaviors)
-        self.calls = []
-
-    def has_service(self, domain, service):
-        return (domain, service) in self._known
-
-    async def async_call(
-        self, domain, service, service_data, blocking=True, return_response=False
-    ):
-        self.calls.append(
-            {
-                "domain": domain,
-                "service": service,
-                "service_data": service_data,
-                "blocking": blocking,
-                "return_response": return_response,
-            }
-        )
-        behavior = self._behaviors.get((domain, service), {})
-        if behavior.get("raises") is not None:
-            raise behavior["raises"]
-        if behavior.get("on_call") is not None:
-            behavior["on_call"]()
-        return behavior.get("response")
-
-    @property
-    def call_count(self):
-        return len(self.calls)
-
-
 def _run_bulk_call_service(hass, msg):
     """Drive the async prep then the pure formatter, as the WS wrapper does."""
     extra = asyncio.run(wsapi._bulk_call_service_prep(hass, msg))

@@ -388,6 +388,17 @@ source ~/.zshrc
    - Create Token → Copy immediately (shown only once)
 2. **Check token format** - Don't wrap the token in quotes in your config
 3. **Token expiration** - Tokens don't expire by default, but can be revoked
+4. **Use an administrator's token** - non-admin tokens are not officially
+   supported but still work, with limitations. With a non-admin user's token,
+   ha-mcp logs a warning (at startup, or on the first admin-only request in
+   OAuth mode). Admin-only operations fail with
+   `AUTH_INSUFFICIENT_PERMISSIONS`. ha-mcp keeps them from getting the
+   ha-mcp host IP-banned: Home Assistant answers an admin-only REST request
+   (automation, script and scene configs, config flows, diagnostics, logs,
+   events) from a non-admin with a 401 that its `http.ban` counts as a
+   failed login, so ha-mcp refuses those without sending them, and it calls
+   services over WebSocket, where a refused admin-only service is not
+   counted.
 
 ### Claude says it can't see Home Assistant
 
@@ -593,6 +604,7 @@ ChatGPT (web, including Codex Work Mode) caches a connector's tool list and some
 - **"Unexpected server output" error:** Add `FASTMCP_SHOW_SERVER_BANNER=false` to your stdio env config. This disables the startup banner that Antigravity misinterprets as unexpected output.
 - **"EOF" errors:** Use absolute paths for the command, not relative paths.
 - **First run timeout:** Run `uvx ha-mcp@latest --version` in your terminal first to download and cache the package before Antigravity tries to start it.
+- **`sending "subscriptions/listen": failed to connect (session ID: ): session not found`:** A bug in Antigravity's built-in MCP client, not a server or config problem: it opens a `subscriptions/listen` stream the server never offered, then misreads the spec-mandated `404 Method not found` reply as a lost session (request sequence in [#2545](https://github.com/homeassistant-ai/ha-mcp/issues/2545); fixed in Go MCP SDK v1.8.0 by [modelcontextprotocol/go-sdk#1193](https://github.com/modelcontextprotocol/go-sdk/pull/1193), which Antigravity has not shipped yet; the same error is reported in [google-antigravity/antigravity-cli#877](https://github.com/google-antigravity/antigravity-cli/issues/877)). Until Antigravity ships a fix, connect through the `fastmcp-remote` stdio bridge: `"command": "uvx", "args": ["fastmcp-remote", "<your MCP server URL>"]`.
 - **Tools load but fail when called:** Try switching to stdio mode instead of HTTP. HTTP mode can experience "connection closed" or reconnection errors with this client.
 - **Connection issues after config changes:** Restart the Agent session in Antigravity after saving any config changes.
 
@@ -735,6 +747,8 @@ The app remains a fully supported alternative on Home Assistant OS and Supervise
 | `HOMEASSISTANT_URL` | Your Home Assistant URL | - | Yes |
 | `HOMEASSISTANT_TOKEN` | Long-lived access token (or `demo` for demo env) | - | Yes |
 | `BACKUP_HINT` | Backup recommendation level | `normal` | No |
+| `ENABLE_SNAPSHOT_ACTIONS` | Allow full HA snapshot actions through `ha_manage_backup`; deletion also requires `ENABLE_SNAPSHOT_DELETE`. `false` blocks listing too | `true` | No |
+| `BACKUP_READ_ONLY` | Allow backup reads and block manual create, restore, and delete through `ha_manage_backup` | `false` | No |
 | `HA_MCP_DISABLE_SETTINGS_UI` | Set to `1` to skip the localhost settings-page sidecar that stdio installs spawn by default ([details](#how-do-i-open-the-ha-mcp-settings-page)) | - | No |
 
 ### Backup Hint Modes
@@ -745,6 +759,34 @@ The app remains a fully supported alternative on Home Assistant OS and Supervise
 | `normal` | Suggests backup only before irreversible operations (recommended) |
 | `weak` | Rarely suggests backups |
 | `auto` | Same as normal (future: auto-detection) |
+
+### Backup permissions
+
+`ha_manage_backup` is mandatory and remains enabled when listed in
+`DISABLED_TOOLS`. Use the **Backups** tab in the web Settings UI to control
+its actions:
+
+- **Allow full HA snapshot actions** is on by default. Turning it off blocks
+  every `scope="snapshot"` action, including listing; `scope="edits"` remains
+  available. Deletion is only available through `ha_manage_backup`, also
+  requires **Allow snapshot deletion**, and remains subject to its snapshot
+  protections.
+- **Make backup management read-only** is off by default. Turning it on allows
+  edit-backup list, view, and diff, plus snapshot list while snapshot actions
+  are enabled. It blocks manual create, restore (including edit restores),
+  and delete. Automatic pre-edit backups continue.
+
+These settings restrict AI calls to `ha_manage_backup` and the equivalent
+backup services and commands sent through `ha_call_service`
+(`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/` snapshot
+commands, and Supervisor `/backups` requests). Full snapshot deletion through
+`ha_call_service` is refused; use `ha_manage_backup`. Code Mode is a beta
+escape hatch and is not fully covered by these settings. Scripts and
+automations that call these services run inside Home Assistant and are not
+covered. Human backup actions in the settings page remain available. App
+(add-on) saves require a restart; other installations apply saved overrides
+immediately. An explicitly set environment variable locks its setting in the
+UI. Disabling snapshot actions takes precedence over read-only listing.
 
 ### Entity visibility filter (opt-in)
 
@@ -956,6 +998,21 @@ slip past a policy that already watches that tool.
 
 ### Getting notified when a tool call is waiting for approval
 
+Clients using MCP 2026-07-28 can resume a pending approval through MRTR
+(multi round-trip requests). Each request waits up to ten seconds; a client
+that follows continuations retries automatically against the same approval.
+**You still approve or deny in the settings UI or through your configured
+Home Assistant approval automation.** A continuation never grants approval.
+
+Automatic waiting ends at the configured `wait_seconds` deadline or after
+eight continuation responses, whichever comes first. Legacy clients keep
+the existing blocking wait and approval error. Modern clients that do not
+follow continuations can still use the existing UI approval and manual
+re-call flow for static targets. Nested calls inside custom scripts keep
+the blocking flow, because retrying a script could repeat earlier actions.
+Selector-based bulk calls can resume only their own approval within the
+original wait window; a fresh call requires a fresh approval.
+
 A rule in **Tool Security Policies** holds the call and shows it in the
 settings UI, which only helps while that tab is open. Every held request is
 also announced on the Home Assistant event bus as
@@ -1008,9 +1065,9 @@ the error tells the agent to do.
 
 If no event arrives at all, check the token the server authenticates with:
 Home Assistant only accepts `POST /api/events/<type>` from an admin user, so
-a standalone install running on a non-admin long-lived token gets a 403 that
-goes to the server log and nowhere else. The embedded component provisions
-its own admin token, so it is not affected.
+a standalone install running on a non-admin long-lived token does not fire
+the event and logs that to the server log and nowhere else. The embedded
+component provisions its own admin token, so it is not affected.
 
 Approving happens in the Tool Security Policies tab by default. Answering
 from an automation is possible too, behind a switch and a PIN — see the next

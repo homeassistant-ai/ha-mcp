@@ -33,9 +33,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": true
     },
     "tags": [
       "Apps (add-ons)"
@@ -166,10 +167,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": false,
-      "readOnlyHint": false
+      "openWorldHint": true
     },
     "tags": [
       "Apps (add-ons)"
@@ -195,9 +196,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Areas & Floors"
@@ -225,9 +227,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Areas & Floors"
@@ -237,7 +240,7 @@
   {
     "name": "ha_set_area_or_floor",
     "title": "Create or Update Area or Floor",
-    "description": "Create or update a Home Assistant area or floor.\n\nPass kind='area' (with optional floor_id, picture, labels) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", labels=[\"site_home\"])\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)",
+    "description": "Create or update a Home Assistant area or floor.\n\nPass kind='area' (with optional floor_id, picture, labels, temperature_entity_id,\nhumidity_entity_id) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", labels=[\"site_home\"])\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", temperature_entity_id=\"sensor.kitchen_temp\", humidity_entity_id=None)\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)",
     "inputSchema": {
       "properties": {
         "kind": {
@@ -256,8 +259,7 @@
         },
         "floor_id": {
           "type": "str | None",
-          "description": "Floor assignment when kind='area' (use empty string to clear).",
-          "default": null
+          "description": "Floor assignment when kind='area' (null or empty string to clear; omit to leave unchanged)."
         },
         "level": {
           "type": "int | None",
@@ -266,8 +268,7 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:sofa', 'mdi:home-floor-1', empty string to remove)",
-          "default": null
+          "description": "Material Design Icon (e.g., 'mdi:sofa', 'mdi:home-floor-1'; null or empty string to remove; omit to leave unchanged)"
         },
         "aliases": {
           "type": "str | list[str] | None",
@@ -276,13 +277,20 @@
         },
         "picture": {
           "type": "str | None",
-          "description": "Picture URL when kind='area' (empty string to remove).",
-          "default": null
+          "description": "Picture URL when kind='area' (null or empty string to remove; omit to leave unchanged)."
         },
         "labels": {
           "type": "str | list[str] | None",
           "description": "Label IDs when kind='area' (replaces the area's label set; empty list to clear). Omit to leave labels unchanged. Floors have no labels.",
           "default": null
+        },
+        "temperature_entity_id": {
+          "type": "str | None",
+          "description": "Sensor the area reports temperature from, when kind='area' (a sensor.* entity with device_class temperature; null or empty string to clear). Omit to leave unchanged."
+        },
+        "humidity_entity_id": {
+          "type": "str | None",
+          "description": "Sensor the area reports humidity from, when kind='area' (a sensor.* entity with device_class humidity; null or empty string to clear). Omit to leave unchanged."
         }
       },
       "required": [
@@ -290,8 +298,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Areas & Floors"
@@ -404,10 +414,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": false,
-      "readOnlyHint": false
+      "openWorldHint": true
     },
     "tags": [
       "Assist"
@@ -430,9 +440,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Automations"
@@ -460,9 +471,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Automations"
@@ -472,7 +484,7 @@
   {
     "name": "ha_config_set_automation",
     "title": "Create or Update Automation",
-    "description": "Create or update a Home Assistant automation.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n\nPrefer native triggers/conditions/actions over templates in logic\npositions; templates belong only in `data.*`, notification text,\n`event_data` and `variables`. The best-practice checker reports\nviolations under `best_practice_warnings` — fix them before\nre-submitting. `automation-patterns.md` and `template-guidelines.md`\nship under `skill_content` by default. Test any unavoidable template\nwith ha_eval_template first.\n\nConsider a dedicated tool first: a state snapshot with no trigger ->\nha_config_set_scene; a value derived from other entities ->\nha_config_set_helper(helper_type='template'); a counter / timer /\nschedule / boolean -> ha_config_set_helper.\n\nMODES (pick one; each can also take `enabled`, which alone with\n`identifier` turns the automation on or off without touching config):\n- python_transform: surgical edits to an existing automation. Requires\n  identifier and config_hash from ha_config_get_automation(). Operates on\n  the fetched config, which uses HA's plural root keys\n  'triggers'/'actions'/'conditions', e.g.\n  python_transform=\"config['triggers'].append({'trigger': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})\"\n- config: new automations or full restructures. Regular automations need\n  alias, triggers and actions; blueprint automations need alias and\n  use_blueprint {path, input}.\n- take_control_of_blueprint: convert a blueprint-backed automation into a\n  standalone one. Takes no config of its own.\n\nIDENTITY: omit identifier and config['id'] to create with a generated ID;\nan unused raw ID creates that specific ID. Reusing an identifier targets\nthe same automation even if the alias changes; to rename or replace it,\nread it first and pass its config_hash — a changed alias without that\nhash is rejected before writing. The returned `automation_id` is the\nresolved entity_id, falling back to the input identifier or the\ngenerated unique_id.\n\nEXAMPLES:\n- Create: ha_config_set_automation(config={\"alias\": \"Morning Lights\", \"triggers\": [{\"trigger\": \"time\", \"at\": \"07:00:00\"}], \"actions\": [{\"action\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}}]})\n- From a blueprint: ha_config_set_automation(config={\"alias\": \"Motion Light Kitchen\", \"use_blueprint\": {\"path\": \"homeassistant/motion_light.yaml\", \"input\": {\"motion_entity\": \"binary_sensor.kitchen_motion\", \"light_target\": {\"entity_id\": \"light.kitchen\"}}}})\n- Update: current = ha_config_get_automation(identifier=\"automation.x\"); ha_config_set_automation(identifier=\"automation.x\", config_hash=current[\"config_hash\"], config={...})\n- Disable: ha_config_set_automation(identifier=\"automation.x\", enabled=False)\n- Run now: ha_config_set_automation(identifier=\"automation.x\", run_actions=True)\n- Take control: ha_config_set_automation(identifier=\"automation.x\", take_control_of_blueprint=True)\n\nTAKE CONTROL is one-way: later blueprint edits stop reaching the\nautomation; to change an input value, update 'use_blueprint.input'\ninstead. It does NOT free the blueprint — Home Assistant keeps counting\nthe converted automation as a user, so deleting that blueprint stays\nrefused until the automation is removed (an automation reload does not\nclear it). The response names the blueprint in\n`took_control_of_blueprint`. To preview the rendering without writing\nanything, use ha_manage_blueprints(action=\"substitute\", path=..., input=...).",
+    "description": "Create or update a Home Assistant automation.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n\nPrefer native triggers/conditions/actions over templates in logic\npositions; templates belong only in `data.*`, notification text,\n`event_data` and `variables`. The best-practice checker reports\nviolations under `best_practice_warnings` — fix them before\nre-submitting. `triggers-and-conditions.md`, `automation-actions.md` and\n`template-guidelines.md` ship under `skill_content` by default. Test any unavoidable template\nwith ha_eval_template first.\n\nConsider a dedicated tool first: a state snapshot with no trigger ->\nha_config_set_scene; a value derived from other entities ->\nha_config_set_helper(helper_type='template'); a counter / timer /\nschedule / boolean -> ha_config_set_helper.\n\nMODES (pick one; each can also take `enabled`, which alone with\n`identifier` turns the automation on or off without touching config):\n- python_transform: surgical edits to an existing automation. Requires\n  identifier and config_hash from ha_config_get_automation(). Operates on\n  the fetched config, which uses HA's plural root keys\n  'triggers'/'actions'/'conditions', e.g.\n  python_transform=\"config['triggers'].append({'trigger': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})\"\n- config: new automations or full restructures. Regular automations need\n  alias, triggers and actions; blueprint automations need alias and\n  use_blueprint {path, input}.\n- take_control_of_blueprint: convert a blueprint-backed automation into a\n  standalone one. Takes no config of its own.\n\nIDENTITY: omit identifier and config['id'] to create with a generated ID;\nan unused raw ID creates that specific ID. Reusing an identifier targets\nthe same automation even if the alias changes; to rename or replace it,\nread it first and pass its config_hash — a changed alias without that\nhash is rejected before writing. The returned `automation_id` is the\nresolved entity_id, falling back to the input identifier or the\ngenerated unique_id.\n\nEXAMPLES:\n- Create: ha_config_set_automation(config={\"alias\": \"Morning Lights\", \"triggers\": [{\"trigger\": \"time\", \"at\": \"07:00:00\"}], \"actions\": [{\"action\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}}]})\n- From a blueprint: ha_config_set_automation(config={\"alias\": \"Motion Light Kitchen\", \"use_blueprint\": {\"path\": \"homeassistant/motion_light.yaml\", \"input\": {\"motion_entity\": \"binary_sensor.kitchen_motion\", \"light_target\": {\"entity_id\": \"light.kitchen\"}}}})\n- Update: current = ha_config_get_automation(identifier=\"automation.x\"); ha_config_set_automation(identifier=\"automation.x\", config_hash=current[\"config_hash\"], config={...})\n- Disable: ha_config_set_automation(identifier=\"automation.x\", enabled=False)\n- Run now: ha_config_set_automation(identifier=\"automation.x\", run_actions=True)\n- Take control: ha_config_set_automation(identifier=\"automation.x\", take_control_of_blueprint=True)\n\nTAKE CONTROL is one-way: later blueprint edits stop reaching the\nautomation; to change an input value, update 'use_blueprint.input'\ninstead. It does NOT free the blueprint — Home Assistant keeps counting\nthe converted automation as a user, so deleting that blueprint stays\nrefused until the automation is removed (an automation reload does not\nclear it). The response names the blueprint in\n`took_control_of_blueprint`. To preview the rendering without writing\nanything, use ha_manage_blueprints(action=\"substitute\", path=..., input=...).",
     "inputSchema": {
       "properties": {
         "config": {
@@ -531,8 +543,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Automations"
@@ -636,9 +650,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Calendar"
@@ -676,9 +691,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Calendar"
@@ -746,8 +762,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Calendar"
@@ -757,7 +775,7 @@
   {
     "name": "ha_get_camera_image",
     "title": "Get Camera Image",
-    "description": "Get a snapshot image from a Home Assistant camera entity.\n\nFetches the current camera image and returns it directly for visual\nanalysis (security checks, delivery verification, confirming a garage\ndoor actually closed). Only cameras exposed to Home Assistant are\naccessible; images come back in their native format (JPEG, PNG, or GIF).\nUse width/height on high-resolution cameras to reduce token usage.\n\nEXAMPLE: ha_get_camera_image(entity_id=\"camera.backyard\", width=640, height=480)",
+    "description": "Get a snapshot image from a Home Assistant camera entity.\n\nFetches the current camera image and returns it directly for\nvisual analysis (security checks, delivery verification,\nconfirming a garage door actually closed), in the format Home\nAssistant serves (JPEG, PNG, or GIF), alongside a short text\nblock stating the served snapshot's size and retrieval time in\nHome Assistant local time.\n\nDo not use it to inspect the camera's state or attributes — use\nha_search or ha_get_state for those; it returns an image, not\nstate. Use it when you need to see the current scene, and on\nhigh-resolution cameras pass width and height to reduce token\nusage.\n\nEXAMPLE: ha_get_camera_image(entity_id=\"camera.backyard\", width=640, height=480)",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -766,12 +784,12 @@
         },
         "width": {
           "type": "int | None",
-          "description": "Width to resize the image to",
+          "description": "Width for the resized image. Home Assistant rescales only when both width and height are given and the camera serves JPEG.",
           "default": null
         },
         "height": {
           "type": "int | None",
-          "description": "Height to resize the image to",
+          "description": "Height for the resized image. Home Assistant rescales only when both width and height are given and the camera serves JPEG.",
           "default": null
         }
       },
@@ -780,9 +798,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Camera"
@@ -893,8 +912,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Dashboard",
@@ -918,8 +939,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Dashboards"
@@ -942,8 +965,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Dashboards"
@@ -953,70 +978,71 @@
   {
     "name": "ha_config_get_dashboard",
     "title": "Get Dashboard",
-    "description": "Get dashboard info - list all dashboards, get config, or search for cards.\n\nMODE 1 — List: list_only=True\n  Lists every dashboard's metadata (url_path, title, icon), storage and\n  YAML alike (metadata only — bodies are never included here).\n\nMODE 2 — Search: any of entity_id / card_type / heading provided\n  Finds cards, badges, and header cards matching the criteria, including\n  cards nested inside stacks, grids, conditional cards, button-card\n  custom_fields, and state-switch states. Each match carries a\n  python_path and a jq_path that locate the card for nested as well as\n  top-level cards. The python_path is a Python subscript chain to be\n  appended after `config` — e.g.\n  python_transform=f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"' (it is\n  NOT valid on its own without the `config` prefix). jq_path is the same\n  location in jq dot-notation.\n  Multiple criteria are AND-ed. Always fetches fresh config, bypassing the cache.\n  Search covers cards/card/custom_fields/states containers up to a depth\n  bound; if the dashboard carries a non-traversed child-bearing shape\n  (e.g. picture-elements `elements`), the result carries a `warnings`\n  entry naming where, so its hidden content is not mistaken for absent.\n  Strategy dashboards are not searchable (no explicit cards).\n\nMODE 3 — Get: Active when list_only=False and no search parameters are provided.\n  Returns the full Lovelace dashboard config, defaulting to the\n  main dashboard if url_path is omitted.\n  With view_path, `config_hash` still covers the FULL config, so a follow-up\n  ha_config_set_dashboard(python_transform=...) addressing\n  config['views'][view_index] validates unchanged. An unknown\n  view_path errors and lists the available view paths.\n  When you only need the render and not the config, use the\n  dedicated ha_get_dashboard_screenshot tool (registered when the\n  dashboard screenshot beta feature is on) instead; it returns images\n  without echoing the config.\n\nMODE 4 — Search all: mode=\"search\" with query=<entity_id or text>\n  Answers \"which dashboards contain this entity/card\" by walking every\n  storage-mode dashboard's views/cards/sections for the query substring.\n  Each match names the url_path, view, card_path, card_type, and the\n  matched field/value. Takes precedence over the other modes (list_only /\n  entity_id / card_type / heading are ignored when mode=\"search\").\n  YAML-mode dashboards are never searched on either path — the component\n  walk skips them in-process and the component-less legacy walk skips any\n  row tagged mode=\"yaml\" — because HA resolves `!secret` when loading a\n  YAML Lovelace config, so searching one could surface resolved secrets.\n  On installs without the ha_mcp_tools component, the default (unnamed)\n  dashboard is also not searched — only dashboards with a url_path are.\n\nMODE 2 (Search) and MODE 3 (Get) return a `config_hash` that stays the same across consecutive reads of an unchanged config; MODE 1 and MODE 4 do not return one.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get one view only: ha_config_get_dashboard(url_path=\"lovelace-mobile\", view_path=\"office\")\n- Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n- Which dashboards use an entity: ha_config_get_dashboard(mode=\"search\", query=\"light.bedroom\")\n\nSEARCH WORKFLOW EXAMPLE:\n1. find = ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.bedroom\")\n2. ha_config_set_dashboard(\n       url_path=\"my-dash\",\n       config_hash=find[\"config_hash\"],\n       python_transform=f'config{find[\"matches\"][0][\"python_path\"]}[\"icon\"] = \"mdi:lamp\"'\n   )",
+    "description": "Get Lovelace dashboards: list them, read one config, or search their cards.\n\nNot for a render alone: ha_get_dashboard_screenshot (screenshot beta\nfeature) returns images without the config. Not for entity discovery:\nuse ha_search.\n\nThe parameters pick the mode:\n- list_only=True: storage and YAML dashboards alike.\n- Any of query / entity_id / card_type / heading searches cards and\n  header cards, AND-ing the criteria, in url_path or, when it is\n  omitted, every storage dashboard. View badges answer entity_id and\n  query, and heading excludes them.\n  Cards nested at any depth count, including\n  custom cards' own keys such as groups[].cards[].card. Each match has a\n  jq_path and a python_path to append to `config` in\n  ha_config_set_dashboard(python_transform=...), e.g.\n  f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"'. Each match carries its\n  dashboard's url_path and config_hash; a one-dashboard search also\n  returns the config_hash at the top level.\n- Otherwise the full config of url_path (the default dashboard when\n  omitted) is returned; with view_path only that view, while config_hash\n  still covers the full config.\n\nCaveats: config_hash stays the same across reads of an unchanged config.\nSearches stop at 200 matches (`truncated`). A search across dashboards\nskips YAML dashboards (HA resolves !secret in them) and, without a\ncurrent ha_mcp_tools component, the default dashboard (with a warning);\nname either by url_path.\nStrategy dashboards have no stored cards to search. An unknown view_path\nerrors and lists the available ones.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get one view only: ha_config_get_dashboard(url_path=\"lovelace-mobile\", view_path=\"office\")\n- Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n- Which dashboards use an entity: ha_config_get_dashboard(query=\"light.bedroom\")\n- Fields of a card type before writing one (omit card_type to list types):\n  ha_config_get_dashboard(card_type=\"tile\", describe=True)",
     "inputSchema": {
       "properties": {
         "url_path": {
           "type": "str | None",
-          "description": "Dashboard URL path (e.g., 'lovelace-home'). Use 'default' for default dashboard.",
+          "description": "Dashboard URL path (e.g. 'lovelace-home'); 'default' for the default dashboard.",
           "default": null
         },
         "list_only": {
           "type": "bool",
-          "description": "When True, url_path is ignored.",
+          "description": "List every dashboard's metadata instead of reading one; ignored when a search parameter is given.",
           "default": false
         },
         "force_reload": {
           "type": "bool",
-          "description": "Force reload from storage (bypass cache). Not applicable in search mode.",
+          "description": "Get only: bypass the config cache (searches always read fresh config).",
           "default": false
         },
         "entity_id": {
           "type": "str | None",
-          "description": "Find cards by entity ID. Supports wildcards, e.g. 'sensor.temperature_*'. Matches cards with this entity in 'entity' or 'entities' field, view-level badges, and header cards.",
+          "description": "Search: cards whose entity/entities field holds this entity ID; '*' matches any run of characters (including none) and the whole ID must match (e.g. 'sensor.temperature_*').",
           "default": null
         },
         "card_type": {
           "type": "str | None",
-          "description": "Find cards by type, e.g. 'tile', 'button', 'heading'.",
+          "description": "Search: cards of this type, e.g. 'tile'; 'badge' selects view badges instead (alone, it lists them all). With describe=True: the type to describe.",
           "default": null
         },
         "heading": {
           "type": "str | None",
-          "description": "Find cards by heading/title text (case-insensitive partial match).",
+          "description": "Search: cards whose heading/title contains this text (case-insensitive).",
           "default": null
         },
         "include_config": {
           "type": "bool",
-          "description": "In search mode: include each matched card's own configuration object in results. A container card's body includes its descendants, which are also separate matches with their own bodies, so nested stacks multiply the payload. Bodies are returned only for dashboards provably in storage mode; for a YAML or unconfirmed dashboard they are withheld (they may carry resolved !secret values) and the response says so, with match locations still reported. Ignored outside search mode.",
+          "description": "Search: include each matched card's own config. A container's body includes its nested cards, which are also matches, so nested stacks multiply the payload. Withheld, with a warning, for a dashboard not provably storage-mode (a YAML config may carry resolved !secret values).",
           "default": false
         },
         "include_screenshot": {
           "type": "bool",
-          "description": "Get mode only: also return rendered image(s) of the dashboard for visual verification. Requires the 'dashboard screenshot' beta feature + engine app (add-on)/sidecar. If the feature is disabled the config is returned with a warning; if the engine is configured but the render fails, the call errors. Ignored in list/search mode.",
+          "description": "Get mode only: also return rendered image(s) of the dashboard for visual verification. Requires the 'dashboard screenshot' beta feature + engine app (add-on)/sidecar. If the feature is disabled the config is returned with a warning; if the engine is configured but the render fails, the call errors.",
           "default": false
         },
         "view_path": {
           "type": "str | None",
-          "description": "Get mode: return ONLY the view whose Lovelace views[].path matches (response carries 'view' + 'view_index' instead of the full 'config'). With include_screenshot, also selects the view to render. Ignored in list/search mode.",
-          "default": null
-        },
-        "mode": {
-          "type": "Literal['search'] | None",
-          "description": "Set to 'search' (requires query).",
+          "description": "Get mode: return ONLY the view whose Lovelace views[].path matches (response carries 'view' + 'view_index' instead of the full 'config'). With include_screenshot, also selects the view to render.",
           "default": null
         },
         "query": {
           "type": "str | None",
-          "description": "With mode='search': the entity_id or substring to find across all storage-mode dashboards. Ignored otherwise.",
+          "description": "Search: text or entity ID contained in any value a card holds (case-insensitive); the matching values are listed under `matched`.",
           "default": null
+        },
+        "describe": {
+          "type": "bool",
+          "description": "Return card_type's fields from HA's card editor",
+          "default": false
         }
       }
     },
     "annotations": {
-      "openWorldHint": false,
       "readOnlyHint": true,
-      "idempotentHint": true
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
     },
     "tags": [
       "Dashboards"
@@ -1054,9 +1080,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": true
     },
     "tags": [
       "Dashboards"
@@ -1066,7 +1093,7 @@
   {
     "name": "ha_config_set_dashboard",
     "title": "Create or Update Dashboard",
-    "description": "Create or update a Home Assistant dashboard.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n`dashboard-guide.md` and `dashboard-cards.md` ship under `skill_content`\nby default.\n\nMODES (pick one):\n- patch: edit known paths with literal values using JSON Patch\n  add/remove/replace/test and config_hash, e.g.\n  patch=[{\"op\": \"replace\", \"path\": \"/views/0/title\", \"value\": \"Home\"}].\n  move/copy are unsupported. Full guide:\n  https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/dashboard-edits.md\n- python_transform: loops or pattern-based changes across cards and views,\n  e.g. 'config[\"views\"][0][\"cards\"].append({\"type\": \"button\", \"entity\": \"light.bedroom\"})'.\n  After delete/add operations indices shift, so chain multiple ops in ONE\n  expression where possible; a later call needs a fresh config_hash from\n  ha_config_get_dashboard().\n- config: new dashboards only, or a full restructure. Replaces everything.\n  Omit it to create a dashboard without initial config.\n\nUse ha_config_get_dashboard(entity_id=...) to get the path of any card,\nand ha_search / ha_get_overview to find entity IDs — never guess them.\nFor visual re-checks after the write, use ha_get_dashboard_screenshot\n(when available) instead of re-sending config.\n\ntitle/icon/require_admin/show_in_sidebar can be updated in a\nmetadata-only call or alongside a full config replacement; with\npython_transform or patch, update metadata in a separate call (combining\nit with patch is rejected). Strategy dashboards (config\n{\"strategy\": {...}}) cannot be converted to custom dashboards here; use\n\"Take Control\" in the Home Assistant UI.\n\nEXAMPLE:\nha_config_set_dashboard(url_path=\"home-dashboard\", title=\"Home Overview\",\n    config={\"views\": [{\"title\": \"Home\", \"type\": \"sections\", \"sections\": [{\"title\": \"Climate\", \"cards\": [{\"type\": \"tile\", \"entity\": \"climate.living_room\"}]}]}]})\n\nThis tool manages storage-mode dashboards only. YAML-mode dashboards (a\n.yaml file registered under ``lovelace: dashboards:`` in\nconfiguration.yaml) and dashboards inlined under ``lovelace:`` are\nedited in their .yaml file; ``ha_config_set_yaml`` can update the\n``lovelace:`` registration but not the dashboard body.",
+    "description": "Create or update a Home Assistant dashboard.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n`dashboard-guide.md` ships under `skill_content` by default. A card's\nfields: ha_config_get_dashboard(card_type=..., describe=True).\n\nMODES (pick one):\n- patch: edit known paths with literal values using JSON Patch\n  add/remove/replace/test and config_hash, e.g.\n  patch=[{\"op\": \"replace\", \"path\": \"/views/0/title\", \"value\": \"Home\"}].\n  move/copy are unsupported. Full guide:\n  https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/dashboard-edits.md\n- python_transform: loops or pattern-based changes across cards and views,\n  e.g. 'config[\"views\"][0][\"cards\"].append({\"type\": \"button\", \"entity\": \"light.bedroom\"})'.\n  After delete/add operations indices shift, so chain multiple ops in ONE\n  expression where possible; a later call needs a fresh config_hash from\n  ha_config_get_dashboard().\n- config: new dashboards only, or a full restructure. Replaces everything.\n  Omit it to create a dashboard without initial config.\n\nUse ha_config_get_dashboard(entity_id=...) to get the path of any card,\nand ha_search / ha_get_overview to find entity IDs — never guess them.\nFor visual re-checks after the write, use ha_get_dashboard_screenshot\n(when available) instead of re-sending config.\n\ntitle/icon/require_admin/show_in_sidebar can be updated in a\nmetadata-only call or alongside a full config replacement; with\npython_transform or patch, update metadata in a separate call (combining\nit with patch is rejected). Strategy dashboards (config\n{\"strategy\": {...}}) cannot be converted to custom dashboards here; use\n\"Take Control\" in the Home Assistant UI.\n\nEXAMPLE:\nha_config_set_dashboard(url_path=\"home-dashboard\", title=\"Home Overview\",\n    config={\"views\": [{\"title\": \"Home\", \"type\": \"sections\", \"sections\": [{\"title\": \"Climate\", \"cards\": [{\"type\": \"tile\", \"entity\": \"climate.living_room\"}]}]}]})\n\nThis tool manages storage-mode dashboards only. YAML-mode dashboards (a\n.yaml file registered under ``lovelace: dashboards:`` in\nconfiguration.yaml) and dashboards inlined under ``lovelace:`` are\nedited in their .yaml file; ``ha_config_set_yaml`` can update the\n``lovelace:`` registration but not the dashboard body.",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -1137,8 +1164,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
     },
     "tags": [
       "Dashboards"
@@ -1174,8 +1203,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Dashboards"
@@ -1213,8 +1244,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": true,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
     },
     "tags": [
       "Developer"
@@ -1224,7 +1257,7 @@
   {
     "name": "ha_dev_manage_settings",
     "title": "Manage Server Settings (dev)",
-    "description": "Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).\n\nDrives everything the web settings UI can change: the Server\nSettings matrix, the Tools tab, the Tool Security Policies editor,\nand the auto-backup config. Use ha_dev_manage_server for\nthe live approval queue and to restart.\n\nWhen NOT to use: for HA entity/automation configuration use the\nha_config_* tools.\n\nCaveats: enable/disable/pin and most server settings take effect\nonly after a restart (ha_dev_manage_server action=\"restart\");\nLLM-API exposure, security gates, and policy edits apply live.\nEnv-pinned settings/tools are read-only until the env var is unset.\nThese actions can flip security-sensitive state — treat with the\nsame care as editing the web UI. The policy-override surfaces\n(set_policy, set_tool with gated=, and set/reset of\nenable_tool_security_policies) additionally require the\n'dev_tools_security_policy_access' setting, which is off by\ndefault; reads are always available. That setting itself is never\nwritable by these tools — change it in the web settings UI or via\nHAMCP_DEV_SECURITY_POLICY_ACCESS.\n\nEXAMPLES:\nha_dev_manage_settings(\"list_tools\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_write_file\", state=\"disabled\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_call_service\", gated=True)\nha_dev_manage_settings(\"get_policy\")\nha_dev_manage_settings(\"set_backup_config\", backup={\"enable_auto_backup\": False})",
+    "description": "Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).\n\nDrives everything the web settings UI can change: the Server\nSettings matrix, the Tools tab, the Tool Security Policies editor,\nand agent-editable backup config. Snapshot Actions and Backup Read\nOnly are human-only controls. Use ha_dev_manage_server for\nthe live approval queue and to restart.\n\nWhen NOT to use: for HA entity/automation configuration use the\nha_config_* tools.\n\nCaveats: enable/disable/pin and most server settings take effect\nonly after a restart (ha_dev_manage_server action=\"restart\");\nLLM-API exposure, security gates, and policy edits apply live.\nEnv-pinned settings/tools are read-only until the env var is unset.\nThese actions can flip security-sensitive state — treat with the\nsame care as editing the web UI. The policy-override surfaces\n(set_policy, set_tool with gated=, and set/reset of\nenable_tool_security_policies) additionally require the\n'dev_tools_security_policy_access' setting, which is off by\ndefault; reads are always available. That setting itself is never\nwritable by these tools — change it in the web settings UI or via\nHAMCP_DEV_SECURITY_POLICY_ACCESS.\n\nEXAMPLES:\nha_dev_manage_settings(\"list_tools\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_write_file\", state=\"disabled\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_call_service\", gated=True)\nha_dev_manage_settings(\"get_policy\")\nha_dev_manage_settings(\"set_backup_config\", backup={\"enable_auto_backup\": False})",
     "inputSchema": {
       "properties": {
         "action": {
@@ -1259,12 +1292,12 @@
         "gated": {
           "type": "bool | None",
           "default": null,
-          "description": "set_tool: require user approval before every call to this tool (adds/removes an unconditional security-policy rule)"
+          "description": "set_tool: toggle the tool's unconditional security-policy rule. In a require-approval list gated=true adds it (every call needs approval); in an allow list that rule approves the tool, so gated=true removes it. Conditional rules are left in place and still apply. gated=true is refused while an allow list's unconditional '*' rule approves every tool"
         },
         "policy": {
           "type": "dict[str, Any] | None",
           "default": null,
-          "description": "set_policy: the full policy object {wait_seconds, approval_ttl_minutes, event_decisions_enabled, rules, version, schema_version}. Replaces the WHOLE document: a field you omit reverts to its default, so send back an edited copy of get_policy rather than a fragment (omitting event_decisions_enabled switches the event-bus approval channel off)"
+          "description": "set_policy: the full policy object {rule_effect, wait_seconds, approval_ttl_minutes, event_decisions_enabled, rules, version, schema_version}. Replaces the WHOLE document: a field you omit reverts to its default, so send back an edited copy of get_policy rather than a fragment (omitting event_decisions_enabled switches the event-bus approval channel off; omitting rule_effect while the stored policy is an allow list is refused)"
         },
         "expected_version": {
           "type": "int | None",
@@ -1282,8 +1315,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Developer"
@@ -1346,9 +1381,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Device Registry",
@@ -1374,9 +1410,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Device Registry"
@@ -1395,17 +1432,17 @@
         },
         "name": {
           "type": "str | None",
-          "description": "New display name for the device (sets name_by_user)",
+          "description": "New display name for the device (sets name_by_user). '' clears name_by_user and reverts to the integration-provided name. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "area_id": {
           "type": "str | None",
-          "description": "Area/room ID to assign the device to. Use empty string '' to unassign.",
+          "description": "Area/room ID to assign the device to. Use empty string '' to unassign. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "disabled_by": {
           "type": "str | None",
-          "description": "Set to 'user' to disable the device, or '' (empty string) to enable it. Omit to leave the disabled state unchanged.",
+          "description": "Set to 'user' to disable the device, or '' (empty string) to enable it. Omit to leave the disabled state unchanged. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "labels": {
@@ -1419,8 +1456,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Device Registry"
@@ -1430,7 +1469,7 @@
   {
     "name": "ha_manage_energy_prefs",
     "title": "Manage Energy Dashboard Preferences",
-    "description": "Manage the Home Assistant Energy Dashboard preferences: grid / solar /\nbattery / gas / water energy sources, device consumption sensors for\nelectricity and water, and cost tariffs.\n\nWHEN TO USE:\n- mode='get' / 'set': inspect or replace the full Energy Dashboard\n  config. Use 'set' for bulk edits or anything touching multiple\n  top-level keys at once.\n- mode='add_device' / 'remove_device': add or remove a single\n  device-consumption entry. The tool performs a fresh read-modify-write\n  internally; the caller does NOT manage config_hash.\n- mode='add_source': append a single entry to ``energy_sources``.\n  Same atomic read-modify-write semantics.\n\nWHEN NOT TO USE:\n- To create the underlying statistics themselves — they must already\n  exist as HA entities before being referenced here; create them via\n  the relevant integration's config flow first.\n\nCAVEATS:\n- ``energy/save_prefs`` has per-key FULL-REPLACE semantics. Passing\n  ``{\"device_consumption\": [<one entry>]}`` deletes every other device\n  the user had configured — silently, with no error. mode='set'\n  requires a fresh ``config_hash`` for optimistic locking; convenience\n  modes hide this entirely.\n- The per-key ``config_hash`` form lets an agent submit only the\n  top-level key it wants to change: ``config`` keys must equal the dict\n  keys (any key outside the canonical set is rejected with\n  ``VALIDATION_FAILED``), and a per-key submission still fully replaces\n  that key's value. A mismatch on any locked key returns\n  ``RESOURCE_LOCKED`` with the offending keys in ``mismatched_keys``.\n- ``dry_run=True`` skips the hash check entirely for both forms.\n- Writes need an administrator token; Home Assistant rejects the save\n  otherwise.\n- After a successful write, the tool calls ``energy/validate`` and\n  returns residual issues (missing stats, unit mismatches) as\n  ``post_save_validation_errors``; the save persists regardless —\n  correct the config and write again if needed.\n- 'add_source' rejects duplicates by ``(type, stat_energy_from)`` for\n  solar/battery/gas/water; grid entries are appended without a duplicate\n  check (multiple grid variants are legitimate), so the caller\n  de-duplicates grid sources.",
+    "description": "Manage the Home Assistant Energy Dashboard preferences: grid / solar /\nbattery / gas / water energy sources, device consumption sensors for\nelectricity and water, and cost tariffs.\n\nWHEN NOT TO USE:\n- To create the underlying statistics themselves — they must already\n  exist as HA entities before being referenced here; create them via\n  the relevant integration's config flow first.\n\nWHEN TO USE:\n- mode='get' / 'set': inspect or replace the full Energy Dashboard\n  config. Use 'set' for bulk edits or anything touching multiple\n  top-level keys at once.\n- mode='add_device' / 'remove_device': add or remove a single\n  device-consumption entry. The tool performs a fresh read-modify-write\n  internally.\n- mode='add_source': append a single entry to ``energy_sources``.\n  Same optimistic read-modify-write semantics.\n\nRELATED TOOLS: Use ha_get_history(source=\"statistics\") with the returned\nstatistic IDs for consumption, totals, and trends. Metadata comes directly\nfrom the running Core, including stored and display units.\n\nCAVEATS:\n- ``energy/save_prefs`` has per-key FULL-REPLACE semantics. Passing\n  ``{\"device_consumption\": [<one entry>]}`` deletes every other device\n  the user had configured — silently, with no error.\n- The per-key ``config_hash`` form lets an agent submit only the\n  top-level key it wants to change: ``config`` keys must equal the dict\n  keys, and a per-key submission still fully replaces\n  that key's value. A mismatch on any locked key returns\n  ``RESOURCE_LOCKED`` with the offending keys in ``mismatched_keys``.\n- ``dry_run=True`` skips the hash check entirely for both forms.\n- Writes need an administrator token; Home Assistant rejects the save\n  otherwise.\n- After a successful write, the tool calls ``energy/validate`` and\n  returns residual issues (missing stats, unit mismatches) as\n  ``post_save_validation_errors``; the save persists regardless —\n  correct the config and write again if needed.\n- 'add_source' rejects duplicates by ``(type, stat_energy_from)`` for\n  solar/battery/gas/water; grid entries are appended without a duplicate\n  check (multiple grid variants are legitimate), so the caller\n  de-duplicates grid sources.\n\nEXAMPLES:\n- ha_manage_energy_prefs(mode=\"get\", include_schema=True)\n- Preview a device: ha_manage_energy_prefs(mode=\"add_device\", stat_consumption=\"sensor.fridge_energy\", dry_run=True)\n- Remove a device: ha_manage_energy_prefs(mode=\"remove_device\", stat_consumption=\"sensor.fridge_energy\")",
     "inputSchema": {
       "properties": {
         "mode": {
@@ -1443,13 +1482,13 @@
           "default": null
         },
         "config_hash": {
-          "type": "str | dict[_PrefsKey, str] | None",
+          "type": "str | dict[str, str] | None",
           "description": "Hash from a previous mode='get' call. REQUIRED for mode='set' unless dry_run=True. Two forms: str (full-blob lock) or dict (per-key lock, taken from the config_hash_per_key field of mode='get'). Pass the dict form as a native object, NOT a JSON-encoded string — a stringified dict is treated as a full-blob token and will report RESOURCE_LOCKED; clients that can only send strings should use the str full-blob form. Ignored by convenience modes.",
           "default": null
         },
         "dry_run": {
           "type": "bool",
-          "description": "If True, no write is performed. For mode='set': runs a local shape check on the proposed config AND calls the server's energy/validate against the CURRENT persisted state. For convenience modes: simulates the mutation against a fresh read and reports what would change without writing — but still raises RESOURCE_ALREADY_EXISTS (duplicate add_device, or duplicate add_source for solar/battery/gas/water), RESOURCE_NOT_FOUND (missing remove_device), or VALIDATION_FAILED (post-mutator shape error) when the proposed mutation is not applicable.",
+          "description": "If True, preview without saving. With the component, validates the complete proposal through Core's registered save schema. Without that capability, explicitly reports proposal validation unavailable. Semantic energy/validate checks persisted state only.",
           "default": false
         },
         "stat_consumption": {
@@ -1474,8 +1513,18 @@
         },
         "source": {
           "type": "dict[str, Any] | None",
-          "description": "Single energy_sources entry for mode='add_source'. Must contain 'type' (one of grid|solar|battery|gas|water) and the type-specific required fields (e.g. solar/battery/gas/water require 'stat_energy_from'). Every source type also accepts an optional 'name' (display label in the energy graphs); battery additionally accepts 'stat_soc' (state-of-charge statistic). Note: HA Core's voluptuous schema for grid sources requires the full field set (cost_adjustment_day, stat_energy_to, stat_cost, entity_energy_price, number_energy_price, entity_energy_price_export, number_energy_price_export, stat_compensation) — the local shape check is narrower, so a minimal {'type': 'grid'} passes locally but surfaces in post_save_validation_errors after writing. Pass the unused fields as None to satisfy the server. Required for mode='add_source'; ignored otherwise.",
+          "description": "Single native energy_sources entry for mode='add_source'. Use mode='get', include_schema=True to inspect the running Core's fields and requirements; dry_run=True validates without saving.",
           "default": null
+        },
+        "include_schema": {
+          "type": "bool",
+          "description": "With mode='get', describe the running Core's save schema. Unavailable without the component.",
+          "default": false
+        },
+        "include_statistics": {
+          "type": "bool",
+          "description": "With mode='get', include native recorder metadata and resolved output units for all configured statistic references. Ignored for other modes.",
+          "default": false
         }
       },
       "required": [
@@ -1483,9 +1532,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": false
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Energy"
@@ -1521,9 +1571,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
       "readOnlyHint": true,
-      "idempotentHint": true
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Entity Registry"
@@ -1549,9 +1600,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Entity Registry"
@@ -1574,9 +1626,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Entity Registry"
@@ -1586,7 +1639,7 @@
   {
     "name": "ha_set_entity",
     "title": "Set Entity",
-    "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, \"Show As\" device class override, per-domain registry options,\nenabled/disabled state, visibility, aliases, labels, voice assistant\nexposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.\n\nSHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload\nneeded.\n\nREGISTRY OPTIONS: multi-domain options are sent as separate registry\nupdates because HA's WS schema requires options_domain + options to be\npaired one domain at a time.\n\nENTITY ID RENAME: Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitations:\n- Entity history is preserved (HA 2022.4+)\n- Entities without unique IDs cannot be renamed\n- Entities disabled by their integration cannot be renamed\n\nDEVICE RENAME:\nnew_device_name can be combined with new_entity_id to rename both in one\ncall. The device is looked up automatically.\n\nUse ha_search() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Set Show As: ha_set_entity(\"binary_sensor.zone_10\", device_class=\"window\")\n- Set sensor precision: ha_set_entity(\"sensor.power\", options={\"sensor\": {\"display_precision\": 2}})\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nENABLED/DISABLED WARNING:\nA disabled entity will NOT appear in state queries, dashboards, or\nautomations until re-enabled AND the integration is reloaded. This is\nNOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. For automations,\nuse ha_config_set_automation(identifier=\"automation.xxx\", enabled=False)\n(or enabled=True to re-enable).\nFor scripts, ha_config_set_script(script_id=\"script.xxx\", run=\"stop\")\nonly stops a currently running execution; it does not disable the script.\nHome Assistant has no script runtime enable/disable service.",
+    "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, \"Show As\" device class override, per-domain registry options,\nenabled/disabled state, visibility, aliases, labels, voice assistant\nexposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, use_device_name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.\n\nSHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload\nneeded.\n\nREGISTRY OPTIONS: multi-domain options are sent as separate registry\nupdates because HA's WS schema requires options_domain + options to be\npaired one domain at a time.\n\nENTITY ID RENAME: Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitations:\n- Entity history is preserved (HA 2022.4+)\n- Entities without unique IDs cannot be renamed\n- Entities disabled by their integration cannot be renamed\n\nDEVICE RENAME:\nnew_device_name can be combined with new_entity_id to rename both in one\ncall. The device is looked up automatically.\n\nUse ha_search() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Set Show As: ha_set_entity(\"binary_sensor.zone_10\", device_class=\"window\")\n- Set sensor precision: ha_set_entity(\"sensor.power\", options={\"sensor\": {\"display_precision\": 2}})\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nENABLED/DISABLED WARNING:\nA disabled entity will NOT appear in state queries, dashboards, or\nautomations until re-enabled AND the integration is reloaded. This is\nNOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. For automations,\nuse ha_config_set_automation(identifier=\"automation.xxx\", enabled=False)\n(or enabled=True to re-enable).\nFor scripts, ha_config_set_script(script_id=\"script.xxx\", run=\"stop\")\nonly stops a currently running execution; it does not disable the script.\nHome Assistant has no script runtime enable/disable service.",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -1595,22 +1648,27 @@
         },
         "area_id": {
           "type": "str | None",
-          "description": "Area/room ID to assign the entity to. Use empty string '' to unassign from current area.",
+          "description": "Area/room ID to assign the entity to. Use empty string '' to unassign from current area. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "name": {
           "type": "str | None",
-          "description": "Display name for the entity. Use empty string '' to remove custom name and revert to default.",
+          "description": "Display name for the entity. Use empty string '' to remove custom name and revert to default. A whitespace-only value acts like '', for clients that cannot send an empty string.",
+          "default": null
+        },
+        "use_device_name": {
+          "type": "bool | None",
+          "description": "HA 2026.10's 'Use device name' switch. True names the entity after its device and follows device renames; False restores the integration's default name. Omit to leave it as is; not combinable with name.",
           "default": null
         },
         "icon": {
           "type": "str | None",
-          "description": "Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon.",
+          "description": "Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "device_class": {
           "type": "str | None",
-          "description": "Override the entity's display device class — what the HA UI's 'Show As' dropdown writes. Use empty string '' to clear the override and fall back to the integration default. Examples: 'window', 'door', 'motion' for binary_sensor; 'temperature', 'humidity' for sensor.",
+          "description": "Override the entity's display device class — what the HA UI's 'Show As' dropdown writes. Use empty string '' to clear the override and fall back to the integration default. Examples: 'window', 'door', 'motion' for binary_sensor; 'temperature', 'humidity' for sensor. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "options": {
@@ -1665,7 +1723,7 @@
         },
         "new_device_name": {
           "type": "str | None",
-          "description": "New display name for the associated device. If provided, both entity and device are updated in one operation.",
+          "description": "New display name for the associated device. If provided, both entity and device are updated in one operation. Empty or whitespace-only never changes the device name: it is reported under warnings when other fields are given and is an error when it is the only update. To clear the device name use ha_set_device(name='').",
           "default": null
         }
       },
@@ -1674,9 +1732,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Entity Registry"
@@ -1704,8 +1763,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Files",
@@ -1734,8 +1795,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Files",
@@ -1773,8 +1836,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Files",
@@ -1813,8 +1878,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Files",
@@ -1848,9 +1915,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Groups"
@@ -1878,9 +1946,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Groups"
@@ -1938,8 +2007,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Groups"
@@ -1999,9 +2070,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": true
     },
     "tags": [
       "HACS"
@@ -2044,8 +2116,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": true,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
     },
     "tags": [
       "HACS"
@@ -2055,7 +2129,7 @@
   {
     "name": "ha_config_list_helpers",
     "title": "List Helpers",
-    "description": "List Home Assistant helpers of a specific type with their configurations.\n\nReturns one page of helpers; `total_count` and `has_more` report the full\nset. Each record carries the complete configuration for its helper:\nid (immutable storage key), entity_id (current — address the helper by\nthis, where available), name (current display name), original_name\n(creation-time name), icon, type-specific settings, and area and label\nassignments.\n\nFor a helper renamed in the UI, id/original_name keep the storage values while\nentity_id/name reflect the current entity registry (entity_id is the identifier\nha_config_set_helper resolves against, so prefer it over id for a renamed helper).\nentity_id/original_name are present only for storage-collection helpers matched in\nthe entity registry — types with no backing entity (e.g. tag), and every record when\nthe registry read degrades, carry only id/name (a warning flags the degraded case).\n\nStorage types list what HA's ``{type}/list`` command returns: the\nstorage-backed helpers (created via UI/API), not the YAML-defined ones.\n``person`` is the exception — HA lists its YAML-configured persons\nalongside the storage ones, so both appear here.\n\nFlow-based types (template / group / utility_meter / derivative / etc.)\nrequire the ha_mcp_tools custom component (>= 1.1.0) and are served only\nthrough it. Requesting a flow type without the component returns a\nCOMPONENT_NOT_INSTALLED error.\n\nWith helper_type=\"all\", each record carries its own ``helper_type``.\nThis mode is component-only (there is no single built-in command that\nlists all types): without the ha_mcp_tools component it returns a\nCOMPONENT_NOT_INSTALLED error rather than a partial or empty list.\n\nEXAMPLES:\n- List all counters: ha_config_list_helpers(\"counter\")\n- List every helper type at once: ha_config_list_helpers(\"all\")\n- Next page: ha_config_list_helpers(\"input_boolean\", offset=100)\n\nFor detailed helper documentation, use ha_get_skill_guide.",
+    "description": "List Home Assistant helpers of a specific type with their configurations.\n\nReturns one page of helpers; `total_count` and `has_more` report the full\nset. Each record carries the complete configuration for its helper:\nid (immutable storage key), entity_id (current — address the helper by\nthis, where available), name (current display name), original_name\n(creation-time name), icon, type-specific settings, and area and label\nassignments.\n\nFor a helper renamed in the UI, id/original_name keep the storage values while\nentity_id/name reflect the current entity registry (entity_id is the identifier\nha_config_set_helper resolves against, so prefer it over id for a renamed helper).\nentity_id/original_name are present only for storage-collection helpers matched in\nthe entity registry — types with no backing entity (e.g. tag), and every record when\nthe registry read degrades, carry only id/name (a warning flags the degraded case).\n\nStorage types list what HA's ``{type}/list`` command returns: the\nstorage-backed helpers (created via UI/API), not the YAML-defined ones.\n``person`` is the exception — HA lists its YAML-configured persons\nalongside the storage ones, so both appear here.\n\nFlow-based types (template / group / utility_meter / derivative / etc.)\nrequire the ha_mcp_tools custom component (>= 1.1.0) and are served only\nthrough it. Requesting a flow type without the component returns a\nCOMPONENT_NOT_INSTALLED error.\n\nWith helper_type=\"all\", each record carries its own ``helper_type``.\nThis mode is component-only (there is no single built-in command that\nlists all types): without the ha_mcp_tools component it returns a\nCOMPONENT_NOT_INSTALLED error rather than a partial or empty list.\n\ndescribe=True returns each field's name, type, required flag, options,\ndefault and (with helper_id) current value, or the menu_options a\nmenu-based helper needs a menu_choice from. Call it before\nha_config_set_helper to learn the config keys for a type.\n\nEXAMPLES:\n- List all counters: ha_config_list_helpers(\"counter\")\n- List every helper type at once: ha_config_list_helpers(\"all\")\n- Next page: ha_config_list_helpers(\"input_boolean\", offset=100)\n- Fields for a template sensor:\n  ha_config_list_helpers(\"template\", describe=True, menu_choice=\"sensor\")\n\nFor detailed helper documentation, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "helper_type": {
@@ -2078,6 +2152,21 @@
             "ge": 0
           },
           "description": "Number of helpers to skip for pagination"
+        },
+        "describe": {
+          "type": "bool",
+          "description": "Instead of listing, return the fields ha_config_set_helper accepts in config for helper_type, as Home Assistant reports them (the form the HA UI shows).",
+          "default": false
+        },
+        "menu_choice": {
+          "type": "str | None",
+          "description": "describe only: sub-type of a menu-based helper (template, group), e.g. 'sensor'.",
+          "default": null
+        },
+        "helper_id": {
+          "type": "str | None",
+          "description": "describe only: an existing helper (config entry id for flow helpers, entity_id or id otherwise); each field then carries its current value.",
+          "default": null
         }
       },
       "required": [
@@ -2085,9 +2174,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Helper Entities"
@@ -2097,7 +2187,7 @@
   {
     "name": "ha_config_set_helper",
     "title": "Create or Update Helper",
-    "description": "Create or update Home Assistant helper entities and config subentries\n(30 types, unified interface).\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n``helper-selection.md`` ships under ``skill_content`` by default.\n\nSIMPLE types (structured params, WebSocket API): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag. Create requires `name`; update requires `helper_id`.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat,\nhistory_stats, mold_indicator. Create requires `name`; for updates pass the\nexisting entry_id as `helper_id` (options flows reject the `name` key).\n`otp` is a helper in the HA UI but not offered here — its flow needs a live\nTOTP code; create it with ha_set_integration(domain=\"otp\").\n\nCONFIG_SUBENTRY type (Config Subentry Flow API): pass `entry_id`,\n`subentry_type` and `config`; pass `subentry_id` to reconfigure an existing\nsubentry, omit it to create one.\n\nBehavior:\n- UPDATE preserves type-specific fields not re-passed (a rename never wipes\n  initial/icon/etc.); flow-helper and config subentry updates behave the same\n  way (see `config`).\n- Omitted `action` falls back to the `helper_id`-presence discriminator\n  (SIMPLE/FLOW) or the `subentry_id`-presence discriminator (config\n  subentries).\n- For flow-based helpers, config keys not declared by any step's data_schema\n  are silently ignored by HA. Validation errors carry the helper's\n  `data_schema` (and `menu_options` for menu-rooted helpers like\n  `template`/`group` when no sub-type is chosen yet), so a follow-up call\n  can self-correct without a separate schema-discovery round-trip.\n- Flows that present more than one menu (e.g. an MQTT device subentry\n  reconfigure looping through its summary menu) take `next_step_id` as a\n  LIST of successive selections, consumed one per menu encounter.\n\nEXAMPLES (menu-based types, where the first-call payload is non-obvious):\n- template sensor: ha_config_set_helper(helper_type=\"template\", name=\"Room Temp\", config={\"next_step_id\": \"sensor\", \"state\": \"{{ states('sensor.x')|float }}\", \"unit_of_measurement\": \"°C\"})\n- group: ha_config_set_helper(helper_type=\"group\", name=\"Kitchen Lights\", config={\"group_type\": \"light\", \"entities\": [\"light.a\", \"light.b\"]})\n- config subentry: ha_config_set_helper(helper_type=\"config_subentry\", entry_id=\"01HXYZ...\", subentry_type=\"conversation\", config={\"name\": \"Local agent\", \"model\": \"gemma3:27b\"})",
+    "description": "Create or update Home Assistant helper entities and config subentries\n(30 types, unified interface).\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n``helper-selection.md`` ships under ``skill_content`` by default.\n\nSIMPLE types (pass `config` dict): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag. Create requires `name`; update requires `helper_id`.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat,\nhistory_stats, mold_indicator. Create requires `name`; for updates pass the\nexisting entry_id as `helper_id` (options flows reject the `name` key).\n`otp` is a helper in the HA UI but not offered here — its flow needs a live\nTOTP code; create it with ha_set_integration(domain=\"otp\").\n\nCONFIG_SUBENTRY type (Config Subentry Flow API): pass `entry_id`,\n`subentry_type` and `config`; pass `subentry_id` to reconfigure an existing\nsubentry, omit it to create one.\n\nBehavior:\n- UPDATE preserves type-specific fields not re-passed (a rename never wipes\n  initial/icon/etc.); flow-helper and config subentry updates behave the same\n  way (see `config`).\n- Omitted `action` falls back to the `helper_id`-presence discriminator\n  (SIMPLE/FLOW) or the `subentry_id`-presence discriminator (config\n  subentries).\n- For flow-based helpers, config keys not declared by any step's data_schema\n  are silently ignored by HA. Validation errors carry the helper's\n  `data_schema` (and `menu_options` for menu-rooted helpers like\n  `template`/`group` when no sub-type is chosen yet), so a follow-up call\n  can self-correct without a separate schema-discovery round-trip.\n- Flows that present more than one menu (e.g. an MQTT device subentry\n  reconfigure looping through its summary menu) take `next_step_id` as a\n  LIST of successive selections, consumed one per menu encounter.\n\nEXAMPLES:\n- input_number: ha_config_set_helper(helper_type=\"input_number\", name=\"Target\", config={\"min\": 0, \"max\": 100, \"step\": 5})\n- template sensor: ha_config_set_helper(helper_type=\"template\", name=\"Room Temp\", config={\"next_step_id\": \"sensor\", \"state\": \"{{ states('sensor.x')|float }}\", \"unit_of_measurement\": \"°C\"})\n- group: ha_config_set_helper(helper_type=\"group\", name=\"Kitchen Lights\", config={\"group_type\": \"light\", \"entities\": [\"light.a\", \"light.b\"]})\n- config subentry: ha_config_set_helper(helper_type=\"config_subentry\", entry_id=\"01HXYZ...\", subentry_type=\"conversation\", config={\"name\": \"Local agent\", \"model\": \"gemma3:27b\"})",
     "inputSchema": {
       "properties": {
         "helper_type": {
@@ -2136,12 +2226,12 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:bell', 'mdi:toggle-switch')",
+          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, set at creation or by ha_set_zone; ha_get_zone shows it), which cannot be removed",
           "default": null
         },
         "area_id": {
           "type": "str | None",
-          "description": "Area/room ID to assign the helper to",
+          "description": "Area ID for the helper; '' or ' ' clears it",
           "default": null
         },
         "labels": {
@@ -2151,147 +2241,124 @@
         },
         "min_value": {
           "type": "float | None",
-          "description": "Minimum value (input_number/counter) or minimum length (input_text). Also accepts shorthand 'min'.",
           "default": null
         },
         "max_value": {
           "type": "float | None",
-          "description": "Maximum value (input_number/counter) or maximum length (input_text). Also accepts shorthand 'max'.",
           "default": null
         },
         "step": {
           "type": "float | None",
-          "description": "Step/increment value for input_number or counter",
           "default": null
         },
         "unit_of_measurement": {
           "type": "str | None",
-          "description": "Unit of measurement for input_number (e.g., '°C', '%', 'W'). Also accepts shorthand 'unit'.",
           "default": null
         },
         "options": {
           "type": "str | list[str] | None",
-          "description": "List of options for input_select (required for input_select)",
           "default": null
         },
         "initial": {
-          "type": "str | int | None",
-          "description": "Initial value for applicable helper types. For input_boolean, input_select, input_number, input_text, and input_datetime: setting `initial` — even to false/0 — disables last-state restore and forces that value on every HA restart; omit unless you want the helper to reset to that value on every restart instead of restoring its last state. For counter, `initial` is just the starting value — restore-on-restart is controlled separately by `restore` (default True).",
+          "type": "str | bool | int | float | None",
           "default": null
         },
         "mode": {
           "type": "str | None",
-          "description": "Display mode: 'box'/'slider' for input_number, 'text'/'password' for input_text",
           "default": null
         },
         "has_date": {
           "type": "bool | None",
-          "description": "Include date component for input_datetime",
           "default": null
         },
         "has_time": {
           "type": "bool | None",
-          "description": "Include time component for input_datetime",
           "default": null
         },
         "restore": {
           "type": "bool | None",
-          "description": "Restore state after restart (counter, timer). Defaults to True for counter, False for timer",
           "default": null
         },
         "duration": {
-          "type": "str | None",
-          "description": "Default duration for timer in format 'HH:MM:SS' or seconds (e.g., '0:05:00' for 5 minutes)",
+          "type": "str | int | float | None",
           "default": null
         },
         "monday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes (e.g. {'from': '07:00', 'to': '22:00', 'data': {'mode': 'comfort'}})",
           "default": null
         },
         "tuesday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Tuesday; same shape as monday.",
           "default": null
         },
         "wednesday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Wednesday; same shape as monday.",
           "default": null
         },
         "thursday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Thursday; same shape as monday.",
           "default": null
         },
         "friday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Friday; same shape as monday.",
           "default": null
         },
         "saturday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Saturday; same shape as monday.",
           "default": null
         },
         "sunday": {
           "type": "list[dict[str, Any]] | None",
-          "description": "Schedule time ranges for Sunday; same shape as monday.",
           "default": null
         },
         "latitude": {
           "type": "float | None",
-          "description": "Latitude for zone (required for zone)",
           "default": null
         },
         "longitude": {
           "type": "float | None",
-          "description": "Longitude for zone (required for zone)",
           "default": null
         },
         "radius": {
           "type": "float | None",
-          "description": "Radius in meters for zone (default: 100)",
           "default": null
         },
         "passive": {
           "type": "bool | None",
-          "description": "Passive zone (won't trigger state changes for person entities)",
           "default": null
         },
         "user_id": {
           "type": "str | None",
-          "description": "User ID to link to person entity",
           "default": null
         },
         "device_trackers": {
           "type": "list[str] | None",
-          "description": "List of device_tracker entity IDs for person",
           "default": null
         },
         "picture": {
           "type": "str | None",
-          "description": "Picture URL for person entity",
           "default": null
         },
         "tag_id": {
           "type": "str | None",
-          "description": "Tag ID. On create, omit to auto-generate a uuid4 hex. On update, the existing tag_id is required (passed via helper_id).",
           "default": null
         },
         "description": {
           "type": "str | None",
-          "description": "Description for tag",
+          "default": null
+        },
+        "pattern": {
+          "type": "str | None",
           "default": null
         },
         "category": {
           "type": "str | None",
-          "description": "Category ID to assign to this helper. Use ha_config_get_category(scope='helpers') to list available categories, or ha_config_set_category() to create one.",
+          "description": "Category ID for this helper (ha_config_get_category(scope='helpers') lists them, ha_config_set_category() creates one); '' or ' ' clears it.",
           "default": null
         },
         "config": {
           "type": "dict[str, Any] | None",
-          "description": "Config dict for flow-based helper types and helper_type='config_subentry'. Ignored for simple helper types. On update it is a patch: a field you omit keeps its current value, and a field set to null is cleared where the schema allows that field to be empty. A field two steps declare gets your one value both times; pass step_values={'<step_id>': {'<field>': <value>}} to give a step its own value, or to leave it out of that step; a LIST of those objects supplies one per encounter when the flow presents a step more than once.",
+          "description": "Type-specific fields. On update it is a patch: a field you omit keeps its current value. SIMPLE types take these keys: input_select: options (list, required), initial. input_number: min, max (required), step, unit_of_measurement, mode ('box'/'slider'), initial. input_text: min, max (length), mode ('text'/'password'), initial, unit_of_measurement, pattern (regex the value must match). input_datetime: has_date, has_time, initial. input_boolean: initial. counter: initial (starting value), minimum, maximum, step, restore (default true). timer: duration ('HH:MM:SS' or seconds), restore (default false). schedule: monday..sunday, each a list of {'from': 'HH:MM', 'to': 'HH:MM'} with optional 'data' dict of extra attributes. zone: latitude, longitude (both required), radius (meters, default 100), passive (won't trigger person state changes). person: user_id, device_trackers (device_tracker entity IDs), picture (URL). tag: tag_id (omit on create to auto-generate), description. On input_* types, `initial` — even false/0 — disables last-state restore and forces that value on every HA restart. ha_config_list_helpers(helper_type, describe=True) lists a type's fields. FLOW types and config_subentry take the flow's fields; a field set to null is cleared where the schema allows that field to be empty. A field two steps declare gets your one value both times; pass step_values={'<step_id>': {'<field>': <value>}} to give a step its own value, or to leave it out of that step; a LIST of those objects supplies one per encounter when the flow presents a step more than once.",
           "default": null
         },
         "wait": {
@@ -2318,8 +2385,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Helper Entities"
@@ -2329,16 +2398,16 @@
   {
     "name": "ha_remove_helpers_integrations",
     "title": "Remove Helper or Integration",
-    "description": "Remove a Home Assistant helper or integration config entry.\n\nUnifies three backend removal mechanisms — simple-helper websocket\ndelete, config-entry delete, and config-subentry delete — behind one\nentry point with four routing paths driven by helper_type.\n\nWHEN NOT TO USE:\n- Removing only an entity (without deleting its underlying helper or\n  config entry) — use `ha_remove_entity` instead.\n- YAML-configured helpers — they have no storage backend. Edit the\n  YAML file and reload the relevant integration.\n\nROUTING:\n- SIMPLE helper_type (input_button, input_boolean, input_select,\n  input_number, input_text, input_datetime, counter, timer, schedule,\n  zone, person, tag) + bare helper_id or entity_id → websocket delete.\n- FLOW helper_type (template, group, utility_meter, derivative, min_max,\n  threshold, integration, statistics, trend, random, filter, tod,\n  generic_thermostat, switch_as_x, generic_hygrostat, history_stats,\n  mold_indicator) + full entity_id → resolve entity_id to\n  config_entry_id via entity_registry, then delete the config entry. All\n  sub-entities (e.g. utility_meter tariffs) are removed together.\n- helper_type=None + entry_id → direct config entry delete (any\n  integration).\n- helper_type=\"config_subentry\" + parent entry_id + subentry_id →\n  delete one config subentry.\n\nA target that is confirmed absent raises a structured error rather than\nreturning silent success: ENTITY_NOT_FOUND for a SIMPLE target missing\nfrom both the state machine and the entity registry, or a FLOW\nentity_id missing from the registry (a bare helper_id on a FLOW target\nalso raises it — FLOW resolution needs a full entity_id);\nRESOURCE_NOT_FOUND for a YAML-configured helper with no config entry, a\nconfig entry the backend reports as 404, or a missing config subentry.\nCalling N times gives the same response. Transient connectivity failures\nraise their own codes (WEBSOCKET_DISCONNECTED, CONNECTION_FAILED) so\nretry logic can branch separately.\n\nEXAMPLES:\n- Remove SIMPLE button: ha_remove_helpers_integrations(target=\"my_button\", helper_type=\"input_button\", confirm=True)\n- Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target=\"sensor.energy_peak\", helper_type=\"utility_meter\", confirm=True)\n- Remove any integration by entry_id: ha_remove_helpers_integrations(target=\"01HXYZ...\", confirm=True)\n- Remove a config subentry: ha_remove_helpers_integrations(target=\"01HXYZ...\", helper_type=\"config_subentry\", subentry_id=\"subentry-123\", confirm=True)\n\nWARNING: Removing a helper or integration that is referenced by\nautomations, scripts, or other integrations may cause those to fail.\nUse ha_search() / ha_get_integration() to verify before removal.\nRecovery requires a usable backup and supported restore path.",
+    "description": "Remove a Home Assistant helper or integration config entry.\n\nUnifies three backend removal mechanisms — simple-helper websocket\ndelete, config-entry delete, and config-subentry delete — behind one\nentry point; helper_type picks the path, or the entity registry does\nwhen an entity_id comes without one.\n\nWHEN NOT TO USE:\n- Removing only an entity (without deleting its underlying helper or\n  config entry) — use `ha_remove_entity` instead.\n- YAML-configured helpers — they have no storage backend. Edit the\n  YAML file and reload the relevant integration.\n\nROUTING:\n- SIMPLE helper_type (input_button, input_boolean, input_select,\n  input_number, input_text, input_datetime, counter, timer, schedule,\n  zone, person, tag) + bare helper_id or entity_id → websocket delete.\n- FLOW helper_type (template, group, utility_meter, derivative, min_max,\n  threshold, integration, statistics, trend, random, filter, tod,\n  generic_thermostat, switch_as_x, generic_hygrostat, history_stats,\n  mold_indicator) + full entity_id → resolve entity_id to\n  config_entry_id via entity_registry, then delete the config entry. All\n  sub-entities (e.g. utility_meter tariffs) are removed together. An\n  entity registered by another integration is refused with\n  VALIDATION_INVALID_PARAMETER and nothing is deleted.\n- helper_type=None + entity_id → the entity's registry entry names its\n  helper, including helpers ha_config_set_helper cannot create (otp,\n  custom-integration helpers); an entity of any other integration is\n  refused with VALIDATION_INVALID_PARAMETER.\n- helper_type=None + entry_id → direct config entry delete (any\n  integration).\n- helper_type=\"config_subentry\" + parent entry_id + subentry_id →\n  delete one config subentry.\n\nA target that cannot be removed raises a structured error rather than\nreturning silent success: ENTITY_NOT_FOUND when the entity_id is absent\nfrom both the state machine and the entity registry (a bare helper_id\non a FLOW target also raises it — FLOW resolution needs a full\nentity_id); RESOURCE_NOT_FOUND when it exists but is not storage- or\nregistry-managed (a YAML-configured helper, or an entity with a state\nbut no registry entry), for a config entry the backend reports as 404,\nor for a missing config subentry.\nCalling N times gives the same response. Transient connectivity failures\nraise their own codes (WEBSOCKET_DISCONNECTED, CONNECTION_FAILED) so\nretry logic can branch separately.\n\nEXAMPLES:\n- Remove SIMPLE button: ha_remove_helpers_integrations(target=\"my_button\", helper_type=\"input_button\", confirm=True)\n- Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target=\"sensor.energy_peak\", helper_type=\"utility_meter\", confirm=True)\n- Remove whatever helper owns an entity: ha_remove_helpers_integrations(target=\"sensor.energy_peak\", confirm=True)\n- Remove any integration by entry_id: ha_remove_helpers_integrations(target=\"01HXYZ...\", confirm=True)\n- Remove a config subentry: ha_remove_helpers_integrations(target=\"01HXYZ...\", helper_type=\"config_subentry\", subentry_id=\"subentry-123\", confirm=True)\n\nWARNING: Removing a helper or integration that is referenced by\nautomations, scripts, or other integrations may cause those to fail.\nUse ha_search() / ha_get_integration() to verify before removal.\nRecovery requires a usable backup and supported restore path.",
     "inputSchema": {
       "properties": {
         "target": {
           "type": "str",
-          "description": "What to remove. One of: (a) bare helper_id for SIMPLE helpers, e.g. 'my_button'; (b) full entity_id, e.g. 'input_button.my_button' or 'sensor.my_meter'; (c) config entry_id for any integration, e.g. value from ha_get_integration(); (d) parent config entry_id for a config subentry."
+          "description": "What to remove. One of: (a) bare helper_id for SIMPLE helpers, e.g. 'my_button'; (b) full entity_id, e.g. 'input_button.my_button' or 'sensor.my_meter'; (c) config entry_id for any integration, with helper_type omitted, e.g. value from ha_get_integration(); (d) parent config entry_id for a config subentry."
         },
         "helper_type": {
           "type": "HelperTypeLiteral | None",
-          "description": "Helper type. Required when target is a helper_id (bare) or entity_id. Set to None when target is a config entry_id to remove any integration. Use 'config_subentry' to remove a config subentry under target.",
+          "description": "Helper type. Required when target is a bare helper_id. Omit when target is a config entry_id to remove any integration. Use 'config_subentry' to remove a config subentry under target.",
           "default": null
         },
         "subentry_id": {
@@ -2353,7 +2422,7 @@
         },
         "wait": {
           "type": "bool",
-          "description": "Wait for entity removal. Default: True. Ignored when helper_type=None or helper_type='config_subentry' (no entity poll, require_restart returned).",
+          "description": "Wait for entity removal. Default: True. Ignored for a direct config entry delete (an entry_id target, or an entity_id whose helper is outside the SIMPLE/FLOW types) or helper_type='config_subentry' (no entity poll, require_restart returned).",
           "default": true
         }
       },
@@ -2362,9 +2431,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Helper Entities",
@@ -2430,9 +2500,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "History & Statistics"
@@ -2442,7 +2513,7 @@
   {
     "name": "ha_get_history",
     "title": "Get Entity History or Statistics",
-    "description": "Get historical data from Home Assistant's recorder.\n\nUse source=\"history\" (default) to troubleshoot why a value changed, check\nevent sequences, or analyze recent patterns. Use source=\"statistics\" for\nlong-term trends beyond the ~10-day recorder retention and period\naverages; entities must have state_class (measurement, total,\ntotal_increasing).\n\nHistory-only params: minimal_response, significant_changes_only.\nStatistics-only params: period, statistic_types.\n\nAll data is fetched from HA before slicing; limit/offset are client-side.\nWith multiple entity_ids, offset must be 0 — use a single entity_id for\noffset > 0. Use has_more and next_offset from the response to paginate.\nAdministrators can optionally enable recorder workload guardrails in\nAdvanced settings. When enabled, oversized entity/time workloads are\nrejected before the recorder query is issued; narrow the time range or\nentity list to stay within the budget. Calendar statistics may first\nread HA's configured timezone so the estimate follows local calendar\nboundaries.\n\nEXAMPLES:\n- ha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\n- Paginate oldest-first: ha_get_history(entity_ids=\"sensor.temperature\", start_time=\"7d\", limit=100, offset=100, order=\"asc\")\n- ha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\", start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])",
+    "description": "Get historical data from Home Assistant's recorder.\n\nWHEN NOT TO USE:\nFor current values, use ha_get_state. To inspect Energy Dashboard\npreferences and configured statistics, use\nha_manage_energy_prefs(mode=\"get\", include_statistics=True).\n\nWHEN TO USE:\nUse source=\"history\" (default) to troubleshoot why a value changed, check\nevent sequences, or analyze recent patterns. Use source=\"statistics\" for\nlong-term trends and period averages.\n\nCAVEATS:\nHistory rows rename Core's compact keys once: s -> state, a -> attributes,\nlu -> last_updated, lc -> last_changed. History event times are ISO strings\nin HA's timezone (UTC if unavailable). When Core omits lc, last_changed\nfalls back to last_updated; this may not be the actual state-change time\nwith significant_changes_only (default) or a window-start snapshot.\nAttributes and unknown fields pass through unchanged.\nStatistics timestamps use Unix milliseconds. Minimal history may omit attributes.\nNo duplicate compact aliases are added. include_schema=True\nretains core_contract even when fields selects other data keys.\n\nOutput units come from\nCore recorder metadata and reflect its display-unit conversion; unresolved\nunits include a reason. statistics_metadata preserves Core's native fields.\n\nAll data is fetched from HA before slicing; limit/offset are client-side.\nWith multiple entity_ids, offset must be 0 — use a single entity_id for\noffset > 0. Use has_more and next_offset from the response to paginate.\nAdministrators can optionally enable recorder workload guardrails in\nAdvanced settings. When enabled, oversized entity/time workloads are\nrejected before the recorder query is issued; narrow the time range or\nentity list to stay within the budget. Calendar statistics may first\nread HA's configured timezone so the estimate follows local calendar\nboundaries.\n\nEXAMPLES:\n- ha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\n- Paginate oldest-first: ha_get_history(entity_ids=\"sensor.temperature\", start_time=\"7d\", limit=100, offset=100, order=\"asc\")\n- ha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\", start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])",
     "inputSchema": {
       "properties": {
         "entity_ids": {
@@ -2498,7 +2569,7 @@
         },
         "statistic_types": {
           "type": "str | list[str] | None",
-          "description": "Statistics types: \"mean\", \"min\", \"max\", \"sum\", \"state\", \"change\". Default: all. Ignored when source=\"history\"",
+          "description": "Native Core statistics types (for example \"sum\", \"change\", \"last_reset\"). Default: Core chooses all. Use include_schema=True to discover the installed contract. Ignored when source=\"history\"",
           "default": null
         },
         "order": {
@@ -2509,7 +2580,17 @@
         "fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Return only the specified top-level response keys to reduce response size. None = full response. History keys: success, source, entities, period, query_params. Statistics keys: success, source, entities, period_type, time_range, statistic_types, query_params, warnings."
+          "description": "Return only the specified keys within data to reduce response size. None = full response. History keys: success, source, entities, period, query_params. Statistics keys: success, source, entities, period_type, time_range, statistic_types, query_params. Warnings and timezone metadata remain outside data and are always retained."
+        },
+        "include_schema": {
+          "type": "bool",
+          "description": "Include the running Core's native request schema when the component supports discovery.",
+          "default": false
+        },
+        "core_options": {
+          "type": "dict[str, Any] | None",
+          "description": "Additional native Core request fields, e.g. {'units': {'energy': 'MWh'}} for statistics. Core validates them. Cannot override fields controlled by the tool's parameters or query limits.",
+          "default": null
         }
       },
       "required": [
@@ -2517,9 +2598,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "History & Statistics"
@@ -2529,7 +2611,7 @@
   {
     "name": "ha_get_logs",
     "title": "Get Logs",
-    "description": "Get Home Assistant logs from various sources.\n\nPrefer source='system' for triage: it returns HA's own deduplicated\nsystem_log entries with counts, first_occurred and full tracebacks, and\nits counts run since each error first occurred. error_log with\nstructured=True counts only what is inside the fetched window (reported\nas window_start/window_end; every install reads a capped window) and\ndrops tracebacks, which structured=False gets back; use it for entries\nbelow system_log's WARNING+ ~50-entry cap, or for the per-component\nrollup. In structured mode limit/order do not apply: issues are ranked\nby count, then severity, then recency, over a fixed deep window.\n\nRaw-text sources (error_log, supervisor, system_service) read a bounded\nwindow per call, so level/search filter and limit slice within that\nwindow only; window_lines reports the size requested. Logbook responses\ncarry has_more plus a pagination_hint; error_log and fault_log carry\nhas_more with a next_offset to pass back while it stays true.",
+    "description": "Get Home Assistant logs from various sources.\n\nPrefer source='system' for triage: it returns HA's own deduplicated\nsystem_log entries with counts, first_occurred and the full exception\ntraceback, and its counts run since each error first occurred. error_log with\nstructured=True counts only what is inside the fetched window (reported\nas window_start/window_end; every install reads a capped window) and\ndrops tracebacks, which structured=False gets back; use it for entries\nbelow system_log's WARNING+ ~50-entry cap, or for the per-component\nrollup. In structured mode limit/order do not apply: issues are ranked\nby count, then severity, then recency, over a fixed deep window.\n\nRaw-text sources (error_log, supervisor, system_service) read a bounded\nwindow per call, so level/search filter and limit slice within that\nwindow only; window_lines reports the size requested. Logbook responses\ncarry has_more plus a pagination_hint; error_log and fault_log carry\nhas_more with a next_offset to pass back while it stays true.",
     "inputSchema": {
       "properties": {
         "source": {
@@ -2580,7 +2662,7 @@
         },
         "compact": {
           "type": "bool",
-          "description": "Logbook only: strip attribute dicts to save context.",
+          "description": "logbook / system only: save context. Logbook strips attribute dicts; system keeps the start and end of each message string within 2000 characters (counted in 'truncated_messages'). search still matches the full message; text inside the cut is not shown. To read one message whole, pass False with a narrow search and limit=1.",
           "default": true
         },
         "level": {
@@ -2609,9 +2691,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "History & Statistics"
@@ -2748,9 +2831,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Integrations"
@@ -2820,9 +2904,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": true
     },
     "tags": [
       "Integrations",
@@ -2898,10 +2983,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true,
       "readOnlyHint": false,
-      "idempotentHint": false
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Integrations"
@@ -2929,9 +3014,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -2952,9 +3038,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -2982,9 +3069,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -3007,9 +3095,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -3047,8 +3136,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -3096,8 +3187,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Labels & Categories"
@@ -3107,7 +3200,7 @@
   {
     "name": "ha_manage_radio",
     "title": "Manage Radios (Z-Wave / Zigbee / Matter / Thread)",
-    "description": "Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.\n\nFor read-only inspection prefer ha_get_device / ha_get_system_health,\nwhich mirror the 'diagnostics' and 'network_status' actions; use this\ntool for writes and the active 'ping' probe (unique to this tool). Write\nactions perform inclusion/commissioning, removal, healing,\nreconfiguration, firmware updates and credential provisioning.\n\nCaveats: long-running actions (inclusion, rebuild routes, firmware) start the\noperation and return immediately with long_running=true; completion\nhappens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-\nPIN pairing) is not scriptable — use SmartStart/QR provisioning here or\nthe HA UI.",
+    "description": "Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.\n\nFor node diagnostics and network summaries prefer ha_get_device /\nha_get_system_health, which mirror 'diagnostics' and 'network_status'.\nThis tool also exposes active 'ping' probes and parameter reads.\nZ-Wave 'get_config_params' lists cached configuration values/metadata;\n'get_config_param' reads one from the cache or explicitly from the device.\nNeither enables or creates entities. Write actions perform\ninclusion/commissioning, removal, healing,\nreconfiguration, firmware updates and credential provisioning.\n\nCaveats: long-running actions (inclusion, rebuild routes, firmware) start the\noperation and return immediately with long_running=true; completion\nhappens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-\nPIN pairing) is not scriptable — use SmartStart/QR provisioning here or\nthe HA UI. HA administrator access is required for parameter reads.",
     "inputSchema": {
       "properties": {
         "radio": {
@@ -3130,7 +3223,7 @@
         },
         "params": {
           "type": "dict[str, Any] | None",
-          "description": "Action-specific parameters (e.g. code, pin, channel, property, value).",
+          "description": "Action-specific parameters (e.g. code, pin, channel, property, value). Z-Wave get_config_param: property (parameter number), endpoint (default 0), property_key (partial-parameter bit mask), refresh (default False; full root parameters only).",
           "default": null
         },
         "confirm": {
@@ -3145,9 +3238,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": false
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Matter",
@@ -3199,9 +3293,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Scenes"
@@ -3229,9 +3324,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Scenes"
@@ -3292,8 +3388,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Scenes"
@@ -3316,9 +3414,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Scripts"
@@ -3346,9 +3445,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Scripts"
@@ -3358,7 +3458,7 @@
   {
     "name": "ha_config_set_script",
     "title": "Create or Update Script",
-    "description": "Create or update a Home Assistant script.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n\nPrefer native actions (`choose` / `if`, `wait_for_trigger`, `repeat`,\n`for:`) over templates in logic positions; templates belong only in\n`data.*`, notification text, `event_data` and `variables`. The\nbest-practice checker reports violations under `best_practice_warnings`.\n`automation-patterns.md` and `template-guidelines.md` ship under\n`skill_content` by default.\n\nScripts use 'sequence', NOT 'trigger' or 'action'; for trigger-based\nexecution use ha_config_set_automation.\n\nMODES (pick one):\n- python_transform: surgical edits to an existing script. Requires\n  config_hash from ha_config_get_script(), e.g.\n  python_transform=\"config['sequence'].append({'delay': {'seconds': 5}})\"\n- config: new scripts or full restructures. Needs 'sequence' (regular) or\n  'use_blueprint' {path, input} (blueprint-based).\n- take_control_of_blueprint: convert a blueprint-backed script into a\n  standalone one. Takes no config of its own.\n- run (alone with script_id): 'start' runs the script (optional\n  variables), 'stop' stops its running executions. Write config changes\n  in a separate call first: Home Assistant signals no completion of the\n  script reload a write triggers.\n\nEXAMPLES:\n- Create: ha_config_set_script(script_id=\"blink_light\", config={\"alias\": \"Light Blink\", \"sequence\": [{\"action\": \"light.turn_on\", \"target\": {\"entity_id\": \"light.living_room\"}}, {\"delay\": {\"seconds\": 2}}, {\"action\": \"light.turn_off\", \"target\": {\"entity_id\": \"light.living_room\"}}]})\n- From a blueprint: ha_config_set_script(script_id=\"notification_script\", config={\"alias\": \"My Notification Script\", \"use_blueprint\": {\"path\": \"notification_script.yaml\", \"input\": {\"message\": \"Hello World\"}}})\n- Take control: ha_config_set_script(script_id=\"notification_script\", take_control_of_blueprint=True)\n\nTAKE CONTROL is one-way: later blueprint edits stop reaching the script;\nto change an input value, update 'use_blueprint.input' instead. It does\nNOT free the blueprint — Home Assistant keeps counting the converted\nscript as a user, so deleting that blueprint stays refused until the\nscript is removed. To preview the rendering without writing anything,\nuse ha_manage_blueprints(action=\"substitute\", domain=\"script\", path=..., input=...).",
+    "description": "Create or update a Home Assistant script.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n\nPrefer native actions (`choose` / `if`, `wait_for_trigger`, `repeat`,\n`for:`) over templates in logic positions; templates belong only in\n`data.*`, notification text, `event_data` and `variables`. The\nbest-practice checker reports violations under `best_practice_warnings`.\n`automation-actions.md`, `triggers-and-conditions.md` and\n`template-guidelines.md` ship under `skill_content` by default.\n\nScripts use 'sequence', NOT 'trigger' or 'action'; for trigger-based\nexecution use ha_config_set_automation.\n\nMODES (pick one):\n- python_transform: surgical edits to an existing script. Requires\n  config_hash from ha_config_get_script(), e.g.\n  python_transform=\"config['sequence'].append({'delay': {'seconds': 5}})\"\n- config: new scripts or full restructures. Needs 'sequence' (regular) or\n  'use_blueprint' {path, input} (blueprint-based).\n- take_control_of_blueprint: convert a blueprint-backed script into a\n  standalone one. Takes no config of its own.\n- run (alone with script_id): 'start' runs the script (optional\n  variables), 'stop' stops its running executions. Write config changes\n  in a separate call first: Home Assistant signals no completion of the\n  script reload a write triggers.\n\nEXAMPLES:\n- Create: ha_config_set_script(script_id=\"blink_light\", config={\"alias\": \"Light Blink\", \"sequence\": [{\"action\": \"light.turn_on\", \"target\": {\"entity_id\": \"light.living_room\"}}, {\"delay\": {\"seconds\": 2}}, {\"action\": \"light.turn_off\", \"target\": {\"entity_id\": \"light.living_room\"}}]})\n- From a blueprint: ha_config_set_script(script_id=\"notification_script\", config={\"alias\": \"My Notification Script\", \"use_blueprint\": {\"path\": \"notification_script.yaml\", \"input\": {\"message\": \"Hello World\"}}})\n- Take control: ha_config_set_script(script_id=\"notification_script\", take_control_of_blueprint=True)\n\nTAKE CONTROL is one-way: later blueprint edits stop reaching the script;\nto change an input value, update 'use_blueprint.input' instead. It does\nNOT free the blueprint — Home Assistant keeps counting the converted\nscript as a user, so deleting that blueprint stays refused until the\nscript is removed. To preview the rendering without writing anything,\nuse ha_manage_blueprints(action=\"substitute\", domain=\"script\", path=..., input=...).",
     "inputSchema": {
       "properties": {
         "script_id": {
@@ -3419,8 +3519,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Scripts"
@@ -3492,9 +3594,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": true,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": true
     },
     "tags": [
       "Search & Discovery"
@@ -3527,9 +3630,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Search & Discovery"
@@ -3630,9 +3734,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Search & Discovery"
@@ -3699,8 +3804,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Service & Device Control"
@@ -3728,9 +3835,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": false
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Service & Device Control"
@@ -3797,8 +3905,9 @@
     },
     "annotations": {
       "readOnlyHint": false,
-      "openWorldHint": false,
-      "destructiveHint": true
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Service & Device Control"
@@ -3822,7 +3931,7 @@
             "allow_inf_nan": false
           },
           "description": "Seconds to wait for a pending operation to finish before returning its status. 0 returns the current status at once.",
-          "default": 10
+          "default": 8
         }
       },
       "required": [
@@ -3830,8 +3939,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Service & Device Control"
@@ -3889,9 +4000,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Service & Device Control"
@@ -3930,6 +4042,8 @@
     },
     "annotations": {
       "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
       "openWorldHint": false
     },
     "tags": [
@@ -3982,9 +4096,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": false
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "System",
@@ -4065,8 +4180,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "System"
@@ -4107,10 +4224,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": false,
-      "readOnlyHint": false
+      "openWorldHint": false
     },
     "tags": [
       "System",
@@ -4121,7 +4238,7 @@
   {
     "name": "ha_manage_security_policy",
     "title": "Manage Security Policy",
-    "description": "Manage the tool security policy that gates high-stakes tool calls behind user approval.\n\nWhen NOT to use: this tool cannot see or decide pending approval\nrequests — listing, approving, and denying them is developer-mode\nonly (ha_dev_manage_server). For ordinary Home Assistant entity,\nautomation, or dashboard work use the ha_config_* tools.\n\nWhen to use: to read the current policy, to add or remove per-tool\napproval rules and their matching conditions, and to change the\napproval wait time or how long an approval is remembered.\n\nCaveats: set replaces the WHOLE document, so send back an edited\ncopy of what get returned, not a fragment. An omitted field is not\nleft alone, it reverts to its default: dropping\nevent_decisions_enabled switches off approving from Home Assistant\nevents, and the response says so in a warning when it does. Writes are\nversion-guarded: a concurrent edit is rejected instead of\nsilently overwritten. Rule edits apply to the running server\nimmediately and can remove approval gates. Whether this tool itself\nis registered is a separate setting that takes effect on restart.\n\nEXAMPLES:\nha_manage_security_policy(\"get\")\nha_manage_security_policy(\"set\", policy={\"wait_seconds\": 60, \"approval_ttl_minutes\": 5, \"event_decisions_enabled\": False, \"rules\": [{\"tool_name\": \"ha_call_service\"}], \"version\": 3})",
+    "description": "Manage the tool security policy that gates high-stakes tool calls behind user approval.\n\nWhen NOT to use: this tool cannot see or decide pending approval\nrequests — listing, approving, and denying them is developer-mode\nonly (ha_dev_manage_server). For ordinary Home Assistant entity,\nautomation, or dashboard work use the ha_config_* tools.\n\nWhen to use: to read the current policy, to add or remove per-tool\napproval rules and their matching conditions, to switch the rule list\nbetween gating and approving the calls it matches, and to change the\napproval wait time or how long an approval is remembered.\n\nCaveats: set replaces the WHOLE document, so send back an edited\ncopy of what get returned, not a fragment. An omitted field is not\nleft alone, it reverts to its default: dropping\nevent_decisions_enabled switches off approving from Home Assistant\nevents, and the response says so in a warning when it does, while\ndropping rule_effect from an allow list is refused. Writes are\nversion-guarded: a concurrent edit is rejected instead of\nsilently overwritten. Rule edits apply to the running server\nimmediately and can remove approval gates. Whether this tool itself\nis registered is a separate setting that takes effect on restart.\n\nEXAMPLES:\nha_manage_security_policy(\"get\")\nha_manage_security_policy(\"set\", policy={\"wait_seconds\": 60, \"approval_ttl_minutes\": 5, \"event_decisions_enabled\": False, \"rules\": [{\"tool_name\": \"ha_call_service\"}], \"version\": 3})",
     "inputSchema": {
       "properties": {
         "action": {
@@ -4131,7 +4248,7 @@
         "policy": {
           "type": "dict[str, Any] | None",
           "default": null,
-          "description": "set: the full policy object {wait_seconds, approval_ttl_minutes, event_decisions_enabled, rules, version}"
+          "description": "set: the full policy object {rule_effect, wait_seconds, approval_ttl_minutes, event_decisions_enabled, rules, version}. rule_effect 'require_approval' (default): a matching rule gates the call; 'allow': a matching rule approves the call and every other call requires approval"
         },
         "expected_version": {
           "type": "int | None",
@@ -4195,10 +4312,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": true,
-      "readOnlyHint": false
+      "openWorldHint": false
     },
     "tags": [
       "System"
@@ -4249,7 +4366,9 @@
       }
     },
     "annotations": {
+      "readOnlyHint": false,
       "destructiveHint": true,
+      "idempotentHint": false,
       "openWorldHint": true
     },
     "tags": [
@@ -4276,8 +4395,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "System"
@@ -4287,7 +4408,7 @@
   {
     "name": "ha_restart",
     "title": "Restart Home Assistant",
-    "description": "Execute a Home Assistant restart.\n\nWARNING: restarts the entire Home Assistant instance; all automations\nare unavailable during the restart, which typically takes 1-5 minutes.\nConfig is validated automatically before the restart proceeds (to\npre-check, call ha_get_system_health(include=\"config_check\")). For\nconfiguration changes, consider ha_reload_core() instead, which reloads\nspecific components without a full restart.\n\nEXAMPLE: ha_restart(confirm=True)",
+    "description": "Execute a Home Assistant restart.\n\nWARNING: restarts the entire Home Assistant instance; all automations\nare unavailable during the restart, which typically takes 1-5 minutes.\nConfig is validated automatically before the restart proceeds (to\npre-check, call ha_get_system_health(include=\"config_check\")). For\nconfiguration changes, consider ha_reload_core() instead, which reloads\nspecific components without a full restart. When this server runs\ninside Home Assistant (embedded), it replies before the restart starts\nand is unreachable until Home Assistant is back.\n\nEXAMPLE: ha_restart(confirm=True)",
     "inputSchema": {
       "properties": {
         "confirm": {
@@ -4298,8 +4419,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "System"
@@ -4325,9 +4448,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Todo Lists"
@@ -4355,9 +4479,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Todo Lists"
@@ -4415,8 +4540,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Todo Lists"
@@ -4466,9 +4593,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Utilities"
@@ -4478,9 +4606,49 @@
   {
     "name": "ha_report_issue",
     "title": "Report Issue or Feedback",
-    "description": "Get diagnostic information and templates for filing issue reports or feedback.\n\nGenerates templates for two report types, and you MUST pick from the\nconversation context:\n- RUNTIME BUG: the user reports an error, failure, or unexpected\n  behavior; a tool returned an error or incorrect result; something in\n  ha-mcp is broken.\n- AGENT BEHAVIOR FEEDBACK: the user says you used the wrong tool,\n  suggests a more efficient workflow, or reports your inefficiency or\n  mistakes.\nIf unclear which, ask: \"Are you reporting a bug in ha-mcp, or providing\nfeedback on how I used the tools?\"\n\nOUTPUT: both templates plus diagnostic data. The full response is LARGE\n(the captured logs appear in the raw log keys AND inside each template)\n— pass fields=... to fetch only the keys you need once you know which\ntemplate applies. Key fields: `runtime_bug_template` /\n`agent_behavior_template`; `recent_logs`, `startup_logs` (captured\nha-mcp tool/server log entries); `addon_logs` (app container\nstdout/stderr, HA app installs only, empty string otherwise);\n`core_error_log` (Home Assistant error log over REST, carries auth /\nintegration errors that don't show in addon_logs); `missing_tool_hint`\n— check this FIRST when the report is about a missing/unavailable tool:\na stale client tool list (not a bug) is the usual cause and refreshing\nthe MCP connection is the fix; `suggested_title`,\n`duplicate_check_urls`, `anonymization_guide`.",
+    "description": "Get diagnostics and a finished GitHub issue for a bug, agent feedback or a feature request.\n\nUse it before filing any GitHub issue about ha-mcp: a bug report\nwithout this report is closed after 24 hours. `report_type` picks\nthe kind of report; if it is unclear which, ask: \"Are you reporting a\nbug in ha-mcp, giving feedback on how I used the tools, or requesting\na feature?\"\n\nPass the report text in the call: the server combines it with the\ndiagnostics it collects into `issue_title`, `issue_body` (the full\nreport with logs) and `issue_url` (a new-issue link with title and\nbody filled in, log sections left out to fit GitHub's URL limit;\nerror messages stay in, with secrets redacted). A call\nwithout text still returns diagnostics, with placeholders in the body.\n\nThe response is LARGE; `fields=` narrows it. Read `instructions`\nbefore showing anything to the user: it covers the missing-tool and\nknown-client pre-checks, the duplicate check, the mandatory\nanonymisation step, and how to file the issue. Check\n`missing_tool_hint` FIRST when the report is about a missing tool: a\nstale client tool list (not a bug) is the usual cause.",
     "inputSchema": {
       "properties": {
+        "report_type": {
+          "type": "Literal['runtime_bug', 'agent_behavior', 'feature_request']",
+          "default": "runtime_bug",
+          "description": "'runtime_bug' when ha-mcp errored or behaved wrongly; 'agent_behavior' when the user says you used the wrong tool or worked inefficiently; 'feature_request' when the user wants ha-mcp to do something it cannot do yet."
+        },
+        "title": {
+          "type": "str | None",
+          "default": null,
+          "description": "One-line summary of what broke or what is requested, for the issue title."
+        },
+        "description": {
+          "type": "str | None",
+          "default": null,
+          "description": "What went wrong in markdown: steps to reproduce, expected and actual behavior. For agent_behavior: what you did and what you should have done. For feature_request: what ha-mcp should do, why the user needs it, and what you tried."
+        },
+        "user_prompt": {
+          "type": "str | None",
+          "default": null,
+          "description": "The user message that led to the problem, verbatim."
+        },
+        "user_comment": {
+          "type": "str | None",
+          "default": null,
+          "description": "The user's own words on what went wrong or what bothered them, verbatim. Ask the user for it; never write it yourself."
+        },
+        "tool_calls": {
+          "type": "str | None",
+          "default": null,
+          "description": "The tool call(s) that produced the problem, verbatim: name, arguments and the (shortened) response."
+        },
+        "ai_model": {
+          "type": "str | None",
+          "default": null,
+          "description": "Your own model identity, as specific as you know it. Do not invent a version."
+        },
+        "client_app": {
+          "type": "str | None",
+          "default": null,
+          "description": "The app and version the user runs you in, as the USER states it (usually on the app's About screen or from its --version command). Never guess it."
+        },
         "tool_call_count": {
           "type": "int",
           "default": 10,
@@ -4493,14 +4661,15 @@
         "fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Return only the specified top-level response keys. None = full response. Typical for a runtime bug: 'runtime_bug_template,suggested_title,runtime_bug_submit_url,duplicate_check_urls,anonymization_guide,missing_tool_hint,known_client_issues_hint,instructions'; for agent feedback swap in agent_behavior_template and agent_behavior_submit_url. The templates already embed the relevant logs, so the raw log keys are only needed for your own analysis. Available keys: diagnostic_info, recent_logs, startup_logs, addon_logs, core_error_log, log_count, startup_log_count, formatted_report, runtime_bug_template, agent_behavior_template, anonymization_guide, suggested_title, runtime_bug_submit_url, agent_behavior_submit_url, duplicate_check_urls, missing_tool_hint, known_client_issues_hint, instructions."
+          "description": "Return only the specified top-level response keys. None = full response. Typical: 'issue_title,issue_body,issue_url,duplicate_check_urls,anonymization_guide,missing_tool_hint,known_client_issues_hint,instructions'. issue_body already embeds the relevant logs, so the raw log keys are only needed for your own analysis. Available keys: diagnostic_info, recent_logs, startup_logs, addon_logs, core_error_log, log_count, startup_log_count, formatted_report, issue_title, issue_body, issue_url, anonymization_guide, duplicate_check_urls, missing_tool_hint, known_client_issues_hint, instructions."
         }
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Utilities"
@@ -4521,9 +4690,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
       "idempotentHint": true,
-      "readOnlyHint": true
+      "openWorldHint": false
     },
     "tags": [
       "Zones"
@@ -4546,9 +4716,10 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "readOnlyHint": false,
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": true,
+      "openWorldHint": false
     },
     "tags": [
       "Zones"
@@ -4599,8 +4770,10 @@
       }
     },
     "annotations": {
-      "openWorldHint": false,
-      "destructiveHint": true
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
     },
     "tags": [
       "Zones"

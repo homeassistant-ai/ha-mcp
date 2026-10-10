@@ -272,7 +272,7 @@ class TestCalendarEventLifecycle:
                     # Don't fail the test - some calendars are read-only
                     pytest.skip(f"Calendar event creation not available: {error_msg}")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Event creation test encountered error: {e}")
             pytest.skip(f"Calendar event creation not available: {e}")
 
@@ -367,7 +367,7 @@ class TestCalendarEventLifecycle:
                         "ha_config_remove_calendar_event",
                         {"entity_id": calendar_entity, "uid": event_uid},
                     )
-                except Exception as cleanup_error:
+                except Exception as cleanup_error:  # noqa: BLE001
                     logger.warning(
                         f"Cleanup of all-day test event {event_uid} on "
                         f"{calendar_entity}: {cleanup_error}"
@@ -532,7 +532,7 @@ class TestCalendarEventLifecycle:
                         ),
                         None,
                     )
-                except Exception as scan_error:
+                except Exception as scan_error:  # noqa: BLE001
                     logger.warning(
                         f"Could not scan for leaked recurring event "
                         f"'{summary}' on {calendar_entity}: {scan_error}"
@@ -543,7 +543,7 @@ class TestCalendarEventLifecycle:
                         "ha_config_remove_calendar_event",
                         {"entity_id": calendar_entity, "uid": series_uid},
                     )
-                except Exception as cleanup_error:
+                except Exception as cleanup_error:  # noqa: BLE001
                     logger.warning(
                         f"Cleanup of recurring test event {series_uid} on "
                         f"{calendar_entity}: {cleanup_error}"
@@ -650,7 +650,7 @@ class TestCalendarEventLifecycle:
                         "ha_config_remove_calendar_event",
                         {"entity_id": calendar_entity, "uid": leaked_uid},
                     )
-            except Exception as leak_cleanup_error:
+            except Exception as leak_cleanup_error:  # noqa: BLE001
                 logger.warning(
                     f"Could not clean up potentially-leaked event "
                     f"'{summary}' on {calendar_entity}: {leak_cleanup_error}"
@@ -669,7 +669,7 @@ class TestCalendarEventLifecycle:
                     "ha_config_remove_calendar_event",
                     {"entity_id": calendar_entity, "uid": event_uid},
                 )
-            except Exception as cleanup_error:
+            except Exception as cleanup_error:  # noqa: BLE001
                 logger.warning(
                     f"Cleanup of test event {event_uid} on {calendar_entity}: "
                     f"{cleanup_error}"
@@ -1013,7 +1013,7 @@ class TestCalendarEventLifecycle:
                         "ha_config_remove_calendar_event",
                         {"entity_id": calendar_entity, "uid": series_uid},
                     )
-                except Exception as cleanup_error:
+                except Exception as cleanup_error:  # noqa: BLE001
                     logger.warning(
                         f"Cleanup of series {series_uid} on {calendar_entity}: "
                         f"{cleanup_error}"

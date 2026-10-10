@@ -213,10 +213,10 @@ jobs:
             --output /tmp/haos-beta-test-image.qcow2
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.15"
+          version: "0.12.20"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -238,7 +238,7 @@ jobs:
         #
         # -n2 --dist loadscope: pytest-xdist parallelizes across 2 workers,
         # each booting its own QEMU (per-worker port offset + qcow2 overlay
-        # — see _haos_worker_setup in tests/src/e2e/conftest.py). Same
+        # — see _haos_worker_setup in tests/src/e2e/_conftest_haos.py). Same
         # rationale as the external HAOS workflow (#1350).
         # Two phases (live-found isolation flaw): addon_disruptive tests
         # self-restart the dev app, killing any OTHER worker's in-flight
@@ -267,7 +267,7 @@ jobs:
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
           HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
-          # Feeds conftest's HACS token injection (qcow2 pre-boot edit)
+          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit)
           # so HACS repo adds don't hit the unauthenticated shared-IP
           # GitHub rate limit — the recurring HACS-install flake.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -341,7 +341,7 @@ jobs:
             cat "$outdir/config.yaml" || true
           done
           ls -laR /tmp/haos-inaddon-beta-diagnostics/ || true
-          # The HACS token injection (conftest pre-boot edit) puts GITHUB_TOKEN
+          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.
@@ -455,10 +455,10 @@ jobs:
             --output /tmp/haos-beta-test-image.qcow2
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.15"
+          version: "0.12.20"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -498,7 +498,7 @@ jobs:
           HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
-          # Feeds conftest's HACS token injection (qcow2 pre-boot edit) so HACS
+          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit) so HACS
           # repo adds don't hit the unauthenticated shared-IP GitHub rate limit —
           # the recurring HACS-install flake.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -555,7 +555,7 @@ jobs:
             cat "$outdir/config-dir-listing.txt" || true
           done
           ls -laR /tmp/haos-embedded-beta-diagnostics/ || true
-          # The HACS token injection (conftest pre-boot edit) puts GITHUB_TOKEN
+          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.

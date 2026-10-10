@@ -24,8 +24,8 @@ DOMAIN = "ha_mcp_tools"
 # together so a manifest bump that forgets this constant (or vice-versa) fails
 # in CI. The
 # capability negotiation — not this version — gates each WS command (see
-# ``websocket_api.CAPABILITIES``).
-COMPONENT_VERSION = "2.2.1"
+# ``websocket_api.constants.CAPABILITIES``).
+COMPONENT_VERSION = "2.2.2"
 
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the
@@ -351,9 +351,9 @@ PYPI_JSON_URL = "https://pypi.org/pypi/{dist}/json"
 # server update until HACS delivers the component (issues #1783/#1785).
 # Tag-timing caveat: stable ``vX.Y.Z`` tags exist before the PyPI publish
 # (semantic-release pushes the tag first), but a dev ``vX.Y.Z.devN`` tag is
-# only created when its draft GitHub release is published — AFTER the binary
-# builds, minutes after PyPI already has the version. During that dev window
-# this URL 404s and the gate deliberately fails open (the registry's
+# created by publish-dev.yml's pre-release job, which runs in parallel with
+# the PyPI publish, so it can briefly trail PyPI. During that dev window this
+# URL 404s and the gate deliberately fails open (the registry's
 # skip-on-failure is the backstop on that channel).
 COMPONENT_MANIFEST_AT_TAG_URL = (
     "https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/"
@@ -598,3 +598,8 @@ ISSUE_LEGACY_HACS_SOURCE = "legacy_hacs_source"
 # nor unbind an HTTP view without a full Home Assistant restart, so both
 # transitions need one; see oauth_legacy.bind_legacy_views.
 ISSUE_LEGACY_OAUTH_RESTART = "legacy_oauth_restart"
+
+# How long the in-process server's listener keeps an idle keep-alive connection
+# (uvicorn's default). The webhook relay drops its pooled connections sooner, or
+# a request sent as the listener closes one fails with a reset (mcp_webhook).
+SERVER_KEEPALIVE_SECONDS = 5

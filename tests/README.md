@@ -64,6 +64,7 @@ tests/
 │   ├── workflows/              # Complex scenarios
 │   └── error_handling/         # Error scenarios
 ├── initial_test_state/         # Clean HA config baseline
+├── test-env/                   # Dev-only package for the hamcp-test-env command
 └── test_env_manager.py         # Interactive test runner
 ```
 
@@ -74,6 +75,10 @@ Pytest configuration lives in the repository root `pyproject.toml` so every invo
 - **Basic**: Connection, tool listing, entity search
 - **Workflows**: Automation, device control, scripts, scenes
 - **Error Handling**: Invalid inputs, network failures
+
+## ✍️ Writing Tests
+
+Before writing or changing a test, read the [test design rules](AGENTS.md#test-design-rules).
 
 ## 🐛 Debugging
 

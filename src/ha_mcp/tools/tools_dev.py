@@ -32,23 +32,21 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..policy.editing import PolicyCaller
 from ..renamed_tools import current_tool_name
+from .coercion import JSON_STRING_COERCION
 from .component_api import (
     component_supports,
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
 )
-from .config_entry_flow_form import (
-    _MISSING_DEFAULT,
-    _step_owned_submission_value,
-)
+from .config_entry_flow_form import _MISSING_DEFAULT, _step_owned_submission_value
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import JSON_STRING_COERCION
+from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -325,7 +323,7 @@ async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | Non
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_SERVER_ENTRY, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError / plain establish Exception → legacy probe
         # (which rides the send_websocket_message bridge).
         logger.warning(
@@ -488,7 +486,7 @@ async def abort_options_flow_quietly(client: Any, flow: dict[str, Any]) -> None:
         return
     try:
         await client.abort_options_flow(flow_id)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug("Options-flow abort failed: %s", exc)
 
 
@@ -632,7 +630,7 @@ class DevTools:
                 row["min"], row["max"] = bounds
                 sentinel = _ADVANCED_SETTINGS_SENTINELS.get(fname)
                 if sentinel is not None:
-                    row["min"] = sentinel
+                    row["off_value"] = sentinel
             choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
             if choices is not None:
                 row["choices"] = list(choices)
@@ -816,11 +814,12 @@ class DevTools:
     @tool(
         name="ha_dev_manage_settings",
         tags={"Developer"},
-        annotations={
-            "openWorldHint": False,
-            "title": "Manage Server Settings (dev)",
-            "destructiveHint": True,
-        },
+        annotations=write_hints(
+            "Manage Server Settings (dev)",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_dev_manage_settings(
@@ -880,8 +879,12 @@ class DevTools:
             Field(
                 default=None,
                 description=(
-                    "set_tool: require user approval before every call to this "
-                    "tool (adds/removes an unconditional security-policy rule)"
+                    "set_tool: toggle the tool's unconditional security-policy "
+                    "rule. In a require-approval list gated=true adds it (every "
+                    "call needs approval); in an allow list that rule approves "
+                    "the tool, so gated=true removes it. Conditional rules are "
+                    "left in place and still apply. gated=true is refused while "
+                    "an allow list's unconditional '*' rule approves every tool"
                 ),
             ),
         ] = None,
@@ -892,13 +895,14 @@ class DevTools:
                 default=None,
                 description=(
                     "set_policy: the full policy object "
-                    "{wait_seconds, approval_ttl_minutes, "
+                    "{rule_effect, wait_seconds, approval_ttl_minutes, "
                     "event_decisions_enabled, rules, version, "
                     "schema_version}. Replaces the WHOLE document: a field "
                     "you omit reverts to its default, so send back an "
                     "edited copy of get_policy rather than a fragment "
                     "(omitting event_decisions_enabled switches the "
-                    "event-bus approval channel off)"
+                    "event-bus approval channel off; omitting rule_effect "
+                    "while the stored policy is an allow list is refused)"
                 ),
             ),
         ] = None,
@@ -929,7 +933,8 @@ class DevTools:
 
         Drives everything the web settings UI can change: the Server
         Settings matrix, the Tools tab, the Tool Security Policies editor,
-        and the auto-backup config. Use ha_dev_manage_server for
+        and agent-editable backup config. Snapshot Actions and Backup Read
+        Only are human-only controls. Use ha_dev_manage_server for
         the live approval queue and to restart.
 
         When NOT to use: for HA entity/automation configuration use the
@@ -971,7 +976,7 @@ class DevTools:
             return await self._apply_set_backup_config(backup)
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"action": action, "setting": setting, "tool": tool},
@@ -1012,7 +1017,8 @@ class DevTools:
                     f"'setting' is required for action={action!r}",
                 )
             )
-        # set/reset only; 'list' returned above, and reads are never gated.
+        # set/reset only; 'list' returned above, and reads never need
+        # security-policy access.
         _guard_security_policy_setting(setting)
 
         from ..config import (
@@ -1090,27 +1096,21 @@ class DevTools:
         return load_tool_metadata_cache()
 
     @staticmethod
-    def _gated_tool_names() -> set[str] | None:
-        """Tool names carrying the bare unconditional gate (the Tools-tab toggle).
+    def _load_policy_or_none() -> Any | None:
+        """The stored policy, or ``None`` when ``tool_policy.json`` is unreadable.
 
-        The Tools-tab per-tool gate toggle manages only the bare rule (no
-        predicates); conditional rules are authored in the Policies tab. Keying
-        this on the bare rule keeps the reported toggle state consistent with
-        what set_tool(gated=...) writes.
-
-        Returns ``None`` when ``tool_policy.json`` is unreadable — the caller
-        must surface that (a silent ``set()`` would render every tool
-        ``gated=False``, indistinguishable from a clean no-gates policy, while
-        the sibling actions raise CONFIG_INVALID for the same file).
+        ``None`` must be surfaced by the caller: a silent empty policy would
+        render every tool ``gated=False``, indistinguishable from a clean
+        no-gates policy, while the sibling actions raise CONFIG_INVALID for the
+        same file.
         """
         from ..policy.persistence import load_policy
         from ..utils.data_paths import get_data_dir
 
         try:
-            policy = load_policy(get_data_dir())
+            return load_policy(get_data_dir())
         except ValueError:
             return None
-        return {rule.tool_name for rule in policy.rules if not rule.when}
 
     async def _list_tool_states(self) -> dict[str, Any]:
         """List every tool with its state / LLM-API / gate + lock flags.
@@ -1134,13 +1134,15 @@ class DevTools:
             states.setdefault(name, "pinned")
         env_pinned = env_pinned_tools()
         overrides = load_llm_api_overrides()
-        gated = self._gated_tool_names()
+        from ..policy.model import Policy, bare_rule_gates
+
+        policy = self._load_policy_or_none()
         warnings: list[str] = []
-        if gated is None:
+        if policy is None:
             # Degrade rather than fail the whole listing: states/exposure stay
             # useful for troubleshooting, but the gate column must not read as
             # a clean no-gates policy.
-            gated = set()
+            policy = Policy()
             warnings.append(
                 "tool_policy.json is invalid; 'gated' is reported as false "
                 "for every tool. Call get_policy for the parse error."
@@ -1171,7 +1173,7 @@ class DevTools:
                     ],
                     overrides,
                 ),
-                "gated": t["name"] in gated,
+                "gated": bare_rule_gates(policy, t["name"]),
                 "env_pinned": t["name"] in env_pinned,
                 "mandatory": t["name"] in mandatory,
                 "bps_locked": t["name"] in bps_locked,
@@ -1228,9 +1230,10 @@ class DevTools:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "tool='*' is a policy wildcard, not a specific tool; it "
-                    "would gate every tool. Use set_policy to author a wildcard "
-                    "rule deliberately.",
+                    "tool='*' is a policy wildcard, not a specific tool; its "
+                    "rule would gate (or, in an allow list, approve) every "
+                    "tool. Use set_policy to author a wildcard rule "
+                    "deliberately.",
                 )
             )
         if not any(v is not None for v in (state, llm_api, gated)):
@@ -1305,6 +1308,7 @@ class DevTools:
         gate_changed); raises ToolError on the first invalid field.
         """
         from ..config import get_global_settings
+        from ..policy.model import bare_rule_gates
         from ..policy.persistence import load_policy
         from ..settings_ui._persistence import env_pinned_tools
         from ..utils.data_paths import get_data_dir
@@ -1335,6 +1339,21 @@ class DevTools:
                     )
                 )
             new_policy, changed = self._apply_gate_to_policy(policy, tool, gate_val)
+            if bare_rule_gates(new_policy, tool) != gate_val:
+                # Only an allow list's bare `*` rule, which approves every
+                # tool, leaves the toggle without effect.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "An unconditional '*' rule in this allow list approves "
+                        f"every tool, so {tool} cannot be gated.",
+                        suggestions=[
+                            "Remove the '*' rule with no conditions first "
+                            "(set_policy, or the Tool Security Policies tab), "
+                            "then retry.",
+                        ],
+                    )
+                )
             plan["gate_val"] = gate_val
             plan["new_policy"] = new_policy
             plan["gate_changed"] = changed
@@ -1400,7 +1419,7 @@ class DevTools:
             return self._commit_gate(plan, data)
         except ToolError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             suffix = (
                 " The state/LLM-API change WAS already saved — re-run set_tool "
                 "with only gated= to finish the gate."
@@ -1419,10 +1438,11 @@ class DevTools:
     def _commit_gate(self, plan: dict[str, Any], data: dict[str, Any]) -> list[str]:
         """Persist the gate portion of a set_tool plan; returns any warnings."""
         from ..config import get_global_settings
+        from ..policy.model import bare_rule_gates
         from ..policy.persistence import load_policy, save_policy
         from ..utils.data_paths import get_data_dir
 
-        data["gated"] = bool(plan["gate_val"])
+        data["gated"] = bare_rule_gates(plan["new_policy"], data["tool"])
         data["policy_rules_changed"] = plan["gate_changed"]
         if plan["gate_changed"]:
             data_dir = get_data_dir()
@@ -1527,16 +1547,19 @@ class DevTools:
         """Return (policy, changed) after adding/removing the bare gate rule.
 
         Pure (no I/O): manages only the bare unconditional rule (when == [])
-        for ``tool``; predicate-bearing rules are preserved.
+        for ``tool``; predicate-bearing rules are preserved. Under an allow
+        list the bare rule approves the tool, so gating removes it.
         """
         from ..policy.model import Rule
 
+        want_bare = gated != (policy.rule_effect == "allow")
         has_bare = any(r.tool_name == tool and not r.when for r in policy.rules)
-        if gated and not has_bare:
+        if want_bare and not has_bare:
             # Insert before the first wildcard rule (mirrors the web UI's
-            # wildcardInsertIndex): find_matching_rule() is first-match, so a
-            # gate appended after a `*` rule would never supply this tool's
-            # remember_minutes / matched_rule.
+            # wildcardInsertIndex): in a require-approval list
+            # find_matching_rule() is first-match, so a gate appended after a
+            # `*` rule would never supply this tool's remember_minutes /
+            # matched_rule. An allow list does not depend on the order.
             rules = list(policy.rules)
             insert_at = next(
                 (i for i, r in enumerate(rules) if r.tool_name == "*"), len(rules)
@@ -1544,7 +1567,7 @@ class DevTools:
             rules.insert(insert_at, Rule(tool_name=tool))
             updated = policy.model_copy(update={"rules": rules})
             return updated, True
-        if not gated and has_bare:
+        if not want_bare and has_bare:
             updated = policy.model_copy(
                 update={
                     "rules": [r for r in policy.rules if r.tool_name != tool or r.when]
@@ -1585,67 +1608,23 @@ class DevTools:
 
     async def _get_backup_config(self) -> dict[str, Any]:
         """Return the auto-backup config fields (shared with the web handler)."""
-        from ..settings_ui._handlers_backups import backup_config_fields
+        from .dev_backup import dev_backup_config_fields
 
         return {
             "success": True,
             "data": {
                 "is_addon": is_running_in_addon(),
-                "fields": backup_config_fields(),
+                "fields": dev_backup_config_fields(),
             },
         }
 
     async def _apply_set_backup_config(
         self, backup: dict[str, Any] | None
     ) -> dict[str, Any]:
-        """Apply auto-backup config changes (same routing as the web UI)."""
-        from ..settings_ui._handlers_backups import (
-            _validate_backup_payload,
-            apply_backup_config,
-        )
+        """Apply backup configuration while preserving human-only controls."""
+        from .dev_backup import apply_dev_backup_config
 
-        if not isinstance(backup, dict):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "'backup' (an object of {field: value}) is required for "
-                    "action='set_backup_config'",
-                    suggestions=[
-                        "Call ha_dev_manage_settings('get_backup_config') for "
-                        "field names"
-                    ],
-                )
-            )
-        clean, err = _validate_backup_payload(backup)
-        if err is not None:
-            raise_tool_error(
-                create_error_response(ErrorCode.VALIDATION_INVALID_PARAMETER, err)
-            )
-        response = await apply_backup_config(self._server, clean)
-        # JSONResponse.body is typed bytes | memoryview; bytes() normalizes both
-        # (no-op for bytes) so json.loads accepts it.
-        body = json.loads(bytes(response.body))
-        if response.status_code >= 400:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    self._backup_error_message(body),
-                    context={"status": response.status_code, "response": body},
-                )
-            )
-        return {"success": True, "data": body}
-
-    @staticmethod
-    def _backup_error_message(body: Any) -> str:
-        """Pull a human message out of a backup-config error response body."""
-        err = body.get("error") if isinstance(body, dict) else None
-        if isinstance(err, dict):
-            return str(
-                err.get("message") or err.get("code") or "backup config update failed"
-            )
-        if isinstance(err, str):
-            return err
-        return "backup config update failed"
+        return await apply_dev_backup_config(self._server, backup)
 
     async def _apply_setting_reset(
         self, setting: str, env_name: str, origin: str
@@ -1800,11 +1779,12 @@ class DevTools:
     @tool(
         name="ha_dev_manage_server",
         tags={"Developer"},
-        annotations={
-            "openWorldHint": True,
-            "title": "Manage MCP Server (dev)",
-            "destructiveHint": True,
-        },
+        annotations=write_hints(
+            "Manage MCP Server (dev)",
+            destructive=True,
+            idempotent=False,
+            open_world=True,
+        ),
     )
     @log_tool_usage
     async def ha_dev_manage_server(
@@ -1908,7 +1888,7 @@ class DevTools:
             return await self._decide_approval(token, approve=action == "approve")
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"action": action, "channel": channel, "pip_spec": pip_spec},
@@ -1937,7 +1917,7 @@ class DevTools:
         try:
             ha_config = await self._client.get_config()
             data["ha_version"] = ha_config.get("version")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             warnings.append(f"Could not read HA version: {exc}")
         try:
             found = await find_server_config_entry(self._client)
@@ -1962,7 +1942,7 @@ class DevTools:
                         )
                     ),
                 }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Best-effort probe: a failure here (including the ToolError the
             # entry discovery raises on a config_entries/get failure) must
             # degrade the info report to a warning, mirroring the HA-version
@@ -2160,7 +2140,7 @@ class DevTools:
                 token=self._client.token,
                 verify_ssl=getattr(self._client, "verify_ssl", None),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "%s establishment failed; falling back to legacy: %r",
                 WS_SERVER_ENTRY_UPDATE,
@@ -2190,7 +2170,7 @@ class DevTools:
                     exc,
                 )
             return None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # HomeAssistantConnectionError (pooled-WS drop) or a plain post-send
             # transport failure. The write is idempotent, so a legacy re-apply is
             # safe (see docstring) — fall back rather than report a phantom error.

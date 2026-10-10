@@ -89,7 +89,7 @@ def read_only_remedy_hint() -> str:
     if get_global_settings().read_only_mode:
         return (
             "To allow changes, the user must turn off Read Only Mode in the "
-            "ha-mcp settings UI (Tools tab) or the add-on configuration."
+            "ha-mcp settings UI (Tools tab) or the app (add-on) configuration."
         )
     return "This connection is read-only. If changes are needed, ask the user."
 
@@ -135,7 +135,7 @@ def _addon_write(args: dict[str, Any]) -> str | None:
         return f"action={action!r}"
     for param in _ADDON_CONFIG_WRITE_PARAMS:
         if args.get(param) is not None:
-            return f"add-on configuration change ({param}=...)"
+            return f"app (add-on) configuration change ({param}=...)"
     if args.get("array_patch") is not None:
         return "array_patch modification"
     if args.get("websocket"):
@@ -229,7 +229,8 @@ def _radio_write(args: dict[str, Any]) -> str | None:
     action = args.get("action")
     # Reads (allowed): per-node diagnostics, the integration/network summary,
     # the active reachability probe, a single Zigbee cluster-attribute read, and
-    # the Thread dataset listing. Everything else is a write — commission/add,
+    # the Thread dataset listing, and Z-Wave configuration-parameter reads
+    # (cache or explicit device request). Everything else is a write — commission/add,
     # remove, reinterview, firmware, fabric/credential/channel/network changes,
     # plus the two actions that LOOK read-ish but are not: zigbee network_backup
     # (creates a backup artifact + key material, like ha_manage_backup's blocked
@@ -241,6 +242,8 @@ def _radio_write(args: dict[str, Any]) -> str | None:
         "ping",
         "cluster_read",
         "list_datasets",
+        "get_config_params",
+        "get_config_param",
     ):
         return None
     return f"action={action!r}"
@@ -251,7 +254,8 @@ def _radio_write(args: dict[str, Any]) -> str | None:
 # APIs; energy prefs and assist pipelines are reachable only through
 # these tools; edit-backup listing exists nowhere else; the saved-tools
 # cache is only listable here; ha_manage_radio's 'ping' probe, 'cluster_read'
-# and 'list_datasets' have no pure-read duplicate elsewhere, while its
+# 'list_datasets', 'get_config_params' and 'get_config_param' have no pure-read
+# duplicate elsewhere, while its
 # 'diagnostics'/'network_status' reads mirror ha_get_device /
 # ha_get_system_health but stay reachable here mid-management;
 # ha_manage_security_policy's policy read is duplicated only by the
@@ -300,7 +304,8 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
         "node diagnostics ('diagnostics'), the integration/network summary "
         "('network_status'), the active reachability probe ('ping'), a Zigbee "
         "cluster-attribute read ('cluster_read'), and the Thread dataset "
-        "listing ('list_datasets')",
+        "listing ('list_datasets'), and Z-Wave parameter reads "
+        "('get_config_params' / 'get_config_param', including explicit refresh)",
     ),
     # Update listing/details exist only here — ha_get_updates was merged
     # into this tool (issue #1726), so hiding it would remove the read
@@ -343,6 +348,17 @@ def read_only_visible(tool: Tool) -> bool:
 def _raise_read_only_error(
     name: str, *, blocked_operation: str | None = None, allowed: str | None = None
 ) -> NoReturn:
+    raise_tool_error(
+        read_only_error_response(
+            name, blocked_operation=blocked_operation, allowed=allowed
+        )
+    )
+
+
+def read_only_error_response(
+    name: str, *, blocked_operation: str | None = None, allowed: str | None = None
+) -> dict[str, Any]:
+    """The structured ``READ_ONLY_MODE`` error for a blocked call to *name*."""
     context: dict[str, Any] = {"tool_name": name, "read_only_mode": True}
     if blocked_operation is not None:
         context["blocked_operation"] = blocked_operation
@@ -359,17 +375,15 @@ def _raise_read_only_error(
             f"'{name}' is a write-capable tool, so the call was blocked — "
             f"no changes were made."
         )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.READ_ONLY_MODE,
-            message,
-            suggestions=[
-                "Continue with read-only tools — searching, getting, and "
-                + "listing data all remain available.",
-                read_only_remedy_hint(),
-            ],
-            context=context,
-        )
+    return create_error_response(
+        ErrorCode.READ_ONLY_MODE,
+        message,
+        suggestions=[
+            "Continue with read-only tools — searching, getting, and "
+            + "listing data all remain available.",
+            read_only_remedy_hint(),
+        ],
+        context=context,
     )
 
 

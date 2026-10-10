@@ -82,7 +82,7 @@ Prefer to run ha-mcp as a Home Assistant **app (add-on)**? On **Home Assistant O
 
 These run the server outside Home Assistant — useful for **Container** / **Core** installs (which can't run apps) or a separate host. The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates the exact client-specific config for each.
 
-- **Docker (HTTP server):** run `ghcr.io/homeassistant-ai/ha-mcp` in HTTP mode, pointed at your Home Assistant URL and a long-lived token, and connect your client to its secret URL. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for the full command and per-client config.
+- **Docker (HTTP server):** run `ghcr.io/homeassistant-ai/ha-mcp` in HTTP mode, pointed at your Home Assistant URL and a long-lived token (an administrator's is recommended; non-admin tokens work with limitations), and connect your client to its secret URL. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for the full command and per-client config.
 - **PyPI / uvx (HTTP server):** run the published `ha-mcp` package with `uvx ha-mcp@latest` (or pip) as a streamable-HTTP server the same way. Details in the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
 - **Local stdio (not recommended):** runs ha-mcp on your own machine over stdio. The one-command installers in the **Demo server** section below use this path; the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) covers connecting it to your own Home Assistant.
 - **OIDC authentication:** gate remote access behind an external identity provider (Authentik, Keycloak, Auth0, etc.) instead of a secret URL — all authenticated users share the server's Home Assistant credentials. See [OIDC Mode](docs/oidc.md).
@@ -258,6 +258,12 @@ If the original entry has been deleted, restore recreates the helper and reports
 <!-- TOOLS_TABLE_END -->
 </details>
 
+Z-Wave configuration values can be read through `ha_manage_radio` with
+`action="get_config_params"` or `action="get_config_param"`, even when their
+configuration entities are disabled or absent. Reads use the Z-Wave JS cache
+by default; a single full root parameter can explicitly request a device read.
+See [parameter reads, freshness, and examples](docs/zwave-parameter-reads.md).
+
 ---
 
 ## 🆚 ha-mcp vs. Home Assistant's built-in MCP Server
@@ -320,7 +326,7 @@ An MCP server can create automations, helpers, and dashboards, but it has no opi
 
 ### Bundled Skills (built-in)
 
-Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) via `skill://` URIs. Any MCP client that supports resources can discover them automatically — no manual installation needed. For tool-only clients (claude.ai, etc.), the same skills are reachable through the polymorphic `ha_get_skill_guide` tool — call it with no args to list bundled skills, with a `skill` arg to list its files, or with `skill` + `file` to read content. Resources are not auto-injected into context — clients must explicitly request them, so idle context cost is just the metadata listing.
+Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) via `skill://` URIs. Any MCP client that supports resources can discover them automatically — no manual installation needed. For tool-only clients (claude.ai, etc.), the best-practices skill is reachable through the `ha_get_skill_guide` tool: call it with no arguments to read `SKILL.md`, or with `file` set to a path `SKILL.md` links to read that reference file. Resources are not auto-injected into context — clients must explicitly request them, so idle context cost is just the metadata listing.
 
 `ha_get_skill_guide` is a mandatory tool: the catalog always exposes it (it can't be disabled) so tool-only clients never see a silently missing skill surface.
 
@@ -347,7 +353,7 @@ Set ENABLE_TOOL_SEARCH=true (or toggle the option in the HA app). The full catal
 
 | Tool | Purpose |
 |------|---------|
-| `ha_search_tools` | BM25 keyword search across all tools. Returns name, description, parameters, and annotations (`readOnlyHint` / `destructiveHint`) so the agent can pick the right one. |
+| `ha_search_tools` | BM25 English-keyword search across all tools, pinned ones included. A hidden tool comes back compact: name, one-line description (the docstring's first paragraph), a one-line `params` list (types, enum values, required) and the proxy that executes it. `ha_search_tools(tools=[...])` returns the full definition (description, input schema and annotations) of the named tools, the second hop before a call. A pinned tool returns a name-only stub (`pinned: true`) pointing back at the tool list, and does not use up a result slot. |
 | `ha_call_read_tool` | Execute a `readOnlyHint` tool by name. Safe — clients can auto-approve. |
 | `ha_call_write_tool` | Execute a write tool that creates or updates data. |
 | `ha_call_delete_tool` | Execute a tool that removes / deletes data. |
@@ -359,7 +365,7 @@ A `ha_manage_*` tool combines several operations, so it is reachable from more t
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `ENABLE_TOOL_SEARCH` | `false` | Replace full tool catalog with search-based discovery (tools deferred behind on-demand search). |
-| `TOOL_SEARCH_MAX_RESULTS` | `5` | Max results returned by `ha_search_tools` (range 2–10). |
+| `TOOL_SEARCH_MAX_RESULTS` | `5` | Max hidden tools returned per `ha_search_tools` call (range 2–10); a pinned tool that ranks inside that top count is added as a name-only stub on top of it. |
 | `PINNED_TOOLS` | empty | Comma-separated tool names to keep always visible. The web settings UI is the primary way to manage this. |
 
 ### When to enable
@@ -506,7 +512,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 💬 Community
 
 - **[GitHub Discussions](https://github.com/homeassistant-ai/ha-mcp/discussions)** — Ask questions, share ideas
-- **[Issue Tracker](https://github.com/homeassistant-ai/ha-mcp/issues)** — Report bugs, request features, or suggest tool behavior improvements
+- **[Issue Tracker](https://github.com/homeassistant-ai/ha-mcp/issues)** — Report bugs, request features, or suggest tool behavior improvements. Bug reports need the report the `ha_report_issue` tool generates, or a reason why there is none; without either they are closed after 24 hours.
 
 ---
 

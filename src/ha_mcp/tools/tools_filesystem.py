@@ -36,6 +36,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import unwrap_service_response
 
 logger = logging.getLogger(__name__)
@@ -542,11 +543,7 @@ class FilesystemTools:
     @tool(
         name="ha_list_files",
         tags={"Files", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "title": "List Files",
-        },
+        annotations=read_only_hints("List Files", open_world=False),
     )
     @log_tool_usage
     async def ha_list_files(
@@ -625,7 +622,7 @@ class FilesystemTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_list_files", "path": path, "pattern": pattern},
@@ -636,11 +633,7 @@ class FilesystemTools:
     @tool(
         name="ha_read_file",
         tags={"Files", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "readOnlyHint": True,
-            "title": "Read File",
-        },
+        annotations=read_only_hints("Read File", open_world=False),
     )
     @log_tool_usage
     async def ha_read_file(
@@ -744,7 +737,7 @@ class FilesystemTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_read_file", "path": path},
@@ -755,11 +748,9 @@ class FilesystemTools:
     @tool(
         name="ha_write_file",
         tags={"Files", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Write File",
-        },
+        annotations=write_hints(
+            "Write File", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="file", id_param="path", mandatory=True)
     @log_tool_usage
@@ -855,7 +846,7 @@ class FilesystemTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_write_file", "path": path},
@@ -866,11 +857,9 @@ class FilesystemTools:
     @tool(
         name="ha_delete_file",
         tags={"Files", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Delete File",
-        },
+        annotations=write_hints(
+            "Delete File", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(domain="file", id_param="path", mandatory=True)
     @log_tool_usage
@@ -948,7 +937,7 @@ class FilesystemTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_delete_file", "path": path},

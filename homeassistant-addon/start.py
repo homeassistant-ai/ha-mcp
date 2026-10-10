@@ -119,7 +119,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
                 )
             else:
                 log_error("Stored secret path is empty, regenerating")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log_error(f"Failed to read stored secret path: {e}")
 
     # Generate new secret path
@@ -129,7 +129,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         data_dir.mkdir(parents=True, exist_ok=True)
         secret_file.write_text(new_path)
         return new_path
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"Failed to save secret path: {e}")
         # Return the path anyway - it will work for this session
         return new_path
@@ -203,40 +203,91 @@ def maybe_persist_secret_path(
         )
 
 
-def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool:
-    """Read ``key`` from ``config`` as a bool, falling back to ``default``.
+# Generated from ha_mcp.config_settings by scripts/generate_app_options.py.
+# start.py reads this table instead of importing ha_mcp: importing the package
+# builds the server's settings before the options below are exported.
+APP_OPTIONS_PATH = Path(__file__).with_name("app_options.json")
+BETA_MASTER = "enable_beta_features"
 
-    Mirrors the ``raw = config.get(key, default); raw if isinstance(raw, bool) else default``
-    pattern used inline in ``main()`` for other options. Extracted so the
-    verify_ssl plumbing can be unit-tested without standing up the full
-    addon container.
+
+def load_app_options(path: Path = APP_OPTIONS_PATH) -> list[dict[str, Any]]:
+    """Return the app option table: key, env var, type, default and limits."""
+    options: list[dict[str, Any]] = json.loads(path.read_text(encoding="utf-8"))
+    return options
+
+
+def _option_problem(option: dict[str, Any], raw: Any) -> str | None:
+    """Return why ``raw`` is not a valid value for ``option``, or None."""
+    kind = option["type"]
+    if kind == "bool" and not isinstance(raw, bool):
+        return "expected true or false"
+    if kind == "int" and (isinstance(raw, bool) or not isinstance(raw, int)):
+        return "expected a whole number"
+    if kind == "str" and not isinstance(raw, str):
+        return "expected text"
+    if option["range"] is not None:
+        lo, hi = option["range"]
+        if not lo <= raw <= hi:
+            return f"expected {lo} through {hi}"
+    if option["choices"] is not None and raw not in option["choices"]:
+        return f"expected one of {', '.join(option['choices'])}"
+    return None
+
+
+def resolve_option(config: dict[str, Any], option: dict[str, Any]) -> Any:
+    """Return the option's value from ``config``, or its default.
+
+    An absent key gives the default silently. A value of the wrong type or
+    outside its limits gives the default with a warning: Supervisor
+    validates the schema, so such a value means a hand-edited options.json.
     """
-    raw = config.get(key, default)
-    if isinstance(raw, bool):
+    key, default = option["key"], option["default"]
+    if key not in config:
+        return default
+    raw = config[key]
+    problem = _option_problem(option, raw)
+    if problem is None:
         return raw
-    if key in config:
-        # Present-but-wrong-type is the diagnostic case: HA Supervisor
-        # coerces YAML scalars to the schema type, so a non-bool here
-        # usually means a hand-edited options.json with a bad value. Warn
-        # so the operator sees why the secure default won (an absent key
-        # is the normal path and stays silent).
-        log_warning(
-            f"addon option {key!r} has type {type(raw).__name__} "
-            f"(expected bool); applying default {default!r}."
-        )
+    log_warning(
+        f"app option {key!r} has invalid value {raw!r} ({problem}); "
+        f"using default {default!r}."
+    )
     return default
 
 
-def resolve_ha_tool_concurrency(config: dict[str, Any]) -> int:
-    """Read the outer tool-call limit, warning before falling back to unlimited."""
-    raw = config.get("ha_tool_concurrency", 0)
-    if isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= 32:
-        return raw
-    log_warning(
-        f"addon option 'ha_tool_concurrency' has invalid value {raw!r} "
-        "(expected an integer from 0 through 32); applying 0 (unlimited)."
-    )
-    return 0
+def export_app_options(
+    config: dict[str, Any], options: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Export each app option to its env var and return the exported values.
+
+    An option every flavor declares is always exported, with its default
+    when ``options.json`` lacks it. An option only some flavors declare
+    (the dev-only beta keys) is exported only when ``options.json`` has
+    it: on the stable flavor an exported value would mark the setting as
+    app-managed in the web UI, and Supervisor would reject the eventual
+    save of a key the stable schema does not declare.
+    """
+    exported: dict[str, Any] = {}
+    for option in options:
+        if not option["always"] and option["key"] not in config:
+            continue
+        value = resolve_option(config, option)
+        os.environ[option["env"]] = (
+            str(value).lower() if isinstance(value, bool) else str(value)
+        )
+        exported[option["key"]] = value
+    return exported
+
+
+def beta_subflags(options: list[dict[str, Any]]) -> list[str]:
+    """Return the dev-only beta sub-flag keys: the toggles the beta master gates."""
+    return [
+        option["key"]
+        for option in options
+        if not option["always"]
+        and option["type"] == "bool"
+        and option["key"] != BETA_MASTER
+    ]
 
 
 def resolve_effective_log_level() -> int:
@@ -260,7 +311,7 @@ def resolve_effective_log_level() -> int:
         from ha_mcp.config import get_global_settings
 
         return getattr(logging, get_global_settings().log_level, logging.INFO)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Loud fallback: without this line, a user who set DEBUG in the
         # web UI can't tell "I'm on INFO" from "my DEBUG request crashed
         # on load" — the same silent-no-op class this fix exists to kill.
@@ -273,32 +324,7 @@ def resolve_effective_log_level() -> int:
         return logging.INFO
 
 
-_DEV_ADDON_BETA_KEYS = (
-    "enable_yaml_config_editing",
-    # Per-key sub-gates of enable_yaml_config_editing. Kept in lockstep
-    # with config.BETA_FEATURE_FIELDS (enforced by
-    # test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry) so the
-    # auto-enable bridge covers exactly the runtime beta set.
-    "enable_yaml_packages_automation",
-    "enable_yaml_packages_script",
-    "enable_yaml_packages_scene",
-    # Default-ON confirm-flow sub-toggle of enable_yaml_config_editing
-    # (#1720). Present here only to keep parity with
-    # config.BETA_FEATURE_FIELDS (enforced by
-    # test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry). Its
-    # truthiness never meaningfully fires the master auto-enable in
-    # practice: the dev addon schema carries enable_beta_features, so the
-    # legacy fallback that consults this set is unreachable on any modern
-    # install.
-    "enable_yaml_edit_confirm",
-    "enable_filesystem_tools",
-    "enable_code_mode",
-    "enable_lite_docstrings",
-    "enable_dashboard_screenshot",
-)
-
-
-def maybe_auto_enable_beta_master(config: dict[str, Any]) -> None:
+def maybe_auto_enable_beta_master(config: dict[str, Any], subflags: list[str]) -> None:
     """Auto-write ``ENABLE_BETA_FEATURES=true`` when the dev-addon
     options have at least one beta sub-flag key set to True.
 
@@ -329,7 +355,7 @@ def maybe_auto_enable_beta_master(config: dict[str, Any]) -> None:
     unreachable. Delete after one stable release cycle (track via
     the changelog entry that introduces this helper).
     """
-    truthy = [key for key in _DEV_ADDON_BETA_KEYS if config.get(key) is True]
+    truthy = [key for key in subflags if config.get(key) is True]
     if truthy:
         os.environ["ENABLE_BETA_FEATURES"] = "true"
         log_info(
@@ -363,91 +389,22 @@ def cleanup_stale_migration_marker(data_dir: Path) -> None:
         )
 
 
-def _apply_yaml_beta_env(
-    *,
-    yaml_config_in_config: bool,
-    enable_yaml_config_editing: bool,
-    yaml_packages_automation_in_config: bool,
-    enable_yaml_packages_automation: bool,
-    yaml_packages_script_in_config: bool,
-    enable_yaml_packages_script: bool,
-    yaml_packages_scene_in_config: bool,
-    enable_yaml_packages_scene: bool,
-    yaml_edit_confirm_in_config: bool,
-    enable_yaml_edit_confirm: bool,
-) -> None:
-    """Write the YAML-editing beta sub-flag env vars that are present in options.
-
-    See ``main`` for the presence-gating rationale (stable-addon installs omit
-    these keys, so writing them unconditionally would mislabel the field as
-    Supervisor-managed in the web UI).
-    """
-    if yaml_config_in_config:
-        os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(
-            enable_yaml_config_editing
-        ).lower()
-    if yaml_packages_automation_in_config:
-        os.environ["ENABLE_YAML_PACKAGES_AUTOMATION"] = str(
-            enable_yaml_packages_automation
-        ).lower()
-    if yaml_packages_script_in_config:
-        os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = str(
-            enable_yaml_packages_script
-        ).lower()
-    if yaml_packages_scene_in_config:
-        os.environ["ENABLE_YAML_PACKAGES_SCENE"] = str(
-            enable_yaml_packages_scene
-        ).lower()
-    if yaml_edit_confirm_in_config:
-        os.environ["ENABLE_YAML_EDIT_CONFIRM"] = str(enable_yaml_edit_confirm).lower()
-
-
-def _apply_tool_beta_env(
-    *,
-    filesystem_tools_in_config: bool,
-    enable_filesystem_tools: bool,
-    dashboard_screenshot_in_config: bool,
-    enable_dashboard_screenshot: bool,
-    code_mode_in_config: bool,
-    enable_code_mode: bool,
-    lite_docstrings_in_config: bool,
-    enable_lite_docstrings: bool,
-) -> None:
-    """Write the tool-gating beta sub-flag env vars that are present in options.
-
-    Same presence-gating rationale as ``_apply_yaml_beta_env``.
-    """
-    if filesystem_tools_in_config:
-        os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(
-            enable_filesystem_tools
-        ).lower()
-    if dashboard_screenshot_in_config:
-        os.environ["HAMCP_ENABLE_DASHBOARD_SCREENSHOT"] = str(
-            enable_dashboard_screenshot
-        ).lower()
-    if code_mode_in_config:
-        os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
-    if lite_docstrings_in_config:
-        os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
-
-
 def _warn_gated_off_beta_subflags(
-    beta_master_in_config: bool,
-    enable_beta_features: bool,
-    subflags: list[tuple[str, bool, bool]],
+    exported: dict[str, Any], subflags: list[str], defaults: dict[str, Any]
 ) -> None:
-    """Warn when the beta master is OFF but truthy sub-flags remain in options.
+    """Warn when the beta master is OFF but sub-flags are turned on in options.
 
     Dev-upgrade silent-disable warning: if the master is in options.json and is
-    False, but any sub-flag is truthy, the runtime gate will force the sub-flag
-    off. Log loudly so an operator who had beta tools on before the
-    master-in-schema rollout, then toggled the master off after the update, can
-    see why their tools went away. ``subflags`` carries ``(name, present,
-    value)`` for each sub-flag.
+    False, but a sub-flag is set to true where it defaults to false, the
+    runtime gate will force the sub-flag off. Log loudly so an operator who
+    had beta tools on before the master-in-schema rollout, then toggled the
+    master off after the update, can see why their tools went away.
     """
-    if not (beta_master_in_config and enable_beta_features is False):
+    if exported.get(BETA_MASTER) is not False:
         return
-    gated_off = [name for name, present, value in subflags if present and value]
+    gated_off = [
+        key for key in subflags if exported.get(key) is True and not defaults[key]
+    ]
     if gated_off:
         log_info(
             "Master beta toggle is OFF but these sub-flags are set "
@@ -475,7 +432,7 @@ def _arm_kill_signal_diagnostics_if_debug(effective_log_level: int) -> None:
         )
 
         schedule_install_after_uvicorn()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"kill-signal diagnostics install failed: {e!r}; continuing")
 
 
@@ -505,7 +462,7 @@ def _run_mcp_server(
     except KeyboardInterrupt:
         log_info("Interrupted, exiting")
         return 0
-    except BaseException as e:
+    except BaseException as e:  # noqa: BLE001
         # Top-level crash handler: intentionally catch ANY exit (including
         # SystemExit, translated to its code below) so the add-on supervisor
         # always sees a clean process exit code instead of a traceback.
@@ -528,229 +485,18 @@ def _run_mcp_server(
     return 0
 
 
-def main() -> int:
-    """Start the Home Assistant MCP Server."""
-    log_info("Starting Home Assistant MCP Server...")
-
-    # Read configuration from Supervisor
-    config_file = Path("/data/options.json")
-    data_dir = Path("/data")
-    cleanup_stale_migration_marker(data_dir)
+def read_options(config_file: Path) -> dict[str, Any]:
+    """Return the app options from ``options.json``, or ``{}`` when it is
+    missing or unreadable."""
     config: dict[str, Any] = {}
-    backup_hint = "normal"  # default
-    custom_secret_path = ""  # default
-    enable_tool_search = False  # default
-    enable_tool_security_policies = False  # default
-    read_only_mode = False  # default (discussion #1569 — non-beta, off by default)
-    redact_secrets = False  # default (issue #2157 — non-beta, off by default)
-    enable_security_policy_tool = False  # default (issue #2148 — non-beta, off)
-    enable_yaml_config_editing = False  # default
-    yaml_config_in_config = False  # presence flag
-    # Per-key sub-gates of enable_yaml_config_editing (dev-addon schema
-    # only). Each follows the same presence-tracked pattern as the
-    # parent so stable installs (key absent) fall through to the
-    # standalone file/default origin chain instead of being pinned to
-    # origin='addon'.
-    enable_yaml_packages_automation = False  # default
-    yaml_packages_automation_in_config = False  # presence flag
-    enable_yaml_packages_script = False  # default
-    yaml_packages_script_in_config = False  # presence flag
-    enable_yaml_packages_scene = False  # default
-    yaml_packages_scene_in_config = False  # presence flag
-    # Confirm-flow sub-toggle of enable_yaml_config_editing (#1720).
-    # Unlike the other beta sub-flags this defaults ON (safety feature);
-    # same presence-tracked pattern so stable installs (key absent) fall
-    # through to the standalone file/default origin chain rather than
-    # being pinned to origin='addon'.
-    enable_yaml_edit_confirm = True  # default (on)
-    yaml_edit_confirm_in_config = False  # presence flag
-    enable_filesystem_tools = False  # default
-    filesystem_tools_in_config = False  # presence flag
-    enable_code_mode = False  # default
-    code_mode_in_config = False  # presence flag
-    enable_dashboard_screenshot = False  # default
-    dashboard_screenshot_in_config = False  # presence flag
-    enable_lite_docstrings = False  # default
-    lite_docstrings_in_config = False  # presence flag
-    enable_mandatory_bps = True  # default (issue #1182 — on by default, non-beta)
-    # Strict best-practices mode (issue #1779). Non-beta, default-ON child
-    # of enable_mandatory_bps; runtime-gated off whenever the parent is off.
-    enable_strict_mandatory_bps = True  # default
-    ha_tool_concurrency = 0  # default — preserve unlimited tool concurrency
-    # Master beta toggle: present only in the dev addon's schema.
-    # Default to False (stable behaviour); when
-    # the dev schema-default merges in, ``beta_master_in_config``
-    # flips to True and the actual value comes from the addon options.
-    beta_master_in_config = False
-    enable_beta_features = False
-    enable_auto_backup = (
-        True  # default (#1288 — on by default; opt out via ENABLE_AUTO_BACKUP=false)
-    )
-    auto_backup_throttle_minutes = 0  # default — every write
-    auto_backup_retain_per_entity = 100  # default
-    # Off by default (#1861 — a snapshot may be the last recovery point
-    # after the agent itself broke something; a human opts in, not the
-    # agent).
-    enable_snapshot_delete = False  # default
-    snapshot_delete_min_age_days = 7  # default
-    tool_search_max_results = 5  # default
-    disabled_tools_raw = ""  # default
-    pinned_tools_raw = ""  # default
-    verify_ssl = True  # default
-
     if config_file.exists():
         try:
             with open(config_file) as f:
                 config = json.load(f)
-            backup_hint = config.get("backup_hint", "normal")
-            custom_secret_path = config.get("secret_path", "")
-            raw_tool_search = config.get("enable_tool_search", False)
-            enable_tool_search = (
-                raw_tool_search if isinstance(raw_tool_search, bool) else False
-            )
-            raw_tool_security_policies = config.get(
-                "enable_tool_security_policies", False
-            )
-            enable_tool_security_policies = (
-                raw_tool_security_policies
-                if isinstance(raw_tool_security_policies, bool)
-                else False
-            )
-            read_only_mode = resolve_bool_option(config, "read_only_mode", False)
-            redact_secrets = resolve_bool_option(config, "redact_secrets", False)
-            enable_security_policy_tool = resolve_bool_option(
-                config, "enable_security_policy_tool", False
-            )
-            ha_tool_concurrency = resolve_ha_tool_concurrency(config)
-            # Beta sub-flag presence tracking. On stable-addon, the 5
-            # beta keys are NOT in config.yaml
-            # schema — options.json carries none of them. If we wrote
-            # ENABLE_YAML_CONFIG_EDITING=false (etc.) unconditionally,
-            # get_feature_flag_origin would see env-var-set + in_addon
-            # → origin='addon' → UI labels editable. The user toggles,
-            # save POSTs to Supervisor, schema rejects (key not in
-            # stable schema). Track presence and skip the env write
-            # below when absent so stable falls through to the
-            # standalone file/default origin chain.
-            yaml_config_in_config = "enable_yaml_config_editing" in config
-            raw_yaml_config = config.get("enable_yaml_config_editing", False)
-            enable_yaml_config_editing = (
-                raw_yaml_config if isinstance(raw_yaml_config, bool) else False
-            )
-            yaml_packages_automation_in_config = (
-                "enable_yaml_packages_automation" in config
-            )
-            raw_yaml_pkg_automation = config.get(
-                "enable_yaml_packages_automation", False
-            )
-            enable_yaml_packages_automation = (
-                raw_yaml_pkg_automation
-                if isinstance(raw_yaml_pkg_automation, bool)
-                else False
-            )
-            yaml_packages_script_in_config = "enable_yaml_packages_script" in config
-            raw_yaml_pkg_script = config.get("enable_yaml_packages_script", False)
-            enable_yaml_packages_script = (
-                raw_yaml_pkg_script if isinstance(raw_yaml_pkg_script, bool) else False
-            )
-            yaml_packages_scene_in_config = "enable_yaml_packages_scene" in config
-            raw_yaml_pkg_scene = config.get("enable_yaml_packages_scene", False)
-            enable_yaml_packages_scene = (
-                raw_yaml_pkg_scene if isinstance(raw_yaml_pkg_scene, bool) else False
-            )
-            yaml_edit_confirm_in_config = "enable_yaml_edit_confirm" in config
-            raw_yaml_edit_confirm = config.get("enable_yaml_edit_confirm", True)
-            enable_yaml_edit_confirm = (
-                raw_yaml_edit_confirm
-                if isinstance(raw_yaml_edit_confirm, bool)
-                else True
-            )
-            filesystem_tools_in_config = "enable_filesystem_tools" in config
-            raw_filesystem_tools = config.get("enable_filesystem_tools", False)
-            enable_filesystem_tools = (
-                raw_filesystem_tools
-                if isinstance(raw_filesystem_tools, bool)
-                else False
-            )
-            dashboard_screenshot_in_config = "enable_dashboard_screenshot" in config
-            raw_dashboard_screenshot = config.get("enable_dashboard_screenshot", False)
-            enable_dashboard_screenshot = (
-                raw_dashboard_screenshot
-                if isinstance(raw_dashboard_screenshot, bool)
-                else False
-            )
-            code_mode_in_config = "enable_code_mode" in config
-            raw_code_mode = config.get("enable_code_mode", False)
-            enable_code_mode = (
-                raw_code_mode if isinstance(raw_code_mode, bool) else False
-            )
-            lite_docstrings_in_config = "enable_lite_docstrings" in config
-            raw_lite_docstrings = config.get("enable_lite_docstrings", False)
-            enable_lite_docstrings = (
-                raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
-            )
-            raw_mandatory_bps = config.get("enable_mandatory_bps", True)
-            if isinstance(raw_mandatory_bps, bool):
-                enable_mandatory_bps = raw_mandatory_bps
-            else:
-                log_error(
-                    "enable_mandatory_bps must be bool, got "
-                    f"{type(raw_mandatory_bps).__name__}={raw_mandatory_bps!r}; "
-                    "using default True"
-                )
-                enable_mandatory_bps = True
-            raw_strict_mandatory_bps = config.get("enable_strict_mandatory_bps", True)
-            if isinstance(raw_strict_mandatory_bps, bool):
-                enable_strict_mandatory_bps = raw_strict_mandatory_bps
-            else:
-                log_error(
-                    "enable_strict_mandatory_bps must be bool, got "
-                    f"{type(raw_strict_mandatory_bps).__name__}="
-                    f"{raw_strict_mandatory_bps!r}; using default True"
-                )
-                enable_strict_mandatory_bps = True
-            # Master beta toggle is present in the dev-addon schema.
-            # Track presence separately so stable
-            # add-on installs (where the key is absent from options.json)
-            # do NOT get an explicit ENABLE_BETA_FEATURES=false env var
-            # — that would force the web UI to render the master as
-            # ``origin=env, locked`` and the standalone user could not
-            # toggle it.
-            beta_master_in_config = "enable_beta_features" in config
-            raw_beta_master = config.get("enable_beta_features", False)
-            enable_beta_features = (
-                raw_beta_master if isinstance(raw_beta_master, bool) else False
-            )
-            raw_auto_backup = config.get("enable_auto_backup", True)
-            enable_auto_backup = (
-                raw_auto_backup if isinstance(raw_auto_backup, bool) else False
-            )
-            raw_throttle = config.get("auto_backup_throttle_minutes", 0)
-            auto_backup_throttle_minutes = (
-                raw_throttle if isinstance(raw_throttle, int) else 0
-            )
-            raw_retain = config.get("auto_backup_retain_per_entity", 100)
-            auto_backup_retain_per_entity = (
-                raw_retain if isinstance(raw_retain, int) else 100
-            )
-            raw_snapshot_delete = config.get("enable_snapshot_delete", False)
-            enable_snapshot_delete = (
-                raw_snapshot_delete if isinstance(raw_snapshot_delete, bool) else False
-            )
-            raw_min_age = config.get("snapshot_delete_min_age_days", 7)
-            snapshot_delete_min_age_days = (
-                raw_min_age if isinstance(raw_min_age, int) else 7
-            )
-            raw_max_results = config.get("tool_search_max_results", 5)
-            tool_search_max_results = (
-                raw_max_results if isinstance(raw_max_results, int) else 5
-            )
-            raw_disabled = config.get("disabled_tools", "")
-            disabled_tools_raw = raw_disabled if isinstance(raw_disabled, str) else ""
-            raw_pinned = config.get("pinned_tools", "")
-            pinned_tools_raw = raw_pinned if isinstance(raw_pinned, str) else ""
-            verify_ssl = resolve_bool_option(config, "verify_ssl", True)
-        except Exception as e:
+            if not isinstance(config, dict):
+                raise ValueError(f"expected a JSON object, got {type(config).__name__}")
+        except Exception as e:  # noqa: BLE001
+            config = {}
             log_error(f"Failed to read config: {e}, using defaults")
             # Persistent "you lost your features" line so an operator
             # who scrolled past the cryptic exception trace still sees
@@ -763,6 +509,64 @@ def main() -> int:
                 "addon-schema default this boot. Inspect /data/options.json "
                 "and fix or delete it, then restart the addon."
             )
+    return config
+
+
+def export_options_env(config: dict[str, Any]) -> None:
+    """Export the app options and the add-on-only settings to env vars."""
+    options = load_app_options()
+    exported = export_app_options(config, options)
+    log_info(f"Backup hint mode: {exported['backup_hint']}")
+    log_info(f"Verify SSL: {exported['verify_ssl']}")
+    subflags = beta_subflags(options)
+    _warn_gated_off_beta_subflags(
+        exported, subflags, {option["key"]: option["default"] for option in options}
+    )
+    if BETA_MASTER not in config:
+        # Legacy safety net: dev-addon installs that pre-date the
+        # master-in-schema rollout don't carry the key yet, but their
+        # truthy sub-flag presence still implies the user wants beta
+        # tools on. Keep the auto-enable as a one-cycle bridge until
+        # Supervisor merges the new schema default into options.json.
+        maybe_auto_enable_beta_master(config, subflags)
+    # Persist saved custom tools across addon restarts. /data is the
+    # per-addon writable directory mapped by Supervisor and survives
+    # add-on updates (but not uninstall/reinstall — users should copy
+    # this file out before reinstalling if they want to migrate).
+    # Setting this unconditionally is safe: on the stable add-on the
+    # tool isn't registered anyway, so the file is never read or
+    # written. This path is hardcoded in add-on mode: it is not an
+    # app option, so add-on operators have no surface to
+    # change it — and /data is the only location that survives add-on
+    # updates anyway.
+    os.environ.setdefault("CODE_MODE_SAVED_TOOLS_PATH", "/data/saved_tools.json")
+
+
+def _log_server_url(secret_path: str) -> None:
+    """Log the MCP server URL the user copies into their client."""
+    log_info("")
+    log_info("=" * 80)
+    log_info(f"🔐 MCP Server URL: http://<home-assistant-ip>:9583{secret_path}")
+    log_info("")
+    log_info(f"   Secret Path: {secret_path}")
+    log_info("")
+    log_info("   ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!")
+    log_info("   💡 This path is auto-generated and persisted to /data/secret_path.txt")
+    log_info("=" * 80)
+    log_info("")
+
+
+def main() -> int:
+    """Start the Home Assistant MCP Server."""
+    log_info("Starting Home Assistant MCP Server...")
+
+    # Read configuration from Supervisor
+    config_file = Path("/data/options.json")
+    data_dir = Path("/data")
+    cleanup_stale_migration_marker(data_dir)
+    config = read_options(config_file)
+    raw_secret_path = config.get("secret_path", "")
+    custom_secret_path = raw_secret_path if isinstance(raw_secret_path, str) else ""
 
     # Validate Supervisor token (needed for both ha-mcp auth below and the
     # options-persist call right after secret path resolution)
@@ -780,127 +584,9 @@ def main() -> int:
     # the skip/retry rules live in maybe_persist_secret_path().
     maybe_persist_secret_path(config, secret_path, supervisor_token)
 
-    log_info(f"Backup hint mode: {backup_hint}")
-    log_info(f"Verify SSL: {verify_ssl}")
-
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
-    os.environ["BACKUP_HINT"] = backup_hint
-    os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
-    os.environ["ENABLE_TOOL_SECURITY_POLICIES"] = str(
-        enable_tool_security_policies
-    ).lower()
-    # READ_ONLY_MODE is non-beta and in BOTH addon schemas, so it is
-    # written unconditionally (like ENABLE_MANDATORY_BPS below).
-    os.environ["READ_ONLY_MODE"] = str(read_only_mode).lower()
-    # REDACT_SECRETS is likewise non-beta and in both addon schemas.
-    os.environ["REDACT_SECRETS"] = str(redact_secrets).lower()
-    # ENABLE_SECURITY_POLICY_TOOL is non-beta and in BOTH addon schemas too,
-    # so it is written unconditionally. In addon mode this export is the ONLY
-    # channel that reaches the server: get_feature_flag_origin reports
-    # 'addon' for every non-beta flag and the override-file applier skips it.
-    os.environ["ENABLE_SECURITY_POLICY_TOOL"] = str(enable_security_policy_tool).lower()
-    # ENABLE_MANDATORY_BPS is non-beta and default-ON, so it is written
-    # unconditionally (like the stable core settings above) — never
-    # presence-gated or beta-master-gated like the beta sub-flags below.
-    os.environ["ENABLE_MANDATORY_BPS"] = str(enable_mandatory_bps).lower()
-    # ENABLE_STRICT_MANDATORY_BPS is non-beta and default-ON as well, so it
-    # is also written unconditionally. It is runtime-gated off by the server
-    # whenever ENABLE_MANDATORY_BPS is off (parent dependency, issue #1779).
-    os.environ["ENABLE_STRICT_MANDATORY_BPS"] = str(enable_strict_mandatory_bps).lower()
-    os.environ["HA_TOOL_CONCURRENCY"] = str(ha_tool_concurrency)
-    # Beta sub-flags: only write env vars when the key is actually in
-    # the addon's options.json. On stable addon,
-    # none of these keys are in schema, so config.get(...) returned
-    # the default False — but explicitly writing the env would mark
-    # the field as origin='addon' (Supervisor-managed) in the web UI,
-    # and Supervisor would reject the eventual save because the key
-    # is not in stable's schema. Skip the write so the standalone
-    # file/default origin chain applies.
-    _apply_yaml_beta_env(
-        yaml_config_in_config=yaml_config_in_config,
-        enable_yaml_config_editing=enable_yaml_config_editing,
-        yaml_packages_automation_in_config=yaml_packages_automation_in_config,
-        enable_yaml_packages_automation=enable_yaml_packages_automation,
-        yaml_packages_script_in_config=yaml_packages_script_in_config,
-        enable_yaml_packages_script=enable_yaml_packages_script,
-        yaml_packages_scene_in_config=yaml_packages_scene_in_config,
-        enable_yaml_packages_scene=enable_yaml_packages_scene,
-        yaml_edit_confirm_in_config=yaml_edit_confirm_in_config,
-        enable_yaml_edit_confirm=enable_yaml_edit_confirm,
-    )
-    _apply_tool_beta_env(
-        filesystem_tools_in_config=filesystem_tools_in_config,
-        enable_filesystem_tools=enable_filesystem_tools,
-        dashboard_screenshot_in_config=dashboard_screenshot_in_config,
-        enable_dashboard_screenshot=enable_dashboard_screenshot,
-        code_mode_in_config=code_mode_in_config,
-        enable_code_mode=enable_code_mode,
-        lite_docstrings_in_config=lite_docstrings_in_config,
-        enable_lite_docstrings=enable_lite_docstrings,
-    )
-    # Dev-upgrade silent-disable warning (see _warn_gated_off_beta_subflags).
-    _warn_gated_off_beta_subflags(
-        beta_master_in_config,
-        enable_beta_features,
-        [
-            (
-                "enable_yaml_config_editing",
-                yaml_config_in_config,
-                enable_yaml_config_editing,
-            ),
-            (
-                "enable_filesystem_tools",
-                filesystem_tools_in_config,
-                enable_filesystem_tools,
-            ),
-            (
-                "enable_dashboard_screenshot",
-                dashboard_screenshot_in_config,
-                enable_dashboard_screenshot,
-            ),
-            ("enable_code_mode", code_mode_in_config, enable_code_mode),
-            (
-                "enable_lite_docstrings",
-                lite_docstrings_in_config,
-                enable_lite_docstrings,
-            ),
-        ],
-    )
-    # Master beta toggle: write env var only when the key exists in
-    # the addon's options.json. Dev addon's schema declares it (so
-    # the key is always present, value follows the user's toggle).
-    # Stable addon's schema does not declare it (so the key is absent
-    # and the standalone web-UI master path remains the gate).
-    if beta_master_in_config:
-        os.environ["ENABLE_BETA_FEATURES"] = str(enable_beta_features).lower()
-    else:
-        # Legacy safety net: dev-addon installs that pre-date the
-        # master-in-schema rollout don't carry the key yet, but their
-        # truthy sub-flag presence still implies the user wants beta
-        # tools on. Keep the auto-enable as a one-cycle bridge until
-        # Supervisor merges the new schema default into options.json.
-        maybe_auto_enable_beta_master(config)
-    os.environ["ENABLE_AUTO_BACKUP"] = str(enable_auto_backup).lower()
-    os.environ["AUTO_BACKUP_THROTTLE_MINUTES"] = str(auto_backup_throttle_minutes)
-    os.environ["AUTO_BACKUP_RETAIN_PER_ENTITY"] = str(auto_backup_retain_per_entity)
-    os.environ["ENABLE_SNAPSHOT_DELETE"] = str(enable_snapshot_delete).lower()
-    os.environ["SNAPSHOT_DELETE_MIN_AGE_DAYS"] = str(snapshot_delete_min_age_days)
-    # Persist saved custom tools across addon restarts. /data is the
-    # per-addon writable directory mapped by Supervisor and survives
-    # add-on updates (but not uninstall/reinstall — users should copy
-    # this file out before reinstalling if they want to migrate).
-    # Setting this unconditionally is safe: on the stable add-on the
-    # tool isn't registered anyway, so the file is never read or
-    # written. This path is hardcoded in add-on mode: it is not in the
-    # add-on config.yaml schema, so add-on operators have no surface to
-    # change it — and /data is the only location that survives add-on
-    # updates anyway.
-    os.environ.setdefault("CODE_MODE_SAVED_TOOLS_PATH", "/data/saved_tools.json")
-    os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)
-    os.environ["DISABLED_TOOLS"] = disabled_tools_raw
-    os.environ["PINNED_TOOLS"] = pinned_tools_raw
-    os.environ["HA_VERIFY_SSL"] = str(verify_ssl).lower()
+    export_options_env(config)
 
     os.environ["HOMEASSISTANT_TOKEN"] = supervisor_token
 
@@ -910,16 +596,7 @@ def main() -> int:
     # Fixed port (internal container port)
     port = 9583
 
-    log_info("")
-    log_info("=" * 80)
-    log_info(f"🔐 MCP Server URL: http://<home-assistant-ip>:9583{secret_path}")
-    log_info("")
-    log_info(f"   Secret Path: {secret_path}")
-    log_info("")
-    log_info("   ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!")
-    log_info("   💡 This path is auto-generated and persisted to /data/secret_path.txt")
-    log_info("=" * 80)
-    log_info("")
+    _log_server_url(secret_path)
 
     # Configure logging before server start (v3 removed log_level from run())
     import logging
@@ -943,7 +620,7 @@ def main() -> int:
     # Wrapped because log cosmetics must never block addon startup.
     try:
         widen_fastmcp_log_console()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_warning(f"Could not widen fastmcp log console: {e!r}; continuing")
 
     # Log the ha-mcp version + a self-update banner when a newer release is

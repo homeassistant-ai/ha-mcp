@@ -1274,7 +1274,7 @@ def _mask_secrets_content(content: str) -> str:
         return "\n".join(f'{key}: "[MASKED]"' for key in parsed)
     except YAMLError:
         return "# secrets.yaml could not be parsed — content withheld to avoid leaking secrets"
-    except Exception:
+    except Exception:  # noqa: BLE001
         return "# secrets.yaml could not be masked — content withheld to avoid leaking secrets"
 
 
@@ -1572,7 +1572,7 @@ async def _run_config_check(hass: HomeAssistant, rel_path: str) -> dict[str, Any
     """
     try:
         errors = await async_check_ha_config_file(hass)
-    except Exception as check_err:
+    except Exception as check_err:  # noqa: BLE001
         _LOGGER.warning(
             "Config check unavailable after editing %s: %s", rel_path, check_err
         )
@@ -2149,7 +2149,7 @@ async def _resolve_post_action(
                 "post_action": "reload_performed",
                 "reload_service": "frontend.reload_themes",
             }
-        except Exception as reload_err:
+        except Exception as reload_err:  # noqa: BLE001
             post_info = {
                 "post_action": "reload_available",
                 "reload_service": "frontend.reload_themes",
@@ -3170,7 +3170,7 @@ def _build_get_caller_token_handler(
                 # an absent one deserve the same answer.
                 raise ValueError("the manifest carries no version")
             version = str(integration.version)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(
                 "Could not read ha_mcp_tools manifest version for "
                 "get_caller_token response: %s",
@@ -3463,7 +3463,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         moved, failed = await hass.async_add_executor_job(
             _migrate_legacy_backup_dir, config_dir
         )
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         # Defensive: a migration failure must not block setup_entry, since
         # the integration's normal value (file ops, edit_yaml_config) is
         # unaffected by whether old backups got relocated.
@@ -3506,7 +3506,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
                 title="HA MCP Tools — credential exposure (GHSA-g39v-cvjh-8fpf)",
                 notification_id="ha_mcp_tools_ghsa_g39v_cvjh_8fpf",
             )
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             # Defensive: log line above is the source of truth; the
             # notification is best-effort UX and must not block setup.
             _LOGGER.warning(
@@ -3516,115 +3516,60 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
                 err,
             )
 
-    handle_list_files = _build_list_files_handler(hass)
-    handle_read_file = _build_read_file_handler(hass)
-    handle_write_file = _build_write_file_handler(hass)
-    handle_delete_file = _build_delete_file_handler(hass)
-    handle_edit_yaml_config = _build_edit_yaml_config_handler(hass)
-    handle_get_caller_token = _build_get_caller_token_handler(hass)
-    handle_get_allowed_paths = _build_get_allowed_paths_handler(hass)
-    handle_set_allowed_paths = _build_set_allowed_paths_handler(hass)
-    handle_get_extra_yaml_keys = _build_get_extra_yaml_keys_handler(hass)
-    handle_set_extra_yaml_keys = _build_set_extra_yaml_keys_handler(hass)
-    handle_list_legacy_backups = _build_list_legacy_backups_handler(hass)
-    handle_read_legacy_backup = _build_read_legacy_backup_handler(hass)
-
     # Register all services with response support
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_EDIT_YAML_CONFIG,
-        handle_edit_yaml_config,
-        schema=SERVICE_EDIT_YAML_CONFIG_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_LIST_FILES,
-        handle_list_files,
-        schema=SERVICE_LIST_FILES_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_READ_FILE,
-        handle_read_file,
-        schema=SERVICE_READ_FILE_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_WRITE_FILE,
-        handle_write_file,
-        schema=SERVICE_WRITE_FILE_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_DELETE_FILE,
-        handle_delete_file,
-        schema=SERVICE_DELETE_FILE_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_GET_CALLER_TOKEN,
-        handle_get_caller_token,
-        schema=SERVICE_GET_CALLER_TOKEN_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_GET_ALLOWED_PATHS,
-        handle_get_allowed_paths,
-        schema=SERVICE_GET_ALLOWED_PATHS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_ALLOWED_PATHS,
-        handle_set_allowed_paths,
-        schema=SERVICE_SET_ALLOWED_PATHS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_GET_EXTRA_YAML_KEYS,
-        handle_get_extra_yaml_keys,
-        schema=SERVICE_GET_EXTRA_YAML_KEYS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_EXTRA_YAML_KEYS,
-        handle_set_extra_yaml_keys,
-        schema=SERVICE_SET_EXTRA_YAML_KEYS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_LIST_LEGACY_BACKUPS,
-        handle_list_legacy_backups,
-        schema=SERVICE_LIST_LEGACY_BACKUPS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_READ_LEGACY_BACKUP,
-        handle_read_legacy_backup,
-        schema=SERVICE_READ_LEGACY_BACKUP_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
+    for service, schema, build_handler in (
+        (
+            SERVICE_EDIT_YAML_CONFIG,
+            SERVICE_EDIT_YAML_CONFIG_SCHEMA,
+            _build_edit_yaml_config_handler,
+        ),
+        (SERVICE_LIST_FILES, SERVICE_LIST_FILES_SCHEMA, _build_list_files_handler),
+        (SERVICE_READ_FILE, SERVICE_READ_FILE_SCHEMA, _build_read_file_handler),
+        (SERVICE_WRITE_FILE, SERVICE_WRITE_FILE_SCHEMA, _build_write_file_handler),
+        (SERVICE_DELETE_FILE, SERVICE_DELETE_FILE_SCHEMA, _build_delete_file_handler),
+        (
+            SERVICE_GET_CALLER_TOKEN,
+            SERVICE_GET_CALLER_TOKEN_SCHEMA,
+            _build_get_caller_token_handler,
+        ),
+        (
+            SERVICE_GET_ALLOWED_PATHS,
+            SERVICE_GET_ALLOWED_PATHS_SCHEMA,
+            _build_get_allowed_paths_handler,
+        ),
+        (
+            SERVICE_SET_ALLOWED_PATHS,
+            SERVICE_SET_ALLOWED_PATHS_SCHEMA,
+            _build_set_allowed_paths_handler,
+        ),
+        (
+            SERVICE_GET_EXTRA_YAML_KEYS,
+            SERVICE_GET_EXTRA_YAML_KEYS_SCHEMA,
+            _build_get_extra_yaml_keys_handler,
+        ),
+        (
+            SERVICE_SET_EXTRA_YAML_KEYS,
+            SERVICE_SET_EXTRA_YAML_KEYS_SCHEMA,
+            _build_set_extra_yaml_keys_handler,
+        ),
+        (
+            SERVICE_LIST_LEGACY_BACKUPS,
+            SERVICE_LIST_LEGACY_BACKUPS_SCHEMA,
+            _build_list_legacy_backups_handler,
+        ),
+        (
+            SERVICE_READ_LEGACY_BACKUP,
+            SERVICE_READ_LEGACY_BACKUP_SCHEMA,
+            _build_read_legacy_backup_handler,
+        ),
+    ):
+        hass.services.async_register(
+            DOMAIN,
+            service,
+            build_handler(hass),
+            schema=schema,
+            supports_response=SupportsResponse.ONLY,
+        )
 
     # Register the in-process ha_mcp_tools/* WebSocket commands (info + search)
     # the server calls behind a capability gate. Idempotent, and independent of
@@ -3660,7 +3605,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             # and ``str()`` would put the literal "None" on the device.
             raise ValueError("the manifest carries no version")
         component_version = str(integration.version)
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         _LOGGER.debug(
             "Could not read the component version for the tools device, using "
             "the compiled-in %s: %s",

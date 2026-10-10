@@ -26,13 +26,14 @@ from .blueprint_write import (
     normalize_blueprint_path,
     write_blueprint,
 )
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import JSON_STRING_COERCION
+from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -129,15 +130,11 @@ class BlueprintTools:
     @tool(
         name="ha_manage_blueprints",
         tags={"Blueprints"},
-        annotations={
-            "readOnlyHint": False,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            # import fetches arbitrary URLs; list/get return externally
-            # authored blueprint content from an otherwise local read.
-            "openWorldHint": True,
-            "title": "Manage Blueprints",
-        },
+        # import fetches arbitrary URLs; list/get return externally
+        # authored blueprint content from an otherwise local read.
+        annotations=write_hints(
+            "Manage Blueprints", destructive=True, idempotent=False, open_world=True
+        ),
     )
     # ``delete`` and ``save`` are the two actions that can destroy an installed
     # blueprint's contents, so both capture first. The snapshot is keyed on the
@@ -336,7 +333,7 @@ class BlueprintTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"action": action, "path": path, "domain": domain, "url": url},

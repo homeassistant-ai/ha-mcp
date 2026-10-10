@@ -29,8 +29,8 @@ from ..backup_manager import (
     BackupRestoreError,
     MandatoryBackupError,
     SnapshotInUseError,
+    _FlowHelperReadError,
     _snapshot_validation_message,
-    _TemplateReadError,
     get_backup_manager,
 )
 from ..config import (
@@ -39,6 +39,7 @@ from ..config import (
     get_backup_setting_origin,
     get_global_settings,
 )
+from ..config_registry import SETTING_BOUNDS
 from ..errors import ErrorCode, create_error_response
 from . import _persistence, _supervisor
 
@@ -140,7 +141,7 @@ async def _diff_backup(
         return _bad_request(_snapshot_validation_message(err))
     except LookupError as err:
         return _bad_request(str(err), code=ErrorCode.RESOURCE_NOT_FOUND, status=404)
-    except _TemplateReadError as err:
+    except _FlowHelperReadError as err:
         return JSONResponse(
             create_error_response(
                 ErrorCode.CONFIG_VALIDATION_FAILED,
@@ -331,15 +332,17 @@ def backup_config_fields() -> list[dict[str, Any]]:
     fields: list[dict[str, Any]] = []
     for field_name, env_name, _ftype in BACKUP_OVERRIDE_FIELDS:
         origin = get_backup_setting_origin(env_name)
-        fields.append(
-            {
-                "field": field_name,
-                "env_var": env_name,
-                "value": getattr(settings, field_name),
-                "origin": origin,
-                "editable": origin in ("addon", "file", "default"),
-            }
-        )
+        row: dict[str, Any] = {
+            "field": field_name,
+            "env_var": env_name,
+            "value": getattr(settings, field_name),
+            "origin": origin,
+            "editable": origin in ("addon", "file", "default"),
+        }
+        bounds = SETTING_BOUNDS.get(field_name)
+        if bounds is not None:
+            row["min"], row["max"] = bounds
+        fields.append(row)
     return fields
 
 
@@ -354,16 +357,6 @@ async def _get_backup_config(
             "fields": backup_config_fields(),
         }
     )
-
-
-# Inclusive bounds for the integer auto-backup fields; a field absent here
-# takes any parseable int. Keyed by the Settings field name.
-_BACKUP_INT_BOUNDS: dict[str, tuple[int, int]] = {
-    "auto_backup_throttle_minutes": (0, 1440),
-    "auto_backup_retain_per_entity": (1, 10_000),
-    "auto_backup_calendar_lookahead_days": (1, 365),
-    "snapshot_delete_min_age_days": (0, 365),
-}
 
 
 def _coerce_bool_field(field_name: str, raw: Any) -> tuple[Any, str | None]:
@@ -390,9 +383,9 @@ def _coerce_int_field(field_name: str, raw: Any) -> tuple[Any, str | None]:
         value = int(raw)
     except (ValueError, TypeError):
         return None, f"Invalid integer for {field_name}: {raw!r}"
-    bounds = _BACKUP_INT_BOUNDS.get(field_name)
+    bounds = SETTING_BOUNDS.get(field_name)
     if bounds is not None and not (bounds[0] <= value <= bounds[1]):
-        return None, f"{field_name} must be {bounds[0]}..{bounds[1]}"
+        return None, f"{field_name} must be {bounds[0]:g}..{bounds[1]:g}"
     return value, None
 
 

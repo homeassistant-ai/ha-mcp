@@ -56,6 +56,8 @@ GATED_TOOL_MODULES: dict[str, tuple[str, str]] = {
     "ha_config_set_yaml": ("tools_yaml_config", "_YAML_SKILL_FILES"),
 }
 
+# Tools whose canonical _*_SKILL_FILES constant lives outside the tool module.
+_SKILL_FILES_MODULE: dict[str, str] = {"ha_config_set_helper": "config_helpers.schemas"}
 
 # ---------------------------------------------------------------------------
 # strict_bps_effective
@@ -78,7 +80,7 @@ def _patch_skills_dir(monkeypatch, value: Path | None) -> None:
 class TestStrictBpsEffective:
     def test_both_on_is_effective(self, monkeypatch, tmp_path):
         _patch_settings(monkeypatch, parent=True, child=True)
-        _patch_skills_dir(monkeypatch, tmp_path)
+        _patch_skills_dir(monkeypatch, _best_practices_skills_dir(tmp_path))
         assert strict_bps_effective() is True
 
     def test_parent_off_is_not_effective(self, monkeypatch, tmp_path):
@@ -112,17 +114,25 @@ class TestStrictBpsEffective:
         ]
         assert len(warned) == 1
 
-    def test_missing_skills_dir_fails_open(self, monkeypatch, caplog):
-        """Both flags on but skills-vendor absent ⇒ False (key unobtainable)."""
+    def test_unservable_skill_fails_open(self, monkeypatch, caplog, tmp_path):
+        """Both flags on, skills root present, but a best-practices skill the
+        guide cannot serve: the key is unobtainable, so gated writes must
+        pass instead of deadlocking on a guide that cannot publish it. The
+        gate runs on every gated write, so the log must carry one warning,
+        not one per write."""
+        skill = tmp_path / "home-assistant-best-practices"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text("# No frontmatter here\n")
         _patch_settings(monkeypatch, parent=True, child=True)
-        _patch_skills_dir(monkeypatch, None)
+        _patch_skills_dir(monkeypatch, tmp_path)
         monkeypatch.setattr("ha_mcp.strict_bps._DEGRADE_WARNED", set())
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.strict_bps"):
+        with caplog.at_level(logging.WARNING):
             assert strict_bps_effective() is False
-            # Warn-once: a second degraded call must not log again.
             assert strict_bps_effective() is False
-        warned = [r for r in caplog.records if "skills-vendor" in r.getMessage()]
-        assert len(warned) == 1
+            assert strict_bps_effective() is False
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1, [r.getMessage() for r in warnings]
+        assert "skills-vendor" in warnings[0].getMessage()
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +286,7 @@ class TestStrictBpsMiddleware:
         # The suggestion names the exact recovery call for this tool.
         suggestion = body["error"]["suggestion"]
         assert "ha_get_skill_guide" in suggestion
-        assert "references/automation-patterns.md" in suggestion
+        assert "references/triggers-and-conditions.md" in suggestion
         assert STRICT_BPS_KEY_PARAM in suggestion
 
     async def test_gated_with_wrong_key_blocked(self, strict_on):
@@ -539,7 +549,12 @@ def test_gated_tool_declares_key_and_maps_first_canonical_file(tool_name: str):
     module_name, const_name = GATED_TOOL_MODULES[tool_name]
     module = importlib.import_module(f"ha_mcp.tools.{module_name}")
 
-    canonical_files = getattr(module, const_name)
+    canonical_files = getattr(
+        importlib.import_module(
+            f"ha_mcp.tools.{_SKILL_FILES_MODULE.get(tool_name, module_name)}"
+        ),
+        const_name,
+    )
     assert STRICT_BPS_GATED_TOOLS[tool_name] == canonical_files[0], (
         f"{tool_name} block-error ref {STRICT_BPS_GATED_TOOLS[tool_name]!r} must "
         f"equal {const_name}[0] ({canonical_files[0]!r})"
@@ -635,12 +650,17 @@ def _make_bare_server() -> object:
 def _best_practices_skills_dir(tmp_path: Path) -> Path:
     skill = tmp_path / "home-assistant-best-practices"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("# Best practices\nReal content here.\n")
+    (skill / "SKILL.md").write_text(
+        "---\nname: best-practices\ndescription: Best practices.\n---\n"
+        "# Best practices\nReal content here.\n"
+    )
     return tmp_path
 
 
 class TestSkillGuideKeyInjection:
     def test_ack_line_prepended_when_strict_effective(self, monkeypatch, tmp_path):
+        """A model reads the key from the top of the served file; without
+        it every gated write stays blocked."""
         from ha_mcp import strict_bps
 
         monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: True)
@@ -651,34 +671,15 @@ class TestSkillGuideKeyInjection:
         )
         srv = _make_bare_server()
         skills_dir = _best_practices_skills_dir(tmp_path)
-        result = srv._handle_skill_guide_call(
-            skills_dir, "home-assistant-best-practices", "SKILL.md"
-        )
-        assert result["success"] is True
+        result = srv._handle_skill_guide_call(skills_dir)
         assert result["content"].startswith(strict_bps_ack_line())
         assert current_strict_bps_ack_key() in result["content"]
-        # Original body still follows the injected line.
         assert "Real content here." in result["content"]
 
     def test_ack_line_absent_when_strict_off(self, monkeypatch, tmp_path):
         monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: False)
         srv = _make_bare_server()
         skills_dir = _best_practices_skills_dir(tmp_path)
-        result = srv._handle_skill_guide_call(
-            skills_dir, "home-assistant-best-practices", "SKILL.md"
-        )
-        assert result["success"] is True
-        assert current_strict_bps_ack_key() not in result["content"]
-
-    def test_ack_line_absent_for_other_skill_even_if_strict(
-        self, monkeypatch, tmp_path
-    ):
-        """A non-best-practices skill never carries the key, even when strict."""
-        monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: True)
-        srv = _make_bare_server()
-        other = tmp_path / "some-other-skill"
-        other.mkdir()
-        (other / "SKILL.md").write_text("# Other\nUnrelated.\n")
-        result = srv._handle_skill_guide_call(tmp_path, "some-other-skill", "SKILL.md")
+        result = srv._handle_skill_guide_call(skills_dir)
         assert result["success"] is True
         assert current_strict_bps_ack_key() not in result["content"]

@@ -38,6 +38,9 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 from homeassistant.loader import async_get_integration
 from packaging.version import InvalidVersion, Version
@@ -180,7 +183,7 @@ def _fill(common: dict[str, str], key: str, /, **values: str) -> str:
     """
     try:
         return common[key].format(**values)
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         # Names both causes: a catalog string this caller cannot fill, or a
         # caller passing values the template never declared. The second is our
         # bug and crashes on the English constant below, so the log line has to
@@ -240,14 +243,14 @@ async def _fetch_common_translations(
 ) -> dict[str, str]:
     """core ``async_get_translations(hass, language, "common")``; test seam.
 
-    Mirrors the seam in ``websocket_api`` so the lookup can be replaced in
+    Mirrors the seam in ``websocket_api.services`` so the lookup can be replaced in
     tests without reaching into Home Assistant's translation machinery.
     """
     from homeassistant.helpers.translation import async_get_translations
 
     result = await async_get_translations(hass, language, "common", {DOMAIN})
     # Any Mapping, not just dict: core returns a plain dict today, but the
-    # mirrored seam in ``websocket_api`` accepts a Mapping, and narrowing it
+    # mirrored seam in ``websocket_api.services`` accepts a Mapping, and narrowing it
     # here would silently discard a whole catalog on a core-internal change.
     if isinstance(result, Mapping):
         return dict(result)
@@ -294,7 +297,7 @@ async def _common_strings(hass: HomeAssistant | None) -> tuple[dict[str, str], s
         # broad ``except`` also covers an ImportError from the function-local
         # core import — a permanent defect nobody would ever notice at debug.
         # ``exc_info`` because the traceback is the only way to tell the two
-        # apart. Same level the ``websocket_api`` seam this mirrors uses.
+        # apart. Same level the ``websocket_api.services`` seam this mirrors uses.
         _LOGGER.warning(
             "Could not load the %s options-form translations, falling back to "
             "English: %s",
@@ -539,10 +542,21 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Show / apply the server options."""
-        if user_input is not None:
-            return self.async_create_entry(title="", data=self._normalize(user_input))
-
         opts = self.config_entry.options
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            errors = self._connect_path_override_errors(user_input)
+            if not errors:
+                return self.async_create_entry(
+                    title="", data=self._normalize(user_input)
+                )
+
+        # A validation failure must re-render the values the user just entered.
+        # Required fields fall back to their stored/default values only when a
+        # direct unit-test call omits them; optional text fields treat omission
+        # as an intentional clear, matching Home Assistant's frontend payload.
+        form_values = opts if user_input is None else {**opts, **user_input}
+        suggested_values = opts if user_input is None else user_input
         schema = vol.Schema(
             {
                 # Authentication mode first, directly under the connect URLs
@@ -551,7 +565,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 # clients such as Google Gemini Spark and Copilot CLI.
                 vol.Required(
                     OPT_WEBHOOK_AUTH,
-                    default=opts.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE),
+                    default=form_values.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE),
                 ): SelectSelector(
                     SelectSelectorConfig(
                         options=[
@@ -565,7 +579,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 ),
                 vol.Required(
                     OPT_CHANNEL,
-                    default=opts.get(OPT_CHANNEL, DEFAULT_CHANNEL),
+                    default=form_values.get(OPT_CHANNEL, DEFAULT_CHANNEL),
                 ): SelectSelector(
                     SelectSelectorConfig(
                         options=[CHANNEL_STABLE, CHANNEL_DEV],
@@ -575,15 +589,15 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 ),
                 vol.Required(
                     OPT_AUTO_UPDATE,
-                    default=bool(opts.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)),
+                    default=bool(form_values.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)),
                 ): bool,
                 vol.Required(
                     OPT_SERVER_PORT,
-                    default=opts.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT),
+                    default=form_values.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
                 vol.Required(
                     OPT_BIND_HOST,
-                    default=opts.get(OPT_BIND_HOST, DEFAULT_BIND_HOST),
+                    default=form_values.get(OPT_BIND_HOST, DEFAULT_BIND_HOST),
                 ): SelectSelector(
                     # Inline labels: hassfest forbids dots in translation
                     # keys, so the IP-valued options cannot use strings.json
@@ -616,7 +630,9 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     # renders an EMPTY field — the help text says "Leave empty",
                     # and pre-filling DEFAULT_PIP_SPEC would show the STABLE dist
                     # name even on the dev channel.
-                    description={"suggested_value": opts.get(OPT_PIP_SPEC, "")},
+                    description={
+                        "suggested_value": suggested_values.get(OPT_PIP_SPEC, "")
+                    },
                 ): str,
                 vol.Optional(
                     OPT_SERVER_URL,
@@ -626,28 +642,34 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     # constant as an explicit override, which would pin the
                     # scheme/port even after issue #1890's SSL/port-aware
                     # loopback derivation.
-                    description={"suggested_value": opts.get(OPT_SERVER_URL, "")},
+                    description={
+                        "suggested_value": suggested_values.get(OPT_SERVER_URL, "")
+                    },
                 ): str,
                 vol.Required(
                     OPT_ENABLE_WEBHOOK,
-                    default=bool(opts.get(OPT_ENABLE_WEBHOOK, True)),
+                    default=bool(form_values.get(OPT_ENABLE_WEBHOOK, True)),
                 ): bool,
                 vol.Required(
                     OPT_ENABLE_STARTUP_NOTIFICATION,
-                    default=bool(opts.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)),
+                    default=bool(
+                        form_values.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)
+                    ),
                 ): bool,
                 vol.Required(
                     OPT_ENABLE_SIDEBAR_PANEL,
-                    default=bool(opts.get(OPT_ENABLE_SIDEBAR_PANEL, True)),
+                    default=bool(form_values.get(OPT_ENABLE_SIDEBAR_PANEL, True)),
                 ): bool,
                 vol.Required(
                     OPT_ENABLE_LLM_API,
-                    default=bool(opts.get(OPT_ENABLE_LLM_API, DEFAULT_ENABLE_LLM_API)),
+                    default=bool(
+                        form_values.get(OPT_ENABLE_LLM_API, DEFAULT_ENABLE_LLM_API)
+                    ),
                 ): bool,
                 vol.Required(
                     OPT_LLM_API_EXPOSURE,
                     default=str(
-                        opts.get(OPT_LLM_API_EXPOSURE, DEFAULT_LLM_API_EXPOSURE)
+                        form_values.get(OPT_LLM_API_EXPOSURE, DEFAULT_LLM_API_EXPOSURE)
                     ),
                 ): SelectSelector(
                     SelectSelectorConfig(
@@ -660,20 +682,26 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 # empty submit — see the OPT_PIP_SPEC note above.
                 vol.Optional(
                     OPT_EXTERNAL_URL,
-                    description={"suggested_value": opts.get(OPT_EXTERNAL_URL, "")},
+                    description={
+                        "suggested_value": suggested_values.get(OPT_EXTERNAL_URL, "")
+                    },
                 ): str,
                 vol.Optional(
                     OPT_WEBHOOK_ID_OVERRIDE,
                     description={
-                        "suggested_value": opts.get(OPT_WEBHOOK_ID_OVERRIDE, "")
+                        "suggested_value": suggested_values.get(
+                            OPT_WEBHOOK_ID_OVERRIDE, ""
+                        )
                     },
                 ): str,
                 vol.Optional(
                     OPT_SECRET_PATH_OVERRIDE,
                     description={
-                        "suggested_value": opts.get(OPT_SECRET_PATH_OVERRIDE, "")
+                        "suggested_value": suggested_values.get(
+                            OPT_SECRET_PATH_OVERRIDE, ""
+                        )
                     },
-                ): str,
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
                 vol.Optional(
                     OPT_REGENERATE_SECRETS,
                     default=False,
@@ -683,14 +711,18 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 # Empty = auto-generate/keep the current value.
                 vol.Optional(
                     OPT_OAUTH_CLIENT_ID,
-                    description={"suggested_value": opts.get(OPT_OAUTH_CLIENT_ID, "")},
+                    description={
+                        "suggested_value": suggested_values.get(OPT_OAUTH_CLIENT_ID, "")
+                    },
                 ): str,
                 vol.Optional(
                     OPT_OAUTH_CLIENT_SECRET,
                     description={
-                        "suggested_value": opts.get(OPT_OAUTH_CLIENT_SECRET, "")
+                        "suggested_value": suggested_values.get(
+                            OPT_OAUTH_CLIENT_SECRET, ""
+                        )
                     },
-                ): str,
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
                 vol.Optional(
                     OPT_OAUTH_REGENERATE,
                     default=False,
@@ -720,6 +752,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         return self.async_show_form(
             step_id="init",
             data_schema=schema,
+            errors=errors,
             description_placeholders={
                 "versions": versions,
                 "connect_url": await self._connect_url_hint(common),
@@ -728,6 +761,23 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 "panel_hint": panel_hint,
             },
         )
+
+    @staticmethod
+    def _connect_path_override_errors(
+        user_input: Mapping[str, Any],
+    ) -> dict[str, str]:
+        """Return field errors for values that cannot be embedded in a URL path."""
+        errors: dict[str, str] = {}
+        for key in (OPT_SECRET_PATH_OVERRIDE, OPT_WEBHOOK_ID_OVERRIDE):
+            # Match _normalize's long-standing paste-friendly behavior: outer
+            # whitespace is discarded before saving, while whitespace inside
+            # the value remains invalid because it breaks the resulting URL.
+            value = str(user_input.get(key, "") or "").strip()
+            if any(character in "#?%" or character.isspace() for character in value):
+                errors[key] = "invalid_connect_path"
+            elif key == OPT_WEBHOOK_ID_OVERRIDE and "/" in value:
+                errors[key] = "invalid_webhook_id"
+        return errors
 
     @staticmethod
     def _normalize(user_input: dict[str, Any]) -> dict[str, Any]:
@@ -798,7 +848,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                         "shows the unknown-version wording",
                         DOMAIN,
                     )
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001
                 _LOGGER.warning(
                     "Could not read the component version for the options hint, "
                     "showing the unknown-version wording: %s",
@@ -814,7 +864,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 else _installed_server_version()
             )
             server_version = raw_version or common["version_not_installed"]
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             _LOGGER.warning(
                 "Could not read the server version for the options hint, showing "
                 "the not-installed wording: %s",
@@ -855,7 +905,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             loaded = any(
                 entry.state is ConfigEntryState.LOADED for entry in tools_entries
             )
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             # Warning, like the two version reads above: this drops the whole
             # tools-module paragraph from the form, which is a larger visible
             # loss than either of those fallbacks.
@@ -903,7 +953,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 if urls:
                     listed = "\n".join(f"- {u}" for u in urls)
                     return f"{common['connect_urls_label']}\n{listed}"
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001
                 # The hint is auxiliary display data: a resolution bug must not
                 # take down the whole options form, but the degradation should
                 # be visible by default - hence warning, not debug.

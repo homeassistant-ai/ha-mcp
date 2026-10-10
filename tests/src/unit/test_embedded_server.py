@@ -64,6 +64,17 @@ _GROUP_ID_ADMIN = es.GROUP_ID_ADMIN
 _TOKEN_TYPE_LLAT = es.TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 
 
+@pytest.fixture(autouse=True)
+def _sound_installed_dependency_graph(monkeypatch):
+    """Start-up and import-failure paths audit the installed dependency graph.
+
+    Unaudited, that audit walks the metadata of every package in the test
+    runner's own environment. These tests supply a graph with no violations;
+    the audit itself is covered by ``test_dependency_diagnostics.py``.
+    """
+    monkeypatch.setattr(es, "audit_dependency_graph", lambda _root: [])
+
+
 def _make_hass(tmp_path) -> MagicMock:
     hass = MagicMock(name="hass")
     hass.config.skip_pip = False

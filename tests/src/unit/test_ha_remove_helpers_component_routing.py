@@ -40,10 +40,8 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, component_registry_lookup
-from ha_mcp.tools.tools_config_helpers import (
-    _get_entities_for_config_entry,
-    _wait_for_flow_entities,
-)
+from ha_mcp.tools.config_helpers.flow import _wait_for_flow_entities
+from ha_mcp.tools.config_helpers.registry import _get_entities_for_config_entry
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._component_routing_helpers import (
@@ -90,7 +88,7 @@ class RoutingClient:
         self.token = "tok"
         self.verify_ssl = False
         # Reply for the SIMPLE-path config/entity_registry/get + FLOW-path
-        # _get_entry_id_for_flow_helper get (kept legacy, single targeted read).
+        # get_entry_id_for_flow_helper get (kept legacy, single targeted read).
         self._get_result = get_result
         self._entities = list(entities or [])
         self.entity_get_calls = 0
@@ -360,12 +358,11 @@ async def test_simple_delete_falsy_unique_id_degrades_like_missing(
     falsy_unique_id: str | None,
 ) -> None:
     """A component-served row where the entity IS registered but ``unique_id``
-    is falsy (empty string or None) must degrade EXACTLY like the missing-entity
-    case: no usable id is resolved, so the direct-id fallback runs, and when
-    that also fails with the entity still present in state, the SAME
-    ENTITY_NOT_FOUND classification as the legacy exhausted-fallback path
-    (test_simple_path_all_fallbacks_exhausted) is raised — with path-accurate
-    wording naming the component lookup rather than "3 attempts"."""
+    is falsy (empty string or None): no usable id is resolved, so the
+    direct-id fallback runs, and when that also fails with the entity still
+    present in state, the exhausted-fallback ENTITY_NOT_FOUND is raised — with
+    path-accurate wording naming the component lookup rather than "3
+    attempts"."""
     row = {
         "entity_id": "input_button.my_button",
         "unique_id": falsy_unique_id,
@@ -399,6 +396,31 @@ async def test_simple_delete_falsy_unique_id_degrades_like_missing(
     assert client.entity_get_calls == 0
 
 
+@pytest.mark.asyncio
+async def test_simple_delete_component_miss_with_a_state_is_not_reported_missing() -> (
+    None
+):
+    """zone.home through the component: the registry lookup misses it, the
+    direct-id delete fails, yet it has a state. It exists, so the caller must
+    learn it is not registry-managed, not that it was already deleted."""
+    ws = make_ws(
+        "ha_mcp_tools/registry_lookup",
+        info_result=_CAPS_REGISTRY,
+        cmd_result={"entities": [], "missing": ["zone.home"]},
+    )
+    client = DeleteFailsRoutingClient()
+    tools = IntegrationTools(client)
+
+    with patch_ws(ws, component_registry_lookup), pytest.raises(ToolError) as excinfo:
+        await tools.ha_remove_helpers_integrations(
+            target="zone.home", helper_type="zone", confirm=True, wait=False
+        )
+
+    err = json.loads(str(excinfo.value))
+    assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert client.entity_get_calls == 0
+
+
 # --- FLOW-helper delete: registry_lookup(config_entry_id=...) sub-entities -------
 
 
@@ -420,9 +442,12 @@ async def test_flow_delete_subentities_via_component_no_dump() -> None:
             ]
         },
     )
-    # Step 1 (_get_entry_id_for_flow_helper) stays legacy: a single targeted get.
+    # Step 1 (get_entry_id_for_flow_helper) stays legacy: a single targeted get.
     client = RoutingClient(
-        get_result={"success": True, "result": {"config_entry_id": "um_entry"}}
+        get_result={
+            "success": True,
+            "result": {"platform": "utility_meter", "config_entry_id": "um_entry"},
+        }
     )
     tools = IntegrationTools(client)
 
@@ -459,7 +484,10 @@ async def test_flow_delete_capability_miss_uses_legacy_dump() -> None:
         info_exc=HomeAssistantCommandError("no info", "unknown_command"),
     )
     client = RoutingClient(
-        get_result={"success": True, "result": {"config_entry_id": "um_entry"}},
+        get_result={
+            "success": True,
+            "result": {"platform": "utility_meter", "config_entry_id": "um_entry"},
+        },
         entities=[
             _row("sensor.energy_peak", unique_id="p", config_entry_id="um_entry"),
             _row("sensor.energy_offpeak", unique_id="o", config_entry_id="um_entry"),
@@ -509,7 +537,7 @@ async def test_set_helper_wait_resolves_via_component_no_dump_no_sleep() -> None
     with (
         patch_ws(ws, component_registry_lookup),
         patch(
-            "ha_mcp.tools.tools_config_helpers.asyncio.sleep", new_callable=AsyncMock
+            "ha_mcp.tools.config_helpers.flow.asyncio.sleep", new_callable=AsyncMock
         ) as sleep_mock,
     ):
         entities, warnings = await _wait_for_flow_entities(
@@ -627,11 +655,10 @@ async def test_get_entities_unexpected_seam_error_converted_to_warnings() -> Non
     client = RoutingClient()
     warnings: list[str] = []
 
-    # Patch the CONSUMER module's binding (tools_config_helpers imports the
+    # Patch the CONSUMER module's binding (config_helpers/registry.py imports the
     # function directly), not the source module's.
     with patch(
-        "ha_mcp.tools.tools_config_helpers"
-        ".fetch_entities_for_config_entry_via_component",
+        "ha_mcp.tools.config_helpers.registry.fetch_entities_for_config_entry_via_component",
         side_effect=RuntimeError("boom"),
     ):
         result = await _get_entities_for_config_entry(client, "um_entry", warnings)

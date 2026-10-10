@@ -32,6 +32,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import read_only_hints
 from .tools_filesystem import (
     _assert_mcp_tools_available,
     call_mcp_tools_service,
@@ -365,11 +366,7 @@ class YamlReadTools:
     @tool(
         name="ha_config_get_yaml",
         tags={"System", "beta"},
-        annotations={
-            "readOnlyHint": True,
-            "openWorldHint": False,
-            "title": "Read YAML Config Fragment",
-        },
+        annotations=read_only_hints("Read YAML Config Fragment", open_world=False),
     )
     @log_tool_usage
     async def ha_config_get_yaml(
@@ -499,7 +496,7 @@ class YamlReadTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={

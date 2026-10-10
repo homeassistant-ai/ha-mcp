@@ -43,6 +43,16 @@ from ..client.rest_client import (
 from ..client.websocket_client import HomeAssistantWebSocketClient, get_websocket_client
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
+from .backup_access import (
+    gate_backup_combo as _gate_combo,
+)
+from .backup_access import (
+    require_backup_access,
+)
+from .backup_access import (
+    require_backup_param as _require,
+)
+from .backup_on_demand import capture_on_demand
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -56,6 +66,7 @@ from .helpers import (
     raise_tool_error,
     safe_progress,
 )
+from .tool_hints import write_hints
 
 if TYPE_CHECKING:
     from ha_mcp._vendor.fastmcp import FastMCP
@@ -283,7 +294,7 @@ async def _backup_prep_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_BACKUP_PREP, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError: a pooled-WS drop or a failed
         # (re)connect. The legacy probes
         # ride a dedicated already-connected socket, so fall back rather than fail
@@ -787,7 +798,7 @@ async def create_backup(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error creating backup: {e}")
         exception_to_structured_error(
             e,
@@ -1162,7 +1173,7 @@ async def restore_backup(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error restoring backup: {e}")
         exception_to_structured_error(
             e,
@@ -1271,7 +1282,7 @@ async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[st
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error listing backups: {e}")
         exception_to_structured_error(
             e,
@@ -1396,7 +1407,7 @@ async def delete_backup(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error deleting backup: {e}")
         exception_to_structured_error(
             e,
@@ -1562,60 +1573,6 @@ async def _execute_snapshot_delete(
     }
 
 
-# Valid (scope, action) combinations. Anything outside this set is
-# rejected with a structured VALIDATION_INVALID_PARAMETER error.
-_VALID_COMBOS: set[tuple[str, str]] = {
-    ("snapshot", "create"),
-    ("snapshot", "list"),
-    ("snapshot", "restore"),
-    ("snapshot", "delete"),
-    ("edits", "create"),
-    ("edits", "list"),
-    ("edits", "view"),
-    ("edits", "diff"),
-    ("edits", "restore"),
-    ("edits", "delete"),
-}
-
-
-def _gate_combo(scope: str, action: str) -> None:
-    """Reject (scope, action) combinations that do not exist.
-
-    Strong gating defends against the LLM accidentally routing "restore
-    my automation" through ``(snapshot, restore)`` (which would restart
-    HA). The error response lists every legal combo so the LLM can
-    self-correct on the next call.
-    """
-    if (scope, action) in _VALID_COMBOS:
-        return
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"Invalid combination: scope={scope!r}, action={action!r}",
-            context={"scope": scope, "action": action},
-            suggestions=[
-                "Valid combinations: "
-                + ", ".join(sorted(f"({s},{a})" for s, a in _VALID_COMBOS)),
-                "scope='snapshot' is for full HA tarball backups (heavy, restart on restore)",
-                "scope='edits' is for per-entity auto-backups produced by write tools (lightweight)",
-            ],
-        )
-    )
-
-
-def _require(param_name: str, value: Any, scope: str, action: str) -> Any:
-    """Validate a required parameter for the picked (scope, action) cell."""
-    if value is None or (isinstance(value, str) and not value.strip()):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"{param_name!r} is required for scope={scope!r}, action={action!r}",
-                context={"scope": scope, "action": action, "missing_param": param_name},
-            )
-        )
-    return value
-
-
 def register_backup_tools(
     mcp: "FastMCP", client: HomeAssistantClient, **kwargs: Any
 ) -> None:
@@ -1640,7 +1597,7 @@ def register_backup_tools(
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
 | `edits` | `view` | Read one auto-backup file by name; returns YAML and parsed `config`. |
 | `edits` | `diff` | Compare one auto-backup against the entity's current config. RFC 6902 JSON-Patch + add/remove/replace counts; bounded output. Read-only — fetches the live config, makes no changes. |
-| `edits` | `restore` | Re-apply one auto-backup. Existing Template helpers require a fresh safety snapshot; other domains follow auto-backup settings and may proceed without one. A deleted Template helper is recreated with a new config-entry ID; its saved entity ID is restored if unoccupied. **No HA restart.** |
+| `edits` | `restore` | Re-apply one auto-backup. Existing flow helpers (template, group, utility_meter, …) and config subentries require a fresh safety snapshot; other domains follow auto-backup settings and may proceed without one. A deleted flow helper is recreated with a new config-entry ID and its saved entity IDs are restored if unoccupied; a deleted subentry is recreated with a new subentry ID. **No HA restart.** |
 | `edits` | `delete` | Delete one auto-backup by `backup_name`, or bulk-delete by filter. |
 
 **When to use which scope:**
@@ -1658,20 +1615,22 @@ refused if: the target is a scheduled/automatic backup; it's younger than
 newest snapshot remaining. These guarantee at least one recovery point always
 survives an agent's own mistakes.
 
+**Human-managed backup controls:** `enable_snapshot_actions=false` (ENABLE_SNAPSHOT_ACTIONS) blocks every snapshot action, including listing. `backup_read_only=true` (BACKUP_READ_ONLY) allows edits list/view/diff and snapshot list when snapshots are enabled; it blocks explicit create/restore/delete in both scopes. Automatic pre-edit capture still follows `enable_auto_backup`. A human must change these controls in the Backups tab, app configuration, or environment; developer tools cannot change them. Global and connection Read Only Mode still restrict writes.
+
 **`enable_auto_backup` and `scope="edits"`:** the automatic-on-write capture (every wrapped tool call) is gated by `enable_auto_backup=true` — if the listing is empty, check the toggle (web settings UI or `ENABLE_AUTO_BACKUP=true` env var). The explicit `(edits, create)` action bypasses the toggle since the request is explicit; `list` / `view` / `restore` / `delete` operate on whatever's already on disk regardless of the toggle's current state.
 
-**Template filters:** `edits.create` accepts a Template entity ID and returns its stable config-entry ID as `entity_id`. Use that returned ID for `edits.list` and bulk `edits.delete`; those filters do not resolve entity aliases. After recreation, the restore result reports the replacement config-entry ID and `entity_id_mapping` separately.
+**Flow-helper filters:** `edits.create` accepts a flow helper's entity ID and returns its stable config-entry ID as `entity_id`. Use that returned ID for `edits.list` and bulk `edits.delete`; those filters do not resolve entity aliases. After recreation, the restore result reports the replacement config-entry ID and `entity_id_mapping` separately.
 
 **Examples:**
 - Snapshot before risky op: `ha_manage_backup(scope="snapshot", action="create", name="Before_Big_Change")`
 - List snapshots (to discover a backup_id or confirm one landed): `ha_manage_backup(scope="snapshot", action="list")`
 - Restore full snapshot: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed")`
 - Delete an old snapshot (requires `enable_snapshot_delete=true`): `ha_manage_backup(scope="snapshot", action="delete", backup_id="dd7550ed", confirm=True)`
-- On-demand entity snapshot before a manual UI edit: `ha_manage_backup(scope="edits", action="create", domain="helper_input_boolean", entity_id="kitchen_lights_active")`
-- List recent auto-backups for one automation: `ha_manage_backup(scope="edits", action="list", domain="automation", entity_id="kitchen_lights")`
-- View an auto-backup: `ha_manage_backup(scope="edits", action="view", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
-- Diff an auto-backup vs current state: `ha_manage_backup(scope="edits", action="diff", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
-- Restore an auto-backup: `ha_manage_backup(scope="edits", action="restore", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
+- On-demand entity snapshot before a manual UI edit: `ha_manage_backup(scope="edits", action="create", domain="helper_input_boolean", entity_id="welcome_home_active")`
+- List recent auto-backups for one automation: `ha_manage_backup(scope="edits", action="list", domain="automation", entity_id="welcome_home")`
+- View an auto-backup: `ha_manage_backup(scope="edits", action="view", backup_name="automation.welcome_home.20260521_153000.yaml")`
+- Diff an auto-backup vs current state: `ha_manage_backup(scope="edits", action="diff", backup_name="automation.welcome_home.20260521_153000.yaml")`
+- Restore an auto-backup: `ha_manage_backup(scope="edits", action="restore", backup_name="automation.welcome_home.20260521_153000.yaml")`
 - Delete one auto-backup: `ha_manage_backup(scope="edits", action="delete", backup_name="...")`
 - Bulk-delete old auto-backups: `ha_manage_backup(scope="edits", action="delete", older_than_days=30)`
 """
@@ -1679,11 +1638,9 @@ survives an agent's own mistakes.
     @mcp.tool(
         description=manage_backup_description,
         tags={"System"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Manage Backups",
-        },
+        annotations=write_hints(
+            "Manage Backups", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_manage_backup(
@@ -1777,6 +1734,8 @@ survives an agent's own mistakes.
     ) -> dict[str, Any]:
         """Polymorphic backup tool. See the tool description for the routing matrix."""
         _gate_combo(scope, action)
+        settings = get_global_settings()
+        require_backup_access(settings, scope, action)
 
         if scope == "snapshot":
             return await _dispatch_snapshot_action(
@@ -1792,7 +1751,6 @@ survives an agent's own mistakes.
             )
 
         # scope == "edits"
-        settings = get_global_settings()
         mgr = get_backup_manager(client, settings)
         return await _dispatch_edits_action(
             mgr,
@@ -1887,30 +1845,10 @@ async def _edits_create(
                 ],
             )
         )
-    path = await mgr.maybe_snapshot(
-        dom,
-        eid,
-        tool_name="ha_manage_backup.edits.create",
-        force=True,
-    )
-    if path is None:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                f"Could not snapshot {dom}:{eid} — entity not found "
-                + "or fetch returned no config",
-                context={"domain": dom, "entity_id": eid},
-                suggestions=[
-                    "Verify the entity exists via the matching "
-                    + "ha_config_get_* tool first",
-                    "For helpers, pass domain='helper_<helper_type>' "
-                    + "(e.g. 'helper_input_boolean')",
-                ],
-            )
-        )
-    if dom == "helper_template":
-        snapshot = await asyncio.to_thread(mgr.read_snapshot, path.name)
-        eid = snapshot["entity_id"]
+    path = await capture_on_demand(mgr, dom, eid)
+    # The id the snapshot is stored under: a flow helper's config entry id
+    # when the caller passed an entity_id alias, else the id as given.
+    eid = await asyncio.to_thread(mgr._payload_entity_id, path) or eid
     return {
         "success": True,
         "data": {
@@ -2016,7 +1954,7 @@ async def _edits_diff(
         )
     except ToolError:
         raise
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         # Fetching the live config for diff goes through the
         # same domain handler ``restore`` uses, so the same
         # HA-side failure modes (4xx/5xx, WS errors, schema
@@ -2070,7 +2008,7 @@ async def _edits_restore(
     action: str,
     backup_name: str | None,
 ) -> dict[str, Any]:
-    """Re-apply an edit backup, or recreate a deleted Template helper."""
+    """Re-apply an edit backup, or recreate a deleted flow helper or subentry."""
     bname = _require("backup_name", backup_name, scope, action)
     try:
         result = await mgr.restore_snapshot(bname)
@@ -2139,7 +2077,7 @@ async def _edits_restore(
         )
     except ToolError:
         raise
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         # ``handler.restore`` is domain-specific and can surface
         # HA-side rejections (schema-validation failures, 4xx/5xx
         # responses, WS command errors). Without this catch those

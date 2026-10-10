@@ -59,6 +59,22 @@ PATHS_IGNORE: tuple[str, ...] = (
 ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     (
         "py/unused-global-variable",
+        "custom_components/ha_mcp_tools/card_definitions.py",
+        "_build_task",
+        "",
+        "Cross-invocation use: async_get_definitions stores the background build "
+        "task so later calls await the same build, including after a timeout.",
+    ),
+    (
+        "py/unused-global-variable",
+        "custom_components/ha_mcp_tools/custom_cards.py",
+        "_dom_failed_at",
+        "",
+        "Cross-invocation use: a failed download records its time; the next "
+        "_async_dom call reads it to enforce the retry cooldown.",
+    ),
+    (
+        "py/unused-global-variable",
         "tests/src/unit/_embedded_stubs.py",
         "_INSTALLED",
         "",
@@ -113,6 +129,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
+        "src/ha_mcp/server_lifespan.py",
+        "This statement has no effect",
+        "await task",
+        "False positive on the bare 'await task' inside contextlib.suppress "
+        "in server_lifespan: awaiting the cancelled admin-token check IS the "
+        "effect (it waits for the task to finish unwinding before the server "
+        "lifespan exits).",
+    ),
+    (
+        "py/ineffectual-statement",
         "tests/src/unit/test_websocket_client.py",
         "This statement has no effect",
         "await task",
@@ -145,7 +171,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
-        "tests/src/unit/test_ha_search_dashboard_split.py",
+        "tests/src/unit/test_ha_search_dashboard_leg_failure.py",
         "This statement has no effect",
         "await call",
         "False positive on the bare 'await call' inside pytest.raises in "
@@ -249,19 +275,22 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/unused-import",
-        "packaging/binary/pyinstaller_hooks/runtime_hook.py",
-        "idna",
+        "tests/src/e2e/conftest.py",
+        "_collection_data_dir",
         "",
-        "Intentional side-effect import: registers the idna codec at startup and "
-        "forces PyInstaller to bundle it. Rewriting it risks the binary build.",
+        "Intentional side-effect import: sets HA_MCP_CONFIG_DIR to a temp dir "
+        "before the conftest imports ha_mcp, which reads settings at import. "
+        "Code in the conftest itself would break the import-order lint.",
     ),
     (
         "py/unused-import",
-        "packaging/binary/pyinstaller_hooks/runtime_hook.py",
-        "encodings",
+        "tests/src/e2e/conftest.py",
+        "Import of 'pytest_",
         "",
-        "Intentional side-effect import: registers the stdlib encodings.idna "
-        "codec at startup. Rewriting it risks the binary build.",
+        "Hook registration: pytest finds hooks by name in the conftest "
+        "namespace, so importing a pytest_* hook from a _conftest_* module "
+        "registers it. pytest_plugins is not allowed in a conftest below the "
+        "root directory.",
     ),
     (
         "py/import-and-import-from",

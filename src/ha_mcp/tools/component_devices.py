@@ -8,13 +8,13 @@ device registry and filter for one entry (``ha_get_device`` single lookup,
 single in-process read: ``device_get`` returns one ``DeviceEntry.dict_repr`` by
 id, ``device_list`` returns them all — each byte-identical to a
 ``config/device_registry/list`` element by construction (see
-``custom_components/ha_mcp_tools/websocket_api.py``). Consumers keep their own
+``custom_components/ha_mcp_tools/websocket_api/lookups.py``). Consumers keep their own
 transforms over that raw shape.
 
 This module owns the caps-gated fetch so the routing discipline — probe caps,
 send one frame, invalidate on ``unknown_command``, fall back to the legacy path
 on any component error — lives in one place instead of being duplicated per
-consumer (the pattern ``tools_search._fetch_states_via_component`` established
+consumer (the pattern ``search.state._fetch_states_via_component`` established
 for the ``states`` capability). Both helpers return ``None`` to mean "component
 unavailable — use the legacy path"; a component that answers authoritatively
 returns its payload (with ``device`` possibly ``None`` for "no such device").
@@ -110,7 +110,7 @@ async def fetch_device_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_DEVICE_GET, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError: a pooled-WS drop or a failed
         # (re)connect. The legacy paths ride the send_websocket_message bridge /
         # a dedicated capture socket, so fall back to legacy; if the transport
@@ -192,7 +192,7 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_DEVICE_LIST, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError / plain establish Exception → legacy (the
         # legacy device list rides the send_websocket_message bridge).
         logger.warning(

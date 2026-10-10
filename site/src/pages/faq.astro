@@ -390,6 +390,7 @@ source ~/.zshrc
             </li>
             <li><strong>Check token format</strong> - Don't wrap the token in quotes in your config</li>
             <li><strong>Token expiration</strong> - Tokens don't expire by default, but can be revoked</li>
+            <li><strong>Use an administrator's token</strong> - non-admin tokens are not officially supported but still work, with limitations. With a non-admin user's token, ha-mcp logs a warning (at startup, or on the first admin-only request in OAuth mode). Admin-only operations fail with <code class="bg-slate-800 px-1 rounded">AUTH_INSUFFICIENT_PERMISSIONS</code>. ha-mcp keeps them from getting the ha-mcp host IP-banned: Home Assistant answers an admin-only REST request (automation, script and scene configs, config flows, diagnostics, logs, events) from a non-admin with a 401 that its <code class="bg-slate-800 px-1 rounded">http.ban</code> counts as a failed login, so ha-mcp refuses those without sending them, and it calls services over WebSocket, where a refused admin-only service is not counted.</li>
           </ol>
         </div>
 
@@ -534,6 +535,9 @@ uvx --refresh ha-mcp@latest</code></pre>
             </li>
             <li>
               <strong>First run timeout:</strong> Run <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest --version</code> in your terminal first to download and cache the package before Antigravity tries to start it.
+            </li>
+            <li>
+              <strong><code class="bg-slate-800 px-1 rounded">sending "subscriptions/listen": failed to connect (session ID: ): session not found</code>:</strong> A bug in Antigravity's built-in MCP client, not a server or config problem: it opens a <code class="bg-slate-800 px-1 rounded">subscriptions/listen</code> stream the server never offered, then misreads the spec-mandated <code class="bg-slate-800 px-1 rounded">404 Method not found</code> reply as a lost session (request sequence in <a href="https://github.com/homeassistant-ai/ha-mcp/issues/2545" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#2545</a>; fixed in Go MCP SDK v1.8.0 by <a href="https://github.com/modelcontextprotocol/go-sdk/pull/1193" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">modelcontextprotocol/go-sdk#1193</a>, which Antigravity has not shipped yet; the same error is reported in <a href="https://github.com/google-antigravity/antigravity-cli/issues/877" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">google-antigravity/antigravity-cli#877</a>). Until Antigravity ships a fix, connect through the <code class="bg-slate-800 px-1 rounded">fastmcp-remote</code> stdio bridge: <code class="bg-slate-800 px-1 rounded">"command": "uvx", "args": ["fastmcp-remote", "&lt;your MCP server URL&gt;"]</code>.
             </li>
             <li>
               <strong>Tools load but fail when called:</strong> Try switching to stdio mode instead of HTTP. HTTP mode can experience "connection closed" or reconnection errors with this client.

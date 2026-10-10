@@ -66,13 +66,16 @@ Triage-state labels:
 | `ready-to-implement` | Clear path with no unresolved decisions. |
 | `needs-choices` | Multiple approaches need stakeholder input. |
 | `needs-info` | Awaiting the reporter. Any label application starts reminders on days 3/5/6 and closure on day 7; a reporter reply after labeling removes it. See [issue intake](issue-intake.md). |
+| `missing bug report output` | A bug report with neither an `ha_report_issue` report nor a reason. The report gate applies it and closes the issue after 24 hours; adding either clears it, and a maintainer removing it waives the requirement. See [issue intake](issue-intake.md#report-gate). |
 | `priority: high/medium/low` | Relative priority. |
 | `triaged` | Historical marker from the retired triage bot. |
 | `triage-failed` | Historical failure marker from the retired triage bot. |
 | `issue-analyzed` | Deep analysis is complete. |
 
 Bug and scope labels:
-Bug-class labels originate in issue-template form selection or manual triage.
+Bug-class labels originate in issue-template form selection, manual triage,
+or [issue intake](issue-intake.md) for an issue filed from an `ha_report_issue`
+report (`bug`, `agent-behavior`, or `enhancement` for a feature request).
 Scope labels are orthogonal: one issue may carry
 both a bug-class label and a scope label.
 
@@ -166,6 +169,12 @@ The permission, worktree, draft, testing, scope, and completion rules are in
 7. If the pull request is already ready for review, refresh the description
    whenever the implemented scope has changed.
 
+`pr.yml` (unit tests, lint, E2E validation and the required gates),
+`codeql-quality.yml` and `performance-tests.yml` run only for pull requests
+that target `master`; HAOS E2E and a few path-filtered
+workflows run for any base. Open a stacked pull request against `master` and
+say in its body which pull request must merge first.
+
 Before declaring the pull request ready, verify the current head, the complete
 required-check state, and the review-thread state. Post an implementation
 summary only when the pull request actually reaches that state.
@@ -186,12 +195,14 @@ summary only when the pull request actually reaches that state.
 | `notify-dev-channel.yml` | Push to `master` touching `src/` | Development-testing notices. |
 | `semver-release.yml` | Biweekly or manual | Stable version tag and GitHub release. |
 | `release-publish.yml` | `workflow_run` after SemVer Release, or manual | Stable container images and MCP registry. |
-| `build-binary.yml` | Release | Linux, macOS, and Windows binaries. |
-| `addon-publish.yml` | Release | Home Assistant app publishing. |
+| `addon-publish.yml` | Called by `semver-release.yml`, or manual | Home Assistant app publishing. |
 | `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py` | Regenerate `tools.json`, README, and app `DOCS.md`. |
+| `sync-ratchet-baselines.yml` | Push to `master` touching counted sources or `pyproject.toml`, or manual | Lower the module-size and duplicate-code baselines, which pull requests only check. |
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
+| `dev-ha-env.yml` | Manual, forks only | Live throwaway HA (Docker or HAOS) running a branch's server standalone, embedded or as the app, behind encrypted-URL tunnels; see [`docs/dev-ha-env.md`](../dev-ha-env.md). |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
-| `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides. |
+| `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides, after the report gate. |
+| `report-gate.yml` | Hourly or manual | Close bug reports whose `missing bug report output` label is 24 hours old. |
 | `slash-agent.yml` | Maintainer slash command or trusted continuation event | Issue response and issue-to-PR implementation through readiness. |
 | `slash-agent-review-event.yml` | PR review or inline comment | Secretless wakeup for the slash controller; it reads no PR code. |
 | `codex-review-issues.yml` | Manual | Write a read-only open-issue report to Actions logs. |
@@ -279,16 +290,21 @@ Conventional commit effects:
 
 | Prefix | Version effect | Changelog |
 |---|---|---|
-| `fix:`, `perf:`, `refactor:` | Patch | User-facing |
-| `feat:` | Minor | User-facing |
-| `feat!:` or `BREAKING CHANGE:` | Major | User-facing |
-| `chore:`, `ci:`, `test:` | None | Internal |
-| `docs:` | None | User-facing |
+| `fix:`, `perf:`, `refactor:` | Patch | By files changed |
+| `feat:` | Minor | By files changed |
+| `feat!:` or `BREAKING CHANGE:` | Major | By files changed |
+| `chore:`, `ci:`, `test:`, `build:`, `style:` | None | Internal |
+| `docs:` | None | By files changed |
 | `*:(internal)` | Normal type effect | Internal |
 
 Releases use
 [python-semantic-release](https://python-semantic-release.readthedocs.io/).
-Use the `(internal)` scope when the change should not appear in user release
+Release notes show a commit to users only when it changes a file users
+install or read; every other commit goes into the collapsed "Internal
+Changes" block. `touches_user_files` in `templates/CHANGELOG.md.j2` owns the
+path list. A commit that changes only tests, CI, scripts or agent
+instructions is therefore internal whatever its type. Use the `(internal)`
+scope when a change to shipped files should still stay out of user release
 notes, for example:
 `feat(internal): Log package version on startup`.
 Every `master` commit updates the development channel; stable releases are

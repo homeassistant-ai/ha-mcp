@@ -44,6 +44,13 @@ class TestPredicate:
         with pytest.raises(ValidationError, match="op='not_in' requires value: list"):
             Predicate(path="args.x", op="not_in", value="not_a_list")
 
+    @pytest.mark.parametrize("op", ["in", "not_in", "regex", "gt", "lt"])
+    def test_an_omitted_operand_is_refused_like_an_explicit_null(self, op):
+        # An omitted value used to skip validation, serialize as null and
+        # then fail the next load of the stored file.
+        with pytest.raises(ValidationError, match=f"op='{op}' requires"):
+            Predicate(path="args.x", op=op)
+
     def test_gt_requires_non_none_value(self):
         with pytest.raises(ValidationError, match="op='gt' requires"):
             Predicate(path="args.x", op="gt", value=None)

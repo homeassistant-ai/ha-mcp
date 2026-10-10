@@ -599,7 +599,7 @@ class TestBulkSelectorFailSafe:
         ``normalize_stringified_containers`` (see test_middleware.py's
         end-to-end coverage) -- a client that sends ``selector`` as a JSON
         string (Claude Desktop stdio does this; see
-        ``tools/util_helpers.py``'s ``JSON_STRING_COERCION``) makes
+        ``tools/coercion.py``'s ``JSON_STRING_COERCION``) makes
         ``args.selector.domain`` yield nothing, so a rule scoped to
         ``selector.domain == "lock"`` never matches even for a lock
         selector. This test pins that ``evaluate()`` itself has no
@@ -740,3 +740,54 @@ class TestBulkSelectorFailSafe:
             )
             == Verdict.REQUIRE_APPROVAL
         )
+
+
+class TestListAndCommaArguments:
+    """Require-approval mode: Home Assistant reads a list argument as its
+    items and a comma-separated string as its stripped parts, so a gate on
+    one value must hold for those shapes too, or the shape bypasses it."""
+
+    GATE = Policy(
+        rules=[
+            Rule(
+                tool_name="ha_get_history",
+                when=[
+                    Predicate(path="args.entity_ids", op="eq", value="sun.sun"),
+                    Predicate(path="args.source", op="eq", value="statistics"),
+                ],
+            )
+        ]
+    )
+
+    @pytest.mark.parametrize(
+        "entity_ids",
+        [
+            ["sun.sun"],
+            "sun.sun,zone.home",
+            [["sun.sun"]],
+            ["zone.home, sun.sun"],
+        ],
+    )
+    def test_every_shape_of_the_gated_entity_is_gated(self, entity_ids):
+        args = {"entity_ids": entity_ids, "source": "statistics"}
+        assert evaluate("ha_get_history", args, self.GATE) == Verdict.REQUIRE_APPROVAL
+
+    @pytest.mark.parametrize("entity_ids", [["zone.home"], "zone.home,light.a"])
+    def test_other_entities_still_run(self, entity_ids):
+        args = {"entity_ids": entity_ids, "source": "statistics"}
+        assert evaluate("ha_get_history", args, self.GATE) == Verdict.ALLOW
+
+    @pytest.mark.parametrize(
+        ("op", "value", "arg"),
+        [
+            # A negated op matched the whole list before; reading its items
+            # must not lose that match.
+            ("neq", "sun.sun", ["sun.sun"]),
+            ("not_in", ["sun.sun"], ["sun.sun"]),
+            # Surrounding whitespace without a comma is stripped too.
+            ("eq", "sun.sun", " sun.sun"),
+        ],
+    )
+    def test_op_matches_the_whole_value_or_a_part(self, op, value, arg):
+        predicate = Predicate(path="args.entity_ids", op=op, value=value)
+        assert match_predicate(predicate, {"entity_ids": arg})

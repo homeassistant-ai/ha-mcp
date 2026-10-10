@@ -1,0 +1,111 @@
+name: Sync Ratchet Baselines
+
+# Pull requests only check the module-size and duplicate-code ratchets against
+# their baselines and never edit them: every pull request touching a listed
+# file would otherwise rewrite the same two files and conflict with the next.
+# After a merge this lowers the size baseline and rewrites the duplicate-code
+# baseline to master's files, and commits them.
+on:
+  push:
+    branches: [master]
+    paths:
+      - '**/*.py'
+      - '**/*.js'
+      - '**/*.mjs'
+      - '**/*.ts'
+      - '**/*.astro'
+      # Its ruff extend-exclude decides which files the ratchets count.
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Shared group for every workflow that pushes to master (semver-release,
+# addon-publish-dev, locale-sync, sync-tool-docs): a push landing while
+# semantic-release is mid-run aborts the release un-retryably ("Upstream
+# branch ... has changed"), so master writers must not overlap. This also
+# keeps sync runs from overlapping each other. cancel-in-progress must be
+# false: a running release must never be cancelled by a baseline sync.
+concurrency:
+  group: master-write
+  cancel-in-progress: false
+  # queue: max keeps every queued run waiting FIFO. The default single-slot
+  # queue evicts the OLDER pending run when a new one queues, which could
+  # silently drop a queued release behind a bot push.
+  queue: max
+
+jobs:
+  sync-ratchet-baselines:
+    name: Lower the ratchet baselines
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 5
+
+    steps:
+    - name: Generate GitHub App token
+      id: app-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      with:
+        app-id: ${{ secrets.RELEASE_APP_ID }}
+        private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        permission-contents: write
+      continue-on-error: true
+
+    - name: Warn when the App token is unavailable
+      if: steps.app-token.outcome == 'failure'
+      run: echo "::warning::GitHub App token unavailable; falling back to RELEASE_TOKEN or GITHUB_TOKEN, which may not be allowed past branch protection."
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        # Use app token to bypass branch protection ruleset
+        token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+    - name: Set up Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      with:
+        python-version: '3.13'
+
+    # Both scripts use only the standard library. A push rejected as a
+    # non-fast-forward means another merge landed after this checkout: its
+    # files can be larger than the entries computed here while staying under
+    # the entries it merged against, and the sync never raises an entry. So
+    # each retry resets to the latest master and recomputes both baselines
+    # from its files, rather than rebasing values computed from an older tree.
+    - name: Lower the baselines, commit and push
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        for attempt in 1 2 3 4 5; do
+          status=0
+          python scripts/module_size_ratchet.py || status=1
+          python scripts/duplicate_code_ratchet.py || status=1
+          if [ "$status" -ne 0 ]; then
+            echo "::error::A ratchet script failed: master breaks a ratchet, or the script crashed (see the output above). Nothing synced."
+            exit 1
+          fi
+          git add tests/src/unit/module_size_baseline.json tests/src/unit/duplicate_code_baseline.json
+          if git diff --staged --quiet; then
+            echo "No baseline changes to sync."
+            exit 0
+          fi
+          git commit -m "chore(internal): sync ratchet baselines after merge [skip ci]"
+          if out=$(git push 2>&1); then
+            echo "$out"
+            echo "Synced ratchet baselines (attempt ${attempt})."
+            exit 0
+          fi
+          echo "$out" >&2
+          # Only master moving is worth a retry; a permission, ruleset or
+          # network failure would fail the same way five times.
+          if ! grep -qE 'non-fast-forward|fetch first' <<<"$out"; then
+            echo "::error::Push failed for a reason other than master moving; not retrying."
+            exit 1
+          fi
+          echo "Push rejected on attempt ${attempt}; recomputing on the latest master."
+          git fetch origin master
+          git reset --hard origin/master
+        done
+        echo "::error::Could not push the ratchet baseline sync after 5 attempts."
+        exit 1

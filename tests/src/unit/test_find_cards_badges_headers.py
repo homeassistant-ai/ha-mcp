@@ -1,16 +1,22 @@
-"""Unit tests for badge and header card search in _find_cards_in_config.
+"""Unit tests for view-badge and sections-view header-card matches in the card search.
 
-Validates that _find_cards_in_config finds view-level badges and
+Validates that the search finds view-level badges and
 sections-view header cards, addressing issue #801.
 """
 
 from typing import Any, ClassVar
 
-from ha_mcp.tools.tools_config_dashboards import _find_cards_in_config
+from ha_mcp.tools.tools_config_dashboards import (
+    _find_cards_matching,
+    _SearchCriteria,
+    _SearchGaps,
+)
+
+from ._dashboard_search_helpers import _find_cards_in_config
 
 
 class TestBadgeSearch:
-    """Test badge search in _find_cards_in_config."""
+    """Badge matches in the dashboard card search."""
 
     DASHBOARD_WITH_BADGES: ClassVar[dict[str, Any]] = {
         "views": [
@@ -73,7 +79,7 @@ class TestBadgeSearch:
         assert len(badge_matches) == 0
 
     def test_badge_search_with_card_type_badge(self):
-        """card_type='badge' should trigger badge search."""
+        """card_type='badge' keeps only badge matches."""
         matches = _find_cards_in_config(
             self.DASHBOARD_WITH_BADGES,
             entity_id="sensor.temperature",
@@ -112,7 +118,7 @@ class TestBadgeSearch:
 
 
 class TestHeaderCardSearch:
-    """Test sections-view header card search in _find_cards_in_config."""
+    """Sections-view header-card matches in the dashboard card search."""
 
     DASHBOARD_WITH_HEADER: ClassVar[dict[str, Any]] = {
         "views": [
@@ -866,11 +872,9 @@ class TestNestedCardSearch:
 
     # ---- Malformed-slot breadcrumb (issue #1599 review round 2, item 4) ----
 
-    def test_malformed_card_slot_skipped_without_raise(self, caplog):
-        """A non-dict entry under `cards` is skipped (no match, no raise) and a
-        debug breadcrumb is logged rather than silently dropped."""
-        import logging
-
+    def test_malformed_card_slot_skipped_without_raise(self):
+        """A non-dict entry under `cards` is skipped (no match, no raise) and
+        recorded as a search gap rather than silently dropped."""
         config = {
             "views": [
                 {
@@ -881,12 +885,10 @@ class TestNestedCardSearch:
                 }
             ]
         }
-        with caplog.at_level(
-            logging.DEBUG, logger="ha_mcp.tools.tools_config_dashboards"
-        ):
-            matches = _find_cards_in_config(config, card_type="tile")
+        gaps = _SearchGaps()
+        matches = _find_cards_matching(config, _SearchCriteria(card_type="tile"), gaps)
         assert len(matches) == 1
-        assert any("non-dict node" in r.message for r in caplog.records)
+        assert gaps.malformed == [".views[0].cards[0]"]
 
     def test_non_string_custom_field_key_skipped_without_raise(self, caplog):
         """A non-string custom_fields key cannot form a path; it is skipped with a

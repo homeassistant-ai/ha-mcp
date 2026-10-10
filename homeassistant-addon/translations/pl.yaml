@@ -1,26 +1,24 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/pl.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/pl.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Weryfikuj certyfikaty TLS
+    description: 'Weryfikuje certyfikat TLS serwera Home Assistant. Wyłącz tę opcję
+      tylko w zaufanej sieci, dla certyfikatu z podpisem własnym lub niezgodności
+      nazwy hosta: osłabia to bezpieczeństwo transportu.'
+  ha_tool_concurrency:
+    name: Współbieżność narzędzi Home Assistant
+    description: Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we
+      wszystkich sesjach. Współbieżność wewnętrznych żądań REST, WebSocket oraz rozgałęzień
+      na narzędzie pozostaje bez zmian. Wartość 0 oznacza brak limitu. Wywołanie oczekujące
+      na wolne zasoby zakończy się niepowodzeniem po 60 sekundach. Zakres 0–32.
   backup_hint:
-    name: Poziom sugestii pełnej migawki HA (dla LLM)
-    description: 'Dostosowuje sformułowanie podpowiedzi, którą LLM widzi w opisie
-      narzędzia `ha_manage_backup(scope=''snapshot'')`, dotyczącej tego, kiedy sugerować
-      pełną kopię zapasową Home Assistant w formacie tarball przed ryzykownymi operacjami
-      (np. masowe usuwanie urządzeń). Wpływa TYLKO na to jedno zdanie podpowiedzi
-      skierowane do LLM.
-
-
-      W przypadku automatycznych migawek automatyzacji / skryptów / pomocników / itp.
-      dla każdej edycji, użyj oddzielnego przełącznika **Włącz automatyczne tworzenie
-      kopii zapasowych edycji** poniżej.'
-  secret_path:
-    name: Nadpisanie tajnej ścieżki
-    description: 'Opcjonalna niestandardowa ścieżka HTTP dla serwera MCP. Pozostaw
-      puste, aby użyć automatycznie generowanej bezpiecznej ścieżki.
-
-      '
+    name: Poziom podpowiedzi kopii zapasowej
+    description: Jak stanowczo asystenci AI są instruowani, aby sugerować pełną kopię
+      zapasową Home Assistant przed ryzykownymi zmianami. Zmienia to tylko tę podpowiedź;
+      automatyczne kopie zapasowe edycji mają własne ustawienie.
   enable_tool_search:
     name: Włącz wyszukiwanie narzędzi
     description: 'Zastąp pełny katalog narzędzi wyszukiwaniem. Zmniejsza bezczynny
@@ -44,10 +42,11 @@ configuration:
       tutaj.'
   tool_search_max_results:
     name: Maksymalna liczba wyników wyszukiwania narzędzi
-    description: 'Maksymalna liczba narzędzi zwracanych przez ha_search_tools, gdy
-      wyszukiwanie narzędzi jest włączone. Niższe wartości (2-3) oszczędzają tokeny
-      kontekstu, ale mogą pominąć istotne narzędzia. Zakres: 2-10. Wymaga ponownego
-      uruchomienia.'
+    description: Maksymalna liczba ukrytych narzędzi zwracanych w jednym wywołaniu
+      ha_search_tools, gdy wyszukiwanie narzędzi jest włączone; przypięte narzędzie
+      mieszczące się w tym limicie jest dodawane jako krótki wpis zawierający tylko
+      nazwę na samej górze. Niższe wartości (2-3) oszczędzają tokeny kontekstu, ale
+      mogą pominąć powiązane narzędzia. Wymaga ponownego uruchomienia. Zakres 2–10.
   enable_tool_security_policies:
     name: Włącz zasady bezpieczeństwa narzędzi (zaawansowane)
     description: Zabezpiecz wywołania narzędzi wysokiego ryzyka (kontrola zamków/alarmów,
@@ -113,13 +112,49 @@ configuration:
       podrzędna opcji „Dołącz umiejętności najlepszych praktyk przy zapisach” powyżej
       i nieaktywna, gdy opcja nadrzędna jest wyłączona. Wymaga ponownego uruchomienia,
       aby zmiany weszły w życie.'
-  ha_tool_concurrency:
-    name: Współbieżność narzędzi Home Assistant
-    description: Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we
-      wszystkich sesjach. Wewnętrzna współbieżność REST, WebSocket oraz rozgałęziania
-      dla poszczególnych narzędzi pozostaje bez zmian. Wartość 0 zachowuje zachowanie
-      bez limitu. Wywołanie oczekujące na wolne zasoby kończy się niepowodzeniem po
-      60 sekundach.
+  enable_auto_backup:
+    name: Automatyczne tworzenie kopii zapasowych edycji
+    description: Zapisuje migawkę encji przed jej zmianą przez każde wywołanie narzędzia
+      zapisu lub usuwania. Gdy ta opcja jest wyłączona, narzędzia plików i surowego
+      YAML-a (ha_write_file, ha_delete_file, ha_config_set_yaml) odmawiają zapisu.
+  auto_backup_throttle_minutes:
+    name: Ograniczenie częstotliwości automatycznych kopii zapasowych (w minutach)
+    description: Jak często kopia zapasowa może zostać utworzona dla tej samej encji.
+      Wartość 0 tworzy kopię przy każdym zapisie; wartość N większa niż 0 tworzy co
+      najwyżej jedną migawkę na N minut dla danej encji. Zakres 0–1440.
+  auto_backup_retain_per_entity:
+    name: Zachowywanie automatycznych kopii zapasowych (na encję)
+    description: Maksymalna liczba zachowywanych migawek na encję. Każde nowe utrwalenie
+      usuwa najstarsze migawki ponad tę liczbę. Zakres 1–10000.
+  enable_snapshot_actions:
+    name: Zezwalaj na działania na pełnych migawkach Home Assistant
+    description: Pozwala asystentom AI zarządzać pełnymi migawkami Home Assistant
+      za pomocą ha_manage_backup oraz odpowiednich usług i poleceń tworzenia kopii
+      zapasowych w ha_call_service. Wyłączenie tej opcji blokuje wszystkie działania
+      na migawkach, w tym ich listowanie. Usuwanie migawek jest dostępne wyłącznie
+      przez ha_manage_backup i wymaga także włączenia opcji Zezwól na usuwanie migawek.
+      Edycja kopii zapasowych oraz działania na kopiach zapasowych wykonywane przez
+      użytkownika w interfejsie ustawień webowych pozostają dostępne.
+  backup_read_only:
+    name: Ustaw zarządzanie kopiami zapasowymi jako tylko do odczytu
+    description: Pozwala asystentom AI na listowanie, przeglądanie i porównywanie
+      (diff) kopii zapasowych edycji oraz listowanie pełnych migawek HA, gdy działania
+      na migawkach są włączone. Blokuje ręczne tworzenie, przywracanie (w tym przywracanie
+      edycji) i usuwanie kopii zapasowych, w tym odpowiadające im usługi i polecenia
+      kopii zapasowych w ha_call_service. Automatyczne kopie zapasowe przed edycją
+      są nadal tworzone. Działania na kopiach zapasowych wykonywane przez użytkownika
+      w interfejsie ustawień webowych pozostają dostępne.
+  enable_snapshot_delete:
+    name: Zezwól na usuwanie migawek
+    description: Pozwala ha_manage_backup usuwać pełne migawki Home Assistant. Migawka
+      może być ostatnią deską ratunku po omyłkowej zmianie, dlatego użytkownik musi
+      włączyć tę opcję. Zaplanowane kopie zapasowe, najnowsza migawka oraz migawki
+      młodsze niż minimalny wiek pozostają chronione.
+  snapshot_delete_min_age_days:
+    name: Minimalny wiek migawki do usunięcia (dni)
+    description: Minimalny wiek migawki w dniach, po którym może zostać usunięta.
+      Wartość 0 wyłącza limit wieku; najnowsza migawka oraz zaplanowane kopie zapasowe
+      pozostają chronione. Zakres 0–365.
   disabled_tools:
     name: Wyłączone narzędzia (oddzielone przecinkami)
     description: Narzędzia wymienione tutaj są wymuszone na wyłączone i zablokowane
@@ -136,54 +171,9 @@ configuration:
       się na górze zakładki „Narzędzia” i nie można ich odpiąć z interfejsu ustawień
       sieciowych bez wcześniejszego usunięcia tej opcji. Przydatne w połączeniu z
       wyszukiwaniem narzędzi. Nazwy narzędzi oddzielone przecinkami.
-  enable_auto_backup:
-    name: Włącz automatyczne tworzenie kopii zapasowych zmian
-    description: 'Tworzy migawkę dla każdej encji przed każdym wywołaniem narzędzia
-      MCP do zapisu/destrukcyjnego (automatyzacja, skrypt, scena, pomocnik, pulpit
-      nawigacyjny, zasób pulpitu nawigacyjnego, etykieta, kategoria, grupa, strefa,
-      obszar, kalendarz, zadanie, encja, urządzenie, integracja oraz pokrewne narzędzia
-      do usuwania/kasowania). Ogranicznik automatycznej kopii zapasowej określa, jak
-      często to się dzieje: 0 (domyślnie) tworzy migawkę przy każdym takim wywołaniu,
-      N>0 co najwyżej jedną migawkę na N minut na encję. Migawki są zapisywane jako
-      pliki YAML w katalogu /data/ha_mcp_backups/ (można zmienić za pomocą HAMCP_BACKUP_DIR)
-      i są wyświetlane, przywracane lub usuwane za pośrednictwem zakładki Kopie zapasowe
-      w interfejsie ustawień sieciowych lub za pomocą ha_manage_backup(scope=''edits'',
-      ...). Dla tych domen przechwytywanie jest typu "best-effort" (najlepszych starań)
-      — niepowodzenie loguje OSTRZEŻENIE, a zapis jest kontynuowany. Narzędzia do
-      plików i surowego YAML są wyjątkiem: ha_write_file, ha_delete_file i ha_config_set_yaml
-      traktują migawkę jako warunek wstępny, więc zapis za ich pośrednictwem jest
-      odrzucany, gdy ta opcja jest wyłączona, a nieudane przechwycenie go blokuje.
-      Domyślnie włączone; odznaczenie wyłącza przechwytywanie typu "best-effort" i
-      wyłącza z użytku narzędzia do plików i surowego YAML. Wymaga ponownego uruchomienia,
-      aby zmiany weszły w życie.'
-  auto_backup_throttle_minutes:
-    name: Ograniczenie automatycznej kopii zapasowej (minuty)
-    description: Okno ograniczenia dla każdej encji. 0 (domyślnie) tworzy migawkę
-      przy każdym opakowanym zapisie. N>0 tworzy co najwyżej jedną migawkę na N minut
-      dla każdej encji. Zakres 0–1440.
-  auto_backup_retain_per_entity:
-    name: Przechowywanie automatycznych kopii zapasowych (na encję)
-    description: Maksymalna liczba migawek przechowywanych dla każdej encji. Starsze
-      migawki przekraczające ten limit są usuwane przy każdym udanym przechwyceniu.
-      Domyślnie 100, zakres 1–10000.
-  enable_snapshot_delete:
-    name: Zezwól na usuwanie migawek
-    description: Pozwala ha_manage_backup usuwać pełne archiwa migawek HA (scope='snapshot',
-      action='delete'). Domyślnie wyłączone — migawka może być ostatnim punktem odzyskiwania
-      po błędnej zmianie, dlatego człowiek musi wyrazić na to zgodę. Nawet gdy jest
-      włączone, zaplanowane kopie zapasowe, najnowsza pozostała migawka i wszystko
-      młodsze niż dolna granica wieku poniżej pozostają chronione.
-  snapshot_delete_min_age_days:
-    name: Minimalny wiek migawki do usunięcia (dni)
-    description: Migawka musi być co najmniej tak stara, zanim będzie mogła zostać
-      usunięta. Zakres 0–365; 0 wyłącza limit (ochrona najnowszej migawki i zaplanowanych
-      kopii zapasowych nadal obowiązuje). Domyślnie 7.
-  verify_ssl:
-    name: Weryfikuj certyfikat TLS
-    description: Zweryfikuj certyfikat TLS serwera Home Assistant. Aplikacja (dodatek)
-      łączy się przez proxy Supervisora, więc zazwyczaj nie ma to wpływu i powinno
-      pozostać włączone. Wyłącz tylko wtedy, gdy skonfigurowano aplikację (dodatek)
-      tak, aby komunikowała się z HA przez publiczną nazwę hosta HTTPS z certyfikatem
-      z podpisem własnym lub niedopasowaniem nazwy hosta. Wyłączenie osłabia bezpieczeństwo
-      transportu — pozostaw włączone, chyba że wiesz, że tego potrzebujesz. Wymaga
-      ponownego uruchomienia, aby zaczęło obowiązywać.
+  secret_path:
+    name: Nadpisanie tajnej ścieżki
+    description: 'Opcjonalna niestandardowa ścieżka HTTP dla serwera MCP. Pozostaw
+      puste, aby użyć automatycznie generowanej bezpiecznej ścieżki.
+
+      '

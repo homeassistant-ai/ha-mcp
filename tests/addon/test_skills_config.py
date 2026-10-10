@@ -65,7 +65,8 @@ class TestBundledSkillFiles:
         assert refs_dir.exists(), "references/ directory not found"
 
         expected_files = [
-            "automation-patterns.md",
+            "automation-actions.md",
+            "triggers-and-conditions.md",
             "device-control.md",
             "examples.yaml",
             "helper-selection.md",

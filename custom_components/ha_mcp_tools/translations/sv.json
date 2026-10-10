@@ -24,6 +24,10 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_connect_path": "Får inte innehålla #, ?, % eller mellanslag.",
+      "invalid_webhook_id": "Webhook-ID:n får inte innehålla ett snedstreck (/)."
+    },
     "step": {
       "tools_info": {
         "title": "HA-MCP Fil- & YAML-verktyg",

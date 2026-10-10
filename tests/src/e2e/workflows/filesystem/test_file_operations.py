@@ -100,7 +100,7 @@ async def mcp_client_with_filesystem(
             f"{missing}. The inaddon addon needs enable_filesystem_tools=true in "
             f"its install-time options (build_image.install_ha_mcp_dev_addon); the "
             f"embedded backend needs it in feature_flags.json "
-            f"(conftest._EMBEDDED_FEATURE_FLAGS)."
+            f"(_conftest_embedded._EMBEDDED_FEATURE_FLAGS)."
         )
         logger.debug("FastMCP client (%s, HTTP) reused for filesystem tests", backend)
         # Session-scope mcp_client owns __aexit__; the per-test fixture
@@ -138,7 +138,7 @@ async def _check_filesystem_tools_available(mcp_client) -> tuple[bool, str | Non
 
         return True, None
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return False, f"Error checking tools: {e}"
 
 
@@ -178,7 +178,7 @@ async def _check_mcp_tools_service_available(mcp_client) -> tuple[bool, str | No
 
         return False, "Unexpected response format"
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return False, f"Error checking services: {e}"
 
 

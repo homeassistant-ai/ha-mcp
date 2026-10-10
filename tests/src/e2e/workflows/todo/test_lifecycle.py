@@ -60,7 +60,7 @@ def enhanced_parse_mcp_result(result) -> dict[str, Any]:
                 str(result.content[0]) if hasattr(result, "content") else str(result)
             )
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to parse MCP result: {e}")
         return {"error": "Failed to parse result", "exception": str(e)}
 
@@ -92,7 +92,7 @@ async def wait_for_item_in_list(
                         logger.info(f"Found item '{item_summary}' in {entity_id}")
                         return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"Item check failed: {e}")
 
         await asyncio.sleep(poll_interval)
@@ -117,7 +117,7 @@ async def get_item_by_summary(
                 if item.get("summary") == item_summary:
                     return item
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Failed to get item by summary: {e}")
 
     return None
@@ -433,7 +433,7 @@ class TestTodoAdvancedFeatures:
                 )
                 logger.info("Cleanup completed")
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 # Some todo integrations don't support descriptions
                 logger.info(f"Description not supported by this integration: {e}")
 
@@ -557,7 +557,7 @@ class TestTodoBulkOperations:
                         "ha_remove_todo_item",
                         {"entity_id": todo_entity, "item": item_name},
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001
                     pass  # Item may already be gone
 
             logger.info("Bulk add operations test completed")

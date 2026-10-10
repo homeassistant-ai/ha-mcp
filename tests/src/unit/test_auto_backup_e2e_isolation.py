@@ -1,6 +1,8 @@
 """The edit-backup E2E fixture must never select a developer's legacy history."""
 
 import os
+import subprocess
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -92,3 +94,71 @@ def test_stdio_environment_pins_backups_inside_its_disposable_directory(
     )
     assert manager.backup_dir == config_dir / "backups"
     default.assert_not_called()
+
+
+def test_in_process_server_keeps_every_write_out_of_the_developer_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A local E2E run must not add snapshots or settings files to the
+    developer's ``~/.ha-mcp`` or to an existing legacy backup store."""
+    home = tmp_path / "home"
+    legacy = home / ".local" / "share" / "ha_mcp" / "backups"
+    legacy.mkdir(parents=True)
+    sentinel = legacy / "existing.yaml"
+    sentinel.write_text("existing backup", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: home)
+    for name in (
+        "HA_MCP_CONFIG_DIR",
+        "HAMCP_BACKUP_DIR",
+        "XDG_DATA_HOME",
+        "SUPERVISOR_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    def mktemp(name: str) -> Path:
+        path = tmp_path / "pytest" / name
+        path.mkdir(parents=True)
+        return path
+
+    fixture = contextmanager(e2e_fixtures.in_process_data_dir.__wrapped__)
+    with fixture(SimpleNamespace(mktemp=mktemp)) as config_dir:
+        assert not data_paths.get_data_dir().is_relative_to(home)
+        manager = bm.get_backup_manager(SimpleNamespace(), config.get_global_settings())
+        path = manager._write_snapshot("automation", "fixture", {"id": "x"}, "test")
+
+    assert path.is_relative_to(config_dir)
+    assert not (home / ".ha-mcp").exists()
+    assert list(legacy.iterdir()) == [sentinel]
+    assert "HAMCP_BACKUP_DIR" not in os.environ
+
+
+def test_e2e_collection_leaves_the_developer_home_alone(tmp_path: Path) -> None:
+    """Collecting E2E tests imports ``ha_mcp``, which reads settings; that must
+    not create or read the developer's ``~/.ha-mcp``."""
+    tests_dir = Path(__file__).resolve().parents[2]
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"HA_MCP_CONFIG_DIR", "HAMCP_BACKUP_DIR", "PYTEST_ADDOPTS"}
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "src/e2e/workflows/config/test_helper_crud.py",
+        ],
+        cwd=tests_dir,
+        env={**env, "HOME": str(home)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (home / ".ha-mcp").exists()

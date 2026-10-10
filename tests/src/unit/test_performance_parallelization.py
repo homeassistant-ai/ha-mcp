@@ -32,6 +32,7 @@ class MockClient:
         self.entities = entities or []
         self.services = services or []
         self.delay = delay
+        self.admin_route_refused = False
         self.get_states_call_count = 0
 
     async def get_states(self) -> list[dict]:

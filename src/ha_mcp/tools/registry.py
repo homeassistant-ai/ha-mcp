@@ -282,7 +282,7 @@ class ToolsRegistry:
             try:
                 if self._import_and_register_module(module_name, kwargs, func_name):
                     registered_count += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 failed.append((module_name, e))
 
         self._raise_or_log_registration_failures(failed, registered_count)

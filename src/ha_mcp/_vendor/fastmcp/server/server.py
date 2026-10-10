@@ -16,7 +16,16 @@ from contextlib import (
 )
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    Literal,
+    TypeVar,
+    cast,
+    get_args,
+    overload,
+)
 
 import httpx2
 from ha_mcp._vendor import mcp_types
@@ -31,6 +40,7 @@ from ha_mcp._vendor.mcp_types import (
 from ha_mcp._vendor.mcp_types.jsonrpc import MISSING_REQUIRED_CLIENT_CAPABILITY
 from pydantic import AnyUrl
 from pydantic import ValidationError as PydanticValidationError
+from pydantic_core import ErrorType
 from starlette.routing import BaseRoute
 from typing_extensions import Self
 
@@ -66,6 +76,7 @@ from ha_mcp._vendor.fastmcp.resources.template import ResourceTemplate
 from ha_mcp._vendor.fastmcp.server.auth import AuthCheck, AuthContext, AuthProvider, run_auth_checks
 from ha_mcp._vendor.fastmcp.server.caching import build_cache_hints
 from ha_mcp._vendor.fastmcp.server.completions import CompletionHandler
+from ha_mcp._vendor.fastmcp.server.dependencies import _dispatching_tool_call
 from ha_mcp._vendor.fastmcp.server.lifespan import Lifespan
 from ha_mcp._vendor.fastmcp.server.low_level import LowLevelServer
 from ha_mcp._vendor.fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
@@ -111,6 +122,21 @@ if TYPE_CHECKING:
     from ha_mcp._vendor.fastmcp.server.providers.proxy import FastMCPProxy
 
 logger = get_logger(__name__.removeprefix("ha_mcp._vendor."))
+
+_BUILTIN_VALIDATION_ERROR_TYPES = frozenset(get_args(ErrorType))
+
+
+def _validation_error_summary(error: PydanticValidationError) -> dict[str, Any]:
+    """Keep counts and built-in codes, never input-derived validation details."""
+    error_types = {
+        detail["type"]
+        if detail["type"] in _BUILTIN_VALIDATION_ERROR_TYPES
+        else "custom_error"
+        for detail in error.errors(
+            include_url=False, include_context=False, include_input=False
+        )
+    }
+    return {"error_count": error.error_count(), "error_types": sorted(error_types)}
 
 
 def _version_request_meta(
@@ -783,7 +809,7 @@ class FastMCP(
     # are inherited from AggregateProvider which handles aggregation and namespacing
 
     async def get_tasks(self) -> Sequence[FastMCPComponent]:
-        """Get task-eligible components with all transforms applied.
+        """Get task-eligible components with server-level transforms applied.
 
         Overrides AggregateProvider.get_tasks() to apply server-level transforms
         after aggregation. AggregateProvider handles provider-level namespacing.
@@ -791,24 +817,10 @@ class FastMCP(
         # Get tasks from AggregateProvider (handles aggregation and namespacing)
         components = list(await super().get_tasks())
 
-        # Separate by component type for server-level transform application
-        tools = [c for c in components if isinstance(c, Tool)]
-        resources = [c for c in components if isinstance(c, Resource)]
-        templates = [c for c in components if isinstance(c, ResourceTemplate)]
-        prompts = [c for c in components if isinstance(c, Prompt)]
-
-        # Apply server-level transforms sequentially
-        for transform in self.transforms:
-            tools = await transform.list_tools(tools)
-            resources = await transform.list_resources(resources)
-            templates = await transform.list_resource_templates(templates)
-            prompts = await transform.list_prompts(prompts)
-
         return [
-            *tools,
-            *resources,
-            *templates,
-            *prompts,
+            c
+            for c in await self._apply_task_transforms(components)
+            if c.task_config.supports_tasks()
         ]
 
     def add_transform(self, transform: Transform) -> None:
@@ -1435,17 +1447,18 @@ class FastMCP(
                 # the whole thing (so it observes every call), and the
                 # interceptors sit between it and the tool body (so each is the
                 # last gate before execution).
-                dispatched = await self._dispatch_component_middleware(
-                    context=mw_context,
-                    call_next=self._compose_tool_call_interceptors(
-                        lambda context: self.call_tool(
-                            context.message.name,
-                            context.message.arguments or {},
-                            version=version,
-                            run_middleware=False,
-                        )
-                    ),
-                )
+                with _dispatching_tool_call():
+                    dispatched = await self._dispatch_component_middleware(
+                        context=mw_context,
+                        call_next=self._compose_tool_call_interceptors(
+                            lambda context: self.call_tool(
+                                context.message.name,
+                                context.message.arguments or {},
+                                version=version,
+                                run_middleware=False,
+                            )
+                        ),
+                    )
                 # Above the chain, so a Prefab payload is re-addressed however
                 # it was produced — middleware can answer a call itself, and
                 # such a result never reaches the core path below.
@@ -1491,18 +1504,15 @@ class FastMCP(
                 try:
                     return await tool._run(arguments or {})
                 except ValidationError as e:
-                    # Argument-validation failure (a bad call). FunctionTool
-                    # converts pydantic's call-validation error into fastmcp's
-                    # ValidationError (see #4128) so it can be filtered as a
-                    # client error. Log the underlying detail without a URL or
-                    # traceback, matching the previous pydantic-error logging.
                     cause = e.__cause__
-                    detail = (
-                        cause.errors(include_url=False)
-                        if isinstance(cause, PydanticValidationError)
-                        else str(e)
-                    )
-                    logger.warning("Invalid arguments for tool %r: %s", name, detail)
+                    if isinstance(cause, PydanticValidationError):
+                        logger.warning(
+                            "Invalid arguments for tool %r: %s",
+                            name,
+                            _validation_error_summary(cause),
+                        )
+                    else:
+                        logger.warning("Invalid arguments for tool %r", name)
                     raise
                 except FastMCPError as e:
                     logger.log(
@@ -1516,7 +1526,7 @@ class FastMCP(
                     logger.warning(
                         "Invalid arguments for tool %r: %s",
                         name,
-                        e.errors(include_url=False),
+                        _validation_error_summary(e),
                     )
                     raise
                 except Exception as e:

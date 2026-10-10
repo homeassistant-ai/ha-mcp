@@ -18,6 +18,7 @@ from ..client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
 )
+from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..errors import ErrorCode, create_error_response
 from .hacs_registration import (
     CATEGORY_MAP,
@@ -36,12 +37,13 @@ from .helpers import (
     safe_progress,
     validate_identifier_not_empty,
 )
-from .util_helpers import add_timezone_metadata
+from .response_helpers import add_timezone_metadata
+from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
 
-async def _assert_hacs_available() -> None:
+async def _assert_hacs_available(ws_client: HomeAssistantWebSocketClient) -> None:
     """Raise ToolError if HACS is not installed or not responding.
 
     Distinguishes "unknown command" (HACS not installed) from other failures
@@ -51,9 +53,6 @@ async def _assert_hacs_available() -> None:
     exception_to_structured_error, so connection failures are classified
     correctly rather than masked as COMPONENT_NOT_INSTALLED.
     """
-    from ..client.websocket_client import get_websocket_client
-
-    ws_client = await get_websocket_client()
     response = await ws_client.send_command("hacs/info")
     if response.get("success"):
         return
@@ -128,15 +127,22 @@ class HacsTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
+    async def _get_hacs_client(self) -> HomeAssistantWebSocketClient:
+        """Check HACS on the current request's connection, including OAuth users."""
+        from ..client.websocket_client import get_websocket_client
+
+        ws_client = await get_websocket_client(
+            url=self._client.base_url,
+            token=self._client.token,
+            verify_ssl=self._client.verify_ssl,
+        )
+        await _assert_hacs_available(ws_client)
+        return ws_client
+
     @tool(
         name="ha_get_hacs_info",
         tags={"HACS"},
-        annotations={
-            "openWorldHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get HACS Info",
-        },
+        annotations=read_only_hints("Get HACS Info", open_world=True),
     )
     @log_tool_usage
     async def ha_get_hacs_info(
@@ -217,7 +223,7 @@ class HacsTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_get_hacs_info", "action": action},
@@ -232,11 +238,9 @@ class HacsTools:
     @tool(
         name="ha_manage_hacs",
         tags={"HACS"},
-        annotations={
-            "openWorldHint": True,
-            "destructiveHint": True,
-            "title": "Manage HACS",
-        },
+        annotations=write_hints(
+            "Manage HACS", destructive=True, idempotent=False, open_world=True
+        ),
     )
     @log_tool_usage
     async def ha_manage_hacs(
@@ -350,7 +354,7 @@ class HacsTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"tool": "ha_manage_hacs", "action": action},
@@ -383,13 +387,7 @@ class HacsTools:
             ctx, progress=0, total=3, message="checking HACS availability"
         )
 
-        # Check if HACS is available
-        await _assert_hacs_available()
-
-        # Get all repositories via WebSocket
-        from ..client.websocket_client import get_websocket_client
-
-        ws_client = await get_websocket_client()
+        ws_client = await self._get_hacs_client()
 
         # Build command parameters - map user-friendly category to HACS internal name
         kwargs_cmd: dict[str, Any] = {}
@@ -447,12 +445,7 @@ class HacsTools:
         return {"success": True, **wrapped}
 
     async def _hacs_info(self, repository_id: str) -> dict[str, Any]:
-        # Check if HACS is available
-        await _assert_hacs_available()
-
-        from ..client.websocket_client import get_websocket_client
-
-        ws_client = await get_websocket_client()
+        ws_client = await self._get_hacs_client()
 
         # If repository_id contains a slash, it's a GitHub path - look up numeric ID
         actual_id, _ = await _resolve_hacs_repo_id(ws_client, repository_id)
@@ -540,12 +533,7 @@ class HacsTools:
                 "Or pass a GitHub path like 'owner/repo' to install by name",
             ],
         )
-        # Check if HACS is available
-        await _assert_hacs_available()
-
-        from ..client.websocket_client import get_websocket_client
-
-        ws_client = await get_websocket_client()
+        ws_client = await self._get_hacs_client()
 
         # Resolve GitHub path to numeric ID if needed
         actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
@@ -633,11 +621,7 @@ class HacsTools:
                 "Or pass a GitHub path like 'owner/repo' to remove by name",
             ],
         )
-        await _assert_hacs_available()
-
-        from ..client.websocket_client import get_websocket_client
-
-        ws_client = await get_websocket_client()
+        ws_client = await self._get_hacs_client()
 
         actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
 
@@ -762,11 +746,7 @@ class HacsTools:
                 "Or pass a GitHub path like 'owner/repo' to refresh by name",
             ],
         )
-        await _assert_hacs_available()
-
-        from ..client.websocket_client import get_websocket_client
-
-        ws_client = await get_websocket_client()
+        ws_client = await self._get_hacs_client()
 
         actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
 
@@ -835,8 +815,7 @@ class HacsTools:
     async def _hacs_add_repository(
         self, repository: str, category: str
     ) -> dict[str, Any]:
-        # Check if HACS is available
-        await _assert_hacs_available()
+        ws_client = await self._get_hacs_client()
 
         # Validate repository format
         if "/" not in repository:
@@ -850,11 +829,6 @@ class HacsTools:
                     ],
                 )
             )
-
-        # Add repository via WebSocket
-        from ..client.websocket_client import get_websocket_client
-
-        ws_client = await get_websocket_client()
 
         # Map user-friendly category to HACS internal name
         hacs_category = CATEGORY_MAP.get(category, category)

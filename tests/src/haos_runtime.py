@@ -265,7 +265,7 @@ def _container_miss_diagnostics(ssh_cmd: list[str], env: dict[str, str]) -> str:
                 check=False,
             )
             captured.append(f"{label}={probe.stdout.strip()!r}")
-        except Exception as probe_err:  # pragma: no cover - diagnostics best-effort
+        except Exception as probe_err:  # noqa: BLE001  # pragma: no cover - diagnostics best-effort
             captured.append(f"{label}_error={probe_err!r}")
     return " | " + " | ".join(captured)
 
@@ -481,7 +481,7 @@ def _shift_recorder_timestamps(db_local: Path, target_age_seconds: float) -> boo
     """
     import sqlite3
 
-    # Same logic as conftest._refresh_recorder_timestamps. Kept inline
+    # Same logic as _conftest_seed._refresh_recorder_timestamps. Kept inline
     # rather than importing because conftest pulls in heavy dev deps
     # (docker, testcontainers) that the HAOS-only paths don't need.
     TIMESTAMP_COLUMNS = {
@@ -553,7 +553,7 @@ def refresh_recorder_in_qcow2(
     once that exceeds the ~24h window history queries use, every history
     pagination test silently regresses. This helper extracts the DB from
     the qcow2, runs the same uniform timestamp shift the testcontainer
-    path does (``conftest._refresh_recorder_timestamps``), and copies the
+    path does (``_conftest_seed._refresh_recorder_timestamps``), and copies the
     file back in place. Done once per pytest session before QEMU boots.
 
     Uses guestfish (libguestfs) for both copy-out and copy-in; sqlite3
@@ -932,8 +932,8 @@ def _build_embedded_server_wheel(dest_dir: Path) -> Path:
     under ``uv run pytest`` in a uv-created venv that ships no ``pip``, so a
     ``python -m pip wheel`` call exits non-zero (verified on CI run 28705609217 —
     it is also why the container-lane embedded test silently skips). ``uv`` is
-    always on PATH (setup-uv) and provisions the setuptools build backend from
-    its cache (already warmed by the lane's ``uv sync``). Returns the wheel path.
+    always on PATH (setup-uv) and builds with its own ``uv_build`` backend.
+    Returns the wheel path.
     """
     import shutil as _shutil
 
@@ -1648,7 +1648,21 @@ def _resolve_local_store_dir(image_path: Path) -> str:
     return "/supervisor/apps/local"
 
 
-def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
+# Files the dev addon's Dockerfile copies from the stable addon dir (staged at
+# the build-context root) and the other repo files it copies, besides src/.
+# Both must match build_image's (kept in sync by hand like
+# HA_MCP_TEST_SECRET_PATH; test_haos_dev_addon_context checks both).
+STABLE_ADDON_FILES = ("start.py", "app_options.json")
+DEV_ADDON_REPO_FILES = (
+    "pyproject.toml",
+    "uv.lock",
+    "README.md",
+    "LICENSE",
+    "tests/test-env/pyproject.toml",
+)
+
+
+def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:  # noqa: PLR0915
     """Overwrite the staged ha-mcp dev addon source with the PR's current source.
 
     The cached qcow2 ships with the addon installed + Docker image built
@@ -1657,7 +1671,7 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
 
     1. Walks the working tree for the addon-build-context files
        (homeassistant-addon-dev/* + start.py from homeassistant-addon/ +
-       pyproject.toml + uv.lock + src/ha_mcp/).
+       ``DEV_ADDON_REPO_FILES`` + src/ha_mcp/).
     2. Bumps the addon's config.yaml ``version:`` so Supervisor's
        local-store scanner reports an update-available on next boot.
        Bump format: ``<base>-pr-<GITHUB_SHA[:7] or "local">`` so every
@@ -1693,12 +1707,11 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
 
         # Same file-shaping as build_image.stage_dev_addon_source so the
         # build context matches what the cached Docker layers expect.
-        _shutil.copy(
-            repo_root / "homeassistant-addon" / "start.py",
-            staging / "start.py",
-        )
-        _shutil.copy(repo_root / "pyproject.toml", staging / "pyproject.toml")
-        _shutil.copy(repo_root / "uv.lock", staging / "uv.lock")
+        for name in STABLE_ADDON_FILES:
+            _shutil.copy(repo_root / "homeassistant-addon" / name, staging / name)
+        for name in DEV_ADDON_REPO_FILES:
+            (staging / name).parent.mkdir(parents=True, exist_ok=True)
+            _shutil.copy(repo_root / name, staging / name)
         addon_src_dir = staging / "src"
         if addon_src_dir.exists():
             _shutil.rmtree(addon_src_dir)
@@ -1707,12 +1720,12 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
 
         # Dockerfile shape fixup (same as bake).
         dockerfile = staging / "Dockerfile"
-        dockerfile.write_text(
-            dockerfile.read_text().replace(
-                "COPY homeassistant-addon/start.py /",
-                "COPY start.py /",
+        patched = dockerfile.read_text()
+        for name in STABLE_ADDON_FILES:
+            patched = patched.replace(
+                f"COPY homeassistant-addon/{name} /", f"COPY {name} /"
             )
-        )
+        dockerfile.write_text(patched)
 
         # Strip image: from config.yaml — Supervisor pulls from GHCR when
         # image: is set, but the per-PR version we bump to below doesn't

@@ -18,13 +18,14 @@ from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
+from ha_mcp.tools.config_write_helpers import fetch_entity_category
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.smart_search._base import _SearchBase
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.tools.tools_registry import _get_single_device_result
 from ha_mcp.tools.tools_search import SearchTools
 from ha_mcp.tools.tools_services import _get_service_translations
-from ha_mcp.tools.util_helpers import fetch_entity_category, get_logger_levels
+from ha_mcp.tools.util_helpers import get_logger_levels
 
 _AREA_LIST = "config/area_registry/list"
 _FLOOR_LIST = "config/floor_registry/list"

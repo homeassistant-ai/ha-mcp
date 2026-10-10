@@ -30,6 +30,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
@@ -160,12 +161,7 @@ class CalendarTools:
     @tool(
         name="ha_config_get_calendar_events",
         tags={"Calendar"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Calendar Events",
-        },
+        annotations=read_only_hints("Get Calendar Events", open_world=False),
     )
     @log_tool_usage
     async def ha_config_get_calendar_events(
@@ -257,7 +253,7 @@ class CalendarTools:
 
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             logger.error(f"Failed to get calendar events for {entity_id}: {error}")
 
             # Provide helpful error messages
@@ -515,11 +511,12 @@ class CalendarTools:
     @tool(
         name="ha_config_set_calendar_event",
         tags={"Calendar"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Calendar Event",
-        },
+        annotations=write_hints(
+            "Create or Update Calendar Event",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(
         domain="calendar_event",
@@ -750,7 +747,7 @@ class CalendarTools:
 
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             action = "update" if uid is not None else "create"
             logger.error(f"Failed to {action} calendar event in {entity_id}: {error}")
 
@@ -770,12 +767,9 @@ class CalendarTools:
     @tool(
         name="ha_config_remove_calendar_event",
         tags={"Calendar"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Calendar Event",
-        },
+        annotations=write_hints(
+            "Remove Calendar Event", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(
         domain="calendar_event",
@@ -886,7 +880,7 @@ class CalendarTools:
 
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             logger.error(f"Failed to delete calendar event from {entity_id}: {error}")
 
             exception_to_structured_error(

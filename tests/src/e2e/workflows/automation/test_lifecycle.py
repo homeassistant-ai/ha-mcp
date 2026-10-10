@@ -79,7 +79,7 @@ async def _trigger_and_verify_automation(
                     "📋 Logbook fallback also timed out — trigger service call "
                     "succeeded, treating as informational"
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Logbook fallback failed: {e} - continuing with test")
 
 
@@ -151,7 +151,7 @@ class TestAutomationLifecycle:
         test_light = await self._find_test_light_entity(mcp_client)
         return [test_light, test_light]
 
-    async def test_basic_automation_lifecycle(
+    async def test_basic_automation_lifecycle(  # noqa: PLR0915
         self, mcp_client, cleanup_tracker, test_data_factory
     ):
         """
@@ -536,7 +536,7 @@ class TestAutomationLifecycle:
             else:
                 logger.info("✅ Invalid configuration properly rejected")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.info(
                 f"✅ Invalid configuration properly rejected with exception: {e}"
             )

@@ -66,7 +66,7 @@ async def _check_entity_state(client: httpx.AsyncClient, check: dict) -> dict:
     r = await client.get(f"/api/states/{entity_id}")
     try:
         actual = r.json().get("state") if r.status_code == 200 else "not found"
-    except Exception:
+    except Exception:  # noqa: BLE001
         actual = "not found"
     return {
         **check,
@@ -85,7 +85,7 @@ async def _find_in_states(
         return None
     try:
         states = r.json()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
     for state in states:
         if state["entity_id"].startswith(f"{domain}."):
@@ -148,7 +148,7 @@ async def _find_in_automation_config(
         return None
     try:
         return r.json()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -228,7 +228,7 @@ async def _check_area_exists(mcp_client, check: dict) -> dict:
                 "passed": True,
                 "detail": f"Found area '{name}'",
             }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return {
             **check,
             "type": "area_exists",
@@ -254,7 +254,7 @@ async def _check_label_exists(mcp_client, check: dict) -> dict:
                 "passed": True,
                 "detail": f"Found label '{name}'",
             }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return {
             **check,
             "type": "label_exists",
@@ -282,7 +282,7 @@ async def _check_dashboard_exists(mcp_client, check: dict) -> dict:
                 "passed": True,
                 "detail": f"Found dashboard '{url_path}'",
             }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return {
             **check,
             "type": "dashboard_exists",

@@ -293,7 +293,7 @@ async def wait_for_state_change(
             logger.warning(f"⚠️ Could not get initial state for {entity_id}")
             return None
         initial_state = initial_data.get("data", {}).get("state")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ Error getting initial state for {entity_id}: {e}")
         return None
 
@@ -667,7 +667,7 @@ async def _ws_wait_for_predicate(
 ) -> Any:
     """Subscribe → sample-after-subscribe → wait-for-event pattern, test-side.
 
-    Mirrors :func:`ha_mcp.tools.util_helpers._ws_wait_for_condition` (the
+    Mirrors :func:`ha_mcp.tools.ws_waiters._ws_wait_for_condition` (the
     server-side waiter PR #1382 introduced) so the test-side wait helpers
     stop racing against entity hydration on busy CI runners.
 

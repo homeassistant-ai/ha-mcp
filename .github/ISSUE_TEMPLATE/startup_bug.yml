@@ -49,49 +49,30 @@ body:
       required: true
 
   - type: textarea
-    id: ai_generated_content
+    id: report
     attributes:
-      label: "📋 AI-Generated Content / Logs / Config"
+      label: "📋 ha_report_issue Report"
       description: |
-        **Copy-paste anything relevant here.**
+        **Required.** Ask your AI agent: *"Report this with the ha_report_issue tool."* Run it in
+        the session where the problem happened. Paste the whole report it generates here (from its
+        Auto-Generated heading to the end), with tokens and passwords removed. It collects the
+        versions, install type, client, settings and tool calls we otherwise have to ask for.
 
-        This can include:
-        - Error messages from terminal/logs
-        - AI-generated summaries or explanations
-        - Configuration files (remove tokens!)
-        - Docker logs
-        - Any output that might help
-
-        **Don't worry about formatting** - just paste everything! Messy is fine.
-
-        **IMPORTANT:** Remove tokens, passwords, and API keys before pasting!
-      placeholder: |
-        [Paste error logs here]
-
-        ERROR: Connection refused to http://homeassistant.local:8123
-        Traceback (most recent call last):
-          File "/path/to/ha_mcp/client.py", line 123
-            ...
-
-        [Or paste your config file - REMOVE TOKENS!]
-        {
-          "mcpServers": {
-            "ha-mcp": {
-              "command": "uvx",
-              "args": ["ha-mcp"],
-              "env": {
-                "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
-                "HOMEASSISTANT_TOKEN": "[REDACTED]"
-              }
-            }
-          }
-        }
-
-        [Or paste AI-generated analysis]
-        The error suggests that the server cannot connect because...
-      render: markdown
+        If no report can exist, for example because ha-mcp does not start or connect or the problem
+        was found by reading the code, typing `N/A` here is acceptable; say why in the next field.
+      placeholder: "Paste the whole ha_report_issue report here, or N/A"
     validations:
       required: true
+
+  - type: textarea
+    id: no_report_reason
+    attributes:
+      label: "Why there is no ha_report_issue report"
+      description: |
+        If you typed N/A above, say why there is no report, and paste your startup logs and
+        configuration here (remove tokens).
+    validations:
+      required: false
 
   - type: dropdown
     id: client
@@ -123,7 +104,6 @@ body:
         - "uv pip install ha-mcp"
         - "Docker (ghcr.io/homeassistant-ai/ha-mcp)"
         - "Home Assistant Add-on"
-        - "Binary download (GitHub releases)"
         - "Git clone + uv sync"
         - "Other (specify below)"
     validations:

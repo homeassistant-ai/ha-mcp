@@ -5,24 +5,30 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp.client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
+    HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.util_helpers import (
+from ha_mcp.tools.coercion import parse_json_param, parse_string_list_param
+from ha_mcp.tools.config_write_helpers import apply_entity_category
+from ha_mcp.tools.diagnostics_helpers import (
     DIAGNOSTICS_DEFAULT_TIMEOUT_SECONDS,
     _resolve_data_path,
-    add_timezone_metadata,
-    apply_entity_category,
-    build_pagination_metadata,
     fetch_integration_diagnostics,
+    parse_diagnostics_fields,
+)
+from ha_mcp.tools.response_helpers import (
+    add_timezone_metadata,
+    build_pagination_metadata,
+    project_fields,
+)
+from ha_mcp.tools.util_helpers import (
     filter_active_repairs,
     get_logger_levels,
     is_single_entity_target,
     normalize_log_level,
-    parse_diagnostics_fields,
-    parse_json_param,
-    parse_string_list_param,
     project_repair_fields,
 )
 
@@ -574,7 +580,7 @@ class TestFetchIntegrationDiagnostics:
         assert "device" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_403_maps_to_admin_required(self):
+    async def test_403_names_proxy_or_ip_ban(self):
         client = MagicMock()
         client._request = AsyncMock(
             side_effect=HomeAssistantAPIError(
@@ -582,16 +588,14 @@ class TestFetchIntegrationDiagnostics:
             )
         )
         result = await fetch_integration_diagnostics(client, "entry_abc")
-        assert "admin scope required" in result["error"]
+        assert "HTTP 403" in result["error"]
+        assert "http.ban" in result["error"]
 
     @pytest.mark.asyncio
     async def test_auth_error_maps_to_token_validity_message(self):
-        """401 = stale/invalid token, NOT admin scope.
+        """401 = invalid token, or a non-admin one past an inconclusive probe.
 
-        ``HomeAssistantAuthError`` only fires on HTTP 401 per
-        ``rest_client.py``. The @require_admin gate rejects with 403, which
-        is handled by ``HomeAssistantAPIError``. The 401 message must steer
-        operators toward token validity, not admin scope.
+        Core's ``@require_admin`` raises ``Unauthorized``, which becomes a 401.
         """
         client = MagicMock()
         client._request = AsyncMock(
@@ -600,9 +604,20 @@ class TestFetchIntegrationDiagnostics:
         result = await fetch_integration_diagnostics(client, "entry_abc")
         assert "HTTP 401" in result["error"]
         assert "invalid or expired" in result["error"]
+        assert "non-admin" in result["error"]
         assert "long-lived access token" in result["error"]
-        # The admin-scope hint belongs on the 403 branch only.
-        assert "admin scope" not in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_admin_required_names_the_unsupported_token(self):
+        client = MagicMock()
+        client._request = AsyncMock(
+            side_effect=HomeAssistantAdminRequiredError(
+                "GET /api/diagnostics/config_entry/entry_abc is admin-only"
+            )
+        )
+        result = await fetch_integration_diagnostics(client, "entry_abc")
+        assert "is admin-only" in result["error"]
+        assert NON_ADMIN_TOKEN_WARNING in result["error"]
 
     @pytest.mark.asyncio
     async def test_timeout_maps_to_timeout_message_with_duration(self):
@@ -1582,8 +1597,6 @@ class TestProjectFieldsTypoGuard:
 
     def test_unknown_fields_key_emits_warning(self):
         """All unknown keys: success + warnings listing the available keys."""
-        from ha_mcp.tools.util_helpers import project_fields
-
         data = {"success": True, "entities": [1, 2], "count": 2}
         result = project_fields(data, ["nonexistent_key"])
         assert result["success"] is True
@@ -1594,8 +1607,6 @@ class TestProjectFieldsTypoGuard:
 
     def test_partial_unknown_key_warns_about_missing_only(self):
         """Mixed valid+invalid: valid key is kept; diagnostic names the unknown one."""
-        from ha_mcp.tools.util_helpers import project_fields
-
         data = {"success": True, "entities": [1, 2], "count": 2}
         result = project_fields(data, ["entities", "typo_key"])
         assert "entities" in result
@@ -1608,8 +1619,6 @@ class TestProjectFieldsTypoGuard:
 
     def test_all_valid_fields_no_warning(self):
         """When all requested keys exist, no warning is emitted."""
-        from ha_mcp.tools.util_helpers import project_fields
-
         data = {"success": True, "entities": [1, 2], "count": 2}
         result = project_fields(data, ["entities"])
         assert "entities" in result
@@ -1617,8 +1626,6 @@ class TestProjectFieldsTypoGuard:
 
     def test_success_field_request_no_false_warning(self):
         """fields=["success"] must not warn — success is force-retained, not unknown."""
-        from ha_mcp.tools.util_helpers import project_fields
-
         data = {"success": True, "count": 5}
         result = project_fields(data, ["success"])
         assert result["success"] is True
@@ -1626,8 +1633,6 @@ class TestProjectFieldsTypoGuard:
 
     def test_warning_survives_projection_because_warnings_is_force_retained(self):
         """The warning added by the typo guard is itself force-retained."""
-        from ha_mcp.tools.util_helpers import project_fields
-
         data = {"success": True, "entities": [1, 2], "count": 2}
         result = project_fields(data, ["ghost_key"])
         # warnings must be in the output even though it was not in fields=
@@ -1635,8 +1640,6 @@ class TestProjectFieldsTypoGuard:
 
     def test_available_fields_override_drives_typo_diagnostic_only(self):
         """A narrow payload reports its full schema without inventing values."""
-        from ha_mcp.tools.util_helpers import project_fields
-
         result = project_fields(
             {"success": True, "system_info": {}},
             ["domains"],

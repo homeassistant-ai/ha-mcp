@@ -198,7 +198,7 @@ def test_beta_lane_discovery_does_not_depend_on_attestation(tmp_path: Path) -> N
     assert _beta_lane_jobs(tmp_path) == {("beta.yml", "beta", "inaddon")}
 
 
-def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
+def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:  # noqa: PLR0915
     """Both beta lanes bake the same beta OS, Supervisor, and Core.
 
     The lanes live in a single workflow file for each user-originated master

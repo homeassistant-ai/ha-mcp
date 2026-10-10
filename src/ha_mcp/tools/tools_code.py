@@ -35,9 +35,15 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.server.context import Context
 
+from ..client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
+    HomeAssistantAdminRequiredError,
+)
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
+from .backup_access import snapshot_route_refusal
 from .helpers import log_tool_usage, raise_tool_error
+from .tool_hints import write_hints
 from .util_helpers import BLOCKED_WS_WRITE_COMMANDS
 
 logger = logging.getLogger(__name__)
@@ -279,7 +285,7 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
 
 def _check_api_post_blocked(normalized: str) -> str | None:
     """Return a rejection message if ``normalized`` matches the api_post
-    blocklist, or ``None`` if the call should proceed.
+    blocklist or a backup control, or ``None`` if the call should proceed.
 
     ``normalized`` is the path after ``_normalize_endpoint`` stripped any
     leading ``/`` and ``api/`` prefix, so for example
@@ -297,7 +303,7 @@ def _check_api_post_blocked(normalized: str) -> str | None:
                 "trigger user automations without the underlying real "
                 "event ever happening. Custom event types are allowed."
             )
-    return None
+    return snapshot_route_refusal(rest_path=normalized)
 
 
 # Cap on the number of saved tools to prevent runaway growth. A buggy
@@ -757,11 +763,13 @@ class _SandboxBridge:
             logger.warning("api_get rejected endpoint %r: %s", endpoint, exc)
             return {"error": str(exc)}
         try:
-            response = await self.client.httpx_client.request("GET", normalized)
+            response = await self.client.guarded_request("GET", normalized)
             try:
                 return response.json()
             except json.JSONDecodeError:
                 return response.text
+        except HomeAssistantAdminRequiredError as exc:
+            return {"error": str(exc), "warnings": [NON_ADMIN_TOKEN_WARNING]}
         except Exception as exc:
             logger.warning("api_get(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
@@ -804,13 +812,15 @@ class _SandboxBridge:
             post_kwargs: dict[str, Any] = {}
             if data is not None:
                 post_kwargs["json"] = data
-            response = await self.client.httpx_client.request(
+            response = await self.client.guarded_request(
                 "POST", normalized, **post_kwargs
             )
             try:
                 return response.json()
             except json.JSONDecodeError:
                 return response.text
+        except HomeAssistantAdminRequiredError as exc:
+            return {"error": str(exc), "warnings": [NON_ADMIN_TOKEN_WARNING]}
         except Exception as exc:
             logger.warning("api_post(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
@@ -825,13 +835,10 @@ class _SandboxBridge:
         code is dynamic and may pass non-dict values; the runtime guard
         below converts that into an error dict.
 
-        Commands listed in ``BLOCKED_WS_WRITE_COMMANDS`` are rejected with an
-        explanatory error: those either rewrite persistent state in ways
-        that have no sandbox-appropriate use case (``config/core/update``)
-        or bypass the validation in their wrapping MCP tool
-        (``lovelace/config/save`` skips the dashboard-collision check that
-        ``ha_config_set_dashboard`` performs; registry mutations skip
-        their corresponding wrapping tools' invariant checks).
+        Commands in ``BLOCKED_WS_WRITE_COMMANDS`` are rejected: they rewrite
+        state with no sandbox use case (``config/core/update``) or skip their
+        wrapping tool's validation (dashboard collision, registry invariants).
+        Full-snapshot backup commands follow the backup controls.
         """
         if self._over_invocation_limit():
             return {
@@ -853,6 +860,8 @@ class _SandboxBridge:
                     "so validation runs."
                 )
             }
+        if refusal := snapshot_route_refusal(ws_command=msg_type, ws_params=message):
+            return {"error": refusal}
         logger.debug("sandbox.ws_send type=%r", msg_type)
         try:
             return await self.client.send_websocket_message(message)
@@ -1094,7 +1103,7 @@ async def _run_saved_custom_tool(
         )
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         code, message, suggestions = _classify_sandbox_error(e)
         raise_tool_error(
             create_error_response(
@@ -1181,7 +1190,7 @@ async def _execute_custom_tool_code(
         )
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         err_code, err_message, err_suggestions = _classify_sandbox_error(e)
         raise_tool_error(
             create_error_response(
@@ -1300,13 +1309,9 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         tags={"System", "beta"},
-        annotations={
-            "openWorldHint": False,
-            "title": "Custom Tool",
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "readOnlyHint": False,
-        },
+        annotations=write_hints(
+            "Custom Tool", destructive=True, idempotent=False, open_world=False
+        ),
     )
     @log_tool_usage
     async def ha_manage_custom_tool(

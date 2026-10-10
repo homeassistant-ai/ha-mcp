@@ -151,7 +151,7 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
         attempted += 1
         try:
             await send_hacs_repository_refresh(ws_client, str(repo["id"]))
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             # Both entries read installed only when someone downloaded the
             # mirror without removing the legacy record — HACS guards against
             # adding the same repository twice but not against two
@@ -278,11 +278,11 @@ async def maybe_refresh_hacs_after_update() -> None:
 async def hacs_refresh_lifespan(_server: Any) -> AsyncIterator[dict[str, Any]]:
     """Schedule the startup nudge for the lifetime of any server run.
 
-    Attached as the FastMCP ``lifespan`` so it runs on EVERY launcher —
-    stdio, the HTTP CLI entry points, and the add-on's ``start.py``, which
-    calls ``mcp.run()`` directly and never passes through ``__main__``'s
-    ``_run_with_shutdown`` (the wiring this replaces; the add-on gap was
-    found live, not by CI, because the e2e suites launch via the CLI
+    Entered by ``server_lifespan``, the FastMCP ``lifespan``, so it runs on
+    EVERY launcher — stdio, the HTTP CLI entry points, and the app's
+    ``start.py``, which calls ``mcp.run()`` directly and never passes through
+    ``__main__``'s ``_run_with_shutdown`` (the wiring this replaces; the app
+    gap was found live, not by CI, because the e2e suites launch via the CLI
     entry points).
     """
     task = asyncio.create_task(maybe_refresh_hacs_after_update())

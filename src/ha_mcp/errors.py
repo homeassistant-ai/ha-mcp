@@ -310,7 +310,8 @@ def create_error_response(
         # Include first suggestion as primary, all suggestions in list
         error_dict["suggestion"] = error_suggestions[0]
         if len(error_suggestions) > 1:
-            error_dict["suggestions"] = error_suggestions
+            # A copy: the defaults are module-level lists shared by every call.
+            error_dict["suggestions"] = list(error_suggestions)
 
     response: dict[str, Any] = {
         "success": False,
@@ -466,6 +467,7 @@ def create_validation_error(
     details: str | None = None,
     invalid_json: bool = False,
     context: dict[str, Any] | None = None,
+    suggestions: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create a validation error response."""
     code = (
@@ -480,7 +482,11 @@ def create_validation_error(
     if parameter:
         final_context["parameter"] = parameter
     return create_error_response(
-        code, message, details, context=final_context if final_context else None
+        code,
+        message,
+        details,
+        suggestions=suggestions,
+        context=final_context if final_context else None,
     )
 
 

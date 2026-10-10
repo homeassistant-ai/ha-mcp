@@ -35,6 +35,7 @@ from ha_mcp._vendor.mcp.types import ToolAnnotations
 
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..renamed_tools import adapt_retired_arguments, current_tool_name
+from .compact_params import compact_params, summary
 from .write_tool_note import DESKTOP_APPROVAL_NOTE
 
 if TYPE_CHECKING:
@@ -92,6 +93,22 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
 # Tool name patterns that indicate delete/remove operations
 _DELETE_PATTERNS = ("_remove_", "_delete_")
 
+# Ranking is plain English keyword matching (BM25, no stemming, no
+# translation), so a query in another language returns nothing (#2576).
+SEARCH_QUERY_DESCRIPTION = (
+    "English keywords naming the operation, e.g. 'get entity state' or "
+    "'create automation'. Translate other languages to English first; "
+    "entity, area and device names keep their original spelling."
+)
+
+SEARCH_TOOLS_DESCRIPTION = (
+    "Exact tool names to return in full (description, input schema, "
+    "annotations); pinned tools come back as their stub. 'query' is ignored "
+    "when this is given."
+)
+
+_TOOL_NOT_FOUND = "Search by English keywords to find the right tool name."
+
 # ``manage`` names one interface that intentionally combines several
 # operations (.gemini/styleguide.md, Tool Naming Convention). Such a tool is
 # categorised by its annotations like any other, but every call proxy can
@@ -101,6 +118,39 @@ _MANAGE_PATTERNS = ("_manage_",)
 # Capability tier a tool falls into — shared by the call-proxy routing and
 # the settings-UI capability badges. See ``categorize_capability``.
 Capability = Literal["read", "write", "delete"]
+
+# Every hint is explicit: Home Assistant 2026.10+ reads an omitted
+# destructiveHint as true even on a read-only tool.
+_PROXY_ANNOTATIONS: dict[Capability, ToolAnnotations] = {
+    "read": ToolAnnotations(
+        title="Call Read Tool",
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=True,
+    ),
+    "write": ToolAnnotations(
+        title="Call Write Tool",
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=True,
+    ),
+    "delete": ToolAnnotations(
+        title="Call Delete Tool",
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
+    ),
+}
+_SEARCH_TOOL_ANNOTATIONS = ToolAnnotations(
+    title="Search Tools",
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
 
 
 class SearchKeywordsTransform(Transform):
@@ -428,9 +478,13 @@ class CategorizedSearchTransform(BM25SearchTransform):
     three category-specific proxies, each carrying appropriate MCP
     annotations for client-side permission handling.
 
-    The unified ``ha_search_tools`` is inherited from BM25SearchTransform and
-    searches across ALL tools regardless of category. Search results include
-    each tool's full annotations so the LLM can determine which proxy to use.
+    The unified ``ha_search_tools`` searches across ALL tools regardless of
+    category, pinned ones included (issue #2576: a pinned tool vanishing
+    from search reads as "no such capability" to a small model). Hidden
+    hits are compact (description, one-line params, proxy hint), and
+    ``tools=[...]`` returns their full definitions. Pinned hits are rendered
+    as a name-only stub pointing back at the tool list, and never consume
+    one of the ``max_results`` slots.
     """
 
     def __init__(
@@ -524,35 +578,194 @@ class CategorizedSearchTransform(BM25SearchTransform):
             self._delete_tools = delete
             self._last_catalog_hash = current_hash
 
-    async def _render_results(self, tools: Sequence[Tool]) -> list[dict[str, Any]]:
-        """Serialize search results with ``execute_via`` hints."""
+    def _make_search_tool(self) -> Tool:
+        """Search tool over the whole catalog (pinned tools included)."""
+        transform = self
+
+        async def search_tools(
+            query: Annotated[str, SEARCH_QUERY_DESCRIPTION] = "",
+            tools: Annotated[list[str] | None, SEARCH_TOOLS_DESCRIPTION] = None,
+            ctx: Context = None,  # type: ignore[assignment]
+        ) -> list[dict[str, Any]]:
+            """Search for tools using English keywords.
+
+            Returns compact matches ranked by relevance; pass ``tools`` to
+            get the full definitions of named tools.
+            """
+            catalog = await transform.get_tool_catalog(ctx)
+            if tools:
+                return await transform._render_full(catalog, tools, ctx)
+            if not query.strip():
+                raise ToolError(
+                    json.dumps(
+                        create_error_response(
+                            code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            message=(
+                                "Pass 'query' (English keywords) or 'tools' "
+                                "(exact tool names)."
+                            ),
+                            suggestions=[
+                                "ha_search_tools(query='create helper') finds tools.",
+                                "ha_search_tools(tools=['<name>']) returns a tool's full schema.",
+                            ],
+                        )
+                    ),
+                    log_level=TOOL_ERROR_LOG_LEVEL,
+                )
+            results = await transform._search(catalog, query)
+            return await transform._render_results(results)
+
+        return Tool.from_function(fn=search_tools, name=self._search_tool_name)
+
+    async def _search(self, tools: Sequence[Tool], query: str) -> Sequence[Tool]:
+        """Rank ``tools``; pinned hits ride along without using a result slot.
+
+        A pinned tool is kept only when it ranks inside the first
+        ``max_results`` of the whole catalog, so a weak match on a stop word
+        does not add a stub to every page.
+        """
+        # The base call (re)builds the index for this catalog; its own top-k
+        # is discarded because pinned hits must not crowd out hidden ones.
+        await super()._search(tools, query)
+        pinned_count = sum(t.name in self._always_visible for t in tools)
+        indices = self._index.query(query, self._max_results + pinned_count)
+        slots = self._max_results
+        results: list[Tool] = []
+        for rank, tool in enumerate(self._indexed_tools[i] for i in indices):
+            if tool.name in self._always_visible:
+                if rank < self._max_results:
+                    results.append(tool)
+            elif slots:
+                results.append(tool)
+                slots -= 1
+        return results
+
+    def _execute_via_hint(self, tool: Tool) -> str:
+        """Call form(s) for *tool* through each proxy ``_advertised_routes`` lists."""
         proxy_map: dict[Capability, str] = {
             "read": self._call_read_name,
             "write": self._call_write_name,
             "delete": self._call_delete_name,
         }
-        results = []
-        for tool in tools:
-            data = tool.to_mcp_tool().model_dump(
-                mode="json", exclude_none=True, by_alias=True
-            )
-            routes = _advertised_routes(tool.name, _categorize_tool(tool))
-            if len(routes) == 1:
-                data["execute_via"] = _execute_via(proxy_map[routes[0]], tool.name)
-            else:
-                hint = "; ".join(
-                    f"{route} actions: {_execute_via(proxy_map[route], tool.name)}"
-                    for route in routes
+        routes = _advertised_routes(tool.name, _categorize_tool(tool))
+        if len(routes) == 1:
+            return _execute_via(proxy_map[routes[0]], tool.name)
+        hint = "; ".join(
+            f"{route} actions: {_execute_via(proxy_map[route], tool.name)}"
+            for route in routes
+        )
+        return hint[:1].upper() + hint[1:]
+
+    @staticmethod
+    def _pinned_stub(tool: Tool) -> dict[str, Any]:
+        # The client already holds this tool's full definition — repeating a
+        # 5-9KB schema here is what overflows small context windows (#2576).
+        return {
+            "name": tool.name,
+            "pinned": True,
+            "execute_via": (
+                f"{tool.name} is already in your tool list — "
+                "call it directly with the schema you have; "
+                "no search or proxy needed."
+            ),
+        }
+
+    async def _render_results(self, tools: Sequence[Tool]) -> list[dict[str, Any]]:
+        """Serialize search hits as compact entries with ``execute_via`` hints."""
+        return [
+            self._pinned_stub(tool)
+            if tool.name in self._always_visible
+            else {
+                "name": tool.name,
+                "description": summary(tool.description),
+                "params": compact_params(tool.parameters),
+                "execute_via": self._execute_via_hint(tool),
+            }
+            for tool in tools
+        ]
+
+    async def _render_full(
+        self, catalog: Sequence[Tool], names: list[str], ctx: Context
+    ) -> list[dict[str, Any]]:
+        """Full definitions of *names* from *catalog*, in the order given.
+
+        A pinned name gets the stub, an unknown one a not-found entry — or,
+        for a write tool Read Only Mode hides, the READ_ONLY_MODE error the
+        call proxies give, so the model learns why rather than concluding
+        the capability does not exist. When no name resolves the whole call
+        is an error.
+        """
+        by_name = {tool.name: tool for tool in catalog}
+        hidden = await self._read_only_hidden(names, by_name, ctx)
+        results: list[dict[str, Any]] = []
+        found = 0
+        for name in names:
+            tool = by_name.get(name)
+            if tool is None:
+                error = (
+                    hidden[name]
+                    if name in hidden
+                    else create_error_response(
+                        code=ErrorCode.RESOURCE_NOT_FOUND,
+                        message=f"Tool '{name}' not found.",
+                        suggestions=[_TOOL_NOT_FOUND],
+                        context={"tool_name": name},
+                    )
                 )
-                data["execute_via"] = hint[:1].upper() + hint[1:]
-            results.append(data)
+                results.append({"name": name, **error})
+                continue
+            found += 1
+            if tool.name in self._always_visible:
+                results.append(self._pinned_stub(tool))
+            else:
+                data = tool.to_mcp_tool().model_dump(
+                    mode="json", exclude_none=True, by_alias=True
+                )
+                data["execute_via"] = self._execute_via_hint(tool)
+                results.append(data)
+        if not found:
+            if len(results) == 1:
+                error = results[0]
+            elif all(name in hidden for name in names):
+                error = {**hidden[names[0]], "results": results}
+            else:
+                missing = [name for name in names if name not in hidden]
+                message = f"No tool is named {', '.join(missing)}."
+                if hidden:
+                    message += " Read Only Mode hides the others; see their entries in results."
+                error = create_error_response(
+                    code=ErrorCode.RESOURCE_NOT_FOUND,
+                    message=message,
+                    suggestions=[_TOOL_NOT_FOUND],
+                    context={"results": results},
+                )
+            raise ToolError(json.dumps(error), log_level=TOOL_ERROR_LOG_LEVEL)
         return results
+
+    @staticmethod
+    async def _read_only_hidden(
+        names: list[str], visible: dict[str, Tool], ctx: Context
+    ) -> dict[str, dict[str, Any]]:
+        """READ_ONLY_MODE errors for the *names* Read Only Mode hides."""
+        if not _read_only_mode() or all(name in visible for name in names):
+            return {}
+        from ..read_only import read_only_error_response, read_only_visible
+
+        registered = {
+            tool.name: tool for tool in await ctx.fastmcp.local_provider._list_tools()
+        }
+        return {
+            name: read_only_error_response(name)
+            for name in names
+            if name not in visible
+            and name in registered
+            and not read_only_visible(registered[name])
+        }
 
     def _make_categorized_proxy(
         self,
         proxy_name: str,
         category: Capability,
-        annotations: ToolAnnotations,
         description: str,
     ) -> Tool:
         """Create a call proxy that validates tool category before execution."""
@@ -638,7 +851,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
             fn=categorized_call,
             name=proxy_name,
             description=description,
-            annotations=annotations,
+            annotations=_PROXY_ANNOTATIONS[category],
         )
 
     async def transform_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
@@ -646,34 +859,29 @@ class CategorizedSearchTransform(BM25SearchTransform):
         pinned = [t for t in tools if t.name in (self._always_visible or [])]
 
         search_tool = self._make_search_tool()
-        # Always set readOnlyHint and override description if provided
+        # Fixed annotations; override the description if one was configured
         search_tool = search_tool.model_copy(
             update={
                 "description": self._search_tool_description or search_tool.description,
-                "annotations": ToolAnnotations(
-                    open_world_hint=False, read_only_hint=True
-                ),
+                "annotations": _SEARCH_TOOL_ANNOTATIONS,
             }
         )
 
         call_read = self._make_categorized_proxy(
             proxy_name=self._call_read_name,
             category="read",
-            annotations=ToolAnnotations(open_world_hint=True, read_only_hint=True),
             description=self._proxy_descs["read"],
         )
 
         call_write = self._make_categorized_proxy(
             proxy_name=self._call_write_name,
             category="write",
-            annotations=ToolAnnotations(open_world_hint=True, destructive_hint=True),
             description=self._proxy_descs["write"],
         )
 
         call_delete = self._make_categorized_proxy(
             proxy_name=self._call_delete_name,
             category="delete",
-            annotations=ToolAnnotations(open_world_hint=False, destructive_hint=True),
             description=self._proxy_descs["delete"],
         )
 
@@ -702,21 +910,18 @@ class CategorizedSearchTransform(BM25SearchTransform):
             return self._make_categorized_proxy(
                 self._call_read_name,
                 "read",
-                ToolAnnotations(open_world_hint=True, read_only_hint=True),
                 self._proxy_descs["read"],
             )
         if name == self._call_write_name:
             return self._make_categorized_proxy(
                 self._call_write_name,
                 "write",
-                ToolAnnotations(open_world_hint=True, destructive_hint=True),
                 self._proxy_descs["write"],
             )
         if name == self._call_delete_name:
             return self._make_categorized_proxy(
                 self._call_delete_name,
                 "delete",
-                ToolAnnotations(open_world_hint=False, destructive_hint=True),
                 self._proxy_descs["delete"],
             )
         return await super().get_tool(name, call_next, version=version)

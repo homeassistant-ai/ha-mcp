@@ -22,6 +22,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -34,13 +35,12 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
+from .response_helpers import (
     build_pagination_metadata,
-    parse_string_list_param,
     project_fields,
     result_fields_warning,
 )
+from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +59,7 @@ class ServiceDiscoveryTools:
     @tool(
         name="ha_list_services",
         tags={"Service & Device Control"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Available Services",
-        },
+        annotations=read_only_hints("List Available Services", open_world=False),
     )
     @log_tool_usage
     async def ha_list_services(
@@ -204,7 +199,7 @@ class ServiceDiscoveryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to list services: {e}")
             exception_to_structured_error(
                 e,
@@ -306,7 +301,7 @@ async def _fetch_services_list_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_SERVICES_LIST, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # DEVIATION (see docstring): the legacy path is REST + a per-request WS
         # bridge, NOT the shared pooled WS. A pooled-WS drop or a failed
         # (re)connect, both HomeAssistantConnectionError since #1947, must fall

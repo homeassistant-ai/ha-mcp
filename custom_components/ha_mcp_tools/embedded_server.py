@@ -49,7 +49,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.requirements import (
     RequirementsNotFound,
     async_process_requirements,
-    pip_kwargs,
 )
 from homeassistant.util.package import is_virtual_env
 from packaging.requirements import InvalidRequirement, Requirement
@@ -83,6 +82,7 @@ from .const import (
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
     SERVER_CONFIG_SUBDIR,
+    SERVER_KEEPALIVE_SECONDS,
     SERVER_TOKEN_CLIENT_NAME,
     SERVER_USER_NAME,
     dist_for_channel,
@@ -96,6 +96,7 @@ from .dependency_diagnostics import (
     requirement_forces_conflict,
     root_import_failure,
 )
+from .pip_compat import pip_kwargs
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -282,7 +283,7 @@ def _install_log_filters_if_available() -> None:
         return
     try:
         install_sdk_log_filters()
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         _LOGGER.warning(
             "Could not install MCP SDK log-noise filters; continuing without them: %s",
             err,
@@ -1643,7 +1644,7 @@ class EmbeddedServerManager:
                 _IMPORTING_WORKERS.discard(threading.current_thread())
             _teardown_worker_loop(loop)
 
-    async def _serve(self, access_token: str, stop_event: asyncio.Event) -> None:
+    async def _serve(self, access_token: str, stop_event: asyncio.Event) -> None:  # noqa: PLR0915
         """Build the ha-mcp server and run it until a stop is signaled.
 
         Mirrors the CLI HTTP runner in ``ha_mcp.__main__`` without importing it
@@ -1798,17 +1799,16 @@ class EmbeddedServerManager:
             lifespan="on",
             # HTTP-ONLY listener, so no WebSocket protocol is loaded. uvicorn
             # resolves its ``ws`` class EAGERLY in Config.load(), and
-            # "websockets-sansio" imports the SHARED websockets package —
-            # the unowned, tearable copy ha-mcp vendors its own copy to stay
-            # clear of (#2135/#2146). With that setting a torn shared install
-            # crashed this server at listener startup no matter what the
-            # client imports. "none" resolves to None and imports nothing;
-            # the MCP app serves Streamable HTTP and registers no WebSocket
-            # route. Pinned by tests/src/unit/test_vendored_websockets.py.
+            # "websockets-sansio" imports the SHARED websockets package — the
+            # unowned, tearable copy ha-mcp vendors its own to stay clear of
+            # (#2135/#2146); a torn shared install crashed this server at
+            # startup. "none" imports nothing; the MCP app serves Streamable
+            # HTTP only. Pinned by tests/src/unit/test_vendored_websockets.py.
             ws="none",
             # Leave Home Assistant's logging untouched — do not let uvicorn
             # reconfigure the root logger from this thread.
             log_config=None,
+            timeout_keep_alive=SERVER_KEEPALIVE_SECONDS,
         )
         uv_server = uvicorn.Server(config)
 
@@ -1986,7 +1986,7 @@ async def _shutdown_server_resources(server: Any) -> None:
         await stop_websocket_listener()
     except ImportError:
         _LOGGER.debug("WebSocket listener module not available")
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         _LOGGER.warning("WebSocket listener cleanup failed: %s", err)
 
     try:
@@ -1995,12 +1995,12 @@ async def _shutdown_server_resources(server: Any) -> None:
         await websocket_manager.disconnect()
     except ImportError:
         _LOGGER.debug("WebSocket manager module not available")
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         _LOGGER.warning("WebSocket manager cleanup failed: %s", err)
 
     try:
         await server.close()
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         _LOGGER.warning("Server cleanup failed: %s", err)
 
 

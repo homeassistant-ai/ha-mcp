@@ -82,36 +82,46 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The settings-UI client script lives in settings.js (a real file for
-# editor/JS tooling). It is a template with two sentinel tokens for the
+# The settings-UI client script lives in the numbered part files under
+# settings_js/ (real files for editor/JS tooling). The parts are one script
+# split at top-level statement boundaries; joining them in file-name order
+# gives the whole script. It is a template with two sentinel tokens for the
 # Python-injected constant lists; substitute them with the same values the
 # inline literal used so the rendered HTML is byte-identical. Injected
 # inline (not served) -- the serving model is unchanged.
 #
 # This is a module-import-time file read: importing settings_ui (done by
-# server.py / __main__.py / the sidecar) now depends on settings.js being
-# present. If packaging drops it, fail with a packaging-specific ImportError
+# server.py / __main__.py / the sidecar) now depends on the parts being
+# present. If packaging drops them, fail with a packaging-specific ImportError
 # rather than a bare FileNotFoundError so the cause is obvious.
-_SETTINGS_JS_PATH = Path(__file__).parent / "settings.js"
+_SETTINGS_JS_DIR = Path(__file__).parent / "settings_js"
 try:
-    _settings_js_template = _SETTINGS_JS_PATH.read_text(encoding="utf-8")
+    _settings_js_parts = sorted(_SETTINGS_JS_DIR.glob("*.js"))
+    _settings_js_template = "".join(
+        part.read_text(encoding="utf-8") for part in _settings_js_parts
+    )
 except OSError as exc:  # pragma: no cover - packaging guard
     raise ImportError(
-        f"settings.js missing at {_SETTINGS_JS_PATH}. It must ship in "
-        "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller datas "
-        "(binary) -- this is a packaging bug, not a usage error."
+        f"settings_js/ missing at {_SETTINGS_JS_DIR}. It must ship in "
+        "the wheel and the sdist -- this is a packaging bug, not a usage error."
     ) from exc
+if not _settings_js_template:  # pragma: no cover - packaging guard
+    raise ImportError(
+        f"settings_js/ at {_SETTINGS_JS_DIR} holds no .js parts. They must "
+        "ship in the wheel and the sdist -- this is a packaging bug, not a "
+        "usage error."
+    )
 # str.replace() silently no-ops on an absent token, and a *renamed* sentinel
 # (e.g. PINNED_DEFAULTS) slips past both the "__HA_MCP_" not-in test and the
 # esbuild/jsdom JS harness (tests/js/harness.mjs) -- `const DEFAULT_PINNED =
 # PINNED_DEFAULTS;` is valid JS (only a runtime ReferenceError), so a drifted
-# settings.js would ship a broken page green. Assert both sentinels are present
+# settings_js/ would ship a broken page green. Assert both sentinels are present
 # before substituting.
 for _sentinel in ("__HA_MCP_DEFAULT_PINNED__", "__HA_MCP_MANDATORY__"):
     if _sentinel not in _settings_js_template:
         raise ImportError(
-            f"settings.js is out of sync: sentinel {_sentinel} not found. "
-            "The Python injection and settings.js have drifted."
+            f"settings_js/ is out of sync: sentinel {_sentinel} not found. "
+            "The Python injection and settings_js/ have drifted."
         )
 # sorted(), not list(): DEFAULT_PINNED_TOOLS / MANDATORY_TOOLS are sets, so
 # json.dumps(list(...)) is per-process-ordered -- the only reason proving the
@@ -123,10 +133,10 @@ _SETTINGS_JS = _settings_js_template.replace(
 
 
 # The settings-UI CSS lives in settings.css, extracted the same way as
-# settings.js. Unlike the JS it has no Python injection points -- a plain
+# the settings_js/ parts. Unlike the JS it has no Python injection points -- a plain
 # read, no token substitution -- and is injected inline between the same
 # <style>/</style> tags so the served page stays byte-identical. It carries
-# the same import-time packaging dependency as settings.js, so the same
+# the same import-time packaging dependency as settings_js/, so the same
 # OSError -> ImportError packaging guard applies.
 _SETTINGS_CSS_PATH = Path(__file__).parent / "settings.css"
 try:
@@ -134,32 +144,30 @@ try:
 except OSError as exc:  # pragma: no cover - packaging guard
     raise ImportError(
         f"settings.css missing at {_SETTINGS_CSS_PATH}. It must ship in "
-        "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller datas "
-        "(binary) -- this is a packaging bug, not a usage error."
+        "the wheel and the sdist -- this is a packaging bug, not a usage error."
     ) from exc
 
 
 # The settings page HTML lives in settings.html, extracted the same way as
-# settings.js / settings.css (a real file for editor/HTML tooling). It carries
+# settings_js/ / settings.css (real files for editor/HTML tooling). It carries
 # six substitution markers — two filled once at import, four per request:
 #   __HA_MCP_CSS__         -> settings.css contents (inside <style>)
-#   __HA_MCP_JS__          -> settings.js contents (inside <script>)
+#   __HA_MCP_JS__          -> settings_js/ contents (inside <script>)
 #   __HA_MCP_THEME_PREFS__ -> per-request server-seeded theme prefs JSON,
 #                             substituted in _render_settings_html()
 #   __HA_MCP_I18N__        -> selected merged translation catalog JSON
 #   __HA_MCP_LANG__        -> selected locale code for the html lang attribute
 #   __HA_MCP_DIR__         -> selected catalog text direction (ltr / rtl)
-# Same import-time packaging dependency as settings.js/css (wheel package-data,
-# MANIFEST.in, PyInstaller datas) and the same OSError guard -- but this loader
-# raises RuntimeError, not the ImportError that settings.js/css raise.
+# Same import-time packaging dependency as settings_js/css (wheel and
+# sdist) and the same OSError guard -- but this loader
+# raises RuntimeError, not the ImportError that settings_js/css raise.
 _SETTINGS_HTML_PATH = Path(__file__).parent / "settings.html"
 try:
     _settings_html_template = _SETTINGS_HTML_PATH.read_text(encoding="utf-8")
 except OSError as exc:  # pragma: no cover - packaging guard
     raise RuntimeError(
         f"settings.html missing at {_SETTINGS_HTML_PATH}. It must ship in "
-        "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller datas "
-        "(binary) -- this is a packaging bug, not a usage error."
+        "the wheel and the sdist -- this is a packaging bug, not a usage error."
     ) from exc
 
 # Fail fast if a marker was renamed in settings.html but not here (or vice
@@ -215,20 +223,18 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
     from pydantic import ValidationError
 
     from ..policy.decision_pin import is_pin_set
-    from ..policy.handlers import build_decision_pin_handlers
-    from ..policy.model import Policy
+    from ..policy.handlers import (
+        build_decision_pin_handlers,
+        policy_file_corrupt_response,
+    )
+    from ..policy.model import ALLOW_LIST_OMITTED_MESSAGE, Policy, drops_allow_list
     from ..policy.persistence import load_policy, save_policy
 
     async def get_config(_: Request) -> JSONResponse:
         try:
             return JSONResponse(load_policy(data_dir).model_dump(mode="json"))
         except ValueError as e:
-            # Mirror the main-server handler: surface corruption rather
-            # than crash the sidecar tab on a 500.
-            return JSONResponse(
-                {"error": str(e), "policy_file_corrupt": True},
-                status_code=500,
-            )
+            return policy_file_corrupt_response(e)
 
     async def put_config(request: Request) -> JSONResponse:
         try:
@@ -244,7 +250,14 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
         from ..utils.config_write_lock import config_write_guard
 
         async with config_write_guard():
-            current = load_policy(data_dir)
+            try:
+                current = load_policy(data_dir)
+            except ValueError as e:
+                return policy_file_corrupt_response(e)
+            if drops_allow_list(new_policy, current):
+                return JSONResponse(
+                    {"error": ALLOW_LIST_OMITTED_MESSAGE}, status_code=400
+                )
             # Mirror the main-server PIN guard, and for the same reason it
             # sits inside the lock there: the PIN delete runs under this
             # lock and leaves the policy version untouched when the switch

@@ -8,7 +8,7 @@ from typing import Any
 from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ...client.rest_client import HomeAssistantAPIError
+from ...client.rest_client import NON_ADMIN_TOKEN_WARNING, HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
 from ..component_api import component_supports, get_component_caps
 from ..config_entry_flow import FLOW_HELPER_TYPES
@@ -98,6 +98,15 @@ def _is_no_stored_config(resp: dict[str, Any]) -> bool:
     if code != "config_not_found":
         return False
     return get_error_message(resp) in _NO_STORED_CONFIG_MESSAGES
+
+
+async def _phase_finished(
+    ctx: Context | None, phase_done: int, total_phases: int, message: str
+) -> int:
+    """Report one more finished search phase and return the new count."""
+    phase_done += 1
+    await safe_progress(ctx, progress=phase_done, total=total_phases, message=message)
+    return phase_done
 
 
 class DeepSearchMixin(SceneSearchMixin):
@@ -224,9 +233,6 @@ class DeepSearchMixin(SceneSearchMixin):
             # to key reference-graph scene hits by storage id rather than slug.
             scene_storage_ids: dict[str, str] = {}
             graph_buckets = related.buckets if related else {}
-            graph_automations = graph_buckets.get("automations", set())
-            graph_scripts = graph_buckets.get("scripts", set())
-            graph_scenes = graph_buckets.get("scenes", set())
 
             # Create semaphore for limiting concurrent API calls
             semaphore = asyncio.Semaphore(concurrency_limit)
@@ -251,18 +257,13 @@ class DeepSearchMixin(SceneSearchMixin):
             # ``_skipped`` = budget exhausted before fetch; ``_failed`` =
             # fetch attempted but raised (caught at ``debug``-level);
             # ``_timeout`` = fetch exceeded the per-request timeout (#1784).
-            automation_skipped = 0
-            automation_failed = 0
-            automation_yaml_skipped = 0
-            automation_timeout = 0
+            automation_skipped = automation_failed = 0
+            automation_yaml_skipped = automation_timeout = 0
             automation_failed_sample: str | None = None
-            script_skipped = 0
-            script_failed = 0
-            script_yaml_skipped = 0
-            script_timeout = 0
+            script_skipped = script_failed = 0
+            script_yaml_skipped = script_timeout = 0
             script_failed_sample: str | None = None
-            helper_failed = 0
-            dashboard_failed = 0
+            helper_failed = dashboard_failed = 0
 
             if "automation" in search_types:
                 (
@@ -278,14 +279,13 @@ class DeepSearchMixin(SceneSearchMixin):
                     query_lower,
                     exact_match,
                     config_time_budget=config_time_budget,
-                    graph_entity_ids=graph_automations,
+                    graph_entity_ids=graph_buckets.get("automations", set()),
                 )
-                phase_done += 1
-                await safe_progress(
+                phase_done = await _phase_finished(
                     ctx,
-                    progress=phase_done,
-                    total=total_phases,
-                    message=f"automations searched ({len(results['automations'])} matches)",
+                    phase_done,
+                    total_phases,
+                    f"automations searched ({len(results['automations'])} matches)",
                 )
 
             if "script" in search_types:
@@ -301,14 +301,13 @@ class DeepSearchMixin(SceneSearchMixin):
                     query_lower,
                     exact_match,
                     config_time_budget=config_time_budget,
-                    graph_entity_ids=graph_scripts,
+                    graph_entity_ids=graph_buckets.get("scripts", set()),
                 )
-                phase_done += 1
-                await safe_progress(
+                phase_done = await _phase_finished(
                     ctx,
-                    progress=phase_done,
-                    total=total_phases,
-                    message=f"scripts searched ({len(results['scripts'])} matches)",
+                    phase_done,
+                    total_phases,
+                    f"scripts searched ({len(results['scripts'])} matches)",
                 )
 
             if "scene" in search_types:
@@ -328,14 +327,13 @@ class DeepSearchMixin(SceneSearchMixin):
                     config_time_budget=config_time_budget,
                     prefetched_registry=prefetched_registry,
                     storage_ids_out=scene_storage_ids,
-                    graph_entity_ids=graph_scenes,
+                    graph_entity_ids=graph_buckets.get("scenes", set()),
                 )
-                phase_done += 1
-                await safe_progress(
+                phase_done = await _phase_finished(
                     ctx,
-                    progress=phase_done,
-                    total=total_phases,
-                    message=f"scenes searched ({len(results['scenes'])} matches)",
+                    phase_done,
+                    total_phases,
+                    f"scenes searched ({len(results['scenes'])} matches)",
                 )
 
             if "helper" in search_types:
@@ -349,12 +347,11 @@ class DeepSearchMixin(SceneSearchMixin):
                     include_config,
                     prefetched_registry=prefetched_registry,
                 )
-                phase_done += 1
-                await safe_progress(
+                phase_done = await _phase_finished(
                     ctx,
-                    progress=phase_done,
-                    total=total_phases,
-                    message=f"helpers searched ({len(results['helpers'])} matches)",
+                    phase_done,
+                    total_phases,
+                    f"helpers searched ({len(results['helpers'])} matches)",
                 )
 
             if "dashboard" in search_types:
@@ -367,12 +364,11 @@ class DeepSearchMixin(SceneSearchMixin):
                     semaphore,
                     include_config=include_config,
                 )
-                phase_done += 1
-                await safe_progress(
+                await _phase_finished(
                     ctx,
-                    progress=phase_done,
-                    total=total_phases,
-                    message=f"dashboards searched ({len(results['dashboards'])} matches)",
+                    phase_done,
+                    total_phases,
+                    f"dashboards searched ({len(results['dashboards'])} matches)",
                 )
 
             graph_surfaces_skipped = _merge_graph_hits(
@@ -415,7 +411,7 @@ class DeepSearchMixin(SceneSearchMixin):
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in deep_search: {e}")
             exception_to_structured_error(
                 e,
@@ -557,7 +553,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     f"out after {INDIVIDUAL_CONFIG_TIMEOUT}s."
                 )
                 return (uid, None, "timeout")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 if is_timeout_error(e):
                     # The REST client's own httpx timeout (HA_TIMEOUT)
                     # fired first and arrived wrapped in a
@@ -697,7 +693,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     f"after {INDIVIDUAL_CONFIG_TIMEOUT}s."
                 )
                 return (sid, None, "timeout")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 if is_timeout_error(e):
                     # Client-side HTTP timeout arrived wrapped; still a
                     # timeout. See _fetch_automation_config.
@@ -896,7 +892,7 @@ class DeepSearchMixin(SceneSearchMixin):
                             }
                         )
                 return matches, False
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.debug(f"Could not list {helper_type}: {e}")
                 return [], True
 
@@ -1002,8 +998,7 @@ class DeepSearchMixin(SceneSearchMixin):
 
         Returns ``(records, failed_count)``. The component's in-process
         ``search`` frame (issue #2008) serves the exact-match, no-body shape
-        — the default ``ha_search`` call — mirroring the
-        ``ha_config_get_dashboard(mode="search")`` routing; fuzzy scoring and
+        (the default ``ha_search`` call); fuzzy scoring and
         ``include_config`` bodies are legacy-only (the component walk is
         substring and its matches carry no bodies), as is every ``None``
         fallback case of :meth:`_component_dashboard_search` — including a
@@ -1170,7 +1165,7 @@ class DeepSearchMixin(SceneSearchMixin):
                         }
                     ], False
                 return [], False
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.debug(f"Dashboard search failed ({url_path}): {e}")
                 return [], True
 
@@ -1347,6 +1342,15 @@ class DeepSearchMixin(SceneSearchMixin):
             graph_surfaces_skipped=graph_surfaces_skipped,
             graph_unavailable=graph_unavailable,
         )
+        # Keyed on the client, not the failure sample, which names only the
+        # first error.
+        if (
+            automation_failed
+            or script_failed
+            or scene_stats.get("failed")
+            or helper_failed
+        ) and self.client.admin_route_refused is True:
+            response.setdefault("warnings", []).append(NON_ADMIN_TOKEN_WARNING)
         return response
 
     @staticmethod
@@ -1583,7 +1587,7 @@ class DeepSearchMixin(SceneSearchMixin):
         """
         try:
             response = await self.client._request("GET", "/config/config_entries/entry")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.debug(f"flow-helper search: list_entries failed: {exc}")
             return [], 1
 

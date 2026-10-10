@@ -743,6 +743,22 @@
     cursor: pointer; font-size: 0.8rem; font-family: inherit; padding: 2px 4px;
   }
   .policy-predicate-row button:hover { text-decoration: underline; }
+  .policy-and-join,
+  .policy-or-join { color: var(--text-secondary); font-size: 0.75rem; font-weight: 500; }
+  .policy-predicate-form-hint { color: var(--text-secondary); font-size: 0.8rem; }
+  /* ha-alert warning look, sized to sit inside a condition row. */
+  .policy-condition-warning {
+    position: relative; flex-basis: 100%;
+    padding: 4px 10px 4px 32px; border-radius: 6px;
+    font-size: 0.78rem; line-height: 1.4; color: var(--text);
+    background: color-mix(in srgb, var(--warning) 14%, transparent);
+  }
+  .policy-condition-warning::before {
+    content: ""; position: absolute; left: 8px; top: 5px; width: 16px; height: 16px;
+    background-color: var(--warning);
+    -webkit-mask: var(--icon-warning) no-repeat center / contain;
+    mask: var(--icon-warning) no-repeat center / contain;
+  }
   .policy-add-predicate {
     background: transparent; border: 1px dashed var(--border); color: var(--accent);
     padding: 6px 12px; border-radius: 4px; cursor: pointer;

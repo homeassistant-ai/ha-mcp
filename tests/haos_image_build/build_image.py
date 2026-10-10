@@ -41,9 +41,9 @@ LOG = logging.getLogger("haos_image_build")
 # renovate: datasource=custom.ha-os-stable depName=home-assistant/operating-system
 STABLE_HAOS_VERSION = "18.3"
 # renovate: datasource=custom.ha-supervisor-stable depName=home-assistant/supervisor
-STABLE_SUPERVISOR_VERSION = "2026.09.2"
+STABLE_SUPERVISOR_VERSION = "2026.09.3"
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-STABLE_CORE_VERSION = "2026.9.3"
+STABLE_CORE_VERSION = "2026.10.0"
 
 HAOS_VERSION = os.environ.get("HAOS_BUILD_OS_VERSION", STABLE_HAOS_VERSION)
 if re.fullmatch(r"[0-9]+\.[0-9]+(?:\.rc[0-9]+)?", HAOS_VERSION) is None:
@@ -222,7 +222,7 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # session that runs the embedded-server test (the
 # ``tests/src/e2e/haos_only/test_embedded_server_haos.py`` fixture enables it via
 # the ``config_entries/disable`` WS command). The ``pip_spec`` is a placeholder
-# here; the conftest HAOS branch overwrites it with a ``file://`` URL to a wheel
+# here; the _conftest_haos.py HAOS branch overwrites it with a ``file://`` URL to a wheel
 # built from the checkout before boot (haos_runtime.stage_embedded_server_wheel_in_qcow2).
 #
 # These constants MUST stay in sync with tests/src/haos_runtime.py's copies
@@ -238,7 +238,7 @@ HA_MCP_SERVER_WEBHOOK_ID = "mcp_e2e_ha_mcp_server_haos"
 HA_MCP_SERVER_SECRET_PATH = "/private_e2e_ha_mcp_server_haos"
 HA_MCP_SERVER_PORT = 9584
 # Placeholder file:// wheel spec — deliberately points at a nonexistent wheel so
-# that if the conftest delivery step ever fails to overwrite it, the entry's
+# that if the _conftest_haos.py delivery step ever fails to overwrite it, the entry's
 # bring-up fails cleanly (repair issue, webhook never registers) and only the
 # embedded-server test times out, rather than silently installing wrong code.
 HA_MCP_SERVER_PLACEHOLDER_PIP_SPEC = (
@@ -487,7 +487,7 @@ def stop_qemu(proc: subprocess.Popen[bytes], ws: HAWebSocket | None) -> None:
     if ws is not None:
         try:
             ws.supervisor_api("/host/shutdown", method="post", timeout=10.0)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # %r so the exception type is visible — bare %s loses it for
             # most exception subclasses and a future maintainer reading
             # this in CI logs needs to know whether it was a timeout, a
@@ -820,7 +820,7 @@ class HAWebSocket:
                     _remaining_deadline_budget(deadline, operation)
                     send_state["started"] = True
                 connection.send(message)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 send_errors.append(exc)
 
         worker = threading.Thread(target=send, name="haos-ws-send", daemon=True)
@@ -1290,6 +1290,22 @@ def _check_core_auth(base_url: str, token: str) -> None:
         ) from e
 
 
+# Files the dev addon's Dockerfile copies from the stable addon dir, staged at
+# the build-context root with their COPY lines rewritten to match.
+STABLE_ADDON_FILES = ("start.py", "app_options.json")
+# Other repo files it copies, besides src/. Supervisor builds with the addon
+# dir as the context, so they are staged into it. Both tuples must match
+# haos_runtime's (kept in sync by hand like HA_MCP_TEST_SECRET_PATH;
+# test_haos_dev_addon_context checks both against the Dockerfile).
+DEV_ADDON_REPO_FILES = (
+    "pyproject.toml",
+    "uv.lock",
+    "README.md",
+    "LICENSE",
+    "tests/test-env/pyproject.toml",
+)
+
+
 def stage_dev_addon_source(qcow2: Path) -> None:
     """Bake the ha-mcp dev addon's source into the qcow2 under /supervisor/addons/local/.
 
@@ -1300,8 +1316,8 @@ def stage_dev_addon_source(qcow2: Path) -> None:
     of an ``addons/{slug}/update`` (Docker layer cache hit, ~20-30s) instead
     of a full first-install (~5 min).
 
-    The dev addon's Dockerfile expects ``start.py``, ``pyproject.toml``,
-    ``uv.lock``, and ``src/`` at the build-context root — same shape as the
+    The dev addon's Dockerfile expects ``start.py``, ``src/`` and the
+    ``DEV_ADDON_REPO_FILES`` at the build-context root — same shape as the
     addon-repo-branch flow used for manual fork testing (see
     ``~/ha-mcp-fork/FORK-DEV.md``). We mirror that prep here so the
     in-HAOS build succeeds without any additional setup at install time.
@@ -1324,11 +1340,11 @@ def stage_dev_addon_source(qcow2: Path) -> None:
 
         # Files outside the addon dir that the Dockerfile COPYs from.
         # Mirrors the addon-repo-branch manual steps.
-        shutil.copy(
-            repo_root / "homeassistant-addon" / "start.py", staging / "start.py"
-        )
-        shutil.copy(repo_root / "pyproject.toml", staging / "pyproject.toml")
-        shutil.copy(repo_root / "uv.lock", staging / "uv.lock")
+        for name in STABLE_ADDON_FILES:
+            shutil.copy(repo_root / "homeassistant-addon" / name, staging / name)
+        for name in DEV_ADDON_REPO_FILES:
+            (staging / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(repo_root / name, staging / name)
         # src/ha_mcp: nuke + copy fresh so a stale tree (e.g. left over from
         # a prior local run) doesn't shadow the current version.
         addon_src_dir = staging / "src"
@@ -1343,23 +1359,19 @@ def stage_dev_addon_source(qcow2: Path) -> None:
         # build context is the addon dir itself, so the path needs to be
         # ``COPY start.py /``. Same patch the FORK-DEV.md flow applies.
         dockerfile = staging / "Dockerfile"
-        original = dockerfile.read_text()
-        patched = original.replace(
-            "COPY homeassistant-addon/start.py /",
-            "COPY start.py /",
-        )
-        if patched == original:
-            # Fail fast — silently writing the unpatched Dockerfile would
-            # cause an opaque addon-build failure 5+ min later during
-            # ``addons/{slug}/install``. Better to point at the patch line
-            # directly.
-            raise RuntimeError(
-                f"Dockerfile patch failed: expected line "
-                f"'COPY homeassistant-addon/start.py /' not found in "
-                f"{dockerfile}. The dev addon's Dockerfile may have been "
-                f"restructured; update the patch in stage_dev_addon_source "
-                f"to match the new shape."
-            )
+        patched = dockerfile.read_text()
+        for name in STABLE_ADDON_FILES:
+            line = f"COPY homeassistant-addon/{name} /"
+            if line not in patched:
+                # Fail fast: an unpatched Dockerfile fails the addon build
+                # opaquely 5+ min later, during ``addons/{slug}/install``.
+                raise RuntimeError(
+                    f"Dockerfile patch failed: expected line {line!r} not "
+                    f"found in {dockerfile}. The dev addon's Dockerfile may "
+                    f"have been restructured; update the patch in "
+                    f"stage_dev_addon_source to match the new shape."
+                )
+            patched = patched.replace(line, f"COPY {name} /")
         dockerfile.write_text(patched)
 
         # Strip the ``image:`` field from config.yaml. Production dev-addon
@@ -1692,7 +1704,7 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
     _install_addon_with_retry(ws, slug, timeout=900.0)
 
     # Pre-set every dev-channel flag the test suite relies on so the addon
-    # exposes the full tool surface (mirrors the env-var setup in conftest's
+    # exposes the full tool surface (mirrors the env-var setup in _conftest_haos.py's
     # external-HAOS branch). The schema in homeassistant-addon-dev/config.yaml
     # lists every flag we toggle here.
     LOG.info("Setting ha-mcp dev addon options (preset secret_path + all dev flags on)")
@@ -2405,7 +2417,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
     embedded-server E2E addresses. The entry is ``disabled_by="user"`` so the
     multi-minute server bring-up only fires when the test enables it — every
     other HAOS session boots with the entry present but inert. The ``pip_spec``
-    is a placeholder; the conftest HAOS branch rewrites it to a ``file://`` wheel
+    is a placeholder; the _conftest_haos.py HAOS branch rewrites it to a ``file://`` wheel
     built from the checkout before boot.
     """
     ce_path = staging / ".storage" / "core.config_entries"
@@ -2445,7 +2457,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
                 "minor_version": 1,
                 "modified_at": "2025-09-07T23:56:28.040747+00:00",
                 "options": {
-                    # Overwritten with the checkout wheel by the conftest HAOS
+                    # Overwritten with the checkout wheel by the _conftest_haos.py HAOS
                     # branch before boot; placeholder points at a nonexistent
                     # wheel so an un-delivered entry fails loudly rather than
                     # installing wrong code.
@@ -2470,7 +2482,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
         )
 
 
-def bake_test_state(qcow2: Path) -> None:
+def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
     """Inject tests/initial_test_state into the qcow2 via libguestfs.
 
     Runs *after* HAOS has been shut down so the qcow2 isn't in use. Uses
@@ -2500,7 +2512,7 @@ def bake_test_state(qcow2: Path) -> None:
         shutil.copytree(initial_state_path, staging)
 
         # Inject custom components matched to what the testcontainer fixture
-        # installs via _install_custom_component in tests/src/e2e/conftest.py.
+        # installs via _install_custom_component in tests/src/e2e/_conftest_seed.py.
         # Both are config_flow-only integrations, so HA won't pick them up
         # from YAML — a synthetic entry in .storage/core.config_entries is
         # how HA Core learns to set them up on boot.
@@ -2536,7 +2548,7 @@ def bake_test_state(qcow2: Path) -> None:
             LOG.info("Staged custom component %s ← %s", domain, src_rel)
 
             # Inject a config entry so HA loads the integration on boot.
-            # Shape matches the testcontainer path in conftest.py:
+            # Shape matches the testcontainer path in _conftest_seed.py:
             # _install_custom_component (entry_id, source=import, version=1).
             ce_path = staging / ".storage" / "core.config_entries"
             ce_data = json.loads(ce_path.read_text())

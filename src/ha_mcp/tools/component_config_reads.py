@@ -119,7 +119,7 @@ async def fetch_entity_lookup_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_ENTITY_LOOKUP, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError: a pooled-WS drop or a failed
         # (re)connect.
         # The resolvers' legacy paths do NOT die identically (see module docstring),
@@ -183,7 +183,7 @@ async def fetch_reference_data_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_REFERENCE_DATA, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # Legacy is REST (get_services/get_states), NOT the pooled WS, so a
         # pooled-WS drop or a failed (re)connect must route to the REST fetch
         # rather than escape into the validator's swallow-all guard (which would

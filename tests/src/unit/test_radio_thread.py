@@ -95,6 +95,25 @@ class TestThreadHandler:
         assert out["datasets"] == datasets
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["set_preferred_dataset", "delete_dataset"])
+    async def test_dataset_write_requires_dataset_id(self, action: str) -> None:
+        record: list = []
+        client = _client({}, record=record)
+        with pytest.raises(ToolError, match="requires: dataset_id"):
+            await _radio(client)(radio="thread", action=action, confirm=True)
+        assert record == []
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_requires_confirm(self) -> None:
+        record: list = []
+        client = _client({}, record=record)
+        with pytest.raises(ToolError, match="confirm=True"):
+            await _radio(client)(
+                radio="thread", action="delete_dataset", params={"dataset_id": "d1"}
+            )
+        assert record == []
+
+    @pytest.mark.asyncio
     async def test_discover_routers_started(self):
         record: list = []
         client = _client(

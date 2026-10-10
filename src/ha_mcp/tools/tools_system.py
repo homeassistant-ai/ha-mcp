@@ -18,18 +18,17 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
-from ..client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-)
+from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from .coercion import JSON_STRING_COERCION
 from .component_api import (
     component_supports,
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
 )
+from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
@@ -38,13 +37,9 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    fetch_integration_diagnostics,
-    filter_active_repairs,
-    parse_diagnostics_fields,
-    summarize_theme_listing,
-)
+from .system_restart import restart_home_assistant
+from .tool_hints import read_only_hints, write_hints
+from .util_helpers import filter_active_repairs, summarize_theme_listing
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +53,7 @@ WS_SYSTEM_SNAPSHOT = "ha_mcp_tools/system_snapshot"
 class _SystemSnapshotSlices:
     """The component's ``system_snapshot`` slices, re-wrapped for the section
     helpers that already unwrap the legacy ``{success, result}`` WS envelope
-    (mirrors ``ha_get_overview``'s ``_OverviewSlices`` in ``tools_search.py``).
+    (mirrors ``ha_get_overview``'s ``_OverviewSlices`` in ``search/overview.py``).
 
     ``config_entries`` / ``repairs`` / ``registry`` are wrapped in the
     ``{success, result}`` envelope ``_fetch_zwave_network`` /
@@ -165,11 +160,12 @@ class SystemTools:
     @tool(
         name="ha_restart",
         tags={"System"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Restart Home Assistant",
-        },
+        annotations=write_hints(
+            "Restart Home Assistant",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_restart(
@@ -185,7 +181,9 @@ class SystemTools:
         Config is validated automatically before the restart proceeds (to
         pre-check, call ha_get_system_health(include="config_check")). For
         configuration changes, consider ha_reload_core() instead, which reloads
-        specific components without a full restart.
+        specific components without a full restart. When this server runs
+        inside Home Assistant (embedded), it replies before the restart starts
+        and is unreachable until Home Assistant is back.
 
         EXAMPLE: ha_restart(confirm=True)
         """
@@ -206,79 +204,17 @@ class SystemTools:
                 )
             )
 
-        restart_initiated = False
-        try:
-            # Check configuration first as a safety measure
-            config_result = await self._client.check_config()
-            if config_result.get("result") != "valid":
-                errors = config_result.get("errors") or []
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.CONFIG_INVALID,
-                        "Configuration is invalid - restart aborted",
-                        details=(
-                            "Home Assistant configuration has errors. "
-                            "Fix the errors before restarting."
-                        ),
-                        context={"config_errors": errors},
-                    )
-                )
-
-            # Call the restart service - mark as initiated before the call
-            # as the connection may be closed before we get a response
-            restart_initiated = True
-            await self._client.call_service("homeassistant", "restart", {})
-
-            return {
-                "success": True,
-                "message": (
-                    "Home Assistant restart initiated. "
-                    "The system will be unavailable for 1-5 minutes."
-                ),
-                "warnings": [
-                    "Connection will be lost during restart. "
-                    "Wait for Home Assistant to become available again."
-                ],
-            }
-
-        except ToolError:
-            raise
-        except Exception as e:
-            error_msg = str(e)
-            # Connection errors after restart initiated are expected
-            # (HA closes connections during restart)
-            if restart_initiated and any(
-                pattern in error_msg.lower()
-                for pattern in (
-                    "connect",
-                    "closed",
-                    "504",
-                    "502",
-                    "503",
-                    "gateway",
-                    "unavailable",
-                )
-            ):
-                return {
-                    "success": True,
-                    "message": (
-                        "Home Assistant restart initiated. "
-                        "Connection was closed as expected during restart."
-                    ),
-                    "warnings": ["Wait 1-5 minutes for Home Assistant to restart."],
-                }
-
-            exception_to_structured_error(e)
-            return None  # unreachable: exception_to_structured_error always raises
+        return await restart_home_assistant(self._client)
 
     @tool(
         name="ha_reload_core",
         tags={"System"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Reload Core Components",
-        },
+        annotations=write_hints(
+            "Reload Core Components",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_reload_core(
@@ -392,7 +328,7 @@ class SystemTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"target": target},
@@ -471,7 +407,7 @@ class SystemTools:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Local import mirrors ``_reraise_if_fatal``: rest_client imports
             # from the tool helpers transitively, so a module-level import
             # would risk a circular import in the tools package.
@@ -540,12 +476,10 @@ class SystemTools:
     @tool(
         name="ha_get_system_health",
         tags={"System", "Zigbee", "Z-Wave", "Thread", "Matter", "Integrations"},
-        annotations={
-            "openWorldHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
-        },
+        annotations=read_only_hints(
+            "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
+            open_world=True,
+        ),
     )
     @log_tool_usage
     async def ha_get_system_health(
@@ -824,7 +758,7 @@ class SystemTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 suggestions=[
@@ -1141,7 +1075,7 @@ class SystemTools:
             return
         try:
             await ws_client.disconnect()
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Best-effort cleanup: a disconnect failure on an already-closing
             # socket is not actionable and must not mask the real result.
             pass
@@ -1181,7 +1115,7 @@ class SystemTools:
                     "Timeout waiting for system health data",
                 )
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             await self._safe_disconnect(ws_client)
             raise_tool_error(
                 create_error_response(
@@ -1267,7 +1201,7 @@ class SystemTools:
                     "%s failed; fell back to legacy: %r", WS_SYSTEM_SNAPSHOT, exc
                 )
             return None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # HomeAssistantConnectionError: a pooled-WS drop or a failed
             # (re)connect. The legacy sections degrade individually (dedicated
             # health WS + REST + the bridge), so fall back rather than fail the
@@ -1341,7 +1275,7 @@ class SystemTools:
                     "repairs/list_issues returned success=false: %s", err_msg
                 )
                 repairs["error"] = f"Repairs data not available: {err_msg}"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _reraise_if_fatal(e)
             logger.warning("Failed to fetch repairs: %s", e)
             repairs["error"] = f"Repairs data not available: {e}"
@@ -1387,7 +1321,7 @@ class SystemTools:
                         f"Showing {device_limit} of {total} devices. "
                         "Use ha_get_device(integration='zha') for full device list."
                     )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _reraise_if_fatal(e)
             logger.warning("Failed to fetch ZHA network data: %s", e)
             zha_network["error"] = f"ZHA integration not available or error: {e}"
@@ -1466,7 +1400,7 @@ class SystemTools:
                         f"Showing {ZWAVE_NODE_LIMIT} of {total_nodes} nodes. "
                         "Use ha_get_device(integration='zwave_js') for full device list."
                     )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _reraise_if_fatal(e)
             logger.warning("Failed to fetch Z-Wave network data: %s", e)
             zwave_network["error"] = (
@@ -1516,7 +1450,7 @@ class SystemTools:
                 thread_network["error"] = (
                     f"Thread/OTBR integration not available: {err_msg}"
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _reraise_if_fatal(e)
             logger.warning("Failed to fetch Thread network data: %s", e)
             thread_network["error"] = (
@@ -1571,7 +1505,7 @@ class SystemTools:
                 "state": matter_entry.get("state"),
                 "title": matter_entry.get("title"),
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _reraise_if_fatal(e)
             logger.warning("Failed to fetch Matter network data: %s", e)
             matter_network["error"] = f"Matter integration not available or error: {e}"
@@ -1604,7 +1538,7 @@ class SystemTools:
                     "frontend/get_themes returned success=false: %s", err_msg
                 )
                 themes_data["error"] = f"Themes data not available: {err_msg}"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _reraise_if_fatal(e)
             logger.warning("Failed to fetch themes: %s", e)
             themes_data["error"] = f"Themes data not available: {e}"
@@ -1991,7 +1925,7 @@ class SystemTools:
                 "is_valid": is_valid,
                 "errors": errors,
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _reraise_if_fatal(e)
             logger.warning("Failed to check config: %s", e)
             config_check["error"] = f"Config check not available: {e}"

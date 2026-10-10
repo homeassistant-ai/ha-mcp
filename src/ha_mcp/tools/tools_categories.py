@@ -25,6 +25,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +39,7 @@ class CategoryTools:
     @tool(
         name="ha_config_get_category",
         tags={"Labels & Categories"},
-        annotations={
-            "openWorldHint": False,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Category",
-        },
+        annotations=read_only_hints("Get Category", open_world=False),
     )
     @log_tool_usage
     async def ha_config_get_category(
@@ -148,7 +144,7 @@ class CategoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting categories: {e}")
             exception_to_structured_error(
                 e,
@@ -165,11 +161,12 @@ class CategoryTools:
     @tool(
         name="ha_config_set_category",
         tags={"Labels & Categories"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Create or Update Category",
-        },
+        annotations=write_hints(
+            "Create or Update Category",
+            destructive=True,
+            idempotent=False,
+            open_world=False,
+        ),
     )
     @with_auto_backup(
         domain="category",
@@ -294,7 +291,7 @@ class CategoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error setting category {name!r}: {e}")
             exception_to_structured_error(
                 e,
@@ -311,12 +308,9 @@ class CategoryTools:
     @tool(
         name="ha_config_remove_category",
         tags={"Labels & Categories"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Category",
-        },
+        annotations=write_hints(
+            "Remove Category", destructive=True, idempotent=True, open_world=False
+        ),
     )
     @with_auto_backup(
         domain="category",
@@ -405,7 +399,7 @@ class CategoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing category {category_id!r}: {e}")
             exception_to_structured_error(
                 e,

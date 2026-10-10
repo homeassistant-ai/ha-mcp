@@ -53,13 +53,14 @@ from ..utils.python_sandbox import (
     format_sandbox_error,
     safe_execute_expression,
 )
+from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     validate_identifier_not_empty,
 )
-from .util_helpers import ANSI_ESCAPE_RE, JSON_STRING_COERCION
+from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
@@ -776,7 +777,7 @@ async def _supervisor_api_call(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error calling Supervisor API {endpoint}: {e}")
         error_response = exception_to_structured_error(
             e,
@@ -3748,12 +3749,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
     @mcp.tool(
         tags={"Apps (add-ons)"},
-        annotations={
-            "openWorldHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Apps (add-ons)",
-        },
+        annotations=read_only_hints("Get Apps (add-ons)", open_world=True),
     )
     @log_tool_usage
     async def ha_get_app(
@@ -3818,13 +3814,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
     @mcp.tool(
         tags={"Apps (add-ons)"},
-        annotations={
-            "openWorldHint": True,
-            "destructiveHint": True,
-            "idempotentHint": False,
-            "readOnlyHint": False,
-            "title": "Manage App (add-on)",
-        },
+        annotations=write_hints(
+            "Manage App (add-on)", destructive=True, idempotent=False, open_world=True
+        ),
     )
     @log_tool_usage
     async def ha_manage_app(

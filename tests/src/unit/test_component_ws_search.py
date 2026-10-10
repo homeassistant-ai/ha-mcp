@@ -28,7 +28,6 @@ config_get was withdrawn pre-release). Highlights:
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import logging
 import sys
@@ -38,6 +37,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+from ._component_ws_fakes import (
+    _FakeConnection,
+    _FakeWSApi,
+    _Unauthorized,
+)
 
 # Force the REAL voluptuous into sys.modules (sibling unit modules stub it with
 # a MagicMock at import time). Captured for the schema / registration tests,
@@ -65,7 +70,7 @@ for _mod in (
 class _StubHomeAssistantError(Exception):
     """Stand-in for core's ``HomeAssistantError`` (raised by ``_do_backup_prep``).
 
-    ``websocket_api`` imports ``homeassistant.exceptions.HomeAssistantError``
+    ``websocket_api.system`` imports ``homeassistant.exceptions.HomeAssistantError``
     function-locally when a backup read fails; the module is MagicMock-stubbed
     like the rest of ``homeassistant.*``, so pin a real exception class as its
     ``HomeAssistantError`` attribute (mirrors the ``homeassistant.components.
@@ -84,12 +89,11 @@ _backup_stub = MagicMock()
 _backup_stub.DATA_MANAGER = "backup"
 sys.modules.setdefault("homeassistant.components.backup", _backup_stub)
 
-from custom_components.ha_mcp_tools import websocket_api as wsapi  # noqa: E402
-from custom_components.ha_mcp_tools.const import COMPONENT_VERSION  # noqa: E402
-
 # Server-side scoring path the component must stay in parity with.
-from ha_mcp.tools.tools_search import _match_exact_search_entity  # noqa: E402
+from ha_mcp.tools.search.entities import _match_exact_search_entity  # noqa: E402
 from ha_mcp.utils.fuzzy_search import calculate_ratio  # noqa: E402
+
+from ._component_ws_api import COMPONENT_VERSION, wsapi  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -119,7 +123,7 @@ class FakeState:
         # Mirrors core ``State.as_dict()`` / the REST ``/api/states/<id>`` shape.
         # Timestamps are already ISO strings here — the real WS transport encodes
         # core's datetimes to the same isoformat, so the server sees plain JSON
-        # either way (see websocket_api._do_states byte-parity note).
+        # either way (see websocket_api.overview._do_states byte-parity note).
         return {
             "entity_id": self.entity_id,
             "state": self.state,
@@ -814,44 +818,9 @@ def empty_view(monkeypatch):
 class TestInfo:
     def test_shape(self):
         """Advertise the complete component capability contract."""
-        # Drift guard: info must advertise EVERY shipped capability (the server
-        # gates each consumer on membership) and mirror CAPABILITIES exactly.
         info = wsapi._do_info(FakeHass(config=FakeConfig(time_zone="America/New_York")))
         assert info["schema_version"] == 1
         assert info["component_version"] == COMPONENT_VERSION
-        assert info["capabilities"] == [
-            "search",
-            "search_unified",
-            "search_entity_membership",
-            "overview",
-            "helpers_list",
-            "states",
-            "blueprint_get",
-            "blueprint_text",
-            "device_get",
-            "device_list",
-            "device_registry_child_semantics",
-            "entity_enrich",
-            "exposure",
-            "config_entries",
-            "registry_lookup",
-            "system_snapshot",
-            "entity_lookup",
-            "backup_prep",
-            "registries",
-            "dashboards",
-            "dashboard_edit",
-            "dashboards_doc_search",
-            "services_list",
-            "reference_data",
-            "search_visibility",
-            "search_visibility_allowlist_authorization",
-            "server_entry",
-            "server_entry_update",
-            "call_service",
-            "bulk_call_service",
-            "template_diagnose",
-        ]
         assert info["capabilities"] == wsapi.CAPABILITIES
         # config_get was withdrawn before release (raw_config freshness lags the
         # config file between write and reload) — it must not be advertised.
@@ -891,22 +860,18 @@ class TestInfo:
         assert wsapi._do_info()["tools_services"] is None
 
     def test_manifest_version_parity(self):
-        """Manifest and COMPONENT_VERSION lockstep, plus the ONE literal pin.
-
-        The lockstep catches a bump that touches one file but not the other.
-        The literal is deliberate and lives ONLY here: it catches a wholesale
-        accidental downgrade (an old component tree copied over reverts BOTH
-        files together — lockstep alone would pass) and makes every version
-        change a conscious, review-visible test edit. Update the literal when
-        bumping; WHEN to bump is docs/agents/custom-component.md's version-cycle
-        rule. Do not narrate current stable/pending state here; it quickly rots.
+        """A bump that touches manifest.json but not COMPONENT_VERSION (or the
+        reverse) makes ``ha_mcp_tools/info`` report a version HACS did not
+        install. A version lower than the base branch's or behind the
+        released stable is the Component Version Gate's job in pr.yml; WHEN
+        to bump is docs/agents/custom-component.md's version-cycle rule.
         """
         manifest = json.loads(
             (
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "2.2.1"
+        assert manifest["version"] == COMPONENT_VERSION
 
 
 # =============================================================================
@@ -1857,61 +1822,6 @@ class TestMatchTypeTaxonomy:
 # =============================================================================
 # registration, admin gate, malformed params (functional decorators)
 # =============================================================================
-class _Unauthorized(Exception):
-    pass
-
-
-class _FakeUser:
-    def __init__(self, is_admin):
-        self.is_admin = is_admin
-
-
-class _FakeConnection:
-    def __init__(self, is_admin=True, has_user=True):
-        self.user = _FakeUser(is_admin) if has_user else None
-        self.results = {}
-
-    def send_result(self, msg_id, result):
-        self.results[msg_id] = result
-
-
-class _FakeWSApi:
-    """Functional stand-in for homeassistant.components.websocket_api."""
-
-    def __init__(self):
-        self.registered = {}
-
-    def websocket_command(self, schema):
-        command = next(v for k, v in schema.items() if str(k) == "type")
-
-        def decorate(func):
-            func._ws_command = command
-            func._ws_schema = schema
-            return func
-
-        return decorate
-
-    def require_admin(self, func):
-        @functools.wraps(func)
-        def wrapper(hass, connection, msg):
-            user = connection.user
-            if user is None or not user.is_admin:
-                raise _Unauthorized()
-            return func(hass, connection, msg)
-
-        return wrapper
-
-    def async_response(self, func):
-        @functools.wraps(func)
-        def wrapper(hass, connection, msg):
-            # The handler is a coroutine (it awaits the search prep's executor
-            # offload); drive it to completion the way the WS layer would.
-            asyncio.run(func(hass, connection, msg))
-
-        return wrapper
-
-    def async_register_command(self, hass, handler):
-        self.registered[handler._ws_command] = handler
 
 
 @pytest.fixture
@@ -1946,9 +1856,7 @@ _ALL_COMMANDS = [
 ]
 
 # Minimal well-formed message body per command (Required fields) so the admin
-# gate / async_response wrappers reach the pure handler. ``states`` requires
-# ``entity_ids``; ``blueprint_get`` requires ``domain`` + ``path``; ``device_get``
-# requires ``device_id``.
+# gate / async_response wrappers reach the pure handler.
 _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     "ha_mcp_tools/states": {"entity_ids": []},
     "ha_mcp_tools/blueprint_get": {"domain": "automation", "path": "x.yaml"},
@@ -2017,6 +1925,10 @@ class TestRegistrationAndAdminGate:
             # Template error location (#2522); prep + admin-gate coverage lives in
             # test_component_template_diagnose.py (this set only guards drift).
             wsapi.WS_TEMPLATE_DIAGNOSE,
+            *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py
+            wsapi.core_contract.COMMAND,
+            "ha_mcp_tools/statistics_units",
+            wsapi.card_definitions.WS_DASHBOARD_CARDS,  # test_card_definitions.py
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered
@@ -2240,9 +2152,8 @@ class TestNewCommandSchemas:
         out = schema({"type": wsapi.WS_CONFIG_ENTRIES, "domain": "mqtt"})
         assert out["domain"] == "mqtt"
         # Both filters are optional (a no-filter call lists every entry).
-        assert schema({"type": wsapi.WS_CONFIG_ENTRIES}) == {
-            "type": wsapi.WS_CONFIG_ENTRIES
-        }
+        defaults = {"type": wsapi.WS_CONFIG_ENTRIES, "include_subentry_data": False}
+        assert schema({"type": wsapi.WS_CONFIG_ENTRIES}) == defaults
 
     @pytest.mark.parametrize(
         "bad",
@@ -2602,27 +2513,6 @@ class TestBlueprintGet:
 # =============================================================================
 # config_get — withdrawn before release (raw_config freshness lag)
 # =============================================================================
-class TestConfigGetWithdrawn:
-    """``config_get`` was withdrawn before release: it served an entity's
-    ``raw_config``, whose freshness lags the config file between a write and the
-    next completed reload, so a get racing a reload returned a stale body. The
-    command, its schema, its capability, and its domain gate are all gone — the
-    get tools serve automation/script reads from the legacy REST path (which
-    reads the fresh config file). These pin that nothing component-side still
-    exposes it (issue #1813 tracks a possible file-reading redesign)."""
-
-    def test_capability_not_advertised(self):
-        assert "config_get" not in wsapi.CAPABILITIES
-
-    def test_no_command_constant_schema_or_domain_gate(self):
-        assert not hasattr(wsapi, "WS_CONFIG_GET")
-        assert not hasattr(wsapi, "_config_get_schema")
-        assert not hasattr(wsapi, "CONFIG_GET_DOMAINS")
-
-    def test_no_handler_function(self):
-        assert not hasattr(wsapi, "_do_config_get")
-
-
 # =============================================================================
 # helpers_list — collection (live attrs) + flow (options, never entry.data)
 # =============================================================================

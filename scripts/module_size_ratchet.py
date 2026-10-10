@@ -1,0 +1,348 @@
+"""Lower the module-size baseline to the files' current sizes.
+
+``tests/src/unit/test_module_size_ratchet.py`` fails when a tracked source file
+crosses ``LINE_LIMIT`` or when a file listed in the baseline grows past its
+entry. A file that shrank or was deleted passes, so a pull request need not
+edit the baseline and two of them do not conflict over it. After a merge,
+``.github/workflows/sync-ratchet-baselines.yml`` runs
+
+    python scripts/module_size_ratchet.py
+
+on master and commits the lowered baseline. The command lowers or drops
+entries. It never raises an entry and never adds a file, so it cannot accept
+growth: split the file instead.
+
+``--check`` reports violations without writing the baseline; the lefthook
+pre-commit hook runs it with ``--staged`` to measure the staged content.
+The baseline is a plain file, so CI also runs ``--base <ref>``: it fails when
+the baseline raises or adds an entry compared with that commit's baseline, or
+when a file grew past the baseline the sync would write from that commit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import tomllib
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BASELINE_PATH = REPO_ROOT / "tests" / "src" / "unit" / "module_size_baseline.json"
+
+# Pylint's max-module-lines default, the figure AGENTS.md names.
+LINE_LIMIT = 1000
+SOURCE_SUFFIXES = (".py", ".js", ".mjs", ".ts", ".astro")
+# Copied from the dev tree by scripts/webhook_proxy_sync.py; the dev tree is
+# the one a pull request edits and the one counted here.
+STABLE_PROXY_COPY = "homeassistant-addon-webhook-proxy/"
+REPIN_COMMAND = "python scripts/module_size_ratchet.py"
+BASELINE_NAME = BASELINE_PATH.relative_to(REPO_ROOT).as_posix()
+
+
+def read_text(
+    repo_root: Path, path: str, staged: bool = False, ref: str | None = None
+) -> str:
+    """Return one file's text from the working tree, with ``staged`` from
+    the index, or with ``ref`` from that commit."""
+    if ref:
+        return _git(repo_root, "show", f"{ref}:{path}").decode("utf-8")
+    if staged:
+        return _git(repo_root, "show", f":{path}").decode("utf-8")
+    return (repo_root / path).read_text("utf-8")
+
+
+def _reject_constant(name: str) -> None:
+    # Every comparison with NaN is false, so a NaN entry would allow any size.
+    raise ValueError(f"the baseline holds {name}, which is not a count")
+
+
+def load_baseline(text: str | bytes) -> dict[str, Any]:
+    """Parse a baseline, rejecting the NaN and Infinity literals that
+    ``json.loads`` otherwise accepts."""
+    baseline: dict[str, Any] = json.loads(text, parse_constant=_reject_constant)
+    return baseline
+
+
+def compare_with_base(
+    repo_root: Path,
+    ref: str,
+    baseline_name: str,
+    find_growth: Callable[[dict[str, Any], dict[str, Any]], list[str]],
+    find_growth_since: Callable[[Path, str], list[str]],
+) -> int:
+    """Return 1 when ``find_growth`` reports growth of the working-tree
+    baseline over the one at ``ref``, or ``find_growth_since`` reports files
+    the baseline the sync would write from ``ref`` does not allow.
+
+    A baseline file that ``ref`` does not have yet is new, so there is
+    nothing to compare it with.
+    """
+    _git(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    # ls-tree prints nothing for a path the commit lacks and fails for any
+    # other problem, which must not pass as "nothing to compare".
+    if not _git(repo_root, "ls-tree", "--name-only", ref, "--", baseline_name):
+        print(f"{ref} has no {baseline_name}; nothing to compare")
+        return 0
+    base = load_baseline(read_text(repo_root, baseline_name, ref=ref))
+    head = load_baseline(read_text(repo_root, baseline_name))
+    return report(find_growth(head, base) or find_growth_since(repo_root, ref))
+
+
+def excluded_prefixes(
+    repo_root: Path, staged: bool = False, ref: str | None = None
+) -> tuple[str, ...]:
+    """Return the path prefixes left out: ruff's ``extend-exclude`` trees
+    (vendored code and fixtures) and the stable proxy copy."""
+    pyproject = tomllib.loads(read_text(repo_root, "pyproject.toml", staged, ref))
+    ruff_excluded = pyproject["tool"]["ruff"]["extend-exclude"]
+    prefixes = [f"{entry.rstrip('/')}/" for entry in ruff_excluded if "*" not in entry]
+    return (*prefixes, STABLE_PROXY_COPY)
+
+
+def in_scope(path: str, excluded: tuple[str, ...]) -> bool:
+    return path.endswith(SOURCE_SUFFIXES) and not path.startswith(excluded)
+
+
+def count_lines(content: bytes) -> int:
+    """Count lines, including a last line that has no newline."""
+    unterminated = bool(content) and not content.endswith(b"\n")
+    return content.count(b"\n") + unterminated
+
+
+class GitError(subprocess.CalledProcessError):
+    """A failed git command, with git's own message in the text."""
+
+    def __str__(self) -> str:
+        detail = (self.stderr or b"").decode("utf-8", "replace").strip()
+        return f"{super().__str__()} {detail}".rstrip()
+
+
+def _git(repo_root: Path, *args: str, stdin: bytes | None = None) -> bytes:
+    # The unit-test job runs as a different user than the checkout owner,
+    # which git refuses without safe.directory.
+    command = ["git", "-c", "safe.directory=*", *args]
+    result = subprocess.run(
+        command, cwd=repo_root, capture_output=True, input=stdin, check=False
+    )
+    if result.returncode:
+        raise GitError(result.returncode, command, result.stdout, result.stderr)
+    return result.stdout
+
+
+def _working_tree_contents(
+    repo_root: Path, excluded: tuple[str, ...]
+) -> dict[str, bytes]:
+    contents: dict[str, bytes] = {}
+    for path in _git(repo_root, "ls-files", "-z").decode("utf-8").split("\0"):
+        file = repo_root / path
+        # A tracked path can be missing from the working tree before its
+        # deletion is committed, and a submodule is a directory.
+        if in_scope(path, excluded) and file.is_file():
+            contents[path] = file.read_bytes()
+    return contents
+
+
+def _staged_contents(repo_root: Path, excluded: tuple[str, ...]) -> dict[str, bytes]:
+    blobs: dict[str, str] = {}
+    entries = _git(repo_root, "ls-files", "-s", "-z").decode("utf-8")
+    for entry in entries.split("\0"):
+        # Each entry is "<mode> <object> <stage>\t<path>".
+        meta, _, path = entry.partition("\t")
+        # Regular files only: a submodule or a symlink has another mode.
+        if in_scope(path, excluded) and meta.startswith("100"):
+            blobs[path] = meta.split()[1]
+    return _read_blobs(repo_root, blobs)
+
+
+def _ref_contents(
+    repo_root: Path, ref: str, excluded: tuple[str, ...]
+) -> dict[str, bytes]:
+    blobs: dict[str, str] = {}
+    entries = _git(repo_root, "ls-tree", "-r", "-z", ref).decode("utf-8")
+    for entry in entries.split("\0"):
+        # Each entry is "<mode> blob <object>\t<path>".
+        meta, _, path = entry.partition("\t")
+        # Regular files only: a submodule or a symlink has another mode.
+        if in_scope(path, excluded) and meta.startswith("100"):
+            blobs[path] = meta.split()[2]
+    return _read_blobs(repo_root, blobs)
+
+
+def _read_blobs(repo_root: Path, blobs: dict[str, str]) -> dict[str, bytes]:
+    """Return each path's blob content. ``blobs`` maps paths to object ids."""
+    # One git process for every blob. Each reply is a "<object> blob <size>"
+    # line, then that many bytes, then a newline.
+    replies = _git(
+        repo_root, "cat-file", "--batch", stdin="\n".join(blobs.values()).encode()
+    )
+    contents: dict[str, bytes] = {}
+    offset = 0
+    for path in blobs:
+        header_end = replies.index(b"\n", offset)
+        header = replies[offset:header_end].split()
+        if len(header) != 3 or header[1] != b"blob":
+            raise RuntimeError(f"git cat-file could not read {path}: {header!r}")
+        size = int(header[2])
+        contents[path] = replies[header_end + 1 : header_end + 1 + size]
+        offset = header_end + 1 + size + 1
+    return contents
+
+
+def read_sources(
+    repo_root: Path, staged: bool = False, ref: str | None = None
+) -> dict[str, bytes]:
+    """Return the content of every tracked source file in scope.
+
+    Reads the working tree, with ``staged`` the index (the content the next
+    commit holds, which differs when a change is left unstaged), or with
+    ``ref`` that commit.
+    """
+    excluded = excluded_prefixes(repo_root, staged, ref)
+    if ref:
+        return _ref_contents(repo_root, ref, excluded)
+    read = _staged_contents if staged else _working_tree_contents
+    return read(repo_root, excluded)
+
+
+def measure(
+    repo_root: Path, staged: bool = False, ref: str | None = None
+) -> dict[str, int]:
+    """Return the line count of every tracked source file in scope."""
+    return {
+        path: count_lines(content)
+        for path, content in read_sources(repo_root, staged, ref).items()
+    }
+
+
+def find_violations(
+    sizes: dict[str, int], baseline: dict[str, int], limit: int
+) -> list[str]:
+    """Return one message per file that breaks the ratchet.
+
+    A listed file below its entry, or gone, passes: the post-merge workflow
+    lowers or drops the entry, so a pull request does not have to.
+    """
+    violations: list[str] = []
+    for path, lines in sorted(sizes.items()):
+        allowed = baseline.get(path)
+        if allowed is None:
+            if lines > limit:
+                violations.append(
+                    f"{path}: {lines} lines is over the {limit}-line limit. "
+                    "Split it along responsibilities."
+                )
+        elif lines > allowed:
+            violations.append(
+                f"{path}: grew from {allowed} to {lines} lines and is already "
+                f"over the {limit}-line limit. Move code out of it."
+            )
+    return violations
+
+
+def lowered_baseline(
+    sizes: dict[str, int], baseline: dict[str, int], limit: int
+) -> dict[str, int]:
+    """Return the baseline with shrunk files lowered and cleared files dropped."""
+    lowered: dict[str, int] = {}
+    for path, allowed in baseline.items():
+        lines = sizes.get(path)
+        if lines is not None and lines > limit:
+            lowered[path] = min(lines, allowed)
+    return lowered
+
+
+def find_growth(baseline: dict[str, int], base: dict[str, int]) -> list[str]:
+    """Return one message per entry ``baseline`` adds or raises over ``base``."""
+    messages: list[str] = []
+    for path, allowed in sorted(baseline.items()):
+        before = base.get(path)
+        if before is None or allowed > before:
+            was = "not listed" if before is None else f"listed at {before} lines"
+            messages.append(
+                f"{path}: {BASELINE_NAME} allows {allowed} lines, but the base "
+                f"branch has it {was}. Only `{REPIN_COMMAND}` edits the "
+                "baseline, and it never raises an entry: split the file instead."
+            )
+    return messages
+
+
+def find_growth_since(repo_root: Path, ref: str) -> list[str]:
+    """Return one message per listed file that grew past the baseline the
+    sync would write from ``ref``.
+
+    Until the sync runs after a merge, ``ref``'s baseline can still hold an
+    entry above its file. Checking against that entry would let a pull
+    request grow the file back: accepted silently if the sync runs after it
+    merges, or leaving master failing its own check if the sync ran first,
+    since the sync never raises an entry.
+    """
+    base_baseline = load_baseline(read_text(repo_root, BASELINE_NAME, ref=ref))
+    synced = lowered_baseline(measure(repo_root, ref=ref), base_baseline, LINE_LIMIT)
+    return [
+        f"{path}: {lines} lines, but the base branch has it at {synced[path]}, "
+        f"and a listed file may not grow ({BASELINE_NAME} can show a higher "
+        "figure until sync-ratchet-baselines.yml lowers it). Move code out of it."
+        for path, lines in sorted(measure(repo_root).items())
+        if path in synced and lines > synced[path]
+    ]
+
+
+def parse_args(argv: list[str] | None, description: str) -> argparse.Namespace:
+    """Parse the options both ratchet scripts take."""
+    parser = argparse.ArgumentParser(description=description)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--staged",
+        action="store_true",
+        help="read the staged content instead of the working tree",
+    )
+    mode.add_argument(
+        "--base",
+        metavar="REF",
+        help="check the baseline and the files against the base commit REF",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="report violations without writing the baseline",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
+    """With ``--base``, compare the baseline and the files with that commit.
+    Otherwise lower the baseline (only measure it with ``--check``) and
+    return 1 if a file is over its limit."""
+    args = parse_args(argv, __doc__.splitlines()[0])
+    if args.base:
+        return compare_with_base(
+            repo_root, args.base, BASELINE_NAME, find_growth, find_growth_since
+        )
+    # With --staged the baseline comes from the index too, so an unstaged
+    # edit to it cannot hide growth in a staged file.
+    baseline = load_baseline(read_text(repo_root, BASELINE_NAME, args.staged))
+    sizes = measure(repo_root, staged=args.staged)
+    lowered = lowered_baseline(sizes, baseline, LINE_LIMIT)
+    if not args.check:
+        (repo_root / BASELINE_NAME).write_text(
+            json.dumps(lowered, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        print(f"{len(baseline) - len(lowered)} entries dropped, {len(lowered)} remain")
+    # A commit that stages no Python file runs no unit tests, so the hook's
+    # --check run of this command is the only check on it.
+    return report(find_violations(sizes, lowered, LINE_LIMIT))
+
+
+def report(violations: list[str]) -> int:
+    """Print each violation to stderr; return the exit status."""
+    for violation in violations:
+        print(violation, file=sys.stderr)
+    return 1 if violations else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

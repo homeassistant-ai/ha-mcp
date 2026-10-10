@@ -101,7 +101,7 @@ class TestInputSelectUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -135,7 +135,7 @@ class TestInputSelectUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -165,7 +165,7 @@ class TestInputNumberUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -206,7 +206,7 @@ class TestInputTextUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -242,7 +242,7 @@ class TestInputBooleanUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -274,7 +274,7 @@ class TestInputDatetimeUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -308,7 +308,7 @@ class TestCounterUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -316,7 +316,7 @@ class TestCounterUpdatePersistence:
                 helper_type="counter",
                 name="My Counter",
                 helper_id="my_counter",
-                initial="10",
+                initial=10,
                 min_value=0,
                 max_value=100,
                 step=2,
@@ -348,7 +348,7 @@ class TestTimerUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -382,7 +382,7 @@ class TestInputButtonUpdatePersistence:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -403,36 +403,6 @@ class TestInputButtonUpdatePersistence:
         msg = update_call[0][0]
         assert msg["name"] == "Updated Button"
         assert msg["icon"] == "mdi:gesture-tap"
-
-
-class TestEntityRegistryFallback:
-    """Verify the entity-registry-only fallback still works for unknown types."""
-
-    async def test_unknown_type_uses_entity_registry(self, register_tools, mock_client):
-        """Unknown helper types should fall back to entity registry update."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"entity_entry": {"entity_id": "unknown_type.test"}},
-            }
-        )
-
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="unknown_type",
-                helper_id="test",
-                name="Test",
-            )
-
-        assert result["success"] is True
-        ws_calls = mock_client.send_websocket_message.call_args_list
-        # Should use entity registry, not {type}/update
-        update_call = ws_calls[0][0][0]
-        assert update_call["type"] == "config/entity_registry/update"
 
 
 class TestFlowHelperRouting:
@@ -1025,28 +995,16 @@ class TestFlowHelperRouting:
 
         assert captured_config.get("name") == "my_helper_name"
 
-    async def test_simple_type_rejects_config_param(self, register_tools, mock_client):
-        """Passing config for a simple helper type raises VALIDATION_INVALID_PARAMETER.
+    async def test_simple_type_accepts_an_empty_config(
+        self, register_tools, mock_client
+    ):
+        """An empty dict or string config is an explicit "nothing" (issue #2479).
 
-        Silent-ignore would mislead agents into thinking the payload took effect.
-        Empty dict and empty string are tolerated (explicit 'nothing').
+        Unknown keys go to Core, which rejects them and names the closest field
+        (test_helper_config_fold.py).
         """
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        # Non-empty config on simple type → reject
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="probe",
-                config={"some_key": "some_value"},
-            )
-        err_text = str(excinfo.value)
-        assert "VALIDATION_INVALID_PARAMETER" in err_text
-        assert "flow-based" in err_text.lower()
-
-        # Empty dict → tolerated (would proceed to simple path). We only check
-        # that no ToolError with VALIDATION_INVALID_PARAMETER for the config
-        # reason is raised; the call itself may fail downstream due to mocks.
         try:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
@@ -1054,8 +1012,8 @@ class TestFlowHelperRouting:
                 config={},
             )
         except ToolError as e:
-            assert "flow-based" not in str(e).lower(), (
-                f"empty config should not trigger the flow-based-rejection message: {e}"
+            assert "Invalid config" not in str(e), (
+                f"empty config should not be rejected as invalid: {e}"
             )
 
     async def test_flow_type_accepts_empty_string_as_no_config(
@@ -1244,7 +1202,7 @@ class TestOptionalNameOnUpdate:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
         ):

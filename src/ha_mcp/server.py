@@ -10,20 +10,35 @@ Implements lazy initialization pattern for improved startup time:
 from __future__ import annotations
 
 import logging
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
-import yaml  # type: ignore[import-untyped]
 from pydantic import Field
-
-from ha_mcp._vendor.mcp.types import Icon
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
-from .hacs_auto_refresh import hacs_refresh_lifespan
 from .http_transport import HttpTransportFastMCP as FastMCP
+from .server_lifespan import server_lifespan
+from .server_tool_text import (
+    ISSUE_FILING_INSTRUCTIONS,
+    LITE_DOCSTRING_DESTINATIONS,
+    LITE_DOCSTRINGS,
+    READ_ONLY_INSTRUCTIONS,
+    SEARCH_KEYWORDS,
+    SEARCH_TOOL_DESCRIPTION,
+    SKILL_USE_BEFORE_KEYWORDS,
+    TOOL_DISCOVERY_INSTRUCTIONS,
+)
 from .tools.helpers import raise_tool_error
+from .tools.tool_hints import read_only_hints
 from .transforms import DEFAULT_PINNED_TOOLS
+from .utils.skill_loader import (
+    BEST_PRACTICES_SKILL_NAME,
+    best_practices_skill,
+    list_skill_files,
+    parse_skill_frontmatter,
+)
 
 if TYPE_CHECKING:
     from .client.rest_client import HomeAssistantClient
@@ -31,7 +46,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Name of the consolidated polymorphic skill tool. Defined as a module
+# Name of the consolidated skill tool. Defined as a module
 # constant so settings UI, instructions, tests, and pinning all agree on
 # one canonical string. 18 chars — well under the 40-char cap that
 # Cloudflare's MCP portal enforces (#1121).
@@ -60,21 +75,6 @@ _SKILL_GUIDE_MANDATORYBPS_HINT = (
     "_dashboard / _yaml) to avoid re-receiving the canonical reference "
     "files inline."
 )
-
-
-# Server icon configuration using GitHub-hosted images
-# These icons are bundled in packaging/mcpb/ and also available via GitHub raw URLs
-SERVER_ICONS = [
-    Icon(
-        src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon.svg",
-        mime_type="image/svg+xml",
-    ),
-    Icon(
-        src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon-128.png",
-        mime_type="image/png",
-        sizes=["128x128"],
-    ),
-]
 
 
 class HomeAssistantSmartMCPServer:
@@ -115,36 +115,13 @@ class HomeAssistantSmartMCPServer:
             server_name = self.settings.mcp_server_name
             server_version = self.settings.mcp_server_version
 
-        # Build server instructions from bundled skills (if enabled)
-        instructions = self._build_skills_instructions()
+        instructions = self._build_instructions()
 
-        # Surface Read Only Mode in the startup instructions so clients
-        # that show server instructions warn the model up front. Startup
-        # state only — live flips are covered by the structured
-        # READ_ONLY_MODE call errors and the ha_get_overview field.
-        if self.settings.read_only_mode:
-            read_only_note = (
-                "## Read Only Mode\n"
-                "This server is running in Read Only Mode: write-capable "
-                "tools are disabled and every write or destructive "
-                "operation is blocked with a READ_ONLY_MODE error. You can "
-                "search, read, and analyze freely. To allow changes, the "
-                "user must turn off Read Only Mode in the ha-mcp settings "
-                "UI (Tools tab) or the add-on configuration."
-            )
-            instructions = (
-                f"{instructions}\n\n{read_only_note}"
-                if instructions
-                else read_only_note
-            )
-
-        # Create FastMCP server with Home Assistant icons for client UI display
         self.mcp = FastMCP(
             name=server_name,
             version=server_version,
-            icons=SERVER_ICONS,
             instructions=instructions,
-            lifespan=hacs_refresh_lifespan,
+            lifespan=server_lifespan,
         )
 
         # Register all tools and expert prompts
@@ -367,6 +344,22 @@ class HomeAssistantSmartMCPServer:
             logger.debug("skill-tool visibility lookup failed", exc_info=True)
             return False
 
+    def _build_instructions(self) -> str:
+        """Compose the server instructions sent in the MCP initialize response."""
+        sections: list[str] = []
+        skills = self._build_skills_instructions()
+        if skills:
+            sections.append(skills)
+
+        # Surface Read Only Mode in the startup instructions so clients
+        # that show server instructions warn the model up front. Startup
+        # state only — live flips are covered by the structured
+        # READ_ONLY_MODE call errors and the ha_get_overview field.
+        if self.settings.read_only_mode:
+            sections.append(READ_ONLY_INSTRUCTIONS)
+        sections.append(ISSUE_FILING_INSTRUCTIONS)
+        return "\n\n".join(sections)
+
     def _build_skills_instructions(self) -> str | None:
         """Build server instructions from bundled skill frontmatter.
 
@@ -420,8 +413,10 @@ class HomeAssistantSmartMCPServer:
                 "Read the skill via MCP resources (resources/read with the "
                 "skill:// URI) — if you can read these instructions, you "
                 "should be able to access resources as well. If for any "
-                f"reason you cannot access MCP resources, use the {SKILL_TOOL_NAME} "
-                "tool as a fallback. If you can access resources normally, do "
+                f"reason you cannot access MCP resources, call {SKILL_TOOL_NAME}() "
+                "with no arguments as a fallback: it returns SKILL.md, then "
+                "pass file='<path>' for a reference file. If you can access "
+                "resources normally, do "
                 "not waste time or tokens on that tool."
             )
 
@@ -441,86 +436,13 @@ class HomeAssistantSmartMCPServer:
 
         # Append tool search instructions when enabled
         if self.settings.enable_tool_search:
-            instructions += (
-                "\n\n## Tool Discovery\n"
-                "This server uses search-based tool discovery. Most tools "
-                "are NOT listed directly \u2014 use ha_search_tools to find them.\n\n"
-                "WORKFLOW:\n"
-                '1. Call ha_search_tools(query="...") to find relevant tools\n'
-                "2. Results include name, description, parameters, and "
-                "annotations (readOnlyHint/destructiveHint)\n"
-                "3. Execute the discovered tool \u2014 two options:\n"
-                "   a) DIRECT CALL (preferred): Call the tool directly by "
-                "name. All discovered tools are callable without a proxy.\n"
-                "   b) VIA PROXY: For permission-gated execution, use the "
-                "matching proxy:\n"
-                "      - ha_call_read_tool \u2014 safe, read-only operations\n"
-                "      - ha_call_write_tool \u2014 creates or modifies data\n"
-                "      - ha_call_delete_tool \u2014 removes data permanently\n\n"
-                "Once you know a tool\u2019s name, you do NOT need to search "
-                "again \u2014 call it directly.\n\n"
-                f"A few default tools are listed directly "
-                f"({', '.join(DEFAULT_PINNED_TOOLS)}) — these are the "
-                f"starting pins, and users can unpin the non-mandatory "
-                f"ones via the Tools tab in the settings UI, so the "
-                f"actual visible set may be a subset of this list. "
-                f"Everything else must be discovered via search.\n\n"
-                "DO NOT assume a capability is unavailable because you "
-                "don't see a direct tool for it. ALWAYS search first."
+            instructions += TOOL_DISCOVERY_INSTRUCTIONS.format(
+                pinned=", ".join(DEFAULT_PINNED_TOOLS)
             )
 
         return instructions
 
-    @staticmethod
-    def _parse_skill_frontmatter(main_file: Path) -> dict | None:
-        """Parse YAML frontmatter from a SKILL.md file.
-
-        Returns the frontmatter dict if valid, or None with a logged
-        warning for each failure case.
-        """
-        try:
-            content = main_file.read_text(encoding="utf-8")
-        except OSError as e:
-            logger.warning("Could not read %s: %s", main_file, e)
-            return None
-
-        parts = content.split("---", 2)
-        if len(parts) < 3:
-            logger.warning("No valid frontmatter delimiters in %s", main_file)
-            return None
-
-        try:
-            frontmatter = yaml.safe_load(parts[1])
-        except yaml.YAMLError as e:
-            # yaml.YAMLError exposes `.problem` and `.problem_mark` for
-            # parse errors — both are the entire debugging payload for
-            # an operator trying to fix the SKILL.md.
-            logger.warning("Could not parse YAML frontmatter in %s: %s", main_file, e)
-            return None
-
-        if not isinstance(frontmatter, dict):
-            logger.warning("Frontmatter is not a mapping in %s", main_file)
-            return None
-
-        description = frontmatter.get("description", "")
-        if not description:
-            logger.warning(
-                "No description in frontmatter for %s", main_file.parent.name
-            )
-            return None
-        if not isinstance(description, str):
-            # Truthy non-string values (e.g. `description: [foo]` or
-            # `description: 42`) would later crash on `.strip()` in the
-            # callers. Fail closed here so malformed bundles only break
-            # themselves, not the whole skill registration.
-            logger.warning(
-                "Description in frontmatter for %s is not a string (got %s); skipping",
-                main_file.parent.name,
-                type(description).__name__,
-            )
-            return None
-
-        return frontmatter
+    _parse_skill_frontmatter = staticmethod(parse_skill_frontmatter)
 
     def _build_skill_block(self, skill_name: str, main_file: Path) -> str | None:
         """Build an instruction block for a single skill.
@@ -589,468 +511,13 @@ class HomeAssistantSmartMCPServer:
     # These are always visible in list_tools() regardless of search transform.
     _PINNED_TOOLS: ClassVar[list[str]] = list(DEFAULT_PINNED_TOOLS)
 
-    # Description for the unified search tool
-    _SEARCH_TOOL_DESCRIPTION = (
-        "Search ALL Home Assistant tools by keyword. Returns matching tools "
-        "with descriptions, parameters, and annotations (read/write/delete). "
-        "Categories: entities, states, automations, scripts, dashboards, "
-        "helpers, HACS, calendar, zones, labels, groups, areas, floors, "
-        "history, statistics, devices, integrations, services, backups, "
-        "todo, camera, blueprints, system, and more.\n\n"
-        "WORKFLOW:\n"
-        "1. ha_search_tools(query='...') \u2014 find tools (this tool)\n"
-        "2. Execute: call the tool DIRECTLY by name (preferred), or use "
-        "a proxy for permission gating:\n"
-        "   - ha_call_read_tool \u2014 readOnlyHint tools (safe, no side effects)\n"
-        "   - ha_call_write_tool \u2014 destructiveHint tools that create/update\n"
-        "   - ha_call_delete_tool \u2014 destructiveHint tools that remove/delete\n"
-        "Once you know a tool name, call it directly \u2014 no need to search "
-        "again.\n\n"
-        "If using proxies, call with TWO top-level params:\n"
-        '   ha_call_read_tool(name="ha_search", arguments={"query": "..."})\n'
-        "   Do NOT nest name/arguments inside the arguments param.\n"
-        "   Call proxy tools SEQUENTIALLY, not in parallel.\n\n"
-        "ALWAYS search before assuming a capability is unavailable. "
-        "Most tools are discoverable only through this search."
-    )
+    _SEARCH_TOOL_DESCRIPTION = SEARCH_TOOL_DESCRIPTION
 
-    # Extra keywords appended to tool descriptions for BM25 ranking.
-    # Applied unconditionally via SearchKeywordsTransform so they also
-    # improve retrieval for Claude's native deferred-tool search on
-    # claude.ai, which indexes tool names and descriptions with BM25
-    # (no semantic matching). Original tool docstrings stay unchanged;
-    # these keywords are appended by the transform at list-tools time.
-    _SEARCH_KEYWORDS: ClassVar[dict[str, str]] = {
-        # s02: "find entities or configs" → ha_search outranks more specific tools
-        "ha_search": (
-            "find entities configs lookup discover search lights sensors switches "
-            "covers climate fans media_player binary_sensor device_tracker "
-            "person weather automation script helper input_boolean input_number "
-            "automations scripts scenes helpers dashboards"
-        ),
-        # s07: "get/read automation" → ha_config_get_automation should outrank set
-        "ha_config_get_automation": (
-            "read inspect fetch view existing automation config triggers "
-            "conditions actions get show detail"
-        ),
-        # s09: "create helper" → ha_config_set_helper should outrank remove_helper
-        # Covers all 29 helper types (12 simple + 17 flow-based, unified in #967).
-        "ha_config_set_helper": (
-            "create update new add helper "
-            "input_boolean input_button input_number input_text input_datetime "
-            "input_select counter timer schedule zone person tag "
-            "template group utility_meter derivative min_max threshold "
-            "integration statistics trend random filter tod "
-            "generic_thermostat switch_as_x generic_hygrostat "
-            "history_stats mold_indicator"
-        ),
-        # Boost tools that compete with ha_search for common queries
-        "ha_config_get_script": (
-            "read inspect fetch view existing script config sequence "
-            "actions get show detail"
-        ),
-        "ha_config_list_helpers": (
-            "list all helpers input_boolean input_number input_text "
-            "counter timer input_datetime input_select"
-        ),
-        "ha_get_entity": (
-            "get entity state attributes details single specific entity_id"
-        ),
-        "ha_get_state": (
-            "get current state value single entity check status bulk multiple states"
-        ),
-        "ha_config_set_automation": (
-            "create update modify edit automation triggers conditions actions "
-            "new automation write save take control blueprint detach "
-            "unlink standalone convert enable disable turn on off run trigger now"
-        ),
-        "ha_config_set_script": (
-            "create update modify edit script sequence actions new script write "
-            "save take control blueprint detach unlink standalone convert "
-            "run start stop execute"
-        ),
-        "ha_config_set_scene": (
-            "create update modify edit scene entities snapshot activate apply turn on"
-        ),
-        "ha_manage_updates": (
-            "update updates install skip firmware core os repair repairs issue "
-            "ignore dismiss unignore"
-        ),
-        "ha_set_integration": (
-            "integration config entry enable disable add options reconfigure "
-            "log level debug logging"
-        ),
-        "ha_config_set_yaml": (
-            "edit yaml configuration.yaml packages template sensor "
-            "binary_sensor command_line rest mqtt knx platform yaml-only "
-            "config file modify add remove replace"
-        ),
-        "ha_manage_app": (
-            "manage app apps addon add-on configure settings options port network boot "
-            "watchdog auto_update supervisor ingress proxy websocket api rest "
-            "esphome nodered node-red frigate mosquitto mqtt zigbee2mqtt zigbee "
-            "z-wave zwave appdaemon hacs studio code server file editor terminal "
-            "ssh samba grafana influxdb deconz motioneye compile validate upload "
-            "deploy firmware ota flash yaml device logs flows events stats"
-        ),
-        # #2322: the Energy Dashboard's tariffs live in .storage/energy, not
-        # in the state machine, so an agent hunting for electricity prices
-        # searches entities, finds none, and invents input_number helpers.
-        # The docstring says "cost tariffs" but never "price", "peak" or
-        # "kWh" — the words agents actually query with — and the title reads
-        # write-only ("Manage ..."), so lead the boost with the read verbs.
-        "ha_manage_energy_prefs": (
-            "read get inspect energy dashboard preferences prefs "
-            "electricity price prices pricing tariff tariffs rate rates "
-            "cost costs kwh peak off-peak offpeak contract utility bill "
-            "grid solar battery gas water consumption "
-            "number_energy_price entity_energy_price stat_energy_from"
-        ),
-        # Old tool names from before the #2329 consolidation, plus the verbs
-        # the merged tool gained. An agent that still knows ha_get_blueprint /
-        # ha_import_blueprint routes to the replacement instead of failing
-        # tool lookup.
-        "ha_manage_blueprints": (
-            "blueprint blueprints import delete remove unused substitute "
-            "take-control list ha_get_blueprint ha_import_blueprint"
-        ),
-        # Old tool names from before #1134 consolidation. BM25 retrieval
-        # on agents that still know the previous catalog ("call
-        # ha_list_resources", "use ha_get_skill_home_assistant_best_practices")
-        # routes them to the replacement instead of failing tool lookup.
-        "ha_get_skill_guide": (
-            "best practices skill skills guide guides reference references "
-            "documentation docs help tutorial automation script scene helper "
-            "dashboard "
-            "ha_list_resources ha_read_resource list_resources read_resource "
-            "ha_get_skill_home_assistant_best_practices "
-            "ha_get_skill_home_assistant home_assistant_best_practices"
-        ),
-    }
+    _SEARCH_KEYWORDS: ClassVar[dict[str, str]] = SEARCH_KEYWORDS
 
-    # Lite docstrings — beta opt-in (enable_lite_docstrings, #1062).
-    # Each entry replaces the full docstring on a heavy tool with a
-    # shorter variant that defers schema/example detail to
-    # ha_get_skill_guide. Every entry preserves
-    # a pointer to that skill so the LLM still has a path to the full
-    # guidance from inside the trimmed description. The trade-off
-    # (LLMs that skip the skill tool get less guidance) is surfaced in
-    # the dev-addon toggle, docs/beta.md, and a startup WARNING.
-    _LITE_DOCSTRINGS: ClassVar[dict[str, str]] = {
-        "ha_config_get_automation": (
-            "Get a Home Assistant automation configuration by "
-            "entity_id or unique_id. Returns the full config "
-            "(trigger, condition, action, mode) plus a stable "
-            "config_hash for use with python_transform on "
-            "ha_config_set_automation.\n\n"
-            "For schema and field-level details, see "
-            "ha_get_skill_guide."
-        ),
-        "ha_config_set_automation": (
-            "Create or update a Home Assistant automation.\n\n"
-            "Supports three modes: full `config` replacement, surgical "
-            "`python_transform` on an existing automation (requires "
-            "`identifier` and `config_hash` from "
-            "ha_config_get_automation), or `take_control_of_blueprint` "
-            "to convert a blueprint-backed automation into an editable "
-            "standalone one (the UI's Take control action). Omit "
-            "`identifier` to create a new automation. Reusing an identifier targets "
-            "the same automation; changing its alias requires config_hash from a prior read. "
-            "`enabled` turns it on or off and `run_actions` runs it now, with a "
-            "write or alone with `identifier`.\n\n"
-            "For schema details, examples, and native-vs-template "
-            "guidance, see ha_get_skill_guide or your locally "
-            "installed skills."
-        ),
-        "ha_config_get_script": (
-            "Get a Home Assistant script configuration by "
-            "script_id or entity_id. Returns the full config (sequence, "
-            "mode, fields) plus a stable config_hash for use with "
-            "python_transform on ha_config_set_script.\n\n"
-            "For schema details, see "
-            "ha_get_skill_guide."
-        ),
-        "ha_config_set_script": (
-            "Create or update a Home Assistant script.\n\n"
-            "Supports three modes: full `config` replacement, surgical "
-            "`python_transform` on an existing script (requires "
-            "`config_hash` from ha_config_get_script), or "
-            "`take_control_of_blueprint` to convert a blueprint-backed "
-            "script into an editable standalone one. `script_id` names "
-            "the script in every mode. `run` ('start' / 'stop'), used alone "
-            "with `script_id`, starts or stops the script.\n\n"
-            "For schema details and examples, see "
-            "ha_get_skill_guide or your locally installed skills."
-        ),
-        "ha_config_get_scene": (
-            "Get a Home Assistant scene configuration by scene_id or entity_id, "
-            "or omit scene_id to list/search scenes. Use query for names/IDs "
-            "and search_in_config=True for full stored attribute values. "
-            "Pass a returned scene_id to get the full config plus a "
-            "stable config_hash for use with python_transform on "
-            "ha_config_set_scene. Integration-managed scenes have no editable "
-            "storage config; partial content searches are not exhaustive.\n\n"
-            "For schema details, see "
-            "ha_get_skill_guide."
-        ),
-        "ha_config_set_scene": (
-            "Create or update a Home Assistant scene.\n\n"
-            "Supports two modes: full `config` replacement, or surgical "
-            "`python_transform` on an existing scene (requires "
-            "`config_hash`). `scene_id` names the scene in both modes. "
-            "`activate` activates the scene, with a write or alone.\n\n"
-            "For schema details and examples, see "
-            "ha_get_skill_guide or your locally installed skills."
-        ),
-        "ha_config_list_helpers": (
-            "List Home Assistant helpers of a given type, one page per "
-            "call (`limit`/`offset`; `total_count` and `has_more` "
-            "describe the full set). The 12 storage-backed types "
-            "(input_button, input_boolean, input_select, input_number, "
-            "input_text, input_datetime, counter, timer, schedule, "
-            "zone, person, tag) are listed on every install. Flow-based "
-            "types (template, group, utility_meter, derivative, and the "
-            "rest) and `helper_type='all'` are served only through the "
-            "ha_mcp_tools custom component.\n\n"
-            "For per-type schemas and decision guidance, see "
-            "ha_get_skill_guide."
-        ),
-        "ha_config_set_helper": (
-            "Create or update a Home Assistant helper. Supports all "
-            "supported helper types: the simple types (input_*, "
-            "counter, timer, schedule, zone, person, tag) and the "
-            "flow-based types (template, group, utility_meter, "
-            "derivative, statistics, trend, threshold, filter, "
-            "switch_as_x, and others).\n\n"
-            "Field set is delivered as `data_schema` on the first "
-            "validation error — submit once and self-correct. For "
-            "decision matrix and worked examples (which helper type "
-            "for which use case), see ha_get_skill_guide or your "
-            "locally installed skills."
-        ),
-        "ha_config_get_dashboard": (
-            "Get Home Assistant dashboard info (list mode, search "
-            "mode, or full config).\n\n"
-            "Three modes: (1) list — `list_only=True` returns all "
-            "storage-mode dashboards with metadata. (2) search — pass "
-            "any of `entity_id`, `card_type`, `heading` to find cards "
-            "(including nested ones, with a `python_path`) inside a "
-            "specific dashboard; the "
-            "result includes a `config_hash` you can pair with "
-            "ha_config_set_dashboard(python_transform=...) to edit "
-            "matched cards surgically. (3) get — no search params "
-            "returns the full Lovelace config plus a stable "
-            "`config_hash`. Use `url_path='default'` for the main "
-            "dashboard. For known JSON Pointer paths, use "
-            "ha_config_set_dashboard(patch=..., config_hash=...).\n\n"
-            "For card-type taxonomy and search workflow examples, see "
-            "ha_get_skill_guide."
-        ),
-        "ha_config_set_dashboard": (
-            "Create or update a Home Assistant dashboard.\n\n"
-            "Three modes: full `config` replacement for new dashboards or "
-            "restructures; `patch` for known JSON Pointer paths with literal "
-            "values (add/remove/replace/test, up to 100 operations; use `-` "
-            "to append to arrays); `python_transform` for loops and pattern-based "
-            "edits. Both edit modes require `config_hash` from "
-            "ha_config_get_dashboard. Choose one mode for content changes; "
-            "omit all three for metadata-only calls. With patch, change "
-            "sidebar metadata in a separate call. Use `url_path` of 'default' "
-            "or 'lovelace' for the built-in dashboard.\n\n"
-            "For card types, layout patterns, and python_transform "
-            "security rules, see "
-            "ha_get_skill_guide or your locally installed skills."
-        ),
-        "ha_call_service": (
-            "Call any Home Assistant service or one-shot WebSocket command: "
-            "the catch-all escape hatch. Prefer a dedicated tool when one "
-            "covers the job (automations, scripts, scenes, apps, updates and "
-            "repairs, integration log levels). Calls `<domain>.<service>` "
-            "(e.g., light.turn_on, climate.set_temperature). Use "
-            "ha_search to find entity IDs and ha_get_state "
-            "to read current values before changing them.\n\n"
-            "For service-parameter details and per-domain guidance, "
-            "see ha_get_skill_guide."
-        ),
-        "ha_config_set_yaml": (
-            "Update raw YAML in configuration.yaml, packages/*.yaml or "
-            "themes/*.yaml via add / replace / remove on a single top-level key "
-            "(LAST RESORT). By default the first call returns a diff "
-            "preview plus confirm_token; repeat with confirm_token to "
-            "apply.\n\n"
-            "Dedicated tools (ha_config_set_automation, "
-            "ha_config_set_script, ha_config_set_scene, "
-            "ha_config_set_helper) cover almost every use case and "
-            "should be preferred. Use this only for YAML-only "
-            "integrations (command_line, rest, shell_command, notify), "
-            "YAML-heavy integrations like knx (in packages/*.yaml), "
-            "registering YAML-mode dashboards via "
-            "`lovelace.dashboards.<url_path>`, or editing theme files in "
-            "themes/*.yaml (reloaded automatically). Most edits require a "
-            "full HA restart; template, mqtt, and group support "
-            "reload.\n\n"
-            "For routing guidance and the full allowlist, see "
-            "ha_get_skill_guide or your locally installed skills."
-        ),
-        "ha_search": (
-            "Search Home Assistant for entities (by name, domain, or area) AND "
-            "inside automation/script/scene/helper/dashboard configs, in one "
-            "call. Returns tagged buckets — `entities` plus per-config-type "
-            "lists — paginated per-surface and combined "
-            "(`has_more`/`next_offset`).\n\n"
-            "Config-body search is skipped when domain/area/state filters signal "
-            "entity-only intent; a warning names the skip — pass `search_types` "
-            "to force it.\n\n"
-            "`partial: True` means results are NOT exhaustive: a surface failed "
-            "or the config branch lost data. Empty buckets with `partial: True` "
-            'mean "search failed", not "no results" — see `partial_reason` '
-            "(also mirrored into `warnings`). Do not treat a partial response as "
-            "complete.\n\n"
-            "For what to do with what you find — native-first patterns, "
-            "entity_id over device_id, impact analysis before renaming — see "
-            "ha_get_skill_guide."
-        ),
-        # ha_manage_backup: the full description is 4571 dedented chars at
-        # BACKUP_HINT=normal (4672 strong / 4598 weak) and the lite value is
-        # a little over a quarter of that. No exact pair is quoted here on
-        # purpose — three successive edits left a stale figure in this
-        # comment, so the ratio is pinned by
-        # test_backup_lite_description_stays_substantially_smaller instead,
-        # which measures both sides at test time.
-        #
-        # It was the largest full description in the GATEWAY catalog this was
-        # measured against, not in the repo: ha_get_system_health (5811) is
-        # larger and unmapped.
-        # The reduction is smaller than pure compression would give because
-        # the safety content below is kept inline. The routing matrix STAYS —
-        # the `action` parameter's own Field description says "Valid (scope,
-        # action) combinations are listed in the tool description", so
-        # trimming it away would leave that pointer aimed at nothing.
-        #
-        # The deferral target now exists: homeassistant-ai/skills#76 landed
-        # references/backups.md, and the submodule pin in this commit
-        # includes it, so test_every_lite_destination_resolves enforces it
-        # rather than the entry sitting on "self-contained". What defers is
-        # the recovery-layer judgment — which of HA's two paths fits which
-        # failure, what an archive actually contains, encryption keys, and
-        # what HA does and does not protect on delete. The eleven worked
-        # examples stay dropped: they were call syntax, which the input
-        # schema already carries.
-        #
-        # destructiveHint is set on this tool, so the lite text keeps every
-        # irreversibility marker inline rather than deferring it: the
-        # restart, the confirm, the human-only enable_snapshot_delete, and
-        # each individual delete guard. It also keeps the two diagnostics
-        # that have no fallback anywhere else — the enable_auto_backup
-        # empty-list ambiguity, and the {backup_hint_text} timing sentence
-        # (resolved per-instance; see _lite_docstring_tokens).
-        "ha_manage_backup": (
-            "Manage Home Assistant backups: full HA snapshots "
-            "(`scope='snapshot'`) and per-entity auto-backups of agent edits "
-            "(`scope='edits'`). Pick the scope first — the wrong one routes "
-            "through the wrong code path.\n\n"
-            "`scope='snapshot'` actions: `create` (slow on a large "
-            "instance — progress heartbeats are sent while waiting, so a "
-            "long wait is not a hang; retrying starts a SECOND backup), "
-            "`list`, `restore` (**restarts HA**), `delete` (needs "
-            "`confirm=True`; disabled until a human sets "
-            "`enable_snapshot_delete` — an agent cannot enable it. Even then "
-            "a delete is refused for scheduled/automatic backups, for "
-            "anything younger than `snapshot_delete_min_age_days` (default "
-            "7; 0 disables the floor), and for the single newest snapshot "
-            "remaining).\n\n"
-            "`scope='edits'` actions: `create` (needs `domain` + "
-            "`entity_id`), `list`, `view`, `diff`, `restore` (takes a fresh "
-            "safety snapshot first; no HA restart), `delete`. Automatic "
-            "capture on write is gated by `enable_auto_backup`, so an empty "
-            '`list` means "nothing saved" OR "the toggle is off" — check it '
-            "before concluding there is nothing to restore. Either way "
-            "`(edits, create)` still works: it bypasses the toggle because "
-            "the request is explicit.\n\n"
-            "Use `edits` to undo a recent agent edit to an "
-            "automation/script/scene/dashboard/helper; use `snapshot` for "
-            "system-wide recovery and before irreversible operations. "
-            "{backup_hint_text}\n\n"
-            "For which recovery path fits which failure, what an archive "
-            "actually contains, and the encryption key a restore needs, see "
-            "ha_get_skill_guide (`references/backups.md`)."
-        ),
-        # ha_report_issue: the dedented docstring is what gets advertised,
-        # not the raw indented one (2351 chars), and the lite value is about
-        # a third of it. Same reason as above for not quoting a pair.
-        #
-        # Unlike every other entry here, the deferral target is the tool's
-        # OWN RESPONSE, not the skill guide: `instructions` (see
-        # tools_bug_report.py) independently re-derives the duplicate check,
-        # the template choice, the missing-tool pre-check, and the mandatory
-        # anonymisation step. Issue reporting is ha-mcp product meta — it
-        # cannot go in the skill pack, whose CONTRIBUTING forbids coupling
-        # skill content to specific MCP tool names. The lite text says so
-        # outright so a compliant agent doesn't spend a call finding out.
-        "ha_report_issue": (
-            "Get diagnostic information plus a ready-to-file report "
-            "template. Covers two kinds of report: a runtime bug (ha-mcp "
-            "errored or behaved unexpectedly) and agent-behaviour feedback "
-            "(the AI used the wrong tool or worked inefficiently). Pick "
-            "based on whether the fault was in ha-mcp or in the agent's own "
-            "choices.\n\n"
-            "The response carries the full workflow in its `instructions` "
-            "field — duplicate check, template selection, the mandatory "
-            "anonymisation step, and the submit URLs — plus "
-            '`missing_tool_hint` for the "a tool I expected is missing" '
-            "case, which is usually a stale client tool list rather than a "
-            "bug. Read `instructions` before presenting anything to the "
-            "user; ha_get_skill_guide does not cover issue reporting."
-        ),
-    }
+    _LITE_DOCSTRINGS: ClassVar[dict[str, str]] = LITE_DOCSTRINGS
 
-    # Where each _LITE_DOCSTRINGS entry's "see ..." pointer actually lands.
-    #
-    # The pointer is the whole bargain of lite mode: the trimmed text is only
-    # acceptable because the detail is reachable. Enforcing that every entry
-    # merely CONTAINS the string "ha_get_skill_guide" (the original
-    # invariant) checks the pointer and never the destination — which is how
-    # an entry deferring to guide content that does not exist could pass
-    # tests (#2153 review). This map names the destination so
-    # tests/src/unit/test_lite_docstrings.py can resolve it against the
-    # vendored skill pack.
-    #
-    # Three legal value forms, each with a matching check in the tests:
-    #
-    #   "references/<file>.md" / "SKILL.md"
-    #       A path inside the home-assistant-best-practices skill. Must
-    #       resolve against the VENDORED pack, and the lite text must carry
-    #       a ha_get_skill_guide pointer to reach it.
-    #   "tool-response:<field>"
-    #       The guidance ships in the tool's own response instead. The field
-    #       must actually be returned, and the lite text must name it.
-    #   "self-contained"
-    #       The entry defers nothing. The lite text must carry NO
-    #       ha_get_skill_guide pointer and name no reference file, so an
-    #       entry cannot quietly re-acquire a pointer to content that isn't
-    #       vendored — which is what "self-contained" exists to prevent.
-    _LITE_DOCSTRING_DESTINATIONS: ClassVar[dict[str, str]] = {
-        "ha_config_get_automation": "references/automation-patterns.md",
-        "ha_config_set_automation": "references/automation-patterns.md",
-        "ha_config_get_script": "references/automation-patterns.md",
-        "ha_config_set_script": "references/automation-patterns.md",
-        "ha_config_get_scene": "references/scenes.md",
-        "ha_config_set_scene": "references/scenes.md",
-        "ha_config_list_helpers": "references/helper-selection.md",
-        "ha_config_set_helper": "references/helper-selection.md",
-        "ha_config_get_dashboard": "references/dashboard-cards.md",
-        "ha_config_set_dashboard": "references/dashboard-guide.md",
-        "ha_call_service": "references/domain-docs.md",
-        "ha_config_set_yaml": "references/yaml-only-integrations.md",
-        # The skill pack has no search reference, so this lands on the
-        # decision workflow. The lite text was reworded to promise what
-        # SKILL.md actually holds (what to do with the results) instead of
-        # "parameters, schema, and examples", which it never had — the
-        # parameters ship in the input schema regardless.
-        "ha_search": "SKILL.md",
-        "ha_manage_backup": "references/backups.md",
-        "ha_report_issue": "tool-response:instructions",
-    }
+    _LITE_DOCSTRING_DESTINATIONS: ClassVar[dict[str, str]] = LITE_DOCSTRING_DESTINATIONS
 
     # Description overrides that REPLACE the original description for BM25.
     # Used to narrow overly broad tools so they stop matching generic queries
@@ -1230,7 +697,7 @@ class HomeAssistantSmartMCPServer:
         Replaces the full tool catalog with a unified BM25 search tool and
         three categorized call proxies (read/write/delete). Pinned tools
         remain directly visible in list_tools() for individual permission
-        gating. The polymorphic ``ha_get_skill_guide`` tool is pinned via
+        gating. The ``ha_get_skill_guide`` tool is pinned via
         ``DEFAULT_PINNED_TOOLS`` (transforms/categorized_search.py) so the
         bundled skill trigger-conditions stay in the catalog — no explicit
         ``pinned.append(...)`` for it here.
@@ -1355,6 +822,10 @@ class HomeAssistantSmartMCPServer:
             from .policy.middleware import PolicyMiddleware
             from .policy.model import Policy
             from .policy.persistence import load_policy
+            from .policy.server_channels import (
+                approval_ws_client,
+                emit_approval_result_as,
+            )
             from .utils.data_paths import get_data_dir
         except ImportError:
             logger.exception(
@@ -1374,106 +845,15 @@ class HomeAssistantSmartMCPServer:
             # roundtrip of a gated tool call.
             return load_policy(data_dir)
 
-        async def _approval_ws_client() -> Any:
-            # Imported at call time, like the rest of this block: the
-            # WebSocket stack is only needed once a gated call is actually
-            # announced, which may never happen.
-            from .client.websocket_client import get_websocket_client
-
-            # Keyed to the credentials the announcement itself goes out
-            # with, the way ``HomeAssistantClient.send_websocket_message``
-            # does it. In OAuth mode ``self.client`` is a proxy resolving to
-            # the current request's client, while the global settings hold
-            # only the ``oauth-mode-token`` placeholder -- so an
-            # unparameterised call would authenticate the response
-            # subscription as nobody, and a request could be announced over
-            # REST on a channel that can never carry the answer back.
-            # Read once, and catch the miss explicitly: a per-attribute
-            # ``getattr`` with a default would swallow an AttributeError
-            # raised anywhere INSIDE the OAuth proxy's resolution, hand
-            # back None, and silently authenticate as the placeholder the
-            # whole change exists to avoid. Three separate reads would also
-            # be three separate resolutions, with nothing tying them to one
-            # client. A client with no credentials at all is the token
-            # deployments' normal case: pooled default connection.
-            client = self.client
-            url: str | None
-            token: str | None
-            verify_ssl: bool | None
-            try:
-                url = client.base_url
-                token = client.token
-                verify_ssl = client.verify_ssl
-            except AttributeError:
-                logger.debug(
-                    "policy decisions: %s exposes no per-request credentials; "
-                    "opening the approval-response channel on the pooled "
-                    "default connection",
-                    type(client).__name__,
-                    exc_info=True,
-                )
-                url = token = verify_ssl = None
-            return await get_websocket_client(
-                url=url, token=token, verify_ssl=verify_ssl
-            )
-
         # Reads the same policy file as the middleware, so the toggle that
         # opens this channel is the one the user flips in the settings UI,
         # with no restart in between.
-        async def _emit_approval_result(
-            token: str,
-            decision: str,
-            *,
-            applied: bool,
-            reason: str,
-            tool_name: str | None = None,
-        ) -> None:
-            from .client.rest_client import HomeAssistantClient
-            from .policy.events import emit_approval_result
-
-            # Credentials read the way ``_approval_ws_client`` reads them,
-            # and for the same reason: this runs in a bus handler, not in a
-            # request, so in OAuth mode ``self.client`` resolves to nobody
-            # and the proxy raises rather than handing back a usable client.
-            # A fresh REST client over the snapshot keeps the result going
-            # out as the same identity the request was announced with.
-            client = self.client
-            url: str | None
-            token_value: str | None
-            verify_ssl: bool | None
-            try:
-                url = client.base_url
-                token_value = client.token
-                verify_ssl = client.verify_ssl
-            except Exception:
-                logger.debug(
-                    "policy decisions: no credentials for the result event; "
-                    "the decision itself is unaffected",
-                    exc_info=True,
-                )
-                return
-            # Owned here, so closed here: this client is built per event and
-            # carries its own httpx connection pool, which nothing else will
-            # ever reclaim. A wrong PIN retried by a chatty automation would
-            # otherwise open one per attempt.
-            async with HomeAssistantClient(
-                url, token_value, verify_ssl=verify_ssl
-            ) as result_client:
-                await emit_approval_result(
-                    result_client,
-                    token,
-                    decision,
-                    applied=applied,
-                    reason=reason,
-                    tool_name=tool_name,
-                )
-
         self.approval_response_listener = ApprovalResponseListener(
             policy_provider=_policy_provider,
             queue=self.approval_queue,
             data_dir=data_dir,
-            get_ws_client=_approval_ws_client,
-            emit_result=_emit_approval_result,
+            get_ws_client=partial(approval_ws_client, self),
+            emit_result=partial(emit_approval_result_as, self),
         )
 
         try:
@@ -1599,43 +979,26 @@ class HomeAssistantSmartMCPServer:
             VisibilityOutboundEnforcement(get_client=lambda: self.client)
         )
 
-    # Shared action-phrased keyword block for retrieval. Some MCP clients
-    # (Claude Code, others) rank candidate tools by token-overlap between
-    # the user's natural-language query and each tool's `description`
-    # field; symptom-framed SKILL.md descriptions don't overlap with
-    # task-phrased queries like "create automation" or "writing trigger".
-    # This block lists the workflow positions where consulting the
-    # bundled skill matters, so retrieval surfaces ha_get_skill_guide
-    # when an agent is about to write config.
-    _SKILL_USE_BEFORE_KEYWORDS: ClassVar[str] = (
-        "Use BEFORE: creating or editing automations, scripts, scenes, "
-        "helpers, or dashboards; writing triggers, conditions, actions, "
-        "wait_template, or service calls; renaming entities or migrating "
-        "device_id to entity_id; calling ha_config_set_automation, "
-        "ha_config_set_script, ha_config_set_helper, ha_config_set_dashboard, "
-        "or ha_set_entity."
-    )
+    _SKILL_USE_BEFORE_KEYWORDS: ClassVar[str] = SKILL_USE_BEFORE_KEYWORDS
 
     def _register_skills(self) -> None:
-        """Register bundled skills as MCP resources and a polymorphic tool.
+        """Register bundled skills as MCP resources and the skill tool.
 
         Two paths to the same content:
 
-        - **Resources** — ``SkillsDirectoryProvider`` serves every skill
+        - **Resources**: ``SkillsDirectoryProvider`` serves every skill
           file at ``skill://<skill>/<path>``. Resource-capable clients
           (Claude Code, Cursor, anything that supports the MCP
           ``resources/list`` / ``resources/read`` methods) discover and
           read skills natively. Best-effort: skipped if the provider
           can't be loaded or the skills dir is missing.
-        - **Tool** — ``ha_get_skill_guide`` is a single polymorphic tool
-          for tool-only clients (claude.ai, etc. that don't read server
-          instructions). Three tiers: no args lists skills with their
-          frontmatter descriptions; ``skill`` arg lists reference files;
-          ``skill`` + ``file`` reads file content. **Registration is
-          always attempted** so an absent tool isn't a silent failure
-          mode — even if the skills submodule is missing, the tool
-          surfaces that fact at call time via an explanatory empty
-          listing with ``degraded: True``. A genuine registration
+        - **Tool**: ``ha_get_skill_guide`` serves the best-practices
+          skill to tool-only clients (claude.ai, etc. that don't read
+          server instructions). No arguments returns SKILL.md; ``file``
+          returns one reference file. **Registration is always
+          attempted** so an absent tool isn't a silent failure mode:
+          even if the skills submodule is missing, the tool reports that
+          at call time with an explanatory error. A genuine registration
           failure (FastMCP API regression, etc.) is caught at the call
           site, logged with full traceback, and flips
           ``status["tool"] = "failed"`` so the summary log warns
@@ -1655,7 +1018,7 @@ class HomeAssistantSmartMCPServer:
         if skills_dir is None:
             logger.warning(
                 "Skills directory not found at %s; skill resources unavailable. "
-                "%s will still be registered and report an empty listing.",
+                "%s will still be registered; its calls report an error.",
                 Path(__file__).parent / "resources" / "skills-vendor" / "skills",
                 SKILL_TOOL_NAME,
             )
@@ -1683,7 +1046,7 @@ class HomeAssistantSmartMCPServer:
                     logger.exception("Failed to register skills as resources")
                     status["provider"] = "failed"
 
-        # Phase 3: Register the polymorphic tool unconditionally. Tool
+        # Phase 3: Register the skill tool unconditionally. Tool
         # absence would be a silent failure for tool-only clients; an
         # always-registered tool that reports "no skills available" is
         # the loud-failure alternative. Wrap the registration call so a
@@ -1752,398 +1115,147 @@ class HomeAssistantSmartMCPServer:
             skills.append((skill_dir.name, skill_dir, frontmatter))
         return skills
 
-    @staticmethod
-    def _list_skill_files(skill_dir: Path) -> list[str]:
-        """Return relative file paths for a skill, filtering symlinks and traversal.
-
-        Symlinks are skipped (defense against a malicious skill bundle
-        linking outside its dir) and ``is_relative_to(resolved_root)``
-        rejects anything that resolves outside the skill's own tree.
-        """
-        files: list[str] = []
-        resolved_root = skill_dir.resolve()
-        try:
-            for f in sorted(skill_dir.rglob("*")):
-                if not f.is_file() or f.is_symlink():
-                    continue
-                if not f.resolve().is_relative_to(resolved_root):
-                    continue
-                files.append(str(f.relative_to(skill_dir)))
-        except OSError as e:
-            logger.warning("Error reading skill files in %s: %s", skill_dir, e)
-        return files
-
     def _register_skill_guide_tool(self, skills_dir: Path | None) -> int:
-        """Register the polymorphic ``ha_get_skill_guide`` tool unconditionally.
+        """Register the ``ha_get_skill_guide`` tool unconditionally.
 
-        Returns the number of bundled skills whose frontmatter parsed
-        successfully (used by ``_register_skills`` for the summary log).
-        The tool is **always** registered regardless of the count — a
-        missing tool would be a silent failure for tool-only clients.
-        When no skills are reachable (missing submodule, empty dir, all
-        frontmatter unparseable), the tool's description says so and
-        Tier 1 returns an empty list with an explanatory note.
+        Returns 1 when the bundled best-practices skill's frontmatter
+        parsed, else 0 (used by ``_register_skills`` for the summary log).
+        The tool is **always** registered: a missing tool would be a
+        silent failure for tool-only clients. When the skill is not
+        reachable (missing submodule, unparseable frontmatter), the
+        description says so and every call raises an explanatory error.
 
-        The tool's description embeds every available skill's
-        frontmatter ``description`` so claude.ai (which doesn't read
-        server instructions) still sees trigger conditions in the
-        catalog — same model the prior per-skill guidance tools used,
-        collapsed into one tool.
+        The description embeds the skill's frontmatter ``description`` so
+        clients that don't read server instructions (claude.ai) still see
+        its trigger conditions in the catalog.
         """
-        skills = self._list_bundled_skills(skills_dir) if skills_dir is not None else []
+        skill = best_practices_skill(skills_dir)
 
-        if skills:
-            # Build the tool description with each skill's trigger
-            # conditions. Keeps the "CALL THIS FIRST" framing the
-            # per-skill tools used so claude.ai's catalog-level retrieval
-            # surfaces it for relevant tasks.
-            skill_blocks = [
-                f"### {name} ({f'skill://{name}/SKILL.md'})\n"
-                f"{fm['description'].strip()}"
-                for name, _dir, fm in skills
-            ]
+        if skill:
+            # Keeps the "CALL THIS FIRST" framing so claude.ai's
+            # catalog-level retrieval surfaces the tool for relevant tasks.
+            (name, _dir, frontmatter) = skill
             tool_description = (
-                "Get bundled Home Assistant best-practice skill guides. "
+                "Get the bundled Home Assistant best-practices skill. "
                 "CALL THIS FIRST before performing matching actions.\n\n"
-                "Three modes (progressive disclosure):\n"
-                "- No args: list bundled skills with their trigger conditions.\n"
-                "- skill arg: list reference files for that skill.\n"
-                "- skill + file args: read the file content.\n\n"
-                "Bundled skills:\n\n"
-                + "\n\n".join(skill_blocks)
-                + f"\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n"
-                + _OLD_SKILL_TOOL_ALIASES
+                "Call with no arguments to read SKILL.md: the workflow, the "
+                "common mistakes, and a table that says which reference "
+                "file to read for each task. Then read only the files that "
+                "table points to.\n\n"
+                f"### {name} (skill://{name}/SKILL.md)\n"
+                f"{frontmatter['description'].strip()}"
+                f"\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n" + _OLD_SKILL_TOOL_ALIASES
             )
         else:
-            # Degraded mode: tool registered but skills directory is
-            # missing/empty. The description signals this so the LLM
-            # doesn't keep retrying calls expecting content.
             # Even in degraded mode, append the action-phrased keyword
             # block so BM25 retrieval still ranks this tool for the
-            # workflow positions the description covers — the tool is
-            # mandatory-pinned, so it stays in the catalog regardless,
-            # but the keywords keep ranking sane for tool-search.
+            # workflow positions the description covers. The tool is
+            # mandatory-pinned, so it stays in the catalog regardless.
             tool_description = (
-                "Get bundled Home Assistant best-practice skill guides. "
-                "No skill bundles are currently available on this server — "
-                "the skills directory is missing, empty, or all SKILL.md "
-                "files failed to parse. Calls return an empty listing; "
-                "ask the operator to verify the skills-vendor submodule "
-                f"is initialized.\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n"
-                + _OLD_SKILL_TOOL_ALIASES
+                "Get the bundled Home Assistant best-practices skill. "
+                "The skill is currently not available on this server: the "
+                "skills directory is missing or its SKILL.md failed to "
+                "parse. Calls return an error; ask the operator to verify "
+                "the skills-vendor submodule is initialized."
+                f"\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n" + _OLD_SKILL_TOOL_ALIASES
             )
 
         async def ha_get_skill_guide(
-            skill: Annotated[
-                str | None,
-                Field(
-                    description=(
-                        "Skill name from the no-args listing "
-                        "(e.g., 'home-assistant-best-practices')."
-                    ),
-                ),
-            ] = None,
             file: Annotated[
-                str | None,
+                str,
                 Field(
                     description=(
-                        "Reference file path within the skill, relative "
-                        "to the skill directory (e.g., 'SKILL.md' or "
-                        "'references/automation-patterns.md'). Requires "
-                        "skill to be set."
+                        "Path of the file to read, exactly as SKILL.md links "
+                        "it (e.g. 'references/triggers-and-conditions.md'). "
+                        "Omit to read SKILL.md."
                     ),
                 ),
-            ] = None,
+            ] = "SKILL.md",
         ) -> dict[str, Any]:
             # Re-read the skills dir live on every call (#1820 review):
             # the strict-BPS gate also reads it live, so a registration-time
-            # capture deadlocks the one recovery path — vendor absent at
+            # capture deadlocks the one recovery path. Vendor absent at
             # boot (gate fails open), operator runs `git submodule update
             # --init` in place, the gate flips ON, but a captured None here
             # would keep the acknowledgment key unobtainable until restart.
-            return self._handle_skill_guide_call(self._get_skills_dir(), skill, file)
+            return self._handle_skill_guide_call(self._get_skills_dir(), file)
 
         self.mcp.tool(
             name=SKILL_TOOL_NAME,
             description=tool_description,
-            annotations={
-                "openWorldHint": False,
-                "readOnlyHint": True,
-                "idempotentHint": True,
-                "title": "Get Home Assistant Best Practices Skill Guide",
-            },
+            annotations=read_only_hints(
+                "Get Home Assistant Best Practices Skill Guide", open_world=False
+            ),
             tags={"System"},
         )(ha_get_skill_guide)
         logger.info(
             "Registered %s (%d bundled skill(s))",
             SKILL_TOOL_NAME,
-            len(skills),
+            1 if skill else 0,
         )
-        return len(skills)
+        return 1 if skill else 0
 
     def _handle_skill_guide_call(
-        self,
-        skills_dir: Path | None,
-        skill: str | None,
-        file: str | None,
+        self, skills_dir: Path | None, file: str = "SKILL.md"
     ) -> dict[str, Any]:
-        """Dispatch a ``ha_get_skill_guide`` call to the right tier.
+        """Serve one file of the bundled best-practices skill.
 
         Split out from the registered async closure so the same logic is
         unit-testable without round-tripping through the MCP tool layer.
         Synchronous because every operation is bounded local disk I/O.
 
-        Return shape per tier:
-        - Tier 1 (no args): ``{"success": True, "skills": [...], "how_to_use": ...}``
-        - Tier 2 (skill): ``{"success": True, "skill": ..., "files": [...], ...}``
-        - Tier 3 (skill+file): ``{"success": True, "skill": ..., "file": ..., "content": ...}``
-
-        ``skills_dir`` is ``None`` when no skills directory exists on
-        disk. In that case Tier 1 returns ``{"success": True,
-        "degraded": True, "skills": [], ...}`` — the explicit
-        ``degraded`` flag lets LLM clients branch on the
-        misconfiguration without parsing the ``how_to_use`` prose,
-        while ``success: True`` keeps generic "call succeeded"
-        predicates honest. Tier 2/3 in degraded mode raise so the
-        caller gets a clear error instead of a confusing empty result.
-        Tool-level failures raise ``ToolError`` (via
-        ``raise_tool_error``) per .gemini/styleguide.md, so clients see
-        ``isError=true`` rather than a success payload with an
-        embedded error.
+        The default is SKILL.md, whose table links every reference file
+        by the path this tool accepts. ``file`` is matched exactly against
+        the regular files that exist in the skill; no path is built from
+        it, so traversal, absolute paths and symlinks are refused by the
+        same lookup. Failures raise ``ToolError`` (via
+        ``raise_tool_error``) per .gemini/styleguide.md.
         """
-        # Degraded mode: no skills directory. Always return a structured
-        # response so callers can detect the situation rather than
-        # silently believing the tool list is just empty.
-        if skills_dir is None:
-            return self._skill_guide_degraded_response(skill, file)
-
-        # Tier 1: no args → list bundled skills with frontmatter
-        if not skill:
-            return self._skill_guide_tier1_response(skills_dir)
-
-        skill_dir = self._resolve_skill_dir(skills_dir, skill)
-
-        # Tier 2: skill only → list reference files
-        if not file:
-            return self._skill_guide_tier2_response(skill, skill_dir)
-
-        # Tier 3: skill + file → read content.
-        target = self._resolve_skill_file_target(skill, skill_dir, file)
-        content = self._read_skill_file_content(skill, file, target)
-        return self._build_skill_guide_tier3_response(skill, file, content)
-
-    def _skill_guide_degraded_response(
-        self, skill: str | None, file: str | None
-    ) -> dict[str, Any]:
-        """Handle a skill-guide call when no skills directory exists.
-
-        Tier 1 (no ``skill``) returns a structured degraded listing.
-        Tier 2/3 (``skill`` given) raise, since there's nothing to read.
-        """
-        if not skill:
-            # Explicit ``degraded`` flag so LLM clients can detect the
-            # misconfiguration signal without parsing the
-            # ``how_to_use`` prose. ``success: True`` is kept so
-            # generic "call succeeded" predicates don't trip — the
-            # tool DID return a structured response — but
-            # ``degraded`` is the actionable branch.
-            return {
-                "success": True,
-                "degraded": True,
-                "skills": [],
-                "how_to_use": (
-                    "No skill bundles are available on this server. "
-                    "The skills-vendor submodule may be missing or "
-                    "uninitialized. Contact the server operator."
-                ),
-            }
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                message=(
-                    "Cannot read skill: no skills directory is available "
-                    "on this server."
-                ),
-                context={"skill": skill, "file": file},
-                suggestions=[
-                    f"Call {SKILL_TOOL_NAME}() with no args to confirm "
-                    "skill availability.",
-                    "Ask the server operator to initialize the "
-                    "skills-vendor submodule "
-                    "(`git submodule update --init`).",
-                ],
-            )
-        )
-
-    def _skill_guide_tier1_response(self, skills_dir: Path) -> dict[str, Any]:
-        """Tier 1: no args → list bundled skills with frontmatter."""
-        skills = self._list_bundled_skills(skills_dir)
-        return {
-            "success": True,
-            "skills": [
-                {
-                    "skill": name,
-                    "uri": f"skill://{name}/SKILL.md",
-                    "description": fm["description"].strip(),
-                }
-                for name, _dir, fm in skills
-            ],
-            "how_to_use": (
-                f"Call {SKILL_TOOL_NAME}(skill='<name>') to list a "
-                f"skill's reference files, then "
-                f"{SKILL_TOOL_NAME}(skill='<name>', file='<path>') "
-                "to read content. Resource-capable clients can also "
-                "read skill:// URIs via resources/read."
-            ),
-        }
-
-    def _resolve_skill_dir(self, skills_dir: Path, skill: str) -> Path:
-        """Resolve and validate the on-disk directory for ``skill``.
-
-        Reject four classes of bad ``skill`` argument before any I/O on
-        the resolved path:
-
-        (a) Traversal — ``"../something"`` lets tier 2 list directories
-            above the skills root.
-        (b) Symlinked skill DIRECTORY — applies the same anti-symlink
-            stance as ``_list_skill_files`` (which filters symlinks
-            per-file inside a skill) one level up, at the skill-dir
-            entry point. The two scopes differ but the intent is the
-            same: don't follow symlinks added to the skill bundle.
-        (c) Root-aliases — ``"."``, ``"./"``, ``"x/.."`` all resolve
-            to the skills root itself. Without this check tier 2
-            silently downgrades from "list one skill's files" to
-            "list every file across every bundle." Not a security
-            escape (skills are bundled content) but a contract
-            mismatch with tier 1.
-        (d) Resolve failures — bubble as a structured INTERNAL_ERROR
-            rather than a generic INTERNAL_ERROR from fastmcp's
-            wrapper, mirroring tier 3.
-        """
-        skill_dir = skills_dir / skill
-        try:
-            skill_resolved = skill_dir.resolve()
-            skills_resolved = skills_dir.resolve()
-        except OSError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    message=(f"Could not resolve path for skill {skill!r}: {e}"),
-                    context={"skill": skill},
-                    suggestions=[
-                        "Check filesystem permissions on the skills-vendor directory.",
-                        "Check the server logs for the underlying OSError.",
-                    ],
-                )
-            )
-        if (
-            not skill_dir.exists()
-            or not skill_dir.is_dir()
-            or not skill_resolved.is_relative_to(skills_resolved)
-            or skill_resolved == skills_resolved
-            or skill_dir.is_symlink()
-        ):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    message=f"Unknown skill: {skill!r}.",
-                    context={"skill": skill},
-                    suggestions=[
-                        f"Call {SKILL_TOOL_NAME}() with no args to list "
-                        "available skills.",
-                        "Check the skill name for typos or path separators.",
-                    ],
-                )
-            )
-        return skill_dir
-
-    def _skill_guide_tier2_response(
-        self, skill: str, skill_dir: Path
-    ) -> dict[str, Any]:
-        """Tier 2: skill only → list reference files."""
-        files = self._list_skill_files(skill_dir)
-        return {
-            "success": True,
-            "skill": skill,
-            "uri": f"skill://{skill}/SKILL.md",
-            "files": [
-                {"name": name, "uri": f"skill://{skill}/{name}"} for name in files
-            ],
-            "how_to_use": (
-                f"Call {SKILL_TOOL_NAME}(skill={skill!r}, file='<name>') "
-                "to read a specific file. Start with SKILL.md for the "
-                "decision workflow."
-            ),
-        }
-
-    def _resolve_skill_file_target(
-        self, skill: str, skill_dir: Path, file: str
-    ) -> Path:
-        """Resolve and validate the on-disk file for tier 3.
-
-        Check ``candidate.is_symlink()`` HERE, before
-        ``candidate.resolve()``. ``resolve()`` returns the canonical
-        non-symlink path, so a post-resolve ``is_symlink()`` check
-        would always be False — the pre-resolve check is the only one
-        that actually catches a symlink. Matches the is_symlink()
-        filter in _list_skill_files (tier 2 listings hide symlinks, so
-        tier 3 must reject them with the same semantics).
-        """
-        candidate = skill_dir / file
-        if candidate.is_symlink():
+        skill = BEST_PRACTICES_SKILL_NAME
+        entry = best_practices_skill(skills_dir)
+        if entry is None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
                     message=(
-                        f"Refusing to follow symlink at {file!r} in skill {skill!r}."
+                        f"The {skill!r} skill is not available on this "
+                        "server. The skills-vendor submodule may be missing "
+                        "or uninitialized, or its SKILL.md failed to parse."
                     ),
-                    context={"skill": skill, "file": file},
+                    context={"file": file},
                     suggestions=[
-                        f"Call {SKILL_TOOL_NAME}(skill={skill!r}) to see the "
-                        "non-symlink files this skill exposes.",
-                        "Ask the operator to replace the symlink with a "
-                        "regular file inside the skill directory.",
+                        "Ask the server operator to initialize the "
+                        "skills-vendor submodule "
+                        "(`git submodule update --init`).",
                     ],
                 )
             )
-        try:
-            target = candidate.resolve()
-        except OSError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    message=(
-                        f"Could not resolve path for file {file!r} in skill "
-                        f"{skill!r}: {e}"
-                    ),
-                    context={"skill": skill, "file": file},
-                    suggestions=[
-                        "Check filesystem permissions on the skills-vendor directory.",
-                        "Check the server logs for the underlying OSError.",
-                    ],
-                )
-            )
-        if not target.is_relative_to(skill_dir.resolve()) or not target.is_file():
+
+        skill_dir = entry[1]
+        requested = file or "SKILL.md"
+        allowed = list_skill_files(skill_dir)
+        if requested not in allowed:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
-                    message=f"Unknown file {file!r} in skill {skill!r}.",
-                    context={"skill": skill, "file": file},
+                    message=f"Unknown file {requested!r} in skill {skill!r}.",
+                    context={"file": requested},
                     suggestions=[
-                        f"Call {SKILL_TOOL_NAME}(skill={skill!r}) to list "
-                        "available files.",
-                        "Verify the file path is relative to the skill "
-                        "directory (e.g., 'references/foo.md').",
+                        "Pass one of these paths exactly as written: "
+                        + ", ".join(allowed),
+                        f"Call {SKILL_TOOL_NAME}() with no arguments to read "
+                        "SKILL.md, whose table says which file to read.",
                     ],
                 )
             )
-        return target
+        content = self._read_skill_file_content(skill, requested, skill_dir / requested)
+        return self._build_skill_guide_response(skill, requested, content)
 
     def _read_skill_file_content(self, skill: str, file: str, target: Path) -> str:
-        """Read the resolved tier-3 file, raising a structured error on I/O failure."""
+        """Read one skill file, raising a structured error on I/O failure."""
         try:
             return target.read_text(encoding="utf-8")
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,
@@ -2156,44 +1268,46 @@ class HomeAssistantSmartMCPServer:
                 )
             )
 
-    def _build_skill_guide_tier3_response(
+    def _build_skill_guide_response(
         self, skill: str, file: str, content: str
     ) -> dict[str, Any]:
-        """Build the tier-3 response, prepending the strict-BPS ack line when relevant.
+        """Build the response for one skill file.
 
-        Hint goes at the top of the response so the LLM sees it before
-        parsing the (potentially large) content body. Scoped to the
-        best-practice skill because that's the one the write-tool
-        MandatoryBPS param gates; other skills (if any) are unrelated.
+        In strict mode the acknowledgment key goes at the top of every
+        file this tool serves (#1779), so a model obtains it whether it
+        reads SKILL.md or the reference file a block error points to.
+        The skill:// resources read raw files and never carry it;
+        resource-preferring clients recover through the block error's
+        suggestion, which points back at this tool.
+
+        The ``MandatoryBPS=false`` hint rides only on reference files.
+        SKILL.md is what every first call returns, and a model that took
+        the hint there would drop the reference files the write tools
+        attach before it had read any of them.
         """
         from .strict_bps import strict_bps_ack_line, strict_bps_effective
-        from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
 
-        is_best_practices = skill == _HA_BEST_PRACTICES_SKILL_NAME
-
-        # Publish the acknowledgment key inside the best-practices content
-        # itself (#1779) when strict mode is effective — this Tier-3 read is
-        # the ONLY caller-facing surface that carries the key. Prepended to
-        # the content body so a model that reads the guide obtains the key
-        # it must pass as BestPracticeKey on gated writes. The skill://
-        # resource surface reads raw files and does NOT get this line; that
-        # is accepted — resource-preferring clients recover via the block
-        # error's suggestion, which points them back at this tool.
-        if is_best_practices and strict_bps_effective():
+        if strict_bps_effective():
             content = f"{strict_bps_ack_line()}\n\n{content}"
 
         response: dict[str, Any] = {}
-        if is_best_practices:
+        if file != "SKILL.md":
             response["skill_content_hint"] = _SKILL_GUIDE_MANDATORYBPS_HINT
         response.update(
             {
                 "success": True,
-                "skill": skill,
                 "file": file,
                 "uri": f"skill://{skill}/{file}",
                 "content": content,
             }
         )
+        if file == "SKILL.md":
+            response["how_to_use"] = (
+                f"Call {SKILL_TOOL_NAME}(file='<path>') for the reference "
+                "files the table above points to for your task, using the "
+                "path exactly as linked (e.g. 'references/triggers-and-"
+                "conditions.md'). Read only those; do not load every file."
+            )
         return response
 
     async def start(self) -> None:
@@ -2212,7 +1326,7 @@ class HomeAssistantSmartMCPServer:
                 )
             else:
                 logger.warning(f"⚠️ Failed to connect to Home Assistant: {error}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"❌ Error testing connection: {e}")
 
         # Log successful server initialization

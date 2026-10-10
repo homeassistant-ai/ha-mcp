@@ -134,7 +134,8 @@ local:
 The **Conversation-agent tool exposure** option picks the shape agents get:
 
 - **Tool search** (default): a compact API — the pinned tools directly, plus
-  `ha_search_tools` (find tools for a task) and `ha_call_tool` (run one).
+  `ha_search_tools` (finds tools for a task as one-line summaries and returns
+  a tool's full description and schema by name) and `ha_call_tool` (run one).
   Keeps the agent's context small; works with modest local models.
 - **Full catalog**: every exposed tool listed directly with its schema.
   Better tool selection for large-context models, at ~10× the prompt cost.
@@ -159,6 +160,13 @@ Notes:
   server over loopback inside Home Assistant.
 - Home Assistant conversation agents cap tool iterations per turn (around
   ten), so a very complex build may need a follow-up prompt to continue.
+- On Home Assistant 2026.10+, each tool carries its title and its read-only /
+  destructive / idempotent / open-world hints, so agents and approval
+  prompts can tell a lookup from a change.
+- With Home Assistant 2026.10+'s own Model Context Protocol server turned
+  on, **Settings → System → AI** also lists this API's own URL
+  (`/api/mcp/<api id>`). External MCP clients signed in as an administrator
+  can use it, whichever APIs the server entry itself selects.
 
 **Security:** the toolset runs with the server's admin access. Selecting it
 on an agent hands that power to everyone who can talk to that agent,

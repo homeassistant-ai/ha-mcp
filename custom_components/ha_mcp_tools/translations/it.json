@@ -24,6 +24,10 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_connect_path": "Non deve contenere #, ?, %, o spazi.",
+      "invalid_webhook_id": "Gli ID dei webhook non devono contenere una barra (/)."
+    },
     "step": {
       "tools_info": {
         "title": "Strumenti file e YAML di HA-MCP",

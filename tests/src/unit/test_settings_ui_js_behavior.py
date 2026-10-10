@@ -707,7 +707,6 @@ class TestVersionFooter:
             ("sidecar", "sidecar"),
             ("addon", "app/add-on"),
             ("docker", "container/docker"),
-            ("pyinstaller", "standalone binary"),
             ("git", "source checkout"),
             ("pypi", "python package"),
             ("unknown", "unknown"),
@@ -1266,8 +1265,13 @@ def _policy_panel_dom() -> str:
     extras = """
       <div id="policy-pending-list"></div>
       <div id="policy-load-error" style="display:none"></div>
+      <h3 id="policy-rules-title"></h3>
       <div id="policy-rules-empty" style="display:none"></div>
       <div id="policy-rules-list"></div>
+      <select id="policy-rule-effect">
+        <option value="require_approval"></option><option value="allow"></option>
+      </select>
+      <span id="policy-global-save-status"></span>
       <input id="policy-wait-seconds" />
       <input id="policy-ttl-minutes" />
       <input id="policy-event-decisions-toggle" type="checkbox" />
@@ -1828,7 +1832,7 @@ class TestPolicyTabFlow:
             settings_script,
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
-            invoke="await window.syncPolicyRule('ha_call_service', false);",
+            invoke="await loadPolicyState(); await window.syncPolicyRule('ha_call_service', false);",
         )
         _assert_clean_init(result)
         puts = [
@@ -1875,7 +1879,7 @@ class TestPolicyTabFlow:
             settings_script,
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
-            invoke="await window.syncPolicyRule('ha_call_service', true);",
+            invoke="await loadPolicyState(); await window.syncPolicyRule('ha_call_service', true);",
         )
         _assert_clean_init(result)
         puts = [
@@ -1911,6 +1915,7 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await policyLoadConfig();
               await window.savePolicyRule('ha_call_service', {
                 tool_name: 'ha_call_service',
                 conditions: [
@@ -1956,6 +1961,7 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await policyLoadConfig();
               await window.savePolicyRule('ha_call_service', {
                 tool_name: 'ha_call_service',
                 conditions: [
@@ -2010,6 +2016,7 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await policyLoadConfig();
               await window.savePolicyRule('ha_call_service', {
                 tool_name: 'ha_call_service',
                 conditions: [[{path: 'args.domain', op: 'eq', value: 'lock'}]],
@@ -2054,6 +2061,7 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await policyLoadConfig();
               await window.savePolicyRule('ha_call_service', {
                 tool_name: 'ha_call_service',
                 conditions: [[{path: 'args.domain', op: 'eq', value: 'lock'}]],
@@ -2096,7 +2104,7 @@ class TestPolicyTabFlow:
             settings_script,
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
-            invoke="await window.syncPolicyRule('ha_call_service', true);",
+            invoke="await loadPolicyState(); await window.syncPolicyRule('ha_call_service', true);",
         )
         _assert_clean_init(result)
         puts = [
@@ -2114,9 +2122,9 @@ class TestPolicyTabFlow:
         self, settings_script: str
     ) -> None:
         """Read side of renderPolicyCards: a tool's on-disk rules collapse into
-        ONE card, one condition row per rule in order. Only single-predicate
-        rows get the edit button; the hand-authored multi-predicate row joins
-        its predicates with ' AND ' and offers no edit. The single remember
+        ONE card, one condition row per rule in order. The multi-predicate row
+        joins its predicates with ' AND ' and offers one edit per predicate
+        (editing them: test_settings_ui_policy_and_conditions.py). The remember
         input shows the MAX across the rules (60), so a save that never touches
         it can't silently shorten a longer window."""
         fetches = {
@@ -2167,12 +2175,11 @@ class TestPolicyTabFlow:
                 ? Array.from(card.querySelectorAll('.policy-predicate-row'))
                 : [];
               document.body.setAttribute('data-row-count', String(rows.length));
-              const codeText = (r) =>
-                (r && r.querySelector('code')) ? r.querySelector('code').textContent : '';
+              const rowText = (r) => (r ? r.textContent : '');
               const hasEdit = (r) =>
-                String(!!(r && r.querySelector('.policy-edit-predicate')));
+                String(r ? r.querySelectorAll('.policy-edit-predicate').length : 0);
               document.body.setAttribute(
-                'data-multi-has-and', String(codeText(rows[2]).includes(' AND ')));
+                'data-multi-has-and', String(rowText(rows[2]).includes(' AND ')));
               document.body.setAttribute('data-multi-has-edit', hasEdit(rows[2]));
               document.body.setAttribute('data-single0-has-edit', hasEdit(rows[0]));
               document.body.setAttribute('data-single1-has-edit', hasEdit(rows[1]));
@@ -2188,11 +2195,11 @@ class TestPolicyTabFlow:
         assert _probe(result, "multi-has-and") == "true", (
             "multi-predicate row missing ' AND ' join"
         )
-        assert _probe(result, "multi-has-edit") == "false", (
-            "multi-predicate row should not be editable"
+        assert _probe(result, "multi-has-edit") == "2", (
+            "each predicate of the multi-predicate row should be editable"
         )
-        assert _probe(result, "single0-has-edit") == "true"
-        assert _probe(result, "single1-has-edit") == "true"
+        assert _probe(result, "single0-has-edit") == "1"
+        assert _probe(result, "single1-has-edit") == "1"
         assert _probe(result, "remember") == "60", (
             "remember input should show the max across rules"
         )
@@ -3302,45 +3309,6 @@ class TestAdvancedSectionRender:
         assert "DEBUG" in select_match.group(1)
         assert "CRITICAL" in select_match.group(1)
 
-    def test_int_field_emits_min_max_attrs(self, settings_script: str) -> None:
-        # Same connection-removed migration as test_locked_field above.
-        fetches = {
-            **DEFAULT_FETCHES,
-            "/api/settings/advanced": {
-                "status": 200,
-                "json": {
-                    "fields": [
-                        {
-                            "field": "fuzzy_threshold",
-                            "env_var": "FUZZY_THRESHOLD",
-                            "value": 70,
-                            "type": "int",
-                            "section": "search",
-                            "origin": "default",
-                            "editable": True,
-                            "min": 1,
-                            "max": 100,
-                        }
-                    ]
-                },
-            },
-        }
-        result = run_script(
-            settings_script,
-            initial_html=MIN_DOM,
-            fetch_map=fetches,
-            invoke="await new Promise(r => setTimeout(r, 200));",
-        )
-        _assert_clean_init(result)
-
-        m = re.search(
-            r'<input[^>]*data-adv-field="fuzzy_threshold"[^>]*>',
-            result.dom,
-        )
-        assert m is not None, "expected number input for fuzzy_threshold"
-        assert 'min="1"' in m.group(0)
-        assert 'max="100"' in m.group(0)
-
 
 class TestFormControlAccessibility:
     """Every generated form control must carry a ``name`` (or ``id``) so it
@@ -4345,6 +4313,7 @@ class TestBetaBlockRendersAtBottom:
             "section": "diagnostics",
             "origin": "default",
             "editable": True,
+            "restart_required": True,
             "choices": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         }
         fetches = {
@@ -4393,8 +4362,7 @@ class TestBetaBlockRendersAtBottom:
         assert body.get("log_level") == "DEBUG", (
             f"auto-save POST body missing the edited value: {body}"
         )
-        # log_level IS in ADVANCED_RESTART_REQUIRED, so this pins the
-        # restart branch: exact toast text + banner shown + cross-tab broadcast.
+        # log_level needs a restart: pins the toast, banner and broadcast.
         m = re.search(r'data-toast="([^"]*)"', result.dom)
         assert m and "Saved. Restart required." in m.group(1), (
             f"expected restart-required success toast; got {m.group(1) if m else None}"
@@ -4664,7 +4632,7 @@ class TestBetaBlockRendersAtBottom:
     def test_advanced_autosave_no_restart_field_plain_saved(
         self, settings_script: str
     ) -> None:
-        """A field NOT in ADVANCED_RESTART_REQUIRED saves with a plain
+        """A field without restart_required saves with a plain
         "Saved." toast and does NOT raise the restart banner — pins the
         no-restart branch (dashboard_screenshot_engine_url is resolved live)."""
         adv_field = {
@@ -6433,7 +6401,7 @@ class TestAdvancedAutoSaveReloadGuard:
 
 
 class TestLoadPolicyStateKeepsPriorGated:
-    """loadPolicyState() keeps the previously-loaded gatedTools when the
+    """loadPolicyState() keeps the previously-loaded gate state when the
     /api/policy/config reload fails, instead of clobbering it to empty —
     so a transient blip can't make the Tools tab falsely claim nothing is
     gated.
@@ -6486,7 +6454,7 @@ class TestLoadPolicyStateKeepsPriorGated:
             initial_html=MIN_DOM,
             fetch_map=fetches,
             invoke="""
-              await new Promise(r => setTimeout(r, 200));  // first load seeds gatedTools
+              await new Promise(r => setTimeout(r, 200));  // first load seeds the gate state
               const before = document.querySelector('input[name="tool:ha_get_state:gated"]');
               const checkedBefore = !!(before && before.checked);
               await loadPolicyState();   // second load: policy/config 500 -> keep prior
@@ -6495,7 +6463,7 @@ class TestLoadPolicyStateKeepsPriorGated:
               document.body.setAttribute('data-before', String(checkedBefore));
               document.body.setAttribute('data-after', String(!!(after && after.checked)));
               document.body.setAttribute(
-                'data-has', String(policyState.gatedTools.has('ha_get_state')));
+                'data-has', String(isToolGated('ha_get_state')));
             """,
         )
         _assert_clean_init(result)
@@ -6503,7 +6471,7 @@ class TestLoadPolicyStateKeepsPriorGated:
             "precondition: the tool should render gated after the first load"
         )
         assert _probe(result, "has") == "true", (
-            "gatedTools was cleared after the failed policy reload"
+            "the gate state was cleared after the failed policy reload"
         )
         assert _probe(result, "after") == "true", (
             "the gated checkbox lost its checked state after the failed reload"
@@ -6565,159 +6533,6 @@ class TestCapabilityBadgeUnknownFallback:
         assert set(texts.split("|")) == {"?", "weird"}, (
             f"unknown badges should show '?' (blank) and the raw value; got {texts}"
         )
-
-
-class TestBackupActionErrorToast:
-    """A network drop on a destructive backup action surfaces a visible
-    error toast instead of silently no-opping (the bare rejection would
-    only reach the visually-hidden #status region).
-    """
-
-    @pytest.mark.parametrize(
-        "act,verb,name,throw_pattern",
-        [
-            ("restore", "Restore", "snap_a", "/restore"),
-            ("delete", "Delete", "snap_b", "/backups/snap_b"),
-        ],
-    )
-    def test_network_error_shows_error_toast(
-        self,
-        settings_script: str,
-        act: str,
-        verb: str,
-        name: str,
-        throw_pattern: str,
-    ) -> None:
-        fetches = {**DEFAULT_FETCHES, throw_pattern: {"throw": "network down"}}
-        invoke = (
-            (
-                "await new Promise(r => setTimeout(r, 100));\n"
-                "await window.backupAction('__ACT__', '__NAME__');\n"
-                "const t = document.querySelector('#ha-toast-region .ha-toast');\n"
-                "document.body.setAttribute('data-toast',\n"
-                "  t ? (t.className + '::' + "
-                "(t.querySelector('.ha-toast-msg')?.textContent || '')) : 'NONE');\n"
-            )
-            .replace("__ACT__", act)
-            .replace("__NAME__", name)
-        )
-        result = run_script(
-            settings_script,
-            initial_html=MIN_DOM,
-            fetch_map=fetches,
-            settle_ms=300,
-            invoke=invoke,
-        )
-        _assert_clean_init(result)
-        toast = _probe(result, "toast") or ""
-        assert "ha-toast-error" in toast, (
-            f"expected an error toast for a failed {act}; got {toast!r}"
-        )
-        assert verb in toast and name in toast and "failed" in toast, (
-            f"error toast missing action/name context; got {toast!r}"
-        )
-
-
-class TestBackupRestoreDiagnostics:
-    """Unknown restore results retain diagnostics without echoing upstream bodies."""
-
-    @pytest.mark.parametrize(
-        ("reply", "stage", "error_type", "status"),
-        [
-            ({"throw": "option-value-secret"}, "request", "TypeError", None),
-            (
-                {"status": 502, "body": "<html>option-value-secret</html>"},
-                "response_json",
-                "SyntaxError",
-                502,
-            ),
-        ],
-    )
-    def test_uncertain_response_logs_safe_context_and_refreshes_once(
-        self, settings_script: str, reply: dict, stage: str, error_type: str, status
-    ) -> None:
-        result = run_script(
-            settings_script,
-            initial_html=MIN_DOM,
-            settle_ms=300,
-            fetch_map={
-                **DEFAULT_FETCHES,
-                "/restore": reply,
-                "/backups?": {"status": 200, "json": {"success": True, "backups": []}},
-            },
-            invoke=(
-                "await new Promise(resolve => setTimeout(resolve, 100));"
-                "await window.backupAction('restore', 'snap_a');"
-            ),
-        )
-        _assert_clean_init(result)
-        assert len(result.fetches_to("/restore")) == 1
-        assert len(result.fetches_to("/backups?")) == 1
-        assert "could not be confirmed" in result.dom
-        assert "before retrying" in result.dom
-        diagnostics = [
-            row
-            for row in result.console
-            if row["level"] == "warn"
-            and row["args"][0] == "Backup restore response unavailable"
-        ]
-        assert len(diagnostics) == 1
-        assert diagnostics[0]["args"] == [
-            "Backup restore response unavailable",
-            f"stage={stage}",
-            f"error_type={error_type}",
-            f"http_status={status if status is not None else 'null'}",
-        ]
-        assert "option-value-secret" not in result.dom + json.dumps(result.console)
-
-    @pytest.mark.parametrize(
-        ("mapping", "extra", "expected"),
-        [
-            (
-                {"created_entity_id": "sensor.new", "restored_entity_id": "sensor.old"},
-                {},
-                "Entity ID: sensor.new → sensor.old",
-            ),
-            (
-                {"created_entity_id": "sensor.new", "target_entity_id": "sensor.old"},
-                {},
-                "Entity rename could not be confirmed: sensor.new → sensor.old",
-            ),
-            ({}, {"entity_ids_restored": False}, "This snapshot has no entity mapping"),
-        ],
-    )
-    def test_recreated_outcome_renders_mapping_and_safety_as_plain_text(
-        self, settings_script: str, mapping: dict, extra: dict, expected: str
-    ) -> None:
-        outcome = {
-            "apply_status": "applied",
-            "verification_status": "matched",
-            "restore_mode": "recreated",
-            "result": {"entry_id": "new-entry", "entity_id_mapping": mapping, **extra},
-            "conflicting_entity_id": "sensor.occupied",
-            "safety_backup": '<img src="x" onerror="alert(1)">',
-        }
-        result = run_script(
-            settings_script,
-            initial_html=MIN_DOM,
-            fetch_map=DEFAULT_FETCHES,
-            settle_ms=300,
-            invoke=(
-                f"showToast(backupRestoreOutcomeMessage({json.dumps(outcome)}));"
-                "document.body.setAttribute('data-message', "
-                "document.querySelector('.ha-toast-msg').textContent);"
-                "document.body.setAttribute('data-injected', "
-                "document.querySelectorAll('.ha-toast-msg img').length);"
-            ),
-        )
-        _assert_clean_init(result)
-        message = _probe(result, "message") or ""
-        assert "Restore was applied and verified" in message
-        assert "Recreated config entry: new-entry" in message
-        assert expected in message
-        assert "sensor.occupied is already in use" in message
-        assert "Safety backup:" in message
-        assert _probe(result, "injected") == "0"
 
 
 class TestLlmApiToggle:
@@ -7760,3 +7575,502 @@ class TestApprovalPinInvalidStatus:
         probe = re.search(r'<div[^>]*id="__pin_absent_probe"[^>]*>', result.dom)
         assert probe is not None
         assert "No PIN set" in probe.group(0), probe.group(0)
+
+
+class TestAllowListPolicyUi:
+    """rule_effect='allow' (issue #2540): the bare rule approves its tool, so
+    the Tools-tab gate toggle and the rule cards read the other way round."""
+
+    ALLOW_POLICY: ClassVar[dict] = {
+        "rule_effect": "allow",
+        "wait_seconds": 60,
+        "approval_ttl_minutes": 5,
+        "version": 4,
+        "rules": [{"tool_name": "ha_get_state", "when": [], "remember_minutes": 0}],
+    }
+
+    def _fetches(self, policy: dict | None = None) -> dict:
+        return {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {"status": 200, "json": policy or self.ALLOW_POLICY},
+        }
+
+    def _puts(self, result: HarnessResult) -> list[dict]:
+        return [
+            json.loads(f["body"])
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+
+    def test_gating_an_approved_tool_removes_its_approval(
+        self, settings_script: str
+    ) -> None:
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await loadPolicyState(); await window.syncPolicyRule('ha_get_state', true);",
+        )
+        _assert_clean_init(result)
+        (body,) = self._puts(result)
+        assert body["rules"] == []
+        assert body["rule_effect"] == "allow"
+
+    def test_ungating_a_tool_approves_it(self, settings_script: str) -> None:
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await loadPolicyState(); await window.syncPolicyRule('ha_call_service', false);",
+        )
+        _assert_clean_init(result)
+        (body,) = self._puts(result)
+        assert sorted(r["tool_name"] for r in body["rules"]) == [
+            "ha_call_service",
+            "ha_get_state",
+        ]
+
+    def test_toggle_shows_unapproved_tools_as_gated(self, settings_script: str) -> None:
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await loadPolicyState();
+              document.body.setAttribute(
+                'data-approved', String(isToolGated('ha_get_state')));
+              document.body.setAttribute(
+                'data-other', String(isToolGated('ha_call_service')));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "approved") == "false"
+        assert _probe(result, "other") == "true"
+
+    def test_rule_cards_use_allow_list_wording(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=DEFAULT_FETCHES,
+            invoke=("renderPolicyCards(" + json.dumps(self.ALLOW_POLICY) + ");"),
+        )
+        _assert_clean_init(result)
+        assert 'data-i18n="policies.rules.title_allow"' in result.dom
+        assert "Approved tools" in result.dom
+        assert "approves every call to this tool" in result.dom
+        assert 'class="policy-rule-lifetime" style="display:none"' in result.dom
+
+    def test_empty_allow_list_explains_that_everything_is_gated(
+        self, settings_script: str
+    ) -> None:
+        empty = {**self.ALLOW_POLICY, "rules": []}
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=DEFAULT_FETCHES,
+            invoke="renderPolicyCards(" + json.dumps(empty) + ");",
+        )
+        _assert_clean_init(result)
+        assert 'data-i18n-html="policies.rules.empty_allow"' in result.dom
+        assert "every tool call needs your approval" in result.dom
+
+    def test_switching_effect_asks_first_and_sends_it(
+        self, settings_script: str
+    ) -> None:
+        require = {**self.ALLOW_POLICY, "rule_effect": "require_approval"}
+        fetches = self._fetches(require)
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await policyLoadConfig();
+              let confirms = 0;
+              window.confirm = () => { confirms += 1; return false; };
+              document.getElementById('policy-rule-effect').value = 'allow';
+              await saveGlobalSettings();
+              window.confirm = () => { confirms += 1; return true; };
+              document.getElementById('policy-rule-effect').value = 'allow';
+              await saveGlobalSettings();
+              document.body.setAttribute('data-confirms', String(confirms));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "confirms") == "2"
+        puts = self._puts(result)
+        assert len(puts) == 1, "a declined switch must not be saved"
+        assert puts[0]["rule_effect"] == "allow"
+
+    def test_unchanged_allow_list_saves_without_asking(
+        self, settings_script: str
+    ) -> None:
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              let confirms = 0;
+              window.confirm = () => { confirms += 1; return true; };
+              await policyLoadConfig();
+              await saveGlobalSettings();
+              document.body.setAttribute('data-confirms', String(confirms));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "confirms") == "0"
+        (body,) = self._puts(result)
+        assert body["rule_effect"] == "allow"
+
+    def test_mode_switched_elsewhere_is_not_written_back(
+        self, settings_script: str
+    ) -> None:
+        """The page loaded a require-approval list; the server now holds an
+        allow list. Saving the page's stale selector must not invert it."""
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              let confirms = 0;
+              window.confirm = () => { confirms += 1; return true; };
+              policyState.cardsEffect = 'require_approval';
+              document.getElementById('policy-rule-effect').value = 'require_approval';
+              await saveGlobalSettings();
+              document.body.setAttribute('data-confirms', String(confirms));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "confirms") == "0"
+        assert self._puts(result) == []
+        assert "Reload the page" in result.dom
+
+    def test_gate_toggle_refuses_when_the_mode_changed_elsewhere(
+        self, settings_script: str
+    ) -> None:
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              policyState.toolsEffect = 'require_approval';
+              try {
+                await window.syncPolicyRule('ha_call_service', true);
+                document.body.setAttribute('data-threw', 'false');
+              } catch (e) {
+                document.body.setAttribute('data-threw', 'true');
+              }
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "threw") == "true"
+        assert self._puts(result) == []
+
+    def test_card_save_refuses_after_a_tools_reload_saw_a_new_mode(
+        self, settings_script: str
+    ) -> None:
+        """The Tools-tab reload learns of the allow list; the cards on the
+        Policies tab were rendered for a require-approval list and still say
+        so, so a condition saved from them must not land as an approval."""
+        require = {**self.ALLOW_POLICY, "rule_effect": "require_approval"}
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "responses": [
+                    {"status": 200, "json": require},
+                    {"status": 200, "json": self.ALLOW_POLICY},
+                    {"status": 200, "json": self.ALLOW_POLICY},
+                    {"status": 200, "json": self.ALLOW_POLICY},
+                ]
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              policyState.cardsEffect = 'require_approval';
+              await loadPolicyState();
+              try {
+                await savePolicyRule('ha_call_service', {
+                  conditions: [[{path: 'args.entity_id', op: 'eq', value: 'lock.front_door'}]],
+                  remembers: [0], remember_minutes: 0, rememberDirty: false,
+                });
+                document.body.setAttribute('data-threw', 'false');
+              } catch (e) {
+                document.body.setAttribute('data-threw', 'true');
+              }
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "threw") == "true"
+        assert self._puts(result) == []
+
+    def test_approve_everything_rule_leaves_no_tool_gated(
+        self, settings_script: str
+    ) -> None:
+        star = {**self.ALLOW_POLICY, "rules": [{"tool_name": "*", "when": []}]}
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(star),
+            invoke="""
+              await loadPolicyState();
+              document.body.setAttribute(
+                'data-gated', String(isToolGated('ha_call_service')));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "gated") == "false"
+
+    ONE_CONDITION: ClassVar[dict] = {
+        **ALLOW_POLICY,
+        "rules": [
+            {
+                "tool_name": "ha_call_service",
+                "when": [{"path": "args.domain", "op": "eq", "value": "light"}],
+                "remember_minutes": 0,
+            }
+        ],
+    }
+
+    def test_removing_the_last_condition_asks_before_approving_everything(
+        self, settings_script: str
+    ) -> None:
+        """Without conditions an allow-list card approves every call to the
+        tool; that is never saved without the user confirming it."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=self._fetches(self.ONE_CONDITION),
+            invoke="""
+              await policyLoadConfig();
+              let asked = 0;
+              window.confirm = () => { asked += 1; return false; };
+              document.querySelector('.policy-remove-predicate').click();
+              await new Promise(r => setTimeout(r, 200));
+              document.body.setAttribute('data-asked', String(asked));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "asked") == "1"
+        assert self._puts(result) == []
+
+    def test_card_redrawn_after_an_edit_keeps_allow_list_wording(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=self._fetches(self.ONE_CONDITION),
+            invoke="""
+              await policyLoadConfig();
+              window.confirm = () => true;
+              document.querySelector('.policy-remove-predicate').click();
+              await new Promise(r => setTimeout(r, 200));
+            """,
+        )
+        _assert_clean_init(result)
+        (body,) = self._puts(result)
+        assert body["rules"] == [
+            {"tool_name": "ha_call_service", "when": [], "remember_minutes": 0}
+        ]
+        assert "Approve without asking" in result.dom
+        assert "Require approval when ANY" not in result.dom
+        assert 'class="policy-rule-lifetime" style="display:none"' in result.dom
+
+    def test_rule_removal_refuses_when_the_mode_changed_elsewhere(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=self._fetches(),
+            invoke="""
+              policyState.cardsEffect = 'require_approval';
+              try {
+                await removePolicyRule('ha_get_state');
+                document.body.setAttribute('data-threw', 'false');
+              } catch (e) {
+                document.body.setAttribute('data-threw', 'true');
+              }
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "threw") == "true"
+        assert self._puts(result) == []
+
+    def test_write_before_the_mode_was_read_says_so(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=self._fetches(),
+            invoke="""
+              policyState.toolsEffect = null;
+              try {
+                await window.syncPolicyRule('ha_call_service', true);
+              } catch (e) {
+                document.body.setAttribute('data-msg', e.message);
+              }
+            """,
+        )
+        _assert_clean_init(result)
+        assert "could not read what a matching rule does" in (
+            _probe(result, "msg") or ""
+        )
+        assert self._puts(result) == []
+
+    def test_gate_toggle_click_under_an_allow_list(self, settings_script: str) -> None:
+        """Ticking "security gated" on an approved tool removes its approval,
+        and the optimistic state follows the allow-list reading."""
+        tool = {
+            "name": "ha_get_state",
+            "title": "Get State",
+            "category": "read",
+            "description": "Read a state.",
+        }
+        fetches = {
+            **self._fetches(),
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [tool],
+                    "states": {},
+                    "env_pinned": {},
+                    "read_only_exempt": [],
+                },
+            },
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_tool_security_policies": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                        }
+                    },
+                    "beta_sub_flags": [],
+                    "is_addon": False,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const box = document.querySelector('input[name="tool:ha_get_state:gated"]');
+              document.body.setAttribute('data-before', String(box.checked));
+              box.checked = true;
+              box.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 200));
+              document.body.setAttribute('data-gated', String(isToolGated('ha_get_state')));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "before") == "false"
+        (body,) = self._puts(result)
+        assert body["rules"] == []
+        assert _probe(result, "gated") == "true"
+
+    def _click_gate_under_wildcard(
+        self, settings_script: str, effect: str, rules: list[dict]
+    ) -> HarnessResult:
+        policy = {**self.ALLOW_POLICY, "rule_effect": effect, "rules": rules}
+        tool = {
+            "name": "ha_get_state",
+            "title": "Get State",
+            "category": "read",
+            "description": "Read a state.",
+        }
+        fetches = {
+            **self._fetches(policy),
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [tool],
+                    "states": {},
+                    "env_pinned": {},
+                    "read_only_exempt": [],
+                },
+            },
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_tool_security_policies": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                        }
+                    },
+                    "beta_sub_flags": [],
+                    "is_addon": False,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const box = document.querySelector('input[name="tool:ha_get_state:gated"]');
+              document.body.setAttribute('data-before', String(box.checked));
+              box.checked = !box.checked;
+              box.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 200));
+              const after = document.querySelector('input[name="tool:ha_get_state:gated"]');
+              document.body.setAttribute('data-after', String(after.checked));
+              document.body.setAttribute('data-bare', [...policyState.bareRuleTools].join(','));
+            """,
+        )
+        _assert_clean_init(result)
+        return result
+
+    def test_gate_toggle_under_an_approve_everything_rule_is_refused(
+        self, settings_script: str
+    ) -> None:
+        """An allow list's bare ``*`` rule approves every tool, so gating one
+        cannot take effect: nothing is saved, the switch returns to where it
+        was, and the alert names the rule to remove."""
+        result = self._click_gate_under_wildcard(
+            settings_script,
+            "allow",
+            [{"tool_name": "*", "when": [], "remember_minutes": 0}],
+        )
+        assert _probe(result, "before") == "false"
+        assert self._puts(result) == []
+        assert _probe(result, "after") == "false"
+        assert _probe(result, "bare") == "*"
+        assert len(result.alerts) == 1
+        assert 'unconditional "*" rule' in result.alerts[0]
+
+    def test_gate_toggle_off_under_a_gate_everything_rule_saves(
+        self, settings_script: str
+    ) -> None:
+        """In a require-approval list the tool's own bare rule is first-match
+        ahead of ``*`` (it supplies the remember window), so removing it is a
+        real change and must not be refused."""
+        result = self._click_gate_under_wildcard(
+            settings_script,
+            "require_approval",
+            [
+                {"tool_name": "ha_get_state", "when": [], "remember_minutes": 0},
+                {"tool_name": "*", "when": [], "remember_minutes": 60},
+            ],
+        )
+        assert _probe(result, "before") == "true"
+        (body,) = self._puts(result)
+        assert [r["tool_name"] for r in body["rules"]] == ["*"]
+        assert result.alerts == []

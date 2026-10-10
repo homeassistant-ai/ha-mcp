@@ -48,6 +48,43 @@ _TYPE_HINTS: dict[str, str] = {
 
 _UNKNOWN_ARGUMENT = "unexpected_keyword_argument"
 
+# Config root keys that models habitually pass as top-level tool arguments on
+# the config-writing tools. When one arrives top-level, the rejection says the
+# key belongs inside `config` instead of only listing the valid tool
+# parameters (issue #2649 section 1).
+#
+# Scoped per tool on purpose: only the config-writing tools take a `config`
+# body, so only their top-level arguments can be misplaced config keys.
+# (Only these two were measured in BAT runs.)
+_CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
+    "ha_config_set_automation": {
+        "alias",
+        "description",
+        "triggers",
+        "trigger",
+        "actions",
+        "action",
+        "conditions",
+        "condition",
+        "mode",
+        "max",
+        "max_exceeded",
+        "variables",
+        "use_blueprint",
+    },
+    "ha_config_set_script": {
+        "alias",
+        "description",
+        "mode",
+        "sequence",
+        "max",
+        "max_exceeded",
+        "fields",
+        "icon",
+        "use_blueprint",
+    },
+}
+
 
 async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] | None:
     """Return the called tool's declared parameter names, or None if unavailable."""
@@ -103,12 +140,44 @@ def _closest_parameter(unknown: str, candidates: Sequence[str]) -> str | None:
     return best[3] if best else None
 
 
-def _unknown_argument_hint(param: str, unclaimed: Sequence[str]) -> str:
-    """Name an undeclared argument, suggesting the parameter it likely meant."""
+def _unknown_argument_hint(
+    param: str,
+    unclaimed: Sequence[str],
+    config_keys: set[str] | None = None,
+) -> str:
+    """Name an undeclared argument, suggesting the parameter it likely meant.
+
+    A config root key passed at the top level of a config-writing tool is told
+    to move inside ``config`` (issue #2649); everything else keeps the
+    did-you-mean behaviour.
+    """
+    if config_keys is not None and param in config_keys:
+        return (
+            f"unknown parameter; `{param}` is a config key, not a tool parameter "
+            "— move it inside `config`"
+        )
     match = _closest_parameter(param, unclaimed)
     return (
         f"unknown parameter, did you mean `{match}`?" if match else "unknown parameter"
     )
+
+
+def _argument_hint(
+    param: str,
+    errs: Sequence[ErrorDetails],
+    unclaimed: Sequence[str],
+    valid_parameters: list[str] | None,
+    config_keys: set[str] | None,
+) -> tuple[str, bool]:
+    """Hint for one rejected argument.
+
+    Returns the hint text and whether the argument is a config root key
+    passed at the top level of a config-writing tool (issue #2649).
+    """
+    if valid_parameters is not None and errs[0]["type"] == _UNKNOWN_ARGUMENT:
+        hint = _unknown_argument_hint(param, unclaimed, config_keys)
+        return hint, config_keys is not None and param in config_keys
+    return _type_hint(errs), False
 
 
 def _type_hint(errs: Sequence[ErrorDetails]) -> str:
@@ -161,22 +230,26 @@ class ValidationErrorMiddleware(Middleware):
                 else None
             )
             unclaimed: list[str] = []
+            config_keys: set[str] | None = None
             if valid_parameters is not None:
                 # Skip parameters the call already supplied: a second, invented
                 # argument almost never means one of them.
                 message_obj = getattr(context, "message", None)
                 supplied = getattr(message_obj, "arguments", None) or {}
                 unclaimed = [p for p in valid_parameters if p not in supplied]
+                tool_name = getattr(message_obj, "name", None)
+                config_keys = (
+                    _CONFIG_ROOT_KEYS_BY_TOOL.get(tool_name) if tool_name else None
+                )
 
             parts: list[str] = []
+            misplaced_keys: list[str] = []
             for param, errs in grouped.items():
-                if (
-                    valid_parameters is not None
-                    and errs[0]["type"] == _UNKNOWN_ARGUMENT
-                ):
-                    hint = _unknown_argument_hint(param, unclaimed)
-                else:
-                    hint = _type_hint(errs)
+                hint, misplaced = _argument_hint(
+                    param, errs, unclaimed, valid_parameters, config_keys
+                )
+                if misplaced:
+                    misplaced_keys.append(param)
                 parts.append(f"`{param}`: {hint}" if param else hint)
             message = "; ".join(parts) if parts else "Invalid argument types."
             error_context: dict[str, Any] | None = None
@@ -185,11 +258,22 @@ class ValidationErrorMiddleware(Middleware):
                 listing = ", ".join(valid_parameters) or "none"
                 message += f"{separator}Valid parameters: {listing}."
                 error_context = {"valid_parameters": valid_parameters}
+            # A misplaced config key repeats the move in the suggestions, the
+            # way the missing-field rejection does (issue #2649 section 1);
+            # otherwise the generic suggestions stand.
+            suggestions: list[str] | None = None
+            if misplaced_keys:
+                suggestions = [
+                    f"Move `{key}` inside the `config` argument, e.g. "
+                    f"config={{'{key}': ...}}."
+                    for key in misplaced_keys
+                ]
             raise_tool_error(
                 create_validation_error(
                     message,
                     details=", ".join(dict.fromkeys(err["type"] for err in errors)),
                     context=error_context,
+                    suggestions=suggestions,
                 )
             )
         return result

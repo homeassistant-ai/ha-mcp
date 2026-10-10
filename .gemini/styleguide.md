@@ -35,8 +35,11 @@ change's scope or an allowed exception is unclear, flag test adequacy as MEDIUM
 severity for manual verification.
 
 **Test locations:**
-- E2E tests (preferred for tools): `tests/src/e2e/`
-- Unit tests (utilities): `tests/src/unit/`
+- E2E tests (tool wiring and real Home Assistant behaviour): `tests/src/e2e/`
+- Unit tests (logic): `tests/src/unit/`
+
+Check new and changed tests against the
+[test design rules](../tests/AGENTS.md#test-design-rules).
 
 ## Exception Handling in Test Polling Loops
 
@@ -88,8 +91,15 @@ FastMCP omits a hint that is not set, and the MCP `ToolAnnotations` schema
 then defines the value clients assume: `readOnlyHint=false`,
 `destructiveHint=true`, `idempotentHint=false`, and `openWorldHint=true`.
 
-Set `openWorldHint` explicitly on every tool because an omitted hint means
-`true`, which otherwise silently misclassifies local Home Assistant tools.
+Set all four hints and a `title` explicitly on every tool. Home Assistant
+2026.10+ copies them into its LLM tool metadata and fills each omitted hint
+with that least-safe default even when another hint makes it irrelevant, so a
+read-only tool without `destructiveHint: False` reaches Home Assistant as
+destructive, and a local tool without `openWorldHint: False` as open-world.
+`tests/src/unit/test_tool_annotations_complete.py` enforces this. Build the
+annotations with `read_only_hints()` or `write_hints()` from
+`src/ha_mcp/tools/tool_hints.py`, which take the title and each hint that
+matters for the tool as required arguments and fill in the rest.
 Annotations describe behavior against current supported upstream versions. A
 side effect present only in an outdated external build does not demote a tool
 from `readOnlyHint`; document the required upstream update instead (the old
@@ -156,6 +166,7 @@ from typing import Any
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from .helpers import log_tool_usage, register_tool_methods
+from .tool_hints import read_only_hints
 
 
 class DomainTools:
@@ -165,7 +176,7 @@ class DomainTools:
     @tool(
         name="ha_<verb>_<noun>",
         tags={"Category Name"},
-        annotations={"readOnlyHint": True, "openWorldHint": False},
+        annotations=read_only_hints("<Verb> <Noun>", open_world=False),
     )
     @log_tool_usage
     async def ha_<verb>_<noun>(self, param: str) -> dict[str, Any]:
@@ -226,6 +237,14 @@ exceptions. Its `context` is functional: an `entity_id` can produce
 
 Flag HIGH severity when a tool returns a plain error, swallows `ToolError`, or
 bypasses the shared structured-error helpers.
+
+Guidance that earns its keep in the suggestions:
+
+- A rejection for a missing or misplaced field says where the field goes
+  (e.g. a config root key passed as a top-level argument is told it belongs
+  inside `config`).
+- When one call breaks several independent input rules, the rejection reports
+  all of them in one response instead of one round trip each.
 
 
 ## Code Conventions
@@ -311,7 +330,7 @@ never nested in a payload key and never represented by a singular `warning`
 string. Tool-level failure raises `ToolError`; only an item inside a batch
 result may use `{"success": False, "error": {...}}`.
 For a tool that builds its response on several branches, see
-`tools_config_helpers.py::HelperResponse` / `_helper_response` and
+`config_helpers/schemas.py::HelperResponse` / `_helper_response` and
 `tests/src/unit/test_helper_response_shape.py`.
 
 ## Tool Waiting Behavior
@@ -326,7 +345,7 @@ defaults to `True`:
   immediately.
 - Query tools return immediately and do not expose `wait`.
 
-Use the shared helpers in `src/ha_mcp/tools/util_helpers.py`:
+Use the shared helpers in `src/ha_mcp/tools/ws_waiters.py`:
 `wait_for_entity_registered()`, `wait_for_entity_removed()`, and
 `wait_for_state_change()`. For bulk work, callers may use `wait=False` and
 then batch-verify.
@@ -398,7 +417,7 @@ A change is BREAKING only if it removes functionality that users depend on.
 
 ## Accessibility (web UI)
 
-Both rendered surfaces — the Astro docs site (`site/`) and the app settings UI (`src/ha_mcp/settings_ui/__init__.py` + `settings.css` / `settings.js`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
+Both rendered surfaces — the Astro docs site (`site/`) and the app settings UI (`src/ha_mcp/settings_ui/__init__.py` + `settings.css` / `settings_js/`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
 
 **Flag MEDIUM severity when a change:**
 
@@ -430,3 +449,7 @@ If you believe a finding is likely out of scope, say so explicitly so the user c
 Do not phrase findings as "post-merge follow-up," "nice to have," or "happy to file an issue" when the change is small and bundleable. Either apply the suggestion inline with a code suggestion block, or raise it plainly and let the user decide.
 
 See AGENTS.md § *Boy Scout Rule — Handling Discovered Improvements* for the author/agent-side rule.
+
+## Native Core contracts
+
+Read and write wrappers follow the [native Core contract guidance](../docs/agents/native-core-contracts.md). Keep domain validation in Core; distinguish wrapper safeguards and incomplete schema descriptions from native validation.

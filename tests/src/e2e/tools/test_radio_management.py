@@ -16,7 +16,8 @@ verify deterministically over the real MCP/WebSocket/REST plumbing is:
    ``ha_get_system_health`` return their sections without crashing (each may
    carry an ``error`` marker on a radio-less container).
 
-The happy-path write actions (commission, inclusion, fabric removal, firmware,
+Stored Thread datasets are also tested without radio hardware. Other happy-path
+write actions (commission, inclusion, fabric removal, firmware,
 channel migration, ...) require a live radio and are out of reach for CI; they
 are exercised by the unit tests instead.
 """
@@ -26,13 +27,44 @@ import logging
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp.client import HomeAssistantClient
+
 from ..utilities.assertions import (
+    MCPAssertions,
     extract_error_message,
     parse_mcp_result,
     safe_call_tool,
 )
+from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action,params",
+    [
+        ("get_config_params", {}),
+        ("get_config_param", {"property": 3}),
+    ],
+)
+async def test_zwave_parameter_reads_surface_real_ha_errors_without_radio(
+    mcp_client: Client, action: str, params: dict
+) -> None:
+    """Read actions reach HA rather than being rejected as unknown MCP actions."""
+    async with MCPAssertions(mcp_client) as mcp:
+        data = await mcp.call_tool_failure(
+            "ha_manage_radio",
+            {
+                "radio": "zwave",
+                "action": action,
+                "device_id": "00000000000000000000000000000000",
+                "params": params,
+            },
+        )
+    assert "Unknown action" not in json.dumps(data)
+    assert "zwave_js/get_config_parameters" in json.dumps(data)
 
 
 @pytest.mark.asyncio
@@ -211,3 +243,96 @@ async def test_system_health_thread_and_matter_includes(mcp_client):
     # an absent-integration ``error`` marker, so assert shape, not content.
     assert isinstance(data["thread_network"], dict)
     assert isinstance(data["matter_network"], dict)
+
+
+@pytest.mark.asyncio
+async def test_thread_dataset_lifecycle_without_border_router(
+    mcp_client: Client, ha_client: HomeAssistantClient
+) -> None:
+    """Switch preferences and remove stale datasets through real HA commands.
+
+    HA cannot clear the preferred dataset through its API. The final dataset
+    remains in the disposable HA fixture and is removed with fixture teardown.
+    """
+    # Valid synthetic dataset: channel 15, PAN 0x1234, no border router.
+    dataset_tlv = (
+        "0E080000000000010000000300000F35060004001FFFE0020811111111222222220708FDAD70BF"
+        "E5AA15DD051000112233445566778899AABBCCDDEEFF030E4F70656E54687265616444656D6F01"
+        "0212340410445F2B5CA6F2A93A55CE570A70EFEECB0C0402A0F7F8"
+    )
+    async with MCPAssertions(mcp_client) as mcp:
+        entries = await ha_client.list_config_entries()
+        if not any(entry["domain"] == "thread" for entry in entries):
+            await mcp.call_tool_success("ha_set_integration", {"domain": "thread"})
+        initial = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_manage_radio",
+            arguments={"radio": "thread", "action": "list_datasets"},
+            predicate=lambda data: data.get("success") is True,
+            description="Thread dataset API is ready",
+        )
+        assert initial["datasets"]["datasets"] == []
+
+        for source, pan_id in (
+            ("e2e-old", "1111111122222222"),
+            ("e2e-new", "1111111122222233"),
+        ):
+            await mcp.call_tool_success(
+                "ha_manage_radio",
+                {
+                    "radio": "thread",
+                    "action": "add_dataset",
+                    "params": {
+                        "source": source,
+                        "tlv": dataset_tlv.replace("1111111122222222", pan_id),
+                    },
+                },
+            )
+        listed = await mcp.call_tool_success(
+            "ha_manage_radio", {"radio": "thread", "action": "list_datasets"}
+        )
+        datasets = {
+            d["source"]: d["dataset_id"] for d in listed["datasets"]["datasets"]
+        }
+        old_id, new_id = datasets["e2e-old"], datasets["e2e-new"]
+        await mcp.call_tool_success(
+            "ha_manage_radio",
+            {
+                "radio": "thread",
+                "action": "set_preferred_dataset",
+                "params": {"dataset_id": old_id},
+            },
+        )
+        await mcp.call_tool_failure(
+            "ha_manage_radio",
+            {
+                "radio": "thread",
+                "action": "delete_dataset",
+                "params": {"dataset_id": old_id},
+                "confirm": True,
+            },
+            expected_error="attempt to remove preferred dataset",
+        )
+        await mcp.call_tool_success(
+            "ha_manage_radio",
+            {
+                "radio": "thread",
+                "action": "set_preferred_dataset",
+                "params": {"dataset_id": new_id},
+            },
+        )
+        await mcp.call_tool_success(
+            "ha_manage_radio",
+            {
+                "radio": "thread",
+                "action": "delete_dataset",
+                "params": {"dataset_id": old_id},
+                "confirm": True,
+            },
+        )
+        final = await mcp.call_tool_success(
+            "ha_manage_radio", {"radio": "thread", "action": "list_datasets"}
+        )
+        assert [
+            (d["dataset_id"], d["preferred"]) for d in final["datasets"]["datasets"]
+        ] == [(new_id, True)]

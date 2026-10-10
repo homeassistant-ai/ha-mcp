@@ -21,7 +21,7 @@ async def _cancel_tasks(*tasks):
 
 @pytest.mark.parametrize("stage", ["create_reply", "rename", "verification"])
 @pytest.mark.parametrize("mutation", ["edit", "delete"])
-async def test_new_entry_writes_wait_until_recreation_finishes(
+async def test_new_entry_writes_wait_until_recreation_finishes(  # noqa: PLR0915
     recovery, monkeypatch, stage, mutation
 ):
     reached = asyncio.Event()
@@ -30,7 +30,7 @@ async def test_new_entry_writes_wait_until_recreation_finishes(
     entered = asyncio.Event()
     original_create = recovery.create.side_effect
     original_send = bm._ws_send
-    original_verify = bm._verify_template_restore
+    original_verify = bm._verify_readback
 
     async def pause():
         reached.set()
@@ -65,7 +65,7 @@ async def test_new_entry_writes_wait_until_recreation_finishes(
 
     recovery.create.side_effect = create
     monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=send))
-    monkeypatch.setattr(bm, "_verify_template_restore", verify)
+    monkeypatch.setattr(bm, "_verify_readback", verify)
     restore = asyncio.create_task(recovery.manager.restore_snapshot(recovery.name))
     writer = None
     try:
@@ -196,11 +196,13 @@ async def test_cancelled_recreation_releases_waiting_entry_write(recovery):
 @pytest.mark.parametrize("exclusive", [False, True])
 async def test_entry_guard_is_reentrant_for_its_task(recovery, exclusive):
     guard = recovery.manager.config_entry_write_guard
-    async with asyncio.timeout(2):
-        async with guard("old-entry", exclusive=exclusive):
-            async with guard("old-entry", exclusive=exclusive):
-                async with guard("new-entry"):
-                    pass
+    async with (
+        asyncio.timeout(2),
+        guard("old-entry", exclusive=exclusive),
+        guard("old-entry", exclusive=exclusive),
+        guard("new-entry"),
+    ):
+        pass
 
 
 async def test_cancelled_waiting_restore_does_not_block_new_writes(recovery):

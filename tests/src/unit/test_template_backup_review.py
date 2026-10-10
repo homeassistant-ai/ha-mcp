@@ -80,7 +80,9 @@ async def test_degraded_safety_capture_blocks_restore(manager, monkeypatch):
     monkeypatch.setattr(bm, "_ws_send", send)
     restore = AsyncMock(return_value={"success": True})
     manager.register(
-        bm.DomainHandler("helper_template", bm._fetch_template_helper, restore)
+        bm.DomainHandler(
+            "helper_template", bm._make_flow_helper_handler("template").fetch, restore
+        )
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
         await manager.restore_snapshot(source.name)
@@ -216,7 +218,10 @@ async def test_alias_removal_uses_core_identity_and_waits_for_restore(
         if message["type"] == "config/entity_registry/get":
             assert message["entity_id"] == "sensor.secondary"
             resolved.set()
-            return {"success": True, "result": {"config_entry_id": "template-entry"}}
+            return {
+                "success": True,
+                "result": {"platform": "template", "config_entry_id": "template-entry"},
+            }
         assert message["type"] == "config/entity_registry/list"
         return {"success": True, "result": []}
 

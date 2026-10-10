@@ -33,29 +33,54 @@
 {%- endif -%}
 {%- endmacro -%}
 
+{#-
+    True when the commit changes a file that users install or read.
+    A fix, perf, refactor or docs commit that only changes tests, CI, scripts
+    or agent instructions matches nothing here, so it is internal whatever
+    scope its author picked.
+-#}
+{%- macro touches_user_files(commit) -%}
+{%- set user_prefixes = ['src/ha_mcp/', 'custom_components/', 'homeassistant-addon', 'scripts/install', 'docs/', 'site/'] -%}
+{%- set user_files = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'Dockerfile', 'pyproject.toml', 'uv.lock', 'hacs.json', 'server.json', '.env.example', '.github/integration-mirror-readme-prefix.md'] -%}
+{%- set ns = namespace(hit=false) -%}
+{%- for path in commit.commit.stats.files if not ns.hit -%}
+{%- if path.startswith('docs/agents/') or path.endswith('AGENTS.md') or path.endswith('CHANGELOG.md') -%}
+{%- elif path in user_files -%}
+{%- set ns.hit = true -%}
+{%- else -%}
+{%- for prefix in user_prefixes if path.startswith(prefix) -%}
+{%- set ns.hit = true -%}
+{%- endfor -%}
+{%- endif -%}
+{%- endfor -%}
+{{ 'true' if ns.hit else 'false' }}
+{%- endmacro -%}
+
 {#- Check if commit is internal -#}
 {%- macro is_internal(commit, type_) -%}
 {%- set internal_scopes = ['internal', 'debug', 'addon-dev', 'ci', 'deps', 'deps-dev'] -%}
-{%- set internal_types = ['chore', 'chores', 'ci', 'test', 'testing', 'build', 'style', 'continuous integration'] -%}
+{%- set internal_types = ['chores', 'continuous integration', 'testing', 'build system', 'code style'] -%}
 {%- if commit.scope and commit.scope | lower in internal_scopes -%}
 true
 {%- elif commit.scope and 'internal' in commit.scope | lower -%}
 true
 {%- elif type_ | lower in internal_types -%}
 true
+{%- elif touches_user_files(commit) | trim == 'false' -%}
+true
 {%- else -%}
 false
 {%- endif -%}
 {%- endmacro -%}
 
-{#- Map type to Keep a Changelog category -#}
+{#- Map type to Keep a Changelog category. Types arrive as the parser's long names. -#}
 {%- macro get_category(type_) -%}
 {%- set t = type_ | lower -%}
 {%- if t in ['feature', 'feat', 'features'] -%}
 Added
 {%- elif t in ['fix', 'bug fixes'] -%}
 Fixed
-{%- elif t in ['perf', 'performance', 'refactor'] -%}
+{%- elif t in ['performance improvements', 'refactoring'] -%}
 Changed
 {%- elif t in ['docs', 'documentation'] -%}
 Changed
@@ -95,6 +120,11 @@ Removed
 
 {#- Standard Keep a Changelog categories -#}
 {%- set standard_categories = ['Breaking Changes', 'Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'] -%}
+
+{%- if user_facing | length == 0 %}
+
+No user-facing changes.
+{%- endif -%}
 
 {#- Render user-facing changes in Keep a Changelog order -#}
 {%- for category in standard_categories -%}

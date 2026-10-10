@@ -235,6 +235,31 @@ See [Cloudflared app documentation](https://github.com/brenner-tobias/addon-clou
 
 ---
 
+## Use from Home Assistant's own AI (Home Assistant 2026.10+)
+
+On Home Assistant 2026.10 or newer, the app announces itself to the
+**Model Context Protocol** integration. **Settings → Devices & services**
+shows it as discovered; select **Add** and confirm. Its tools then become an
+API that Home Assistant conversation agents can select under
+**Control Home Assistant**. Select **Ignore** if you do not want that.
+
+- On an older Home Assistant the app announces nothing. After updating Home
+  Assistant, restart the app to be discovered.
+- Turn on [`enable_tool_search`](#enable_tool_search) for this use. A
+  conversation agent receives every tool description with every message, and
+  the full catalog is far larger than the search tools.
+- Home Assistant stops a tool call after 10 seconds, so long operations
+  (backups, restarts, large searches) can report a timeout while they still
+  finish.
+- If you added the app's URL to the integration by hand before, that entry
+  keeps working. Home Assistant still offers the discovered one unless the
+  manual entry uses the exact URL the app announces
+  (`http://<app hostname>:9583/...`), so an entry added with the IP address
+  ends up next to a second one for the same server. Keep only one. To get an
+  API name that stays the same when the app is reinstalled, remove the manual
+  entry and add the discovered one. If it is not offered, restart Home
+  Assistant.
+
 ## Configuration Options
 
 The app has minimal configuration - most settings are automatic.
@@ -265,6 +290,42 @@ Controls when the AI assistant suggests creating backups before operations:
 - `auto`: Intelligent detection (future enhancement)
 
 **Note:** This is an advanced option. Enable "Show unused optional configuration options" in the app configuration UI to see it.
+
+### enable_snapshot_actions
+
+**Default:** `true`
+
+**Allow full HA snapshot actions.** `ha_manage_backup` is mandatory and
+remains enabled when listed in `disabled_tools`; this option and
+`backup_read_only` control its actions, here or in the web Settings UI
+**Backups** tab.
+
+Turning this off blocks full HA snapshot actions through `ha_manage_backup`
+and the guarded backup routes in `ha_call_service`, including listing. It does
+not block scripts or automations that call these services inside Home
+Assistant. Edit backups remain available. Deletion is only available through
+`ha_manage_backup`, also requires **Allow snapshot deletion**
+(`enable_snapshot_delete`), and its protections still apply.
+
+### backup_read_only
+
+**Default:** `false`
+
+**Make backup management read-only.** Allows edit-backup list, view, and diff,
+and snapshot list when snapshot actions are enabled. Blocks manual create,
+restore (including edit restores), and delete. Automatic pre-edit backups
+continue.
+
+`enable_snapshot_actions` and `backup_read_only` restrict AI calls to `ha_manage_backup` and the equivalent
+backup services and commands sent through `ha_call_service`
+(`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/` snapshot
+commands, and Supervisor `/backups` requests). Full snapshot deletion through
+`ha_call_service` is refused; use `ha_manage_backup`. Code Mode is a beta
+escape hatch and is not fully covered by these options. Scripts and
+automations that call these services run inside Home Assistant and are not
+covered. Human backup actions in the settings page remain available. Save,
+then restart the app to apply changes. Disabling snapshot actions blocks
+snapshot listing even when backup management is read-only.
 
 ### secret_path (Advanced)
 
@@ -316,7 +377,7 @@ Requires app restart to take effect.
 
 **Default:** `5` (range 2-10)
 
-Maximum number of tools returned by `ha_search_tools` when `enable_tool_search` is on. Lower values (2-3) save context tokens but may miss relevant tools. Has no effect unless tool search is enabled.
+Maximum number of hidden tools returned per `ha_search_tools` call when `enable_tool_search` is on; a pinned tool that ranks inside that top count is added as a short name-only entry on top of it. Lower values (2-3) save context tokens but may miss relevant tools. Has no effect unless tool search is enabled.
 
 Requires app restart to take effect.
 
@@ -344,6 +405,18 @@ enable_tool_security_policies: true
 ```
 
 Per-tool rules (including argument conditions like `args.domain in ['lock', 'alarm_control_panel']`) are configured from the **Tool Security Policies** tab in the web UI, not from `config.yaml`.
+
+A tool's conditions are alternatives: a call matches when any one of them holds. **+ AND** adds a sub-condition to one condition, and that condition then holds only when all of its sub-conditions do, so each AND narrows the calls that condition matches. Sub-conditions that no single value can satisfy, such as `args.domain` equals `light` AND `args.domain` equals `lock`, make that condition match nothing for a plain value. The tab refuses to save a condition in which one argument must equal a string and also equal another string, NOT equal it, be one of a list without it, or NOT be one of a list with it (wildcard paths and case-only differences are not checked, although under an allow list they match nothing too); such a condition saved elsewhere is marked on its row. In a require-approval list, to gate a list argument that holds several values, use contains once for each value; under an allow list every item of a list must be approved, so use is one of with every value its items may take.
+
+In a require-approval list, a sub-condition also holds when one item of a list argument, or one part of a comma-separated value, satisfies it (each sub-condition may use a different item), because Home Assistant reads `"light.a, lock.x"` as two entity IDs. So `args.entity_id` equals `lock.x` gates `["lock.x"]` and `"light.a, lock.x"` too. A free-text argument with a comma is split the same way, which can gate a call that would not match as a whole.
+
+**Allow list.** By default a matching rule requires approval and every other call runs. Setting **Approval mode** to **Require approval unless a rule matches (allow list)** reverses that: the rules list the calls that run without approval, and every other call, reads included, needs approval. Only tool search and managing pending approvals stay exempt. An allow list matches strictly, so neither a case variant nor one listed value among unlisted ones can ride an approval: a condition must hold with exact case, for every value a wildcard path (`args.operations.*.entity_id`) or a list argument reaches, every branch of a wildcard path must hold the field (so a batch operation without it, or an argument that lacks it, needs approval; a plain value such as the `domain` string lacks every field, so `args.*.entity_id` approves no `ha_call_service` call that can run), and an object argument matches only by equals or is one of. Regex and contains still match substrings, so anchor a regex with `^…$`, and does NOT equal / is NOT one of approve everything they do not name. A string value at a condition's path that contains a comma or has leading or trailing whitespace matches no condition except is present, whatever the argument, because Home Assistant splits and strips entity IDs given that way. Approvals given under an allow list are never remembered: each one covers a single call. A rule constrains only the arguments it names, so an approval for `entity_id` equals `lock.shed` also covers a call that adds `area_id` or another target argument. To approve one exact call, match the whole argument object instead: path `args`, is one of, and a list of the approved argument objects.
+
+**Matching object keys.** A path ending in `*~` reaches the keys of an object argument instead of its values. A scene names the entities it sets as keys (`{"lock.front_door": "unlocked"}`), so for `ha_config_set_scene` the path `args.config.entities.*~` with regex `^(lock|siren|alarm_control_panel)\.` gates every scene that includes one of them, where `args.config.entities.*` would only reach the target states. Under an allow list every key must satisfy the condition, and an empty or missing `entities` needs approval. `*~` must be the last segment of a path. Such a rule covers only scene definitions written through `ha_config_set_scene`: a `python_transform` edit, `activate=True` on an existing scene, and `scene.apply` or `scene.create` through `ha_call_service` each need a rule of their own.
+
+If you edit `tool_policy.json` by hand, spell every field exactly: an unknown field (a typo such as `rule_efect`) makes the policy fail to load, and every tool call is then refused until the file is fixed.
+
+Downgrading to a release without allow-list support reads an allow list as a require-approval list, which inverts it: the approved calls then need approval and everything else runs. Switch back to **Require approval for matching calls (block list)** before downgrading.
 
 *Inspired by [PolicyLayer](https://policylayer.com/)'s policy DSL shape, originally proposed in [#966](https://github.com/homeassistant-ai/ha-mcp/issues/966) by [@L1AD](https://github.com/L1AD).*
 
@@ -396,6 +469,90 @@ Off by default. Requires app restart to take effect.
 ```yaml
 redact_secrets: true
 ```
+
+### enable_security_policy_tool
+
+**Default:** `false`
+
+Registers the `ha_manage_security_policy` tool, which lets connected AI agents read and rewrite the tool security policies, including removing approval gates.
+
+This option is independent of `enable_tool_security_policies`: it controls who can edit the rules, not whether they are enforced. The tool cannot see or decide pending approvals. To keep a human in the loop, gate the tool before you enable it: switch on "security gated" for Manage Security Policy in the **Tools** tab of the web UI. The gate is part of the policy this tool edits, so an approved `set` call can remove it. Check that each change you approve keeps it.
+
+Off by default. Requires app restart to take effect.
+
+### enable_mandatory_bps
+
+**Default:** `true`
+
+Attaches the Home Assistant best-practice reference files to the response of every successful write by the six config write tools (automations, scripts, scenes, helpers, dashboards, raw YAML), under `skill_content`. Reference sections cited by best-practice warnings are added too.
+
+Each tool also has a per-call `MandatoryBPS` parameter that the agent can set to `false` once it has the content. When this option is off, no `skill_content` is sent, whatever the per-call parameter or the warnings say.
+
+Leave it on. Turn it off only for models with very small context windows; write accuracy may drop. Requires app restart to take effect.
+
+### enable_strict_mandatory_bps
+
+**Default:** `true`
+
+Blocks the six best-practice write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) until the client proves it read the best practices. A blocked call returns an error that tells the client to read the best-practices skill with `ha_get_skill_guide` and pass back the acknowledgment key it gets there. While this is on, `ha_get_skill_guide` cannot be disabled, because it is the only source of the key.
+
+Has no effect while `enable_mandatory_bps` is off. Requires app restart to take effect.
+
+### ha_tool_concurrency
+
+**Default:** `0` (range 0-32)
+
+Limits how many Home Assistant tool calls run at the same time across all sessions. `0` means no limit. A call that waits for a free slot fails after 60 seconds. The limit applies to whole tool calls only: the REST, WebSocket and per-tool concurrency inside a call does not change.
+
+A limit lets constrained installs queue tool calls instead of running them all at once. Requires app restart to take effect.
+
+### enable_auto_backup
+
+**Default:** `true`
+
+Saves a snapshot of an entity before each write or delete tool call changes it (automations, scripts, scenes, helpers, dashboards, dashboard resources, labels, categories, groups, zones, areas, calendars, to-do lists, entities, devices, integrations, and their remove/delete tools). Snapshots are YAML files under `/data/ha_mcp_backups/`. List, restore or delete them in the **Backups** tab of the web UI, or with `ha_manage_backup(scope='edits', ...)`.
+
+For those tools the snapshot is best effort: a failed capture logs a warning and the write goes ahead. The file and raw-YAML tools (`ha_write_file`, `ha_delete_file`, `ha_config_set_yaml`) need the snapshot: while this option is off they refuse to write, and a failed capture blocks the write.
+
+Requires app restart to take effect.
+
+### auto_backup_throttle_minutes
+
+**Default:** `0` (range 0-1440)
+
+How often auto-backup may capture the same entity. `0` captures a snapshot on every write; a value N above 0 captures at most one snapshot per N minutes per entity.
+
+### auto_backup_retain_per_entity
+
+**Default:** `100` (range 1-10000)
+
+The most snapshots kept per entity. Each new capture removes the oldest snapshots above this number.
+
+### enable_snapshot_delete
+
+**Default:** `false`
+
+Lets `ha_manage_backup` delete full Home Assistant snapshots (`scope='snapshot'`, `action='delete'`). A snapshot may be the last way back after a mistaken change, so a person must turn this on, not the AI. Even when it is on, scheduled backups, the newest snapshot and snapshots younger than `snapshot_delete_min_age_days` cannot be deleted.
+
+### snapshot_delete_min_age_days
+
+**Default:** `7` (range 0-365)
+
+How old a snapshot must be, in days, before it can be deleted. `0` turns off the age limit; the newest snapshot and scheduled backups stay protected.
+
+### disabled_tools
+
+**Default:** empty
+
+Comma-separated tool names to turn off, for example `ha_call_event,ha_eval_template`. The tools stay off and locked in the **Tools** tab of the web UI until you remove them here.
+
+These tools cannot be disabled and keep running even when listed: `ha_search`, `ha_get_overview`, `ha_get_state`, `ha_report_issue`, `ha_manage_backup`. `ha_get_skill_guide` can be disabled only while `enable_strict_mandatory_bps` is off.
+
+### pinned_tools
+
+**Default:** empty
+
+Comma-separated tool names to pin. Pinned tools appear at the top of the **Tools** tab and stay pinned in the web UI until you remove them here. Useful with `enable_tool_search`.
 
 ---
 
@@ -552,7 +709,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Dashboards
 - `ha_config_delete_dashboard` — Delete a storage-mode dashboard completely.
 - `ha_config_delete_dashboard_resource` — Delete a dashboard resource.
-- `ha_config_get_dashboard` — Get dashboard info - list all dashboards, get config, or search for cards.
+- `ha_config_get_dashboard` — Get Lovelace dashboards: list them, read one config, or search their cards.
 - `ha_config_list_dashboard_resources` — List Lovelace dashboard resources (custom cards, themes, CSS/JS).
 - `ha_config_set_dashboard` — Create or update a Home Assistant dashboard.
 - `ha_config_set_dashboard_resource` — Create or update a dashboard resource (inline code or external URL).
@@ -656,7 +813,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### Utilities
 - `ha_eval_template` — Execute a Jinja2 template render, or an automation condition check, in Home Assistant.
-- `ha_report_issue` — Get diagnostic information and templates for filing issue reports or feedback.
+- `ha_report_issue` — Get diagnostics and a finished GitHub issue for a bug, agent feedback or a feature request.
 
 ### Zones
 - `ha_get_zone` — Get zone information - list all zones or get details for a specific one.

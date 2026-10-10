@@ -13,12 +13,16 @@ syntax errors; this harness adds behavioural assertions.
 
 from __future__ import annotations
 
+import atexit
+import errno
 import json
 import math
 import os
+import queue
 import re
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,12 +46,11 @@ def _node_binary() -> str:
 def _default_timeout_s() -> float:
     """Per-run node timeout, overridable via ``HA_MCP_JS_HARNESS_TIMEOUT``.
 
-    15s suits CI, where node + jsdom start up in about a second. On slower
-    hardware that start-up alone approaches the limit, so every test times
-    out and the suite is not merely slow but unrunnable — which is how a
-    developer ends up writing jsdom tests blind. An unparseable or
-    non-positive override falls back to the default rather than failing
-    collection.
+    15s suits CI, where node + jsdom start up in about a second. The first
+    run on each pytest worker also pays that start-up, which on slower
+    hardware can approach the limit; the override is for that case. An
+    unparseable or non-positive override falls back to the default rather
+    than failing collection.
     """
     try:
         override = float(os.environ.get("HA_MCP_JS_HARNESS_TIMEOUT", ""))
@@ -186,36 +189,170 @@ def run_script(
         "broadcastChannelUnavailable": broadcast_channel_unavailable,
     }
 
-    # encoding pinned: node emits UTF-8; without it, text=True decodes with
-    # the locale codepage (cp1252 on Windows), the reader thread crashes on
-    # the first non-cp1252 char and stdout comes back None. errors="replace"
-    # keeps malformed bytes from killing the reader the same way — they
-    # degrade to U+FFFD and surface in the harness's own error reporting.
-    proc = subprocess.run(
-        [_node_binary(), str(HARNESS_PATH)],
-        input=json.dumps(request),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=_default_timeout_s() if timeout_s is None else timeout_s,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise AssertionError(
-            f"JS harness exited {proc.returncode}\n"
-            f"stderr: {proc.stderr}\n"
-            f"stdout: {proc.stdout[:2000]}",
+    timeout = _default_timeout_s() if timeout_s is None else timeout_s
+    with _worker_lock:
+        return HarnessResult(**_harness_worker().run(request, timeout))
+
+
+class _HarnessWorker:
+    """One node process running ``harness.mjs`` for many runs.
+
+    Requests and replies are single JSON lines. Threads drain stdout and
+    stderr, so a run's timeout can be enforced and a full stderr pipe never
+    blocks node. A run that times out, kills node or garbles the stream
+    closes the worker; the next run starts a new one. Each failure shows the
+    stderr no earlier failure has shown, so output from a crash between runs
+    is not lost.
+    """
+
+    def __init__(self) -> None:
+        self._cmd = [_node_binary(), str(HARNESS_PATH)]
+        # encoding pinned: node emits UTF-8; without it, text=True decodes with
+        # the locale codepage (cp1252 on Windows) and the reader thread crashes
+        # on the first non-cp1252 char. errors="replace" keeps malformed bytes
+        # from killing the reader the same way; they degrade to U+FFFD and
+        # surface in the harness's own error reporting.
+        self._proc = subprocess.Popen(
+            self._cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
+        self.closed = False
+        self._replies: queue.Queue[str | None] = queue.Queue()
+        self._stderr: list[str] = []
+        self._reported = 0
+        self._stdout_reader = threading.Thread(target=self._read_stdout, daemon=True)
+        self._stderr_reader = threading.Thread(target=self._read_stderr, daemon=True)
+        self._stdout_reader.start()
+        self._stderr_reader.start()
+
+    def _read_stdout(self) -> None:
+        assert self._proc.stdout is not None
+        try:
+            for line in self._proc.stdout:
+                self._replies.put(line)
+        finally:
+            # A reader that dies must not look like a slow run.
+            self._replies.put(None)
+
+    def _read_stderr(self) -> None:
+        assert self._proc.stderr is not None
+        for line in self._proc.stderr:
+            self._stderr.append(line)
+
+    @property
+    def died(self) -> bool:
+        """Whether node exited without this worker closing it."""
+        return not self.closed and self._proc.poll() is not None
+
+    def run(self, request: dict[str, Any], timeout_s: float) -> dict[str, Any]:
+        assert self._proc.stdin is not None
+        try:
+            self._proc.stdin.write(json.dumps(request) + "\n")
+            self._proc.stdin.flush()
+            line = self._replies.get(timeout=timeout_s)
+        except queue.Empty:
+            self.close(kill=True)
+            timeout = subprocess.TimeoutExpired(self._cmd, timeout_s)
+            timeout.add_note(f"stderr: {self._unreported_stderr()}")
+            raise timeout from None
+        except OSError as e:
+            # node already exited: BrokenPipeError, or EINVAL on Windows.
+            if not (isinstance(e, BrokenPipeError) or e.errno == errno.EINVAL):
+                self.close(kill=True)
+                raise
+            line = None
+        except BaseException:
+            # The reply may still arrive and would answer the next request.
+            self.close(kill=True)
+            raise
+        if line is None:
+            self.close()
+            raise AssertionError(
+                f"JS harness exited {self._proc.returncode}\n"
+                f"stderr: {self._unreported_stderr()}"
+            )
+        try:
+            reply = json.loads(line)
+        except json.JSONDecodeError:
+            reply = None
+        if isinstance(reply, dict) and "result" in reply:
+            self._reported = len(self._stderr)
+            return reply["result"]
+        if isinstance(reply, dict) and "error" in reply:
+            raise AssertionError(
+                f"JS harness failed: {reply['error']}\n"
+                f"stderr: {self._unreported_stderr()}"
+            )
+        self.close(kill=True)
         raise AssertionError(
-            f"JS harness returned non-JSON stdout: {e}\n"
-            f"stdout: {proc.stdout[:2000]}\n"
-            f"stderr: {proc.stderr}",
-        ) from e
-    return HarnessResult(**payload)
+            f"JS harness reply is neither a result nor an error: {line[:2000]}\n"
+            f"stderr: {self._unreported_stderr()}"
+        )
+
+    def _unreported_stderr(self) -> str:
+        if self._proc.poll() is not None:
+            self._stderr_reader.join(timeout=5)
+        end = len(self._stderr)
+        text = "".join(self._stderr[self._reported : end])
+        self._reported = end
+        return text
+
+    def close(self, *, kill: bool = False) -> None:
+        self.closed = True
+        if kill:
+            self._proc.kill()
+        elif self._proc.stdin is not None and not self._proc.stdin.closed:
+            try:
+                self._proc.stdin.close()
+            except OSError:
+                pass  # node already exited
+        try:
+            self._proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            self._proc.wait()
+
+    def death_report(self) -> str:
+        """Why node exited between runs, for the run that finds it dead."""
+        self.close()
+        return (
+            f"JS harness exited {self._proc.returncode} between runs\n"
+            f"stderr: {self._unreported_stderr()}"
+        )
+
+
+_worker: _HarnessWorker | None = None
+_worker_lock = threading.Lock()
+
+
+def _harness_worker() -> _HarnessWorker:
+    """The pytest process's harness worker, started on first use.
+
+    A worker whose node exited between runs fails the run that finds it,
+    with node's stderr, rather than being replaced silently.
+    """
+    global _worker
+    if _worker is not None and _worker.died:
+        dead, _worker = _worker, None
+        raise AssertionError(dead.death_report())
+    if _worker is None or _worker.closed:
+        _worker = _HarnessWorker()
+    return _worker
+
+
+def _stop_worker() -> None:
+    global _worker
+    if _worker is not None:
+        _worker.close()
+        _worker = None
+
+
+atexit.register(_stop_worker)
 
 
 def extract_astro_frontmatter_vars(

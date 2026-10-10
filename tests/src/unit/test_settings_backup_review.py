@@ -123,7 +123,7 @@ async def test_settings_diff_preserves_template_refusal_reason(
 ):
     manager = SimpleNamespace(
         snapshot_comparison=AsyncMock(
-            side_effect=bm._TemplateReadError(message, reason)
+            side_effect=bm._FlowHelperReadError(message, reason)
         )
     )
     monkeypatch.setattr(ui, "_backup_mgr", lambda server: manager)

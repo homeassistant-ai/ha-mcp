@@ -14,6 +14,8 @@ import httpx
 import pytest
 
 from ha_mcp.client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
+    HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
     SceneStorageConfigNotFoundError,
@@ -539,6 +541,85 @@ class TestYamlSkippedClassification:
         assert yaml_skipped_count == 0, (
             f"only 404s count as yaml_skipped; got yaml_skipped={yaml_skipped_count}"
         )
+
+    @pytest.mark.asyncio
+    async def test_automation_admin_required_names_the_cause(
+        self, mock_client, smart_tools
+    ):
+        """A non-admin token's locally refused fetch (#2546) is reported as
+        failed with a sample that names the admin requirement."""
+        automations = _make_automation_entities(3)
+        mock_client.get_states = AsyncMock(return_value=automations)
+        mock_client._request = AsyncMock(
+            side_effect=HomeAssistantAdminRequiredError(
+                "GET /api/config/automation/config/uid_0 is admin-only"
+            )
+        )
+
+        (
+            _matches,
+            _skipped_count,
+            failed_count,
+            yaml_skipped_count,
+            _timeout_count,
+            failed_sample,
+        ) = await smart_tools._deep_search_automations(
+            automations,
+            {a["entity_id"]: a["attributes"]["id"] for a in automations},
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert failed_count == 3
+        assert yaml_skipped_count == 0
+        assert failed_sample is not None
+        assert failed_sample.startswith("HomeAssistantAdminRequiredError:")
+        assert "admin-only" in failed_sample
+
+    @pytest.mark.parametrize(
+        ("refused", "failures", "warned"),
+        [
+            (True, {"automation_failed": 1}, True),
+            (True, {"script_failed": 1}, True),
+            (True, {"scene_failed": 1}, True),
+            (True, {"helper_failed": 1}, True),
+            (False, {"automation_failed": 1}, False),
+            (True, {}, False),
+        ],
+        ids=[
+            "refused-automation-fetch",
+            "refused-script-fetch",
+            "refused-scene-fetch",
+            "refused-flow-helper-probe",
+            "admin-token",
+            "nothing-failed",
+        ],
+    )
+    def test_refused_admin_routes_add_the_unsupported_warning(
+        self, mock_client, smart_tools, refused, failures, warned
+    ):
+        """Keyed on the client, not the failure sample, which names only the
+        first error (a 500 can take its slot)."""
+        mock_client.admin_route_refused = refused
+        response = smart_tools._paginate_and_build_response(
+            {"automations": [], "scripts": [], "scenes": [], "helpers": []},
+            "anything",
+            ["automation"],
+            0,
+            10,
+            False,
+            {
+                "failed": failures.pop("scene_failed", 0),
+                "yaml_skipped": 0,
+                "skipped": 0,
+                "timeout": 0,
+                "integration_skipped": 0,
+                "registry_failed": False,
+                "failed_sample": None,
+            },
+            automation_failed_sample="HTTP 500: Internal Server Error",
+            **failures,
+        )
+        assert (NON_ADMIN_TOKEN_WARNING in response.get("warnings", [])) is warned
 
     @pytest.mark.asyncio
     async def test_automation_none_status_code_classifies_as_failed(

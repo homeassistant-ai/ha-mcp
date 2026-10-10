@@ -17,17 +17,15 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import (
-    JSON_STRING_COERCION,
-    summarize_theme_listing,
-    websocket_error_message,
-)
+from .tool_hints import write_hints
+from .util_helpers import summarize_theme_listing, websocket_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -190,13 +188,12 @@ class ThemesTools:
     @tool(
         name="ha_manage_theme",
         tags={"System"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "readOnlyHint": False,
-            "title": "Manage Frontend Themes",
-        },
+        annotations=write_hints(
+            "Manage Frontend Themes",
+            destructive=True,
+            idempotent=True,
+            open_world=False,
+        ),
     )
     @log_tool_usage
     async def ha_manage_theme(
@@ -379,7 +376,7 @@ class ThemesTools:
             }
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"action": action, "theme_name": theme_name, "mode": mode},

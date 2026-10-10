@@ -1,33 +1,25 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/es.json (keys addon.*, features.*,
-# addon_stable.*); regenerate with: python scripts/generate_locales.py
+# src/ha_mcp/settings_ui/locales/es.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
+  verify_ssl:
+    name: Verificar certificados TLS
+    description: 'Verificar el certificado TLS del servidor de Home Assistant. Desactiva
+      esto solo en una red de confianza, para un certificado autofirmado o un desajuste
+      de nombre de host: esto debilita la seguridad del transporte.'
+  ha_tool_concurrency:
+    name: Concurrencia de herramientas de Home Assistant
+    description: Límite opcional en las llamadas a herramientas externas de Home Assistant
+      en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución
+      por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una
+      llamada que espera capacidad falla después de 60 segundos. Rango 0–32.
   backup_hint:
-    name: Nivel de sugerencia de instantánea completa de HA (para el LLM)
-    description: 'Ajusta la redacción de la indicación que el LLM ve en la descripción
-      de la
-
-      herramienta `ha_manage_backup(scope=''snapshot'')` sobre cuándo sugerir una
-
-      copia de seguridad completa de Home Assistant antes de operaciones
-
-      arriesgadas (p. ej. borrados masivos de dispositivos). Afecta ÚNICAMENTE a
-
-      esa frase dirigida al LLM.
-
-
-      Para instantáneas automáticas por edición de automatizaciones / scripts /
-
-      auxiliares / etc., usa la opción independiente **Activar copia de
-
-      seguridad automática de las ediciones** que aparece más abajo.'
-  secret_path:
-    name: Ruta secreta personalizada
-    description: 'Ruta HTTP personalizada opcional para el servidor MCP. Déjala vacía
-      para usar la ruta segura generada automáticamente.
-
-      '
+    name: Nivel de sugerencia de copia de seguridad
+    description: Con qué intensidad se indica a los asistentes de IA que sugieran
+      una copia de seguridad completa de Home Assistant antes de realizar cambios
+      arriesgados. Solo cambia esta sugerencia; las copias de seguridad de edición
+      automática tienen su propia configuración.
   enable_tool_search:
     name: Activar la búsqueda de herramientas
     description: 'Reemplaza el catálogo completo de herramientas por un descubrimiento
@@ -53,10 +45,12 @@ configuration:
       aquí.'
   tool_search_max_results:
     name: Máximo de resultados de la búsqueda de herramientas
-    description: 'Número máximo de herramientas que devuelve ha_search_tools cuando
-      la búsqueda de herramientas está activada. Los valores bajos (2-3) ahorran tokens
-      de contexto pero pueden dejar fuera herramientas relevantes. Rango: 2-10. Requiere
-      reiniciar.'
+    description: Número máximo de herramientas ocultas devueltas por cada llamada
+      a ha_search_tools cuando la búsqueda de herramientas está habilitada; una herramienta
+      fijada que se encuentre dentro de ese recuento superior se añade como una entrada
+      corta solo de nombre en la parte superior. Los valores más bajos (2-3) ahorran
+      tokens de contexto, pero pueden omitir herramientas relevantes. Requiere reinicio.
+      Rango 2–10.
   enable_tool_security_policies:
     name: Activar las políticas de seguridad de herramientas (avanzado)
     description: Somete a aprobación del usuario las llamadas a herramientas de alto
@@ -126,12 +120,56 @@ configuration:
       es la única que publica esa clave de confirmación. Depende de la opción "Adjuntar
       skills de buenas prácticas en las escrituras" de arriba y es inerte mientras
       esa opción principal esté desactivada. Requiere reiniciar para que surta efecto.'
-  ha_tool_concurrency:
-    name: Concurrencia de herramientas de Home Assistant
-    description: Límite opcional en las llamadas externas a herramientas de Home Assistant
-      en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución
-      por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una
-      llamada que espera capacidad falla después de 60 segundos.
+  enable_auto_backup:
+    name: Copia automática de las ediciones
+    description: Guarda una copia de seguridad de una entidad antes de que cada llamada
+      de herramienta de escritura o eliminación la modifique. Mientras esto esté desactivado,
+      las herramientas de archivos y YAML sin procesar (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) se negarán a escribir.
+  auto_backup_throttle_minutes:
+    name: Límite de frecuencia de copia de seguridad automática (minutos)
+    description: Con qué frecuencia la copia de seguridad automática puede capturar
+      la misma entidad. 0 captura en cada escritura; N superior a 0 captura como máximo
+      una copia de seguridad por N minutos por entidad. Rango 0–1440.
+  auto_backup_retain_per_entity:
+    name: Retención de copias de seguridad automáticas (por entidad)
+    description: El número máximo de copias de seguridad conservadas por entidad.
+      Cada nueva captura elimina las copias de seguridad más antiguas que superen
+      este número. Rango 1–10000.
+  enable_snapshot_actions:
+    name: Permitir acciones de instantáneas completas de HA
+    description: Permitir que los asistentes de IA gestionen copias de seguridad completas
+      de Home Assistant mediante ha_manage_backup y los servicios y comandos de copia
+      de seguridad equivalentes en ha_call_service. Desactivar esto bloquea todas
+      las acciones de copias de seguridad, incluido el listado. La eliminación de
+      copias de seguridad solo está disponible a través de ha_manage_backup y también
+      requiere Permitir la eliminación de copias de seguridad. La edición de copias
+      de seguridad y las acciones de copias de seguridad que una persona realiza en
+      la interfaz de usuario de configuración web siguen estando disponibles.
+  backup_read_only:
+    name: Hacer que la gestión de copias de seguridad sea de solo lectura
+    description: Permitir que los asistentes de IA listen, vean y comparen (diff)
+      las copias de seguridad de edición, y listen las copias de seguridad completas
+      de HA cuando las acciones de copias de seguridad estén habilitadas. Bloquea
+      la creación, restauración (incluidas las restauraciones de edición) y eliminación
+      manuales de copias de seguridad, incluidos los servicios y comandos de copia
+      de seguridad equivalentes en ha_call_service. Las copias de seguridad automáticas
+      previas a la edición continúan. Las acciones de copias de seguridad que una
+      persona realiza en la interfaz de usuario de configuración web siguen estando
+      disponibles.
+  enable_snapshot_delete:
+    name: Permitir la eliminación de instantáneas
+    description: Permitir que ha_manage_backup elimine copias de seguridad completas
+      de Home Assistant. Una copia de seguridad puede ser el último recurso después
+      de un cambio erróneo, por lo que una persona debe activar esto. Las copias de
+      seguridad programadas, la copia de seguridad más reciente y las copias de seguridad
+      más jóvenes que la edad mínima permanecen protegidas.
+  snapshot_delete_min_age_days:
+    name: Antigüedad mínima de la instantánea para eliminarla (días)
+    description: La antigüedad que debe tener una copia de seguridad, en días, antes
+      de poder ser eliminada. 0 desactiva el límite de edad; la copia de seguridad
+      más reciente y las copias de seguridad programadas permanecen protegidas. Rango
+      0–365.
   disabled_tools:
     name: Herramientas desactivadas (separadas por comas)
     description: 'Las herramientas indicadas aquí quedan forzadas a desactivadas y
@@ -148,57 +186,9 @@ configuration:
       desde la interfaz web de ajustes sin quitar antes esta opción. Resulta útil
       en combinación con la búsqueda de herramientas. Nombres de herramientas separados
       por comas.'
-  enable_auto_backup:
-    name: Activar copia de seguridad automática de las ediciones
-    description: 'Captura una instantánea por entidad antes de cada llamada envuelta
-      de herramienta MCP de escritura/destructiva (automatización, script, escena,
-      asistente, panel, recurso de panel, etiqueta, categoría, grupo, zona, área,
-      calendario, tarea, entidad, dispositivo, integración y herramientas de eliminación/borrado
-      de elementos relacionados). El límite de frecuencia de la copia de seguridad
-      automática establece la frecuencia con la que esto ocurre: 0 (predeterminado)
-      captura en cada llamada de este tipo, N>0 como máximo una instantánea cada N
-      minutos por entidad. Las instantáneas se guardan como archivos YAML en /data/ha_mcp_backups/
-      (anular mediante HAMCP_BACKUP_DIR) y se listan, restauran o eliminan a través
-      de la pestaña "Copias de seguridad" en la interfaz de usuario de configuración
-      web o mediante ha_manage_backup(scope=''edits'', ...). Para esos dominios, la
-      captura es de "mejor esfuerzo" — un fallo registra una ADVERTENCIA y la escritura
-      procede. Las herramientas de archivo y YAML sin procesar son la excepción: ha_write_file,
-      ha_delete_file y ha_config_set_yaml tratan la instantánea como una condición
-      previa, por lo que una escritura a través de ellas se rechaza mientras esto
-      está desactivado, y una captura fallida la bloquea. Activado por defecto; desmarcar
-      desactiva las capturas de "mejor esfuerzo" y deja fuera de servicio las herramientas
-      de archivo y YAML sin procesar con ellas. Requiere un reinicio para que surta
-      efecto.'
-  auto_backup_throttle_minutes:
-    name: Limitación de la copia automática (minutos)
-    description: Ventana de limitación por entidad. 0 (predeterminado) captura una
-      instantánea en cada escritura cubierta. N>0 captura como mucho una instantánea
-      cada N minutos por entidad. Rango 0–1440.
-  auto_backup_retain_per_entity:
-    name: Retención de copias automáticas (por entidad)
-    description: Número máximo de instantáneas conservadas por entidad. Las instantáneas
-      más antiguas que superen este límite se rotan en cada captura correcta. Predeterminado
-      100, rango 1–10000.
-  enable_snapshot_delete:
-    name: Permitir la eliminación de instantáneas
-    description: 'Permite que ha_manage_backup elimine archivos tarball de instantáneas
-      completas de HA (scope=''snapshot'', action=''delete''). Desactivado de forma
-      predeterminada: una instantánea puede ser el último punto de recuperación tras
-      un cambio equivocado, así que una persona debe autorizarlo aquí expresamente.
-      Incluso estando activado, las copias de seguridad programadas, la instantánea
-      más reciente que quede y todo lo más nuevo que el mínimo de antigüedad de abajo
-      siguen protegidos.'
-  snapshot_delete_min_age_days:
-    name: Antigüedad mínima de la instantánea para eliminarla (días)
-    description: Una instantánea debe tener al menos esta antigüedad para poder eliminarse.
-      Rango 0–365; 0 desactiva el mínimo (las protecciones de la instantánea más reciente
-      y de las copias programadas siguen aplicándose). Predeterminado 7.
-  verify_ssl:
-    name: Verificar el certificado TLS
-    description: Verifica el certificado TLS del servidor de Home Assistant. La app
-      (add-on) se conecta a través del proxy del Supervisor, por lo que normalmente
-      esto no tiene efecto y debe permanecer habilitado. Desactívalo solo si has reconfigurado
-      la app (add-on) para comunicarse con HA a través de un nombre de host HTTPS
-      público con un certificado autofirmado o un error de coincidencia en el nombre
-      de host. Desactivarlo debilita la seguridad del transporte; déjalo activado
-      a menos que sepas que lo necesitas. Requiere reiniciar para aplicar los cambios.
+  secret_path:
+    name: Ruta secreta personalizada
+    description: 'Ruta HTTP personalizada opcional para el servidor MCP. Déjala vacía
+      para usar la ruta segura generada automáticamente.
+
+      '

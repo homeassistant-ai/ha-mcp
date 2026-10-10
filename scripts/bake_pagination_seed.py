@@ -7,7 +7,7 @@ container cleanly so the recorder flushes, then copies the resulting
 
 The result is a committed SQLite DB that ships with N pre-recorded state-change
 rows for ``input_number.e2e_pagination_seed``. The companion timestamp-refresh
-hook in ``tests/src/e2e/conftest.py`` shifts those rows forward each test
+hook in ``tests/src/e2e/_conftest_seed.py`` shifts those rows forward each test
 session so the rows always look "recent" to a ``24h`` history-window query.
 
 Usage:

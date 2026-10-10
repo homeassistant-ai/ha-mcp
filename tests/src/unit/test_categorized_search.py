@@ -222,13 +222,13 @@ class TestRenderResults:
         assert "ha_remove_area_or_floor" in results[0]["execute_via"]
 
     @pytest.mark.anyio
-    async def test_preserves_standard_fields(self, transform):
-        """Should preserve name, description, annotations, inputSchema."""
+    async def test_hit_is_compact(self, transform):
+        """A hit carries name, description, params and proxy, no schema."""
         tools = [_make_tool("ha_get_state", read_only=True, description="Get state")]
         results = await transform._render_results(tools)
-        assert results[0]["name"] == "ha_get_state"
-        assert "description" in results[0]
-        assert "inputSchema" in results[0]
+        assert set(results[0]) == {"name", "description", "params", "execute_via"}
+        assert results[0]["description"] == "Get state"
+        assert "inputSchema" not in results[0]
 
     @pytest.mark.anyio
     async def test_multiple_tools(self, transform):
@@ -503,15 +503,9 @@ class TestCategorizedCallDispatch:
 
     def _get_proxy_fn(self, transform, category):
         """Get the callable fn from a proxy Tool."""
-        annotations_map = {
-            "read": ToolAnnotations(read_only_hint=True),
-            "write": ToolAnnotations(destructive_hint=True),
-            "delete": ToolAnnotations(destructive_hint=True),
-        }
         proxy = transform._make_categorized_proxy(
             proxy_name=f"ha_call_{category}_tool",
             category=category,
-            annotations=annotations_map[category],
             description=f"Test {category} proxy",
         )
         return proxy.fn
@@ -848,15 +842,9 @@ class TestDoubleUnwrap:
         return t
 
     def _get_proxy_fn(self, transform, category):
-        annotations_map = {
-            "read": ToolAnnotations(read_only_hint=True),
-            "write": ToolAnnotations(destructive_hint=True),
-            "delete": ToolAnnotations(destructive_hint=True),
-        }
         proxy = transform._make_categorized_proxy(
             proxy_name=f"ha_call_{category}_tool",
             category=category,
-            annotations=annotations_map[category],
             description=f"Test {category} proxy",
         )
         return proxy.fn
@@ -1054,15 +1042,9 @@ class TestArgumentsAsString:
         return t
 
     def _get_proxy_fn(self, transform, category):
-        annotations_map = {
-            "read": ToolAnnotations(read_only_hint=True),
-            "write": ToolAnnotations(destructive_hint=True),
-            "delete": ToolAnnotations(destructive_hint=True),
-        }
         proxy = transform._make_categorized_proxy(
             proxy_name=f"ha_call_{category}_tool",
             category=category,
-            annotations=annotations_map[category],
             description=f"Test {category} proxy",
         )
         return proxy.fn

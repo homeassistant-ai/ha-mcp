@@ -17,6 +17,9 @@ name: CodeQL Code Quality
 # and pays for ONE checkout / Python setup / CodeQL CLI install instead of
 # two. The job keeps the name `CodeQL Gate`, so the required-status-check
 # context on the master ruleset is unchanged and needs no maintainer edit.
+# Renaming the job, or splitting it into several, leaves that required
+# context pending, which blocks every merge into master until the ruleset is
+# edited to match.
 #
 # The matrix also gave each language its OWN runner and its own 20-minute
 # budget. Serially they share one job, so the create+analyze steps carry
@@ -44,6 +47,10 @@ name: CodeQL Code Quality
 # `if: success() || failure()` as the rest of the job. Deliberate: a cancelled
 # run no longer uploads a partial artifact, which is the price of not paying
 # for the remainder of the job after a cancel.
+#
+# Databases are created under $RUNNER_TEMP, outside the scanned tree: a
+# database inside it gets its own source archive extracted as more source,
+# and the gate cannot verify allowlist entries for those duplicate findings.
 #
 # Languages gated (one step group each), both scanning the whole tree
 # (--source-root .):
@@ -137,7 +144,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh codeql database create ha-mcp-db-python \
+          gh codeql database create "$RUNNER_TEMP/ha-mcp-db-python" \
             --language=python \
             --build-mode=none \
             --source-root . \
@@ -148,7 +155,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh codeql database analyze ha-mcp-db-python \
+          gh codeql database analyze "$RUNNER_TEMP/ha-mcp-db-python" \
             codeql/python-queries:codeql-suites/python-code-quality.qls \
             codeql/python-queries:codeql-suites/python-code-scanning.qls \
             --format=sarif-latest \
@@ -174,8 +181,13 @@ jobs:
         timeout-minutes: 8
         env:
           GH_TOKEN: ${{ github.token }}
+        # The settings_js parts run as one inline script, and CodeQL analyses
+        # each file on its own. Join them so the analysis sees one scope and
+        # follows data from one part into the next.
         run: |
-          gh codeql database create ha-mcp-db-javascript \
+          cat src/ha_mcp/settings_ui/settings_js/*.js > src/ha_mcp/settings_ui/settings.js
+          rm -r src/ha_mcp/settings_ui/settings_js
+          gh codeql database create "$RUNNER_TEMP/ha-mcp-db-javascript" \
             --language=javascript \
             --build-mode=none \
             --source-root . \
@@ -187,7 +199,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh codeql database analyze ha-mcp-db-javascript \
+          gh codeql database analyze "$RUNNER_TEMP/ha-mcp-db-javascript" \
             codeql/javascript-queries:codeql-suites/javascript-code-quality.qls \
             codeql/javascript-queries:codeql-suites/javascript-code-scanning.qls \
             --format=sarif-latest \

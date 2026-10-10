@@ -1,4 +1,4 @@
-"""Tests for util_helpers.build_skill_content (issue #1182).
+"""Tests for config_write_helpers.build_skill_content (issue #1182).
 
 The helper is the shared assembly point for the MandatoryBPS parameter on
 every write tool (set_automation / _script / _scene / _helper / _dashboard /
@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from ha_mcp.tools.util_helpers import (
+from ha_mcp.tools.config_write_helpers import (
     _SKILL_CONTENT_OPTOUT_HINT,
     _SKILLS_VENDOR_MISSING_WARNING,
     _WRITE_TOOL_BP_HINT_SUGGESTION,
@@ -426,7 +426,7 @@ class TestDegradedPaths:
         problem degrades gracefully here."""
         # ``get_global_settings`` is imported INSIDE ``build_skill_content``
         # via ``from ..config import get_global_settings``, so the symbol
-        # isn't bound in ``util_helpers``'s module namespace. Patch at the
+        # isn't bound in ``config_write_helpers``'s module namespace. Patch at the
         # source module instead — that's where the function-local import
         # resolves the name on every call.
         with patch(
@@ -491,7 +491,8 @@ class TestPerToolCanonicalMappings:
         from ha_mcp.tools.tools_config_automations import _AUTOMATION_SKILL_FILES
 
         assert _AUTOMATION_SKILL_FILES == (
-            "references/automation-patterns.md",
+            "references/triggers-and-conditions.md",
+            "references/automation-actions.md",
             "references/template-guidelines.md",
         )
 
@@ -499,7 +500,8 @@ class TestPerToolCanonicalMappings:
         from ha_mcp.tools.tools_config_scripts import _SCRIPT_SKILL_FILES
 
         assert _SCRIPT_SKILL_FILES == (
-            "references/automation-patterns.md",
+            "references/automation-actions.md",
+            "references/triggers-and-conditions.md",
             "references/template-guidelines.md",
         )
 
@@ -509,17 +511,14 @@ class TestPerToolCanonicalMappings:
         assert _SCENE_SKILL_FILES == ("SKILL.md",)
 
     def test_helper_mapping(self):
-        from ha_mcp.tools.tools_config_helpers import _HELPER_SKILL_FILES
+        from ha_mcp.tools.config_helpers.schemas import _HELPER_SKILL_FILES
 
         assert _HELPER_SKILL_FILES == ("references/helper-selection.md",)
 
     def test_dashboard_mapping(self):
         from ha_mcp.tools.tools_config_dashboards import _DASHBOARD_SKILL_FILES
 
-        assert _DASHBOARD_SKILL_FILES == (
-            "references/dashboard-guide.md",
-            "references/dashboard-cards.md",
-        )
+        assert _DASHBOARD_SKILL_FILES == ("references/dashboard-guide.md",)
 
     def test_yaml_mapping(self):
         from ha_mcp.tools.tools_yaml_config import _YAML_SKILL_FILES

@@ -685,8 +685,8 @@ class TestAccessibilityMarkup:
 
 
 class TestSettingsJsExtraction:
-    """The client JS lives in settings.js (extracted from the Python string)
-    but is injected inline into the served HTML. These guards lock the file
+    """The client JS lives in the settings_js/ parts (extracted from the Python
+    string) but is injected inline into the served HTML. These guards lock the file
     and the rendered page together so they can never silently drift.
     """
 
@@ -753,7 +753,7 @@ class TestSettingsJsExtraction:
 class TestSettingsCssExtraction:
     """The page CSS lives in settings.css (extracted from the Python string)
     but is injected inline into the served HTML's <style> block, mirroring the
-    settings.js mechanism. These guards lock the file and the rendered page
+    settings_js/ mechanism. These guards lock the file and the rendered page
     together so they can never silently drift.
     """
 
@@ -2510,6 +2510,11 @@ class TestSettingsInfoEndpoint:
 
     def _capture_handler(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        # These tests are about process identity, not the version: do not
+        # read the developer's installed package metadata.
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._handlers_server.get_version", lambda: "1.2.3"
+        )
         captured: dict[str, SaveHandler] = {}
 
         def custom_route_factory(path, methods):
@@ -3119,7 +3124,7 @@ class TestGetHandlersAddonLiveOptions:
         # resolves to "default" (env unset, override file empty), so the live
         # value must be ignored even though it appears in the payload.
         monkeypatch.delenv("FUZZY_THRESHOLD", raising=False)
-        monkeypatch.setattr("ha_mcp.config._read_feature_flag_override_file", dict)
+        monkeypatch.setattr("ha_mcp.config_overrides._read_feature_flag_override_file", dict)  # fmt: skip
         _reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
@@ -3153,7 +3158,7 @@ class TestGetHandlersAddonLiveOptions:
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         # Master beta flag: env var unset in addon mode -> origin "default".
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
-        monkeypatch.setattr("ha_mcp.config._read_feature_flag_override_file", dict)
+        monkeypatch.setattr("ha_mcp.config_overrides._read_feature_flag_override_file", dict)  # fmt: skip
         _reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
@@ -5134,3 +5139,71 @@ class TestSidecarPolicyPinGuard:
             assert json.loads(response.body)["pin_required"] is True
         finally:
             get_data_dir.cache_clear()
+
+    @pytest.fixture
+    def sidecar_put(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        handlers = build_settings_handlers(None, is_sidecar=True)
+
+        async def put(body: dict) -> Any:
+            request = MagicMock()
+            request.json = AsyncMock(return_value=body)
+            return await handlers["policy_put_config"](request)
+
+        yield put
+        get_data_dir.cache_clear()
+
+    @pytest.mark.anyio
+    async def test_sidecar_refuses_to_drop_an_allow_list_by_omission(
+        self, sidecar_put, tmp_path
+    ):
+        """Same guard as the main PUT (issue #2540): an omitted rule_effect
+        would read a stored allow list as a require-approval list."""
+        from ha_mcp.policy.model import Policy, Rule
+        from ha_mcp.policy.persistence import load_policy, save_policy
+
+        save_policy(
+            tmp_path,
+            Policy(rule_effect="allow", rules=[Rule(tool_name="ha_get_state")]),
+        )
+        response = await sidecar_put(
+            {"rules": [{"tool_name": "ha_get_state"}], "version": 1}
+        )
+        assert response.status_code == 400
+        assert "rule_effect" in json.loads(response.body)["error"]
+        assert load_policy(tmp_path).rule_effect == "allow"
+
+    @pytest.mark.anyio
+    async def test_sidecar_put_reports_a_corrupt_stored_policy(
+        self, sidecar_put, tmp_path
+    ):
+        stored = tmp_path / "tool_policy.json"
+        stored.write_text("{not valid json")
+        response = await sidecar_put({"rules": []})
+        assert response.status_code == 500
+        assert json.loads(response.body)["policy_file_corrupt"] is True
+        assert stored.read_text() == "{not valid json"
+
+    @pytest.mark.anyio
+    async def test_sidecar_get_reports_a_corrupt_stored_policy(
+        self, sidecar_put, tmp_path
+    ):
+        # sidecar_put has pointed the data dir at tmp_path for this test.
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        (tmp_path / "tool_policy.json").write_text("{not valid json")
+        handlers = build_settings_handlers(None, is_sidecar=True)
+        response = await handlers["policy_get_config"](MagicMock())
+        assert response.status_code == 500
+        assert json.loads(response.body)["policy_file_corrupt"] is True
+
+    @pytest.mark.anyio
+    async def test_sidecar_refuses_unknown_keys(self, sidecar_put):
+        response = await sidecar_put({"rules": [], "rule_efect": "allow"})
+        assert response.status_code == 400
+        assert "rule_efect" in json.loads(response.body)["error"]

@@ -30,10 +30,11 @@ imported in one direction only (menu <- form <- walker <- here):
 import asyncio
 import json
 import logging
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
@@ -45,6 +46,7 @@ from ..client.rest_client import (
 from ..errors import ErrorCode, create_error_response
 from ..redaction import sentinel_option_keys
 from .config_entry_flow_form import _extract_schema_field_names
+from .config_entry_flow_menu import answer_menu_from_snapshot
 from .config_entry_flow_walker import (
     POST_COMMIT_STATUSES,
     _FlowType,
@@ -57,11 +59,17 @@ logger = logging.getLogger(__name__)
 
 
 OptionsRestoreReason = Literal[
-    "unsupported_form", "unsupported_fields", "validation_failed", "flow_aborted"
+    "unsupported_form",
+    "unsupported_fields",
+    "identity_changed",
+    "validation_failed",
+    "flow_aborted",
 ]
 _RESTORE_REASON_MESSAGES: dict[OptionsRestoreReason, str] = {
     "unsupported_form": "Options restore requires an authoritative options form",
     "unsupported_fields": "Snapshot fields are not accepted by the options form",
+    "identity_changed": "Snapshot fields no restore form offers differ from the "
+    "stored ones (set at creation); restore refused",
     "validation_failed": "Home Assistant rejected the restored options as invalid",
     "flow_aborted": "Home Assistant aborted the options restore",
 }
@@ -124,7 +132,7 @@ class CreationFlowError(OptionsFlowError):
     """Complete-snapshot creation failure with conservative application knowledge."""
 
     reason_messages: ClassVar[dict[OptionsRestoreReason, str]] = {
-        "unsupported_form": "Template recreation requires an authoritative creation form",
+        "unsupported_form": "Helper recreation requires an authoritative creation form",
         "unsupported_fields": "Snapshot fields are not accepted by the creation form",
         "validation_failed": "Home Assistant rejected the recreated helper as invalid",
         "flow_aborted": "Home Assistant aborted the helper recreation",
@@ -133,13 +141,23 @@ class CreationFlowError(OptionsFlowError):
 
 @dataclass
 class _OptionsFlowProgress:
-    """Track replies before the walker can fail while interpreting them."""
+    """Track replies before the walker can fail while interpreting them.
+
+    A complete snapshot may span several forms: each form takes the snapshot
+    fields it declares. Before the form HA marks as the last (``last_step``),
+    every snapshot field no form took must equal ``fixed``, the entry's stored
+    options, since the options flow cannot change it.
+    """
 
     entry_id: str
     flow_id: str | None = None
     apply_status: Literal["not_applied", "unknown", "applied"] = "not_applied"
     reason: OptionsRestoreReason | None = None
     fields: tuple[str, ...] = ()
+    config: dict[str, Any] = field(default_factory=dict)
+    fixed: dict[str, Any] | None = None
+    current_step: dict[str, Any] = field(default_factory=dict)
+    consumed: set[str] = field(default_factory=set)
     error_type: ClassVar[type[OptionsFlowError]] = OptionsFlowError
     operation: ClassVar[str] = "Options restore"
 
@@ -167,6 +185,8 @@ class _OptionsFlowProgress:
         submit_fn: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
         | None = None,
     ) -> dict[str, Any]:
+        if self.current_step.get("type") == _FlowType.FORM:
+            self.check_form(self.current_step)
         self.apply_status = "unknown"
         try:
             submit = submit_fn or client.submit_options_flow_step
@@ -176,13 +196,72 @@ class _OptionsFlowProgress:
             raise
         except HomeAssistantAPIError as err:
             if err.status_code is not None and 400 <= err.status_code < 500:
+                # HA rejected the submission (a malformed or missing field)
+                # without applying it; say so rather than refusing nameless.
                 self.apply_status = "not_applied"
+                self.reason = "validation_failed"
             raise
         self.record_reply(result)
         return result
 
+    def refuse(
+        self, reason: OptionsRestoreReason, fields: list[str] | tuple[str, ...] = ()
+    ) -> NoReturn:
+        self.reason, self.fields = reason, tuple(fields)
+        raise self.failure()
+
+    def start(self, step: dict[str, Any]) -> None:
+        """Accept the options flow's first reply only as a clean form."""
+        if step.get("type") == _FlowType.ABORT:
+            # HA refused to open the flow (a second Forecast.Solar plane
+            # without an API key aborts as api_key_required).
+            self.refuse("flow_aborted")
+        if step.get("type") != _FlowType.FORM:
+            self.refuse("unsupported_form")
+        self._refuse_form_errors(step)
+        self.current_step = step
+
+    def _refuse_form_errors(self, step: dict[str, Any]) -> None:
+        if errors := step.get("errors"):
+            self.refuse(
+                "validation_failed", tuple(errors) if isinstance(errors, dict) else ()
+            )
+
+    def check_form(self, step: dict[str, Any]) -> None:
+        """Before submitting a form, settle the snapshot fields it leaves.
+
+        The leftover check runs only on the form HA marks as last
+        (``last_step: True``). A flow that never marks one (``None``, the
+        ``async_show_form`` default) is submitted as it comes, and its result
+        is verified by readback after it has been applied.
+        """
+        schema = step.get("data_schema")
+        if not isinstance(schema, list):
+            self.refuse("unsupported_form")
+        self._refuse_form_errors(step)
+        # Top-level names: a section's fields sit under the section's key.
+        declared = {f.get("name") for f in schema if isinstance(f, dict)}
+        mine = {key: value for key, value in self.config.items() if key in declared}
+        if unknown := _unknown_snapshot_fields(schema, mine):
+            self.refuse("unsupported_fields", unknown)
+        self.consumed |= mine.keys()
+        if step.get("last_step") is not True:
+            # A form follows (False), or may, chosen from these answers (None,
+            # as filter's): later forms take the rest, and a final readback
+            # verifies what a flow without a marked last form saved.
+            return
+        left = [key for key in self.config if key not in self.consumed]
+        fixed = self.fixed or {}
+        if unknown := [key for key in left if key not in fixed]:
+            self.refuse("unsupported_fields", unknown)
+        if changed := [
+            key for key in left if _json_differs(fixed[key], self.config[key])
+        ]:
+            self.refuse("identity_changed", changed)
+
     def record_reply(self, result: dict[str, Any]) -> None:
         """Record application knowledge before the walker interprets a reply."""
+        previous, self.current_step = self.current_step, result
         if result.get("type") == _FlowType.CREATE_ENTRY:
             self.apply_status = "applied"
         elif result.get("type") == _FlowType.ABORT:
@@ -195,14 +274,29 @@ class _OptionsFlowProgress:
             self.reason = "validation_failed"
             if isinstance(result["errors"], dict):
                 self.fields = tuple(result["errors"])
+        elif (
+            result.get("type") == _FlowType.FORM
+            and previous.get("last_step") is not True
+        ):
+            # The next form of the flow: nothing is committed before
+            # CREATE_ENTRY; check_form settles it and the walker fills it.
+            self.apply_status = "not_applied"
         else:
-            # A complete snapshot cannot safely populate an unexpected next step.
-            # Supported snapshot flows commit only on CREATE_ENTRY; another
-            # form or menu leaves the submitted options pending in the flow.
+            # A complete snapshot cannot choose a menu branch mid-flow, nor
+            # fill a form after the one HA called the last.
             if result.get("type") in (_FlowType.FORM, _FlowType.MENU):
                 self.apply_status = "not_applied"
                 self.reason = "unsupported_form"
             raise self.failure()
+
+
+def _json_differs(stored: Any, snapshot: Any) -> bool:
+    """Type-sensitive comparison, as the restore preview shows it (False is not 0)."""
+    from ..backup_diff import _compute_json_patch
+
+    patch: list[dict[str, Any]] = []
+    _compute_json_patch(snapshot, stored, 1, patch)
+    return bool(patch)
 
 
 def _unknown_snapshot_fields(
@@ -225,54 +319,26 @@ def _unknown_snapshot_fields(
     return unknown
 
 
-def _preflight_options_restore(
-    progress: _OptionsFlowProgress, step: dict[str, Any], config: dict[str, Any]
-) -> None:
-    """Reject unsupported complete-snapshot fields before an options submit."""
-    schema = step.get("data_schema")
-    reason: OptionsRestoreReason
-    fields: tuple[str, ...] = ()
-    if step.get("type") != _FlowType.FORM or not isinstance(schema, list):
-        reason = "unsupported_form"
-    elif unknown := _unknown_snapshot_fields(schema, config):
-        reason = "unsupported_fields"
-        fields = tuple(unknown)
-    elif step.get("errors"):
-        reason = "validation_failed"
-        if isinstance(step["errors"], dict):
-            fields = tuple(step["errors"])
-    else:
-        return
-    raise progress.error_type(
-        _RESTORE_REASON_MESSAGES[reason],
-        apply_status=progress.apply_status,
-        entry_id=progress.entry_id,
-        flow_id=progress.flow_id,
-        reason=reason,
-        fields=fields,
-    )
-
-
 class _CreationFlowProgress(_OptionsFlowProgress):
-    """Require the selected creation form to consume a complete snapshot."""
+    """Fill the creation forms from a complete snapshot; a key no form takes
+    is refused before the form HA marks as last."""
 
     error_type = CreationFlowError
-    operation = "Template recreation"
+    operation = "Helper recreation"
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(entry_id="")
         self.config = {
             key: value for key, value in config.items() if key != "next_step_id"
         }
-        self.current_step: dict[str, Any] = {}
 
     def record_reply(self, result: dict[str, Any]) -> None:
         previous_type = self.current_step.get("type")
-        self.current_step = result
         if previous_type in (None, _FlowType.MENU) and result.get("type") in (
             _FlowType.MENU,
             _FlowType.FORM,
         ):
+            self.current_step = result
             self.apply_status = "not_applied"
             return
         super().record_reply(result)
@@ -287,8 +353,6 @@ class _CreationFlowProgress(_OptionsFlowProgress):
     async def submit(
         self, client: Any, flow_id: str, payload: dict[str, Any], **kwargs: Any
     ) -> dict[str, Any]:
-        if self.current_step.get("type") == _FlowType.FORM:
-            _preflight_options_restore(self, self.current_step, self.config)
         return await super().submit(
             client, flow_id, payload, submit_fn=client.submit_config_flow_step
         )
@@ -307,6 +371,10 @@ async def _create_snapshot_helper(
         progress.record_reply(initial_step)
         if not progress.flow_id:
             raise progress.failure()
+        if initial_step.get("type") == _FlowType.MENU:
+            config = answer_menu_from_snapshot(
+                progress, initial_step, config, helper_type
+            )
         result = await _handle_flow_steps(
             client,
             progress.flow_id,
@@ -314,6 +382,7 @@ async def _create_snapshot_helper(
             config,
             submit_fn=partial(progress.submit, client),
             helper_type=helper_type,
+            complete_snapshot=True,
         )
         entry = result["entry"].get("result", {})
         return {
@@ -341,16 +410,16 @@ async def _cleanup_snapshot_creation(
             await asyncio.wait_for(
                 client.abort_config_flow(progress.flow_id), timeout=5
             )
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             logger.warning(
-                "Template recreation flow %s cleanup failed (reason=%s, error_type=%s)",
+                "Helper recreation flow %s cleanup failed (reason=%s, error_type=%s)",
                 progress.flow_id,
                 failure.reason,
                 type(err).__name__,
             )
     else:
         logger.warning(
-            "Template recreation flow %s was not aborted "
+            "Helper recreation flow %s was not aborted "
             "(apply_status=%s, reason=%s); reconcile Home Assistant before retrying",
             progress.flow_id,
             failure.apply_status,
@@ -362,7 +431,7 @@ async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
     """Abort a still-pending flow without hiding the original failure."""
     try:
         await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
-    except Exception as abort_err:
+    except Exception as abort_err:  # noqa: BLE001
         logger.warning("Failed to abort flow %s after error: %s", flow_id, abort_err)
 
 
@@ -370,7 +439,7 @@ async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
     """Abort a pending subentry flow without hiding the original failure."""
     try:
         await asyncio.wait_for(client.abort_config_subentry_flow(flow_id), timeout=5.0)
-    except Exception as abort_err:
+    except Exception as abort_err:  # noqa: BLE001
         logger.warning(
             "Failed to abort config subentry flow %s after error: %s",
             flow_id,
@@ -460,6 +529,34 @@ FLOW_HELPER_TYPES: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
+async def _subentry_ids(client: Any, entry_id: str) -> set[str] | None:
+    """IDs of the entry's subentries; None when they can't be listed."""
+    try:
+        listed = await client.list_config_subentries(entry_id)
+    except Exception:
+        logger.debug("Listing subentries of %s failed", entry_id, exc_info=True)
+        return None
+    if not isinstance(listed, dict) or not listed.get("success"):
+        return None
+    return {
+        s["subentry_id"]
+        for s in listed.get("result") or []
+        if isinstance(s, dict) and s.get("subentry_id")
+    }
+
+
+async def _created_subentry_id(
+    client: Any, entry_id: str, before: set[str]
+) -> str | None:
+    created = (await _subentry_ids(client, entry_id) or before) - before
+    return created.pop() if len(created) == 1 else None
+
+
+# A create finds its subentry by diffing the parent's listing, so creates under
+# one parent run one at a time.
+_SUBENTRY_CREATE_LOCKS: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
 async def set_config_subentry(
     client: Any,
     entry_id: str,
@@ -483,7 +580,28 @@ async def set_config_subentry(
     subentry fields it does not name instead of resetting them. The create
     branch is unchanged on both counts.
     """
+    if subentry_id is not None:
+        return await _run_config_subentry_flow(
+            client, entry_id, subentry_type, config_dict, subentry_id,
+            show_advanced_options,
+        )  # fmt: skip
+    async with _SUBENTRY_CREATE_LOCKS[entry_id]:
+        return await _run_config_subentry_flow(
+            client, entry_id, subentry_type, config_dict, None, show_advanced_options
+        )
+
+
+async def _run_config_subentry_flow(
+    client: Any,
+    entry_id: str,
+    subentry_type: str,
+    config_dict: dict[str, Any],
+    subentry_id: str | None,
+    show_advanced_options: bool | None,
+) -> dict[str, Any]:
     _reject_redaction_sentinels(config_dict)
+    # Core's create result carries no subentry_id; the new one is the difference.
+    before = None if subentry_id else await _subentry_ids(client, entry_id)
     flow_result = await client.start_config_subentry_flow(
         entry_id,
         subentry_type,
@@ -536,6 +654,8 @@ async def set_config_subentry(
             await _abort_subentry_flow_best_effort(client, flow_id)
         raise
 
+    if before is not None and result["operation"] == "created":
+        subentry_id = await _created_subentry_id(client, entry_id, before)
     response = {
         "success": True,
         "entry_id": entry_id,
@@ -574,14 +694,14 @@ async def get_user_step_field_names(client: Any, helper_type: str) -> set[str] |
         if flow_result.get("type") != _FlowType.FORM:
             return None
         return _extract_schema_field_names(flow_result.get("data_schema"))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Schema introspection failed for {helper_type}: {e}")
         return None
     finally:
         if flow_id:
             try:
                 await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
-            except Exception as abort_err:
+            except Exception as abort_err:  # noqa: BLE001
                 logger.warning(
                     f"Failed to abort introspection flow {flow_id}: {abort_err}"
                 )
@@ -595,6 +715,7 @@ async def update_config_entry_options(
     expected_domain: str | None = None,
     noun: str = "integration",
     keep_current_values: bool = True,
+    fixed_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Update an existing config entry via its options flow.
 
@@ -615,14 +736,24 @@ async def update_config_entry_options(
     schema default means submitting the ``None`` for Home Assistant to
     validate rather than omitting it into that default.
     A complete options snapshot restore passes ``keep_current_values=False``
-    so current values absent from the snapshot are not copied into the payload.
-    The caller must ensure the integration replaces its options only when its
-    flow returns CREATE_ENTRY. The restore requires
-    a single authoritative form and raises ``OptionsFlowError``
-    with apply knowledge on failure; uncertain or completed restores are not
-    aborted. Ordinary edits retain their existing error/abort behavior.
+    so current values absent from the snapshot are not copied into the payload,
+    and ``fixed_options``, the entry's stored options: a snapshot field none of
+    the options forms offers must still hold its stored value, checked before
+    the form HA marks as last (a flow that marks none is verified by readback
+    after it applied). The caller must
+    ensure the integration replaces its options only when its flow returns
+    CREATE_ENTRY. The restore requires authoritative forms and raises
+    ``OptionsFlowError`` with apply knowledge on failure; uncertain or
+    completed restores are not aborted. Ordinary edits retain their existing
+    error/abort behavior.
     """
-    progress = None if keep_current_values else _OptionsFlowProgress(entry_id)
+    progress = (
+        None
+        if keep_current_values
+        else _OptionsFlowProgress(
+            entry_id, config=dict(config_dict), fixed=dict(fixed_options or {})
+        )
+    )
     try:
         return await _update_config_entry_options(
             client, entry_id, config_dict, expected_domain, noun, progress
@@ -648,16 +779,11 @@ async def update_config_entry_options(
         raise failure from err
 
 
-async def _update_config_entry_options(
-    client: Any,
-    entry_id: str,
-    config_dict: dict[str, Any],
-    expected_domain: str | None,
-    noun: str,
-    progress: _OptionsFlowProgress | None,
+async def config_entry_of_domain(
+    client: Any, entry_id: str, expected_domain: str | None
 ) -> dict[str, Any]:
-    _reject_redaction_sentinels(config_dict)
-    config_entry = await client.get_config_entry(entry_id)
+    """The config entry, refused when it belongs to another domain."""
+    config_entry: dict[str, Any] = await client.get_config_entry(entry_id)
     actual_domain = config_entry.get("domain")
     if expected_domain is not None and actual_domain != expected_domain:
         raise_tool_error(
@@ -674,6 +800,20 @@ async def _update_config_entry_options(
                 },
             )
         )
+    return config_entry
+
+
+async def _update_config_entry_options(
+    client: Any,
+    entry_id: str,
+    config_dict: dict[str, Any],
+    expected_domain: str | None,
+    noun: str,
+    progress: _OptionsFlowProgress | None,
+) -> dict[str, Any]:
+    _reject_redaction_sentinels(config_dict)
+    config_entry = await config_entry_of_domain(client, entry_id, expected_domain)
+    actual_domain = config_entry.get("domain")
 
     flow_result = await client.start_options_flow(entry_id)
     flow_id = flow_result.get("flow_id")
@@ -696,7 +836,7 @@ async def _update_config_entry_options(
 
     try:
         if progress is not None:
-            _preflight_options_restore(progress, flow_result, config_dict)
+            progress.start(flow_result)
 
         result = await _handle_flow_steps(
             client,
@@ -708,12 +848,13 @@ async def _update_config_entry_options(
             else client.submit_options_flow_step,
             helper_type=expected_domain,
             keep_current_values=progress is None,
+            complete_snapshot=progress is not None,
         )
     except Exception as flow_err:
         if progress is None or progress.apply_status == "not_applied":
             try:
                 await asyncio.wait_for(client.abort_options_flow(flow_id), timeout=5.0)
-            except Exception as abort_err:
+            except Exception as abort_err:  # noqa: BLE001
                 logger.warning(
                     "Failed to abort options flow %s for entry %s "
                     "(stage=abort_cleanup, reason=%s, error_type=%s)",
@@ -798,7 +939,7 @@ async def create_config_entry(
     except Exception:
         try:
             await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
-        except Exception as abort_err:
+        except Exception as abort_err:  # noqa: BLE001
             logger.warning(
                 f"Failed to abort config flow {flow_id} after error: {abort_err}"
             )

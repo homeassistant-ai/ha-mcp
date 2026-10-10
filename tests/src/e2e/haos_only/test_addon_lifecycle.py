@@ -144,6 +144,32 @@ async def _addon_action(mcp_client: Any, slug: str, action: str) -> dict[str, An
     )
 
 
+async def _addon_action_accepted(
+    mcp_client: Any, slug: str, action: str, *, attempts: int = 3
+) -> dict[str, Any]:
+    """Run ``_addon_action`` until the Supervisor accepts it.
+
+    Right after a stop or start settles, the Supervisor can still refuse the
+    next lifecycle call (Home Assistant surfaces it as a bare 500). The
+    lifecycle contract is that the call works, not that it works on the
+    first try against a Supervisor still finishing the previous job.
+    """
+    result: dict[str, Any] = {}
+    for attempt in range(attempts):
+        result = await _addon_action(mcp_client, slug, action)
+        if result.get("success"):
+            break
+        LOG.warning(
+            "hassio.addon_%s(%s) attempt %d failed: %s",
+            action,
+            slug,
+            attempt + 1,
+            result,
+        )
+        await asyncio.sleep(_STATE_POLL_INTERVAL * 2)
+    return result
+
+
 async def _wait_for_state(
     mcp_client: Any,
     slug: str,
@@ -417,19 +443,19 @@ async def test_matter_server_start_stop_restart_roundtrip(mcp_client: Any) -> No
     """
     slug = await _resolve_slug(mcp_client, MATTER_NAME)
     try:
-        stop_result = await _addon_action(mcp_client, slug, "stop")
+        stop_result = await _addon_action_accepted(mcp_client, slug, "stop")
         assert stop_result.get("success"), (
             f"hassio.addon_stop({slug}) failed: {stop_result}"
         )
         await _wait_for_state(mcp_client, slug, STOPPED_STATES)
 
-        start_result = await _addon_action(mcp_client, slug, "start")
+        start_result = await _addon_action_accepted(mcp_client, slug, "start")
         assert start_result.get("success"), (
             f"hassio.addon_start({slug}) failed: {start_result}"
         )
         await _wait_for_state(mcp_client, slug, "started")
 
-        restart_result = await _addon_action(mcp_client, slug, "restart")
+        restart_result = await _addon_action_accepted(mcp_client, slug, "restart")
         assert restart_result.get("success"), (
             f"hassio.addon_restart({slug}) failed: {restart_result}"
         )
@@ -615,18 +641,22 @@ async def test_mqtt_io_info_and_options_reachable(mcp_client: Any) -> None:
     """MQTT IO is installed-but-stopped; metadata still reachable.
 
     MQTT IO needs a configured broker (and Mosquitto in the bake is also
-    ``start=False``), so it doesn't reach the started state. Same shape
-    contract as Mosquitto: info dict, options dict, logs string — all
-    reachable via Supervisor even when the addon hasn't run.
+    ``start=False``), so it cannot run for long. Its config sets no
+    ``boot:``, so the Supervisor's default ``auto`` starts it after every
+    boot until it fails, and the test can catch it still running: stop it
+    first. Same shape contract as Mosquitto: info dict, options dict, logs
+    string — all reachable via Supervisor while the addon is stopped.
     """
     slug = await _resolve_slug(mcp_client, MQTT_IO_NAME)
 
     detail = await _get_addon_detail(mcp_client, slug)
-    assert detail.get("state") in STOPPED_STATES, (
-        f"MQTT IO should be in a stopped-family state, got "
-        f"{detail.get('state')!r}. Did build_image.py accidentally flip "
-        f"it to start=True?"
-    )
+    if detail.get("state") not in STOPPED_STATES:
+        stop_result = await _addon_action_accepted(mcp_client, slug, "stop")
+        assert stop_result.get("success"), (
+            f"hassio.addon_stop({slug}) failed: {stop_result}"
+        )
+        await _wait_for_state(mcp_client, slug, STOPPED_STATES)
+        detail = await _get_addon_detail(mcp_client, slug)
 
     options = detail.get("options")
     assert isinstance(options, dict), (

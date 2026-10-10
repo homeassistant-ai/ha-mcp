@@ -18,6 +18,7 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+from urllib.parse import quote
 
 from ha_mcp._vendor import mcp_types
 from ha_mcp._vendor.mcp_types import Annotations, ContentBlock, ModelPreferences, SamplingMessage
@@ -274,9 +275,9 @@ class Image:
         if self.path:
             # Workaround for WEBP in Py3.10
             mimetypes.add_type("image/webp", ".webp")
-            resp = mimetypes.guess_type(self.path, strict=False)
-            if resp and resp[0] is not None:
-                return resp[0]
+            mime_type, _ = mimetypes.guess_type(self.path, strict=False)
+            if mime_type is not None:
+                return mime_type
             return "application/octet-stream"
         return "image/png"  # default for raw binary data
 
@@ -429,7 +430,7 @@ class File:
                     if Path(self._name).suffix
                     else f".{self._mime_type.split('/')[1]}"
                 )
-                uri_str = f"file:///{self._name}{extension}"
+                uri_str = f"file:///{quote(self._name + extension)}"
             else:
                 uri_str = f"file:///resource.{self._mime_type.split('/')[1]}"
         else:

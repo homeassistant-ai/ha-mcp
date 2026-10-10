@@ -11,7 +11,7 @@ capability, all of that becomes ONE in-process read: ``ha_mcp_tools/registries``
 returns exactly the requested registry kinds (``area`` / ``floor`` / ``label``
 / ``category``) as their FULL-FIELD ``config/<x>_registry/list``-shaped rows —
 byte-compatible with the legacy WS list responses the consumers already parse
-(see ``custom_components/ha_mcp_tools/websocket_api.py::_do_registries``).
+(see ``custom_components/ha_mcp_tools/websocket_api/registries.py::_do_registries``).
 
 This module owns the caps-gated fetch so the routing discipline — probe caps,
 send one frame, invalidate on ``unknown_command``, fall back to the legacy
@@ -132,7 +132,7 @@ async def fetch_registries_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_REGISTRIES, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError: a pooled-WS drop or a failed
         # (re)connect. The capture
         # fetchers use a dedicated one-shot socket and forbid a blocked write, so

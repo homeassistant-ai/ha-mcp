@@ -26,9 +26,10 @@ from ...utilities.entity_finders import find_test_light_entity
 
 logger = logging.getLogger(__name__)
 
-_AUTOMATION_PATTERNS_REF = "references/automation-patterns.md"
+_TRIGGERS_CONDITIONS_REF = "references/triggers-and-conditions.md"
+_AUTOMATION_ACTIONS_REF = "references/automation-actions.md"
 _TEMPLATE_GUIDELINES_REF = "references/template-guidelines.md"
-_NATIVE_CONDITIONS_ANCHOR = "references/automation-patterns.md#native-conditions"
+_NATIVE_CONDITIONS_ANCHOR = "references/triggers-and-conditions.md#native-conditions"
 
 
 @pytest.mark.automation
@@ -72,7 +73,8 @@ class TestSkillContentDelivery:
         # Canonical files attached.
         skill_content = result.get("skill_content")
         assert skill_content, "skill_content must be non-empty"
-        assert _AUTOMATION_PATTERNS_REF in skill_content
+        assert _TRIGGERS_CONDITIONS_REF in skill_content
+        assert _AUTOMATION_ACTIONS_REF in skill_content
         assert _TEMPLATE_GUIDELINES_REF in skill_content
 
     async def test_mandatorybps_false_suppresses_skill_content(
@@ -115,7 +117,7 @@ class TestSkillContentDelivery:
 
         Template-in-condition with float-comparison is the canonical
         anti-pattern the checker catches; the warning anchors at
-        ``automation-patterns.md#native-conditions``."""
+        ``triggers-and-conditions.md#native-conditions``."""
         test_light = await self._find_test_light_entity(mcp_client)
         config = test_data_factory.automation_config(
             "Skill Content Section Slice E2E",
@@ -148,7 +150,7 @@ class TestSkillContentDelivery:
             "expected best_practice_warnings on template-in-condition input"
         )
         # The section-anchored ref is embedded — and ONLY that ref, not
-        # the whole automation-patterns.md file. Section-slicing in
+        # the whole triggers-and-conditions.md file. Section-slicing in
         # action.
         skill_content = result.get("skill_content") or {}
         assert skill_content, "expected section auto-embed on BP warning"
@@ -158,7 +160,7 @@ class TestSkillContentDelivery:
         )
         # The bare-file canonical must NOT be present (would mean
         # canonical attach leaked through despite MandatoryBPS=False).
-        assert _AUTOMATION_PATTERNS_REF not in skill_content, (
+        assert _TRIGGERS_CONDITIONS_REF not in skill_content, (
             "bare canonical file should be suppressed by MandatoryBPS=False"
         )
         # Section body is small: it contains just the matching heading,
@@ -200,7 +202,11 @@ class TestSkillContentDelivery:
                         ],
                     },
                 },
-                ["automation-patterns.md", "template-guidelines.md"],
+                [
+                    "automation-actions.md",
+                    "triggers-and-conditions.md",
+                    "template-guidelines.md",
+                ],
             )
         if tool == "scene":
             return (
@@ -231,7 +237,7 @@ class TestSkillContentDelivery:
                     "title": f"E2E Skill Dash {suffix}",
                     "config": {"views": [{"title": "V", "cards": []}]},
                 },
-                ["dashboard-guide.md", "dashboard-cards.md"],
+                ["dashboard-guide.md"],
             )
         raise AssertionError(f"unknown tool {tool}")
 

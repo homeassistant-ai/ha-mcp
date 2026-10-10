@@ -13,7 +13,8 @@ registered; default is tool-search only):
 
 * **tool search** — the agent gets a tiny catalog: the server's pinned tools
   mirrored directly, plus two meta-tools synthesized here: ``ha_search_tools``
-  (find tools by task) and ``ha_call_tool`` (execute a discovered tool). This
+  (find tools by task, then fetch one's full schema by name; see
+  :mod:`llm_api_search`) and ``ha_call_tool`` (execute a discovered tool). This
   keeps per-turn context small — the shape context-limited models need.
 * **full** — every exposed tool is mirrored directly into the agent's tool
   list, one schema each.
@@ -53,7 +54,7 @@ import logging
 import math
 import sys
 from collections import Counter
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from functools import cache
@@ -73,6 +74,11 @@ from .const import (
     EXPOSURE_TOOL_SEARCH,
     OPT_LLM_API_EXPOSURE,
 )
+from .llm_api_search import CALL_TOOL_NAME as _CALL_TOOL_NAME
+from .llm_api_search import SEARCH_TOOL_NAME as _SEARCH_TOOL_NAME
+from .llm_api_search import HaMcpSearchTool
+from .llm_tool_exposure import META_PARAMS_KEY, _tool_meta_namespace, partition_tools
+from .llm_tool_metadata import declare_metadata, tool_hints, tool_result, tool_title
 
 if TYPE_CHECKING:
     import httpx
@@ -92,45 +98,6 @@ _LIST_TOOLS_TIMEOUT_SECONDS = 10.0
 # remote-server integration would allow. The conversation agent shows a spinner
 # for the duration, so err generous rather than kill a legitimate slow tool.
 _CALL_TOOL_TIMEOUT_SECONDS = 300.0
-
-# The server-side stamp this module filters on (mirrors
-# src/ha_mcp/llm_exposure.py — keep the names in sync).
-_META_NAMESPACE = "ha_mcp"
-_META_EXPOSED_KEY = "llm_api_exposed"
-_META_PINNED_KEY = "pinned"
-
-# Fallback exposure policy for servers that predate the stamp: hide the
-# operational-hazard names and the known beta/developer tools. Imperfect by
-# construction (a newer beta tool on an old server can't be known here) but
-# strictly safer than exposing everything, and logged once per instance
-# build. The real policy lives server-side.
-_FALLBACK_DENY_PREFIXES = ("ha_dev_",)
-_FALLBACK_DENY_TOOLS = frozenset(
-    {
-        "ha_restart",
-        "ha_reload_core",
-        "ha_manage_backup",
-        # Beta-tagged tools as of the stamp's introduction (server-side the
-        # gate is tag-based and future-proof; this list is only the legacy
-        # fallback).
-        "ha_config_set_yaml",
-        "ha_manage_custom_tool",
-        "ha_get_dashboard_screenshot",
-        "ha_install_mcp_tools",
-        "ha_list_files",
-        "ha_read_file",
-        "ha_write_file",
-        "ha_delete_file",
-    }
-)
-
-# Names of the meta-tools synthesized for the tool-search mode. ha_search_tools
-# deliberately matches the server's own tool-search terminology; if the server
-# itself runs ENABLE_TOOL_SEARCH its identically-named tool is excluded from
-# mirroring/search results to avoid duplicates.
-_SEARCH_TOOL_NAME = "ha_search_tools"
-_CALL_TOOL_NAME = "ha_call_tool"
-_SEARCH_RESULT_LIMIT = 8
 
 
 @cache
@@ -377,10 +344,14 @@ _TOOL_SEARCH_PROMPT = (
     "This assistant uses search-based tool discovery: most tools are NOT "
     "listed directly.\n"
     f"1. Call {_SEARCH_TOOL_NAME}(query=...) to find tools for the task; "
-    "results include each tool's name, description, and input schema.\n"
-    f"2. Execute a discovered tool with {_CALL_TOOL_NAME}(name=..., "
-    "arguments={...}) — discovered tools are NOT directly callable here.\n"
-    "3. The few tools listed directly can be called as usual.\n"
+    "results are compact: each tool's name, one-line description, and params.\n"
+    f"2. Call {_SEARCH_TOOL_NAME}(tools=[...]) for the full description and "
+    "input schema of the tool you will call — required before calling: the "
+    "compact hit omits usage guidance, nested fields, defaults, and parameter "
+    "descriptions.\n"
+    f"3. Execute it with {_CALL_TOOL_NAME}(name=..., arguments={{...}}) — "
+    "discovered tools are NOT directly callable here.\n"
+    "4. The few tools listed directly can be called as usual.\n"
     "Search once per task, not per call — tool names stay valid all "
     "conversation."
 )
@@ -598,50 +569,6 @@ async def _mcp_session(
         yield session, init_result
 
 
-def _tool_meta_namespace(tool: Any) -> dict[str, Any] | None:
-    """Return the tool's ``_meta.ha_mcp`` namespace, or None when absent."""
-    meta = getattr(tool, "meta", None)
-    if not isinstance(meta, dict):
-        return None
-    namespace = meta.get(_META_NAMESPACE)
-    return namespace if isinstance(namespace, dict) else None
-
-
-def _fallback_exposed(name: str) -> bool:
-    """Legacy exposure policy for servers that predate the meta stamp."""
-    if name.startswith(_FALLBACK_DENY_PREFIXES):
-        return False
-    return name not in _FALLBACK_DENY_TOOLS
-
-
-def _partition_tools(tools: Iterable[Any]) -> tuple[list[Any], set[str], bool]:
-    """Split a raw tools/list into (exposed tools, pinned names, stamped).
-
-    ``stamped`` is False when NO tool carried the server's exposure stamp —
-    an older server package — in which case the conservative component-side
-    fallback policy was applied instead.
-    """
-    stamped = False
-    exposed: list[Any] = []
-    pinned: set[str] = set()
-    for tool in tools:
-        namespace = _tool_meta_namespace(tool)
-        if namespace is not None and _META_EXPOSED_KEY in namespace:
-            stamped = True
-            if namespace.get(_META_PINNED_KEY):
-                pinned.add(tool.name)
-            if namespace.get(_META_EXPOSED_KEY):
-                exposed.append(tool)
-        elif _fallback_exposed(tool.name):
-            exposed.append(tool)
-    if not stamped:
-        # The fallback path already filtered; recompute pinned as empty (an
-        # unstamped server gives no pinned signal — the tool-search mode then
-        # simply mirrors nothing directly).
-        pinned = set()
-    return exposed, pinned, stamped
-
-
 class HaMcpTool(llm.Tool):
     """One ha-mcp tool, called over loopback MCP."""
 
@@ -651,23 +578,28 @@ class HaMcpTool(llm.Tool):
         description: str | None,
         parameters: vol.Schema,
         server_url: str,
+        *,
+        title: str | None = None,
+        hints: dict[str, Any] | None = None,
     ) -> None:
-        """Store the converted schema and the loopback endpoint."""
+        """Store the converted schema, the server's metadata and the endpoint."""
         self.name = name
         self.description = description
         self.parameters = parameters
         self._server_url = server_url
+        declare_metadata(self, title=title, hints=hints)
 
     async def async_call(
         self,
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
-    ) -> JsonObjectType:
+    ) -> Any:
         """Call the tool on the in-process server and return its result."""
-        return await _forward_tool_call(
+        dumped = await _forward_tool_call(
             hass, self._server_url, self.name, tool_input.tool_args
         )
+        return tool_result(dumped, error=dumped.get("isError") is True)
 
 
 async def _forward_tool_call(
@@ -715,68 +647,6 @@ def _tool_input_schema(tool: Any) -> Any:
     return schema
 
 
-def _search_score(query_words: list[str], name: str, description: str) -> int:
-    """Score a tool against the query (simple word overlap + substring)."""
-    haystack = f"{name} {description}".lower()
-    name_lower = name.lower()
-    score = 0
-    for word in query_words:
-        if word in name_lower:
-            score += 3
-        elif word in haystack:
-            score += 1
-    return score
-
-
-class HaMcpSearchTool(llm.Tool):
-    """Meta-tool: find ha-mcp tools relevant to a task (tool-search mode).
-
-    Searches only the EXPOSED catalog snapshot taken at instance build, so a
-    hidden tool can never appear in results.
-    """
-
-    name = _SEARCH_TOOL_NAME
-    description = (
-        "Search the Home Assistant MCP toolset for tools relevant to a task. "
-        "Returns each match's name, description, and input schema. Execute "
-        f"matches with {_CALL_TOOL_NAME}."
-    )
-    parameters = vol.Schema({vol.Required("query"): str})
-
-    def __init__(self, catalog: list[dict[str, Any]]) -> None:
-        """Hold the exposed-catalog snapshot (name/description/schema dicts)."""
-        self._catalog = catalog
-
-    async def async_call(
-        self,
-        hass: HomeAssistant,
-        tool_input: llm.ToolInput,
-        llm_context: llm.LLMContext,
-    ) -> JsonObjectType:
-        """Return the top-scoring exposed tools for the query."""
-        query_words = [
-            w for w in str(tool_input.tool_args.get("query", "")).lower().split() if w
-        ]
-        scored = sorted(
-            (
-                (_search_score(query_words, t["name"], t["description"]), t)
-                for t in self._catalog
-            ),
-            key=lambda pair: pair[0],
-            reverse=True,
-        )
-        results = [t for score, t in scored[:_SEARCH_RESULT_LIMIT] if score > 0]
-        if not results:
-            return {
-                "results": [],
-                "message": (
-                    "No matching tools. Try different task words (e.g. "
-                    "'automation', 'light', 'history', 'dashboard')."
-                ),
-            }
-        return {"results": results}
-
-
 class HaMcpCallTool(llm.Tool):
     """Meta-tool: execute a tool discovered via search (tool-search mode).
 
@@ -803,6 +673,8 @@ class HaMcpCallTool(llm.Tool):
         """Hold the loopback endpoint and the exposed-name allowlist."""
         self._server_url = server_url
         self._exposed_names = exposed_names
+        # Dispatches any exposed tool, so no hints: Core's least-safe defaults.
+        declare_metadata(self, title="Call HA-MCP Tool", hints=None)
 
     async def async_call(
         self,
@@ -814,11 +686,17 @@ class HaMcpCallTool(llm.Tool):
         name = str(tool_input.tool_args.get("name", ""))
         arguments = tool_input.tool_args.get("arguments") or {}
         if name not in self._exposed_names:
-            return {
-                "error": f"Unknown tool '{name}'.",
-                "suggestion": (f"Use {_SEARCH_TOOL_NAME} to discover available tools."),
-            }
-        return await _forward_tool_call(hass, self._server_url, name, arguments)
+            return tool_result(
+                {
+                    "error": f"Unknown tool '{name}'.",
+                    "suggestion": (
+                        f"Use {_SEARCH_TOOL_NAME} to discover available tools."
+                    ),
+                },
+                error=True,
+            )
+        dumped = await _forward_tool_call(hass, self._server_url, name, arguments)
+        return tool_result(dumped, error=dumped.get("isError") is True)
 
 
 @dataclass(kw_only=True)
@@ -858,7 +736,7 @@ class HaMcpLlmApi(llm.API):
                 f"Could not reach the in-process HA-MCP server: {err}"
             ) from err
 
-        exposed, pinned, stamped = _partition_tools(list_result.tools)
+        exposed, pinned, stamped = partition_tools(list_result.tools)
         # Never mirror or search a server-side tool that shares a synthesized
         # meta-tool's name (the server's own tool-search mode registers an
         # ha_search_tools) — one name, one behavior.
@@ -902,6 +780,17 @@ class HaMcpLlmApi(llm.API):
             )
             return None
 
+    def _mirror(self, tool: Any, parameters: vol.Schema) -> HaMcpTool:
+        """Mirror one server tool with its title and safety hints."""
+        return HaMcpTool(
+            tool.name,
+            tool.description,
+            parameters,
+            self.server_url,
+            title=tool_title(tool),
+            hints=tool_hints(tool),
+        )
+
     def _build_full_tools(self, exposed: list[Any]) -> list[llm.Tool]:
         """Mirror every exposed tool directly (full-catalog mode)."""
         tools: list[llm.Tool] = []
@@ -910,9 +799,7 @@ class HaMcpLlmApi(llm.API):
             parameters = self._convert_parameters(tool, schema)
             if parameters is None:
                 continue
-            tools.append(
-                HaMcpTool(tool.name, tool.description, parameters, self.server_url)
-            )
+            tools.append(self._mirror(tool, parameters))
         return tools
 
     def _build_tool_search_tools(
@@ -921,6 +808,7 @@ class HaMcpLlmApi(llm.API):
         """Build the compact catalog: mirrored pinned tools + meta-tools."""
         tools: list[llm.Tool] = []
         exposed_names: set[str] = set()
+        mirrored: set[str] = set()
         catalog: list[dict[str, Any]] = []
         for tool in exposed:
             exposed_names.add(tool.name)
@@ -935,22 +823,26 @@ class HaMcpLlmApi(llm.API):
             # converter that wrote back would corrupt the catalog entry, so
             # re-check this before pointing the component at a third one.
             schema = _normalise_schema(_tool_input_schema(tool), tool.name)
-            catalog.append(
-                {
-                    "name": tool.name,
-                    "description": tool.description or "",
-                    "input_schema": schema,
-                }
-            )
+            entry = {
+                "name": tool.name,
+                "description": tool.description or "",
+                "input_schema": schema,
+            }
+            # The server renders the compact params line (#2633); a server
+            # that predates the stamp leaves the hit without one.
+            params = (_tool_meta_namespace(tool) or {}).get(META_PARAMS_KEY)
+            if isinstance(params, str):
+                entry["params"] = params
+            catalog.append(entry)
             if tool.name in pinned:
                 parameters = self._convert_parameters(tool, schema)
                 if parameters is not None:
-                    tools.append(
-                        HaMcpTool(
-                            tool.name, tool.description, parameters, self.server_url
-                        )
-                    )
-        tools.append(HaMcpSearchTool(catalog))
+                    tools.append(self._mirror(tool, parameters))
+                    mirrored.add(tool.name)
+        # Only a tool actually mirrored is in the agent's list; a pinned one
+        # whose schema failed to convert stays a full search entry, reachable
+        # through ha_call_tool.
+        tools.append(HaMcpSearchTool(catalog, mirrored))
         tools.append(HaMcpCallTool(self.server_url, exposed_names))
         return tools
 

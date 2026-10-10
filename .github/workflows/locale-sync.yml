@@ -52,7 +52,7 @@ name: Locale Sync
 # holds no credential beyond the rotatable API key for its free-tier Gemini
 # project; the push job runs on a fresh runner against a fresh clone, executes
 # only git (no hooks or project code), and refuses any patch touching files
-# outside the locale allowlist — data-only catalogs; settings.js is deliberately
+# outside the locale allowlist — data-only catalogs; settings_js/ is deliberately
 # not exportable (see the export step). A compromised dependency in the
 # translate job can therefore corrupt at most the locale catalogs the
 # pipeline legitimately writes — never reach the ruleset-bypassing push
@@ -128,10 +128,10 @@ jobs:
         persist-credentials: false
 
     - name: Install uv
-      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.15"
+        version: "0.12.20"
 
     - name: Install dependencies
       run: uv sync --dev
@@ -151,7 +151,7 @@ jobs:
 
     - name: Export changes as a patch
       id: export
-      # settings.js is deliberately NOT staged: its generated FEATURE_META
+      # settings_js/ is deliberately NOT staged: its generated FEATURE_META
       # block derives from en.json alone, which this pipeline never touches
       # — PR CI's ungated derived-catalogs check keeps it current — so the
       # sync never legitimately changes the file, and excluding it means no
@@ -349,8 +349,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Shared group for every workflow that pushes to master (semver-release,
-    # addon-publish-dev, sync-tool-docs): a bot push landing
-    # while semantic-release is mid-run aborts the release un-retryably
+    # addon-publish-dev, sync-tool-docs, sync-ratchet-baselines): a bot push
+    # landing while semantic-release is mid-run aborts the release un-retryably
     # ("Upstream branch ... has changed"), so master writers must not
     # overlap. On this short job only — the translate leg never writes to
     # master and must not hold the slot. cancel-in-progress must be false:
