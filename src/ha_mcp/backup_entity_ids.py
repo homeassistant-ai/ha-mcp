@@ -16,6 +16,21 @@ def _manager() -> Any:
     return backup_manager
 
 
+async def registry_row(
+    client: Any, platform: str, unique_id: str
+) -> dict[str, Any] | None:
+    """The entity-registry row of ``platform``'s entity with ``unique_id``."""
+    rows = await _manager()._entity_registry_rows(client)
+    return next(
+        (
+            row
+            for row in rows
+            if row.get("platform") == platform and row.get("unique_id") == unique_id
+        ),
+        None,
+    )
+
+
 def _recreated_unique_id(saved: dict[str, Any], old_entry: str, new_entry: str) -> str:
     """Core derives a helper entity's unique_id from its config-entry ID."""
     return str(saved["unique_id"]).replace(old_entry, new_entry)

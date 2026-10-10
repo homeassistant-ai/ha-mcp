@@ -46,24 +46,41 @@ logger = logging.getLogger(__name__)
 
 
 def _build_zone_result(
-    zones: list[dict[str, Any]], zone_id: str | None
+    zones: list[dict[str, Any]], zone_id: str | None, gaps: list[str] | None = None
 ) -> dict[str, Any]:
     """Assemble the ha_get_zone response from a list of zone records.
 
     Shared by the legacy ``zone/list`` path and the component ``helpers_list``
     path so the two produce an identical envelope. Without ``zone_id`` returns
-    the full list; with one, returns that single zone or raises
-    RESOURCE_NOT_FOUND.
+    the full list; with one (a zone_id or an entity_id), returns that single
+    zone or raises RESOURCE_NOT_FOUND. ``gaps`` names parts of the listing that
+    could not be read: they become warnings, and a zone missing from such a
+    listing is a read failure, not an absent zone.
     """
     if zone_id is None:
-        return {
+        response: dict[str, Any] = {
             "success": True,
             "count": len(zones),
             "zones": zones,
             "message": f"Found {len(zones)} zone(s)",
         }
+        if gaps:
+            response["warnings"] = list(gaps)
+        return response
 
-    zone = next((z for z in zones if z.get("id") == zone_id), None)
+    zone = next(
+        (z for z in zones if zone_id in (z.get("id"), z.get("entity_id"))), None
+    )
+    if zone is None and gaps:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Zone {zone_id} is not among the zones that could be read: "
+                + "; ".join(gaps),
+                context={"zone_id": zone_id},
+                suggestions=["Retry once the entity registry and states can be read"],
+            )
+        )
     if zone is None:
         available_ids = [z.get("id") for z in zones[:10]]  # Show first 10
         raise_tool_error(
@@ -79,11 +96,10 @@ def _build_zone_result(
                 ],
             )
         )
-    return {
-        "success": True,
-        "zone_id": zone_id,
-        "zone": zone,
-    }
+    response = {"success": True, "zone_id": zone_id, "zone": zone}
+    if gaps:
+        response["warnings"] = list(gaps)
+    return response
 
 
 def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
@@ -98,8 +114,10 @@ def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
     # The component reads each zone entity's _config, so a zone outside the
     # storage (the home zone, a YAML zone) shows as one without a storage id.
+    # Without a _config it falls back to the state attributes and fills the
+    # storage id in; Core's editable attribute then marks a YAML zone.
     storage_id = rec.get("storage_id")
-    is_yaml = storage_id is None
+    is_yaml = storage_id is None or out.get("editable") is False
     # Storage zones keep their storage id (the key ha_get_zone matches on);
     # YAML zones get their object_id so they can still be fetched by zone_id.
     out["id"] = storage_id if storage_id is not None else rec.get("object_id")
@@ -137,7 +155,7 @@ class ZoneTools:
         zone_id: Annotated[
             str | None,
             Field(
-                description="Zone ID to get details for (from ha_get_zone() list).",
+                description="Zone ID or entity_id to get details for (from the ha_get_zone() list).",
                 default=None,
             ),
         ] = None,
@@ -151,9 +169,10 @@ class ZoneTools:
         - List all zones: ha_get_zone()
         - Get specific zone: ha_get_zone(zone_id="abc123")
 
-        YAML-defined zones, including the 'home' zone, are listed with
-        ``editable=false`` / ``source="yaml"``; zones created in the UI or by
-        ha_set_zone are ``source="storage"``. Each zone carries its entity_id.
+        Zones outside the zone storage, the home zone (from the general
+        settings) and YAML zones, are listed with ``editable=false`` /
+        ``source="yaml"``; editable means ha_set_zone and ha_remove_zone can
+        change the zone. Each zone carries its entity_id.
         """
         try:
             # Prefer the ha_mcp_tools component's helpers_list, one call for
@@ -196,17 +215,16 @@ class ZoneTools:
           downgrade): invalidate the caps and return ``None`` so the caller
           serves the legacy listing, silently.
         - any other ``HomeAssistantCommandError`` / ``HomeAssistantCommandTimeout``:
-          serve the correct result from the legacy zone list, append a
-          ``warnings[]`` entry, and ``log.warning``.
+          serve the result from the legacy listing, append a ``warnings[]``
+          entry, and ``log.warning``.
         - a response that does not authoritatively enumerate ``zone`` (an older
           component with no ``covered_types``): fall back to legacy silently.
         - ``HomeAssistantConnectionError`` (pooled-WS drop) or the plain
           ``Exception`` ``get_websocket_client()`` raises on a failed (re)connect:
-          served from the legacy ``zone/list`` (which rides the swallowing
-          ``send_websocket_message`` bridge, so a transport failure surfaces there
-          as a structured error rather than dying identically), with a
-          ``warnings[]`` entry + ``log.warning``; a transport failure must not
-          escape.
+          served from the legacy listing (its reads ride the swallowing
+          ``send_websocket_message`` bridge, so a transport failure surfaces
+          there as a structured error or a listing gap rather than dying
+          identically), with a ``warnings[]`` entry + ``log.warning``.
         """
         try:
             raw = await self._send_component_zone_list()
@@ -258,20 +276,20 @@ class ZoneTools:
         )
 
     async def _legacy_zone_result(self, zone_id: str | None) -> dict[str, Any]:
-        """Serve ha_get_zone from Core's commands, with a warning per missing part."""
-        rows, warnings = await self._legacy_zone_rows()
-        response = _build_zone_result(rows, zone_id)
-        if warnings:
-            response["warnings"] = warnings
-        return response
+        """Serve ha_get_zone from Core's own commands."""
+        rows, gaps = await self._legacy_zone_rows()
+        return _build_zone_result(rows, zone_id, gaps)
 
     async def _legacy_zone_rows(self) -> tuple[list[dict[str, Any]], list[str]]:
-        """Storage zones from Core's ``zone/list`` plus the YAML zones it omits.
+        """Storage zones from Core's ``zone/list``, then every other zone state.
 
-        Rows match the component's: the stored body or, for the home zone and
-        YAML zones, their state attributes, plus ``entity_id``, ``editable`` and
-        ``source``. The registry links a storage zone to its entity_id (its
-        ``unique_id`` is the zone_id); every other zone state is not stored.
+        A storage row is the stored body; the home zone's and YAML zones' rows
+        are their state attributes (``friendly_name`` also as ``name``, plus
+        ``persons`` and ``device_trackers``). Every row carries ``entity_id``,
+        ``editable`` and ``source``, like the component's. The registry links a
+        storage zone to its entity (its ``unique_id`` is the zone_id); a zone
+        state without such an entry is not stored. Returns the rows and the
+        parts that could not be read.
         """
         result = await self._client.send_websocket_message({"type": "zone/list"})
         if not result.get("success"):
@@ -282,16 +300,8 @@ class ZoneTools:
                     context={},
                 )
             )
-        warnings: list[str] = []
-        entity_ids: dict[str, str] = {}
-        try:
-            entity_ids = {
-                e["unique_id"]: e["entity_id"]
-                for e in await self._zone_registry_entries()
-                if e.get("unique_id")
-            }
-        except ToolError as exc:
-            warnings.append(f"Zone entity_ids are missing: {exc}")
+        entries, registry_error = await self._zone_registry()
+        entity_ids = {e["unique_id"]: e["entity_id"] for e in entries}
         rows = [
             {
                 **item,
@@ -302,50 +312,54 @@ class ZoneTools:
             for item in result.get("result") or []
             if isinstance(item, dict)
         ]
+        if registry_error:
+            # Without the registry no zone state can be told apart from a stored zone.
+            return rows, [
+                "Zone entity_ids, and zones outside the zone storage such as "
+                f"'home', are missing: {registry_error}"
+            ]
         try:
             states = await self._client.get_states()
         except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
-            warnings.append(f"YAML-defined zones such as 'home' are missing: {exc}")
-            states = []
-        if warnings:
-            # Without the registry no state can be told apart from a stored zone.
-            return rows, warnings
-        storage_ids = {v: k for k, v in entity_ids.items()}
-        stored = {row["entity_id"] for row in rows}
+            return rows, [
+                f"Zones outside the zone storage such as 'home' are missing: {exc}"
+            ]
+        stored = set(entity_ids.values())
         for state in states:
             entity_id = state.get("entity_id", "") if isinstance(state, dict) else ""
             if not entity_id.startswith("zone.") or entity_id in stored:
                 continue
             attrs = state.get("attributes") or {}
+            object_id = entity_id.split(".", 1)[1]
             rows.append(
                 {
                     **attrs,
-                    "id": storage_ids.get(entity_id, entity_id.split(".", 1)[1]),
+                    "name": attrs.get("friendly_name", object_id),
+                    "id": object_id,
                     "entity_id": entity_id,
                     "editable": False,
                     "source": "yaml",
                 }
             )
-        return rows, warnings
+        return rows, []
 
-    async def _zone_registry_entries(self) -> list[dict[str, Any]]:
-        """The zone integration's entity registry entries."""
+    async def _zone_registry(self) -> tuple[list[dict[str, Any]], str | None]:
+        """The zone integration's registry entries, or the reason they are missing."""
         listed = await self._client.send_websocket_message(
             {"type": "config/entity_registry/list"}
         )
         if not listed.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Could not read the entity registry to find the zone: "
-                    f"{listed.get('error', 'Unknown error')}",
-                )
+            return [], (
+                "the entity registry could not be read: "
+                f"{listed.get('error', 'Unknown error')}"
             )
         return [
             e
             for e in listed.get("result") or []
-            if isinstance(e, dict) and e.get("platform") == "zone"
-        ]
+            if isinstance(e, dict)
+            and e.get("platform") == "zone"
+            and e.get("unique_id")
+        ], None
 
     async def _zone_state(self, entity_id: str) -> dict[str, Any] | None:
         try:
@@ -354,31 +368,39 @@ class ZoneTools:
             if exc.status_code == 404:
                 return None
             raise
-        return state if isinstance(state, dict) else None
+        return state if isinstance(state, dict) and state else None
 
     async def _resolve_zone(self, zone_id: str) -> tuple[str, str]:
-        """The entity_id and storage zone_id of an editable zone, given either.
+        """The entity_id and storage zone_id of a stored zone, given either.
 
         Core's zone commands take the storage id, which is the registry
         ``unique_id`` of the zone's entity. The home zone and YAML zones are not
-        in that storage, and Core gives them no ``unique_id``.
+        in that storage; Core gives them no ``unique_id``, so they have no
+        registry entry. A storage id wins over an entity_id of the same text: a
+        renamed entity can carry another zone's id.
         """
+        entries, registry_error = await self._zone_registry()
+        if registry_error:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Could not find zone {zone_id}: {registry_error}",
+                    context={"zone_id": zone_id},
+                )
+            )
         entity_id = zone_id if zone_id.startswith("zone.") else f"zone.{zone_id}"
-        entries = await self._zone_registry_entries()
-        entry = next(
-            (e for e in entries if e.get("unique_id") == zone_id), None
-        ) or next((e for e in entries if e.get("entity_id") == entity_id), None)
+        entry = next((e for e in entries if e["unique_id"] == zone_id), None) or next(
+            (e for e in entries if e.get("entity_id") == entity_id), None
+        )
         if entry is not None:
-            entity_id = entry["entity_id"]
-        state = await self._zone_state(entity_id)
-        stored = entry is not None and bool(entry.get("unique_id"))
-        if state is not None and not stored:
+            return entry["entity_id"], entry["unique_id"]
+        if await self._zone_state(entity_id) is not None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
                     f"Zone {entity_id} is not a stored zone: it is defined in YAML "
-                    "or, for zone.home, by the home location in the general "
-                    "settings, so the zone tools cannot change or remove it.",
+                    "or, for the default zone.home, by the home location in the "
+                    "general settings, so the zone tools cannot change or remove it.",
                     context={"zone_id": zone_id, "entity_id": entity_id},
                     suggestions=[
                         "Edit a YAML zone in configuration.yaml",
@@ -386,18 +408,16 @@ class ZoneTools:
                     ],
                 )
             )
-        if entry is None or not stored:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    f"Zone not found: {zone_id}",
-                    context={"zone_id": zone_id},
-                    suggestions=[
-                        "Use ha_get_zone() without zone_id to see all available zones"
-                    ],
-                )
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Zone not found: {zone_id}",
+                context={"zone_id": zone_id},
+                suggestions=[
+                    "Use ha_get_zone() without zone_id to see all available zones"
+                ],
             )
-        return entity_id, entry["unique_id"]
+        )
 
     @tool(
         name="ha_set_zone",
@@ -462,6 +482,13 @@ class ZoneTools:
                 default=None,
             ),
         ] = None,
+        wait: Annotated[
+            bool,
+            Field(
+                description="Wait for the zone to be queryable before returning. Set to False for bulk operations.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """Create or update a Home Assistant zone.
 
@@ -499,6 +526,12 @@ class ZoneTools:
                 )
                 if value is not None
             }
+            if name is not None and not name.strip():
+                raise_tool_error(
+                    create_validation_error(
+                        "name cannot be blank.", context={"zone_id": zone_id}
+                    )
+                )
             if zone_id:
                 operation = "update"
                 updated = [
@@ -521,8 +554,9 @@ class ZoneTools:
                         )
                     )
                 entity_id, storage_id = await self._resolve_zone(zone_id)
-                # The helper write path merges into the stored zone and keeps
-                # a new icon in the registry, where it stays clearable (#2643).
+                # The helper write path merges into the stored zone and keeps a
+                # new icon in the registry, where it stays clearable, unless the
+                # zone already stores one (#2643).
                 result = await _execute_update_simple_helper(
                     self._client,
                     "zone",
@@ -533,7 +567,7 @@ class ZoneTools:
                     None,
                     None,
                     None,
-                    True,
+                    wait,
                     False,
                     fields,
                 )
@@ -555,7 +589,7 @@ class ZoneTools:
                 None,
                 None,
                 None,
-                True,
+                wait,
                 False,
                 fields,
             )
@@ -594,6 +628,13 @@ class ZoneTools:
             str,
             Field(description="Zone ID or entity_id of the zone to remove"),
         ],
+        wait: Annotated[
+            bool,
+            Field(
+                description="Wait for the zone to be gone before returning. Set to False for bulk operations.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Remove a Home Assistant zone.
@@ -636,6 +677,8 @@ class ZoneTools:
                 "entity_id": entity_id,
                 "message": f"Successfully removed zone: {entity_id}",
             }
+            if not wait:
+                return response
             try:
                 if not await wait_for_entity_removed(self._client, entity_id):
                     response["warnings"] = [
