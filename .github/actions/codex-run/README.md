@@ -1,7 +1,7 @@
 # Generic Codex action
 
 `codex-run` executes caller instructions verbatim on Ubuntu with Codex CLI
-`0.157.1`. The caller owns the task, capabilities, expected output and publication.
+`0.162.1`. The caller owns the task, capabilities, expected output and publication.
 The action owns its OAuth credential isolation, process lifetime and diagnostics.
 It does not interpret repository roles or implement a maintainer trust list.
 
@@ -23,7 +23,7 @@ resolve inside `GITHUB_WORKSPACE`.
 | `timeout-minutes` | `10` | Codex process limit, starting after setup. The caller must also cap the whole action step. |
 | `model` / `reasoning-effort` | empty | Optional explicit model and reasoning settings. |
 | `output-schema` | empty | Optional final-response JSON Schema; response usefulness and presence remain caller requirements. |
-| `codex-version` | `0.157.1` | Exact CLI version, required for reproducible permission behavior. |
+| `codex-version` | `0.162.1` | Exact CLI version, required for reproducible permission behavior. |
 
 Commands inherit the small `core` environment. Explicit grants are added through
 `shell_environment_policy.set`, so a selected `GH_TOKEN` is actually available
@@ -61,7 +61,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         with:
           codex-auth: ${{ secrets.CODEX_AUTH }}
-          model: gpt-6-astra
+          model: gpt-6.1-sol
           sandbox: read-only
           allow-shell: "true"
           network-access: "true"

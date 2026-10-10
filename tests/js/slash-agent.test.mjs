@@ -104,8 +104,8 @@ test("a failure appearing during the worker remains unhandled for the next wakeu
 });
 
 test("only anchored, nonempty slash commands select supported models", () => {
-  assert.equal(command("/astra implement this").model, "gpt-6-astra");
-  assert.equal(command("/sol fix it\r\nkeep scope").model, "gpt-6-sol");
+  assert.equal(command("/astra implement this").model, "gpt-6.1-sol");
+  assert.equal(command("/sol fix it\r\nkeep scope").model, "gpt-6.1-sol");
   assert.equal(command("/terra explain this").model, "gpt-5.6-terra");
   for (const text of [
     "/astra",
@@ -359,7 +359,7 @@ test("pause, resume, role revocation and iteration cap survive separate runs", (
   snapshot.session.rounds = 4;
   snapshot.session.commandUpdatedAt = api.command.updated_at;
   snapshot.session.status = "waiting";
-  snapshot.session.handled = "unhandled-review-feedback";
+  snapshot.feedback.push({ id: 999, body: "An unhandled finding", author: "maintainer" });
   assert.equal(decide(snapshot, { automatic: true }).mode, "limit");
 });
 
@@ -397,16 +397,18 @@ test("four published rounds exhaust the budget until a new maintainer command", 
   assert.equal(resumed.decision.rounds, 0);
 });
 
-test("existing Sol checkpoints remain readable while new Sol commands use GPT-6", () => {
+test("existing checkpoints remain readable while new commands use the current model", () => {
   const api = new FakeAPI();
   const state = start(api);
-  state.model = "gpt-5.6-sol";
-  api.comments.find((comment) => comment.id === 100).body = renderState(state, api.repository);
-  assert.equal(stateFrom(api.edits(api.comments), APP).model, "gpt-5.6-sol");
+  for (const model of ["gpt-5.6-sol", "gpt-6-sol", "gpt-6-astra"]) {
+    state.model = model;
+    api.comments.find((comment) => comment.id === 100).body = renderState(state, api.repository);
+    assert.equal(stateFrom(api.edits(api.comments), APP).model, model);
+  }
   api.command.body = "/sol resume";
   api.command.updated_at = "2026-09-15T21:00:00Z";
   const plan = initial(api);
-  assert.equal(plan.decision.parsed.model, "gpt-6-sol");
+  assert.equal(plan.decision.parsed.model, command(api.command.body).model);
 });
 
 test("stale work, repo/App mismatch and protected branches perform no publication", () => {

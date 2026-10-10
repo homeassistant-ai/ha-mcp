@@ -4,7 +4,10 @@ import {
   decide,
   digest,
   feedbackHash,
+  feedbackItems,
   failureHash,
+  commandOrder,
+  maintainerCommand,
   ORIGIN_MARKER,
   principal,
   trustedComment,
@@ -63,10 +66,7 @@ function assertCurrent(api, plan, app, expectedHead, checkThreads = true) {
     throw Error("Source/head/authorization changed during publication");
   const laterControl = current.comments.some(
     (c) =>
-      principal(c)?.type === "User" &&
-      trustedComment(c, current.roles) &&
-      /^\/(astra|sol|terra)\s+/.test(c.body ?? "") &&
-      c.updated_at > command.updated_at,
+      maintainerCommand(c, current.roles) && commandOrder(c, command) > 0,
   );
   if (laterControl)
     throw Error("A newer maintainer command superseded this run");
@@ -185,8 +185,8 @@ function description(result, root, previous = null) {
     type("breaking", "💥 Breaking change"),
   ].join("\n")}\n\n## Testing\n\n- [x] I have tested these changes with a LLM agent\n- [ ] All automated tests pass (\`uv run pytest\`)\n- [ ] Code follows style guidelines (\`uv run ruff check\`)\n\n${prose(result.tests)}\n\n## Checklist\n\n- [ ] I have updated documentation if needed\n${DESCRIPTION_END}`;
   if (previous === null) return `${managed}\n\n${ORIGIN_MARKER}${root} -->`;
-  const start = previous.startsWith(`${DESCRIPTION_START}\n`) ? 0 : -1;
-  const end = previous.indexOf(DESCRIPTION_END);
+  const start = previous.indexOf(`${DESCRIPTION_START}\n`);
+  const end = previous.indexOf(DESCRIPTION_END, start);
   // Older App PRs lack delimiters. Preserve their author and review sections.
   if (start < 0 || end < start) return previous;
   return previous.slice(0, start) + managed + previous.slice(end + DESCRIPTION_END.length);
@@ -235,6 +235,12 @@ export function publish(
       state.commandUpdatedAt !== fresh.session.commandUpdatedAt)
   )
     delete state.pendingSummary;
+  if (d.mode === "closed") {
+    state.status = "closed";
+    state.summary = "This request cannot run because the session's issue or PR is closed or merged. Start a new request on a separate open issue or PR; the agent will not reopen or modify the closed session.";
+    save(api, state, app);
+    return state;
+  }
   if (d.mode === "pause" || d.mode === "limit") {
     state.status = d.mode === "pause" ? "paused" : "blocked";
     state.summary =
@@ -257,6 +263,7 @@ export function publish(
     state.checkedHead = fresh.head;
     state.checkedFailure = failureHash(fresh);
     state.handled = feedbackHash(fresh);
+    state.handledFeedback = feedbackItems(fresh);
     save(api, state, app);
     return state;
   }
@@ -401,6 +408,7 @@ export function publish(
         : t,
     ),
   });
+  state.handledFeedback = feedbackItems(fresh);
   state.checkedHead = fresh.head;
   // A new failure appearing during execution was not in the worker's prompt.
   state.checkedFailure = failureHash(plan.snapshot);

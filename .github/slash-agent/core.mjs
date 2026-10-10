@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { prose } from "../issue-intake/intake.mjs";
 
 export const MODELS = {
-  astra: "gpt-6-astra",
-  sol: "gpt-6-sol",
+  astra: "gpt-6.1-sol",
+  sol: "gpt-6.1-sol",
   terra: "gpt-5.6-terra",
 };
 export const REVIEW_BOTS = [
@@ -44,7 +44,8 @@ export function command(body) {
   const match = /^\/(astra|sol|terra)[ \t]+(\S[\s\S]*)$/.exec(
     (body ?? "").trim(),
   );
-  if (!match || Buffer.byteLength(match[2], "utf8") > 12000) return null;
+  if (!match || Buffer.byteLength(match[2], "utf8") > 12000 ||
+      Buffer.byteLength(JSON.stringify(match[2]), "utf8") > 12002) return null;
   const text = match[2].trim();
   return {
     model: MODELS[match[1]],
@@ -52,6 +53,13 @@ export function command(body) {
     action: ["pause", "resume"].includes(text) ? text : "work",
   };
 }
+
+export const maintainerCommand = (comment, roles) =>
+  comment.user?.type === "User" && comment.user.login !== "ghhamcp" &&
+  principal(comment)?.type === "User" && trustedComment(comment, roles)
+    ? command(comment.body) : null;
+export const commandOrder = (a, b) =>
+  a.updated_at.localeCompare(b.updated_at) || a.id - b.id;
 
 export function stateFrom(comments, app) {
   const owned = comments.filter(
@@ -89,14 +97,17 @@ export function stateFrom(comments, app) {
     state.root < 1 ||
     !Number.isSafeInteger(state.rounds) ||
     state.rounds < 0 ||
-    ![...Object.values(MODELS), "gpt-5.6-sol"].includes(state.model) ||
+    ![...Object.values(MODELS), "gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol"].includes(state.model) ||
     !Number.isSafeInteger(state.commandId) ||
     typeof state.summary !== "string" ||
     state.summary.length > 12000 ||
     typeof state.task !== "string" ||
     Buffer.byteLength(state.task, "utf8") > 12000 ||
     typeof state.branch !== "string" ||
-    typeof state.status !== "string"
+    typeof state.status !== "string" ||
+    (state.handledFeedback !== undefined &&
+      (!Array.isArray(state.handledFeedback) ||
+        !state.handledFeedback.every((item) => typeof item === "string" && /^[a-f0-9]{64}$/.test(item))))
   )
     throw Error("Invalid slash checkpoint fields");
   return { ...state, commentId: owned[0].id };
@@ -112,7 +123,7 @@ export function renderState(state, repository) {
     : "";
   const body =
     `Slash agent: **${state.status}**${link}\n\n${prose(state.summary || "Preparing the requested work.")}\n\n` +
-    `Round ${state.rounds}/${MAX_ROUNDS}. Maintainers can pause, resume, or send a new \`/astra\`, \`/sol\`, or \`/terra\` request.\n\n` +
+    `Round ${state.rounds}/${MAX_ROUNDS}. ${state.status === "closed" ? "This session is closed; start a new request on a separate open issue or PR." : "Maintainers can pause, resume, or send a new `/astra`, `/sol`, or `/terra` request."}\n\n` +
     `${STATE_MARKER}${encoded} -->`;
   if (Buffer.byteLength(body, "utf8") > 65000)
     throw Error("Slash checkpoint exceeds GitHub's comment size limit");
@@ -132,6 +143,16 @@ export function feedbackHash(snapshot) {
       }))
       .filter((t) => t.comments.length),
   });
+}
+
+export function feedbackItems(snapshot) {
+  return [
+    ...snapshot.feedback.map((review) => digest({ review })),
+    ...snapshot.threads.filter((t) => !t.isResolved).flatMap((thread) =>
+      thread.comments.filter((c) => reviewFeedback(c, snapshot.roles)).map((c) =>
+        digest({ thread: thread.id, id: c.id, body: c.body,
+          updated: c.updated_at, author: principal(c) }))),
+  ];
 }
 
 export function checksReady(snapshot) {
@@ -165,22 +186,9 @@ export function failureHash(snapshot) {
 }
 
 export function decide(snapshot, trigger) {
-  if (
-    snapshot.issue.state !== "open" ||
-    snapshot.issue.locked ||
-    snapshot.pr?.state === "closed"
-  )
-    return { mode: "idle" };
-  const commands = snapshot.comments.filter((c) =>
-    c.user?.type === "User" &&
-    c.user.login !== "ghhamcp" &&
-    principal(c)?.type === "User" &&
-    trustedComment(c, snapshot.roles) &&
-    command(c.body),
-  );
-  commands.sort(
-    (a, b) => a.updated_at.localeCompare(b.updated_at) || a.id - b.id,
-  );
+  if (snapshot.issue.locked) return { mode: "idle" };
+  const commands = snapshot.comments.filter((c) => maintainerCommand(c, snapshot.roles));
+  commands.sort(commandOrder);
   const latest = commands.at(-1);
   const previous = snapshot.session;
   if (
@@ -198,6 +206,12 @@ export function decide(snapshot, trigger) {
     !previous ||
     previous.commandId !== latest.id ||
     previous.commandUpdatedAt !== latest.updated_at;
+  if (snapshot.issue.state !== "open" || snapshot.pr?.state === "closed") {
+    return changed && trigger.commandId === latest.id
+      ? { mode: "closed", latest, parsed, rounds: previous?.rounds ?? 0,
+          task: parsed.action === "work" ? parsed.text : previous?.task }
+      : { mode: "idle" };
+  }
   // An ordinary event cannot start a session from an old historical slash command.
   if (!previous && trigger.commandId !== latest.id) return { mode: "idle" };
   if (parsed.action === "pause")
@@ -222,11 +236,16 @@ export function decide(snapshot, trigger) {
   const failure = failureHash(snapshot);
   const newFailure = failure !== null &&
     (previous?.checkedHead !== snapshot.head || previous?.checkedFailure !== failure);
+  // Removing handled findings is not new work. Older checkpoints retain the
+  // aggregate comparison until the next publication records item fingerprints.
+  const newFeedback = previous?.handledFeedback
+    ? feedbackItems(snapshot).some((item) => !previous.handledFeedback.includes(item))
+    : previous?.handled !== feedback;
   if (
     !changed &&
     previous.status !== "publishing" &&
     !newFailure &&
-    previous.handled === feedback
+    !newFeedback
   ) {
     return {
       mode:
@@ -253,8 +272,8 @@ const obj = (properties) => ({
 });
 export const resultSchema = obj({
   title: str(120),
-  // Together with the 12 KiB UTF-8 command cap, these limits keep even CJK
-  // output inside the base64 checkpoint's 50 KiB budget.
+  // Per-field limits bound continuation memory. renderState separately checks
+  // JSON/base64 expansion and the public comment's UTF-8 size.
   summary: str(2000),
   tests: str(1000),
   memory: str(2000),

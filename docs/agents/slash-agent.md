@@ -14,9 +14,12 @@ The command explicitly authorizes this lifecycle through readiness, including
 publication and review replies. A separate ready command is not needed; pause
 remains available before the readiness transition.
 
-The model mapping is fixed: Astra uses `gpt-6-astra`, Sol uses `gpt-6-sol`,
-and Terra uses `gpt-5.6-terra`. An existing checkpoint that records the former
-`gpt-5.6-sol` model remains readable; a new `/sol` command selects `gpt-6-sol`.
+The model mapping is explicit: `/sol` and the compatibility alias `/astra` use
+`gpt-6.1-sol`; `/terra` uses `gpt-5.6-terra`. Former `gpt-6-astra`, `gpt-6-sol`
+and `gpt-5.6-sol` checkpoints remain readable. A continuation selects the
+current mapping; no model is chosen dynamically from a catalog. Terra remains
+subject to ChatGPT-account availability; an unavailable model blocks the
+worker and requires a new command with a supported model.
 An issue starts `agents/issue-N` from the default branch and creates a draft PR
 when the result changes the repository. An unchanged result instead completes
 in the App-owned issue checkpoint, whose
@@ -160,3 +163,22 @@ belong in `ha-mcp-workflows-dev`, use its own secrets and manifest fixtures, and
 never mutate product issues/PRs. The bench is manually dispatched, with no canary.
 The runtime workflow becomes available only after its dependencies and this PR
 reach the default branch and the App permissions are installed.
+
+## Review corrections — 2026-10-10
+
+Feedback is remembered per authorized review/comment revision. Resolving,
+deleting or dismissing a handled item does not spend a coding turn; a new or
+edited item does. Older aggregate-only checkpoints retain the conservative
+hash comparison until their next publication records item fingerprints.
+
+Admission and publication share the same command parser and ordering. Tasks
+are limited to 12,000 UTF-8 bytes, including JSON escaping (excluding the two
+outer quotes), to prevent escaped text from consuming the checkpoint budget.
+Checkpoint and public-comment sizes are still checked independently.
+
+A new explicit command on a session whose issue or PR is closed/merged records
+a visible refusal without a model call. It does not reopen the session; start
+a separate request on an open issue or PR. Automatic events remain idle.
+The worker instructions explicitly prohibit all `.env`/`.env.*` templates.
+Managed PR descriptions update their delimited section even when a maintainer
+has inserted a note above it; surrounding text remains unchanged.

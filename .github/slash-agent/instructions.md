@@ -24,7 +24,10 @@ scope change needs a maintainer decision.
 Implement and run relevant tests. For a bug, demonstrate the failing regression
 before fixing it. Check available CI failures using gh; do not claim success for
 checks you did not run. Do not modify .github/, .codex/, .claude/, credentials,
-symlinks or submodules: these need a separate human-controlled change. Do not
+symlinks or submodules: these need a separate human-controlled change. The path
+restriction includes every `.env` and `.env.*` file, even tracked templates
+such as `.env.example` and `tests/.env.test`, and every `auth.json`. Report
+`blocked` before editing when the requested task needs these paths. Do not
 modify Git metadata or root/scoped AGENTS.md and CLAUDE.md entrypoints. Leave
 all intended file changes in the working tree. New files ignored by
 `.gitignore` are not packaged; choose a non-ignored path or report blocked.
