@@ -97,12 +97,12 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 
 Testing behavior belongs in this root because it applies to every code change:
 
-- Complete applicable live testing before merge per the [live-review procedure](docs/agents/github-workflow.md#live-testing-in-pr-reviews), on a live HA chosen by the user; static review and CI cannot replace it.
+- Complete applicable live testing before merge per the [live-review procedure](docs/agents/github-workflow.md#live-testing-in-pr-reviews); static review and CI cannot replace it.
 - Bug fixes require a failing regression test first, then the minimal fix, unless the only possible test would restate a freely chosen configuration value (rule 4 in [`tests/AGENTS.md`](tests/AGENTS.md)).
 - New MCP tools need E2E coverage. Any existing tool without tests gains E2E coverage even when it is not otherwise part of the current pull request. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
 - Refactors with strong existing coverage, documentation-only changes, minor parameters on well-tested tools, and utilities whose behaviour an existing test already asserts may not need a new test; assess live testing separately.
-- Run the smallest relevant tests after changes. [`tests/AGENTS.md`](tests/AGENTS.md) owns test design rules, lanes, markers, polling, and test patterns; the [development reference](docs/agents/development.md#test-commands) has the exact commands.
-- Run relevant E2E tests unprompted; let pytest report missing prerequisites or skips.
+- Run the smallest relevant tests after changes; follow the [test rules](tests/AGENTS.md) and [commands](docs/agents/development.md#test-commands).
+- Check E2E prerequisites, resources, and user permissions first. If local execution is unsuitable, run the tests on GitHub Actions against a branch in the user's fork.
 - Claim full-suite success only after running it; a focused file is partial evidence.
 - Fix unrelated CI test failures, even when time-consuming, under the Boy Scout scope rules below.
 - Match verification to risk: documentation-only work needs structural checks (links, generated-file drift, size, workflow syntax), not unrelated application E2E.
