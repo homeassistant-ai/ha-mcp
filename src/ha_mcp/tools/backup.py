@@ -2051,15 +2051,16 @@ async def _edits_restore(
             )
         )
     except MandatoryBackupError as err:
-        # A legacy restore's mandatory pre-restore safety snapshot
-        # genuinely failed — the overwrite was blocked, nothing changed.
-        # Same fail-closed contract + error code as the @with_auto_backup
-        # write path (#1579), so callers see one consistent failure mode.
+        # A restore's mandatory pre-restore safety snapshot genuinely
+        # failed — the overwrite was blocked, nothing changed. Same
+        # fail-closed contract + error code as the @with_auto_backup write
+        # path (#1579), so callers see one consistent failure mode.
+        logger.warning("Restore of %s blocked: %s", bname, err.safe_cause)
         raise_tool_error(
             create_error_response(
                 ErrorCode.BACKUP_CAPTURE_FAILED,
-                "Restore blocked: the pre-restore safety snapshot could "
-                "not be captured. Nothing was changed.",
+                "Restore blocked: the pre-restore safety snapshot could not be "
+                f"captured ({err.safe_cause}). Nothing was changed.",
                 context={
                     "backup_name": bname,
                     "data": {

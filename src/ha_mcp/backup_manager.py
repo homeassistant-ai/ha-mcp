@@ -143,6 +143,11 @@ class MandatoryBackupError(Exception):
         # can include configuration values even when wrapped by this class.
         self.safe_detail = safe_detail
 
+    @property
+    def safe_cause(self) -> str:
+        """The safe detail, else only the failing exception's class name."""
+        return self.safe_detail or type(self.__cause__ or self).__name__
+
 
 class BackupRestoreError(HomeAssistantError):
     """A restore outcome whose apply knowledge must survive caller mapping."""
@@ -515,7 +520,8 @@ def _require_restore_safety(path: Path) -> None:
     """Check the recovery file after its restore pin closes the deletion race."""
     if not path.is_file():
         raise MandatoryBackupError(
-            "The safety snapshot disappeared before restore; no changes were applied"
+            "The safety snapshot disappeared before restore; no changes were applied",
+            safe_detail="safety snapshot disappeared",
         )
 
 
@@ -840,9 +846,8 @@ class BackupManager:
         handler = self.handler_for(domain)
         if handler is None:
             if mandatory:
-                raise MandatoryBackupError(
-                    f"no auto-backup handler is registered for domain {domain!r}"
-                )
+                message = f"no auto-backup handler is registered for domain {domain!r}"
+                raise MandatoryBackupError(message, safe_detail=message)
             logger.warning(
                 "Auto-backup: no handler registered for domain %r — skipping",
                 domain,
@@ -971,7 +976,7 @@ class BackupManager:
                     f"The new snapshot for {key} disappeared before capture completed"
                 )
                 if mandatory:
-                    raise MandatoryBackupError(message)
+                    raise MandatoryBackupError(message, safe_detail=message)
                 logger.warning("Auto-backup: %s", message)
                 return None
             self._last_snapshot[key] = now
@@ -1553,29 +1558,21 @@ class BackupManager:
         return await handler.fetch(self._client, entity_id) is not None
 
     async def _capture_restore_safety(self, domain: str, entity_id: str) -> Path | None:
-        """Flow-helper restore requires a fresh recovery point for its stable entry."""
-        if domain == "helper_config_subentry":
-            # A reconfigure flow can apply partly, so the capture is forced and
-            # mandatory; a deleted subentry has nothing to capture (None).
-            return await self.maybe_snapshot(
-                domain,
-                entity_id,
-                tool_name="ha_manage_backup.restore.safety",
-                force=True,
-                mandatory=True,
-            )
-        if not _is_flow_helper_domain(domain):
-            return await self.maybe_snapshot(
-                domain, entity_id, tool_name="ha_manage_backup.restore.safety"
-            )
+        """Capture the pre-restore recovery point; a failed capture blocks it.
+
+        Flow helpers and subentries force a fresh one, since their flows can
+        apply a restore partly. Otherwise a disabled auto-backup or the
+        throttle skips it (None), as does a target with nothing to capture.
+        """
+        is_flow = _is_flow_helper_domain(domain)
         path = await self.maybe_snapshot(
             domain,
             entity_id,
             tool_name="ha_manage_backup.restore.safety",
-            force=True,
+            force=is_flow or domain == "helper_config_subentry",
             mandatory=True,
         )
-        if path is None:
+        if path is None and is_flow:
             raise MandatoryBackupError(
                 f"{_flow_label(_flow_type(domain))} helper no longer exists; "
                 "restore was not attempted"

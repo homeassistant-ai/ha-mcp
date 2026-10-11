@@ -224,6 +224,27 @@ class TestPythonTransformAutomationIdKey:
         assert result["success"] is True
         assert result["automation_id"] == "orphaned_unique_id"
 
+    async def test_a_failed_read_back_does_not_report_the_saved_write_as_failed(
+        self, transform_tools
+    ):
+        """The transform is saved; failing the call would invite a retry that
+        then meets a stale config_hash."""
+        from ha_mcp.client.rest_client import HomeAssistantAPIError
+
+        transform_tools._get_automation_config_internal = AsyncMock(
+            side_effect=HomeAssistantAPIError("GET reply is not JSON")
+        )
+
+        result = await transform_tools.ha_config_set_automation(
+            identifier="abc123unique",
+            python_transform="config['mode'] = 'single'",
+            config_hash="prior_hash",
+        )
+
+        assert result["success"] is True
+        assert result["config_hash"] is None
+        assert any("reading it back failed" in w for w in result["warnings"])
+
 
 class TestFullConfigSetAutomationIdKey:
     """`automation_id` parity on `ha_config_set_automation` full-config branch.
@@ -599,8 +620,8 @@ class TestAutomationReplacementGuard:
             HomeAssistantClient,
         )
 
-        # Exercise the actual client resolver: it maps a failed state lookup to
-        # 404. A second lookup would recover and target the existing automation.
+        # Exercise the actual client resolver: it maps a state 404 to not found.
+        # A second lookup would recover and target the existing automation.
         for name in (
             "get_entity_state",
             "_resolve_automation_id",
@@ -614,7 +635,7 @@ class TestAutomationReplacementGuard:
             )
         mock_client._request = AsyncMock(
             side_effect=[
-                HomeAssistantAPIError("Transient server failure", status_code=500),
+                HomeAssistantAPIError("Not found", status_code=404),
                 {"attributes": {"id": "abc123unique"}},
                 {"result": "ok"},
             ]

@@ -1411,8 +1411,13 @@ class AutomationConfigTools:
         )
         for warning in conflict_warnings:
             result.setdefault("warnings", []).append(warning)
-        refetched = await self._get_automation_config_internal(identifier)
-        new_config_hash = refetched[1]
+        new_config_hash: str | None = None  # the write is saved; read-back may fail
+        try:
+            _, new_config_hash = await self._get_automation_config_internal(identifier)
+        except (HomeAssistantAPIError, HomeAssistantConnectionError) as e:
+            result.setdefault("warnings", []).append(
+                f"Saved; reading it back failed ({e}), re-read it for a config_hash"
+            )
 
         entity_id = result.get("entity_id")
         if not entity_id and identifier and identifier.startswith("automation."):
@@ -1634,8 +1639,8 @@ class AutomationConfigTools:
         except HomeAssistantAPIError as exc:
             if exc.status_code == 404 and not identifier.startswith("automation."):
                 return None  # Preserve intentional creation with a caller-chosen ID.
-            # Entity-ID resolution also maps lookup failures to 404. Never retry
-            # those as creation: a recovered lookup could overwrite an unchecked target.
+            # Entity-ID resolution reports a state 404 as not found. Never retry
+            # that as creation: a recovered lookup could overwrite an unchecked target.
             raise
         if current.get("alias") != config["alias"]:
             raise_tool_error(

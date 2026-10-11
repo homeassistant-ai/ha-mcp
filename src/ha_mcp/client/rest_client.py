@@ -628,8 +628,7 @@ class HomeAssistantClient:
     async def _request(
         self, method: str, endpoint: str, **kwargs: Any
     ) -> dict[str, Any]:
-        """
-        Make authenticated request to Home Assistant API and parse JSON body.
+        """Make authenticated request to Home Assistant API and parse JSON body.
 
         Args:
             method: HTTP method (GET, POST, etc.)
@@ -642,15 +641,17 @@ class HomeAssistantClient:
         Raises:
             HomeAssistantConnectionError: Connection failed
             HomeAssistantAuthError: Authentication failed
-            HomeAssistantAPIError: API error
+            HomeAssistantAPIError: API error, or a GET reply that is not JSON
         """
         response = await self._raw_request(method, endpoint, **kwargs)
         try:
             result: dict[str, Any] = response.json()
             return result
-        except json.JSONDecodeError:
-            # Some endpoints return empty responses
-            return {}
+        except ValueError as e:  # not JSON, or not UTF-8
+            if method != "GET" or not response.content.strip():
+                return {}  # empty body, or a write's reply: accepted, body unknown
+            # A read's {} would pass as the entity's config (e.g. in a backup).
+            raise HomeAssistantAPIError("GET reply is not JSON") from e
 
     async def get_config(self) -> dict[str, Any]:
         """Get Home Assistant configuration."""
@@ -662,7 +663,7 @@ class HomeAssistantClient:
 
         Raises ``HomeAssistantConnectionError`` when the response isn't the
         JSON array ``/states`` always returns on success -- including
-        ``_request``'s own empty-dict fallback for an unparseable body.
+        ``_request``'s own empty-dict fallback for an empty body.
         Silently returning ``[]`` here would let a genuine fetch failure
         masquerade as "this instance has zero entities", which no real,
         running Home Assistant instance produces; callers that need to
@@ -1469,8 +1470,7 @@ class HomeAssistantClient:
     # Automation Configuration Management
 
     async def _resolve_automation_id(self, identifier: str) -> str:
-        """
-        Convert entity_id to unique_id if needed, or return unique_id as-is.
+        """Convert entity_id to unique_id if needed, or return unique_id as-is.
 
         Args:
             identifier: Either entity_id (automation.xxx) or unique_id
@@ -1479,9 +1479,8 @@ class HomeAssistantClient:
             The unique_id for configuration API
 
         Raises:
-            HomeAssistantAPIError: If automation not found
+            HomeAssistantAPIError: 404 if not found; other read failures propagate
         """
-        # If it looks like an entity_id, convert to unique_id
         if identifier.startswith("automation."):
             try:
                 state = await self.get_entity_state(identifier)
@@ -1495,7 +1494,9 @@ class HomeAssistantClient:
                     f"Converted entity_id {identifier} to unique_id {unique_id}"
                 )
                 return str(unique_id)
-            except HomeAssistantError as e:
+            except HomeAssistantAPIError as e:
+                if e.status_code != 404:  # a failed read is not a missing one
+                    raise
                 raise HomeAssistantAPIError(
                     f"Failed to resolve automation {identifier}: {str(e)}",
                     status_code=404,
@@ -1505,8 +1506,7 @@ class HomeAssistantClient:
             return identifier
 
     async def get_automation_config(self, identifier: str) -> dict[str, Any]:
-        """
-        Get automation configuration by unique_id or entity_id.
+        """Get automation configuration by unique_id or entity_id.
 
         Args:
             identifier: Either automation entity_id (automation.xxx) or unique_id

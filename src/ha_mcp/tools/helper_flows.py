@@ -31,7 +31,7 @@ async def _fetch_helper_flow_types(client: Any) -> frozenset[str]:
     domains = await client._request(
         "GET", "/config/config_entries/flow_handlers", params={"type": "helper"}
     )
-    # _request answers an unparseable body with {}; an empty set would refuse
+    # _request answers an empty body with {}; an empty set would refuse
     # every flow helper as "not a helper".
     if not isinstance(domains, list):
         raise HomeAssistantConnectionError(

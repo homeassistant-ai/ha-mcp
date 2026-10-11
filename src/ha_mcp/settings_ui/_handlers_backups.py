@@ -231,11 +231,12 @@ async def _restore_backup(
             }.get(code, 409),
         )
     except MandatoryBackupError as err:
+        logger.warning("Restore of %s blocked: %s", name, err.safe_cause)
         return JSONResponse(
             create_error_response(
                 ErrorCode.BACKUP_CAPTURE_FAILED,
-                "Restore blocked: the pre-restore safety snapshot could not "
-                "be captured. Nothing was changed.",
+                "Restore blocked: the pre-restore safety snapshot could not be "
+                f"captured ({err.safe_cause}). Nothing was changed.",
                 suggestions=err.suggestions,
                 context={
                     "data": {
