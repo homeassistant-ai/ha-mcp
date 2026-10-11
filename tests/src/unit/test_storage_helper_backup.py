@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp import backup_manager as bm
+from ha_mcp.client.rest_client import HomeAssistantCommandError
 
 _ITEMS: dict[str, Any] = {
     "zone": [{"id": "office", "name": "Office", "latitude": 1.0, "longitude": 2.0}],
@@ -47,6 +48,15 @@ def ws(monkeypatch: pytest.MonkeyPatch, registry: list[dict[str, Any]]) -> Async
     async def send(client: Any, message: dict[str, Any]) -> Any:
         if message["type"] == "config/entity_registry/list":
             return registry
+        if message["type"] == "config/entity_registry/get":
+            row = next(
+                (r for r in registry if r["entity_id"] == message["entity_id"]), None
+            )
+            if row is None:
+                raise HomeAssistantCommandError(
+                    "Command failed: not found", "not_found"
+                )
+            return row
         if message["type"] == "config/entity_registry/update":
             registry[0]["name"] = message["name"]
             return {}

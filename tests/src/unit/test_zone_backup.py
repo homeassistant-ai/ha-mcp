@@ -375,6 +375,10 @@ class TestZoneBackup:
                 return {"storage": [item]} if helper_type == "person" else [item]
             if msg["type"] == "config/entity_registry/list":
                 return [dict(entry)]
+            if msg["type"] == "config/entity_registry/get":
+                if msg["entity_id"] != entry["entity_id"]:
+                    raise HomeAssistantCommandError("Command failed", "not_found")
+                return dict(entry)
             return {**item}
 
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
