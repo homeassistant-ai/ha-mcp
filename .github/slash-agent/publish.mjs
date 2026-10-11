@@ -226,7 +226,7 @@ function description(result, root, previous = null) {
     type("maintenance", "🔧 Maintenance/refactor"),
     type("tests", "🧪 Tests only"),
     type("breaking", "💥 Breaking change"),
-  ].join("\n")}\n\n## Testing\n\n- [x] I have tested these changes with a LLM agent\n- [ ] All automated tests pass (\`uv run pytest\`)\n- [ ] Code follows style guidelines (\`uv run ruff check\`)\n\n${prose(result.tests)}\n\n## Checklist\n\n- [ ] I have updated documentation if needed\n${DESCRIPTION_END}`;
+  ].join("\n")}\n\n## Testing\n\n- [ ] The author or a reviewer has live-tested this PR with an LLM agent on the dev environment or another live HA chosen by the user (if applicable)\n- [ ] All automated tests pass (\`uv run pytest\`)\n- [ ] Code passes lint, format, and type checks (\`uv run ruff check\`, \`uv run ruff format --check\` on changed files, \`uv run mypy src/\`)\n\n${prose(result.tests)}\n\n## Checklist\n\n- [ ] I have updated documentation if needed\n${DESCRIPTION_END}`;
   if (previous === null) return `${managed}\n\n${ORIGIN_MARKER}${root} -->`;
   const start = previous.indexOf(`${DESCRIPTION_START}\n`);
   const end = previous.indexOf(DESCRIPTION_END, start);

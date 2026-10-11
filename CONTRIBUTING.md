@@ -15,6 +15,10 @@ Thank you for your interest in contributing!
 
 See **[tests/README.md](tests/README.md)**. To try a branch against a live, throwaway Home Assistant (Docker or HAOS) from your fork, see **[docs/dev-ha-env.md](docs/dev-ha-env.md)**.
 
+Follow the [repository testing policy](AGENTS.md#testing-and-verification) and
+[live-review procedure](docs/agents/github-workflow.md#live-testing-in-pr-reviews)
+when preparing a PR's Testing section and reviewing its evidence.
+
 ## 🛠️ Development
 
 **Setup:**
