@@ -108,11 +108,11 @@ async def test_tool_search_catalog_carries_the_note_on_write_paths() -> None:
     assert DESKTOP_APPROVAL_NOTE not in hidden["ha_get_state"]
 
 
-def test_note_names_the_workarounds() -> None:
+def test_note_preserves_manual_approval() -> None:
     lowered = DESKTOP_APPROVAL_NOTE.lower()
     assert "4-minute" in lowered
     assert "wait" in lowered
-    assert "always allow" in lowered
+    assert "always allow" not in lowered
 
 
 def test_server_installs_transform_after_lite_docstrings() -> None:
