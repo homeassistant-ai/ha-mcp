@@ -77,6 +77,9 @@ from .backup_diff import (
 )
 from .backup_entity_ids import _restore_entity_ids
 from .backup_helper_target import fetch_helper as _fetch_helper
+from .backup_helper_target import note_no_safety_backup as _note_no_safety_backup
+from .backup_helper_target import require_holds as _require_holds
+from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
 from .backup_registry_icons import REGISTRY_RESTORES, REGISTRY_SNAPSHOTS
 from .backup_zones import fetch_zone
@@ -740,6 +743,7 @@ class BackupManager:
         force: bool = False,
         mandatory: bool = False,
         skip_reasons: list[str] | None = None,
+        holds: Any = None,
     ) -> Path | None:
         """Capture a snapshot for ``domain:entity_id`` if throttle elapsed.
 
@@ -767,6 +771,9 @@ class BackupManager:
 
         ``skip_reasons`` (best-effort mode) collects why a capture that was
         due did not happen, so the caller can tell its own caller.
+
+        ``holds`` is the id the captured item must have; another item raises
+        ``BackupRestoreError`` before anything is written.
         """
         if not force:
             await self.ensure_directory_ready()
@@ -811,6 +818,8 @@ class BackupManager:
             )
             if config is _SNAPSHOT_SKIP:
                 return None
+            if holds is not None:
+                _require_holds(config, holds, entity_id)
             return await self._write_and_rotate(
                 domain, entity_id, key, config, tool_name, now, mandatory=mandatory
             )
@@ -1580,54 +1589,28 @@ class BackupManager:
             return None  # auto-backup off: no safety backup is promised
         # The restore overwrites the current state, so the throttle that a
         # recent snapshot of an older state set does not apply.
-        path = await self.maybe_snapshot(
-            domain,
-            entity_id,
-            tool_name="ha_manage_backup.restore.safety",
-            force=True,
-            mandatory=True,
-        )
+        target = await _safety_target(self._client, domain, entity_id, config)
+        checked = not flow_driven and outcome is not None
+        path = None
+        if target is not None:  # None: the item the restore writes is gone
+            path = await self.maybe_snapshot(
+                domain,
+                target,
+                tool_name="ha_manage_backup.restore.safety",
+                force=True,
+                mandatory=True,
+                holds=config.get("id")
+                if checked and isinstance(config, dict)
+                else None,
+            )
         if path is None and is_flow:
             raise MandatoryBackupError(
                 f"{_flow_label(_flow_type(domain))} helper no longer exists; "
                 "restore was not attempted"
             )
-        if not flow_driven and outcome is not None:
-            await self._note_safety_target(path, entity_id, outcome, config)
+        if checked and path is None:
+            _note_no_safety_backup(outcome, domain, target, config)
         return path
-
-    async def _note_safety_target(
-        self, path: Path | None, entity_id: str, outcome: dict[str, Any], config: Any
-    ) -> None:
-        """Warn when the safety backup holds nothing, or another item than the
-        one the restore overwrites: snapshots are keyed by the id the tool was
-        given, which a rename since can leave naming nothing, or another item."""
-        if path is None:
-            outcome["warnings"] = [
-                f"No safety backup was taken: nothing was found under "
-                f"{entity_id}. If it was renamed since this backup, the "
-                "restore overwrites its current state without one."
-            ]
-            return
-        stored = config.get("id") if isinstance(config, dict) else None
-        if stored is None:
-            return
-        try:
-            held = await asyncio.to_thread(self.read_snapshot, path.name)
-        except (OSError, ValueError) as err:
-            outcome["warnings"] = [
-                f"The safety backup {path.name} could not be read back to check "
-                f"that it holds {stored}: {type(err).__name__}."
-            ]
-            return
-        held_config = held.get("config")
-        held_id = held_config.get("id") if isinstance(held_config, dict) else None
-        if held_id != stored:
-            outcome["warnings"] = [
-                f"The safety backup {path.name} holds {held_id}, not {stored}, "
-                f"which this restore overwrites: {entity_id} names another item "
-                "since this backup."
-            ]
 
     # ----- diff ----------------------------------------------------------
 
