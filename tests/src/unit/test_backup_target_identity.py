@@ -56,8 +56,8 @@ def _helper_ws(registry: dict[str, Any]) -> Any:
 
 class TestHelperSnapshotTarget:
     async def test_a_renamed_entity_snapshots_the_helper_it_belongs_to(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The write changes "hall", so a snapshot of "porch" leaves no rollback."""
         monkeypatch.setattr(bm, "_ws_send", _helper_ws(REGISTRY))
 
@@ -65,7 +65,9 @@ class TestHelperSnapshotTarget:
 
         assert got["id"] == "hall"
 
-    async def test_an_entity_of_no_listed_helper_snapshots_nothing(self, monkeypatch):
+    async def test_an_entity_of_no_listed_helper_snapshots_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The write fails on the registry's unique_id; the object id names
         another helper, which a snapshot of it would mislabel."""
         registry = {"input_boolean.porch": {"unique_id": "yaml_only"}}
@@ -73,7 +75,9 @@ class TestHelperSnapshotTarget:
 
         assert await bm._fetch_helper(_StubClient(), "porch", "input_boolean") is None
 
-    async def test_an_entity_id_of_another_type_snapshots_nothing(self, monkeypatch):
+    async def test_an_entity_id_of_another_type_snapshots_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The write takes counter.porch for input_boolean.counter.porch and
         fails; a snapshot of helper "porch" would back up a helper not written."""
         monkeypatch.setattr(bm, "_ws_send", _helper_ws({}))
@@ -83,8 +87,8 @@ class TestHelperSnapshotTarget:
         assert got is None
 
     async def test_a_helper_without_a_registry_entry_is_found_by_its_id(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The removal falls back to the storage id when the registry has none."""
         monkeypatch.setattr(bm, "_ws_send", _helper_ws({}))
 
@@ -117,7 +121,9 @@ class TestTagSnapshotTarget:
     a bare tag id as the stored id; a tag's entity_id follows its name, so
     tag.front can belong to the tag named "Front"."""
 
-    async def test_a_bare_tag_id_is_the_stored_id(self, monkeypatch):
+    async def test_a_bare_tag_id_is_the_stored_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         registry = {"tag.front": {"unique_id": "xyz"}}
         monkeypatch.setattr(bm, "_ws_send", _tag_ws(registry))
 
@@ -125,7 +131,9 @@ class TestTagSnapshotTarget:
 
         assert got["id"] == "front"
 
-    async def test_a_tag_entity_id_is_the_tag_it_belongs_to(self, monkeypatch):
+    async def test_a_tag_entity_id_is_the_tag_it_belongs_to(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         registry = {"tag.front": {"unique_id": "xyz"}}
         monkeypatch.setattr(bm, "_ws_send", _tag_ws(registry))
 
@@ -134,8 +142,8 @@ class TestTagSnapshotTarget:
         assert got["id"] == "xyz"
 
     async def test_a_tag_id_that_cannot_name_an_entity_is_still_found(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """tag.abc-1 is how the tag tools accept the id abc-1."""
         monkeypatch.setattr(bm, "_ws_send", _tag_ws({}))
 
@@ -202,7 +210,7 @@ async def _remove_tag(
 
 
 class TestTagRemoval:
-    async def test_removing_a_tag_by_its_id_deletes_that_tag(self):
+    async def test_removing_a_tag_by_its_id_deletes_that_tag(self) -> None:
         client = _tag_client()
 
         result = await _remove_tag(client, "front")
@@ -210,7 +218,7 @@ class TestTagRemoval:
         assert client.deletes == [{"type": "tag/delete", "tag_id": "front"}]
         assert result["entity_ids"] == ["tag.garage"]
 
-    async def test_an_unreadable_registry_does_not_stop_the_removal(self):
+    async def test_an_unreadable_registry_does_not_stop_the_removal(self) -> None:
         """The entity only names the reply; the delete goes by the stored id."""
         client = _tag_client(registry_readable=False)
         waited = AsyncMock(return_value=None)
@@ -224,7 +232,7 @@ class TestTagRemoval:
         waited.assert_not_awaited()
         assert "registry could not be read" in result["warnings"][0]
 
-    async def test_an_unknown_tag_id_is_not_called_yaml_configured(self):
+    async def test_an_unknown_tag_id_is_not_called_yaml_configured(self) -> None:
         """Tags have no YAML form; the id may be a name or a typo."""
         client = _tag_client(stored=False)
 
@@ -237,7 +245,7 @@ class TestTagRemoval:
         assert "YAML" not in error["message"] + error["suggestion"]
 
 
-def test_a_removed_helper_is_named_by_its_type():
+def test_a_removed_helper_is_named_by_its_type() -> None:
     """Its backup domain carries the helper_ prefix; the warning names the type."""
     outcome: dict[str, Any] = {}
     note_no_safety_backup(outcome, "helper_tag", None, {"id": "front_door"})
@@ -256,7 +264,7 @@ def _set_helper_tool(client: Any) -> Any:
     return tools["ha_config_set_helper"]
 
 
-async def test_an_update_by_a_storage_id_that_starts_with_the_type_finds_it():
+async def test_an_update_by_a_storage_id_that_starts_with_the_type_finds_it() -> None:
     """A helper named "Input Boolean Hall" has the storage id input_boolean_hall;
     without the dot, the prefix check took that id for an entity_id."""
     client = MagicMock()
@@ -301,7 +309,10 @@ def _snapshot(tmp_path: Path, config: dict[str, Any] | None = None) -> str:
 
 
 def _store_ws(
-    monkeypatch, registry: Any, items: list[dict[str, Any]], registry_error=None
+    monkeypatch: pytest.MonkeyPatch,
+    registry: Any,
+    items: list[dict[str, Any]],
+    registry_error: Exception | None = None,
 ) -> list[dict[str, Any]]:
     """A Core fake for storage items: an update or registry get of an unknown
     id fails with Core's not_found."""
@@ -355,7 +366,9 @@ def _store_snapshot(tmp_path: Path, domain: str, entity_id: str, item_id: str) -
 
 
 class TestRestoreSafetyBackup:
-    async def test_a_target_not_found_under_its_id_is_reported(self, tmp_path: Path):
+    async def test_a_target_not_found_under_its_id_is_reported(
+        self, tmp_path: Path
+    ) -> None:
         """Renamed since the backup, its current state is overwritten unsaved."""
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler(fetched=None))
@@ -367,7 +380,7 @@ class TestRestoreSafetyBackup:
 
     async def test_a_recent_snapshot_does_not_stop_the_safety_backup(
         self, tmp_path: Path
-    ):
+    ) -> None:
         """The throttle's snapshot holds an older state than the one replaced."""
         mgr = _mk_manager(tmp_path, auto_backup_throttle_minutes=60)
         mgr.register(_mk_handler(fetched={"alias": "Hall lights, edited"}))
@@ -378,7 +391,9 @@ class TestRestoreSafetyBackup:
 
         assert result["data"]["safety_backup"] is not None
 
-    async def test_a_safety_backup_of_another_item_blocks_it(self, tmp_path: Path):
+    async def test_a_safety_backup_of_another_item_blocks_it(
+        self, tmp_path: Path
+    ) -> None:
         """Renamed since, the id can name another item: the item the restore
         overwrites would have no safety backup."""
         mgr = _mk_manager(tmp_path)
@@ -405,8 +420,12 @@ class TestRestoreSafetyBackup:
         [("helper_input_boolean", "input_boolean"), ("zone", "zone")],
     )
     async def test_the_safety_backup_follows_a_renamed_item(
-        self, tmp_path: Path, monkeypatch, domain: str, platform: str
-    ):
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        domain: str,
+        platform: str,
+    ) -> None:
         """The backup's entity_id names item_a now and item_b was renamed; the
         restore writes item_b, so the safety backup holds item_b. A counter
         with the same storage id is another platform's item."""
@@ -446,8 +465,8 @@ class TestRestoreSafetyBackup:
         ] == ["item_b"]
 
     async def test_a_removed_zone_whose_entity_id_names_another_is_recreated(
-        self, tmp_path: Path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Nothing is overwritten, so no backup is taken, of the other zone either."""
         registry = [
             {"entity_id": "zone.hall", "platform": "zone", "unique_id": "porch"}
@@ -465,7 +484,9 @@ class TestRestoreSafetyBackup:
         assert _snapshot_files(tmp_path) == [name]
         assert [m["type"] for m in sent if m.get("zone_id") == "porch"] == []
 
-    async def test_an_unreadable_registry_blocks_it(self, tmp_path: Path, monkeypatch):
+    async def test_an_unreadable_registry_blocks_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The lookup is part of the safety capture: its failure is one."""
         down = HomeAssistantCommandError("Command failed: down", "unknown_error")
         sent = _store_ws(monkeypatch, None, [{"id": "item_b"}], registry_error=down)
@@ -481,7 +502,9 @@ class TestRestoreSafetyBackup:
         assert reply["data"]["apply_status"] == "not_applied"
         assert [m for m in sent if m["type"] == "input_boolean/update"] == []
 
-    async def test_an_earlier_directory_failure_does_not_stop_it(self, tmp_path: Path):
+    async def test_an_earlier_directory_failure_does_not_stop_it(
+        self, tmp_path: Path
+    ) -> None:
         """A failed directory check sets an error that a later write clears."""
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler(fetched={"alias": "Hall lights"}))
@@ -491,7 +514,7 @@ class TestRestoreSafetyBackup:
 
         assert result["data"]["safety_backup"] is not None
 
-    async def test_a_failed_apply_names_the_safety_backup(self, tmp_path: Path):
+    async def test_a_failed_apply_names_the_safety_backup(self, tmp_path: Path) -> None:
         """The write may have applied partly; the error keeps its own code."""
         mgr = _mk_manager(tmp_path)
         mgr.register(
@@ -509,7 +532,7 @@ class TestRestoreSafetyBackup:
         assert reply["data"]["safety_backup"] is not None
         assert reply["data"]["apply_status"] == "unknown"
 
-    async def test_with_auto_backup_off_none_is_promised(self, tmp_path: Path):
+    async def test_with_auto_backup_off_none_is_promised(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path, enable_auto_backup=False)
         mgr.register(_mk_handler(fetched=None))
 
@@ -518,7 +541,7 @@ class TestRestoreSafetyBackup:
         assert "warnings" not in result
 
 
-def test_settings_shows_the_restore_warnings(settings_script):
+def test_settings_shows_the_restore_warnings(settings_script: str) -> None:
     """Settings showed only the safety backup's name, never why it is missing."""
     reply = {
         "status": 200,
@@ -539,8 +562,8 @@ def test_settings_shows_the_restore_warnings(settings_script):
 
 
 def test_settings_reports_a_failed_write_with_its_warnings(
-    settings_script, tmp_path: Path, monkeypatch
-):
+    settings_script: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The route answered a failed write with a plain-text HTTP 500."""
     mgr = _mk_manager(tmp_path)
     mgr.register(
@@ -561,7 +584,9 @@ def test_settings_reports_a_failed_write_with_its_warnings(
     assert "nothing was found under hall_lights" in rendered.alerts[0]
 
 
-def test_settings_names_a_recreated_helper_s_mapping_warning_once(settings_script):
+def test_settings_names_a_recreated_helper_s_mapping_warning_once(
+    settings_script: str,
+) -> None:
     """Its outcome message already renders the result's warning."""
     note = "This snapshot has no entity mapping; the recreated helper may have a new entity ID."
     outcome = {
@@ -582,3 +607,35 @@ def test_settings_names_a_recreated_helper_s_mapping_warning_once(settings_scrip
     )
 
     assert rendered.alerts[0].count("may have a new entity ID") == 1
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        # A flow helper's recreation carries restore_mode at the top level and
+        # today returns no other warning; this pins that one would show.
+        {
+            "restore_mode": "recreated",
+            "apply_status": "applied",
+            "result": {"entry_id": "new-entry", "entity_ids_restored": True},
+        },
+        # A zone's recreation keeps restore_mode inside the result, as sent.
+        {"result": {"id": "hall", "restore_mode": "recreated"}},
+    ],
+    ids=["flow-helper-with-mapping", "zone"],
+)
+def test_settings_keeps_a_recreated_item_s_own_warnings(
+    settings_script: str, outcome: dict[str, Any]
+) -> None:
+    """Only the no-mapping warning is rendered by the outcome message."""
+    outcome = {
+        **outcome,
+        "safety_backup": None,
+        "result": {**outcome["result"], "warnings": ["Created with a warning"]},
+    }
+
+    rendered = run_restore(
+        settings_script, {"status": 200, "json": {"success": True, "data": outcome}}
+    )
+
+    assert "Created with a warning" in rendered.alerts[0]

@@ -361,11 +361,14 @@ function renderBackups() {
   });
 }
 
-// The manager's restore warnings and the handler's, as lines to append. A
-// recreated flow helper's outcome message already renders its result.
+// The manager's restore warnings and the handler's, as lines to append. The
+// result's warning for a recreated flow helper without an entity mapping is
+// left out: its outcome message already renders it.
 function backupRestoreWarnings(outcome = {}) {
   const list = (value) => (Array.isArray(value) ? value : []);
-  const handler = outcome.restore_mode === 'recreated' ? [] : list(outcome.result?.warnings);
+  const handler = outcome.restore_mode === 'recreated' && outcome.result?.entity_ids_restored === false
+    ? []
+    : list(outcome.result?.warnings);
   const warnings = [...list(outcome.warnings), ...handler];
   return warnings.length ? '\n\n' + warnings.join('\n') : '';
 }
