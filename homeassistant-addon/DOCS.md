@@ -86,7 +86,7 @@ Replace the URL in `args` with the one from your app logs. No token goes here â€
 
 **How it works:** `uvx` runs fastmcp-remote, which converts the app's HTTP endpoint to the stdio Claude Desktop expects.
 
-**Migrating from mcp-proxy:** switch to `fastmcp-remote` using the configuration above, or follow the [`mcp-remote` setup instructions](https://github.com/punkpeye/mcp-remote#usage). For `mcp-remote`, install Node.js and set `"command": "npx"` with `"args": ["mcp-remote", "YOUR_CONNECT_URL", "--allow-http"]` for a trusted LAN HTTP URL. We no longer recommend `mcp-proxy` for connecting to ha-mcp.
+**Migrating from mcp-proxy:** switch to `fastmcp-remote` using the configuration above, or follow the [`mcp-remote` setup instructions](https://github.com/punkpeye/mcp-remote#usage). For `mcp-remote`, install Node.js and set `"command": "npx"` with `"args": ["-y", "mcp-remote", "YOUR_CONNECT_URL", "--allow-http"]` for a trusted LAN HTTP URL. We no longer recommend `mcp-proxy` for connecting to ha-mcp.
 
 </details>
 
