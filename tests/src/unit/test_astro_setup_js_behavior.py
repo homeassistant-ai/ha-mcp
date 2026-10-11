@@ -723,12 +723,12 @@ class TestStdioBridgeChoice:
     """The generated stdio-bridge config must use a bridge with a bounded SDK.
 
     mcp-proxy imports ``request_ctx`` from ``mcp.server.lowlevel.server``
-    but declares an unbounded ``mcp>=`` dependency, so an unconstrained
-    ``uvx mcp-proxy`` resolves mcp 2.x and dies on an ImportError before
-    it ever connects (#2073). The wizard therefore emits ``fastmcp-remote``,
+    but (before 0.13.0) declares an unbounded ``mcp>=`` dependency, so an
+    unconstrained ``uvx mcp-proxy`` resolves mcp 2.x and dies on an
+    ImportError before it ever connects (#2073). The wizard therefore emits ``fastmcp-remote``,
     which pins ``fastmcp-slim[client,server]==<its own version>``, and that
-    package in turn bounds ``mcp`` itself, so it cannot drift onto an
-    incompatible SDK.
+    package bounds ``mcp`` to a range, so the SDK cannot jump to a new
+    major without a new ``fastmcp-remote`` release.
 
     The regression this guards is emitting *any* bridge whose SDK dependency
     resolves unbounded, so reverting to a bare ``mcp-proxy`` invocation must
