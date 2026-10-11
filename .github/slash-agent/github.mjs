@@ -403,7 +403,7 @@ export function collect(api, number, app, options = {}) {
     ? api.pages(`commits/${head}/check-runs?filter=latest`, "check_runs")
     : [];
   const statuses = pr ? api.pages(`commits/${head}/statuses`) : [];
-  // Coalesced, secretless wakeups are signals, not tests of the PR's code.
+  // Secretless wakeups are signals, not tests of the PR's code.
   const checks = checkRuns
     .filter((c) => !(c.app?.id === GITHUB_ACTIONS_APP_ID && c.name === REVIEW_WAKEUP_CHECK_NAME))
     .map((c) => ({

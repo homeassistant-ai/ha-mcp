@@ -11,9 +11,9 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: slash-review-event-${{ github.repository }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# Let every notification finish: concurrency cancellation adds failure
+# annotations to PR checks during review bursts. The controller serializes
+# actual agent work by session and revalidates whether work is still needed.
 
 jobs:
   notify:
