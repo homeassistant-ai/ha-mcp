@@ -187,13 +187,17 @@ def test_worker_failure_metadata_does_not_print_model_log(tmp_path: Path) -> Non
     assert "secret-token-DO-NOT-PUBLISH" not in result.stdout
 
 
-def test_review_notifications_cannot_cancel_each_others_pr_checks() -> None:
-    """Review bursts must not create failure annotations by cancelling wakeups."""
+def test_review_notifications_queue_without_replacing_pending_pr_checks() -> None:
+    """Review bursts queue per PR instead of cancelling running or pending checks."""
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/slash-agent-review-event.yml").read_text()
     )
-    for scope in (workflow, *workflow["jobs"].values()):
-        assert "concurrency" not in scope
+    concurrency = workflow["concurrency"]
+    assert "${{ github.repository }}" in concurrency["group"]
+    assert "${{ github.event.pull_request.number }}" in concurrency["group"]
+    assert concurrency["cancel-in-progress"] is False
+    assert concurrency["queue"] == "max"
+    assert all("concurrency" not in job for job in workflow["jobs"].values())
 
 
 def test_review_wakeup_has_no_credentials_checkout_or_generated_scripts() -> None:
