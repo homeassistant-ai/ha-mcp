@@ -1863,7 +1863,7 @@ ingress:
         <h3 class="instruction-title text-yellow-300">stdio Bridge Required</h3>
         <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use fastmcp-remote to connect to HTTP servers:</p>
         <pre class="code-block"><code># fastmcp-remote is run automatically via uvx in the config below</code></pre>
-        <p class="text-xs text-slate-400 mt-2">fastmcp-remote is the stdio bridge published by the FastMCP project. It pins its dependency on the MCP SDK to a bounded range, so an SDK release cannot break it the way it broke mcp-proxy (<a href="${base}/faq#mcp-proxy-request-ctx" class="text-blue-400 hover:underline">details</a>).</p>
+        <p class="text-xs text-slate-400 mt-2">fastmcp-remote is the stdio bridge published by the FastMCP project. If you previously used mcp-proxy, replace the whole server entry with the config below (<a href="${base}/faq#mcp-proxy-request-ctx" class="text-blue-400 hover:underline">migration details</a>).</p>
       </div>`;
       instructions.push(stdioBridgeInstr);
     }
@@ -2008,32 +2008,9 @@ ingress:
           }, null, 2);
         }
       } else if (needsStdioBridge) {
-        // fastmcp-remote is the FastMCP project's own stdio bridge. It is used
-        // here in preference to mcp-proxy, which declares an unbounded
-        // `mcp>=...` and so broke outright when the SDK released 2.0.0 and
-        // removed `request_ctx` (#2073). fastmcp-remote pins
-        // `fastmcp-slim[client,server]==<its own version>`, and that package
-        // in turn bounds `mcp` (`mcp<2.0,>=1.24.0` as of fastmcp-slim 3.4.5),
-        // so an SDK release alone cannot repeat this break. No `mcp<...`
-        // constraint is added here the way mcp-proxy needed one: adding one
-        // would only reintroduce a version to revisit on the next SDK major,
-        // for a bridge whose own bound already covers that.
-        //
-        // No `@latest` suffix either, unlike the `ha-mcp@latest` stdio config
-        // below: per uv's docs, a bare `uvx <pkg>` reuses whatever version
-        // resolved on first run, while `@latest` forces a fresh resolve every
-        // invocation. fastmcp-remote doesn't need that: an older cached
-        // version stays compatible because of the bound above, and matching
-        // upstream's own bare `uvx fastmcp-remote <url>` example keeps this
-        // config recognizable against their docs.
-        //
-        // No `--transport` flag: fastmcp-remote defaults to Streamable HTTP,
-        // which is what ha-mcp serves. No `--auth` flag either: bare
-        // `uvx fastmcp-remote <url>` was verified to complete initialize and
-        // tools/list in ~1s against a standard-mode (no-OAuth, secret-path)
-        // deployment, so its default auth mode does not stall on OAuth
-        // discovery the way the 300s `--auth-timeout` default would suggest.
-        // Not verified against OAuth-enabled or remote-tunnel deployments.
+        // Match upstream's `uvx fastmcp-remote <url>` example. The bridge
+        // defaults to Streamable HTTP and manages its own dependencies;
+        // do not carry over SDK pins or transport flags from older bridges.
         config = JSON.stringify({
           mcpServers: {
             "home-assistant": {

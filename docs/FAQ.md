@@ -255,38 +255,9 @@ If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, y
 
 ### mcp-proxy fails with `ImportError: cannot import name 'request_ctx'`
 
-A previously working `uvx mcp-proxy` config stops connecting and the client shows "Server disconnected". Running the command by hand shows:
+Switch to `fastmcp-remote` or [`mcp-remote`](https://github.com/punkpeye/mcp-remote#usage) (requires Node.js/`npx` and `--allow-http` for trusted LAN HTTP URLs). We no longer recommend `mcp-proxy` for connecting to ha-mcp.
 
-```text
-from mcp.server.lowlevel.server import request_ctx
-ImportError: cannot import name 'request_ctx' from 'mcp.server.lowlevel.server'
-```
-
-**Cause:** the `mcp` SDK released version 2.0.0, which removed `request_ctx`. mcp-proxy depends on `mcp` without an upper version bound, so `uvx` installs the incompatible 2.x release. Clearing the uv cache does not help — a fresh install picks the same version.
-
-This only affected clients that reached an HTTP ha-mcp deployment through the mcp-proxy bridge (Claude Desktop and JetBrains, when this FAQ entry was written). The local stdio setup — `uvx ha-mcp@latest` — is unaffected, and so are the app (add-on), Docker, and the custom component themselves: ha-mcp already pins the SDK below 2.0.
-
-**If your client is JetBrains:** drop the bridge entirely rather than switching bridges. JetBrains IDEs support Streamable HTTP natively via the MCP Servers panel. The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) now generates a plain `{"mcpServers": {"home-assistant": {"url": "..."}}}` entry with no `command`/`args` at all. The fastmcp-remote fix below still applies to Claude Desktop and other stdio-only clients.
-
-**Fix (Claude Desktop and other stdio-only clients):** switch the bridge to `fastmcp-remote`, the stdio bridge published by the FastMCP project. It pins its dependency on the MCP SDK to a bounded range, so an SDK release cannot break it the way it broke mcp-proxy. Replace the whole server entry with:
-
-```json
-{
-  "mcpServers": {
-    "home-assistant": {
-      "command": "uvx",
-      "args": [
-        "fastmcp-remote",
-        "http://192.168.1.100:9583/private_your_secret_path"
-      ]
-    }
-  }
-}
-```
-
-Keep your own connect URL. No `--transport` flag is needed: fastmcp-remote defaults to Streamable HTTP, which is what ha-mcp serves. Restart the client after saving (Claude Desktop: **File → Exit**, then reopen; closing the window is not enough). The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates this config for stdio-only clients.
-
-**Prefer to stay on mcp-proxy?** Adding `"--with", "mcp<2.0.0"` to its `args` also works. `--with` is a global `uv` option, so it must come *before* the package name. That pin has to be revisited on the next SDK major; switching bridges does not. See [#2073](https://github.com/homeassistant-ai/ha-mcp/issues/2073).
+The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates a `fastmcp-remote` configuration for Claude Desktop and other stdio-only clients. Replace your old server entry with the generated configuration, keep your connect URL, and fully restart the client.
 
 ### uvx fails with `invalid peer certificate: UnknownIssuer`
 
@@ -504,8 +475,8 @@ See the [integration's README](https://github.com/norpol/hass-codex-tunnel-mcp#r
 
 This is a Claude Desktop bug, not an ha-mcp bug. It affects tools served by
 MCP servers Claude Desktop runs locally: anything in
-`claude_desktop_config.json` (a direct stdio server or a bridge such as
-`mcp-remote`, `fastmcp-remote` or `mcp-proxy`), Desktop Extensions, and
+`claude_desktop_config.json` (a direct stdio server or any stdio-to-HTTP
+bridge), Desktop Extensions, and
 Desktop's own Filesystem connector. claude.ai custom connectors and Claude Code
 are not affected.
 

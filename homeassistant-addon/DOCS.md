@@ -86,7 +86,7 @@ Replace the URL in `args` with the one from your app logs. No token goes here â€
 
 **How it works:** `uvx` runs fastmcp-remote, which converts the app's HTTP endpoint to the stdio Claude Desktop expects.
 
-**Upgrading from mcp-proxy:** earlier versions of this guide used `mcp-proxy`. If your config still runs it and Claude Desktop shows "Server disconnected", replace it with the config above. mcp-proxy declares no upper bound on the MCP SDK, so it fails with `ImportError: cannot import name 'request_ctx'` once the SDK ships a major release ([#2073](https://github.com/homeassistant-ai/ha-mcp/issues/2073)). fastmcp-remote pins its SDK dependency to a bounded range and cannot break that way.
+**Migrating from mcp-proxy:** switch to `fastmcp-remote` using the configuration above, or follow the [`mcp-remote` setup instructions](https://github.com/punkpeye/mcp-remote#usage). For `mcp-remote`, install Node.js and set `"command": "npx"` with `"args": ["-y", "mcp-remote", "YOUR_CONNECT_URL", "--allow-http"]` for a trusted LAN HTTP URL. We no longer recommend `mcp-proxy` for connecting to ha-mcp.
 
 </details>
 
