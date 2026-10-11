@@ -290,6 +290,60 @@ def _snapshot(tmp_path: Path, config: dict[str, Any] | None = None) -> str:
     return path.name
 
 
+def _store_ws(
+    monkeypatch, registry: Any, items: list[dict[str, Any]], registry_error=None
+) -> list[dict[str, Any]]:
+    """A Core fake for storage items: an update or registry get of an unknown
+    id fails with Core's not_found."""
+    sent: list[dict[str, Any]] = []
+    missing = HomeAssistantCommandError("Command failed: not found", "not_found")
+
+    async def send(_client: Any, message: dict[str, Any]) -> Any:
+        sent.append(message)
+        kind = message["type"]
+        if kind.startswith("config/entity_registry/") and registry_error:
+            raise registry_error
+        if kind == "config/entity_registry/list":
+            return registry
+        if kind == "config/entity_registry/get":
+            row = next(
+                (r for r in registry if r["entity_id"] == message["entity_id"]), None
+            )
+            if row is None:
+                raise missing
+            return row
+        item_type, _, command = kind.partition("/")
+        if command == "list":
+            return items
+        target = message.get(f"{item_type}_id")
+        if command == "update" and target not in {i["id"] for i in items}:
+            raise missing
+        return {"id": target or "new", "name": message.get("name")}
+
+    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=send))
+    return sent
+
+
+def _snapshot_files(tmp_path: Path) -> list[str]:
+    return sorted(p.name for p in tmp_path.glob("*.yaml"))
+
+
+def _store_snapshot(tmp_path: Path, domain: str, entity_id: str, item_id: str) -> str:
+    name = f"{domain}.{entity_id}.20260521_120000.yaml"
+    config = {"id": item_id, "name": item_id.title()}
+    (tmp_path / name).write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "domain": domain,
+                "entity_id": entity_id,
+                "config": config,
+            }
+        )
+    )
+    return name
+
+
 class TestRestoreSafetyBackup:
     async def test_a_target_not_found_under_its_id_is_reported(self, tmp_path: Path):
         """Renamed since the backup, its current state is overwritten unsaved."""
@@ -314,16 +368,108 @@ class TestRestoreSafetyBackup:
 
         assert result["data"]["safety_backup"] is not None
 
-    async def test_a_safety_backup_of_another_item_is_reported(self, tmp_path: Path):
-        """Renamed since, the id can name another item: its file would restore that."""
+    async def test_a_safety_backup_of_another_item_blocks_it(self, tmp_path: Path):
+        """Renamed since, the id can name another item: the item the restore
+        overwrites would have no safety backup."""
         mgr = _mk_manager(tmp_path)
-        mgr.register(_mk_handler(fetched={"id": "other", "alias": "Other"}))
+        written = AssertionError("the restore wrote")
+        mgr.register(
+            _mk_handler(
+                fetched={"id": "other", "alias": "Other"}, raise_on_restore=written
+            )
+        )
         name = _snapshot(tmp_path, {"id": "hall", "alias": "Hall lights"})
+
+        with pytest.raises(ToolError) as exc_info:
+            await _edits_restore(mgr, "edits", "restore", name)
+
+        reply = json.loads(str(exc_info.value))
+        assert reply["error"]["code"] == "BACKUP_CAPTURE_FAILED"
+        assert "would hold other, not hall" in reply["error"]["message"]
+        assert reply["data"]["apply_status"] == "not_applied"
+        assert reply["data"]["safety_backup"] is None
+        assert _snapshot_files(tmp_path) == [name]
+
+    @pytest.mark.parametrize(
+        ("domain", "platform"),
+        [("helper_input_boolean", "input_boolean"), ("zone", "zone")],
+    )
+    async def test_the_safety_backup_follows_a_renamed_item(
+        self, tmp_path: Path, monkeypatch, domain: str, platform: str
+    ):
+        """The backup's entity_id names item_a now and item_b was renamed; the
+        restore writes item_b, so the safety backup holds item_b. A counter
+        with the same storage id is another platform's item."""
+        registry = [
+            {
+                "entity_id": "counter.item_b",
+                "platform": "counter",
+                "unique_id": "item_b",
+            },
+            {
+                "entity_id": f"{platform}.item_b",
+                "platform": platform,
+                "unique_id": "item_a",
+            },
+            {
+                "entity_id": f"{platform}.renamed",
+                "platform": platform,
+                "unique_id": "item_b",
+            },
+        ]
+        items = [{"id": "item_a", "name": "A"}, {"id": "item_b", "name": "B2"}]
+        sent = _store_ws(monkeypatch, registry, items)
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, None)
+        name = _store_snapshot(tmp_path, domain, f"{platform}.item_b", "item_b")
 
         result = await _edits_restore(mgr, "edits", "restore", name)
 
-        assert "other" in result["warnings"][0] and "hall" in result["warnings"][0]
-        assert not [w for w in result["warnings"] if "restore the safety_backup" in w]
+        held = mgr.read_snapshot(result["data"]["safety_backup"])
+        assert {k: held["config"][k] for k in ("id", "name")} == {
+            "id": "item_b",
+            "name": "B2",
+        }
+        assert "restore the safety_backup" in result["warnings"][0]
+        assert [
+            m[f"{platform}_id"] for m in sent if m["type"] == f"{platform}/update"
+        ] == ["item_b"]
+
+    async def test_a_removed_zone_whose_entity_id_names_another_is_recreated(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Nothing is overwritten, so no backup is taken, of the other zone either."""
+        registry = [
+            {"entity_id": "zone.hall", "platform": "zone", "unique_id": "porch"}
+        ]
+        sent = _store_ws(monkeypatch, registry, [{"id": "porch", "name": "Porch"}])
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, None)
+        name = _store_snapshot(tmp_path, "zone", "zone.hall", "hall")
+
+        result = await _edits_restore(mgr, "edits", "restore", name)
+
+        assert result["data"]["result"]["restore_mode"] == "recreated"
+        assert result["data"]["safety_backup"] is None
+        assert "zone hall no longer exists" in result["warnings"][0]
+        assert _snapshot_files(tmp_path) == [name]
+        assert [m["type"] for m in sent if m.get("zone_id") == "porch"] == []
+
+    async def test_an_unreadable_registry_blocks_it(self, tmp_path: Path, monkeypatch):
+        """The lookup is part of the safety capture: its failure is one."""
+        down = HomeAssistantCommandError("Command failed: down", "unknown_error")
+        sent = _store_ws(monkeypatch, None, [{"id": "item_b"}], registry_error=down)
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, None)
+        name = _store_snapshot(tmp_path, "helper_input_boolean", "x.item_b", "item_b")
+
+        with pytest.raises(ToolError) as exc_info:
+            await _edits_restore(mgr, "edits", "restore", name)
+
+        reply = json.loads(str(exc_info.value))
+        assert reply["error"]["code"] == "BACKUP_CAPTURE_FAILED"
+        assert reply["data"]["apply_status"] == "not_applied"
+        assert [m for m in sent if m["type"] == "input_boolean/update"] == []
 
     async def test_an_earlier_directory_failure_does_not_stop_it(self, tmp_path: Path):
         """A failed directory check sets an error that a later write clears."""
@@ -334,28 +480,6 @@ class TestRestoreSafetyBackup:
         result = await _edits_restore(mgr, "edits", "restore", _snapshot(tmp_path))
 
         assert result["data"]["safety_backup"] is not None
-
-    async def test_an_unreadable_safety_backup_does_not_stop_it(
-        self, tmp_path: Path, monkeypatch
-    ):
-        """The file is written; only the check of what it holds failed."""
-        mgr = _mk_manager(tmp_path)
-        mgr.register(_mk_handler(fetched={"id": "hall", "alias": "Hall lights"}))
-        name = _snapshot(tmp_path, {"id": "hall", "alias": "Hall lights"})
-        read = mgr.read_snapshot
-
-        def read_only_the_backup(snapshot: str) -> Any:
-            if snapshot != name:
-                raise OSError(5, "Input/output error")
-            return read(snapshot)
-
-        monkeypatch.setattr(mgr, "read_snapshot", read_only_the_backup)
-
-        result = await _edits_restore(mgr, "edits", "restore", name)
-
-        assert result["data"]["result"]["ok"] is True
-        assert result["data"]["safety_backup"] is not None
-        assert "could not be read back" in result["warnings"][0]
 
     async def test_a_failed_apply_names_the_safety_backup(self, tmp_path: Path):
         """The write may have applied partly; the error keeps its own code."""
@@ -404,26 +528,27 @@ def test_settings_shows_the_restore_warnings(settings_script):
     assert "keeps its stored icon" in rendered.alerts[0]
 
 
-def test_settings_reports_a_failed_write_with_its_safety_backup(
+def test_settings_reports_a_failed_write_with_its_warnings(
     settings_script, tmp_path: Path, monkeypatch
 ):
     """The route answered a failed write with a plain-text HTTP 500."""
     mgr = _mk_manager(tmp_path)
     mgr.register(
         _mk_handler(
-            fetched={"id": "other", "alias": "Other"},
+            fetched=None,
             raise_on_restore=HomeAssistantAPIError("Not found", status_code=404),
         )
     )
-    name = _snapshot(tmp_path, {"id": "hall", "alias": "Hall lights"})
+    name = _snapshot(tmp_path)
 
     response = response_for(monkeypatch, mgr, name)
     rendered = run_restore(
         settings_script, {"status": response.status_code, "json": response.json()}, name
     )
 
-    assert response.json()["data"]["safety_backup"] is not None
-    assert "holds other, not hall" in rendered.alerts[0]
+    assert response.status_code == 409
+    assert response.json()["data"]["apply_status"] == "unknown"
+    assert "nothing was found under hall_lights" in rendered.alerts[0]
 
 
 def test_settings_names_a_recreated_helper_s_mapping_warning_once(settings_script):
