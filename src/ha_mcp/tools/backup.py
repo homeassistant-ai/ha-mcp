@@ -2108,7 +2108,7 @@ async def _edits_restore(
         handler_result = dict(result["result"])
         warnings.extend(handler_result.pop("warnings", []))
         data["result"] = handler_result
-    if result.get("safety_backup") and not result.get("warnings"):
+    if result.get("safety_backup"):
         warnings.append(
             "This restore did NOT restart HA. To revert, restore the safety_backup."
         )
