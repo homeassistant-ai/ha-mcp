@@ -687,7 +687,7 @@
     },
     "ha_config_set_helper": {
       "title": "Créer/mettre à jour l'assistant",
-      "description": "Crée ou met à jour une entité d'assistance Home Assistant."
+      "description": "Créer ou mettre à jour des assistants Home Assistant : types de stockage, chaque assistant"
     },
     "ha_config_set_label": {
       "title": "Créer/mettre à jour l'étiquette",

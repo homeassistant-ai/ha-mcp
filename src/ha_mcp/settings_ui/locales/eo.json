@@ -656,7 +656,7 @@
     },
     "ha_config_set_helper": {
       "title": "Krei aŭ Ĝisdatigi Helpanton",
-      "description": "Kreu aŭ ĝisdatigu helpantajn entojn kaj agordajn sub-enirojn de Home Assistant."
+      "description": "Krei aŭ ĝisdatigi Home Assistant helpantojn: stoktipoj, ĉiu helpanto"
     },
     "ha_config_set_label": {
       "title": "Krei aŭ Ĝisdatigi Etikedon",

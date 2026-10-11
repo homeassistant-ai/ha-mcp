@@ -687,7 +687,7 @@
     },
     "ha_config_set_helper": {
       "title": "Crea o aggiorna un helper",
-      "description": "Crea o aggiorna le entità helper di Home Assistant e le sottovoci di configurazione"
+      "description": "Crea o aggiorna gli helper di Home Assistant: tipi di archiviazione, ogni helper"
     },
     "ha_config_set_label": {
       "title": "Crea o aggiorna un'etichetta",

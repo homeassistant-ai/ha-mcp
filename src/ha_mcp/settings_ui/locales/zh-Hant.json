@@ -656,7 +656,7 @@
     },
     "ha_config_set_helper": {
       "title": "建立或更新輔助程式",
-      "description": "建立或更新 Home Assistant 輔助程式實體與設定子項目"
+      "description": "建立或更新 Home Assistant 輔助程式：儲存類型、每個輔助程式"
     },
     "ha_config_set_label": {
       "title": "建立或更新標籤",

@@ -687,7 +687,7 @@
     },
     "ha_config_set_helper": {
       "title": "Köməkçi yarat və ya yenilə",
-      "description": "Home Assistant köməkçi obyektlərini və konfiqurasiyanın alt qeydlərini yaradın və ya yeniləyin."
+      "description": "Home Assistant köməkçilərini yaradın və ya yeniləyin: yaddaş növləri, hər bir köməkçi"
     },
     "ha_config_set_label": {
       "title": "Etiket yarat və ya yenilə",

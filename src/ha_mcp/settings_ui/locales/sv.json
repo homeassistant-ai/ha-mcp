@@ -656,7 +656,7 @@
     },
     "ha_config_set_helper": {
       "title": "Skapa eller Uppdatera Hjälpare",
-      "description": "Skapa eller uppdatera Home Assistant-hjälpentiteter och konfigurationsunderposter"
+      "description": "Skapa eller uppdatera Home Assistant-hjälpare: lagringstyper, alla hjälpare"
     },
     "ha_config_set_label": {
       "title": "Skapa eller Uppdatera Etikett",

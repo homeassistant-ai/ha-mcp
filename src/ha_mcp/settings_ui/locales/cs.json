@@ -656,7 +656,7 @@
     },
     "ha_config_set_helper": {
       "title": "Vytvořit nebo aktualizovat pomocníka",
-      "description": "Vytvořit nebo aktualizovat pomocné entity Home Assistant a podpoložky konfigurace"
+      "description": "Vytvořte nebo aktualizujte pomocníky Home Assistant: typy úložišť, každý pomocník"
     },
     "ha_config_set_label": {
       "title": "Vytvořit nebo aktualizovat štítek",

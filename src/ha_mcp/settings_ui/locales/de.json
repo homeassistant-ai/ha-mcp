@@ -687,7 +687,7 @@
     },
     "ha_config_set_helper": {
       "title": "Helfer erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Helfer-Entität."
+      "description": "Home Assistant-Helfer erstellen oder aktualisieren: Speichertypen, jeder Helfer"
     },
     "ha_config_set_label": {
       "title": "Label erstellen/aktualisieren",

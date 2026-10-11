@@ -656,7 +656,7 @@
     },
     "ha_config_set_helper": {
       "title": "Utwórz lub zaktualizuj pomocnika",
-      "description": "Utwórz lub zaktualizuj encje pomocnicze Home Assistant i podpozycje konfiguracji"
+      "description": "Twórz lub aktualizuj pomocniki Home Assistant: typy magazynów, każdy pomocnik"
     },
     "ha_config_set_label": {
       "title": "Utwórz lub zaktualizuj etykietę",

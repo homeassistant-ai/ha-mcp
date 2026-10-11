@@ -687,7 +687,7 @@
     },
     "ha_config_set_helper": {
       "title": "Создать или изменить помощник",
-      "description": "Создать или обновить вспомогательную сущность Home Assistant."
+      "description": "Создание или обновление помощников Home Assistant: типы хранилищ, любые помощники"
     },
     "ha_config_set_label": {
       "title": "Создать или изменить метку",

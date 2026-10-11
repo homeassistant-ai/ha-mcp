@@ -656,7 +656,7 @@
     },
     "ha_config_set_helper": {
       "title": "Maak of Werk Helper bij",
-      "description": "Maak of werk Home Assistant-helperentiteiten en configuratiesubitems bij"
+      "description": "Maak of werk Home Assistant-helpers bij: opslagtypen, elke helper"
     },
     "ha_config_set_label": {
       "title": "Maak of Werk Label bij",
