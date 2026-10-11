@@ -108,7 +108,8 @@ def note_no_safety_backup(
     if target is None:  # safety_target: the stored item no longer exists
         stored = config.get("id") if isinstance(config, dict) else None
         outcome["warnings"] = [
-            f"No safety backup was taken: {domain} {stored} no longer exists, "
+            f"No safety backup was taken: {domain.removeprefix('helper_')} "
+            f"{stored} no longer exists, "
             "so this restore overwrites none of its state."
         ]
         return

@@ -17,6 +17,7 @@ import yaml
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.backup_helper_target import note_no_safety_backup
 from ha_mcp.backup_manager import SCHEMA_VERSION
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
@@ -234,6 +235,15 @@ class TestTagRemoval:
         assert error["code"] == "ENTITY_NOT_FOUND"
         assert "front_door" in error["message"]
         assert "YAML" not in error["message"] + error["suggestion"]
+
+
+def test_a_removed_helper_is_named_by_its_type():
+    """Its backup domain carries the helper_ prefix; the warning names the type."""
+    outcome: dict[str, Any] = {}
+    note_no_safety_backup(outcome, "helper_tag", None, {"id": "front_door"})
+    warning = outcome["warnings"][0]
+    assert "helper_" not in warning
+    assert "tag front_door no longer exists" in warning
 
 
 def _set_helper_tool(client: Any) -> Any:
