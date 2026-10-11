@@ -255,7 +255,7 @@ If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, y
 
 ### mcp-proxy fails with `ImportError: cannot import name 'request_ctx'`
 
-Switch to `fastmcp-remote` or `mcp-remote`. We no longer recommend `mcp-proxy` for connecting to ha-mcp.
+Switch to `fastmcp-remote` or [`mcp-remote`](https://github.com/punkpeye/mcp-remote#usage) (requires Node.js/`npx` and `--allow-http` for trusted LAN HTTP URLs). We no longer recommend `mcp-proxy` for connecting to ha-mcp.
 
 The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates a `fastmcp-remote` configuration for Claude Desktop and other stdio-only clients. Replace your old server entry with the generated configuration, keep your connect URL, and fully restart the client.
 
@@ -475,8 +475,8 @@ See the [integration's README](https://github.com/norpol/hass-codex-tunnel-mcp#r
 
 This is a Claude Desktop bug, not an ha-mcp bug. It affects tools served by
 MCP servers Claude Desktop runs locally: anything in
-`claude_desktop_config.json` (a direct stdio server or a bridge such as
-`mcp-remote` or `fastmcp-remote`), Desktop Extensions, and
+`claude_desktop_config.json` (a direct stdio server or any stdio-to-HTTP
+bridge), Desktop Extensions, and
 Desktop's own Filesystem connector. claude.ai custom connectors and Claude Code
 are not affected.
 

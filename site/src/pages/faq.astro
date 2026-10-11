@@ -268,7 +268,7 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
 
         <div class="faq-item" id="mcp-proxy-request-ctx">
           <h3 class="text-lg font-medium text-white mb-2">mcp-proxy fails with <code class="bg-slate-800 px-1 rounded">ImportError: cannot import name 'request_ctx'</code></h3>
-          <p class="text-slate-300 mb-3">Switch to <code class="bg-slate-800 px-1 rounded">fastmcp-remote</code> or <code class="bg-slate-800 px-1 rounded">mcp-remote</code>. We no longer recommend <code class="bg-slate-800 px-1 rounded">mcp-proxy</code> for connecting to ha-mcp.</p>
+          <p class="text-slate-300 mb-3">Switch to <code class="bg-slate-800 px-1 rounded">fastmcp-remote</code> or <a href="https://github.com/punkpeye/mcp-remote#usage" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">mcp-remote</a> (requires Node.js/<code class="bg-slate-800 px-1 rounded">npx</code> and <code class="bg-slate-800 px-1 rounded">--allow-http</code> for trusted LAN HTTP URLs). We no longer recommend <code class="bg-slate-800 px-1 rounded">mcp-proxy</code> for connecting to ha-mcp.</p>
           <p class="text-slate-400 text-sm">The <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> generates a <code class="bg-slate-800 px-1 rounded">fastmcp-remote</code> configuration for Claude Desktop and other stdio-only clients. Replace your old server entry with the generated configuration, keep your connect URL, and fully restart the client.</p>
         </div>
 
