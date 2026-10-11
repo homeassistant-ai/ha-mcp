@@ -720,28 +720,29 @@ class TestYamlDialects:
 
 
 class TestStdioBridgeChoice:
-    """The generated stdio-bridge config must use a bridge with a bounded SDK.
+    """Stdio-only clients get exactly ``fastmcp-remote <url>`` as their bridge.
 
-    mcp-proxy imports ``request_ctx`` from ``mcp.server.lowlevel.server``
-    but (before 0.13.0) declares an unbounded ``mcp>=`` dependency, so an
-    unconstrained ``uvx mcp-proxy`` resolves mcp 2.x and dies on an
-    ImportError before it ever connects (#2073). The wizard therefore emits ``fastmcp-remote``,
-    which pins ``fastmcp-slim[client,server]==<its own version>``, and that
-    package bounds ``mcp`` to a range, so the SDK cannot jump to a new
-    major without a new ``fastmcp-remote`` release.
+    Before 0.13.0, mcp-proxy imported ``request_ctx`` from
+    ``mcp.server.lowlevel.server`` and declared an unbounded ``mcp>=``
+    dependency. ``uvx mcp-proxy`` then resolved mcp 2.x and died on an
+    ImportError before it connected (#2073). From 0.13.0 it caps ``mcp``
+    below 2, so it no longer breaks that way, but it cannot use SDK 2.x.
+    The wizard emits ``fastmcp-remote``, which pins
+    ``fastmcp-slim[client,server]==<its own version>``. That package
+    bounds ``mcp`` to a range, so the SDK cannot jump to a new major
+    without a new ``fastmcp-remote`` release.
 
-    The regression this guards is emitting *any* bridge whose SDK dependency
-    resolves unbounded, so reverting to a bare ``mcp-proxy`` invocation must
-    fail here even though `uv` would still install it without error. The
-    break only surfaces later, on import, not at install time.
+    The guarded behaviour is the shape of the emitted config: the bridge
+    package first, then the connect URL, with no other bridge, flag or
+    SDK pin. A different bridge or a leftover ``--with`` pin fails here
+    even though ``uv`` would still install it without error.
 
-    Every stdio-only client that goes through the bridge is covered, derived
-    from the real ``stdioOnlyClients`` list minus Zed (which takes the URL
-    directly) rather than hardcoded here.
+    Every stdio-only client is covered. The list comes from the real
+    ``stdioOnlyClients`` data rather than being hardcoded here.
     """
 
     @pytest.mark.parametrize("client_id", BRIDGE_CLIENT_IDS, ids=BRIDGE_CLIENT_IDS)
-    def test_generated_config_uses_bounded_stdio_bridge(
+    def test_stdio_bridge_config_is_fastmcp_remote_with_connect_url(
         self,
         client_id: str,
         setup_script: str,
@@ -773,29 +774,14 @@ class TestStdioBridgeChoice:
         config = json.loads(match.group(1).replace("&quot;", '"'))
         args = config["mcpServers"]["home-assistant"]["args"]
 
-        assert "fastmcp-remote" in args, (
-            f"{client_id}: expected a fastmcp-remote bridge config; args={args}"
-        )
-        assert "mcp-proxy" not in args, (
-            f"{client_id}: mcp-proxy declares an unbounded mcp>= dependency and "
-            f"breaks on every SDK major (#2073). Use fastmcp-remote, whose SDK "
-            f"dependency is bounded; args={args}"
-        )
-        # fastmcp-remote needs no SDK pin, so a stray `--with` here means the
-        # mcp-proxy workaround was carried over onto a bridge that never
-        # needed it.
-        assert "--with" not in args, (
-            f"{client_id}: fastmcp-remote's own SDK dependency is already "
-            f"bounded; a --with constraint is leftover mcp-proxy scaffolding; "
-            f"args={args}"
-        )
-        # The bridge takes exactly [package, url]: the package name must come
-        # first (reversed, uvx would treat the URL as the package), and no
-        # stray flag should sneak in between. The URL itself is whatever the
-        # wizard resolved (a real connect URL in the browser, a `{{...}}`
-        # placeholder in this harness), so this doesn't assert its contents.
-        assert len(args) == 2 and args[0] == "fastmcp-remote", (
-            f"{client_id}: expected exactly [package, url]; args={args}"
+        # The bridge takes exactly [package, url]. The package comes first
+        # (reversed, uvx would treat the URL as the package), with no other
+        # bridge, flag or SDK pin. The URL is the `{{MCP_SERVER_URL}}`
+        # placeholder, which the setup page tells the user to replace with
+        # their connect URL, so a config without it would be unusable.
+        assert args == ["fastmcp-remote", "{{MCP_SERVER_URL}}"], (
+            f"{client_id}: expected exactly [fastmcp-remote, connect URL "
+            f"placeholder]; args={args}"
         )
 
     @pytest.mark.parametrize(
