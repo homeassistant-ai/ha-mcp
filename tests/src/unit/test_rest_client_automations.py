@@ -11,6 +11,7 @@ import pytest
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
+    HomeAssistantConnectionError,
 )
 
 
@@ -389,6 +390,34 @@ class TestUpsertAutomationResolvedShortCircuit:
 
         assert result["operation"] == "created"
         mock_client._resolve_automation_id.assert_not_called()
+
+
+def _resolver_client(state_error: Exception) -> HomeAssistantClient:
+    """A client whose automation state read fails with ``state_error``."""
+    client = HomeAssistantClient.__new__(HomeAssistantClient)
+    client.get_entity_state = AsyncMock(side_effect=state_error)  # type: ignore[method-assign]
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        HomeAssistantConnectionError("down"),
+        HomeAssistantAPIError("server error", status_code=500),
+    ],
+    ids=["connection", "server-error"],
+)
+async def test_a_failed_state_read_is_not_reported_as_a_missing_automation(
+    error: Exception,
+) -> None:
+    """Reported as not found, a backup skips the automation silently and an
+    agent may create a duplicate of it."""
+    client = _resolver_client(error)
+
+    with pytest.raises(type(error)) as exc_info:
+        await client._resolve_automation_id("automation.kitchen")
+    assert exc_info.value is error
 
 
 class TestPollForAutomationEntity:

@@ -12,6 +12,11 @@ import logging
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAdminRequiredError,
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.errors import ErrorCode, create_error_response, create_validation_error
 from ha_mcp.tools.helpers import exception_to_structured_error, raise_tool_error
 
@@ -375,3 +380,62 @@ class TestSchemaAndAuthClassification:
         exc = HomeAssistantConnectionError("WebSocket not authenticated")
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == "CONNECTION_FAILED"
+
+
+class TestClassifiedGuidanceSurvivesCallerSuggestions:
+    """Issue #2698: a caller's own hints must not drop the token, admin or
+    reachability guidance an environment failure needs to be fixed."""
+
+    @staticmethod
+    def _classified(error: Exception) -> list[str]:
+        err = exception_to_structured_error(error, raise_error=False)["error"]
+        return err.get("suggestions") or [err["suggestion"]]
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            HomeAssistantAuthError("401 Unauthorized"),
+            HomeAssistantAdminRequiredError("GET /api/error_log is admin-only"),
+            HomeAssistantConnectionError("connection refused"),
+        ],
+    )
+    def test_environment_guidance_comes_first(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception
+    ) -> None:
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        classified = self._classified(error)
+        result = exception_to_structured_error(
+            error, raise_error=False, suggestions=["Caller hint"]
+        )
+        assert result["error"]["suggestions"] == [*classified, "Caller hint"]
+        assert result["error"]["suggestion"] == classified[0]
+
+    def test_add_on_auth_guidance_comes_first(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "x")
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+        error = HomeAssistantAuthError("401 Unauthorized")
+        classified = self._classified(error)
+        assert "Supervisor" in classified[0]
+        result = exception_to_structured_error(
+            error, raise_error=False, suggestions=["Caller hint"]
+        )
+        assert result["error"]["suggestions"] == [*classified, "Caller hint"]
+
+    def test_a_caller_hint_already_classified_is_not_repeated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        error = HomeAssistantAuthError("401 Unauthorized")
+        classified = self._classified(error)
+        result = exception_to_structured_error(
+            error, raise_error=False, suggestions=[classified[0], "Caller hint"]
+        )
+        assert result["error"]["suggestions"] == [*classified, "Caller hint"]
+
+    def test_other_codes_keep_the_callers_list(self) -> None:
+        result = exception_to_structured_error(
+            ValueError("bad input"), raise_error=False, suggestions=["Caller hint"]
+        )
+        assert result["error"]["suggestions"] == ["Caller hint"]

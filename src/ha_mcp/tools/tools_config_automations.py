@@ -71,9 +71,9 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import (
+    verify_entity_removed,
     wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
-    wait_for_entity_removed,
     wait_for_state_change,
 )
 
@@ -1411,8 +1411,13 @@ class AutomationConfigTools:
         )
         for warning in conflict_warnings:
             result.setdefault("warnings", []).append(warning)
-        refetched = await self._get_automation_config_internal(identifier)
-        new_config_hash = refetched[1]
+        new_config_hash: str | None = None  # the write is saved; read-back may fail
+        try:
+            _, new_config_hash = await self._get_automation_config_internal(identifier)
+        except (HomeAssistantAPIError, HomeAssistantConnectionError) as e:
+            result.setdefault("warnings", []).append(
+                f"Saved; reading it back failed ({e}), re-read it for a config_hash"
+            )
 
         entity_id = result.get("entity_id")
         if not entity_id and identifier and identifier.startswith("automation."):
@@ -1634,8 +1639,8 @@ class AutomationConfigTools:
         except HomeAssistantAPIError as exc:
             if exc.status_code == 404 and not identifier.startswith("automation."):
                 return None  # Preserve intentional creation with a caller-chosen ID.
-            # Entity-ID resolution also maps lookup failures to 404. Never retry
-            # those as creation: a recovered lookup could overwrite an unchecked target.
+            # Entity-ID resolution reports a state 404 as not found. Never retry
+            # that as creation: a recovered lookup could overwrite an unchecked target.
             raise
         if current.get("alias") != config["alias"]:
             raise_tool_error(
@@ -1938,18 +1943,7 @@ class AutomationConfigTools:
 
             # Wait for entity to be removed
             if wait and entity_id_for_wait:
-                try:
-                    removed = await wait_for_entity_removed(
-                        self._client, entity_id_for_wait
-                    )
-                    if not removed:
-                        result.setdefault("warnings", []).append(
-                            f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
-                        )
-                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                    result.setdefault("warnings", []).append(
-                        f"Deletion confirmed but removal verification failed: {e}"
-                    )
+                await verify_entity_removed(self._client, entity_id_for_wait, result)
 
             return {
                 "success": True,

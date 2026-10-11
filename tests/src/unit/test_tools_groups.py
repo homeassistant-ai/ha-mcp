@@ -193,6 +193,9 @@ class TestGroupToolsValidation:
         assert result["success"] is True
         assert result["entity_id"] == "group.test_group"
         assert result["object_id"] == "test_group"
+        # The real removal check ran clean: a bug in it would only show up as
+        # a warning, since any failed check after a delete is one.
+        assert "warnings" not in result
 
         # Verify service was called
         mock_client.call_service.assert_called_once_with(

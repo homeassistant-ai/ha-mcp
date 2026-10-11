@@ -412,8 +412,8 @@ async def test_deep_search_finds_non_template_flow_helpers(
 ):
     """deep_search surfaces non-template flow-based helpers too (issue #1457).
 
-    The flow-helper branch lists config entries for every domain in
-    ``FLOW_HELPER_TYPES``, so a group (menu-rooted flow) and a min_max (single
+    The flow-helper branch lists config entries for every helper flow Home
+    Assistant lists, so a group (menu-rooted flow) and a min_max (single
     form) must be findable by name alongside template helpers — not just the
     ``template`` domain.
     """

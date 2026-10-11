@@ -124,7 +124,7 @@ class TestAutomationWaitParameter:
     ):
         """wait defaults to True for removal and polls for entity removal."""
         with patch(
-            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             mock_wait.return_value = True
@@ -139,7 +139,7 @@ class TestAutomationWaitParameter:
     ):
         """wait=False skips removal polling."""
         with patch(
-            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             result = await register_tools["ha_config_remove_automation"](
@@ -154,7 +154,7 @@ class TestAutomationWaitParameter:
     ):
         """wait=True works even when identifier is a unique_id, not an entity_id."""
         with patch(
-            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             mock_wait.return_value = True
@@ -174,7 +174,7 @@ class TestAutomationWaitParameter:
         """When get_states fails, wait is skipped but deletion still succeeds."""
         mock_client.get_states.side_effect = Exception("connection error")
         with patch(
-            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             result = await register_tools["ha_config_remove_automation"](
@@ -275,7 +275,7 @@ class TestScriptWaitParameter:
     async def test_remove_script_wait_default_true(self, tools, mock_client):
         """wait defaults to True for removal."""
         with patch(
-            "ha_mcp.tools.tools_config_scripts.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             mock_wait.return_value = True
@@ -288,7 +288,7 @@ class TestScriptWaitParameter:
     async def test_remove_script_wait_false_skips_polling(self, tools, mock_client):
         """wait=False skips removal polling."""
         with patch(
-            "ha_mcp.tools.tools_config_scripts.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             result = await tools.ha_config_remove_script(

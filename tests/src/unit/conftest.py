@@ -8,9 +8,46 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
+from types import SimpleNamespace
 
 import pytest
+
+# Core's generated flow registry, which the component imports at module level
+# for its flow-helper set. Home Assistant is not a unit-test dependency, and the
+# module must exist before any test module imports the component. The helper
+# list is Core 2026.10's (refresh it from homeassistant/generated/config_flows.py);
+# bayesian is a Core integration of type "service", so Core files it under
+# "integration".
+sys.modules.setdefault(
+    "homeassistant.generated.config_flows",
+    SimpleNamespace(
+        FLOWS={
+            "helper": [
+                "derivative",
+                "filter",
+                "generic_hygrostat",
+                "generic_thermostat",
+                "group",
+                "history_stats",
+                "integration",
+                "min_max",
+                "mold_indicator",
+                "otp",
+                "random",
+                "statistics",
+                "switch_as_x",
+                "template",
+                "threshold",
+                "tod",
+                "trend",
+                "utility_meter",
+            ],
+            "integration": ["bayesian"],
+        }
+    ),
+)
 
 _ISOLATION_VARS = ("HA_MCP_CONFIG_DIR", "HA_MCP_DISABLE_SETTINGS_UI")
 _SESSION_DATA_DIR = ""
@@ -165,6 +202,52 @@ def _ensure_event_state_changed_const():
                 EVENT_STATE_CHANGED="state_changed"
             )
     yield
+
+
+@pytest.fixture(autouse=True)
+def _core_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer the component's Core loader call with the stubbed helper flow list.
+
+    ``helpers_list`` and ``search`` ask ``homeassistant.loader`` for the helper
+    flows in their async pre-steps. The loader is a ``MagicMock`` stub in unit
+    tests, which cannot be awaited, so this answers with the ``FLOWS["helper"]``
+    stub above, i.e. no custom helper integrations. It does nothing until the
+    component is loaded; in a test that loads it later the await fails and the
+    pre-step degrades to Core's built-in list with ``helper_flows_degraded``.
+    A test that needs custom helper integrations patches the name again.
+    """
+    from unittest.mock import AsyncMock
+
+    mod = sys.modules.get("custom_components.ha_mcp_tools.websocket_api.flow_domains")
+    if mod is None:
+        return
+    flows = sys.modules["homeassistant.generated.config_flows"].FLOWS["helper"]
+    monkeypatch.setattr(
+        mod, "async_get_config_flows", AsyncMock(return_value=set(flows))
+    )
+
+
+@pytest.fixture(autouse=True)
+def _server_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer the server's ``flow_handlers?type=helper`` read with the stubbed list.
+
+    The helper tools read Core's helper flows at call time
+    (``helper_flows.helper_flow_types``) through the REST client, which unit
+    tests mock per test. This answers with the ``FLOWS["helper"]`` stub above and
+    starts every test with an empty per-client cache. A test that needs another
+    list patches ``_fetch_helper_flow_types`` again.
+    """
+    from unittest.mock import AsyncMock
+
+    from ha_mcp.tools import helper_flows
+
+    flows = sys.modules["homeassistant.generated.config_flows"].FLOWS["helper"]
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(return_value=frozenset(flows)),
+    )
+    helper_flows._CACHE.clear()
 
 
 @pytest.fixture

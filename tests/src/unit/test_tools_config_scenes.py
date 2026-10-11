@@ -2448,11 +2448,12 @@ class TestSceneVerificationFailureWarnings:
     Per the narrow exception tuple decision (#1340 thread with
     kingpanther13): only ``HomeAssistantConnectionError`` and
     ``HomeAssistantAuthError`` propagate from
-    ``wait_for_entity_registered`` / ``wait_for_entity_removed`` to the
-    call sites. ``TimeoutError`` returns False (handled separately;
-    surfaces a different "not yet queryable" warning), and
-    ``HomeAssistantAPIError`` is fully swallowed by the helpers in
-    ``ws_waiters.py``.
+    ``wait_for_entity_registered`` to the set call sites. ``TimeoutError``
+    returns False (handled separately; surfaces a different "not yet
+    queryable" warning), and ``HomeAssistantAPIError`` is fully swallowed
+    by the helpers in ``ws_waiters.py``. The delete path goes through
+    ``verify_entity_removed``, which turns any failed removal check into a
+    warning; one case covers it here.
 
     Distinct from the cross-cutting shape regression in
     ``test_helper_response_shape.py::TestLifecycleWriteWarningsShape`` —
@@ -2642,12 +2643,12 @@ class TestSceneVerificationFailureWarnings:
         warning ("Deletion confirmed but removal verification failed"),
         while the response still reports ``success=True`` (the delete
         REST call itself completed) and threads the storage key."""
-        from ha_mcp.tools import tools_config_scenes as scene_mod
+        from ha_mcp.tools import ws_waiters
 
         async def _raise(*_args, **_kwargs):
             raise HomeAssistantConnectionError("forced for test")
 
-        monkeypatch.setattr(scene_mod, "wait_for_entity_removed", _raise)
+        monkeypatch.setattr(ws_waiters, "wait_for_entity_removed", _raise)
 
         result = await tools.ha_config_remove_scene(scene_id="test_scene")
 
@@ -2662,33 +2663,6 @@ class TestSceneVerificationFailureWarnings:
         )
         assert all(isinstance(w, str) for w in warnings)
         # Remove-path verbiage is distinct from create / update.
-        assert any("removal verification failed" in w for w in warnings), (
-            f"expected scene-remove verbiage; got {warnings!r}"
-        )
-        assert any("forced for test" in w for w in warnings)
-
-    async def test_scene_remove_wait_auth_error_appends_warning(
-        self, tools, mock_client, monkeypatch
-    ):
-        """Remove path: ``HomeAssistantAuthError`` reaches the same
-        warning path as the connection-error case."""
-        from ha_mcp.tools import tools_config_scenes as scene_mod
-
-        async def _raise(*_args, **_kwargs):
-            raise HomeAssistantAuthError("forced for test")
-
-        monkeypatch.setattr(scene_mod, "wait_for_entity_removed", _raise)
-
-        result = await tools.ha_config_remove_scene(scene_id="test_scene")
-
-        assert result["success"] is True
-        assert result["action"] == "delete"
-        mock_client.delete_scene_config.assert_called_once()
-        assert result["scene_id"] == "test_scene"
-
-        warnings = result.get("warnings")
-        assert isinstance(warnings, list) and warnings
-        assert all(isinstance(w, str) for w in warnings)
         assert any("removal verification failed" in w for w in warnings), (
             f"expected scene-remove verbiage; got {warnings!r}"
         )

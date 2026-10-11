@@ -1406,16 +1406,6 @@ class TestHelpers:
             assert marker in json.dumps(flow[0]["options"])
 
 
-def test_flow_helper_domains_cover_server_flow_helper_types():
-    """The component must index every domain the server routes as a flow helper,
-    or a UI-created helper of a covered type would be invisible to the component
-    path (e2e ``test_deep_search_finds_non_template_flow_helpers``)."""
-    from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
-
-    missing = set(FLOW_HELPER_TYPES) - wsapi.FLOW_HELPER_DOMAINS
-    assert not missing, f"component FLOW_HELPER_DOMAINS misses server types: {missing}"
-
-
 # =============================================================================
 # secret scrub — resolved !secret plaintext is BLOCKED from the match corpus
 # =============================================================================

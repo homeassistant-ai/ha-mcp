@@ -787,7 +787,7 @@ class TestRemoveHelpersIntegrations:
         ]
         mock_client.get_entity_state.return_value = {"state": "off"}
         with patch(
-            "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             mock_wait.return_value = True
@@ -812,7 +812,7 @@ class TestRemoveHelpersIntegrations:
         ]
         mock_client.get_entity_state.return_value = {"state": "off"}
         with patch(
-            "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
+            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             mock_wait.return_value = False  # timeout
@@ -825,32 +825,6 @@ class TestRemoveHelpersIntegrations:
         assert result["success"] is True
         assert result.get("warnings"), f"Expected warnings list, got: {result}"
         assert any("still present" in w for w in result["warnings"])
-
-    async def test_simple_path_wait_true_propagates_connection_error(
-        self, tools, mock_client
-    ):
-        """SIMPLE standard wait=True: HomeAssistantConnectionError from
-        wait_for_entity_removed must propagate as ToolError, not be
-        masked as a warning (R2 in KP13 review #1056)."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": {"unique_id": "uid-w3"}},
-            {"success": True},
-        ]
-        mock_client.get_entity_state.return_value = {"state": "off"}
-        with patch(
-            "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
-            new_callable=AsyncMock,
-        ) as mock_wait:
-            mock_wait.side_effect = HomeAssistantConnectionError(
-                "network down during poll"
-            )
-            with pytest.raises(ToolError):
-                await tools.ha_remove_helpers_integrations(
-                    target="my_button",
-                    helper_type="input_button",
-                    confirm=True,
-                    wait=True,
-                )
 
     async def test_simple_path_registry_lookup_connection_error_propagates(
         self, tools, mock_client

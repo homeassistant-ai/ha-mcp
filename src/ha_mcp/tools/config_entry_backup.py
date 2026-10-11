@@ -1,13 +1,19 @@
-"""The backup domain a config-entry write snapshots under.
+"""Flow-helper backups that depend on Core's helper flow list.
 
 A flow helper is a config entry, so edits and deletions reaching it through
 the integration tools back it up as ``helper_<type>``, through its options,
-like ha_config_set_helper does (#2632).
+like ha_config_set_helper does (#2632). The same list decides whether a type
+the component's listing did not cover is a failed read or no helper at all.
 """
 
 from typing import Any
 
-from ..backup_manager import _is_flow_helper_domain
+from ..backup_manager import (
+    _FlowHelperBackupSkip,
+    _FlowHelperReadError,
+    _is_flow_helper_domain,
+)
+from .helper_flows import helper_flow_types, listed_helper_flows
 
 
 def helper_backup_id(kwargs: dict[str, Any]) -> str:
@@ -37,6 +43,28 @@ def skip_unless_flow_helper(kwargs: dict[str, Any]) -> bool:
     return not _is_flow_helper_domain(flow_helper_backup_domain(kwargs))
 
 
+async def uncovered_flow_helper_error(
+    client: Any, helper_type: str
+) -> _FlowHelperReadError:
+    """Why the component's helper listing did not cover ``helper_type``.
+
+    A helper flow Core lists is missing there when the component predates
+    reading Core's list (it carries a fixed copy) or its own read of Core's
+    loader failed (custom helper integrations drop out): that is a failed read.
+    A type Core does not list is no helper at all, so there is nothing to back
+    up. A failed read of Core's list raises instead.
+    """
+    if helper_type in await listed_helper_flows(client, helper_type):
+        return _FlowHelperReadError(
+            f"The component cannot authoritatively read {helper_type} helpers",
+            f"{helper_type}_read_unsupported",
+        )
+    return _FlowHelperBackupSkip(
+        f"{helper_type} is not a helper flow this Home Assistant lists",
+        "unknown_helper_type",
+    )
+
+
 async def resolve_config_entry_backup_domain(
     client: Any, kwargs: dict[str, Any], domain: str, entry_id: str
 ) -> str:
@@ -51,6 +79,9 @@ async def resolve_config_entry_backup_domain(
     if not (edits_options or deletes_entry):
         # Enable/disable restores must retain the integration's disabled flag.
         return domain
+    # The entry's domain can be any integration, so it is checked against Core's
+    # helper flows rather than inferred from the snapshot-domain shape.
     entry = await client.get_config_entry(entry_id)
-    helper_domain = f"helper_{entry.get('domain')}"
-    return helper_domain if _is_flow_helper_domain(helper_domain) else domain
+    if entry.get("domain") in await helper_flow_types(client):
+        return f"helper_{entry.get('domain')}"
+    return domain

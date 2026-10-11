@@ -11,7 +11,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ...client.rest_client import NON_ADMIN_TOKEN_WARNING, HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
 from ..component_api import component_supports, get_component_caps
-from ..config_entry_flow import FLOW_HELPER_TYPES
+from ..helper_flows import helper_flow_types
 from ..helpers import exception_to_structured_error, safe_progress
 from ..tools_config_dashboards import (
     _dashboards_via_component,
@@ -910,16 +910,16 @@ class DeepSearchMixin(SceneSearchMixin):
         Returns ``(results, failed_type_count)`` — ``failed_type_count`` counts
         each helper backend that failed: an ``input_*`` ``<type>/list`` fetch
         that raised or returned a non-success response, plus the flow-helper
-        config-entries list fetch when it is unreachable or returns an
-        unexpected shape, plus each per-entry flow-helper options-flow probe
-        that failed (the flow raised or returned a non-form first step — the
-        config body was then never searched). Per-entry flow-helper *scoring*
-        failures (a code bug processing a response the backend did return) stay
-        tolerated inside ``_search_flow_helpers`` (one bad entry must not sink
-        the gather) and don't surface here. Helpers run on every default
-        ``ha_search`` call, so silent failures here mean the caller cannot
-        tell "no helpers match" from "helper backend partially down" —
-        surfaced via ``partial: True``.
+        surface when its config-entries or helper-flow read fails or the entries
+        come back in an unexpected shape, plus each per-entry flow-helper
+        options-flow probe that failed (the flow raised or returned a non-form
+        first step — the config body was then never searched). Per-entry
+        flow-helper *scoring* failures (a code bug processing a response the
+        backend did return) stay tolerated inside ``_search_flow_helpers`` (one
+        bad entry must not sink the gather) and don't surface here. Helpers run
+        on every default ``ha_search`` call, so silent failures here mean the
+        caller cannot tell "no helpers match" from "helper backend partially
+        down" — surfaced via ``partial: True``.
 
         ``prefetched_registry`` is the orchestrator's already-fetched
         ``config/entity_registry/list`` response, reused (never re-fetched
@@ -1565,30 +1565,33 @@ class DeepSearchMixin(SceneSearchMixin):
         no ``<type>/list`` endpoint. Lists them via the standard config
         entries REST endpoint, then probes each entry's options flow so the
         helper's current config — template body, group members, source
-        entity, etc. — is searchable.
+        entity, etc. — is searchable. An entry without an options flow (otp)
+        is matched on its title and domain.
 
-        Cost: 1 REST call + one options-flow probe per flow-helper config
-        entry, parallelised under ``semaphore``. The probe is skipped when
-        the title alone already scores the maximum (a deeper config match can
-        only raise the total, never lower it); any title that leaves headroom
-        is still probed for accurate scoring and ``match_in_config``.
+        Cost: the entries call, the cached helper-flow list, and one
+        options-flow probe per entry with an options flow, parallelised under
+        ``semaphore``. The probe is skipped when the title alone already
+        scores the maximum (a deeper config match can only raise the total,
+        never lower it); any title that leaves headroom is still probed for
+        accurate scoring and ``match_in_config``.
 
         Returns ``(results, failed_count)``. ``failed_count`` counts flow-
         helper backend failures so the caller can route them to ``partial``:
-        the whole surface unreachable (config-entries list fetch raised or
-        returned an unexpected shape) counts as 1; otherwise it is the number
-        of per-entry options-flow probes that failed (the flow raised or
-        returned a non-form first step), so a helper whose config body could
-        not be read is reported as incomplete rather than a silent clean
-        non-match. Per-entry *scoring* failures (a bug processing a response
-        the backend did return) are logged at warning and dropped without
-        counting — one bad entry must not sink the gather, and a code bug is
-        not a backend outage.
+        the whole surface unreachable (the config-entries or helper-flow read
+        raised, or the entries came back in an unexpected shape) counts as 1;
+        otherwise it is the number of per-entry options-flow probes that failed
+        (the flow raised or returned a non-form first step), so a helper whose
+        config body could not be read is reported as incomplete rather than a
+        silent clean non-match. Per-entry *scoring* failures (a bug processing a
+        response the backend did return) are logged at warning and dropped
+        without counting — one bad entry must not sink the gather, and a code
+        bug is not a backend outage.
         """
         try:
             response = await self.client._request("GET", "/config/config_entries/entry")
+            flows = await helper_flow_types(self.client)
         except Exception as exc:  # noqa: BLE001
-            logger.debug(f"flow-helper search: list_entries failed: {exc}")
+            logger.debug(f"flow-helper search: entries or flows read failed: {exc}")
             return [], 1
 
         if not isinstance(response, list):
@@ -1598,7 +1601,9 @@ class DeepSearchMixin(SceneSearchMixin):
             )
             return [], 1
 
-        flow_entries = [e for e in response if self._is_flow_helper_entry(e)]
+        flow_entries = [
+            e for e in response if isinstance(e, dict) and e.get("domain") in flows
+        ]
         if not flow_entries:
             return [], 0
 
@@ -1632,15 +1637,6 @@ class DeepSearchMixin(SceneSearchMixin):
                 # One bad entry must not sink the whole multi-source deep_search.
                 logger.warning(f"flow-helper scoring failed: {item!r}")
         return out, probe_failures
-
-    @staticmethod
-    def _is_flow_helper_entry(entry: Any) -> bool:
-        """Return True for an options-flow config entry of a flow-helper domain."""
-        return (
-            isinstance(entry, dict)
-            and entry.get("domain") in FLOW_HELPER_TYPES
-            and bool(entry.get("supports_options"))
-        )
 
     async def _score_flow_entry(
         self,
@@ -1682,12 +1678,14 @@ class DeepSearchMixin(SceneSearchMixin):
 
         options: dict[str, Any] = {}
         probe_failed = False
-        # Only a perfect title match (score 100) makes the deeper options probe
-        # redundant — the probe can only raise the total, never lower it, so
-        # anything below 100 is worth probing (in both exact and fuzzy modes)
-        # for accurate scoring and ``match_in_config``.
-        need_probe = include_config or (
-            self._score_deep_match(
+        # Only an entry with an options flow has a body to probe. Among those,
+        # only a perfect title match (score 100) makes the probe redundant — it
+        # can only raise the total, never lower it, so anything below 100 is
+        # worth probing (in both exact and fuzzy modes) for accurate scoring
+        # and ``match_in_config``.
+        need_probe = bool(entry.get("supports_options")) and (
+            include_config
+            or self._score_deep_match(
                 title_pseudo_eid, title, name_score, 0, query_lower, exact_match
             )[0]
             < 100

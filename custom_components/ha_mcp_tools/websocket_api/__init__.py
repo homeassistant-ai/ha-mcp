@@ -31,7 +31,8 @@ the info handshake carries no capability entry:
   response's ``covered_types`` names which helper_type values were authoritatively
   enumerated, so the server falls back to its legacy ``<type>/list`` path for an
   uncovered type (e.g. ``tag``, which has no state entity) instead of trusting an
-  empty result.
+  empty result. A custom-only helper integration is listed with ``options: None``
+  and ``options_withheld`` (see ``flow_domains._flow_helper_domains``).
 * ``ha_mcp_tools/states`` — a bulk state read: ``State.as_dict()`` for each
   requested entity_id (a pure ``hass.states.get`` in-memory read) plus the list
   of ids with no state, so the server's ``ha_get_state`` serves a 100-entity
@@ -269,16 +270,19 @@ Design notes that are load-bearing:
   merely unemitted.
 * **Event-loop hygiene.** Every registry/state join is a pure in-memory read
   over live data — run synchronously, no persistent index (always fresh, zero
-  cache-invalidation surface). The one blocking read — ``secrets.yaml`` for the
-  match-corpus scrub — runs in the executor via the command wrapper's async
-  pre-step (:func:`_search_prep`), never on the event loop.
+  cache-invalidation surface). The blocking ``secrets.yaml`` read, for the
+  match-corpus scrub and the scrub of emitted options, runs in the executor via
+  the command wrapper's async pre-steps (:func:`_search_prep`,
+  :func:`_helpers_list_prep`, :func:`_config_entries_prep`), never on the event
+  loop; the first two also ask Core's loader for the helper flows when flow
+  helpers are in scope.
 
 Module layout. This package's ``__init__`` holds the registration seam
 (``async_register_commands``, ``_command_specs`` and ``_build_handler``). The command
 code lives in the submodules:
 
 * ``constants`` and ``schemas``: the wire contract, capability list and request schemas.
-* ``registry``, ``secrets`` and ``assist``: shared registry, secret-scrub and Assist exposure helpers.
+* ``registry``, ``secrets``, ``assist`` and ``flow_domains``: shared registry, secret-scrub, Assist exposure and flow-helper domain helpers.
 * ``search``, ``search_config``, ``search_score`` and ``visibility``: ``ha_mcp_tools/search``.
 * ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries`` and ``dashboards``: the read commands.
 * ``system``: ``info``, ``system_snapshot``, ``backup_prep``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.

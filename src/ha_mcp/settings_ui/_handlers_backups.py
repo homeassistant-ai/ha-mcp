@@ -208,6 +208,7 @@ async def _restore_backup(
             "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "backup_capture_failed": ErrorCode.BACKUP_CAPTURE_FAILED,
+            "entry_deleted": ErrorCode.RESOURCE_NOT_FOUND,
         }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
         return JSONResponse(
             create_error_response(
@@ -231,11 +232,12 @@ async def _restore_backup(
             }.get(code, 409),
         )
     except MandatoryBackupError as err:
+        logger.warning("Restore of %s blocked: %s", name, err.safe_cause)
         return JSONResponse(
             create_error_response(
                 ErrorCode.BACKUP_CAPTURE_FAILED,
-                "Restore blocked: the pre-restore safety snapshot could not "
-                "be captured. Nothing was changed.",
+                "Restore blocked: the pre-restore safety snapshot could not be "
+                f"captured ({err.safe_cause}). Nothing was changed.",
                 suggestions=err.suggestions,
                 context={
                     "data": {

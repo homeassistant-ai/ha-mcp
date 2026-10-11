@@ -99,7 +99,7 @@ SEARCH_KEYWORDS: dict[str, str] = {
         "conditions actions get show detail"
     ),
     # s09: "create helper" → ha_config_set_helper should outrank remove_helper
-    # Covers all 29 helper types (12 simple + 17 flow-based, unified in #967).
+    # Covers the storage types and Core's common helper flows (unified in #967).
     "ha_config_set_helper": (
         "create update new add helper "
         "input_boolean input_button input_number input_text input_datetime "

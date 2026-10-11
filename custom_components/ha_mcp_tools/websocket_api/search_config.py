@@ -14,8 +14,10 @@ from .constants import (
     MAX_BODY_BYTES,
     SEARCH_TYPE_SCENE,
 )
+from .flow_domains import OPTIONS_WITHHELD_CUSTOM
 from .registry import _iter_config_entries, _iter_states, _plainify, _RegistryView
 from .search_score import _config_score
+from .secrets import _scrub_secret_values
 
 
 # --- Config surfaces (automation/script/scene) -------------------------------
@@ -254,8 +256,15 @@ def _search_helpers(
     exact: bool,
     include_config: bool,
     secret_values: frozenset[str] = frozenset(),
+    flow_domains: frozenset[str] = FLOW_HELPER_DOMAINS,
+    custom_domains: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """Index collection helpers (states) + flow helpers (config-entry options)."""
+    """Index collection helpers (states) + flow helpers (config-entry options).
+
+    An entry of a custom-only domain is matched on its title only and emitted with
+    ``options: None`` and ``options_withheld`` (see
+    ``flow_domains._flow_helper_domains``).
+    """
     results: list[dict[str, Any]] = []
 
     # Collection helpers: entities in the state machine, matched on entity_id /
@@ -308,10 +317,37 @@ def _search_helpers(
             }
         )
 
-    # Flow helpers: config entries — options + title ONLY, never data.
+    results.extend(
+        _search_flow_helpers(
+            hass,
+            query_lower,
+            match_all=match_all,
+            exact=exact,
+            include_config=include_config,
+            secret_values=secret_values,
+            flow_domains=flow_domains,
+            custom_domains=custom_domains,
+        )
+    )
+    return results
+
+
+def _search_flow_helpers(
+    hass: HomeAssistant,
+    query_lower: str,
+    *,
+    match_all: bool,
+    exact: bool,
+    include_config: bool,
+    secret_values: frozenset[str],
+    flow_domains: frozenset[str],
+    custom_domains: frozenset[str],
+) -> list[dict[str, Any]]:
+    """Index flow helpers: config entries, options + title ONLY, never data."""
+    results: list[dict[str, Any]] = []
     for entry in _iter_config_entries(hass):
         domain = getattr(entry, "domain", None)
-        if domain not in FLOW_HELPER_DOMAINS:
+        if domain not in flow_domains:
             continue
         title = getattr(entry, "title", None) or ""
         # ``ConfigEntry.options`` is a ``MappingProxyType`` in live HA, not a
@@ -319,9 +355,14 @@ def _search_helpers(
         # ``{}``, so a flow helper's body (a template's ``state``, a group's
         # members, …) was never indexed and ``match_in_config`` could never fire.
         # Accept any ``Mapping`` so the persisted options are searchable and
-        # emittable under ``include_config``.
+        # emittable under ``include_config`` — except a custom-only domain's,
+        # which stay unread (see ``_flow_helper_domains``).
         raw_options = getattr(entry, "options", None)
-        options = dict(raw_options) if isinstance(raw_options, Mapping) else {}
+        options = (
+            dict(raw_options)
+            if isinstance(raw_options, Mapping) and domain not in custom_domains
+            else {}
+        )
         entry_id = getattr(entry, "entry_id", None)
         if match_all:
             score = 100
@@ -339,18 +380,23 @@ def _search_helpers(
             if scored is None:
                 continue
             score, match_in_name, match_in_config = scored
-        results.append(
-            {
-                "entity_id": None,
-                "helper_type": domain,
-                "entry_id": entry_id,
-                "name": title,
-                "kind": "flow",
-                "score": score,
-                "match_in_name": match_in_name,
-                "match_in_config": match_in_config,
-                # Data minimization: options only, never entry.data.
-                "options": options if include_config else None,
-            }
-        )
+        record: dict[str, Any] = {
+            "entity_id": None,
+            "helper_type": domain,
+            "entry_id": entry_id,
+            "name": title,
+            "kind": "flow",
+            "score": score,
+            "match_in_name": match_in_name,
+            "match_in_config": match_in_config,
+            # Data minimization: options only, never entry.data.
+            "options": (
+                _scrub_secret_values(_plainify(options), secret_values)
+                if include_config and domain not in custom_domains
+                else None
+            ),
+        }
+        if domain in custom_domains:
+            record["options_withheld"] = OPTIONS_WITHHELD_CUSTOM
+        results.append(record)
     return results
