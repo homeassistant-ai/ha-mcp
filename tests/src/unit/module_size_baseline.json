@@ -6,7 +6,7 @@
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py": 1314,
   "homeassistant-addon-webhook-proxy-dev/start.py": 1948,
   "scripts/translate_locales.py": 1316,
-  "site/src/pages/setup.astro": 2882,
+  "site/src/pages/setup.astro": 2859,
   "src/ha_mcp/__main__.py": 1750,
   "src/ha_mcp/auth/provider.py": 1008,
   "src/ha_mcp/backup_manager.py": 3969,
