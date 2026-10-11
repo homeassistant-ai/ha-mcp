@@ -1512,7 +1512,9 @@ class BackupManager:
             # Commit to the absent-target branch: if an entry reappeared since
             # preflight, recreation refuses instead of editing it without safety.
             restore = (
-                handler.restore
+                functools.partial(_restore_config_subentry, recreate_only=True)
+                if domain == "helper_config_subentry" and safety_path is None
+                else handler.restore
                 if needs_safety
                 else functools.partial(
                     _recreate_flow_helper, helper_type=_flow_type(domain)
@@ -1558,12 +1560,7 @@ class BackupManager:
         return await handler.fetch(self._client, entity_id) is not None
 
     async def _capture_restore_safety(self, domain: str, entity_id: str) -> Path | None:
-        """Capture the pre-restore recovery point; a failed capture blocks it.
-
-        Flow helpers and subentries force a fresh one, since their flows can
-        apply a restore partly. Otherwise a disabled auto-backup or the
-        throttle skips it (None), as does a target with nothing to capture.
-        """
+        """Take a restore's recovery point; a failed capture raises and blocks it."""
         is_flow = _is_flow_helper_domain(domain)
         path = await self.maybe_snapshot(
             domain,
@@ -3751,7 +3748,9 @@ async def _fetch_config_subentry(client: Any, entity_id: str) -> Any:
     return _subentry_row(subentries, entry_id, subentry_id)
 
 
-async def _restore_config_subentry(client: Any, entity_id: str, config: Any) -> Any:
+async def _restore_config_subentry(
+    client: Any, entity_id: str, config: Any, *, recreate_only: bool = False
+) -> Any:
     """Restore a subentry's data through its reconfigure flow.
 
     A snapshot field none of the reconfigure forms offers must still match the
@@ -3792,6 +3791,11 @@ async def _restore_config_subentry(client: Any, entity_id: str, config: Any) -> 
     if current is None:
         return await _recreate_config_subentry(
             client, entity_id, snapshot, data, subentries
+        )
+    if recreate_only:  # absent at the safety capture: nothing may be edited
+        raise BackupRestoreError(
+            "Config subentry reappeared after its safety capture; not restored",
+            reason="entry_still_exists",
         )
     expected, keys = _subentry_expectation(snapshot, data)
     return await _apply_and_verify(

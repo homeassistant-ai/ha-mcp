@@ -225,8 +225,8 @@ class TestPythonTransformAutomationIdKey:
         assert result["automation_id"] == "orphaned_unique_id"
 
     async def test_a_failed_read_back_does_not_report_the_saved_write_as_failed(
-        self, transform_tools
-    ):
+        self, transform_tools: AutomationConfigTools
+    ) -> None:
         """The transform is saved; failing the call would invite a retry that
         then meets a stale config_hash."""
         from ha_mcp.client.rest_client import HomeAssistantAPIError

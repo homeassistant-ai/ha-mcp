@@ -12,6 +12,7 @@ that distinction to fail closed instead of silently treating an
 unverifiable batch as a verified-safe one.
 """
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -38,7 +39,7 @@ def client():
         return c
 
 
-def _response(status_code, *, json_body):
+def _response(status_code: int, *, json_body: Any) -> MagicMock:
     resp = MagicMock(spec=httpx.Response)
     resp.status_code = status_code
     resp.reason_phrase = "OK"
@@ -109,8 +110,8 @@ _UNREADABLE_BODIES = pytest.mark.parametrize(
 @pytest.mark.asyncio
 @_UNREADABLE_BODIES
 async def test_a_read_reply_that_is_not_json_is_an_error_not_an_empty_result(
-    client, body
-):
+    client: HomeAssistantClient, body: bytes
+) -> None:
     """``{}`` would pass as an entity's config, e.g. in a pre-write backup."""
     client.httpx_client.request = AsyncMock(
         return_value=httpx.Response(200, content=body)
@@ -122,7 +123,9 @@ async def test_a_read_reply_that_is_not_json_is_an_error_not_an_empty_result(
 
 @pytest.mark.asyncio
 @_UNREADABLE_BODIES
-async def test_a_write_reply_that_is_not_json_counts_as_accepted(client, body):
+async def test_a_write_reply_that_is_not_json_counts_as_accepted(
+    client: HomeAssistantClient, body: bytes
+) -> None:
     """The write may have run; reporting it as failed invites a retry that
     repeats it, so the caller gets the empty result and verifies state."""
     client.httpx_client.request = AsyncMock(

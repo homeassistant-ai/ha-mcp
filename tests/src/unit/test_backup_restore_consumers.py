@@ -199,8 +199,11 @@ def _remote_cause() -> MandatoryBackupError:
 )
 @pytest.mark.parametrize("consumer", ["mcp", "settings"])
 async def test_mandatory_capture_failure_keeps_backup_error_code(
-    error, shown_cause, consumer, monkeypatch
-):
+    error: Exception,
+    shown_cause: str | None,
+    consumer: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from ha_mcp.tools.backup import _edits_restore
 
     manager = SimpleNamespace(restore_snapshot=AsyncMock(side_effect=error))
@@ -748,3 +751,14 @@ async def test_a_failed_safety_capture_blocks_the_restore(tmp_path: Path) -> Non
     )
     with pytest.raises(MandatoryBackupError):
         await mgr.restore_snapshot(path.name)
+
+
+async def test_a_deleted_integration_entry_is_not_found_in_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The MCP restore already maps entry_deleted to RESOURCE_NOT_FOUND."""
+    error = BackupRestoreError("gone", reason="entry_deleted", restored_from=NAME)
+    manager = SimpleNamespace(restore_snapshot=AsyncMock(side_effect=error))
+    response = response_for(monkeypatch, manager)
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
