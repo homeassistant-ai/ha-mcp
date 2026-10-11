@@ -9,7 +9,7 @@ from __future__ import annotations
 from contextlib import AsyncExitStack
 from typing import Any
 
-from websockets.exceptions import WebSocketException
+from ._vendor.websockets.exceptions import WebSocketException
 
 
 def _manager() -> Any:

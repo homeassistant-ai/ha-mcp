@@ -78,6 +78,7 @@ from .backup_diff import (
 from .backup_entity_ids import _restore_entity_ids
 from .backup_integrations import fetch_integration, restore_integration
 from .backup_registry_icons import REGISTRY_RESTORES, REGISTRY_SNAPSHOTS
+from .backup_zones import fetch_zone
 from .client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
@@ -2524,18 +2525,6 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
     return await _recreate_calendar_event(client, cal, event, start, end)
 
 
-# Zones — zone/list, then zone/update or zone/create (backup_zones.py). ha_set_zone
-# and ha_remove_zone take a zone_id or entity_id; a create backup passes the name.
-
-
-async def _fetch_zone(client: Any, entity_id: str) -> Any:
-    items = _require_list(await _ws_send(client, {"type": "zone/list"}), "zone/list")
-    for item in items:
-        if item.get("id") == entity_id or item.get("name") == entity_id:
-            return await REGISTRY_SNAPSHOTS["zone"](client, item)
-    return await _fetch_helper(client, entity_id, "zone") if "." in entity_id else None
-
-
 # Areas / floors — config/area_registry/{list,update}, config/floor_registry/{list,update}
 
 
@@ -3940,7 +3929,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
         DomainHandler("calendar_event", _fetch_calendar_event, _restore_calendar_event)
     )
     restore_zone_item = functools.partial(_restore_helper, helper_type="zone")
-    mgr.register(DomainHandler("zone", _fetch_zone, restore_zone_item))
+    mgr.register(DomainHandler("zone", fetch_zone, restore_zone_item))
     mgr.register(
         DomainHandler("area_or_floor", _fetch_area_or_floor, _restore_area_or_floor)
     )

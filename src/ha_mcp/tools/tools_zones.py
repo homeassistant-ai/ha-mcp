@@ -402,9 +402,7 @@ class ZoneTools:
         entry = next((e for e in entries if e["unique_id"] == zone_id), None) or next(
             (e for e in entries if e.get("entity_id") == entity_id), None
         )
-        if entry is not None:
-            return entry["entity_id"], entry["unique_id"]
-        if await self._zone_state(entity_id) is not None:
+        if entry is None and await self._zone_state(entity_id) is not None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
@@ -418,16 +416,18 @@ class ZoneTools:
                     ],
                 )
             )
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                f"Zone not found: {zone_id}",
-                context={"zone_id": zone_id},
-                suggestions=[
-                    "Use ha_get_zone() without zone_id to see all available zones"
-                ],
+        if entry is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"Zone not found: {zone_id}",
+                    context={"zone_id": zone_id},
+                    suggestions=[
+                        "Use ha_get_zone() without zone_id to see all available zones"
+                    ],
+                )
             )
-        )
+        return entry["entity_id"], entry["unique_id"]
 
     @tool(
         name="ha_set_zone",
@@ -436,10 +436,7 @@ class ZoneTools:
             "Set Zone", destructive=True, idempotent=False, open_world=False
         ),
     )
-    @with_auto_backup(
-        domain="zone",
-        id_fn=lambda kw: str(kw.get("zone_id") or kw.get("name") or ""),
-    )
+    @with_auto_backup(domain="zone", id_param="zone_id")
     @log_tool_usage
     async def ha_set_zone(
         self,
