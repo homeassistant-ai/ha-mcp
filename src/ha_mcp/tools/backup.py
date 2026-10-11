@@ -2092,11 +2092,11 @@ async def _edits_restore(
             },
             suggestions=[
                 "Verify the entity referenced by the backup still exists; "
-                "restore re-POSTs to its current registry key",
+                + "restore re-POSTs to its current registry key",
                 "Compare the captured schema vs current HA — HA minor versions "
-                "occasionally drop/rename fields",
+                + "occasionally drop/rename fields",
                 "Inspect the snapshot YAML via ha_manage_backup(scope='edits', "
-                "action='view', backup_name=...)",
+                + "action='view', backup_name=...)",
             ],
         )
         return None  # unreachable: exception_to_structured_error always raises
