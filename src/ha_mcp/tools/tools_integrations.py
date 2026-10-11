@@ -40,6 +40,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .component_helper_collections import removal_tag_entity, tag_removal_reply
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_backup import (
     flow_helper_backup_domain,
@@ -53,9 +54,8 @@ from .config_helpers.registry import _get_entities_for_config_entry
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES, StorageHelperType
 from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
 from .flow_helper_lookup import (
-    YAML_HELPER_REMOVAL,
-    YAML_HELPER_SUGGESTION,
     get_entry_id_for_flow_helper,
+    not_stored_reply,
     raise_flow_helper_lookup_error,
     raise_unregistered_entity_error,
     resolve_helper_entity,
@@ -2672,18 +2672,19 @@ class IntegrationTools:
         helper's unique_id, then falls back to direct-id-delete and a
         classification of why the registry has no usable record.
         """
-        # Convert to entity_id form
-        entity_id = (
-            target
-            if target.startswith(f"{helper_type}.")
-            else f"{helper_type}.{target}"
-        )
-        # Bare helper_id (without prefix) form for fallback strategies
-        helper_id = (
-            target.split(".", 1)[1] if target.startswith(f"{helper_type}.") else target
-        )
+        prefixed = target.startswith(f"{helper_type}.")
+        entity_id = target if prefixed else f"{helper_type}.{target}"
+        helper_id = target.split(".", 1)[1] if prefixed else target  # for fallbacks
 
         try:
+            if helper_type == "tag" and not prefixed:
+                # A bare tag id is the stored id, as tag_item_id reads it (#2632).
+                entity, reason = await removal_tag_entity(self._client, target)
+                waits = wait_bool and entity is not None
+                response = await self._delete_simple_via_unique_id(
+                    helper_type, target, target, entity or entity_id, waits
+                )
+                return tag_removal_reply(response, entity, reason)
             (
                 unique_id,
                 registry_result,
@@ -3093,20 +3094,17 @@ class IntegrationTools:
         # Core's storage collection holds only UI-created items; a YAML helper
         # has a registry entry with a unique_id but no stored item to delete.
         if ws_failure_code(result) is ErrorCode.RESOURCE_NOT_FOUND:
+            code, message, suggestion = not_stored_reply(helper_type, unique_id, target)
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    (
-                        f"Home Assistant has no stored {helper_type} "
-                        f"'{unique_id}': {target} is YAML-configured or was "
-                        f"already deleted. {YAML_HELPER_REMOVAL}"
-                    ),
+                    code,
+                    message,
                     context={
                         "target": target,
                         "entity_id": entity_id,
                         "unique_id": unique_id,
                     },
-                    suggestions=[YAML_HELPER_SUGGESTION],
+                    suggestions=[suggestion],
                 )
             )
 

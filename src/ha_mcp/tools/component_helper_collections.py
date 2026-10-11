@@ -13,7 +13,11 @@ import time
 import weakref
 from typing import Any, NoReturn
 
-from ..client.rest_client import HomeAssistantAPIError, HomeAssistantCommandNotSent
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantCommandNotSent,
+    HomeAssistantError,
+)
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
@@ -238,6 +242,33 @@ async def registry_entity_id(
 async def tag_entity_id(client: Any, tag_id: str | None) -> str | None:
     """The entity of a tag: its entity_id follows the tag's name, not its ID."""
     return await registry_entity_id(client, "tag", tag_id)
+
+
+async def removal_tag_entity(client: Any, tag_id: str) -> tuple[str | None, str | None]:
+    """The entity a tag removal reports and waits on, or None and why not.
+
+    The delete goes by the stored id either way. A tag's entity_id follows its
+    name, so tag.<id> is no stand-in: it can be another tag's entity.
+    """
+    try:
+        entity = await tag_entity_id(client, tag_id)
+    except (HomeAssistantError, OSError, TimeoutError) as err:
+        return None, f"the entity registry could not be read ({err})"
+    return entity, None if entity else "the tag has no entity in the registry"
+
+
+def tag_removal_reply(
+    response: dict[str, Any], entity: str | None, reason: str | None
+) -> dict[str, Any]:
+    """A tag removal's reply without a guessed entity, saying why it has none."""
+    if entity is None:
+        response["entity_ids"] = []
+        response["message"] = f"Successfully deleted tag: {response['target']}."
+        response.setdefault("warnings", []).append(
+            f"Tag {response['target']} was deleted, but {reason}, so its entity "
+            "is not named and the removal was not waited on."
+        )
+    return response
 
 
 async def tag_item_id(client: Any, helper_id: str) -> str:

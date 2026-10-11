@@ -900,7 +900,7 @@ class HelperConfigTools:
                 # helper_id is guaranteed non-None by _validate_set_helper_action for update
                 hid: str = helper_id  # type: ignore[assignment]
                 entity_id = (
-                    hid if hid.startswith(helper_type) else f"{helper_type}.{hid}"
+                    hid if hid.startswith(f"{helper_type}.") else f"{helper_type}.{hid}"
                 )
                 return await _execute_update_simple_helper(
                     self._client,

@@ -250,6 +250,17 @@ async def _restore_backup(
             ),
             status_code=409,
         )
+    except Exception as err:  # noqa: BLE001
+        # A write to Home Assistant failed: keep the error's own code, and the
+        # manager's outcome names the safety backup to revert with (#2632).
+        from ..tools.helpers import exception_to_structured_error
+
+        response = exception_to_structured_error(
+            err,
+            context={"data": getattr(err, "restore_outcome", None)},
+            raise_error=False,
+        )
+        return JSONResponse(response, status_code=409)
     return JSONResponse({"success": True, "data": result})
 
 

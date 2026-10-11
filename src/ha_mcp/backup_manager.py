@@ -76,6 +76,7 @@ from .backup_diff import (
     _summarize_patch_counts,
 )
 from .backup_entity_ids import _restore_entity_ids
+from .backup_helper_target import fetch_helper as _fetch_helper
 from .backup_integrations import fetch_integration, restore_integration
 from .backup_registry_icons import REGISTRY_RESTORES, REGISTRY_SNAPSHOTS
 from .backup_zones import fetch_zone
@@ -1503,7 +1504,9 @@ class BackupManager:
             flow_driven = is_flow or domain == "helper_config_subentry"
             if needs_safety and (flow_driven or take_safety_backup):
                 step = "safety_backup"
-                safety_path = await self._capture_restore_safety(domain, entity_id)
+                safety_path = await self._capture_restore_safety(
+                    domain, entity_id, outcome, config
+                )
                 if safety_path is not None:
                     self._protect_snapshot(safety_path.name)
                     await _await_backup_io(_require_restore_safety, safety_path)
@@ -1542,6 +1545,9 @@ class BackupManager:
                     reason=_flow_failure_reason(step, err),
                     **outcome,
                 ) from err
+            # The error keeps its own type and code; the safety backup to revert
+            # with and any warnings ride along for the caller.
+            err.restore_outcome = {**outcome, "apply_status": apply_status}  # type: ignore[attr-defined]
             raise
         finally:
             if safety_path is not None:
@@ -1560,14 +1566,25 @@ class BackupManager:
         # existing one is checked against the snapshot by its options flow.
         return await handler.fetch(self._client, entity_id) is not None
 
-    async def _capture_restore_safety(self, domain: str, entity_id: str) -> Path | None:
+    async def _capture_restore_safety(
+        self,
+        domain: str,
+        entity_id: str,
+        outcome: dict[str, Any] | None = None,
+        config: Any = None,
+    ) -> Path | None:
         """Take a restore's recovery point; a failed capture raises and blocks it."""
         is_flow = _is_flow_helper_domain(domain)
+        flow_driven = is_flow or domain == "helper_config_subentry"
+        if not flow_driven and not getattr(self._settings, "enable_auto_backup", False):
+            return None  # auto-backup off: no safety backup is promised
+        # The restore overwrites the current state, so the throttle that a
+        # recent snapshot of an older state set does not apply.
         path = await self.maybe_snapshot(
             domain,
             entity_id,
             tool_name="ha_manage_backup.restore.safety",
-            force=is_flow or domain == "helper_config_subentry",
+            force=True,
             mandatory=True,
         )
         if path is None and is_flow:
@@ -1575,7 +1592,42 @@ class BackupManager:
                 f"{_flow_label(_flow_type(domain))} helper no longer exists; "
                 "restore was not attempted"
             )
+        if not flow_driven and outcome is not None:
+            await self._note_safety_target(path, entity_id, outcome, config)
         return path
+
+    async def _note_safety_target(
+        self, path: Path | None, entity_id: str, outcome: dict[str, Any], config: Any
+    ) -> None:
+        """Warn when the safety backup holds nothing, or another item than the
+        one the restore overwrites: snapshots are keyed by the id the tool was
+        given, which a rename since can leave naming nothing, or another item."""
+        if path is None:
+            outcome["warnings"] = [
+                f"No safety backup was taken: nothing was found under "
+                f"{entity_id}. If it was renamed since this backup, the "
+                "restore overwrites its current state without one."
+            ]
+            return
+        stored = config.get("id") if isinstance(config, dict) else None
+        if stored is None:
+            return
+        try:
+            held = await asyncio.to_thread(self.read_snapshot, path.name)
+        except (OSError, ValueError) as err:
+            outcome["warnings"] = [
+                f"The safety backup {path.name} could not be read back to check "
+                f"that it holds {stored}: {type(err).__name__}."
+            ]
+            return
+        held_config = held.get("config")
+        held_id = held_config.get("id") if isinstance(held_config, dict) else None
+        if held_id != stored:
+            outcome["warnings"] = [
+                f"The safety backup {path.name} holds {held_id}, not {stored}, "
+                f"which this restore overwrites: {entity_id} names another item "
+                "since this backup."
+            ]
 
     # ----- diff ----------------------------------------------------------
 
@@ -2699,8 +2751,9 @@ async def _restore_device(client: Any, entity_id: str, config: Any) -> Any:
 # Integration enable/disable — restore re-applies the disabled flag.
 
 
-# Helpers — one handler family. Entity ID is "<helper_type>:<id>" so each
-# helper type lists/restores via its native WS endpoints. The decorator
+# Helpers — one handler family. Entity ID is the id the tool was given (a bare
+# id or <type>.<id>); each helper type lists/restores via its native WS
+# endpoints (fetch: backup_helper_target.py). The decorator
 # constructs the domain key as ``helper_<type>`` so files group naturally.
 
 _HELPER_LIST_TYPES = {
@@ -2717,51 +2770,6 @@ _HELPER_LIST_TYPES = {
     "person",
     "tag",
 }
-
-
-async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
-    """Fetch a storage helper's full config from its ``<helper_type>/list``.
-
-    Registered for ``_KNOWN_HELPER_TYPES`` only; flow helpers (config
-    entries) have their own handler family (``_make_flow_helper_handler``).
-    """
-    listed = await _ws_send(client, {"type": f"{helper_type}/list"})
-    if helper_type == "person" and isinstance(listed, dict):
-        listed = listed.get("storage")  # YAML-defined persons are not editable
-    items = _require_list(listed, f"{helper_type}/list")
-    object_id = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
-    for item in items:
-        if item.get("id") == object_id or item.get("id") == entity_id:
-            return await _registry_snapshot(client, helper_type, item)
-    # Fallback for renamed helpers: after an entity_id rename the object_id
-    # no longer equals the storage collection id (which stays the original
-    # create-time id == the registry unique_id), so the direct match above
-    # misses and the snapshot was silently skipped. Resolve the unique_id
-    # via the entity registry and match on that — the same key the helper
-    # update tool itself resolves to.
-    eid = entity_id if "." in entity_id else f"{helper_type}.{entity_id}"
-    try:
-        entry = await _ws_send(
-            client, {"type": "config/entity_registry/get", "entity_id": eid}
-        )
-    except HomeAssistantError as err:
-        # Only a genuine "entity not found" means there's nothing to back up;
-        # transport/auth/5xx errors must propagate so maybe_snapshot logs a
-        # WARNING rather than silently skipping. Same POLICY as _fetch_automation,
-        # but matched on the message substring because config/entity_registry/get
-        # failures arrive as a WS command error with no status_code to switch on.
-        # Best-effort: if HA's not-found wording ever changes, a real miss
-        # degrades to a WARNING + skip (never a swallowed fatal error).
-        msg = str(err).lower()
-        if "not_found" in msg or "not found" in msg:
-            return None
-        raise
-    unique_id = entry.get("unique_id") if isinstance(entry, dict) else None
-    if unique_id:
-        for item in items:
-            if str(item.get("id")) == str(unique_id):
-                return await _registry_snapshot(client, helper_type, item)
-    return None
 
 
 async def _restore_helper(
