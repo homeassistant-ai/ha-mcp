@@ -56,7 +56,7 @@
   "tests/src/e2e/workflows/scripts/test_lifecycle.py": 1341,
   "tests/src/haos_runtime.py": 2864,
   "tests/src/unit/policy/test_middleware.py": 1711,
-  "tests/src/unit/test_astro_setup_js_behavior.py": 1303,
+  "tests/src/unit/test_astro_setup_js_behavior.py": 1289,
   "tests/src/unit/test_automation_enabled.py": 1184,
   "tests/src/unit/test_backup_manager.py": 3654,
   "tests/src/unit/test_best_practice_checker.py": 3080,
