@@ -131,6 +131,18 @@ def contains_pem_private_key(value: Any) -> bool:
     )
 
 
+def known_values_for_option_item(value: Any) -> set[str]:
+    """Return a string option item plus PEM lines needed by log scrubbing."""
+    if not isinstance(value, str) or not value:
+        return set()
+    values = {value}
+    if contains_pem_private_key(value):
+        # Supervisor log reads split multiline option values before the
+        # middleware can scrub them, so retain every line as well.
+        values.update(line for line in value.splitlines() if line)
+    return values
+
+
 # ---------------------------------------------------------------------------
 # Surface 1: Supervisor add-on options + schema
 # ---------------------------------------------------------------------------
@@ -202,11 +214,8 @@ def collect_addon_secret_values(options: Any, schema: Any) -> set[str]:
             continue
         if entry.get("format") == "password" or contains_pem_private_key(value):
             candidates = value if isinstance(value, list) else [value]
-            if isinstance(value, str) and contains_pem_private_key(value):
-                # Supervisor log reads split multiline option values before the
-                # middleware can scrub them, so retain every PEM line too.
-                candidates = [*candidates, *value.splitlines()]
-            values.update(item for item in candidates if isinstance(item, str) and item)
+            for candidate in candidates:
+                values |= known_values_for_option_item(candidate)
     return values
 
 

@@ -250,6 +250,21 @@ class TestCollectAddonSecretValues:
 
         assert values == set(options["deployment_key"])
 
+    def test_collects_lines_from_multiline_pem_list_item(self) -> None:
+        key = "-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----"
+
+        values = collect_addon_secret_values(
+            {"deployment_key": [key]},
+            [{"name": "deployment_key", "type": "string", "multiple": True}],
+        )
+
+        assert values == {
+            key,
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "secret",
+            "-----END RSA PRIVATE KEY-----",
+        }
+
 
 class TestSentinels:
     def test_sentinel_for_set_and_empty(self):
