@@ -24,6 +24,7 @@ from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
 from .core_payload import check_core_gaps, merged_update
+from .icon_route import collection_icon
 from .listing import listed_items
 from .registry import _ws_error_msg
 from .schemas import (
@@ -73,7 +74,8 @@ async def _execute_legacy_update(
 ) -> dict[str, Any]:
     """Update through Core's ``<type>/update`` WS command (no component)."""
     stored = await _stored_item(client, helper_type, entity_id, unique_id)
-    body = merged_update(helper_type, stored, name, icon, fields, entity_id)
+    item_icon = await collection_icon(client, helper_type, "update", icon)
+    body = merged_update(helper_type, stored, name, item_icon, fields, entity_id)
     check_core_gaps(helper_type, body, changed=fields)
     result = await client.send_websocket_message(
         {**body, "type": f"{helper_type}/update", f"{helper_type}_id": unique_id}
@@ -264,13 +266,10 @@ async def _execute_update_simple_helper(
         except (HomeAssistantError, OSError, TimeoutError) as err:
             tag_entity, reason = None, f"its entity could not be read ({err})"
             lookup_failed = True
-        # Core's tag schema has no icon field, so an icon is sent to Core above;
-        # a cleared one ('') is left out there and clears the registry icon.
-        registry_icon = icon if icon == "" else None
         given = [
             field
             for field, value in (
-                ("icon", registry_icon),
+                ("icon", icon),
                 ("area", area_id),
                 ("labels", labels),
                 ("category", category),
@@ -287,7 +286,7 @@ async def _execute_update_simple_helper(
             await _apply_update_registry_and_category(
                 client,
                 entity_id,
-                registry_icon,
+                icon,
                 area_id,
                 labels,
                 category,
@@ -349,7 +348,8 @@ async def _update_via_component(
     item = await read_helper_item(client, helper_type, **target)
     if item is None:
         return None
-    body = merged_update(helper_type, item["item"], name, icon, fields, entity_id)
+    item_icon = await collection_icon(client, helper_type, "update", icon)
+    body = merged_update(helper_type, item["item"], name, item_icon, fields, entity_id)
     check_core_gaps(helper_type, body, changed=fields)
     registry = {
         key: value

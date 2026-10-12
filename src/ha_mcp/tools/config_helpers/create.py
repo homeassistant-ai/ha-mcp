@@ -16,10 +16,10 @@ from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
 from .core_payload import (
-    REGISTRY_ICON_ON_CREATE,
     check_core_gaps,
     with_create_defaults,
 )
+from .icon_route import collection_icon
 from .registry import _ws_error_msg
 from .schemas import (
     _attach_helper_skill,
@@ -128,7 +128,16 @@ async def _execute_create_simple_helper(
             )
         )
 
-    registry_icon = icon if helper_type in REGISTRY_ICON_ON_CREATE else None
+    # A zone's update merges into the stored item and rejects an empty icon, so
+    # an icon stored there can never be removed: a new zone's icon goes to the
+    # entity registry (#2643), like the icon of a type whose schema has none or
+    # cannot be read.
+    item_icon = (
+        None
+        if helper_type == "zone"
+        else await collection_icon(client, helper_type, "create", icon)
+    )
+    registry_icon = icon if item_icon is None else None
     message = _build_create_message(
         helper_type, name, None if registry_icon else icon, fields
     )

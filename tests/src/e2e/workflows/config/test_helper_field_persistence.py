@@ -26,7 +26,7 @@ Also includes a cross-cutting test: a fully-configured input_number
 updated with only ``min_value=70`` must preserve initial, mode,
 unit_of_measurement, step, and icon; and zone tests: an icon change must
 reach the zone's stored icon, and clearing a stored icon must fail; and a
-person and tag test: Core refuses an icon for either.
+person and tag test: their icon lands in the entity registry and clears there.
 """
 
 import logging
@@ -779,49 +779,41 @@ class TestZoneIconPersistence:
             assert await _stored_icon(mcp, zone_id) == "mdi:school"
 
 
+async def _registry_icon(mcp: MCPAssertions, entity_id: str) -> str | None:
+    entity = await mcp.call_tool_success("ha_get_entity", {"entity_id": entity_id})
+    return entity["entity_entry"]["icon"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.config
 @pytest.mark.parametrize("helper_type", ["person", "tag"])
-async def test_person_and_tag_icons_are_left_to_core(
+async def test_person_and_tag_icons_land_in_the_registry_and_can_be_cleared(
     mcp_client: Client, helper_type: str
 ) -> None:
-    """Core's person and tag schemas have no icon field: an icon update fails
-    with Core's error, while the same update without the icon succeeds."""
-    tag_id = f"e2e-core-judge-{uuid.uuid4().hex[:8]}"
+    """Core's person and tag schemas have no icon field: the icon goes to the
+    entity registry on create and on update, and '' clears it there."""
+    tag_id = f"e2e-registry-icon-{uuid.uuid4().hex[:8]}"
     create: dict[str, Any] = {
         "helper_type": helper_type,
-        "name": f"E2E Core Judge {helper_type}",
+        "name": f"E2E Registry Icon {helper_type}",
+        "icon": "mdi:star",
     }
     if helper_type == "tag":
         create["config"] = {"tag_id": tag_id}
     async with MCPAssertions(mcp_client) as mcp:
         created = await mcp.call_tool_success("ha_config_set_helper", create)
-        helper_id = (
-            tag_id
-            if helper_type == "tag"
-            else _entity_id_from_create(created, "person")
-        )
+        entity_id = created.get("entity_id")
+        helper_id = tag_id if helper_type == "tag" else entity_id
         try:
-            assert helper_id, created
-            # The helper is found and an update without the icon goes through,
-            # so the failure below can only come from the icon.
-            await mcp.call_tool_success(
-                "ha_config_set_helper",
-                {
-                    "helper_type": helper_type,
-                    "helper_id": helper_id,
-                    "name": f"E2E Core Judge {helper_type} renamed",
-                },
-            )
-            await mcp.call_tool_failure(
-                "ha_config_set_helper",
-                {
-                    "helper_type": helper_type,
-                    "helper_id": helper_id,
-                    "icon": "mdi:star",
-                },
-                expected_error="'icon'",
-            )
+            assert entity_id, created
+            assert await _registry_icon(mcp, entity_id) == "mdi:star"
+
+            for icon, expected in (("mdi:heart", "mdi:heart"), ("", None)):
+                await mcp.call_tool_success(
+                    "ha_config_set_helper",
+                    {"helper_type": helper_type, "helper_id": helper_id, "icon": icon},
+                )
+                assert await _registry_icon(mcp, entity_id) == expected
         finally:
             if helper_id:
                 await safe_call_tool(

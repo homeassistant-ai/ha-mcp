@@ -17,12 +17,6 @@ from ...errors import ErrorCode, create_error_response
 from ..helpers import raise_tool_error
 from .schemas import _simple_helper_error_context
 
-# A zone's update merges into the stored item and rejects an empty icon, so an
-# icon stored there can never be removed: a new zone's icon goes to the entity
-# registry instead (#2643). Person and tag are not here: their Core schemas have
-# no icon field, and Core's refusal reaches the caller.
-REGISTRY_ICON_ON_CREATE = frozenset({"zone"})
-
 # The tool's own range parameters, under the names each type's Core schema uses.
 _RANGE_KEYS: dict[str, tuple[str, str]] = {"counter": ("minimum", "maximum")}
 _DEFAULT_RANGE_KEYS = ("min", "max")

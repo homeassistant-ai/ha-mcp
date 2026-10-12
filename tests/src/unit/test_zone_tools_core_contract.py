@@ -22,7 +22,10 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.config_helpers.create import _execute_create_simple_helper
-from ha_mcp.tools.config_helpers.update import _execute_update_simple_helper
+from ha_mcp.tools.config_helpers.update import (
+    _execute_update_simple_helper,
+    _update_via_component,
+)
 from ha_mcp.tools.tools_zones import ZoneTools, _build_zone_result
 
 OFFICE = {
@@ -122,6 +125,22 @@ def registered() -> AsyncMock:
     return AsyncMock(return_value=True)
 
 
+_FETCH_SCHEMAS = "ha_mcp.tools.config_helpers.icon_route.fetch_helper_schemas"
+# Core's person and tag fields, as the component serves them: no icon among them.
+_PERSON_SCHEMAS = {
+    "person": {
+        action: [{"name": f} for f in ("name", "user_id", "device_trackers", "picture")]
+        for action in ("create", "update")
+    }
+}
+_TAG_SCHEMAS = {
+    "tag": {
+        "create": [{"name": f} for f in ("tag_id", "name", "description")],
+        "update": [{"name": f} for f in ("name", "description")],
+    }
+}
+
+
 @pytest.fixture(autouse=True)
 def _no_component(removed: AsyncMock, registered: AsyncMock):
     """Serve every call through Core's own WebSocket commands, without waiting."""
@@ -138,6 +157,7 @@ def _no_component(removed: AsyncMock, registered: AsyncMock):
             "ha_mcp.tools.config_helpers.create.write_helper_item",
             new=AsyncMock(return_value=None),
         ),
+        patch(_FETCH_SCHEMAS, new=AsyncMock(return_value=None)),
         patch(
             "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new=registered,
@@ -335,8 +355,8 @@ class TestCreatedIconStaysClearable:
 
     Core's zone/update merges into the stored item and rejects an empty icon, so
     an icon stored in a zone can never be removed (#2643). Person and tag have no
-    icon field: their icon is sent to Core, which refuses it. A created person's,
-    tag's or zone's entity is looked up in the registry.
+    icon field in Core's schemas, so their icon goes to the registry too. A
+    created person's, tag's or zone's entity is looked up in the registry.
     """
 
     async def test_zone_create_writes_the_icon_to_its_registry_entity(self):
@@ -413,8 +433,7 @@ class TestCreatedIconStaysClearable:
 
         assert "the category given were not applied" in result["warnings"][0]
 
-    async def test_person_create_sends_the_icon_for_core_to_judge(self):
-        """Core's person schema has no icon field; Core, not the tool, says so."""
+    async def test_person_create_writes_the_icon_to_the_registry(self):
         client = _client(
             {
                 "person/create": {"success": True, "result": {"id": "anna"}},
@@ -431,16 +450,19 @@ class TestCreatedIconStaysClearable:
             }
         )
 
-        await _execute_create_simple_helper(
-            client, "person", "Anna", "mdi:account", None, None, None, False, False, {}
-        )  # fmt: skip
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=_PERSON_SCHEMAS)):
+            await _execute_create_simple_helper(
+                client, "person", "Anna", "mdi:account", None, None, None,
+                False, False, {},
+            )  # fmt: skip
 
         (create,) = _sent(client, "person/create")
-        assert create["icon"] == "mdi:account"
-        assert _sent(client, "config/entity_registry/update") == []
+        assert "icon" not in create
+        assert (
+            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:account"
+        )
 
-    async def test_tag_create_sends_the_icon_for_core_to_judge(self):
-        """Core's tag schema has no icon field either; Core, not the tool, says so."""
+    async def test_tag_create_writes_the_icon_to_the_registry(self):
         client = _client(
             {
                 "tag/create": {"success": True, "result": {"id": "abc-1"}},
@@ -457,15 +479,17 @@ class TestCreatedIconStaysClearable:
             }
         )
 
-        await _execute_create_simple_helper(
-            client, "tag", "Front door", "mdi:nfc", None, None, None, False, False, {}
-        )  # fmt: skip
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=_TAG_SCHEMAS)):
+            await _execute_create_simple_helper(
+                client, "tag", "Front door", "mdi:nfc", None, None, None,
+                False, False, {},
+            )  # fmt: skip
 
         (create,) = _sent(client, "tag/create")
-        assert create["icon"] == "mdi:nfc"
-        assert _sent(client, "config/entity_registry/update") == []
+        assert "icon" not in create
+        assert _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:nfc"
 
-    async def test_person_update_sends_the_icon_for_core_to_judge(self):
+    async def test_person_update_leaves_the_icon_out_of_the_stored_item(self):
         person = {"id": "anna", "name": "Anna", "device_trackers": []}
         entry = {"entity_id": "person.anna", "platform": "person", "unique_id": "anna"}
         client = _client(
@@ -479,13 +503,96 @@ class TestCreatedIconStaysClearable:
             }
         )
 
-        await _execute_update_simple_helper(
-            client, "person", "person.anna", "person.anna", None, "mdi:account",
-            None, None, None, False, False, {},
-        )  # fmt: skip
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=_PERSON_SCHEMAS)):
+            await _execute_update_simple_helper(
+                client, "person", "person.anna", "person.anna", None, "mdi:account",
+                None, None, None, False, False, {},
+            )  # fmt: skip
 
         (update,) = _sent(client, "person/update")
-        assert update["icon"] == "mdi:account"
+        assert "icon" not in update
+        assert (
+            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:account"
+        )
+
+    async def test_component_person_create_sends_the_icon_as_a_registry_field(self):
+        write = AsyncMock(return_value=None)
+        with (
+            patch("ha_mcp.tools.config_helpers.create.write_helper_item", write),
+            patch(_FETCH_SCHEMAS, AsyncMock(return_value=_PERSON_SCHEMAS)),
+        ):
+            await _execute_create_simple_helper(
+                _client(
+                    {
+                        "person/create": {"success": True, "result": {"id": "anna"}},
+                        "config/entity_registry/list": {"success": True, "result": []},
+                    }
+                ), "person", "Anna", "mdi:account", None, None, None,
+                False, False, {},
+            )  # fmt: skip
+
+        assert "icon" not in write.call_args.args[3]
+        assert write.call_args.kwargs["registry"] == {"icon": "mdi:account"}
+
+    @pytest.mark.parametrize(
+        ("helper_type", "schemas", "item", "in_item"),
+        [
+            ("person", _PERSON_SCHEMAS, {"id": "anna", "name": "Anna"}, False),
+            (
+                "input_boolean",
+                {"input_boolean": {"update": [{"name": "name"}, {"name": "icon"}]}},
+                {"id": "anna", "name": "Anna"},
+                True,
+            ),
+        ],
+        ids=["person", "input_boolean"],
+    )
+    async def test_component_update_follows_the_schema_and_sets_the_registry(
+        self, helper_type, schemas, item, in_item
+    ):
+        """The registry always takes the icon; the item only where Core has one."""
+        write = AsyncMock(return_value=None)
+        read = AsyncMock(return_value={"item": item, "item_id": "anna"})
+        with (
+            patch("ha_mcp.tools.config_helpers.update.read_helper_item", read),
+            patch("ha_mcp.tools.config_helpers.update.write_helper_item", write),
+            patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)),
+        ):
+            await _update_via_component(
+                _client(), helper_type, f"{helper_type}.anna", f"{helper_type}.anna",
+                None, "mdi:account", None, None, None, {},
+            )  # fmt: skip
+
+        assert ("icon" in write.call_args.args[3]) is in_item
+        assert write.call_args.kwargs["registry"] == {"icon": "mdi:account"}
+
+    async def test_an_icon_the_schema_declares_lands_in_item_and_registry(self):
+        stored = {"id": "lamp", "name": "Lamp", "icon": "mdi:lamp"}
+        entry = {
+            "entity_id": "input_boolean.lamp",
+            "platform": "input_boolean",
+            "unique_id": "lamp",
+        }
+        client = _client(
+            {
+                "input_boolean/list": {"success": True, "result": [stored]},
+                "input_boolean/update": {"success": True, "result": stored},
+                "config/entity_registry/get": {"success": True, "result": entry},
+            }
+        )
+        schemas = {"input_boolean": {"update": [{"name": "name"}, {"name": "icon"}]}}
+
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)):
+            await _execute_update_simple_helper(
+                client, "input_boolean", "input_boolean.lamp", "input_boolean.lamp",
+                None, "mdi:lightbulb", None, None, None, False, False, {},
+            )  # fmt: skip
+
+        (update,) = _sent(client, "input_boolean/update")
+        assert update["icon"] == "mdi:lightbulb"
+        assert (
+            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:lightbulb"
+        )
 
     async def test_tag_update_without_its_entity_is_a_warning(self):
         tag = {"id": "abc-1", "name": "Front door"}
@@ -523,18 +630,68 @@ class TestCreatedIconStaysClearable:
         assert "could not be read" in result["warnings"][0]
 
     async def test_other_helpers_keep_the_icon_in_their_stored_item(self):
-        """Their update replaces the stored item, so a stored icon can be cleared."""
+        """Core's schema declares the icon: it stays in the stored item."""
         client = _client(
             {"input_boolean/create": {"success": True, "result": {"id": "lamp"}}}
         )
+        schemas = {"input_boolean": {"create": [{"name": "name"}, {"name": "icon"}]}}
 
-        await _execute_create_simple_helper(
-            client, "input_boolean", "Lamp", "mdi:lamp", None, None, None, False, False, {}
-        )  # fmt: skip
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)):
+            await _execute_create_simple_helper(
+                client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
+                False, False, {},
+            )  # fmt: skip
 
         (create,) = _sent(client, "input_boolean/create")
         assert create["icon"] == "mdi:lamp"
         assert _sent(client, "config/entity_registry/update") == []
+
+    @pytest.mark.parametrize(
+        "schemas",
+        [None, {}, {"input_boolean": {}}],
+        ids=["unreadable", "no types", "no create fields"],
+    )
+    async def test_an_icon_without_a_known_field_goes_to_the_registry(self, schemas):
+        """Without Core's field list nothing is guessed: the registry takes it."""
+        client = _client(
+            {"input_boolean/create": {"success": True, "result": {"id": "lamp"}}}
+        )
+
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)):
+            await _execute_create_simple_helper(
+                client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
+                False, False, {},
+            )  # fmt: skip
+
+        (create,) = _sent(client, "input_boolean/create")
+        assert "icon" not in create
+        assert _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:lamp"
+
+    async def test_a_cleared_icon_also_leaves_the_stored_item(self):
+        """Clearing only the registry would bring an older stored icon back."""
+        stored = {"id": "lamp", "name": "Lamp", "icon": "mdi:lamp"}
+        entry = {
+            "entity_id": "input_boolean.lamp",
+            "platform": "input_boolean",
+            "unique_id": "lamp",
+        }
+        client = _client(
+            {
+                "input_boolean/list": {"success": True, "result": [stored]},
+                "input_boolean/update": {"success": True, "result": stored},
+                "config/entity_registry/get": {"success": True, "result": entry},
+            }
+        )
+
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)):
+            await _execute_update_simple_helper(
+                client, "input_boolean", "input_boolean.lamp", "input_boolean.lamp",
+                None, "", None, None, None, False, False, {},
+            )  # fmt: skip
+
+        (update,) = _sent(client, "input_boolean/update")
+        assert "icon" not in update
+        assert _sent(client, "config/entity_registry/update")[0]["icon"] is None
 
     async def test_component_create_sends_the_icon_as_a_registry_field(self):
         write = AsyncMock(return_value=None)

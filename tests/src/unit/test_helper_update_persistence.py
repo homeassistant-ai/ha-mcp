@@ -402,7 +402,7 @@ class TestInputButtonUpdatePersistence:
         assert update_call is not None
         msg = update_call[0][0]
         assert msg["name"] == "Updated Button"
-        assert msg["icon"] == "mdi:gesture-tap"
+        assert "icon" not in msg  # no readable schema, so not into the item
 
 
 class TestFlowHelperRouting:
