@@ -118,6 +118,37 @@ class TestRedactAddonOptions:
             {"user": "b", "token": REDACTED_EMPTY},
         ]
 
+    def test_unmarked_pem_private_key_is_redacted(self) -> None:
+        options = {
+            "deployment_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----",
+            "description": "ordinary public configuration",
+        }
+        schema = [
+            {"name": "deployment_key", "type": "string"},
+            {"name": "description", "type": "string"},
+        ]
+
+        out = redact_addon_options(options, schema)
+
+        assert out["deployment_key"] == REDACTED_SET
+        assert out["description"] == "ordinary public configuration"
+
+    def test_unmarked_pem_private_key_line_list_is_redacted(self) -> None:
+        options = {
+            "deployment_key": [
+                "-----BEGIN RSA PRIVATE KEY-----",
+                "secret",
+                "-----END RSA PRIVATE KEY-----",
+            ]
+        }
+        schema = [{"name": "deployment_key", "type": "string", "multiple": True}]
+
+        assert redact_addon_options(options, schema)["deployment_key"] == [
+            REDACTED_SET,
+            REDACTED_SET,
+            REDACTED_SET,
+        ]
+
     def test_input_options_not_mutated(self):
         before = json.dumps(ADDON_OPTIONS, sort_keys=True)
         redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA)
@@ -159,6 +190,20 @@ class TestCollectAddonSecretValues:
         assert "" not in values
         assert "info" not in values
         assert "root" not in values
+
+    def test_collects_unmarked_pem_private_key(self) -> None:
+        key = "-----BEGIN EC PRIVATE KEY-----\nsecret\n-----END EC PRIVATE KEY-----"
+        values = collect_addon_secret_values(
+            {"deployment_key": key},
+            [{"name": "deployment_key", "type": "string"}],
+        )
+
+        assert values == {
+            key,
+            "-----BEGIN EC PRIVATE KEY-----",
+            "secret",
+            "-----END EC PRIVATE KEY-----",
+        }
 
 
 class TestSentinels:
