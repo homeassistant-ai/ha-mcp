@@ -264,10 +264,13 @@ async def _execute_update_simple_helper(
         except (HomeAssistantError, OSError, TimeoutError) as err:
             tag_entity, reason = None, f"its entity could not be read ({err})"
             lookup_failed = True
+        # Core's tag schema has no icon field, so an icon is sent to Core above;
+        # a cleared one ('') is left out there and clears the registry icon.
+        registry_icon = icon if icon == "" else None
         given = [
             field
             for field, value in (
-                ("icon", icon),
+                ("icon", registry_icon),
                 ("area", area_id),
                 ("labels", labels),
                 ("category", category),
@@ -284,7 +287,7 @@ async def _execute_update_simple_helper(
             await _apply_update_registry_and_category(
                 client,
                 entity_id,
-                icon,
+                registry_icon,
                 area_id,
                 labels,
                 category,

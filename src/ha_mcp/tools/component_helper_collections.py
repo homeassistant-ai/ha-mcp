@@ -222,11 +222,16 @@ async def _platform_entities(client: Any, platform: str) -> list[dict[str, Any]]
     return [e for e in listed.get("result") or [] if e.get("platform") == platform]
 
 
+# Helper types whose entity_id follows the item's name, not its ID.
+NAME_FOLLOWING_ENTITY_IDS = frozenset({"person", "tag", "zone"})
+
+
 async def registry_entity_id(
     client: Any, platform: str, item_id: str | None
 ) -> str | None:
-    """The entity of a stored item whose entity_id follows its name, not its ID
-    (tag, zone, person): the registry entry whose unique_id is the item's ID."""
+    """The entity_id of a stored item's entity: the registry entry on ``platform``
+    whose unique_id is the item's ID. For the types in ``NAME_FOLLOWING_ENTITY_IDS``
+    only the registry knows it."""
     if not item_id:
         return None
     return next(

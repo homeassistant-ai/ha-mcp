@@ -331,11 +331,12 @@ class TestZoneWrites:
 
 
 class TestCreatedIconStaysClearable:
-    """A new zone's, person's or tag's icon goes to the entity registry.
+    """A new zone's icon goes to the entity registry, where it stays clearable.
 
     Core's zone/update merges into the stored item and rejects an empty icon, so
-    an icon stored in a zone can never be removed; person and tag have no icon
-    field, so Core rejects one there (#2643).
+    an icon stored in a zone can never be removed (#2643). Person and tag have no
+    icon field: their icon is sent to Core, which refuses it. A created person's,
+    tag's or zone's entity is looked up in the registry.
     """
 
     async def test_zone_create_writes_the_icon_to_its_registry_entity(self):
@@ -412,7 +413,8 @@ class TestCreatedIconStaysClearable:
 
         assert "the category given were not applied" in result["warnings"][0]
 
-    async def test_person_create_writes_the_icon_to_the_registry(self):
+    async def test_person_create_sends_the_icon_for_core_to_judge(self):
+        """Core's person schema has no icon field; Core, not the tool, says so."""
         client = _client(
             {
                 "person/create": {"success": True, "result": {"id": "anna"}},
@@ -434,12 +436,36 @@ class TestCreatedIconStaysClearable:
         )  # fmt: skip
 
         (create,) = _sent(client, "person/create")
-        assert "icon" not in create
-        assert (
-            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:account"
+        assert create["icon"] == "mdi:account"
+        assert _sent(client, "config/entity_registry/update") == []
+
+    async def test_tag_create_sends_the_icon_for_core_to_judge(self):
+        """Core's tag schema has no icon field either; Core, not the tool, says so."""
+        client = _client(
+            {
+                "tag/create": {"success": True, "result": {"id": "abc-1"}},
+                "config/entity_registry/list": {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "tag.front_door",
+                            "platform": "tag",
+                            "unique_id": "abc-1",
+                        }
+                    ],
+                },
+            }
         )
 
-    async def test_person_update_leaves_the_icon_out_of_the_stored_item(self):
+        await _execute_create_simple_helper(
+            client, "tag", "Front door", "mdi:nfc", None, None, None, False, False, {}
+        )  # fmt: skip
+
+        (create,) = _sent(client, "tag/create")
+        assert create["icon"] == "mdi:nfc"
+        assert _sent(client, "config/entity_registry/update") == []
+
+    async def test_person_update_sends_the_icon_for_core_to_judge(self):
         person = {"id": "anna", "name": "Anna", "device_trackers": []}
         entry = {"entity_id": "person.anna", "platform": "person", "unique_id": "anna"}
         client = _client(
@@ -459,10 +485,7 @@ class TestCreatedIconStaysClearable:
         )  # fmt: skip
 
         (update,) = _sent(client, "person/update")
-        assert "icon" not in update
-        assert (
-            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:account"
-        )
+        assert update["icon"] == "mdi:account"
 
     async def test_tag_update_without_its_entity_is_a_warning(self):
         tag = {"id": "abc-1", "name": "Front door"}
@@ -475,11 +498,11 @@ class TestCreatedIconStaysClearable:
         )
 
         result = await _execute_update_simple_helper(
-            client, "tag", "abc-1", "abc-1", None, "mdi:nfc",
-            None, None, None, False, False, {},
+            client, "tag", "abc-1", "abc-1", None, None,
+            "hall", None, None, False, False, {},
         )  # fmt: skip
 
-        assert "were not applied" in result["warnings"][0]
+        assert "the area given were not applied" in result["warnings"][0]
 
     async def test_a_failed_registry_read_on_tag_update_is_a_warning(self):
         """Even with no registry field given, the missing entity_id is named."""

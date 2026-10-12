@@ -25,10 +25,12 @@ input_datetime, counter, timer. Skips: schedule, zone, person, tag.
 Also includes a cross-cutting test: a fully-configured input_number
 updated with only ``min_value=70`` must preserve initial, mode,
 unit_of_measurement, step, and icon; and zone tests: an icon change must
-reach the zone's stored icon, and clearing a stored icon must fail.
+reach the zone's stored icon, and clearing a stored icon must fail; and a
+person and tag test: Core refuses an icon for either.
 """
 
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -779,36 +781,51 @@ class TestZoneIconPersistence:
 
 @pytest.mark.asyncio
 @pytest.mark.config
-async def test_person_icon_lands_in_the_registry_and_can_be_cleared(
-    mcp_client: Client,
+@pytest.mark.parametrize("helper_type", ["person", "tag"])
+async def test_person_and_tag_icons_are_left_to_core(
+    mcp_client: Client, helper_type: str
 ) -> None:
-    """Core's person schema has no icon field: the icon goes to the registry."""
+    """Core's person and tag schemas have no icon field: an icon update fails
+    with Core's error, while the same update without the icon succeeds."""
+    tag_id = f"e2e-core-judge-{uuid.uuid4().hex[:8]}"
+    create: dict[str, Any] = {
+        "helper_type": helper_type,
+        "name": f"E2E Core Judge {helper_type}",
+    }
+    if helper_type == "tag":
+        create["config"] = {"tag_id": tag_id}
     async with MCPAssertions(mcp_client) as mcp:
-        created = await mcp.call_tool_success(
-            "ha_config_set_helper",
-            {"helper_type": "person", "name": "E2E Icon Person", "icon": "mdi:star"},
+        created = await mcp.call_tool_success("ha_config_set_helper", create)
+        helper_id = (
+            tag_id
+            if helper_type == "tag"
+            else _entity_id_from_create(created, "person")
         )
-        entity_id = _entity_id_from_create(created, "person")
         try:
-            assert entity_id, created
-            assert await _wait_for_entity_registration(mcp_client, entity_id)
-            state = await mcp.call_tool_success(
-                "ha_get_state", {"entity_id": entity_id}
-            )
-            assert state["data"]["attributes"].get("icon") == "mdi:star", state
-
+            assert helper_id, created
+            # The helper is found and an update without the icon goes through,
+            # so the failure below can only come from the icon.
             await mcp.call_tool_success(
                 "ha_config_set_helper",
-                {"helper_type": "person", "helper_id": entity_id, "icon": ""},
+                {
+                    "helper_type": helper_type,
+                    "helper_id": helper_id,
+                    "name": f"E2E Core Judge {helper_type} renamed",
+                },
             )
-            state = await mcp.call_tool_success(
-                "ha_get_state", {"entity_id": entity_id}
+            await mcp.call_tool_failure(
+                "ha_config_set_helper",
+                {
+                    "helper_type": helper_type,
+                    "helper_id": helper_id,
+                    "icon": "mdi:star",
+                },
+                expected_error="'icon'",
             )
-            assert "icon" not in state["data"]["attributes"], state
         finally:
-            if entity_id:
+            if helper_id:
                 await safe_call_tool(
                     mcp_client,
                     "ha_remove_helpers_integrations",
-                    {"helper_type": "person", "target": entity_id, "confirm": True},
+                    {"helper_type": helper_type, "target": helper_id, "confirm": True},
                 )

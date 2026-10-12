@@ -6,6 +6,7 @@ from ...client.rest_client import HomeAssistantError
 from ...errors import ErrorCode, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_helper_collections import (
+    NAME_FOLLOWING_ENTITY_IDS,
     collection_payload,
     native_result,
     registry_entity_id,
@@ -227,7 +228,7 @@ async def _created_entity_id(
     the registry knows it. The helper already exists, so a failed read is
     reported rather than raised: a caller retrying would create it twice.
     """
-    if helper_type in REGISTRY_ICON_ON_CREATE:
+    if helper_type in NAME_FOLLOWING_ENTITY_IDS:
         try:
             entity_id = await registry_entity_id(
                 client, helper_type, helper_data.get("id")
