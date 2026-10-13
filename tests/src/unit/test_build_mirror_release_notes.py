@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
+
+import pytest
 
 _SCRIPT = (
     Path(__file__).resolve().parents[3] / "scripts" / "build_mirror_release_notes.py"
@@ -65,6 +68,41 @@ def test_format_release_notes_filters_noise_subjects() -> None:
     )
     assert "- feat: real component change" in notes
     assert "publish dev addon version" not in notes
+
+
+@pytest.mark.parametrize("component_changed", [False, True])
+def test_release_stamp_does_not_count_as_a_component_change(
+    tmp_path: Path, component_changed: bool
+) -> None:
+    """Match the server-only release reproduced on the HAOS dev instance."""
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init")
+    git("config", "user.name", "Release regression")
+    git("config", "user.email", "test@example.invalid")
+    component = tmp_path / "custom_components" / "ha_mcp_tools"
+    component.mkdir(parents=True)
+    version = component / "const.py"
+    version.write_text('COMPONENT_VERSION = "9.0.0"\n', encoding="utf-8")
+    git("add", ".")
+    git("commit", "-m", "feat: baseline")
+    git("tag", "v9.0.0")
+    target = component if component_changed else tmp_path
+    (target / "behavior.py").write_text("FIXED = True\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-m", "fix: behavior correction")
+    version.write_text('COMPONENT_VERSION = "9.0.1"\n', encoding="utf-8")
+    git("add", ".")
+    git("commit", "-m", "9.0.1")
+    git("tag", "v9.0.1")
+    output = tmp_path / "notes.md"
+    assert build.main(["--repo-dir", str(tmp_path), "--out", str(output)]) == 0
+    notes = output.read_text(encoding="utf-8")
+    assert "- 9.0.1" not in notes
+    assert ("- fix: behavior correction" in notes) is component_changed
+    assert ("No changes to" in notes) is not component_changed
 
 
 def test_select_stable_tags_filters_dev_and_stable_pointer() -> None:
