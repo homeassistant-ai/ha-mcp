@@ -355,7 +355,7 @@ File & YAML Tools**); it changes nothing about how the in-process server runs.
 
 Both entries share the integration's package requirements. A File & YAML-only
 installation also installs the paired `ha-mcp` package, even when the actual
-server runs in an app (add-on), Docker or another process. It does **not** need
+server runs in an app, Docker or another process. It does **not** need
 an HA-MCP Server entry and does not start an embedded server. If installing a
 shared requirement fails, neither entry can load; Home Assistant shows an
 **Invalid config** persistent notification with a **Show logs** link.
