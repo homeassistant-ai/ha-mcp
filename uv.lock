@@ -1067,15 +1067,15 @@ wheels = [
 
 [[package]]
 name = "lefthook"
-version = "2.1.14"
+version = "2.1.17"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/54/9b67d7b19bc4e61345065d53ce103d3ab81dc1dc5a5e35695af076c1506c/lefthook-2.1.14-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:e60ec36d5ec6094bea11c063aa09f11972509d6f6647d82ad1ee12d61f0859a2", size = 5427421, upload-time = "2026-09-14T10:26:00.346Z" },
-    { url = "https://files.pythonhosted.org/packages/d0/a0/72c430c1e261f11c67f57befb52432f8635ce8268dc0f7f1013125c803f0/lefthook-2.1.14-py3-none-macosx_11_0_arm64.whl", hash = "sha256:dd628f4b7436d825758ed98fc5e52c5ed3c782e1bbf4c623fc7d3b45ec3216dc", size = 4950978, upload-time = "2026-09-14T10:26:02.22Z" },
-    { url = "https://files.pythonhosted.org/packages/92/df/b44d9c547d45337e6bff854143c70579b34efea9076e20cd5b7c2dbe910d/lefthook-2.1.14-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:fd2aecae214cdcbb6336485e01fe114a002d78a80dbb49907b9f9f039d57d840", size = 4782004, upload-time = "2026-09-14T10:26:03.733Z" },
-    { url = "https://files.pythonhosted.org/packages/9a/04/216ca938c50e5b5d199b74157217b3963d1de166bf82ee32fab510d0a89d/lefthook-2.1.14-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:ee4ea57cbf07fdaa6faca8e18ba1b09e3246b1d7d8fc1a9c411299bbe7c24bae", size = 5361787, upload-time = "2026-09-14T10:26:05.164Z" },
-    { url = "https://files.pythonhosted.org/packages/91/63/1e1c38fa8e590f23d22df778425a3783d9f1df1137cc9bf7125240cbf6a4/lefthook-2.1.14-py3-none-win_amd64.whl", hash = "sha256:d28d43e98c42e723e92e2045c9b40e7908f128f63eec1ad3ebd37a0e9dc5cc74", size = 5509521, upload-time = "2026-09-14T10:26:06.699Z" },
-    { url = "https://files.pythonhosted.org/packages/de/0c/8fc504b2c8222faf8877ffb597ab007201e296e73d99602b21c2a57934ac/lefthook-2.1.14-py3-none-win_arm64.whl", hash = "sha256:2be15ca9164f5921e5170d522624a3dc6033ae38b4a8a90ba05598d22803876c", size = 4861855, upload-time = "2026-09-14T10:26:07.947Z" },
+    { url = "https://files.pythonhosted.org/packages/30/ab/1d5364eb167e0bbdb7894d453fe8f25973087b3c680837d2cc5639fb71d5/lefthook-2.1.17-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:53dc47b923127867010e68c324e09bbd455463954f7629c88102faa01dbdf61a", size = 5446224, upload-time = "2026-10-05T07:48:37.068Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/22/02c06debb039dbfd3f7e5cfb0b3f81efa49b6271a2cf5887e717ac34b165/lefthook-2.1.17-py3-none-macosx_11_0_arm64.whl", hash = "sha256:8faa20d78977bb3c5176d04c151c19060280a47448f339e19c0a61be32c9f143", size = 4965211, upload-time = "2026-10-05T07:48:38.642Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/5d/0ffb1d67b25c625797dfac31fe269a9bc14c8719b07772b8772b4a7735dc/lefthook-2.1.17-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:05e913e5bad044a50b105de6bfa077f082cd0c5e78a7de758840362f8cf4c698", size = 4794103, upload-time = "2026-10-05T07:48:40.223Z" },
+    { url = "https://files.pythonhosted.org/packages/06/ae/fc4c0d2bbcd386ea4a2bc6c8296747786b54ebce004f1935fa137a61d606/lefthook-2.1.17-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:e5b4ad680d6d141abd7be5e1cf29dde285e2c5fc60d7170b6bcde9874dd1cfb4", size = 5376403, upload-time = "2026-10-05T07:48:41.773Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/ac/006681926a87602b43fe34698d3a04bd50f750388bafee7bc1711a72cd64/lefthook-2.1.17-py3-none-win_amd64.whl", hash = "sha256:fbf76ad507b6d77af021a818e897c9c8071a77566081def5e2242f68f55b8da8", size = 5526254, upload-time = "2026-10-05T07:48:43.229Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/af/8c4c93349d1ced1bb51f08fbb3d3d5714abbcc3dc20d322311cf9abdd471/lefthook-2.1.17-py3-none-win_arm64.whl", hash = "sha256:83035a1e902c76295c4e2b80ceb38a4a1928e1d888ed81d3e7b0dede1397a3e7", size = 4875677, upload-time = "2026-10-05T07:48:44.824Z" },
 ]
 
 [[package]]
@@ -2110,8 +2110,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "sys_platform != 'win32'" },
-    { name = "jeepney", marker = "sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
