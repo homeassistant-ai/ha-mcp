@@ -60,7 +60,14 @@ def select_stable_tags(tags: list[str]) -> tuple[str | None, str]:
 
 def _filter_noise_subjects(subjects: list[str]) -> list[str]:
     """Drop commit subjects that are automation noise, not component changes."""
-    return [s for s in subjects if not s.startswith(_NOISE_SUBJECT_PREFIXES)]
+    # semantic-release commits each stable version as its bare number while
+    # stamping the component version and server pin, even on server-only bumps.
+    return [
+        s
+        for s in subjects
+        if not s.startswith(_NOISE_SUBJECT_PREFIXES)
+        and not _STABLE_TAG_RE.fullmatch(f"v{s}")
+    ]
 
 
 def format_release_notes(
