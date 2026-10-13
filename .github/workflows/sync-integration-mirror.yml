@@ -310,7 +310,7 @@ jobs:
             # --cleanup=verbatim keeps the markdown headings `git tag -F`
             # would otherwise strip as comments.
             python3 scripts/build_mirror_release_notes.py \
-              --out /tmp/mirror_notes.md
+              --tag "$TAG" --out /tmp/mirror_notes.md
           else
             stable_exists=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
             if [ -n "$stable_exists" ]; then
