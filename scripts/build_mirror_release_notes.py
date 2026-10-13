@@ -40,22 +40,25 @@ def _stable_version_key(tag: str) -> tuple[int, int, int]:
     return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
-def select_stable_tags(tags: list[str]) -> tuple[str | None, str]:
-    """Pick the two newest stable server release tags as (prev, curr).
+def select_stable_tags(
+    tags: list[str], current_tag: str | None = None
+) -> tuple[str | None, str]:
+    """Pick a stable release and its predecessor as (prev, curr).
 
     Filters to tags matching vX.Y.Z (excludes dev tags like
     'v7.10.0.dev778' and the floating 'stable' tag) and sorts numerically --
     a lexical sort would put 'v7.10.0' before 'v7.9.0'. Returns (None, curr)
-    when only one stable tag exists (the first-ever stable release).
+    for the first stable release. Without current_tag, selects the newest.
     """
     stable = sorted(
         (tag for tag in tags if _STABLE_TAG_RE.match(tag)), key=_stable_version_key
     )
     if not stable:
         raise ValueError("no stable tags (vX.Y.Z) found")
-    if len(stable) == 1:
-        return None, stable[0]
-    return stable[-2], stable[-1]
+    if current_tag is not None and current_tag not in stable:
+        raise ValueError(f"requested stable tag not found: {current_tag}")
+    index = stable.index(current_tag) if current_tag is not None else len(stable) - 1
+    return (stable[index - 1] if index else None), stable[index]
 
 
 def _filter_noise_subjects(subjects: list[str]) -> list[str]:
@@ -126,11 +129,13 @@ def _run_git(args: list[str], repo_dir: Path) -> str:
     return result.stdout.strip()
 
 
-def discover_stable_tags(repo_dir: Path) -> tuple[str | None, str]:
-    """Find the two newest stable server release tags in repo_dir."""
+def discover_stable_tags(
+    repo_dir: Path, current_tag: str | None = None
+) -> tuple[str | None, str]:
+    """Find the selected stable release and its predecessor in repo_dir."""
     output = _run_git(["tag", "-l", "v*"], repo_dir)
     tags = output.splitlines() if output else []
-    return select_stable_tags(tags)
+    return select_stable_tags(tags, current_tag)
 
 
 def collect_component_subjects(
@@ -153,6 +158,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Destination path for the generated release notes",
     )
     parser.add_argument(
+        "--tag",
+        help="Stable release being published (defaults to the newest stable tag)",
+    )
+    parser.add_argument(
         "--repo-dir",
         type=Path,
         default=Path.cwd(),
@@ -164,7 +173,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        prev_tag, curr_tag = discover_stable_tags(args.repo_dir)
+        prev_tag, curr_tag = discover_stable_tags(args.repo_dir, args.tag)
         subjects = collect_component_subjects(prev_tag, curr_tag, args.repo_dir)
     except (RuntimeError, ValueError) as e:
         print(f"build_mirror_release_notes: {e}", file=sys.stderr)
