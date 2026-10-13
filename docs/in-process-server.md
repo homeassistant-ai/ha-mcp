@@ -264,11 +264,27 @@ component than the one you have, a repair issue titled **Update the HA-MCP Custo
 Component via HACS** appears under **Settings → Repairs**. The server keeps
 running; update the component via HACS to clear it.
 
-Upgrading from component 2.x: the **Release channel** and **Automatic server
+### Upgrading from component 2.x
+
+The component and server now share one version, so the component version jumps
+from 2.x to 9.x. Existing credentials, connection secrets and effective settings
+are preserved, including settings inherited from defaults. The safer network
+defaults apply to newly created server entries.
+
+**Update controls change:** the **Release channel** and **Automatic server
 updates** options and the server update entity are gone (the entity is removed
 from the registry on the first start). A 2.x install on the `dev` channel moves
 to the stable server with this release; turn on the HACS **Pre-release** switch
 to keep receiving development builds.
+
+**Existing OAuth clients may need configuration:** in secret-URL (`none`) mode,
+the callback allowlist applies to existing installations too. A client whose
+callback is not listed cannot complete its next sign-in. Under **Settings →
+Devices & services → HA-MCP Server → Configure**, add its exact callback URL to
+**Allowed OAuth callback URL**. Claude's callback is included by default;
+other clients may need an entry. Connections that use only the webhook URL and
+clients using Home Assistant or legacy OAuth authentication are unaffected by
+this allowlist change. See [Security](#security) for loopback callback matching.
 
 ### Local-only mode
 
@@ -359,13 +375,20 @@ See [SECURITY.md](../SECURITY.md) for the full threat model.
 
 The in-process server entry and the **HA-MCP File & YAML Tools** entry are two
 config-entry types of the same **HA-MCP Custom Component** (`ha_mcp_tools`). They
-are independent: the server works on its own, and most installs never need the
-File & YAML entry. Add it only if you enable ha-mcp's opt-in file and YAML editing
+can be configured separately: the server works on its own, and most installs
+never need the File & YAML entry. Add it only if you enable ha-mcp's opt-in file and YAML editing
 tools (feature flags, off by default) — those tools call the privileged services
 that entry registers, and that applies to every server type, including an
 external app, Docker, or stdio server as well as the in-process server. Add or
 remove it at any time from the same **Add Integration** menu (choose **HA-MCP
 File & YAML Tools**); it changes nothing about how the in-process server runs.
+
+Both entries share the integration's package requirements. A File & YAML-only
+installation also installs the paired `ha-mcp` package, even when the actual
+server runs in an app (add-on), Docker or another process. It does **not** need
+an HA-MCP Server entry and does not start an embedded server. If installing a
+shared requirement fails, neither entry can load; Home Assistant shows an
+**Invalid config** persistent notification with a **Show logs** link.
 
 ## First start takes a little longer
 
@@ -398,8 +421,9 @@ until then.
 **The integration does not load at all.** Home Assistant installs the server
 build each component release pins before it loads the integration. If that
 install fails (no network at startup, or a conflict with a package Home
-Assistant itself needs), neither entry loads, no repair issue is filed, and the
-log reads `Requirements for ha_mcp_tools not found`. Fix the cause the log
+Assistant itself needs), neither entry loads and no repair issue is filed.
+Open **Notifications → Invalid config → ha_mcp_tools (Show logs)**. The log
+reads `Requirements for ha_mcp_tools not found`. Fix the cause the log
 names above that line, then restart Home Assistant.
 
 **Nothing happens after updating the component.** Home Assistant loads custom
