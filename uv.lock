@@ -1441,11 +1441,11 @@ wheels = [
 
 [[package]]
 name = "probatio"
-version = "0.12.2"
+version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/bc/75/ed2300cef9badd3f9235b37af1d31e7b83d2f90a701784b7e113ded0ba37/probatio-0.12.2.tar.gz", hash = "sha256:9c8de343f951552d762474fb71f5035c434012357cdfb2221aa090df274f49cc", size = 375748, upload-time = "2026-09-13T17:50:39.978Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/70/0d/866a5d14b2deb3a9e93121ec8caeae0f3883cda575218da1a6b46dd6223f/probatio-0.13.0.tar.gz", hash = "sha256:b5941dfdb68d813fbe49551d8802b241c4774f756fe51dfdedbad33e27797373", size = 405374, upload-time = "2026-10-02T09:57:43.616Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/68/97/27f31b324a3ad019511e51ba8127b4a2a44c530cf42192c18b40f9ae0a1c/probatio-0.12.2-py3-none-any.whl", hash = "sha256:db6e9767e59cb659f3f00259d74ec2fd478e25bddcacd8323a2a45ecb607d11a", size = 225365, upload-time = "2026-09-13T17:50:37.387Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/ab/8d3eb6004bec5ec8938baac7b251eed8954a5cdbfe9e342072634494a631/probatio-0.13.0-py3-none-any.whl", hash = "sha256:b592d11c89b536fa42617c3f23fb8798aeb659da2113cc2ec1ff8759f8a34d8a", size = 238295, upload-time = "2026-10-02T09:57:40.897Z" },
 ]
 
 [[package]]
@@ -2110,8 +2110,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "sys_platform != 'win32'" },
-    { name = "jeepney", marker = "sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
