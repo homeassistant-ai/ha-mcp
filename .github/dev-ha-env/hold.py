@@ -30,6 +30,7 @@ from haos_runtime import (
     SSH_ADDON_PASSWORD,
     SSH_ADDON_USER,
     SSHPASS_BIN,
+    _home_assistant_ws_command,
     _ssh_debug_host_port,
     wait_for_addon_mcp_ready,
 )
