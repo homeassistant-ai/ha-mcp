@@ -97,9 +97,17 @@ def test_release_stamp_does_not_count_as_a_component_change(
     git("add", ".")
     git("commit", "-m", "9.0.1")
     git("tag", "v9.0.1")
+    git("commit", "--allow-empty", "-m", "fix: later queued release")
+    git("tag", "v9.0.2")
     output = tmp_path / "notes.md"
-    assert build.main(["--repo-dir", str(tmp_path), "--out", str(output)]) == 0
+    assert (
+        build.main(
+            ["--repo-dir", str(tmp_path), "--tag", "v9.0.1", "--out", str(output)]
+        )
+        == 0
+    )
     notes = output.read_text(encoding="utf-8")
+    assert notes.startswith("## HA-MCP Custom Component 9.0.1\n")
     assert "- 9.0.1" not in notes
     assert ("- fix: behavior correction" in notes) is component_changed
     assert ("No changes to" in notes) is not component_changed
@@ -124,6 +132,23 @@ def test_select_stable_tags_single_tag_returns_none_prev() -> None:
     prev, curr = build.select_stable_tags(["v7.1.0"])
     assert prev is None
     assert curr == "v7.1.0"
+
+
+def test_selected_release_ignores_newer_tags() -> None:
+    # A queued mirror run can still be publishing 9.0.1 after 9.0.2 is tagged.
+    assert build.select_stable_tags(
+        ["v9.0.0", "v9.0.1", "v9.0.2"], current_tag="v9.0.1"
+    ) == ("v9.0.0", "v9.0.1")
+    assert build.select_stable_tags(["v9.0.0", "v9.0.1"], current_tag="v9.0.0") == (
+        None,
+        "v9.0.0",
+    )
+
+
+@pytest.mark.parametrize("tag", ["v9.0.3", "v9.0.1.dev1"])
+def test_selected_release_must_be_an_existing_stable_tag(tag: str) -> None:
+    with pytest.raises(ValueError, match="stable tag"):
+        build.select_stable_tags(["v9.0.0", "v9.0.1"], current_tag=tag)
 
 
 def test_select_stable_tags_raises_on_no_stable_tags() -> None:
