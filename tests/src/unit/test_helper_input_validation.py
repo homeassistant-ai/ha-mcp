@@ -54,6 +54,14 @@ def mock_client():
                     },
                 }
 
+            if msg_type == "config/entity_registry/list":
+                entry = {
+                    "entity_id": f"{helper_type}.{unique_id}",
+                    "unique_id": unique_id,
+                    "platform": helper_type,
+                }
+                return {"success": True, "result": [entry]}
+
             if msg_type.endswith("/list"):
                 return {"success": True, "result": [existing]}
 

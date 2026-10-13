@@ -41,6 +41,11 @@ REGISTRY = [
     OFFICE_ENTRY,
     {"entity_id": "light.desk", "platform": "hue", "unique_id": "office"},
 ]
+LAMP = {
+    "entity_id": "input_boolean.lamp",
+    "platform": "input_boolean",
+    "unique_id": "lamp",
+}
 HOME_STATE = {
     "entity_id": "zone.home",
     "state": "1",
@@ -419,6 +424,25 @@ class TestCreatedIconStaysClearable:
         assert "could not be read" in result["warnings"][0]
         assert "403" in result["warnings"][0]
 
+    async def test_a_failed_registry_read_after_a_helper_create_is_a_warning(self):
+        """Its entity now comes from the registry too: raising would make a
+        retrying caller create the helper twice."""
+        client = _client(
+            {
+                "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
+                "config/entity_registry/list": REGISTRY_BLOCKED,
+            }
+        )
+
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)):
+            result = await _execute_create_simple_helper(
+                client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
+                False, False, {},
+            )  # fmt: skip
+
+        assert result["success"] is True
+        assert any("could not be read" in w for w in result["warnings"])
+
     async def test_a_category_without_its_entity_is_named_as_not_applied(self):
         client = _client(
             {
@@ -632,12 +656,15 @@ class TestCreatedIconStaysClearable:
     async def test_other_helpers_keep_the_icon_in_their_stored_item(self):
         """Core's schema declares the icon: it stays in the stored item."""
         client = _client(
-            {"input_boolean/create": {"success": True, "result": {"id": "lamp"}}}
+            {
+                "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
+                "config/entity_registry/list": {"success": True, "result": [LAMP]},
+            }
         )
         schemas = {"input_boolean": {"create": [{"name": "name"}, {"name": "icon"}]}}
 
         with patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)):
-            await _execute_create_simple_helper(
+            result = await _execute_create_simple_helper(
                 client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
                 False, False, {},
             )  # fmt: skip
@@ -645,6 +672,7 @@ class TestCreatedIconStaysClearable:
         (create,) = _sent(client, "input_boolean/create")
         assert create["icon"] == "mdi:lamp"
         assert _sent(client, "config/entity_registry/update") == []
+        assert not any("backups" in w for w in result.get("warnings", []))
 
     @pytest.mark.parametrize(
         "schemas",
@@ -654,11 +682,14 @@ class TestCreatedIconStaysClearable:
     async def test_an_icon_without_a_known_field_goes_to_the_registry(self, schemas):
         """Without Core's field list nothing is guessed: the registry takes it."""
         client = _client(
-            {"input_boolean/create": {"success": True, "result": {"id": "lamp"}}}
+            {
+                "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
+                "config/entity_registry/list": {"success": True, "result": [LAMP]},
+            }
         )
 
         with patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)):
-            await _execute_create_simple_helper(
+            result = await _execute_create_simple_helper(
                 client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
                 False, False, {},
             )  # fmt: skip
@@ -666,6 +697,54 @@ class TestCreatedIconStaysClearable:
         (create,) = _sent(client, "input_boolean/create")
         assert "icon" not in create
         assert _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:lamp"
+        # Only tag, zone and person snapshots hold a registry icon.
+        assert any("backups do not hold" in w for w in result["warnings"])
+
+    async def test_the_registry_icon_goes_to_the_new_helper_s_own_entity(self):
+        """A renamed helper holds input_boolean.lamp, so Core names the new one
+        input_boolean.lamp_2: <type>.<id> would give the icon to the other."""
+        renamed = {**LAMP, "unique_id": "other"}
+        created = {**LAMP, "entity_id": "input_boolean.lamp_2"}
+        client = _client(
+            {
+                "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
+                "config/entity_registry/list": {
+                    "success": True,
+                    "result": [renamed, created],
+                },
+            }
+        )
+
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)):
+            result = await _execute_create_simple_helper(
+                client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
+                False, False, {},
+            )  # fmt: skip
+
+        (update,) = _sent(client, "config/entity_registry/update")
+        assert update["entity_id"] == "input_boolean.lamp_2"
+        assert result["entity_id"] == "input_boolean.lamp_2"
+
+    async def test_an_icon_for_a_helper_without_a_registry_entry_is_not_applied(
+        self,
+    ):
+        """No entry proves which entity is the new helper's: nothing is written."""
+        renamed = {**LAMP, "unique_id": "other"}
+        client = _client(
+            {
+                "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
+                "config/entity_registry/list": {"success": True, "result": [renamed]},
+            }
+        )
+
+        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)):
+            result = await _execute_create_simple_helper(
+                client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
+                False, False, {},
+            )  # fmt: skip
+
+        assert _sent(client, "config/entity_registry/update") == []
+        assert any("icon given were not applied" in w for w in result["warnings"])
 
     async def test_a_cleared_icon_also_leaves_the_stored_item(self):
         """Clearing only the registry would bring an older stored icon back."""
@@ -684,7 +763,7 @@ class TestCreatedIconStaysClearable:
         )
 
         with patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)):
-            await _execute_update_simple_helper(
+            result = await _execute_update_simple_helper(
                 client, "input_boolean", "input_boolean.lamp", "input_boolean.lamp",
                 None, "", None, None, None, False, False, {},
             )  # fmt: skip
@@ -692,6 +771,8 @@ class TestCreatedIconStaysClearable:
         (update,) = _sent(client, "input_boolean/update")
         assert "icon" not in update
         assert _sent(client, "config/entity_registry/update")[0]["icon"] is None
+        # The backup taken before this update holds no registry icon.
+        assert any("backups do not hold" in w for w in result["warnings"])
 
     async def test_component_create_sends_the_icon_as_a_registry_field(self):
         write = AsyncMock(return_value=None)

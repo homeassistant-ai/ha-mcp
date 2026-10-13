@@ -19,7 +19,7 @@ from .core_payload import (
     check_core_gaps,
     with_create_defaults,
 )
-from .icon_route import collection_icon
+from .icon_route import collection_icon, unbacked_icon_warning
 from .registry import _ws_error_msg
 from .schemas import (
     _attach_helper_skill,
@@ -190,6 +190,8 @@ async def _execute_create_simple_helper(
             f", so the {', '.join(given)} given were not applied" if given else ""
         )
         warnings.append(f"{helper_type} created, but {reason}{not_applied}.")
+    elif entity_id:
+        warnings.extend(unbacked_icon_warning(helper_type, registry_icon))
 
     # Tags live in their own tag registry and never appear in /api/states/<entity_id> —
     # polling there always 404s for the full timeout (~10s per tag), burning CI time.
@@ -233,21 +235,18 @@ async def _created_entity_id(
 ) -> tuple[str | None, str | None]:
     """The new helper's entity_id, and why it could not be read.
 
-    A tag's, zone's or person's entity_id follows its name, not its ID, so only
-    the registry knows it. The helper already exists, so a failed read is
-    reported rather than raised: a caller retrying would create it twice.
+    Unless the reply names it, only the registry knows it: a tag's, zone's or
+    person's entity_id follows its name, and ``<type>.<id>`` can be a renamed
+    entity of another helper, in which case Core suffixes the new one. The
+    helper already exists, so a failed read is reported rather than raised: a
+    caller retrying would create it twice.
     """
-    if helper_type in NAME_FOLLOWING_ENTITY_IDS:
-        try:
-            entity_id = await registry_entity_id(
-                client, helper_type, helper_data.get("id")
-            )
-        except (HomeAssistantError, OSError, TimeoutError) as err:
-            return None, str(err)
-        return entity_id, None
-    entity_id = helper_data.get("entity_id")
-    if not entity_id and helper_data.get("id"):
-        entity_id = f"{helper_type}.{helper_data['id']}"
+    if helper_type not in NAME_FOLLOWING_ENTITY_IDS and helper_data.get("entity_id"):
+        return helper_data["entity_id"], None
+    try:
+        entity_id = await registry_entity_id(client, helper_type, helper_data.get("id"))
+    except (HomeAssistantError, OSError, TimeoutError) as err:
+        return None, str(err)
     return entity_id, None
 
 

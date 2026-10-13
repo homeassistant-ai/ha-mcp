@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from ...backup_registry_icons import REGISTRY_SNAPSHOTS
 from ..component_helper_collections import fetch_helper_schemas
 
 
@@ -29,3 +30,16 @@ async def collection_icon(
     ):
         return icon
     return None
+
+
+def unbacked_icon_warning(helper_type: str, icon: str | None) -> list[str]:
+    """Say that a registry icon set or cleared here is not in the helper's
+    automatic backups: only tag, zone and person snapshots hold their registry
+    icon, so a restore cannot bring it back."""
+    if icon is None or helper_type in REGISTRY_SNAPSHOTS:
+        return []
+    return [
+        f"This {helper_type}'s icon is kept in the entity registry, which its "
+        "automatic backups do not hold: restoring a backup does not bring an "
+        "icon back."
+    ]

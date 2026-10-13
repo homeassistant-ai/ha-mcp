@@ -701,15 +701,25 @@ async def test_component_tag_update_reports_the_component_entity() -> None:
 
 
 async def test_write_falls_back_to_websocket_when_component_unavailable() -> None:
+    entry = {
+        "entity_id": "input_boolean.b",
+        "platform": "input_boolean",
+        "unique_id": "b",
+    }
+
+    async def send(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == "config/entity_registry/list":
+            return {"success": True, "result": [entry]}
+        return {"success": True, "result": {"id": "b", "name": "B"}}
+
     client = MagicMock()
-    client.send_websocket_message = AsyncMock(
-        return_value={"success": True, "result": {"id": "b", "name": "B"}}
-    )
+    client.send_websocket_message = AsyncMock(side_effect=send)
     with patch.object(hc_create, "write_helper_item", AsyncMock(return_value=None)):
         result = await hc_create._execute_create_simple_helper(
             client, "input_boolean", "B", None, None, None, None, False, False, {},
         )  # fmt: skip
-    client.send_websocket_message.assert_awaited_once()
+    sent = [c.args[0]["type"] for c in client.send_websocket_message.await_args_list]
+    assert sent.count("input_boolean/create") == 1
     assert result["entity_id"] == "input_boolean.b"
 
 

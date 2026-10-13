@@ -484,6 +484,54 @@ class TestRestoreSafetyBackup:
         assert _snapshot_files(tmp_path) == [name]
         assert [m["type"] for m in sent if m.get("zone_id") == "porch"] == []
 
+    async def test_a_stored_item_without_a_registry_entry_is_backed_up(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Removing its registry entry leaves the stored item, which the restore
+        overwrites: it is backed up first, not reported gone."""
+        sent = _store_ws(monkeypatch, [], [{"id": "item_b", "name": "B2"}])
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, None)
+        # Keyed by its old entity_id: the backup must follow the stored id.
+        name = _store_snapshot(
+            tmp_path, "helper_input_boolean", "input_boolean.renamed", "item_b"
+        )
+
+        result = await _edits_restore(mgr, "edits", "restore", name)
+
+        held = mgr.read_snapshot(result["data"]["safety_backup"])
+        assert held["config"]["name"] == "B2"
+        assert not any("no longer exists" in w for w in result["warnings"])
+        assert [m for m in sent if m["type"] == "input_boolean/update"]
+
+    async def test_a_stored_item_whose_id_names_another_entity_blocks_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without its own registry entry, <type>.<id> can be another item's
+        entity: that backup would hold the other item, so nothing is written."""
+        registry = [
+            {
+                "entity_id": "input_boolean.item_b",
+                "platform": "input_boolean",
+                "unique_id": "item_a",
+            }
+        ]
+        items = [{"id": "item_a", "name": "A"}, {"id": "item_b", "name": "B2"}]
+        sent = _store_ws(monkeypatch, registry, items)
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, None)
+        name = _store_snapshot(
+            tmp_path, "helper_input_boolean", "input_boolean.item_b", "item_b"
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _edits_restore(mgr, "edits", "restore", name)
+
+        assert json.loads(str(exc_info.value))["error"]["code"] == (
+            "BACKUP_CAPTURE_FAILED"
+        )
+        assert [m for m in sent if m["type"] == "input_boolean/update"] == []
+
     async def test_an_unreadable_registry_blocks_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -582,6 +630,35 @@ def test_settings_reports_a_failed_write_with_its_warnings(
     assert response.status_code == 409
     assert response.json()["data"]["apply_status"] == "unknown"
     assert "nothing was found under hall_lights" in rendered.alerts[0]
+
+
+def test_settings_keeps_a_structured_tool_error(
+    settings_script: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ToolError already says what failed and how to fix it; re-classified,
+    Settings showed "An unexpected error occurred"."""
+    reply = {
+        "success": False,
+        "error": {
+            "code": "COMPONENT_NOT_INSTALLED",
+            "message": "File restore needs the ha_mcp_tools component",
+        },
+    }
+    mgr = _mk_manager(tmp_path)
+    mgr.register(
+        _mk_handler(fetched=None, raise_on_restore=ToolError(json.dumps(reply)))
+    )
+    name = _snapshot(tmp_path)
+
+    response = response_for(monkeypatch, mgr, name)
+    rendered = run_restore(
+        settings_script, {"status": response.status_code, "json": response.json()}, name
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+    assert response.json()["data"]["apply_status"] == "unknown"
+    assert "needs the ha_mcp_tools component" in " ".join(rendered.alerts)
 
 
 def test_settings_names_a_recreated_helper_s_mapping_warning_once(

@@ -24,7 +24,7 @@ from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
 from .core_payload import check_core_gaps, merged_update
-from .icon_route import collection_icon
+from .icon_route import collection_icon, unbacked_icon_warning
 from .listing import listed_items
 from .registry import _ws_error_msg
 from .schemas import (
@@ -253,6 +253,7 @@ async def _execute_update_simple_helper(
     )
     if native is not None:
         updated_data, entity_id, warnings = native
+        warnings.extend(unbacked_icon_warning(helper_type, icon))
     elif helper_type == "tag":
         # Tags have their own registry entity whose id follows the tag's name.
         tag_id = await tag_item_id(client, helper_id)
@@ -300,6 +301,7 @@ async def _execute_update_simple_helper(
         updated_data = await _execute_legacy_update(
             client, helper_type, entity_id, unique_id, name, icon, fields
         )
+        warnings.extend(unbacked_icon_warning(helper_type, icon))
         await _apply_update_registry_and_category(
             client, entity_id, icon, area_id, labels, category, updated_data, warnings
         )

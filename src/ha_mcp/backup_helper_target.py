@@ -17,6 +17,15 @@ from .backup_entity_ids import _manager
 from .client.rest_client import HomeAssistantError
 
 
+async def _stored_items(client: Any, helper_type: str) -> list[Any]:
+    bm = _manager()
+    listed = await bm._ws_send(client, {"type": f"{helper_type}/list"})
+    if helper_type == "person" and isinstance(listed, dict):
+        listed = listed.get("storage")  # YAML-defined persons are not editable
+    items: list[Any] = bm._require_list(listed, f"{helper_type}/list")
+    return items
+
+
 async def fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
     """Fetch a storage helper's full config from its ``<helper_type>/list``.
 
@@ -24,10 +33,7 @@ async def fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
     entries) have their own handler family (``_make_flow_helper_handler``).
     """
     bm = _manager()
-    listed = await bm._ws_send(client, {"type": f"{helper_type}/list"})
-    if helper_type == "person" and isinstance(listed, dict):
-        listed = listed.get("storage")  # YAML-defined persons are not editable
-    items = bm._require_list(listed, f"{helper_type}/list")
+    items = await _stored_items(client, helper_type)
     prefixed = entity_id.startswith(f"{helper_type}.")
     eid = entity_id if prefixed else f"{helper_type}.{entity_id}"
     entry: Any = {"unique_id": entity_id}
@@ -61,8 +67,9 @@ async def safety_target(
     The restore writes a stored item by its id; the backup is keyed by the
     entity_id the item had, which a rename since can leave naming nothing, or
     another item. For a storage item the registry entry whose unique_id is the
-    stored id follows it, and no entry means the item is gone: the restore
-    recreates it or fails, and overwrites nothing that needs a backup.
+    stored id follows it. An item can outlive its registry entry, so only its
+    absence from the stored items means it is gone: the restore recreates it or
+    fails, and overwrites nothing that needs a backup.
     """
     bm = _manager()
     platform = domain.removeprefix("helper_")
@@ -76,7 +83,7 @@ async def safety_target(
             f"the entity registry could not be read: {type(err).__name__}",
             safe_detail="the entity registry could not be read",
         ) from err
-    return next(
+    target: str | None = next(
         (
             row["entity_id"]
             for row in rows
@@ -84,6 +91,20 @@ async def safety_target(
         ),
         None,
     )
+    if target is not None:
+        return target
+    try:
+        items = await _stored_items(client, platform)
+    except bm._CAPTURE_TRANSIENT_ERRORS as err:
+        raise bm.MandatoryBackupError(
+            f"the stored {platform} items could not be read: {type(err).__name__}",
+            safe_detail=f"the stored {platform} items could not be read",
+        ) from err
+    if not any(str(item.get("id")) == str(stored) for item in items):
+        return None
+    # fetch_helper takes an id without a registry entry as the stored id; if
+    # another item's entity holds it, require_holds blocks the restore.
+    return f"{platform}.{stored}"
 
 
 def require_holds(config: Any, stored: Any, entity_id: str) -> None:
@@ -97,7 +118,10 @@ def require_holds(config: Any, stored: Any, entity_id: str) -> None:
             f"which this restore overwrites: {entity_id} names another item since "
             "this backup. Nothing was changed.",
             reason="backup_capture_failed",
-            suggestions=[f"Find the current entity_id of {stored} with ha_search"],
+            suggestions=[
+                f"Find the current entity_id of {stored} with ha_search",
+                f"If {stored} has no entity, rename the entity that holds {entity_id}",
+            ],
         )
 
 
