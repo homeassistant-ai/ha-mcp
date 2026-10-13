@@ -233,10 +233,10 @@ Configure there just reports that.)
 The server is part of the component release. Each HA-MCP Custom Component
 release names the exact `ha-mcp` build it was released with as an integration
 requirement, and Home Assistant installs it like any integration's Python
-packages. HACS is therefore the only update path: when it offers a component
-update, that update carries the matching server, and restarting Home Assistant
-after the update installs both. The component never downloads or swaps the
-server on its own.
+packages. For HACS-managed installs, update the component through HACS; manual
+installs can replace the component files with the new release. Either path
+carries the matching server, and restarting Home Assistant after the update
+installs both. The component never downloads or swaps the server on its own.
 
 **Development builds** follow the main branch. Turn on the HACS **Pre-release**
 switch for the HA-MCP Custom Component repository to receive them; each
