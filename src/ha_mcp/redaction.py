@@ -37,6 +37,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import re
 import threading
 from collections.abc import Iterable, Sequence
 from typing import Any
@@ -65,6 +66,13 @@ _SENTINELS = frozenset({REDACTED_SET, REDACTED_EMPTY, REDACTED_KNOWN})
 # appears as a port number or entity-id fragment) would corrupt unrelated
 # output far more often than it would protect anything.
 _MIN_KNOWN_SECRET_LEN = 6
+
+# An add-on schema can legitimately omit ``format: password`` for a deploy
+# key. The PEM envelope itself is unambiguous enough to protect without
+# falling back to name-based secret guessing.
+_PEM_PRIVATE_KEY_MARKER = re.compile(
+    r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"
+)
 
 _known_secrets: set[str] = set()
 _known_secrets_lock = threading.Lock()
@@ -114,6 +122,27 @@ def sentinel_replacement(value: Any) -> Any:
     return value if is_sentinel(value) else sentinel_for(value)
 
 
+def contains_pem_private_key(value: Any) -> bool:
+    """Whether an option value or list of lines contains a PEM private key."""
+    if isinstance(value, str):
+        return bool(_PEM_PRIVATE_KEY_MARKER.search(value))
+    return isinstance(value, list) and any(
+        isinstance(item, str) and _PEM_PRIVATE_KEY_MARKER.search(item) for item in value
+    )
+
+
+def known_values_for_option_item(value: Any) -> set[str]:
+    """Return a string option item plus PEM lines needed by log scrubbing."""
+    if not isinstance(value, str) or not value:
+        return set()
+    values = {value}
+    if contains_pem_private_key(value):
+        # Supervisor log reads split multiline option values before the
+        # middleware can scrub them, so retain every line as well.
+        values.update(line for line in value.splitlines() if line)
+    return values
+
+
 # ---------------------------------------------------------------------------
 # Surface 1: Supervisor add-on options + schema
 # ---------------------------------------------------------------------------
@@ -160,7 +189,7 @@ def redact_addon_options(options: Any, schema: Any) -> Any:
                     for item in value
                 ]
             continue
-        if entry.get("format") == "password":
+        if entry.get("format") == "password" or contains_pem_private_key(value):
             # multiple: true passwords are a list — sentinel_replacement
             # keeps the container shape so the option's type survives.
             out[name] = sentinel_replacement(value)
@@ -183,9 +212,10 @@ def collect_addon_secret_values(options: Any, schema: Any) -> set[str]:
                     if isinstance(item, dict):
                         values |= collect_addon_secret_values(item, nested)
             continue
-        if entry.get("format") == "password":
+        if entry.get("format") == "password" or contains_pem_private_key(value):
             candidates = value if isinstance(value, list) else [value]
-            values.update(item for item in candidates if isinstance(item, str) and item)
+            for candidate in candidates:
+                values |= known_values_for_option_item(candidate)
     return values
 
 

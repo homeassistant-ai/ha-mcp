@@ -118,6 +118,53 @@ class TestRedactAddonOptions:
             {"user": "b", "token": REDACTED_EMPTY},
         ]
 
+    @pytest.mark.parametrize(
+        ("begin_marker", "end_marker"),
+        [
+            (
+                "-----BEGIN OPENSSH PRIVATE KEY-----",
+                "-----END OPENSSH PRIVATE KEY-----",
+            ),
+            ("-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"),
+            (
+                "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+                "-----END PGP PRIVATE KEY BLOCK-----",
+            ),
+        ],
+    )
+    def test_unmarked_pem_private_key_is_redacted(
+        self, begin_marker: str, end_marker: str
+    ) -> None:
+        options = {
+            "deployment_key": f"{begin_marker}\nsecret\n{end_marker}",
+            "description": "ordinary public configuration",
+        }
+        schema = [
+            {"name": "deployment_key", "type": "string"},
+            {"name": "description", "type": "string"},
+        ]
+
+        out = redact_addon_options(options, schema)
+
+        assert out["deployment_key"] == REDACTED_SET
+        assert out["description"] == "ordinary public configuration"
+
+    def test_unmarked_pem_private_key_line_list_is_redacted(self) -> None:
+        options = {
+            "deployment_key": [
+                "-----BEGIN RSA PRIVATE KEY-----",
+                "secret",
+                "-----END RSA PRIVATE KEY-----",
+            ]
+        }
+        schema = [{"name": "deployment_key", "type": "string", "multiple": True}]
+
+        assert redact_addon_options(options, schema)["deployment_key"] == [
+            REDACTED_SET,
+            REDACTED_SET,
+            REDACTED_SET,
+        ]
+
     def test_input_options_not_mutated(self):
         before = json.dumps(ADDON_OPTIONS, sort_keys=True)
         redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA)
@@ -159,6 +206,64 @@ class TestCollectAddonSecretValues:
         assert "" not in values
         assert "info" not in values
         assert "root" not in values
+
+    @pytest.mark.parametrize(
+        ("begin_marker", "end_marker"),
+        [
+            ("-----BEGIN EC PRIVATE KEY-----", "-----END EC PRIVATE KEY-----"),
+            ("-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"),
+            (
+                "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+                "-----END PGP PRIVATE KEY BLOCK-----",
+            ),
+        ],
+    )
+    def test_collects_unmarked_pem_private_key(
+        self, begin_marker: str, end_marker: str
+    ) -> None:
+        key = f"{begin_marker}\nsecret\n{end_marker}"
+        values = collect_addon_secret_values(
+            {"deployment_key": key},
+            [{"name": "deployment_key", "type": "string"}],
+        )
+
+        assert values == {
+            key,
+            begin_marker,
+            "secret",
+            end_marker,
+        }
+
+    def test_collects_unmarked_pem_private_key_line_list(self) -> None:
+        options = {
+            "deployment_key": [
+                "-----BEGIN RSA PRIVATE KEY-----",
+                "secret",
+                "-----END RSA PRIVATE KEY-----",
+            ]
+        }
+
+        values = collect_addon_secret_values(
+            options,
+            [{"name": "deployment_key", "type": "string", "multiple": True}],
+        )
+
+        assert values == set(options["deployment_key"])
+
+    def test_collects_lines_from_multiline_pem_list_item(self) -> None:
+        key = "-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----"
+
+        values = collect_addon_secret_values(
+            {"deployment_key": [key]},
+            [{"name": "deployment_key", "type": "string", "multiple": True}],
+        )
+
+        assert values == {
+            key,
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "secret",
+            "-----END RSA PRIVATE KEY-----",
+        }
 
 
 class TestSentinels:
