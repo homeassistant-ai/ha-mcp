@@ -1,0 +1,78 @@
+name: Maintainer slash agent
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_run:
+    workflows:
+      [
+        Slash agent review event,
+        PR Validation Pipeline,
+        HAOS E2E Tests,
+        CodeQL Code Quality,
+        Send Codex PR Review,
+      ]
+    types: [completed]
+  status:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue or same-repository PR containing the maintainer command.
+        required: true
+        type: number
+      comment_id:
+        description: Existing maintainer slash comment to process.
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: read
+  checks: read
+  statuses: read
+
+jobs:
+  route:
+    if: >-
+      github.repository == 'homeassistant-ai/ha-mcp' &&
+      vars.HA_MCP_AGENT_APP_SLUG != '' &&
+      vars.HA_MCP_AGENT_CLIENT_ID != '' &&
+      (github.event_name != 'issue_comment' ||
+      github.event.comment.user.type == 'User' ||
+      contains(fromJSON('["coderabbitai[bot]","chatgpt-codex-connector[bot]"]'), github.event.comment.user.login))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.route.outputs.run }}
+      root: ${{ steps.route.outputs.root }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Resolve the canonical session without reserving model work
+        id: route
+        timeout-minutes: 6
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HA_MCP_APP_SLUG: ${{ vars.HA_MCP_AGENT_APP_SLUG }}
+        run: node .github/slash-agent/main.mjs route
+
+  session:
+    needs: route
+    if: needs.route.outputs.run == 'true'
+    concurrency:
+      group: slash-agent-session-${{ github.repository }}-${{ needs.route.outputs.root }}
+      cancel-in-progress: false
+      queue: max
+    uses: ./.github/workflows/slash-agent-session.yml
+    with:
+      session_root: ${{ needs.route.outputs.root }}
+    secrets:
+      CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
+      CODEX_AUTH_PAT: ${{ secrets.CODEX_AUTH_PAT }}
+      HA_MCP_AGENT_APP_PRIVATE_KEY: ${{ secrets.HA_MCP_AGENT_APP_PRIVATE_KEY }}

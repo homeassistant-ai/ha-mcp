@@ -30,6 +30,9 @@ The behavioral decision about when to write and run tests is canonical in
 Reviewers use the severity guidance below to assess whether a change satisfies
 that policy.
 
+Apply the [live-review procedure](../docs/agents/github-workflow.md#live-testing-in-pr-reviews)
+when assessing live evidence and review completeness.
+
 Flag missing coverage as HIGH severity when the root policy requires it. If the
 change's scope or an allowed exception is unclear, flag test adequacy as MEDIUM
 severity for manual verification.
@@ -238,6 +241,14 @@ exceptions. Its `context` is functional: an `entity_id` can produce
 Flag HIGH severity when a tool returns a plain error, swallows `ToolError`, or
 bypasses the shared structured-error helpers.
 
+Guidance that earns its keep in the suggestions:
+
+- A rejection for a missing or misplaced field says where the field goes
+  (e.g. a config root key passed as a top-level argument is told it belongs
+  inside `config`).
+- When one call breaks several independent input rules, the rejection reports
+  all of them in one response instead of one round trip each.
+
 
 ## Code Conventions
 
@@ -441,3 +452,7 @@ If you believe a finding is likely out of scope, say so explicitly so the user c
 Do not phrase findings as "post-merge follow-up," "nice to have," or "happy to file an issue" when the change is small and bundleable. Either apply the suggestion inline with a code suggestion block, or raise it plainly and let the user decide.
 
 See AGENTS.md § *Boy Scout Rule — Handling Discovered Improvements* for the author/agent-side rule.
+
+## Native Core contracts
+
+Read and write wrappers follow the [native Core contract guidance](../docs/agents/native-core-contracts.md). Keep domain validation in Core; distinguish wrapper safeguards and incomplete schema descriptions from native validation.

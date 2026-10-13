@@ -86,7 +86,7 @@ Replace the URL in `args` with the one from your app logs. No token goes here �
 
 **How it works:** `uvx` runs fastmcp-remote, which converts the app's HTTP endpoint to the stdio Claude Desktop expects.
 
-**Upgrading from mcp-proxy:** earlier versions of this guide used `mcp-proxy`. If your config still runs it and Claude Desktop shows "Server disconnected", replace it with the config above. mcp-proxy declares no upper bound on the MCP SDK, so it fails with `ImportError: cannot import name 'request_ctx'` once the SDK ships a major release ([#2073](https://github.com/homeassistant-ai/ha-mcp/issues/2073)). fastmcp-remote pins its SDK dependency to a bounded range and cannot break that way.
+**Migrating from mcp-proxy:** switch to `fastmcp-remote` using the configuration above, or follow the [`mcp-remote` setup instructions](https://github.com/punkpeye/mcp-remote#usage). For `mcp-remote`, install Node.js and set `"command": "npx"` with `"args": ["-y", "mcp-remote", "YOUR_CONNECT_URL", "--allow-http"]` for a trusted LAN HTTP URL. We no longer recommend `mcp-proxy` for connecting to ha-mcp.
 
 </details>
 
@@ -709,7 +709,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Dashboards
 - `ha_config_delete_dashboard` — Delete a storage-mode dashboard completely.
 - `ha_config_delete_dashboard_resource` — Delete a dashboard resource.
-- `ha_config_get_dashboard` — Get dashboard info - list all dashboards, get config, or search for cards.
+- `ha_config_get_dashboard` — Get Lovelace dashboards: list them, read one config, or search their cards.
 - `ha_config_list_dashboard_resources` — List Lovelace dashboard resources (custom cards, themes, CSS/JS).
 - `ha_config_set_dashboard` — Create or update a Home Assistant dashboard.
 - `ha_config_set_dashboard_resource` — Create or update a dashboard resource (inline code or external URL).
@@ -749,7 +749,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### Helper Entities
 - `ha_config_list_helpers` — List Home Assistant helpers of a specific type with their configurations.
-- `ha_config_set_helper` — Create or update Home Assistant helper entities and config subentries
+- `ha_config_set_helper` — Create or update Home Assistant helpers: storage types, every helper
 - `ha_remove_helpers_integrations` — Remove a Home Assistant helper or integration config entry.
 
 ### History & Statistics

@@ -13,6 +13,7 @@ from typing import Any
 
 from ..client.rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 
@@ -396,6 +397,13 @@ async def wait_for_repo_registration(
             # unsubscribe has already been dispatched; allow the
             # cancellation to propagate.
             raise
+        except HomeAssistantCommandTimeout:
+            # No answer: the subscription may outlive us until the pooled
+            # connection is replaced, but the wait's own result stands.
+            logger.warning(
+                "hacs/subscribe %s release timed out; it may leak until reconnect",
+                sub_id,
+            )
 
 
 async def send_hacs_repository_refresh(

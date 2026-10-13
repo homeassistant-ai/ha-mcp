@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+import yaml
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.routing import Route
@@ -22,6 +23,7 @@ from ha_mcp.settings_ui import _handlers_backups as ui
 
 from ._js_harness import extract_script_body, run_script
 from .test_backup_diff_error_mapping import _backup_settings, _dispatcher
+from .test_backup_manager import _mk_handler, _mk_manager
 from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM, _assert_clean_init
 
 NAME = "helper_template.sensor.example.20260909_000000.yaml"
@@ -166,23 +168,44 @@ def test_settings_mandatory_capture_failure_is_json_and_does_not_echo_details(
     assert "secret-marker" not in response.text
 
 
-@pytest.mark.parametrize("template", [False, True])
+def _remote_cause() -> MandatoryBackupError:
+    error = MandatoryBackupError("Upstream message with secret-marker")
+    error.__cause__ = HomeAssistantConnectionError("secret-marker down")
+    return error
+
+
+@pytest.mark.parametrize(
+    ("error", "shown_cause"),
+    [
+        (
+            BackupRestoreError(
+                "The pre-restore safety snapshot could not be captured.",
+                reason="backup_capture_failed",
+                restored_from=NAME,
+                safety_backup=None,
+            ),
+            None,
+        ),
+        # A remote message may carry config values: only its class is shown.
+        (_remote_cause(), "HomeAssistantConnectionError"),
+        (
+            MandatoryBackupError(
+                "Local message with secret-marker", safe_detail="snapshot vanished"
+            ),
+            "snapshot vanished",
+        ),
+    ],
+    ids=["template", "remote-cause", "local-detail"],
+)
 @pytest.mark.parametrize("consumer", ["mcp", "settings"])
 async def test_mandatory_capture_failure_keeps_backup_error_code(
-    template, consumer, monkeypatch
-):
+    error: Exception,
+    shown_cause: str | None,
+    consumer: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from ha_mcp.tools.backup import _edits_restore
 
-    error = (
-        BackupRestoreError(
-            "The pre-restore safety snapshot could not be captured.",
-            reason="backup_capture_failed",
-            restored_from=NAME,
-            safety_backup=None,
-        )
-        if template
-        else MandatoryBackupError("Upstream message with secret-marker")
-    )
     manager = SimpleNamespace(restore_snapshot=AsyncMock(side_effect=error))
     if consumer == "settings":
         response = response_for(monkeypatch, manager)
@@ -195,6 +218,8 @@ async def test_mandatory_capture_failure_keeps_backup_error_code(
     assert payload["error"]["code"] == "BACKUP_CAPTURE_FAILED"
     assert payload["data"]["apply_status"] == "not_applied"
     assert "secret-marker" not in json.dumps(payload)
+    if shown_cause:
+        assert shown_cause in payload["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -701,3 +726,39 @@ def test_settings_partial_recreation_retains_identity_for_manual_recovery(
         assert "sensor.generated" in rendered.alerts[0]
         assert "could not be confirmed" in rendered.alerts[0]
     assert len(rendered.fetches_to("/backups?")) == 1
+
+
+async def test_a_failed_safety_capture_blocks_the_restore(tmp_path: Path) -> None:
+    """Restoring over the current config without its recovery point would
+    lose it, and ``safety_backup: None`` would read like nothing to save."""
+    mgr = _mk_manager(tmp_path)
+    path = tmp_path / "automation.x.20260521_120000.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": bm.SCHEMA_VERSION,
+                "domain": "automation",
+                "entity_id": "x",
+                "config": {"alias": "x"},
+            }
+        )
+    )
+    mgr.register(
+        _mk_handler(
+            raise_on_fetch=HomeAssistantConnectionError("down"),
+            raise_on_restore=AssertionError("restored without a safety backup"),
+        )
+    )
+    with pytest.raises(MandatoryBackupError):
+        await mgr.restore_snapshot(path.name)
+
+
+async def test_a_deleted_integration_entry_is_not_found_in_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The MCP restore already maps entry_deleted to RESOURCE_NOT_FOUND."""
+    error = BackupRestoreError("gone", reason="entry_deleted", restored_from=NAME)
+    manager = SimpleNamespace(restore_snapshot=AsyncMock(side_effect=error))
+    response = response_for(monkeypatch, manager)
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "RESOURCE_NOT_FOUND"

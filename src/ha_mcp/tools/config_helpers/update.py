@@ -78,9 +78,13 @@ async def _execute_legacy_update(
         {**body, "type": f"{helper_type}/update", f"{helper_type}_id": unique_id}
     )
     if not result.get("success"):
+        code = ws_failure_code(result)
+        if code is ErrorCode.RESOURCE_NOT_FOUND:
+            # The item vanished after _stored_item read it; report it the same way.
+            code = ErrorCode.CONFIG_NOT_FOUND
         raise_tool_error(
             create_error_response(
-                ws_failure_code(result),
+                code,
                 f"Failed to update {helper_type} config: "
                 f"{result.get('error', 'Unknown error')}",
                 context=_simple_helper_error_context(helper_type, entity_id=entity_id),

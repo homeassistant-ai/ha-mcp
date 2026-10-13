@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: Optional Codex model, e.g. gpt-6-astra; empty uses the account default.
+        description: Optional Codex model, e.g. gpt-6.1-sol; empty uses the account default.
         required: false
         default: ""
         type: string

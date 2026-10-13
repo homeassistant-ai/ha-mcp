@@ -9,6 +9,7 @@ error" from Supervisor.
 from __future__ import annotations
 
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -49,3 +50,43 @@ def test_the_staged_dev_app_context_holds_every_file_the_dockerfile_copies(
     }
 
     assert sorted(expected - staged) == []
+
+
+def _load_dev_env_holder(monkeypatch: pytest.MonkeyPatch) -> object:
+    """Import ``.github/dev-ha-env/hold.py`` as the workflow runs it.
+
+    The workflow copies the file into ``tests/src/e2e/``, so it resolves the
+    repo root from that location and uses that package's relative imports;
+    compiling it under that path reproduces both without copying.
+    """
+    from tests.src.e2e import _conftest_embedded
+
+    source_path = _REPO_ROOT / ".github" / "dev-ha-env" / "hold.py"
+    run_path = _REPO_ROOT / "tests" / "src" / "e2e" / "hold.py"
+    flags = _conftest_embedded._EMBEDDED_FEATURE_FLAGS
+    # The holder edits the shared flags at import; restore them afterwards.
+    monkeypatch.setitem(
+        flags, "enable_strict_mandatory_bps", flags["enable_strict_mandatory_bps"]
+    )
+    monkeypatch.setitem(flags, "enable_dev_mode", False)
+    monkeypatch.syspath_prepend(str(_REPO_ROOT / "tests" / "src"))
+    module = types.ModuleType("tests.src.e2e._dev_env_holder")
+    module.__file__ = str(run_path)
+    module.__package__ = "tests.src.e2e"
+    exec(
+        compile(source_path.read_text(encoding="utf-8"), str(run_path), "exec"),
+        module.__dict__,
+    )
+    return module
+
+
+def test_the_dev_env_runs_its_embedded_server_in_developer_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """docs/dev-ha-env.md updates the embedded server with ha_dev_manage_server,
+    which only a server in developer mode exposes."""
+    from tests.src.e2e import _conftest_embedded
+
+    _load_dev_env_holder(monkeypatch)
+
+    assert _conftest_embedded._EMBEDDED_FEATURE_FLAGS["enable_dev_mode"] is True

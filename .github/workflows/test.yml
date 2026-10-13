@@ -6,7 +6,7 @@ on:
       model:
         description: Codex model to verify with the repository's authenticated account.
         required: true
-        default: gpt-6-astra
+        default: gpt-6.1-sol
         type: string
 
 permissions:

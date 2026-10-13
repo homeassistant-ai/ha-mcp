@@ -246,7 +246,7 @@ def _registries_schema() -> dict[Any, Any]:
 def _dashboards_schema() -> dict[Any, Any]:
     return {
         vol.Required("type"): WS_DASHBOARDS,
-        vol.Optional("mode", default="list"): vol.In(("list", "get", "search")),
+        vol.Optional("mode", default="list"): vol.In(("list", "get", "search", "docs")),
         # ``None``/absent url_path = the default dashboard (``get`` mode).
         vol.Optional("url_path"): vol.Any(str, None),
         vol.Optional("query"): vol.Any(str, None),

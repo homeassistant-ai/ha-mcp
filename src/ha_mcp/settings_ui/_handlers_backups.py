@@ -208,6 +208,7 @@ async def _restore_backup(
             "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "backup_capture_failed": ErrorCode.BACKUP_CAPTURE_FAILED,
+            "entry_deleted": ErrorCode.RESOURCE_NOT_FOUND,
         }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
         return JSONResponse(
             create_error_response(
@@ -231,11 +232,12 @@ async def _restore_backup(
             }.get(code, 409),
         )
     except MandatoryBackupError as err:
+        logger.warning("Restore of %s blocked: %s", name, err.safe_cause)
         return JSONResponse(
             create_error_response(
                 ErrorCode.BACKUP_CAPTURE_FAILED,
-                "Restore blocked: the pre-restore safety snapshot could not "
-                "be captured. Nothing was changed.",
+                "Restore blocked: the pre-restore safety snapshot could not be "
+                f"captured ({err.safe_cause}). Nothing was changed.",
                 suggestions=err.suggestions,
                 context={
                     "data": {
@@ -332,15 +334,17 @@ def backup_config_fields() -> list[dict[str, Any]]:
     fields: list[dict[str, Any]] = []
     for field_name, env_name, _ftype in BACKUP_OVERRIDE_FIELDS:
         origin = get_backup_setting_origin(env_name)
-        fields.append(
-            {
-                "field": field_name,
-                "env_var": env_name,
-                "value": getattr(settings, field_name),
-                "origin": origin,
-                "editable": origin in ("addon", "file", "default"),
-            }
-        )
+        row: dict[str, Any] = {
+            "field": field_name,
+            "env_var": env_name,
+            "value": getattr(settings, field_name),
+            "origin": origin,
+            "editable": origin in ("addon", "file", "default"),
+        }
+        bounds = SETTING_BOUNDS.get(field_name)
+        if bounds is not None:
+            row["min"], row["max"] = bounds
+        fields.append(row)
     return fields
 
 

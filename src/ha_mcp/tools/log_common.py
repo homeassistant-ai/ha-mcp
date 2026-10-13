@@ -188,12 +188,13 @@ def _validate_log_slug(source: str, slug: str | None) -> None:
 
 
 def _addon_auth_error_suggestions() -> list[str]:
+    """What a log read adds to the classified auth guidance, which comes first."""
     if is_running_in_addon():
         return [
-            "Verify SUPERVISOR_TOKEN is set correctly inside the app (add-on)",
-            "Reinstall the app if the token may have rotated",
+            "Verify SUPERVISOR_TOKEN is set inside the app (add-on), and reinstall "
+            "the app if the token may have rotated"
         ]
     return [
-        "Verify HOMEASSISTANT_TOKEN is a valid admin Long-Lived Access Token (Settings → Profile → Long-Lived Access Tokens)",
-        "Re-create the LLAT if it has expired or been revoked",
+        "Reading logs needs an admin user's token: check that the Long-Lived Access "
+        "Token belongs to an admin (Settings → Profile → Long-Lived Access Tokens)",
     ]

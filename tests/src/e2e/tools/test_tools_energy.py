@@ -2,8 +2,7 @@
 E2E smoke tests for ha_manage_energy_prefs.
 
 Scope: mode="get" and a minimal mode="set" roundtrip against the
-freshly-initialised test container. Shape-validation and dry_run logic
-remain in the unit tests under tests/src/unit/test_tools_energy.py;
+freshly-initialised test container. Native proposal validation is exercised in test_native_energy_contract.py;
 the E2E suite exercises the real WebSocket plumbing to catch command
 renames (energy/get_prefs, energy/save_prefs) that mocks cannot.
 """
@@ -41,16 +40,19 @@ async def test_energy_prefs_get_returns_expected_shape(mcp_client):
 
     config = data["config"]
     assert isinstance(config, dict)
-    # All three top-level keys must be present in the response, even on a
-    # fresh install.
-    for key in ("energy_sources", "device_consumption", "device_consumption_water"):
-        assert key in config, (
-            f"top-level key '{key}' missing from energy prefs response — "
-            f"got keys: {sorted(config.keys())}"
+    # Native defaults are available through the component; without it an
+    # unconfigured Core returns no prefs and the tool reports an empty config.
+    if config:
+        assert all(
+            isinstance(config[key], list)
+            for key in (
+                "energy_sources",
+                "device_consumption",
+                "device_consumption_water",
+            )
         )
-        assert isinstance(config[key], list), (
-            f"top-level key '{key}' must be a list, got {type(config[key]).__name__}"
-        )
+    else:
+        assert "unavailable" in data["note"]
 
     # Hash must be a non-empty hex string.
     config_hash = data["config_hash"]
@@ -61,9 +63,9 @@ async def test_energy_prefs_get_returns_expected_shape(mcp_client):
 
     logger.info(
         "energy prefs get returned %d sources, %d devices, %d water devices; hash=%s",
-        len(config["energy_sources"]),
-        len(config["device_consumption"]),
-        len(config["device_consumption_water"]),
+        len(config.get("energy_sources", [])),
+        len(config.get("device_consumption", [])),
+        len(config.get("device_consumption_water", [])),
         config_hash,
     )
 
@@ -218,11 +220,7 @@ async def _cleanup_test_source(mcp_client, stat_energy_from: str) -> None:
 async def test_energy_add_source_roundtrip(mcp_client):
     """mode='add_source' atomically appends a grid entry to energy_sources.
 
-    Uses a fully-shaped grid source — HA Core's voluptuous schema requires
-    all top-level grid fields (cost_adjustment_day, etc.) even when their
-    values are None. The local _shape_check is intentionally narrower than
-    the server schema; this test exercises the post-shape server validation
-    path.
+    Uses a representative native grid source and verifies saved preferences.
 
     Cleanup is in a finally so an assertion failure does not persist the
     test artifact (subsequent runs would otherwise leave it accumulating).
@@ -235,7 +233,7 @@ async def test_energy_add_source_roundtrip(mcp_client):
         "stat_cost": None,
         "entity_energy_price": None,
         "number_energy_price": None,
-        "cost_adjustment_day": 0,
+        "cost_adjustment_day": "1",
         "entity_energy_price_export": None,
         "number_energy_price_export": None,
         "stat_compensation": None,
@@ -252,6 +250,12 @@ async def test_energy_add_source_roundtrip(mcp_client):
             "ha_manage_energy_prefs", {"mode": "get"}
         )
         assert_mcp_success(get_after)
+        assert add_result.data["config"] == get_after.data["config"]
+        assert add_result.data["config_hash"] == get_after.data["config_hash"]
+        assert (
+            add_result.data["config_hash_per_key"]
+            == get_after.data["config_hash_per_key"]
+        )
         sources = get_after.data["config"]["energy_sources"]
         assert any(s.get("stat_energy_from") == stat for s in sources), (
             f"Added grid source should appear; got sources={sources}"
@@ -261,16 +265,7 @@ async def test_energy_add_source_roundtrip(mcp_client):
 
 
 def _non_grid_source_payload(source_type: str, stat: str) -> dict:
-    """Build a server-schema-conformant source payload per type.
-
-    The local ``_shape_check`` only requires ``stat_energy_from`` for
-    solar/battery/gas/water, but HA Core's voluptuous schema requires more for
-    some types (battery requires ``stat_energy_to`` and rejects None).
-    These payloads track what the server actually accepts, not what the
-    local check passes — the asymmetry is intentional (see B1 in the
-    tool docstring) and the unit suite covers the local-shape-only path
-    separately.
-    """
+    """Representative real source payloads; Core owns their acceptance contract."""
     if source_type == "battery":
         return {
             "type": "battery",
@@ -285,11 +280,7 @@ def _non_grid_source_payload(source_type: str, stat: str) -> dict:
 async def test_energy_add_source_non_grid_roundtrip(mcp_client, source_type):
     """mode='add_source' atomically appends solar/battery/gas/water entries.
 
-    Each non-grid type only requires ``stat_energy_from`` for the local
-    shape check; the post-save validate may surface ``stat not found``
-    because the test stat does not exist in the container, but that is
-    a non-fatal warning (the save itself succeeds and returns a
-    config_hash).
+    Missing statistics can produce semantic warnings after a valid save.
     """
     stat = f"sensor.test_e2e_{source_type}_in"
     new_source = _non_grid_source_payload(source_type, stat)
@@ -327,6 +318,19 @@ async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
     initial = await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
     assert_mcp_success(initial)
     initial_data = initial.data
+    if not initial_data["config"]:
+        # Let Core create its defaults; this test must also pass in isolation
+        # on the absent-component lane, where defaults cannot be discovered.
+        initialized = await mcp_client.call_tool(
+            "ha_manage_energy_prefs",
+            {
+                "mode": "set",
+                "config": {},
+                "config_hash": initial_data["config_hash"],
+            },
+        )
+        assert_mcp_success(initialized)
+        initial_data = initialized.data
     assert "config_hash_per_key" in initial_data, (
         "mode='get' must surface config_hash_per_key alongside config_hash"
     )
@@ -380,3 +384,61 @@ async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
                         },
                     },
                 )
+
+
+@pytest.mark.asyncio
+async def test_energy_inspection_exposes_native_statistics_metadata(mcp_client):
+    """Configured device statistics can be discovered with their real recorder units."""
+    statistic_id = "sensor.total_energy_kwh"
+    before = assert_mcp_success(
+        await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
+    )
+    before = before.get("data", before)
+    already_present = any(
+        d.get("stat_consumption") == statistic_id
+        for d in before["config"].get("device_consumption", [])
+    )
+    added = False
+    try:
+        if not already_present:
+            assert_mcp_success(
+                await mcp_client.call_tool(
+                    "ha_manage_energy_prefs",
+                    {
+                        "mode": "add_device",
+                        "stat_consumption": statistic_id,
+                        "name": "E2E statistics metadata",
+                    },
+                )
+            )
+            added = True
+        result = assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_manage_energy_prefs",
+                {
+                    "mode": "get",
+                    "include_statistics": True,
+                },
+            )
+        )
+        result = result.get("data", result)
+        record = next(
+            r
+            for r in result["statistics_metadata"]
+            if r["statistic_id"] == statistic_id
+        )
+        assert record["unit_of_measurement"] == "kWh"
+        assert record["statistics_unit_of_measurement"] == "kWh"
+        assert record["has_sum"] is True
+        assert "statistics_metadata" not in result["config"]
+    finally:
+        if added:
+            assert_mcp_success(
+                await mcp_client.call_tool(
+                    "ha_manage_energy_prefs",
+                    {
+                        "mode": "remove_device",
+                        "stat_consumption": statistic_id,
+                    },
+                )
+            )

@@ -243,7 +243,10 @@ async def test_search_and_get_schema_share_transformed_catalog(
         result = await client.call_tool(
             "ha_search_tools", {"query": "broader discovery"}
         )
-        found = next(t for t in result.data if t["name"] == "ha_search")
+        hit = next(t for t in result.data if t["name"] == "ha_search")
+        assert not any(f"{name} (" in hit["params"] for name in _HIDDEN)
+        full = await client.call_tool("ha_search_tools", {"tools": ["ha_search"]})
+        found = full.data[0]
         assert _HIDDEN.isdisjoint(found["inputSchema"]["properties"])
         schemas = await client.call_tool(
             "get_schema", {"tools": ["ha_search"], "detail": "full"}

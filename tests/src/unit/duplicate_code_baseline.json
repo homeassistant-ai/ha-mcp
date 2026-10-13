@@ -607,10 +607,6 @@
     "tests/src/unit/test_tools_dev.py::TestSecurityPolicyAccessGuard.test_policy_tool_flag_refused_even_with_access",
     "tests/src/unit/test_tools_dev.py::TestSecurityPolicyAccessGuard.test_policy_tool_flag_refused_without_access"
   ],
-  "92e2f191f442": [
-    "custom_components/ha_mcp_tools/websocket_api/dashboards.py::_view_card_containers",
-    "src/ha_mcp/tools/tools_config_dashboards.py::_all_dashboard_view_card_containers"
-  ],
   "93ec9cb4abd0": [
     "custom_components/ha_mcp_tools/oauth_dcr.py::mint_client_id",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::mint_client_id"

@@ -507,8 +507,8 @@ class TestToolSearchModeInstance:
         assert "ha_config_set_automation" in names
         # Hidden tools never appear in search results.
         assert "ha_restart" not in names
-        # Results carry the schema the agent needs for ha_call_tool.
-        assert all("input_schema" in r for r in result["results"])
+        # Hits are compact; the full schema is a second, by-name hop.
+        assert all({*r} == {"name", "description", "params"} for r in result["results"])
 
     async def test_search_with_no_match_guides_retry(self, monkeypatch):
         instance = await self._instance(monkeypatch)

@@ -16,7 +16,6 @@ from typing import Any, Literal, NoReturn, overload
 from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from .._version import is_embedded
 from ..client.rest_client import (
     NON_ADMIN_TOKEN_WARNING,
     HomeAssistantAdminRequiredError,
@@ -40,8 +39,6 @@ from ..utils.usage_logger import log_tool_call
 from .coercion import UNSET
 
 logger = logging.getLogger(__name__)
-
-_AUTH_CODES = frozenset({ErrorCode.AUTH_INVALID_TOKEN, ErrorCode.AUTH_EXPIRED})
 
 
 def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
@@ -511,6 +508,32 @@ def _classify_by_message(
     return result
 
 
+# Environment failures: the classified guidance (token, admin rights, reachability)
+# is what fixes them and most callers do not anticipate them, so it leads and a
+# caller's own hints follow. Every other code keeps the caller's list as given.
+_ENVIRONMENT_CODES = frozenset(
+    {
+        ErrorCode.AUTH_INVALID_TOKEN.value,
+        ErrorCode.AUTH_EXPIRED.value,
+        ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS.value,
+        ErrorCode.CONNECTION_FAILED.value,
+        ErrorCode.CONNECTION_TIMEOUT.value,
+    }
+)
+
+
+def _with_classified_suggestions(
+    error: dict[str, Any], suggestions: list[str]
+) -> list[str]:
+    """Put the classified suggestions of an environment code before the caller's."""
+    if error.get("code") not in _ENVIRONMENT_CODES:
+        return suggestions
+    classified = error.get("suggestions") or (
+        [error["suggestion"]] if error.get("suggestion") else []
+    )
+    return [*classified, *(s for s in suggestions if s not in classified)]
+
+
 def _append_macos_hints(error_response: dict[str, Any]) -> None:
     if not (
         sys.platform == "darwin"
@@ -579,6 +602,9 @@ def exception_to_structured_error(
                     If False, returns the error dict for further modification.
         suggestions: Optional list of actionable suggestions to embed in the error.
                     Saves callers from manually inserting suggestions after the call.
+                    They replace the classified ones, except for the AUTH_*,
+                    CONNECTION_FAILED and CONNECTION_TIMEOUT codes, where they
+                    follow them (duplicates dropped).
 
     Returns:
         Structured error response dictionary (only if raise_error=False)
@@ -621,12 +647,7 @@ def exception_to_structured_error(
         # rely on the plural key being present even for single-item caller
         # suggestions. Setting both keeps response consumers on both code
         # paths working.
-        if error_response["error"].get("code") in _AUTH_CODES and is_embedded():
-            # The in-process server's token lives in the HA-MCP Server entry; a
-            # tool's own hints ("check the entity id") cannot fix a refused
-            # token, so the guidance to replace it stays first.
-            auth_hints = list(error_response["error"].get("suggestions") or [])
-            suggestions = auth_hints + [s for s in suggestions if s not in auth_hints]
+        suggestions = _with_classified_suggestions(error_response["error"], suggestions)
         error_response["error"]["suggestion"] = suggestions[0]
         error_response["error"]["suggestions"] = suggestions
 
@@ -714,9 +735,13 @@ async def safe_progress(
 
 
 def ws_failure_code(result: dict[str, Any]) -> ErrorCode:
-    """Core answers a schema-invalid write with ``invalid_format``: the caller's input."""
-    if result.get("error_code") == "invalid_format":
+    """Map Core's WS error code: ``invalid_format`` is the caller's input,
+    ``not_found`` an item Core does not hold (e.g. a YAML-configured helper)."""
+    code = result.get("error_code")
+    if code == "invalid_format":
         return ErrorCode.VALIDATION_INVALID_PARAMETER
+    if code == "not_found":
+        return ErrorCode.RESOURCE_NOT_FOUND
     return ErrorCode.SERVICE_CALL_FAILED
 
 

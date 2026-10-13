@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 
-from .. import helper_collections
+from homeassistant.generated.config_flows import FLOWS
+
+from .. import card_definitions, core_contract, helper_collections
 from ..const import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
 
 __all__ = [
@@ -149,6 +151,9 @@ CAPABILITIES: list[str] = [
     # when this is advertised — an older component without the keys would
     # silently narrow coverage to the card-scoped walk and hide load failures.
     "dashboards_doc_search",
+    # A flag on ``ha_mcp_tools/dashboards``: gates mode=docs, every storage
+    # dashboard's config in one frame for the server's card search (#2694).
+    "dashboards_docs",
     "services_list",
     "reference_data",
     # A flag, not a standalone command: gates the optional ``visibility`` param
@@ -182,6 +187,8 @@ CAPABILITIES: list[str] = [
     # settings panel offers the editor only when this is advertised.
     "oauth_callbacks",
     *helper_collections.CAPABILITIES,
+    core_contract.CAPABILITY,
+    *card_definitions.CAPABILITIES,
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates
@@ -263,31 +270,11 @@ COLLECTION_HELPER_DOMAINS = frozenset(
         "schedule",
     }
 )
-# Flow (config-entry-backed) helpers. Indexed from ``entry.options`` / ``title``
-# directly — no OptionsFlow start/abort dance, and NEVER ``entry.data``.
-FLOW_HELPER_DOMAINS = frozenset(
-    {
-        "template",
-        "group",
-        "utility_meter",
-        "threshold",
-        "derivative",
-        "integration",
-        "min_max",
-        "statistics",
-        "trend",
-        "tod",
-        "random",
-        "switch_as_x",
-        "mold_indicator",
-        "history_stats",
-        "bayesian",
-        "filter",
-        "generic_thermostat",
-        "generic_hygrostat",
-        "combine",
-    }
-)
+# Core's generated FLOWS["helper"]: the default without the async pre-step, the
+# fallback when its loader read fails, and the split that decides whose options are
+# withheld (``custom_domains = flows - FLOW_HELPER_DOMAINS``). Indexed from
+# options/title, NEVER entry.data.
+FLOW_HELPER_DOMAINS = frozenset(FLOWS["helper"])
 
 # Collection helper domains enumerated by ``ha_mcp_tools/helpers_list``: the
 # collection helpers ``search`` indexes PLUS zone/person, which are state-machine

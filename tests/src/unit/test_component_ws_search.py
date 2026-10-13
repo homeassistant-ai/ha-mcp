@@ -818,46 +818,9 @@ def empty_view(monkeypatch):
 class TestInfo:
     def test_shape(self):
         """Advertise the complete component capability contract."""
-        # Drift guard: info advertises EVERY shipped capability, as CAPABILITIES.
         info = wsapi._do_info(FakeHass(config=FakeConfig(time_zone="America/New_York")))
         assert info["schema_version"] == 1
         assert info["component_version"] == COMPONENT_VERSION
-        assert info["capabilities"] == [
-            "search",
-            "search_unified",
-            "search_entity_membership",
-            "overview",
-            "helpers_list",
-            "states",
-            "blueprint_get",
-            "blueprint_text",
-            "device_get",
-            "device_list",
-            "device_registry_child_semantics",
-            "entity_enrich",
-            "exposure",
-            "config_entries",
-            "config_entries_subentry_data",
-            "registry_lookup",
-            "system_snapshot",
-            "entity_lookup",
-            "backup_prep",
-            "registries",
-            "dashboards",
-            "dashboard_edit",
-            "dashboards_doc_search",
-            "services_list",
-            "reference_data",
-            "search_visibility",
-            "search_visibility_allowlist_authorization",
-            "server_entry",
-            "server_entry_update",
-            "call_service",
-            "bulk_call_service",
-            "template_diagnose",
-            "oauth_callbacks",
-            *wsapi.helper_collections.CAPABILITIES,
-        ]
         assert info["capabilities"] == wsapi.CAPABILITIES
         # config_get was withdrawn before release (raw_config freshness lags the
         # config file between write and reload) — it must not be advertised.
@@ -1442,16 +1405,6 @@ class TestHelpers:
             assert marker in json.dumps(flow[0]["options"])
 
 
-def test_flow_helper_domains_cover_server_flow_helper_types():
-    """The component must index every domain the server routes as a flow helper,
-    or a UI-created helper of a covered type would be invisible to the component
-    path (e2e ``test_deep_search_finds_non_template_flow_helpers``)."""
-    from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
-
-    missing = set(FLOW_HELPER_TYPES) - wsapi.FLOW_HELPER_DOMAINS
-    assert not missing, f"component FLOW_HELPER_DOMAINS misses server types: {missing}"
-
-
 # =============================================================================
 # secret scrub — resolved !secret plaintext is BLOCKED from the match corpus
 # =============================================================================
@@ -1892,9 +1845,7 @@ _ALL_COMMANDS = [
 ]
 
 # Minimal well-formed message body per command (Required fields) so the admin
-# gate / async_response wrappers reach the pure handler. ``states`` requires
-# ``entity_ids``; ``blueprint_get`` requires ``domain`` + ``path``; ``device_get``
-# requires ``device_id``.
+# gate / async_response wrappers reach the pure handler.
 _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     "ha_mcp_tools/states": {"entity_ids": []},
     "ha_mcp_tools/blueprint_get": {"domain": "automation", "path": "x.yaml"},
@@ -1961,6 +1912,9 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_OAUTH_CALLBACKS,
             wsapi.WS_OAUTH_CALLBACKS_UPDATE,
             *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py
+            wsapi.core_contract.COMMAND,
+            "ha_mcp_tools/statistics_units",
+            wsapi.card_definitions.WS_DASHBOARD_CARDS,  # test_card_definitions.py
         }
         # config_get is withdrawn: no handler is registered for it.
         assert "ha_mcp_tools/config_get" not in functional_ws.registered

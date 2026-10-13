@@ -1,0 +1,11 @@
+{
+  "reason": "#2689 adds two container_only standalone OAuth and WebSocket authentication regressions. Both skip on every HAOS lane, including the no-tools variants.",
+  "deltas": {
+    "haos": 2,
+    "haos_stdio": 2,
+    "haos_inaddon": 2,
+    "haos_embedded": 2,
+    "haos_inaddon_no_tools": 2,
+    "haos_embedded_no_tools": 2
+  }
+}

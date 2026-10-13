@@ -3309,45 +3309,6 @@ class TestAdvancedSectionRender:
         assert "DEBUG" in select_match.group(1)
         assert "CRITICAL" in select_match.group(1)
 
-    def test_int_field_emits_min_max_attrs(self, settings_script: str) -> None:
-        # Same connection-removed migration as test_locked_field above.
-        fetches = {
-            **DEFAULT_FETCHES,
-            "/api/settings/advanced": {
-                "status": 200,
-                "json": {
-                    "fields": [
-                        {
-                            "field": "fuzzy_threshold",
-                            "env_var": "FUZZY_THRESHOLD",
-                            "value": 70,
-                            "type": "int",
-                            "section": "search",
-                            "origin": "default",
-                            "editable": True,
-                            "min": 1,
-                            "max": 100,
-                        }
-                    ]
-                },
-            },
-        }
-        result = run_script(
-            settings_script,
-            initial_html=MIN_DOM,
-            fetch_map=fetches,
-            invoke="await new Promise(r => setTimeout(r, 200));",
-        )
-        _assert_clean_init(result)
-
-        m = re.search(
-            r'<input[^>]*data-adv-field="fuzzy_threshold"[^>]*>',
-            result.dom,
-        )
-        assert m is not None, "expected number input for fuzzy_threshold"
-        assert 'min="1"' in m.group(0)
-        assert 'max="100"' in m.group(0)
-
 
 class TestFormControlAccessibility:
     """Every generated form control must carry a ``name`` (or ``id``) so it

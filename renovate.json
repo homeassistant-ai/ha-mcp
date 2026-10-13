@@ -219,7 +219,8 @@
         "dockerfile"
       ],
       "matchPackageNames": [
-        "python"
+        "python",
+        "public.ecr.aws/docker/library/python"
       ],
       "allowedVersions": "/^3\\.13-slim$/"
     },
@@ -229,7 +230,8 @@
         "dockerfile"
       ],
       "matchPackageNames": [
-        "python"
+        "python",
+        "public.ecr.aws/docker/library/python"
       ],
       "matchFileNames": [
         "homeassistant-addon-webhook-proxy/Dockerfile",

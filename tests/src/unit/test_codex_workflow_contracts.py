@@ -312,6 +312,80 @@ def test_explicit_environment_and_network_preserve_credential_boundary(tmp_path)
     assert token.encode() not in result.stdout + result.stderr
 
 
+def test_read_only_paths_protect_controller_and_git_metadata(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "control").mkdir(parents=True)
+    (workspace / "source" / ".git").mkdir(parents=True)
+    result = prepare(
+        tmp_path,
+        SANDBOX_INPUT="workspace-write",
+        WORKING_DIRECTORY_INPUT="source",
+        READ_ONLY_PATHS_INPUT="control\n./control\nsource/.git",
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    profile = next(tmp_path.glob("codex-action-state/home.*/*.config.toml"))
+    config = tomllib.loads(profile.read_text())
+    permissions = config["permissions"]["ci-action"]
+    assert permissions["extends"] == ":workspace"
+    entries = permissions["filesystem"]
+
+    # Native Windows jq receives MSYS-converted --arg paths; the Ubuntu runner
+    # keeps POSIX paths. Both designate the same explicitly protected locations.
+    def expected(path: Path) -> str:
+        return path.as_posix() if os.name == "nt" else posix(path)
+
+    assert entries[expected(workspace / "control")] == "read"
+    assert entries[expected(workspace / "source" / ".git")] == "read"
+    assert "deny" in entries.values()
+
+
+@pytest.mark.parametrize(
+    "paths,input_paths,valid",
+    [
+        ("", "control", False),
+        ("not-json", "control", False),
+        ("[]", "control", False),
+        ("[]", "", True),
+        ('["control","source/.git"]', "control\nsource/.git", True),
+    ],
+)
+def test_read_only_probe_cannot_succeed_without_valid_paths(
+    tmp_path: Path, paths: str, input_paths: str, valid: bool
+) -> None:
+    if valid and shutil.which("jq") is None:
+        pytest.skip(
+            "Native jq is unavailable; the GitHub Linux runner exercises this case"
+        )
+    action = load(".github/actions/codex-run/action.yml")
+    verify = next(
+        step["run"]
+        for step in action["runs"]["steps"]
+        if step.get("name") == "Verify credential isolation"
+    )
+    # Run the actual probe block with a fake successful sandbox; malformed input
+    # must fail before any protected path can be silently skipped.
+    probe = (
+        "set -euo pipefail\ncodex() { return 0; }\nreadonly_json="
+        + verify.split("readonly_json=", 1)[1]
+    )
+    result = shell(
+        probe,
+        tmp_path,
+        CODEX_ACTION_READONLY_PATHS=paths,
+        READ_ONLY_PATHS_INPUT=input_paths,
+        CODEX_ACTION_PROFILE="fixture",
+        CODEX_ACTION_WORKDIR="fixture",
+    )
+    assert (result.returncode == 0) is valid, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("path", ["../outside", "missing"])
+def test_read_only_paths_must_exist_inside_workspace(tmp_path: Path, path: str) -> None:
+    (tmp_path / "outside").mkdir()
+    result = prepare(tmp_path, READ_ONLY_PATHS_INPUT=path)
+    assert result.returncode != 0
+
+
 @pytest.mark.parametrize(
     "name", ["CODEX_AUTH_INPUT", "CODEX_AUTH_PAT", "BAD*NAME", "UNSET_TEST_VARIABLE"]
 )

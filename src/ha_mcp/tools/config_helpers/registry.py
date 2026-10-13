@@ -8,7 +8,6 @@ from ...client.rest_client import HomeAssistantAPIError, HomeAssistantAuthError
 from ...errors import ErrorCode, create_auth_error, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_registry_lookup import fetch_entities_for_config_entry_via_component
-from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..config_write_helpers import apply_entity_category
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .schemas import SIMPLE_HELPER_TYPES, _simple_helper_error_context
@@ -546,7 +545,8 @@ async def _check_name_collision(
         # will reject; let it surface that error rather than guessing.
         return
 
-    if helper_type in FLOW_HELPER_TYPES:
+    # ha_config_set_helper checked the type: not storage means a helper flow.
+    if helper_type not in SIMPLE_HELPER_TYPES:
         existing_id = await _find_collision_in_flow_helpers(
             client, helper_type, target_slug
         )

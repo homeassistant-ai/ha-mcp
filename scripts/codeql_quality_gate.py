@@ -59,6 +59,22 @@ PATHS_IGNORE: tuple[str, ...] = (
 ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     (
         "py/unused-global-variable",
+        "custom_components/ha_mcp_tools/card_definitions.py",
+        "_build_task",
+        "",
+        "Cross-invocation use: async_get_definitions stores the background build "
+        "task so later calls await the same build, including after a timeout.",
+    ),
+    (
+        "py/unused-global-variable",
+        "custom_components/ha_mcp_tools/custom_cards.py",
+        "_dom_failed_at",
+        "",
+        "Cross-invocation use: a failed download records its time; the next "
+        "_async_dom call reads it to enforce the retry cooldown.",
+    ),
+    (
+        "py/unused-global-variable",
         "tests/src/unit/_embedded_stubs.py",
         "_INSTALLED",
         "",

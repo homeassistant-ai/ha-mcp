@@ -237,7 +237,7 @@ class TestSkillContentDelivery:
                     "title": f"E2E Skill Dash {suffix}",
                     "config": {"views": [{"title": "V", "cards": []}]},
                 },
-                ["dashboard-guide.md", "dashboard-cards.md"],
+                ["dashboard-guide.md"],
             )
         raise AssertionError(f"unknown tool {tool}")
 

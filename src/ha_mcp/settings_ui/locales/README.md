@@ -6,8 +6,10 @@ the wheel and sdist ship every file under `src/ha_mcp`.
 
 **This directory is the canonical translation store.** Besides the settings
 UI's own strings, each catalog carries the add-on option strings under
-`addon.<key>.*` (with `features.<key>.*` for options the settings UI also
-shows, and `addon_stable.<key>.*` for flavor-specific wording). Both add-on
+`addon.<key>.*`. An option the settings UI also shows has no `addon.<key>.*`
+entry: it uses the UI's own `features.<key>.*`, `advanced.<key>.*` or
+`backup.fields.<key>.*` text, and `addon_stable.<key>.*` holds flavor-specific
+wording. Both add-on
 flavors' `translations/*.yaml` and the `FEATURE_META` block in
 `settings_js/05_feature_flags.js` are generated from these catalogs by
 `scripts/generate_locales.py` — never edit those by hand. Wherever one
@@ -145,7 +147,7 @@ is named):
 - The generated files (both add-on YAMLs, `FEATURE_META`) are byte-exact
   generator output (`test_derived_catalogs_match_the_canonical_store`); run
   `python scripts/generate_locales.py` after touching any `addon.*`,
-  `addon_stable.*` or `features.*` key.
+  `addon_stable.*`, `features.*`, `advanced.*` or `backup.fields.*` key.
 - Component-catalog `{placeholder}` parity, for keys whose English still
   matches the baseline — a hand edit that drops a placeholder fails the PR
   that makes it; a translation awaiting a machine rewrite is excluded.

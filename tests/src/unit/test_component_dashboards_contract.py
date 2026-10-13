@@ -11,8 +11,8 @@ Covered seams: ``list`` parity (component rows == the legacy
 ``lovelace/dashboards/list`` shape, YAML metadata rows KEPT on both paths),
 ``get`` parity (storage body + the default dashboard via ``url_path=None``), a
 YAML dashboard's per-call fall back to the legacy read (its body is never served
-in-process), cross-dashboard ``search`` parity (the component's in-process walk
-vs the server-side legacy walk over identical fixture configs), the set tool's
+in-process), search-across-dashboards parity (configs from the component's one
+``docs`` frame vs the legacy per-dashboard reads, same server walk), the set tool's
 existence check, and the auto-backup capture read.
 """
 
@@ -97,8 +97,8 @@ _YAML_BODY = {"views": [{"cards": [{"type": "markdown", "content": "yaml secret"
 
 # A sections-view carrying entity refs the plain card walk never visits: a
 # bare-string badge, a dict badge, and a header card. Each entity appears in
-# exactly ONE container so a query isolates that container — pinning that both
-# the component walk and the server legacy walk reach badges + header cards.
+# exactly ONE container so a query isolates that container — pinning that the
+# search reaches badges + header cards whichever path served the configs.
 _BADGE_HEADER_BODY = {
     "title": "Sensors",
     "views": [
@@ -347,24 +347,22 @@ async def test_get_yaml_dashboard_falls_back_to_legacy() -> None:
 
 # --- cross-dashboard search parity -------------------------------------------
 @pytest.mark.asyncio
-async def test_search_parity_component_vs_legacy_walk() -> None:
-    """The component's in-process walk and the server-side legacy walk return the
-    SAME matches over identical fixture configs."""
+async def test_search_parity_docs_frame_vs_legacy_reads() -> None:
+    """Configs from the component's one ``docs`` frame and from the legacy
+    per-dashboard reads give the SAME matches."""
     dmap = {
         "home": _storage_dash("home", "Home", body=_HOME_BODY),
         "office": _storage_dash("office", "Office", body=_OFFICE_BODY),
     }
 
-    # Component path: the real _do_dashboards search over the fake lovelace hass.
+    # Component path: the real _do_dashboards ``docs`` frame over the fake hass.
     hass = _component_hass(dmap)
     ws = _real_component_ws(hass)
     comp_client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(
-            mode="search", query="light"
-        )
+        comp_resp = await _build_get_dashboard(comp_client)(query="light")
 
-    # Legacy path: list + per-dashboard get + the same walk, server-side.
+    # Legacy path: list + one get per storage dashboard.
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     legacy_client = RoutingClient(
         dashboards_list=[
@@ -374,9 +372,7 @@ async def test_search_parity_component_vs_legacy_walk() -> None:
         configs={"home": _HOME_BODY, "office": _OFFICE_BODY},
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
-        legacy_resp = await _build_get_dashboard(legacy_client)(
-            mode="search", query="light"
-        )
+        legacy_resp = await _build_get_dashboard(legacy_client)(query="light")
 
     assert comp_resp["matches"]  # non-empty (light.kitchen / light.hall / light.desk)
     assert comp_resp["matches"] == legacy_resp["matches"]
@@ -399,9 +395,7 @@ async def test_search_parity_case_insensitive_query() -> None:
     ws = _real_component_ws(hass)
     comp_client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(
-            mode="search", query="LIGHT"
-        )
+        comp_resp = await _build_get_dashboard(comp_client)(query="LIGHT")
 
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     legacy_client = RoutingClient(
@@ -412,9 +406,7 @@ async def test_search_parity_case_insensitive_query() -> None:
         configs={"home": _HOME_BODY, "office": _OFFICE_BODY},
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
-        legacy_resp = await _build_get_dashboard(legacy_client)(
-            mode="search", query="LIGHT"
-        )
+        legacy_resp = await _build_get_dashboard(legacy_client)(query="LIGHT")
 
     assert comp_resp["matches"]  # uppercase query still hits lowercase content
     assert comp_resp["matches"] == legacy_resp["matches"]
@@ -425,8 +417,8 @@ async def test_search_parity_badges_and_header_cards() -> None:
     """A view badge and a sections-view header card are searched on BOTH paths.
 
     An entity referenced only as a badge or only inside a header card must be
-    found identically by the component's in-process walk and the server's legacy
-    walk — otherwise a rename/remove would wrongly read as "no dashboard uses it".
+    found identically through the component ``docs`` frame and the legacy reads —
+    otherwise a rename/remove would wrongly read as "no dashboard uses it".
     """
     dmap = {"sensors": _storage_dash("sensors", "Sensors", body=_BADGE_HEADER_BODY)}
     legacy_rows = [{**_storage_dash("sensors", "Sensors").config, "mode": "storage"}]
@@ -436,57 +428,52 @@ async def test_search_parity_badges_and_header_cards() -> None:
         hass = _component_hass(dmap)
         ws = _real_component_ws(hass)
         with patch_ws(ws, tools_config_dashboards):
-            comp = await _build_get_dashboard(RoutingClient())(
-                mode="search", query=query
-            )
+            comp = await _build_get_dashboard(RoutingClient())(query=query)
         legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
         legacy_client = RoutingClient(
             dashboards_list=legacy_rows, configs=legacy_configs
         )
         with patch_ws(legacy_ws, tools_config_dashboards):
-            legacy = await _build_get_dashboard(legacy_client)(
-                mode="search", query=query
-            )
+            legacy = await _build_get_dashboard(legacy_client)(query=query)
         return comp["matches"], legacy["matches"]
 
     # Badge-only (bare string): matched nowhere else.
     comp_b, legacy_b = await _both("sensor.badge_only")
     assert comp_b == legacy_b
     assert len(comp_b) == 1
-    assert ".badges[" in comp_b[0]["card_path"]
+    assert ".badges[" in comp_b[0]["jq_path"]
     assert comp_b[0]["card_type"] == "badge"
-    assert comp_b[0]["matched_value"] == "sensor.badge_only"
+    assert comp_b[0]["matched"] == [{"field": "badges", "value": "sensor.badge_only"}]
 
-    # Dict badge: walked like a card (its own type + field taxonomy).
+    # Dict badge: its strings are searched; card_type stays "badge".
     comp_d, legacy_d = await _both("sensor.badge_dict")
     assert comp_d == legacy_d
     assert len(comp_d) == 1
-    assert ".badges[" in comp_d[0]["card_path"]
-    assert comp_d[0]["card_type"] == "entity"
+    assert ".badges[" in comp_d[0]["jq_path"]
+    assert comp_d[0]["card_type"] == "badge"
+    assert comp_d[0]["matched"] == [{"field": "entity", "value": "sensor.badge_dict"}]
 
     # Header-card-only: matched only in views[n].header.card.
     comp_h, legacy_h = await _both("sensor.header_only")
     assert comp_h == legacy_h
     assert len(comp_h) == 1
-    assert comp_h[0]["card_path"].endswith(".header.card")
+    assert comp_h[0]["jq_path"].endswith(".header.card")
     assert comp_h[0]["card_type"] == "markdown"
 
 
 @pytest.mark.asyncio
 async def test_search_parity_truncation_cap() -> None:
-    """>200 matches truncate identically on both paths (mirrors the component cap)."""
-    cap = tools_config_dashboards._SEARCH_ALL_MATCH_CAP
-    entities = [f"light.e{i}" for i in range(cap + 25)]
-    body = {"views": [{"cards": [{"type": "entities", "entities": entities}]}]}
+    """More matches than the cap truncate identically on both paths."""
+    cap = tools_config_dashboards._SEARCH_MATCH_CAP
+    cards = [{"type": "tile", "entity": f"light.e{i}"} for i in range(cap + 25)]
+    body = {"views": [{"cards": cards}]}
     dmap = {"home": _storage_dash("home", "Home", body=body)}
 
     hass = _component_hass(dmap)
     ws = _real_component_ws(hass)
     comp_client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(
-            mode="search", query="light.e"
-        )
+        comp_resp = await _build_get_dashboard(comp_client)(query="light.e")
 
     legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
     legacy_client = RoutingClient(
@@ -494,9 +481,7 @@ async def test_search_parity_truncation_cap() -> None:
         configs={"home": body},
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
-        legacy_resp = await _build_get_dashboard(legacy_client)(
-            mode="search", query="light.e"
-        )
+        legacy_resp = await _build_get_dashboard(legacy_client)(query="light.e")
 
     assert comp_resp["truncated"] is True
     assert legacy_resp["truncated"] is True
@@ -506,11 +491,10 @@ async def test_search_parity_truncation_cap() -> None:
 
 @pytest.mark.asyncio
 async def test_search_default_dashboard_asymmetry() -> None:
-    """Documented asymmetry: the component walk covers the default (None-keyed)
-    dashboard; the component-less legacy walk excludes it, because
-    ``fetch_dashboards_list`` never returns the default so it is never fetched
-    for the server-side walk (see MODE 4 docstring caveat on
-    ``ha_config_get_dashboard``)."""
+    """Documented asymmetry: the component ``docs`` frame includes the default
+    (None-keyed) dashboard; the legacy reads exclude it, because
+    ``fetch_dashboards_list`` never returns the default (see the search caveat in
+    the ``ha_config_get_dashboard`` docstring)."""
     default_body = {
         "views": [{"cards": [{"type": "entities", "entities": ["light.default_only"]}]}]
     }
@@ -523,9 +507,7 @@ async def test_search_default_dashboard_asymmetry() -> None:
     ws = _real_component_ws(hass)
     comp_client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        comp_resp = await _build_get_dashboard(comp_client)(
-            mode="search", query="light.default_only"
-        )
+        comp_resp = await _build_get_dashboard(comp_client)(query="light.default_only")
 
     # Legacy: fetch_dashboards_list never returns the default (None key), so
     # its dashboard is never fetched for the walk.
@@ -536,12 +518,31 @@ async def test_search_default_dashboard_asymmetry() -> None:
     )
     with patch_ws(legacy_ws, tools_config_dashboards):
         legacy_resp = await _build_get_dashboard(legacy_client)(
-            mode="search", query="light.default_only"
+            query="light.default_only"
         )
 
     assert comp_resp["matches"]
-    assert comp_resp["matches"][0]["url_path"] is None  # the default's own key
+    assert comp_resp["matches"][0]["url_path"] == "default"
     assert legacy_resp["matches"] == []  # documented exclusion
+
+
+@pytest.mark.asyncio
+async def test_search_across_dashboards_never_returns_a_yaml_body() -> None:
+    """With include_config, card bodies come only from storage dashboards: the
+    ``docs`` frame never carries a YAML config, whose !secret values HA resolves."""
+    body = {"views": [{"cards": [{"type": "tile", "entity": "light.both"}]}]}
+    dmap = {
+        "home": _storage_dash("home", "Home", body=body),
+        "yaml-dash": FakeDashboard("yaml-dash", "yaml", config={}, body=body),
+    }
+    hass = _component_hass(dmap)
+    with patch_ws(_real_component_ws(hass), tools_config_dashboards):
+        resp = await _build_get_dashboard(RoutingClient())(
+            query="light.both", include_config=True
+        )
+
+    assert [m["url_path"] for m in resp["matches"]] == ["home"]
+    assert resp["matches"][0]["card_config"] == body["views"][0]["cards"][0]
 
 
 # --- set tool existence check -------------------------------------------------

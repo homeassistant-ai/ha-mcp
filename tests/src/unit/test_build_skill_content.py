@@ -518,10 +518,7 @@ class TestPerToolCanonicalMappings:
     def test_dashboard_mapping(self):
         from ha_mcp.tools.tools_config_dashboards import _DASHBOARD_SKILL_FILES
 
-        assert _DASHBOARD_SKILL_FILES == (
-            "references/dashboard-guide.md",
-            "references/dashboard-cards.md",
-        )
+        assert _DASHBOARD_SKILL_FILES == ("references/dashboard-guide.md",)
 
     def test_yaml_mapping(self):
         from ha_mcp.tools.tools_yaml_config import _YAML_SKILL_FILES

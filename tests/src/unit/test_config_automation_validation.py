@@ -54,16 +54,18 @@ class TestValidateRequiredFields:
             identifier=None,
         )
 
-    def test_missing_trigger_without_sequence_uses_generic_error(self) -> None:
-        """Missing fields without a 'sequence' key emit the default suggestions."""
+    def test_missing_trigger_without_sequence_names_missing_field(self) -> None:
+        """Missing fields without a 'sequence' key name the missing field and
+        suggest adding it inside config."""
         with pytest.raises(ToolError) as exc_info:
             AutomationConfigTools._validate_required_fields(
                 {"alias": "x", "actions": []},
                 identifier=None,
             )
-        error = _error_from_tool_error(exc_info.value)
+        body = _body_from_tool_error(exc_info.value)
+        assert body["missing_fields"] == ["triggers"]
+        error = body["error"]
         assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
-        assert "triggers" in error["message"]
         # The generic suggestion should NOT mention ha_config_set_script.
         all_text = json.dumps(error)
         assert "ha_config_set_script" not in all_text
@@ -96,6 +98,150 @@ class TestValidateRequiredFields:
             )
         error = _error_from_tool_error(exc_info.value)
         assert "ha_config_set_script" in error.get("suggestion", "")
+
+    def test_sequence_hint_also_places_alias_when_missing(self) -> None:
+        """Sequence-shaped config missing alias too: the automation correction
+        must name alias placement and show the config shape, or following the
+        suggestion leaves the next call invalid."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"sequence": [{"action": "light.turn_off"}]},
+                identifier=None,
+            )
+        error = _error_from_tool_error(exc_info.value)
+        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
+        all_text = json.dumps(error)
+        assert "alias" in all_text
+        assert "config={'alias':" in all_text
+
+    def test_missing_alias_says_it_belongs_inside_config(self) -> None:
+        """Missing 'alias' names the config body and shows the expected shape
+        in one line (issue #2649 section 2)."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {
+                    "triggers": [{"trigger": "state"}],
+                    "actions": [{"action": "light.turn_on"}],
+                },
+                identifier=None,
+            )
+        body = _body_from_tool_error(exc_info.value)
+        assert body["missing_fields"] == ["alias"]
+        error = body["error"]
+        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
+        assert "`config`" in error["message"]
+        # Expected shape in one line with copy-pasteable quoted keys.
+        assert "config={'alias': 'My Automation'" in error["message"]
+
+    def test_missing_alias_on_blueprint_shows_blueprint_shape(self) -> None:
+        """A blueprint config missing 'alias' shows the blueprint shape, not
+        triggers/actions (which the blueprint branch strips)."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"use_blueprint": {"path": "light.yaml", "input": {}}},
+                identifier=None,
+            )
+        body = _body_from_tool_error(exc_info.value)
+        assert body["missing_fields"] == ["alias"]
+        error = body["error"]
+        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
+        assert "use_blueprint" in error["message"]
+        assert "'triggers'" not in error["message"]
+
+    def test_enabled_in_config_and_missing_alias_report_together(self) -> None:
+        """Issue #2649 section 3: a missing field and a misplaced runtime-only
+        'enabled' key surface in ONE rejection instead of one round trip each."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"enabled": False, "triggers": [], "actions": []},
+                identifier=None,
+            )
+        body = _body_from_tool_error(exc_info.value)
+        assert body["missing_fields"] == ["alias"]
+        assert body["invalid_key"] == "enabled"
+        error = body["error"]
+        all_text = json.dumps(error)
+        assert "runtime-only" in all_text
+        # The combined rejection also says where alias goes.
+        assert "`config`" in error["message"]
+        # The combined rejection keeps the standalone enabled suggestions
+        # instead of the generic fallback.
+        suggestions = error.get("suggestions", [])
+        assert any("Remove 'enabled' from config" in s for s in suggestions)
+        assert (
+            "Use enabled=None to leave the current runtime state unchanged"
+            in suggestions
+        )
+        assert "Check documentation for required fields" not in all_text
+
+    def test_sequence_and_enabled_report_together(self) -> None:
+        """A script-shaped config that also misplaces 'enabled' reports both
+        violations in one rejection."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"sequence": [{"action": "light.turn_on"}], "enabled": True},
+                identifier=None,
+            )
+        body = _body_from_tool_error(exc_info.value)
+        assert body["missing_fields"] == ["alias", "triggers", "actions"]
+        assert body["invalid_key"] == "enabled"
+        error = body["error"]
+        all_text = json.dumps(error)
+        assert "ha_config_set_script" in all_text
+        assert "runtime-only" in all_text
+        # The two guidance sentences are separated, not run together.
+        assert ". 'enabled'" in error["message"]
+        # The sequence branch folds in the enabled suggestions the same way
+        # the other combined rejection does.
+        suggestions = error.get("suggestions", [])
+        assert any("Remove 'enabled' from config" in s for s in suggestions)
+        assert (
+            "Use enabled=None to leave the current runtime state unchanged"
+            in suggestions
+        )
+
+    def test_missing_alias_on_transform_points_at_transform(self) -> None:
+        """A transform that drops 'alias' is told to set it in the transform
+        expression, not to send config={...} (which write modes would reject)."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"triggers": [], "actions": []},
+                identifier="automation.x",
+                source="python_transform",
+            )
+        body = _body_from_tool_error(exc_info.value)
+        assert body["missing_fields"] == ["alias"]
+        error = body["error"]
+        assert "config['alias']" in error["message"]
+        assert "config={" not in error["message"]
+
+    def test_sequence_misroute_on_transform_points_at_transform(self) -> None:
+        """A transform producing 'sequence' gets transform-expression guidance,
+        not config={...} (which write modes would reject)."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"sequence": [{"action": "light.turn_off"}]},
+                identifier="automation.x",
+                source="python_transform",
+            )
+        error = _error_from_tool_error(exc_info.value)
+        assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
+        all_text = json.dumps(error)
+        assert "python_transform expression" in all_text
+        assert "config['alias']" in all_text
+        assert "config={" not in all_text
+
+    def test_enabled_in_config_alone_still_rejected(self) -> None:
+        """The standalone runtime-only rejection is unchanged when it is the
+        only problem."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {"alias": "x", "triggers": [], "actions": [], "enabled": True},
+                identifier=None,
+            )
+        error = _error_from_tool_error(exc_info.value)
+        assert "runtime-only" in error["message"]
+        assert "Missing required fields" not in error["message"]
 
 
 class TestValidateConditionBlocks:

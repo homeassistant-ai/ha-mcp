@@ -803,11 +803,11 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "repository",
     },
     "ha_manage_energy_prefs": {
-        # mode='set' payload — blocked unless dry_run=True (preview only).
+        # Get-mode inspection and write payloads gated by mode/dry_run.
+        "include_statistics",
+        "include_schema",
         "config",
         "config_hash",
-        # Convenience-mode payloads (add_device/remove_device/add_source),
-        # all blocked unless dry_run=True.
         "stat_consumption",
         "name",
         "included_in_stat",

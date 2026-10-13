@@ -4,8 +4,11 @@ Tests the BM25Scorer class, tokenizer, FuzzyEntitySearcher BM25 integration,
 and the BM25 path in SmartSearchTools._search_in_dict.
 """
 
+from typing import Any
+
 import pytest
 
+from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.utils.fuzzy_search import (
     HIDDEN_SCORE_PENALTY,
     BM25Scorer,
@@ -296,6 +299,15 @@ class TestSearchInDictBM25:
         }
         score = smart_tools._search_in_dict(config, "kitchen motion", exact_match=False)
         assert score > 0
+
+    @pytest.mark.parametrize("exact_match", [True, False])
+    def test_deeply_nested_config_is_searched_in_full(
+        self, smart_tools: SmartSearchTools, exact_match: bool
+    ) -> None:
+        deep: dict[str, Any] = {"entity": "light.deep"}
+        for _ in range(1500):
+            deep = {"n": deep}
+        assert smart_tools._search_in_dict(deep, "light.deep", exact_match) > 0
 
 
 # ---------------------------------------------------------------------------

@@ -112,50 +112,44 @@ class ScoringMixin(_SearchBase):
     def _collect_string_leaves(
         data: dict[str, Any] | list[Any] | Any, out: list[str]
     ) -> None:
-        """Recursively collect all string representations from nested data."""
-        if isinstance(data, dict):
-            for key, value in data.items():
-                out.append(str(key))
-                ScoringMixin._collect_string_leaves(value, out)
-        elif isinstance(data, list):
-            for item in data:
-                ScoringMixin._collect_string_leaves(item, out)
-        elif isinstance(data, str):
-            out.append(data)
-        elif data is not None:
-            out.append(str(data))
+        """Collect keys and every leaf of nested data as strings.
 
-    @classmethod
+        Iterative, so a config of any depth is read in full; BM25 scores the
+        leaves as one bag of tokens, so their order does not matter.
+        """
+        stack = [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    out.append(str(key))
+                    stack.append(value)
+            elif isinstance(node, list):
+                stack.extend(node)
+            elif isinstance(node, str):
+                out.append(node)
+            elif node is not None:
+                out.append(str(node))
+
+    @staticmethod
     def _search_in_dict_exact(
-        cls,
         data: dict[str, Any] | list[Any] | Any,
         query: str,
     ) -> int:
-        """Exact substring search in nested structures (returns 100 or 0)."""
-        if isinstance(data, dict):
-            return cls._exact_in_dict(data, query)
-        if isinstance(data, list):
-            return cls._exact_in_list(data, query)
-        if isinstance(data, str):
-            return 100 if query in data.lower() else 0
-        if data is not None:
-            return 100 if query in str(data).lower() else 0
-        return 0
+        """Exact substring search over keys and leaves (returns 100 or 0).
 
-    @classmethod
-    def _exact_in_dict(cls, data: dict[str, Any], query: str) -> int:
-        """Exact-match scan over a dict's keys and recursively over its values."""
-        for key, value in data.items():
-            if query in str(key).lower():
-                return 100
-            if cls._search_in_dict_exact(value, query) >= 100:
-                return 100
-        return 0
-
-    @classmethod
-    def _exact_in_list(cls, data: list[Any], query: str) -> int:
-        """Exact-match scan recursively over a list's items."""
-        for item in data:
-            if cls._search_in_dict_exact(item, query) >= 100:
+        Iterative, so a config of any depth is read in full.
+        """
+        stack = [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if query in str(key).lower():
+                        return 100
+                    stack.append(value)
+            elif isinstance(node, list):
+                stack.extend(node)
+            elif node is not None and query in str(node).lower():
                 return 100
         return 0

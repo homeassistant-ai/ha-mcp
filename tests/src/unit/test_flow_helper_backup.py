@@ -8,6 +8,7 @@ not offer comes from Home Assistant's own forms, not a per-type list.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -158,11 +159,12 @@ def _creation_client(*replies: dict[str, Any], first: dict[str, Any]) -> Any:
 _CREATED = {"type": "create_entry", "result": {"entry_id": "new-entry"}}
 
 
-async def test_edit_whose_capture_the_component_cannot_serve_warns_the_caller(
+async def _edit_an_uncovered_meter(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
-) -> None:
-    """The write goes ahead, and the response (not only the log) says that no
-    backup was taken and why."""
+) -> dict[str, Any]:
+    """Edit a utility meter the component's listing does not cover. The stubbed
+    Core helper flow list (conftest) lists utility_meter, so its capture is a
+    failed read unless that list cannot be read either."""
     from ha_mcp.tools import auto_backup
 
     async def send(client: Any, message: dict[str, Any]) -> Any:
@@ -186,12 +188,42 @@ async def test_edit_whose_capture_the_component_cannot_serve_warns_the_caller(
     async def edit(helper_id: str) -> dict[str, Any]:
         return {"success": True}
 
-    result = await edit(helper_id="meter-entry")
+    return await edit(helper_id="meter-entry")
+
+
+async def test_edit_whose_capture_the_component_cannot_serve_warns_the_caller(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The write goes ahead, and the response (not only the log) says that no
+    backup was taken and why."""
+    result = await _edit_an_uncovered_meter(monkeypatch, tmp_path)
 
     assert result["success"] is True
     (warning,) = result["warnings"]
     assert warning.startswith("No pre-write backup of helper_utility_meter:meter-entry")
     assert "cannot authoritatively read utility_meter" in warning
+
+
+async def test_a_failed_read_of_core_helper_flows_is_not_logged_as_no_helper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When neither the component nor Core's helper flow list can be read, the
+    capture is a failed fetch at WARNING, not an INFO skip of an unknown type."""
+    from ha_mcp.client.rest_client import HomeAssistantConnectionError
+    from ha_mcp.tools import helper_flows
+
+    monkeypatch.setattr(
+        helper_flows,
+        "_fetch_helper_flow_types",
+        AsyncMock(side_effect=HomeAssistantConnectionError("down")),
+    )
+    with caplog.at_level(logging.INFO):
+        result = await _edit_an_uncovered_meter(monkeypatch, tmp_path)
+
+    assert result["success"] is True
+    records = [r for r in caplog.records if r.name == bm.logger.name]
+    assert any(r.levelno == logging.WARNING for r in records)
+    assert not any(r.levelno == logging.INFO for r in records)
 
 
 async def test_every_flow_helper_edit_runs_in_the_restore_critical_section(

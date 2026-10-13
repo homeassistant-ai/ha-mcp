@@ -433,3 +433,56 @@ async def test_unchanged_field_no_form_offers_does_not_fail_the_restore(
     )
 
     assert ha.subentries["s1"] == {**PLANE, "model": "A"}
+
+
+def _subentry_manager(ha: _HA, tmp_path: Any) -> bm.BackupManager:
+    return bm.get_backup_manager(
+        ha.client,
+        SimpleNamespace(
+            enable_auto_backup=True,
+            auto_backup_throttle_minutes=0,
+            auto_backup_retain_per_entity=5,
+            auto_backup_dir=str(tmp_path),
+        ),
+    )
+
+
+@pytest.mark.usefixtures("component")
+async def test_an_existing_subentry_is_restored_after_its_safety_capture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    ha = _HA({"s1": {**PLANE, "modules_power": 900}})
+    monkeypatch.setattr(bm, "_ws_send", ha.ws)
+    manager = _subentry_manager(ha, tmp_path)
+    snapshot = manager._write_snapshot(
+        "helper_config_subentry", "e1/s1", _snapshot(dict(PLANE)), "test"
+    )
+
+    result = await manager.restore_snapshot(snapshot.name)
+
+    assert result["safety_backup"] is not None
+    assert ha.subentries["s1"] == PLANE
+
+
+@pytest.mark.usefixtures("component")
+async def test_a_subentry_that_reappears_after_an_empty_capture_is_not_edited(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Absent at the safety capture, the subentry has no recovery point; one
+    that exists by the time the restore runs must not be reconfigured."""
+    ha = _HA({"s1": {**PLANE, "modules_power": 900}})
+    monkeypatch.setattr(bm, "_ws_send", ha.ws)
+    manager = _subentry_manager(ha, tmp_path)
+    snapshot = manager._write_snapshot(
+        "helper_config_subentry", "e1/s1", _snapshot(dict(PLANE)), "test"
+    )
+    monkeypatch.setattr(
+        manager, "_capture_restore_safety", AsyncMock(return_value=None)
+    )
+
+    with pytest.raises(bm.BackupRestoreError) as refused:
+        await manager.restore_snapshot(snapshot.name)
+
+    assert refused.value.outcome["reason"] == "entry_still_exists"
+    assert ha.subentries["s1"]["modules_power"] == 900
+    ha.client.start_config_subentry_flow.assert_not_awaited()

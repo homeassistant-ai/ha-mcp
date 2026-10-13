@@ -1,0 +1,27 @@
+name: Slash agent review event
+
+# This workflow may come from a PR merge ref. It receives no secrets and executes
+# no checkout or PR code. Its completion wakes the default-branch controller,
+# which independently reads and authorizes the current GitHub state.
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+
+permissions: {}
+
+# Queue review bursts: cancelling running or pending notifications adds failure
+# annotations to PR checks. GitHub allows up to 100 pending runs with queue: max.
+concurrency:
+  group: slash-review-event-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  notify:
+    name: Slash review event
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: echo 'Review activity is available for the trusted controller.'

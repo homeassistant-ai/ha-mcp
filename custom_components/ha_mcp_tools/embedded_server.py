@@ -48,7 +48,6 @@ from homeassistant.loader import async_get_integration
 from homeassistant.requirements import (
     RequirementsNotFound,
     async_process_requirements,
-    pip_kwargs,
 )
 from homeassistant.util.package import is_virtual_env
 from packaging.requirements import InvalidRequirement, Requirement
@@ -86,6 +85,7 @@ from .dependency_diagnostics import (
     requirement_forces_conflict,
     root_import_failure,
 )
+from .pip_compat import pip_kwargs
 from .server_credentials import (
     CredentialNeeded,
     async_release_credentials,

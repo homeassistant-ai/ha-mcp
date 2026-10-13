@@ -15,7 +15,8 @@ axis from the global enable/disable in the settings UI:
 For embedded servers with the Home Assistant LLM API enabled, the single
 source of truth travels **in-band**: :class:`LlmExposureMiddleware` stamps
 every ``tools/list`` entry with
-``_meta.ha_mcp = {"llm_api_exposed": bool, "pinned": bool, "policy": {...}}``
+``_meta.ha_mcp = {"llm_api_exposed": bool, "pinned": bool, "params": str,
+"policy": {...}}``
 so the component (one more loopback MCP client) filters on data that can never
 drift from the server's settings, with zero extra round-trips. The ``policy``
 block reports the serving server's gating state (#1990 — see META_POLICY_KEY). Stamping re-reads the
@@ -51,6 +52,10 @@ logger = logging.getLogger(__name__)
 META_NAMESPACE = "ha_mcp"
 META_EXPOSED_KEY = "llm_api_exposed"
 META_PINNED_KEY = "pinned"
+# The one-line parameter summary the component's search hits show (#2633).
+# Rendered here so the component, which cannot import this package, carries
+# no copy of the renderer.
+META_PARAMS_KEY = "params"
 
 # Serving-server policy/identity block stamped alongside the per-tool keys
 # (#1990). A client (or a debugging agent) reading tools/list can see the
@@ -267,6 +272,8 @@ class LlmExposureMiddleware(Middleware):
         call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
     ) -> Sequence[Tool]:
         """Stamp ``_meta.ha_mcp`` on every tool in the list result."""
+        from .transforms.compact_params import compact_params
+
         tools = await call_next(context)
         overrides, pinned = self._current_settings()
         policy_block = self._policy_block()
@@ -279,6 +286,7 @@ class LlmExposureMiddleware(Middleware):
                 tool.name, tool.tags or set(), overrides
             )
             namespace[META_PINNED_KEY] = tool.name in pinned
+            namespace[META_PARAMS_KEY] = compact_params(tool.parameters)
             namespace[META_POLICY_KEY] = policy_block
             meta[META_NAMESPACE] = namespace
             stamped.append(tool.model_copy(update={"meta": meta}))

@@ -43,6 +43,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.typing import ConfigType
 
+from .cloudhook import buffered_response, discovery_rejection, is_cloudhook, read_body
 from .readonly_webhook import (
     readonly_url,
     register_readonly_webhook,
@@ -1032,9 +1033,8 @@ async def _relay_upstream_response(
     if mcp_session:
         resp_headers["Mcp-Session-Id"] = mcp_session
 
-    if "text/event-stream" in content_type:
-        # SSE streaming response - prevent HA compression middleware
-        # from breaking it (supervisor#6470)
+    if "text/event-stream" in content_type and not is_cloudhook(request):
+        # SSE streaming: keep HA's compression middleware off the stream (supervisor#6470)
         resp_headers["Content-Type"] = "text/event-stream"
         resp_headers["X-Accel-Buffering"] = "no"
 
@@ -1052,12 +1052,7 @@ async def _relay_upstream_response(
         if not any(ct in content_type for ct in allowed_content_types):
             content_type = "application/json"
         resp_headers["Content-Type"] = content_type
-        resp_body = await upstream_resp.read()
-        return web.Response(
-            status=upstream_resp.status,
-            body=resp_body,
-            headers=resp_headers,
-        )
+        return await buffered_response(request, upstream_resp, resp_headers)
 
 
 async def _handle_webhook(
@@ -1106,11 +1101,14 @@ async def _handle_webhook(
                     f"MCP Proxy [inbound]: -> 401 Unauthorized ({reject_reason}; "
                     "expected for the initial discovery probe)",
                 )
+            rejection = discovery_rejection(request)
+            if rejection is not None:
+                return rejection
             from .oauth import build_unauthorized_response
 
             return build_unauthorized_response(request, oauth_provider)
 
-    body = await request.read()
+    body = await read_body(request)
 
     forward_headers = _forward_headers(request)
     session = data["session"]

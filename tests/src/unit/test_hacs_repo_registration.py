@@ -80,6 +80,27 @@ class TestWaitForRepoRegistration:
         ws_client.unsubscribe_command.assert_awaited_once_with(7)
 
     @pytest.mark.asyncio
+    async def test_unsubscribe_timeout_keeps_the_found_repo(self):
+        """Home Assistant not answering the unsubscribe must not replace the
+        repo the wait already found with an error for a registration that
+        worked."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandTimeout
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
+
+        ws_client = _build_ws_client(
+            list_responses=[_list_response_with_repo(repo_id=42)],
+            subscribe_result=(7, asyncio.Queue()),
+        )
+        ws_client.unsubscribe_command.side_effect = HomeAssistantCommandTimeout(
+            "Command timeout"
+        )
+
+        repo = await wait_for_repo_registration(ws_client, WATCHED_REPO, timeout=5.0)
+
+        assert repo is not None
+        assert str(repo.get("id")) == "42"
+
+    @pytest.mark.asyncio
     async def test_event_triggers_targeted_list_lookup(self):
         """Matching dispatch event → fresh list lookup to get the full entry."""
         from ha_mcp.tools.hacs_registration import wait_for_repo_registration

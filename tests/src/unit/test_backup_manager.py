@@ -24,6 +24,7 @@ import yaml
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 from ha_mcp.backup_manager import (
     _MAX_PATCH_OPS,
     SCHEMA_VERSION,
@@ -1088,13 +1089,17 @@ class TestCapture:
         assert path is None
         assert not any(tmp_path.iterdir())
 
+    @pytest.mark.parametrize(
+        "error", [OSError("disk gone"), ConnectionClosed(None, None)], ids=str
+    )
     async def test_fetch_transient_exception_does_not_raise(
-        self, tmp_path: Path
+        self, tmp_path: Path, error: Exception
     ) -> None:
         mgr = _mk_manager(tmp_path)
-        # Transient/expected exceptions (HA / network / FS / yaml errors) are
-        # swallowed — capture is best-effort, the wrapped write must still run.
-        mgr.register(_mk_handler(raise_on_fetch=OSError("disk gone")))
+        # Transient/expected exceptions (HA / network / FS / yaml errors, a
+        # socket closed under the fetch) are swallowed — capture is
+        # best-effort, the wrapped write must still run.
+        mgr.register(_mk_handler(raise_on_fetch=error))
         path = await mgr.maybe_snapshot("automation", "x", tool_name="t")
         assert path is None
 
@@ -1674,20 +1679,6 @@ class TestFactory:
         ]:
             assert mgr.handler_for(d) is not None, f"missing handler: {d}"
 
-    def test_every_flow_helper_type_has_an_options_handler(
-        self, tmp_path: Path
-    ) -> None:
-        # ha_config_set_helper snapshots flow helpers (config entries) as
-        # helper_<type>; each is backed up through its options (#2632).
-        from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
-
-        settings = _StubSettings(auto_backup_dir=str(tmp_path))
-        mgr = get_backup_manager(_StubClient(), settings)
-        for helper_type in FLOW_HELPER_TYPES:
-            handler = mgr.handler_for(f"helper_{helper_type}")
-            assert handler is not None, helper_type
-            assert handler.fetch.__qualname__.startswith("_make_flow_helper_handler")
-
 
 # ---------------------------------------------------------------- default dir
 
@@ -1950,18 +1941,21 @@ class TestForceSnapshot:
         assert mgr.enabled is True
 
 
+_FLOWS = "helper_<flow helper type>"
+
+
 class TestSupportedDomains:
     def test_returns_sorted_registered_domains(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler(domain="zone"))
         mgr.register(_mk_handler(domain="automation"))
         mgr.register(_mk_handler(domain="label"))
-        # Sorted output for stable user-facing error messages.
-        assert mgr.supported_domains() == ["automation", "label", "zone"]
+        # Sorted, with flow helpers (no fixed list) named generically last.
+        assert mgr.supported_domains() == ["automation", "label", "zone", _FLOWS]
 
     def test_empty_when_no_handlers(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path)
-        assert mgr.supported_domains() == []
+        assert mgr.supported_domains() == [_FLOWS]
 
 
 # ---------------------------------------------------------------- WS envelope guards

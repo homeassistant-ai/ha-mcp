@@ -29,7 +29,7 @@ from .helpers import (
 )
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
-from .ws_waiters import wait_for_entity_registered, wait_for_entity_removed
+from .ws_waiters import verify_entity_removed, wait_for_entity_registered
 
 logger = logging.getLogger(__name__)
 
@@ -482,16 +482,7 @@ class GroupTools:
 
             result: dict[str, Any] = {}
             if wait:
-                try:
-                    removed = await wait_for_entity_removed(self._client, entity_id)
-                    if not removed:
-                        result.setdefault("warnings", []).append(
-                            f"Deletion confirmed by API but {entity_id} may still appear briefly."
-                        )
-                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                    result.setdefault("warnings", []).append(
-                        f"Deletion confirmed but removal verification failed: {e}"
-                    )
+                await verify_entity_removed(self._client, entity_id, result)
 
             return {
                 "success": True,

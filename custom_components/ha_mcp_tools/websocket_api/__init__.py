@@ -31,7 +31,8 @@ the info handshake carries no capability entry:
   response's ``covered_types`` names which helper_type values were authoritatively
   enumerated, so the server falls back to its legacy ``<type>/list`` path for an
   uncovered type (e.g. ``tag``, which has no state entity) instead of trusting an
-  empty result.
+  empty result. A custom-only helper integration is listed with ``options: None``
+  and ``options_withheld`` (see ``flow_domains._flow_helper_domains``).
 * ``ha_mcp_tools/states`` — a bulk state read: ``State.as_dict()`` for each
   requested entity_id (a pure ``hass.states.get`` in-memory read) plus the list
   of ids with no state, so the server's ``ha_get_state`` serves a 100-entity
@@ -85,7 +86,7 @@ the info handshake carries no capability entry:
   the not-exposed default (the legacy path never raises on junk); and a missing
   ``hass.states.get(id)`` omits the live-state fields (friendly_name/state) rather
   than crashing.
-* ``ha_mcp_tools/dashboards`` — Lovelace dashboards read in-process, three modes.
+* ``ha_mcp_tools/dashboards`` — Lovelace dashboards read in-process, four modes.
   ``list`` mirrors the ``lovelace/dashboards/list`` row shape (id/url_path/title/
   icon/show_in_sidebar/require_admin) with an additive per-row ``mode`` so the
   server can exclude YAML dashboards; ``get`` returns one dashboard's config body
@@ -94,7 +95,8 @@ the info handshake carries no capability entry:
   legacy for those — a YAML body may carry resolved ``!secret`` plaintext);
   ``search`` walks every STORAGE dashboard's views/cards/sections (plus view-level
   badges and sections-view header cards) for a query substring (capped at 200 with a
-  ``truncated`` flag). YAML-dashboard bodies are never emitted — storage-only. All
+  ``truncated`` flag); ``docs`` returns every STORAGE dashboard's config in one
+  frame for the server's card search. YAML-dashboard bodies are never emitted. All
   Store loads run in :func:`_dashboards_prep`.
 * ``ha_mcp_tools/services_list`` — the REST ``/api/services`` service catalog
   (``async_get_all_descriptions``) joined with the ``services`` backend
@@ -268,16 +270,19 @@ Design notes that are load-bearing:
   merely unemitted.
 * **Event-loop hygiene.** Every registry/state join is a pure in-memory read
   over live data — run synchronously, no persistent index (always fresh, zero
-  cache-invalidation surface). The one blocking read — ``secrets.yaml`` for the
-  match-corpus scrub — runs in the executor via the command wrapper's async
-  pre-step (:func:`_search_prep`), never on the event loop.
+  cache-invalidation surface). The blocking ``secrets.yaml`` read, for the
+  match-corpus scrub and the scrub of emitted options, runs in the executor via
+  the command wrapper's async pre-steps (:func:`_search_prep`,
+  :func:`_helpers_list_prep`, :func:`_config_entries_prep`), never on the event
+  loop; the first two also ask Core's loader for the helper flows when flow
+  helpers are in scope.
 
 Module layout. This package's ``__init__`` holds the registration seam
 (``async_register_commands``, ``_command_specs`` and ``_build_handler``). The command
 code lives in the submodules:
 
 * ``constants`` and ``schemas``: the wire contract, capability list and request schemas.
-* ``registry``, ``secrets`` and ``assist``: shared registry, secret-scrub and Assist exposure helpers.
+* ``registry``, ``secrets``, ``assist`` and ``flow_domains``: shared registry, secret-scrub, Assist exposure and flow-helper domain helpers.
 * ``search``, ``search_config``, ``search_score`` and ``visibility``: ``ha_mcp_tools/search``.
 * ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries`` and ``dashboards``: the read commands.
 * ``system``: ``info``, ``system_snapshot``, ``backup_prep``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
@@ -299,7 +304,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .. import helper_collections
+from .. import card_definitions, core_contract, helper_collections
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
 from .call_service import _call_service_prep, _do_call_service
 from .config_entries import _config_entries_prep, _do_config_entries
@@ -464,6 +469,8 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         ),
         (_template_diagnose_schema(), _do_template_diagnose, _template_diagnose_prep),
         *helper_collections.command_specs(vol, er),
+        *core_contract.command_specs(vol),
+        *card_definitions.command_specs(vol),
         *_oauth_callback_specs(),
     ]
 

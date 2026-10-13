@@ -21,15 +21,21 @@ point of the test, and the reason it restores the config and restarts Core in a
 ``finally`` no matter how it ends.
 """
 
+import asyncio
 import logging
 import shlex
 import time
+import urllib.request
 from base64 import b64encode
 from posixpath import dirname
 
 import pytest
-from haos_runtime import _wait_http_ok, ssh_exec
+from haos_runtime import HA_MCP_SERVER_WEBHOOK_ID, _wait_http_ok, ssh_exec
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
+
+from ..utilities.assertions import MCPAssertions
 from ..utilities.logger_seed import with_probe_logger_config
 
 logger = logging.getLogger(__name__)
@@ -214,6 +220,36 @@ def _restart_core() -> bool:
     return True
 
 
+def _restart_core_via_ha_restart(base_url: str, ready_url: str) -> None:
+    """Restart Core through the embedded server's own ``ha_restart`` (#2691).
+
+    On HAOS the restart service returns only once Supervisor has killed Core,
+    so an embedded server that awaited it never sent its reply. The call must
+    answer, then Core must actually go down (the old process answers readiness
+    until it stops).
+    """
+
+    async def _call() -> None:
+        transport = StreamableHttpTransport(
+            url=f"{base_url}/api/webhook/{HA_MCP_SERVER_WEBHOOK_ID}"
+        )
+        async with Client(transport, timeout=60) as client:
+            await MCPAssertions(client).call_tool_success(
+                "ha_restart", {"confirm": True}
+            )
+
+    asyncio.run(_call())
+    deadline = time.monotonic() + 120.0
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(ready_url, timeout=5.0):
+                pass
+        except OSError:
+            return
+        time.sleep(0.5)
+    raise AssertionError("ha_restart replied but Core never went down")
+
+
 def _py_spy_dump() -> str:
     """Best-effort in-VM py-spy dump of the frozen Core process.
 
@@ -282,7 +318,7 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
         )
 
         logger.info("Restarting Core with the re-entrant log probe installed")
-        assert _restart_core(), "could not restart Core to load the probe"
+        _restart_core_via_ha_restart(base_url, ready_url)
 
         _require_ha_responsive(
             ready_url,

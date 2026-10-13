@@ -1,13 +1,13 @@
 # AGENTS.md
 
-Canonical agent guidance for the Home Assistant MCP Server repository.
+Canonical agent guidance for HA-MCP.
 
 ## Instruction structure
 
 - `AGENTS.md` is the canonical source. `CLAUDE.md` is a symlink to it; edit `AGENTS.md` only.
 - This root file owns repository-wide behavior, permissions, scope, and testing policy. Linked documents own topic-specific detail.
 - Before working, read every applicable `AGENTS.md` from the repository root through the target directory; narrower files supplement every broader ancestor.
-- Follow ordinary Markdown links when the task enters their scope. Do not replace them with `@imports`: imports load every linked byte at startup and defeat progressive disclosure.
+- Read linked guidance when relevant; use Markdown links rather than startup-loading `@imports`.
 - If linked guidance conflicts with this file's behavioral rules, this file controls. Repair the conflicting duplicate rather than choosing silently.
 
 ## Repository Structure
@@ -57,8 +57,8 @@ Keep this file short enough to load on every task:
 - Keep only broadly applicable, high-value behavior in the root. Put coding conventions and subsystem procedures in their closest durable owner.
 - Retain a short section here for each major topic and state when and why to read its linked document.
 - Use ordinary Markdown links, not imports. A link must name the document's scope; avoid blind “see also” references.
-- Give each rule one canonical owner. Link instead of copying exact lists, commands, examples, or policy prose into multiple files.
-- Keep volatile counts, file inventories, workflow catalogs, historical incidents, and tutorials out of startup context; place them beside the code or process they describe.
+- Give each rule one canonical owner; link instead of copying its details.
+- Keep counts, inventories, workflow catalogs, incidents and tutorials beside their code or process, outside startup guidance.
 - Prefer short directives with concrete triggers. Explain rationale where a future editor might otherwise “simplify” a load-bearing rule.
 - Use descriptive headings, fenced code blocks, and CommonMark blank lines around headings and lists. Do not use decorative formatting as structure.
 - When guidance changes, check `AGENTS.md`, scoped `AGENTS.md` files, the style guide, contributing docs, tests, and inline references for drift.
@@ -67,7 +67,7 @@ Keep this file short enough to load on every task:
 
 Do not create, edit, label, close, or comment on an issue or pull request without user authorization for that write. Draft the exact proposed text first when approval has not already been given.
 
-Every bug or agent-behavior issue filed here must contain the report `ha_report_issue` generates (its `issue_body`, unchanged), or a `### Why there is no ha_report_issue report` section saying why there is none (even "N/A"); feature requests should too. `issue-intake.yml` labels a new one that has neither `missing bug report output`, and `report-gate.yml` closes it after 24 hours unless one is added or a maintainer removes the label.
+Bug and agent-behavior issues require the unchanged `ha_report_issue` body or a `### Why there is no ha_report_issue report` explanation; feature requests should too. The [report gate](docs/agents/issue-intake.md#report-gate) labels missing reports and closes them after 24 hours unless corrected or waived by a maintainer.
 
 The detailed label taxonomy, issue-analysis query, bot behavior, review commands, CI loop, and release automation live in the [GitHub workflow reference](docs/agents/github-workflow.md).
 
@@ -86,6 +86,7 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 - Never commit directly to `master` or `main` except for a documentation-only adjustment.
 - Never push or open a pull request without explicit user permission.
 - Open every pull request as a draft. Mark it ready only when explicitly asked, after refreshing its description and verifying required CI and reviews.
+- A maintainer slash command authorizes the [slash lifecycle](docs/agents/slash-agent.md) through readiness, including review replies and thread resolution. It never authorizes merging or requesting reviewers.
 - Never merge, close, delete branches, publish, release, or otherwise finalize work without explicit approval for that exact action.
 - Preserve the pull-request template headings and generated review sections.
 - Make routine, reversible implementation decisions autonomously. Ask before a choice materially changes scope, public behavior, architecture, or review surface; do not create competing pull requests without approval.
@@ -96,14 +97,15 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 
 Testing behavior belongs in this root because it applies to every code change:
 
+- Complete applicable live testing before merge per the [live-review procedure](docs/agents/github-workflow.md#live-testing-in-pr-reviews); static review and CI cannot replace it.
 - Bug fixes require a failing regression test first, then the minimal fix, unless the only possible test would restate a freely chosen configuration value (rule 4 in [`tests/AGENTS.md`](tests/AGENTS.md)).
 - New MCP tools need E2E coverage. Any existing tool without tests gains E2E coverage even when it is not otherwise part of the current pull request. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
-- Refactors with strong existing coverage, documentation-only changes, minor parameters on well-tested tools, and utilities whose behaviour an existing test already asserts may not need a new test.
-- Run the smallest relevant tests after changes. Read [`tests/AGENTS.md`](tests/AGENTS.md) for test design rules, lanes, markers, polling, and test patterns, and the [development reference](docs/agents/development.md#test-commands) for exact commands.
-- Run relevant E2E tests without waiting to be asked. Let pytest report unavailable prerequisites or skips rather than assuming them.
-- Run the full E2E suite only before claiming the full suite passes; a focused file is partial evidence and must be described that way.
-- Fix unrelated test failures encountered during CI, even when time-consuming, subject to the Boy Scout scope rules below.
-- Match verification to risk. Documentation-only work needs structural checks such as links, generated-file drift, size, and workflow syntax, not unrelated application E2E.
+- Refactors with strong existing coverage, documentation-only changes, minor parameters on well-tested tools, and utilities whose behaviour an existing test already asserts may not need a new test; assess live testing separately.
+- Run the smallest relevant tests after changes; follow the [test rules](tests/AGENTS.md) and [commands](docs/agents/development.md#test-commands).
+- Before E2E, ask the user to choose local execution or a GitHub runner on a fork branch, unless already chosen; check resources there. Establish missing prerequisites from pytest's skip reasons, not by assumption.
+- Claim full-suite success only after running it; a focused file is partial evidence.
+- Fix unrelated CI test failures, even when time-consuming, under the Boy Scout scope rules below.
+- Match verification to risk: documentation-only work needs structural checks (links, generated-file drift, size, workflow syntax), not unrelated application E2E.
 - Never state that tests, lint, builds, CI, or review are clean without fresh evidence from the relevant command or current pull-request head.
 
 ### Boy Scout Rule — Handling Discovered Improvements
@@ -147,7 +149,9 @@ The minimal setup is `uv sync --group dev`; run stdio with `uv run ha-mcp` and H
 
 ## Architecture
 
-Tools are lazy-discovered from `tools_*.py`; shared business logic belongs in service modules; WebSocket-backed operations verify state changes; and tools wait for logical completion when possible. Read the [architecture map](docs/agents/development.md#architecture) and the [code review style guide](.gemini/styleguide.md) before structural code changes.
+Lazy-discover tools from `tools_*.py`; put shared logic in service modules, verify writes and wait for completion. Before structural changes, read the [architecture map](docs/agents/development.md#architecture) and [style guide](.gemini/styleguide.md).
+
+For read/write tools, follow [native Core contracts](docs/agents/native-core-contracts.md); preserve safety gates and label unavailable validation.
 
 ## Code Conventions
 
@@ -171,7 +175,7 @@ Tools wait for completion when a reliable signal exists; query and fire-and-forg
 
 ## Custom Component
 
-Before changing `custom_components/ha_mcp_tools/` or a server dependency on it, read the [custom-component guide](docs/agents/custom-component.md). It owns the paired release version cycle, minimum-version gate, backward compatibility, two-entry command surface, and post-merge live-test requirement.
+Before changing `custom_components/ha_mcp_tools/` or a server dependency on it, read the [custom-component guide](docs/agents/custom-component.md). It owns the paired release version cycle, minimum-version gate, backward compatibility, two-entry command surface, and pre-merge live-test requirement.
 Functionality used by the embedded server must be registered on the shared
 command surface available from the server entry; never leave it on the tools
 entry alone. Only the privileged filesystem and YAML services remain

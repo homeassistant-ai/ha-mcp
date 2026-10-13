@@ -19,11 +19,11 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
-from ..config_entry_flow import FLOW_HELPER_TYPES, config_entry_of_domain
+from ..config_entry_flow import config_entry_of_domain
 from ..config_entry_flow_introspect import fetch_helper_flow_info, menu_choices
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .listing import listed_items
-from .schemas import SIMPLE_HELPER_SCHEMAS
+from .schemas import SIMPLE_HELPER_SCHEMAS, SIMPLE_HELPER_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -69,18 +69,18 @@ def compact_field(field: dict[str, Any]) -> dict[str, Any]:
         kind, cfg = next(iter(field["selector"].items()))
         cfg = cfg if isinstance(cfg, dict) else {}
         out["type"] = kind
-        if "options" in cfg:
+        if isinstance(cfg.get("options"), list | tuple):
             out["options"] = _option_values(cfg["options"])
         out.update(
             {k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)}
         )
-    elif field.get("type") == "expandable":
+    elif field.get("type") in {"expandable", "grid"}:
         out["type"] = "section"
         out["fields"] = [compact_field(f) for f in field.get("schema", [])]
     else:
         if "type" in field:
             out["type"] = field["type"]
-        if "options" in field:
+        if isinstance(field.get("options"), list | tuple):
             out["options"] = _option_values(field["options"])
         out.update({k: field[k] for k in _SERIALIZED_KEYS if k in field})
     if field.get("default") is not None:
@@ -373,7 +373,8 @@ async def describe_helper(
     flow helper (read via its options flow), or the storage id / entity_id
     for a storage helper.
     """
-    if helper_type in FLOW_HELPER_TYPES:
+    # ha_config_list_helpers checked the type: not storage means a helper flow.
+    if helper_type not in SIMPLE_HELPER_TYPES:
         described = await _describe_flow(client, helper_type, menu_choice, helper_id)
     else:
         if menu_choice:
