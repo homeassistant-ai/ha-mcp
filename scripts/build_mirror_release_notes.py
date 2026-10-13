@@ -29,6 +29,10 @@ _STABLE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 _NOISE_SUBJECT_PREFIXES = ("chore(addon): publish dev addon version",)
 
 _CHANGELOG_URL = "https://github.com/homeassistant-ai/ha-mcp/releases"
+_UPGRADE_GUIDE_URL = (
+    "https://github.com/homeassistant-ai/ha-mcp/blob/master/"
+    "docs/in-process-server.md#upgrading-from-component-2x"
+)
 
 _COMPONENT_PATH = "custom_components/ha_mcp_tools/"
 
@@ -91,6 +95,13 @@ def format_release_notes(
         "",
         f"Installs the ha-mcp {version} server released with it; restart Home "
         "Assistant after updating to run both.",
+        "",
+        "**Upgrading from component 2.x:** The Release channel, Automatic server "
+        "updates and server update entity are removed; update the component "
+        "through HACS or manually. In secret-URL "
+        "(`none`) mode, existing OAuth clients may need their callback added "
+        "to the allowlist before they can sign in again. "
+        f"[Upgrade guide]({_UPGRADE_GUIDE_URL}).",
         "",
     ]
     if prev_tag is None:
