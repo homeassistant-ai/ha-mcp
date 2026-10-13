@@ -38,4 +38,4 @@ jobs:
       # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
       - name: Remove vendored test fixtures
         run: rm -rf tests/initial_test_state
-      - uses: home-assistant/actions/hassfest@06749dd8c0b54f350bc69c8752456cee498808a3 # master
+      - uses: home-assistant/actions/hassfest@50baf3a307f87100cf550d4ae127746595030d5d # master
