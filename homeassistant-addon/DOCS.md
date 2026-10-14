@@ -353,6 +353,18 @@ When disabled, both the REST and WebSocket clients connect with hostname checkin
 
 Requires app restart to take effect.
 
+### custom_instructions (Advanced)
+
+**Default:** empty
+
+Text that is added to the MCP server instructions, which every AI assistant receives when it connects. Use it for guidance that should reach all your clients at once instead of configuring each one separately, for example:
+
+> Household notes are kept in `/share/llm/home.md`. Read them before changing anything in Home Assistant, and add lasting findings there.
+
+When empty, nothing is added. Only you can set it — through this option or the web settings UI — so it carries the same trust as your own client instructions or memory files. Some MCP clients do not pass server instructions to the model, so check that yours does.
+
+Requires app restart to take effect; clients see the new text after they reconnect.
+
 ### enable_tool_search
 
 **Default:** `false`

@@ -20,6 +20,13 @@ configuration:
       Assistant ehtiyat nüsxəsini təklif etməyin nə qədər güclü şəkildə bildirildiyi.
       O, yalnız bu ipucunu dəyişdirir; avtomatik redaktə ehtiyat nüsxələrinin öz parametrləri
       var.
+  custom_instructions:
+    name: Custom server instructions
+    description: Text sent to every AI assistant that connects, as part of the MCP
+      server instructions — for example where household notes are kept and when to
+      read or update them. Use it for guidance that should reach all your clients
+      at once. Leave empty to add nothing. Requires restart; clients see the change
+      when they reconnect.
   enable_tool_search:
     name: Alət axtarışını aktivləşdir
     description: 'Tam alət kataloqunu axtarış əsasında aşkarlama ilə əvəz edin. Boşdayanma

@@ -3,9 +3,12 @@
 Holds the search tool description, the BM25 keyword boosts, the lite
 docstring variants with their destinations, and the skill keyword block.
 ``HomeAssistantSmartMCPServer`` exposes each one as a class attribute.
+Also composes the initialize instructions from these sections.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 # Description for the unified search tool
 SEARCH_TOOL_DESCRIPTION = (
@@ -562,3 +565,21 @@ ISSUE_FILING_INSTRUCTIONS = (
     "in the issue unchanged. A bug report filed without it is closed "
     "automatically after 24 hours."
 )
+
+
+def compose_instructions(skills: str | None, settings: Any) -> str:
+    """The server instructions: skills, Read Only Mode, issue filing, owner text."""
+    sections = [skills] if skills else []
+    # Surface Read Only Mode in the startup instructions so clients
+    # that show server instructions warn the model up front. Startup
+    # state only — live flips are covered by the structured
+    # READ_ONLY_MODE call errors and the ha_get_overview field.
+    if settings.read_only_mode:
+        sections.append(READ_ONLY_INSTRUCTIONS)
+    sections.append(ISSUE_FILING_INSTRUCTIONS)
+    custom = settings.custom_instructions
+    if isinstance(custom, str) and custom.strip():
+        sections.append(
+            f"## Instructions from this installation's owner\n{custom.strip()}"
+        )
+    return "\n\n".join(sections)

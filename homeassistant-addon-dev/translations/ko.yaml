@@ -15,6 +15,13 @@ configuration:
     name: 백업 힌트 수준
     description: 위험한 변경 전에 전체 Home Assistant 백업을 제안하도록 AI 어시스턴트에 지시하는 강도입니다. 이 힌트만
       변경하며 자동 편집 백업에는 자체 설정이 있습니다.
+  custom_instructions:
+    name: Custom server instructions
+    description: Text sent to every AI assistant that connects, as part of the MCP
+      server instructions — for example where household notes are kept and when to
+      read or update them. Use it for guidance that should reach all your clients
+      at once. Leave empty to add nothing. Requires restart; clients see the change
+      when they reconnect.
   enable_beta_features:
     name: 베타 기능 사용(마스터)
     description: ⚠ 위험 — 이 도구들은 Home Assistant 설치본을 영구적으로 손상시킬 수 있습니다. YAML 설정과 파일

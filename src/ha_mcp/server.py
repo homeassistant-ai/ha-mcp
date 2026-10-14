@@ -21,14 +21,13 @@ from .errors import ErrorCode, create_error_response
 from .http_transport import HttpTransportFastMCP as FastMCP
 from .server_lifespan import server_lifespan
 from .server_tool_text import (
-    ISSUE_FILING_INSTRUCTIONS,
     LITE_DOCSTRING_DESTINATIONS,
     LITE_DOCSTRINGS,
-    READ_ONLY_INSTRUCTIONS,
     SEARCH_KEYWORDS,
     SEARCH_TOOL_DESCRIPTION,
     SKILL_USE_BEFORE_KEYWORDS,
     TOOL_DISCOVERY_INSTRUCTIONS,
+    compose_instructions,
 )
 from .tools.helpers import raise_tool_error
 from .tools.tool_hints import read_only_hints
@@ -346,19 +345,7 @@ class HomeAssistantSmartMCPServer:
 
     def _build_instructions(self) -> str:
         """Compose the server instructions sent in the MCP initialize response."""
-        sections: list[str] = []
-        skills = self._build_skills_instructions()
-        if skills:
-            sections.append(skills)
-
-        # Surface Read Only Mode in the startup instructions so clients
-        # that show server instructions warn the model up front. Startup
-        # state only — live flips are covered by the structured
-        # READ_ONLY_MODE call errors and the ha_get_overview field.
-        if self.settings.read_only_mode:
-            sections.append(READ_ONLY_INSTRUCTIONS)
-        sections.append(ISSUE_FILING_INSTRUCTIONS)
-        return "\n\n".join(sections)
+        return compose_instructions(self._build_skills_instructions(), self.settings)
 
     def _build_skills_instructions(self) -> str | None:
         """Build server instructions from bundled skill frontmatter.

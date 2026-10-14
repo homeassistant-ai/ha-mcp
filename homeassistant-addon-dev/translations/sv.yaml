@@ -19,6 +19,13 @@ configuration:
     description: Hur starkt AI-assistenter uppmanas att föreslå en fullständig Home
       Assistant-säkerhetskopia före riskabla ändringar. Det ändrar bara detta tips;
       automatiska redigeringssäkerhetskopior har sin egen inställning.
+  custom_instructions:
+    name: Custom server instructions
+    description: Text sent to every AI assistant that connects, as part of the MCP
+      server instructions — for example where household notes are kept and when to
+      read or update them. Use it for guidance that should reach all your clients
+      at once. Leave empty to add nothing. Requires restart; clients see the change
+      when they reconnect.
   enable_beta_features:
     name: Aktivera beta-funktioner (huvud)
     description: ⚠ FARA — dessa verktyg kan PERMANENT SKADA din Home Assistant-installation.
