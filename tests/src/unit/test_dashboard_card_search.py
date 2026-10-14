@@ -649,11 +649,18 @@ class TestReviewedSearchEdges:
         assert "not searched" not in warning
 
     def test_button_card_styles_card_list_is_not_misshapen(self) -> None:
+        """Valid button-card ``styles.card`` CSS was flagged for repair (#2729).
+
+        The styles stay ordinary searchable text, with no misshapen-slot warning.
+        """
         card = {
             "type": "custom:button-card",
             "entity": "light.a",
             "styles": {"card": [{"height": "80px"}], "name": [{"color": "red"}]},
         }
-        result = self._search({"views": [{"cards": [card]}]}, query="light.a")
+        config = {"views": [{"cards": [card]}]}
+        result = self._search(config, query="light.a")
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].cards[0]"]
         assert "warnings" not in result
+        css = self._search(config, query="80px")
+        assert [m["jq_path"] for m in css["matches"]] == [".views[0].cards[0]"]
