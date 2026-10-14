@@ -25,6 +25,7 @@ def server():
         settings.mcp_server_version = "0.0.1"
         settings.enabled_tool_modules = "all"
         settings.enable_dashboard_partial_tools = True
+        settings.custom_instructions = ""
 
         # Patch out tool registration and skills registration
         with (

@@ -3,7 +3,8 @@
 Sections, in order: the bundled best-practice skills with how to read them
 (plus the tool-search note when that mode is on), the Read Only Mode
 warning, the issue-filing rule, and the installation owner's
-``custom_instructions``. The texts themselves live in ``server_tool_text``.
+``custom_instructions``. The skills header and access fallbacks are
+defined here; the notices come from ``server_tool_text``.
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ if TYPE_CHECKING:
     from .config_settings import Settings
 
 logger = logging.getLogger(__name__)
+
+OWNER_HEADING = "## Instructions from this installation's owner"
 
 _SKILLS_HEADER = (
     "IMPORTANT: This server provides best-practice skills that MUST "
@@ -159,9 +162,9 @@ def compose_instructions(skills: str | None, settings: Settings) -> str:
     if settings.read_only_mode:
         sections.append(READ_ONLY_INSTRUCTIONS)
     sections.append(ISSUE_FILING_INSTRUCTIONS)
-    custom = settings.custom_instructions
-    if isinstance(custom, str) and custom.strip():
-        sections.append(
-            f"## Instructions from this installation's owner\n{custom.strip()}"
-        )
+    custom = settings.custom_instructions.strip()
+    if custom:
+        # Length only: the text itself is the owner's and may be personal.
+        logger.info("custom_instructions active (%d characters)", len(custom))
+        sections.append(f"{OWNER_HEADING}\n{custom}")
     return "\n\n".join(sections)

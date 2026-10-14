@@ -290,6 +290,7 @@ class Settings(BaseSettings):
             section="tools_surface",
             app=_ALL_FLAVORS,
             restart_required=True,
+            multiline=True,
         ),
     ] = Field("", alias="HAMCP_CUSTOM_INSTRUCTIONS")
 

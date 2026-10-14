@@ -17,9 +17,10 @@ configuration:
     name: Custom server instructions
     description: Text sent to every AI assistant that connects, as part of the MCP
       server instructions — for example where household notes are kept and when to
-      read or update them. Use it for guidance that should reach all your clients
-      at once. Leave empty to add nothing. Requires restart; clients see the change
-      when they reconnect.
+      read or update them. Also part of the prompt of Home Assistant conversation
+      agents (Assist) that use this toolset. Use it for guidance that should reach
+      all your clients at once; keep it short and free of secrets. Leave empty to
+      add nothing. Requires restart; clients see the change when they reconnect.
   enable_beta_features:
     name: 啟用測試版功能 (master)
     description: ⚠ 危險 —— 這些工具可能會永久損壞您的 Home Assistant 安裝。它們會寫入您的 YAML 設定、檔案系統、安裝自訂元件、執行任意沙盒

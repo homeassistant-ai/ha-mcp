@@ -88,7 +88,7 @@ def _advanced_field_row(
         _ADVANCED_SETTINGS_SENTINELS,
         OAUTH_MODE_TOKEN,
     )
-    from ..config_registry import ADVANCED_RESTART_REQUIRED
+    from ..config_registry import ADVANCED_MULTILINE, ADVANCED_RESTART_REQUIRED
 
     origin = _origin_for_advanced_field(env_name, overrides=overrides)
     value: Any = getattr(settings, fname, None)
@@ -122,6 +122,8 @@ def _advanced_field_row(
     choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
     if choices is not None:
         row["choices"] = list(choices)
+    if fname in ADVANCED_MULTILINE:
+        row["multiline"] = True
     return row
 
 

@@ -1,9 +1,9 @@
 """Static text the server publishes about its tools.
 
 Holds the search tool description, the BM25 keyword boosts, the lite
-docstring variants with their destinations, the skill keyword block, the
-skill tool's name and the instruction sections.
-``HomeAssistantSmartMCPServer`` exposes each one as a class attribute.
+docstring variants with their destinations and the skill keyword block,
+which ``HomeAssistantSmartMCPServer`` exposes as class attributes, plus the
+skill tool's name and the instruction notices ``server_instructions`` uses.
 """
 
 from __future__ import annotations

@@ -164,7 +164,8 @@ def _apply_policy_guard_row_locks(fname: str, row: dict[str, Any]) -> None:
     see ``editable: true`` on rows whose set/reset the guards refuse:
     ``enable_tool_security_policies`` while access is off, and
     ``dev_tools_security_policy_access`` plus
-    ``enable_security_policy_tool`` always (web UI / env var only).
+    ``enable_security_policy_tool`` and ``custom_instructions`` always
+    (web UI / env var only).
     A row that is ALREADY non-editable (env-pinned) keeps its plain env
     story: the pin refuses the write before these guards would, and
     stamping a policy reason there would misdirect the fix toward the
@@ -181,7 +182,7 @@ def _apply_policy_guard_row_locks(fname: str, row: dict[str, Any]) -> None:
             row["editable"] = False
             row["locked_reason"] = "web_ui_or_env_only"
         row["value"] = _security_policy_access_enabled()
-    elif fname == "enable_security_policy_tool":
+    elif fname in _HUMAN_ONLY_SETTINGS:
         if row["editable"]:
             row["editable"] = False
             row["locked_reason"] = "web_ui_or_env_only"
@@ -215,48 +216,46 @@ def _require_security_policy_access(operation: str) -> None:
     )
 
 
+# Settings dev tools may never write, in either direction, with the refusal
+# message and where a human changes them instead.
+_HUMAN_ONLY_SETTINGS: dict[str, tuple[str, str]] = {
+    "enable_security_policy_tool": (
+        "it registers ha_manage_security_policy, which can rewrite the tool "
+        "security policies gating the agent.",
+        "Change it in the web settings UI (Tool Security Policies tab) or via "
+        "the ENABLE_SECURITY_POLICY_TOOL env var.",
+    ),
+    "dev_tools_security_policy_access": (
+        "it is the toggle governing their own access to tool security policies.",
+        "Change it in the web settings UI (Server Settings tab, Developer "
+        "section) or via the HAMCP_DEV_SECURITY_POLICY_ACCESS env var.",
+    ),
+    "custom_instructions": (
+        "its text is sent to every connected agent as server instructions.",
+        "Change it in the web settings UI (Server Settings tab, Advanced) or "
+        "via the HAMCP_CUSTOM_INSTRUCTIONS env var.",
+    ),
+}
+
+
 def _guard_security_policy_setting(setting: str) -> None:
     """Gate set/reset of the settings that define the dev tools' leash.
 
-    ``dev_tools_security_policy_access`` is refused unconditionally — even
-    with access ON — so the agent can neither grant itself policy access
-    nor revoke it; that toggle belongs to the web settings UI and the env
-    var alone. ``enable_security_policy_tool`` gets the same unconditional
-    refusal: it registers ha_manage_security_policy, which can rewrite the
-    policies gating the agent, and its toggle belongs to the Tool Security
-    Policies tab (issue #2148) — a dev-tools write would reach the same
-    end state as unbuckling the leash, one restart later.
-    ``enable_tool_security_policies`` is the whole gating engine's master
-    switch, so writing it needs access.
+    ``_HUMAN_ONLY_SETTINGS`` are refused even with access ON: the agent may
+    neither grant nor revoke its own policy access, nor register
+    ha_manage_security_policy (#2148; the same end state as unbuckling the
+    leash, one restart later), nor rewrite the text steering every agent.
+    ``enable_tool_security_policies`` is the gating engine's master switch,
+    so writing it needs access.
     """
-    if setting == "enable_security_policy_tool":
+    if setting in _HUMAN_ONLY_SETTINGS:
+        reason, where = _HUMAN_ONLY_SETTINGS[setting]
         raise_tool_error(
             create_error_response(
                 ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
-                "'enable_security_policy_tool' cannot be changed by dev "
-                "tools: it registers ha_manage_security_policy, which can "
-                "rewrite the tool security policies gating the agent.",
+                f"'{setting}' cannot be changed by dev tools: {reason}",
                 context={"setting": setting},
-                suggestions=[
-                    "Change it in the web settings UI (Tool Security "
-                    "Policies tab) or via the ENABLE_SECURITY_POLICY_TOOL "
-                    "env var.",
-                ],
-            )
-        )
-    if setting == "dev_tools_security_policy_access":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
-                "'dev_tools_security_policy_access' cannot be changed by dev "
-                "tools: it is the toggle governing their own access to tool "
-                "security policies.",
-                context={"setting": setting},
-                suggestions=[
-                    "Change it in the web settings UI (Server Settings tab, "
-                    "Developer section) or via the "
-                    "HAMCP_DEV_SECURITY_POLICY_ACCESS env var.",
-                ],
+                suggestions=[where],
             )
         )
     if setting == "enable_tool_security_policies":

@@ -5,14 +5,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ha_mcp.config import Settings
 from ha_mcp.server_instructions import (
     build_skill_block,
     build_skills_instructions,
     compose_instructions,
     skill_tool_hidden,
 )
-from ha_mcp.server_tool_text import SKILL_TOOL_NAME
+from ha_mcp.server_tool_text import ISSUE_FILING_INSTRUCTIONS, SKILL_TOOL_NAME
 
 
 @pytest.fixture
@@ -148,40 +147,52 @@ class TestCustomInstructions:
     TEXT = "Household notes are in /share/llm/home.md; read them before changes."
 
     @pytest.mark.parametrize("value", ["", "   \n  "])
-    def test_an_unset_setting_adds_nothing(
+    def test_an_unset_setting_adds_nothing_after_the_last_notice(
         self, settings: MagicMock, value: str
     ) -> None:
-        baseline = compose_instructions("SKILLS", settings)
         settings.custom_instructions = value
-        assert compose_instructions("SKILLS", settings) == baseline
+        assert compose_instructions("SKILLS", settings).endswith(
+            ISSUE_FILING_INSTRUCTIONS
+        )
 
-    def test_every_client_receives_the_owners_text(self, settings: MagicMock) -> None:
+    def test_every_client_receives_the_owners_text_under_its_heading(
+        self, settings: MagicMock
+    ) -> None:
         settings.custom_instructions = f"  {self.TEXT}\n"
         instructions = compose_instructions("SKILLS", settings)
-        assert instructions.endswith(self.TEXT)
-        assert "## Filing ha-mcp issues" in instructions
+        assert instructions.endswith(
+            f"{ISSUE_FILING_INSTRUCTIONS}\n\n"
+            f"## Instructions from this installation's owner\n{self.TEXT}"
+        )
 
-    def test_the_setting_is_read_from_its_environment_variable(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_line_breaks_in_the_owners_text_reach_the_agent(
+        self, settings: MagicMock
     ) -> None:
-        monkeypatch.setenv("HAMCP_CUSTOM_INSTRUCTIONS", self.TEXT)
-        assert Settings().custom_instructions == self.TEXT
+        settings.custom_instructions = "First rule.\nSecond rule."
+        assert compose_instructions(None, settings).endswith(
+            "First rule.\nSecond rule."
+        )
 
 
-def test_the_server_sends_the_composed_instructions(
-    settings: MagicMock, tmp_path: Path
-) -> None:
-    """The server's initialize instructions are this module's composition."""
+def test_the_server_starts_with_the_composed_instructions(tmp_path: Path) -> None:
+    """A regression that drops ``instructions=`` from FastMCP is caught here."""
     from ha_mcp.server import HomeAssistantSmartMCPServer
 
     _write_skill(tmp_path)
-    settings.custom_instructions = "owner text"
-    server = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
-    server.settings = settings
     with (
-        patch.object(server, "_get_skills_dir", return_value=tmp_path),
+        patch("ha_mcp.server.get_global_settings") as get_settings,
+        patch("ha_mcp.server.FastMCP") as fastmcp,
         patch("ha_mcp.server.skill_tool_hidden", return_value=False),
+        patch.object(
+            HomeAssistantSmartMCPServer, "_get_skills_dir", return_value=tmp_path
+        ),
+        patch.object(HomeAssistantSmartMCPServer, "_initialize_server"),
     ):
-        instructions = server._build_instructions()
+        settings = get_settings.return_value
+        settings.read_only_mode = False
+        settings.enable_tool_search = False
+        settings.custom_instructions = "owner text"
+        HomeAssistantSmartMCPServer()
+    instructions = fastmcp.call_args.kwargs["instructions"]
     assert "### Skill: my-skill" in instructions
     assert instructions.endswith("owner text")
