@@ -20,7 +20,7 @@ from .server_tool_text import (
     TOOL_DISCOVERY_INSTRUCTIONS,
 )
 from .transforms import DEFAULT_PINNED_TOOLS
-from .utils.skill_loader import parse_skill_frontmatter
+from .utils.skill_loader import list_skills
 
 if TYPE_CHECKING:
     from .config_settings import Settings
@@ -79,7 +79,7 @@ def skill_tool_hidden(settings: Settings) -> bool:
         from .settings_ui._persistence import effective_tool_config
         from .settings_ui._tools_meta import effective_mandatory_tools
 
-        states = effective_tool_config().get("tools", {})
+        states = effective_tool_config(settings).get("tools", {})
         return states.get(
             SKILL_TOOL_NAME
         ) == "disabled" and SKILL_TOOL_NAME not in effective_mandatory_tools(settings)
@@ -88,61 +88,32 @@ def skill_tool_hidden(settings: Settings) -> bool:
         return False
 
 
-def build_skill_block(skill_name: str, main_file: Path) -> str | None:
-    """Build an instruction block for a single skill.
-
-    Reads the description field from YAML frontmatter and includes it
-    verbatim. The description is designed for LLM consumption and
-    contains its own trigger conditions and symptom indicators.
-    """
-    frontmatter = parse_skill_frontmatter(main_file)
-    if not frontmatter:
-        return None
-
-    description = frontmatter["description"]
+def skill_block(skill_name: str, description: str) -> str:
+    """One skill's entry: its resource URI and its LLM-authored description."""
     uri = f"skill://{skill_name}/SKILL.md"
-
     return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
 
 
 def build_skills_instructions(
     skills_dir: Path | None, settings: Settings, tool_hidden: bool
 ) -> str | None:
-    """Build server instructions from bundled skill frontmatter.
+    """Build the skills section from each bundled SKILL.md's frontmatter.
 
-    Reads the description field from each SKILL.md's YAML frontmatter
-    and includes it as-is in the server instructions. The description
-    is authored for LLM consumption and should not be parsed or
-    restructured by code.
-
-    Returns None when no skills directory or no parseable skills are
-    present, leaving instructions unchanged from the default (None).
+    The description field is authored for LLM consumption and included
+    as-is, never parsed or restructured by code. Returns None when there is
+    no skills directory or no parseable skill; the instructions then start
+    with the notices.
     """
-    if not skills_dir:
-        return None
-
-    try:
-        entries = sorted(skills_dir.iterdir())
-    except OSError as e:
-        logger.warning("Could not read skills directory %s: %s", skills_dir, e)
-        return None
-
-    skill_blocks: list[str] = []
-    for skill_dir in entries:
-        main_file = skill_dir / "SKILL.md"
-        if not skill_dir.is_dir() or not main_file.exists():
-            continue
-
-        block = build_skill_block(skill_dir.name, main_file)
-        if block:
-            skill_blocks.append(block)
-
-    if not skill_blocks:
+    skills = list_skills(skills_dir) if skills_dir else []
+    if not skills:
         return None
 
     fallback = _LOCAL_SKILLS_FALLBACK if tool_hidden else _SKILL_TOOL_FALLBACK
     header = _SKILLS_HEADER.format(access_method=_RESOURCE_ACCESS + fallback)
-    instructions = header + "\n".join(skill_blocks)
+    instructions = header + "\n".join(
+        skill_block(name, frontmatter["description"])
+        for name, _dir, frontmatter in skills
+    )
 
     if settings.enable_tool_search:
         instructions += TOOL_DISCOVERY_INSTRUCTIONS.format(

@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ha_mcp.server_instructions import (
-    build_skill_block,
     build_skills_instructions,
     compose_instructions,
     skill_tool_hidden,
@@ -33,23 +32,6 @@ def _write_skill(skills_dir: Path, name: str = "my-skill") -> Path:
     return skill_md
 
 
-class TestSkillBlock:
-    def test_agents_see_each_skill_with_its_uri_and_description(
-        self, tmp_path: Path
-    ) -> None:
-        result = build_skill_block("my-skill", _write_skill(tmp_path))
-        assert result is not None
-        assert "### Skill: my-skill" in result
-        assert "skill://my-skill/SKILL.md" in result
-        assert "Best practices for my-skill tasks." in result
-
-    def test_a_skill_without_frontmatter_is_left_out(self, tmp_path: Path) -> None:
-        skill_md = tmp_path / "bad" / "SKILL.md"
-        skill_md.parent.mkdir()
-        skill_md.write_text("# No frontmatter\n")
-        assert build_skill_block("bad", skill_md) is None
-
-
 class TestSkillsSection:
     def test_no_skills_section_without_a_skills_directory(
         self, settings: MagicMock
@@ -67,7 +49,8 @@ class TestSkillsSection:
         assert result is not None
         assert "IMPORTANT" in result
         assert "resources/read" in result
-        assert "### Skill: my-skill" in result
+        assert "### Skill: my-skill (skill://my-skill/SKILL.md)" in result
+        assert "Best practices for my-skill tasks." in result
         assert f"call {SKILL_TOOL_NAME}()" in result
         # The pre-consolidation pair must no longer appear (#1134).
         assert "ha_list_resources" not in result
@@ -101,11 +84,19 @@ class TestSkillsSection:
             with patch(
                 "ha_mcp.settings_ui._persistence.effective_tool_config",
                 return_value={"tools": tools},
-            ):
+            ) as tool_config:
                 assert skill_tool_hidden(settings) is hidden
+            # The decision reads the settings it was given, not the global ones.
+            tool_config.assert_called_once_with(settings)
 
     @pytest.mark.parametrize(
-        "entry", ["empty", "file instead of a directory", "directory without SKILL.md"]
+        "entry",
+        [
+            "empty",
+            "file instead of a directory",
+            "directory without SKILL.md",
+            "SKILL.md without frontmatter",
+        ],
     )
     def test_no_skills_section_when_no_skill_is_readable(
         self, settings: MagicMock, tmp_path: Path, entry: str
@@ -114,6 +105,9 @@ class TestSkillsSection:
             (tmp_path / "not-a-dir.txt").write_text("just a file")
         elif entry == "directory without SKILL.md":
             (tmp_path / "no-skill-md").mkdir()
+        elif entry == "SKILL.md without frontmatter":
+            (tmp_path / "bad").mkdir()
+            (tmp_path / "bad" / "SKILL.md").write_text("# No frontmatter\n")
         assert build_skills_instructions(tmp_path, settings, tool_hidden=False) is None
 
 

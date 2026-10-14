@@ -8,10 +8,10 @@ skill tool's name and the instruction notices ``server_instructions`` uses.
 
 from __future__ import annotations
 
-# Name of the consolidated skill tool. Defined as a module
-# constant so settings UI, instructions, tests, and pinning all agree on
-# one canonical string. 18 chars — well under the 40-char cap that
-# Cloudflare's MCP portal enforces (#1121).
+# Name of the consolidated skill tool. Defined as a module constant so the
+# tool registration, the instructions, the mandatory-tool set, the default
+# pins and the tests agree on one canonical string. 18 chars — well under
+# the 40-char cap that Cloudflare's MCP portal enforces (#1121).
 SKILL_TOOL_NAME = "ha_get_skill_guide"
 
 # Description for the unified search tool

@@ -957,32 +957,6 @@ class HomeAssistantSmartMCPServer:
         else:
             logger.warning(message, *args)
 
-    def _list_bundled_skills(
-        self, skills_dir: Path
-    ) -> list[tuple[str, Path, dict[str, Any]]]:
-        """Return parsed (name, dir, frontmatter) triples for valid bundled skills.
-
-        Skips entries that aren't directories, lack ``SKILL.md``, or whose
-        frontmatter doesn't parse. Sorted by directory name for stable
-        ordering across clients.
-        """
-        try:
-            entries = sorted(skills_dir.iterdir())
-        except OSError as e:
-            logger.warning("Could not read skills directory %s: %s", skills_dir, e)
-            return []
-
-        skills: list[tuple[str, Path, dict[str, Any]]] = []
-        for skill_dir in entries:
-            main_file = skill_dir / "SKILL.md"
-            if not skill_dir.is_dir() or not main_file.exists():
-                continue
-            frontmatter = self._parse_skill_frontmatter(main_file)
-            if not frontmatter:
-                continue
-            skills.append((skill_dir.name, skill_dir, frontmatter))
-        return skills
-
     def _register_skill_guide_tool(self, skills_dir: Path | None) -> int:
         """Register the ``ha_get_skill_guide`` tool unconditionally.
 
