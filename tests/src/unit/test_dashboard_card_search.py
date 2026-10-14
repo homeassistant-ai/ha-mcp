@@ -647,3 +647,13 @@ class TestReviewedSearchEdges:
         [warning] = result["warnings"]
         assert ".views[0].badges[0].card" in warning
         assert "not searched" not in warning
+
+    def test_button_card_styles_card_list_is_not_misshapen(self) -> None:
+        card = {
+            "type": "custom:button-card",
+            "entity": "light.a",
+            "styles": {"card": [{"height": "80px"}], "name": [{"color": "red"}]},
+        }
+        result = self._search({"views": [{"cards": [card]}]}, query="light.a")
+        assert [m["jq_path"] for m in result["matches"]] == [".views[0].cards[0]"]
+        assert "warnings" not in result

@@ -245,6 +245,8 @@ def _entity_matches(pattern: str, candidate: object) -> bool:
 # ``conditions`` also carry ``type`` and would false-match as cards.
 _NESTED_CARDS_KEY = "cards"
 _NESTED_CARD_KEY = "card"
+# custom:button-card's ``styles.card`` is a list of CSS objects, not a card slot
+_STYLES_KEY = "styles"
 _NESTED_CUSTOM_FIELDS_KEY = "custom_fields"
 _NESTED_STATES_KEY = "states"
 # Keys holding non-card children (picture-elements ``elements``). Their text is
@@ -439,19 +441,24 @@ def _split_card_node(
         return
     for k, v in node.items():
         if isinstance(k, str):
-            _split_card_entry(k, v, path, out, depth + 1)
+            _split_card_entry(k, v, path, out, depth + 1, parent=key)
         else:
             _log_non_str_key("card", k, jq)
 
 
 def _split_card_entry(
-    key: str, value: Any, path: tuple[str, str], out: _CardSplit, depth: int
+    key: str,
+    value: Any,
+    path: tuple[str, str],
+    out: _CardSplit,
+    depth: int,
+    parent: str = "",
 ) -> None:
     """``_split_card_node`` for one ``key: value`` entry of a dict at ``path``."""
     child_jq, child_py = f"{path[0]}{_jq_key(key)}", f"{path[1]}{_py_key(key)}"
     slots = _card_slots(key, value, child_jq)
     if slots is None:
-        if _is_swapped_card_container(key, value):
+        if parent != _STYLES_KEY and _is_swapped_card_container(key, value):
             out.misshapen.append(child_jq)
         _split_card_node(value, (child_jq, child_py), key, out, depth)
         return
