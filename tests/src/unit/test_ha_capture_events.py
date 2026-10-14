@@ -192,8 +192,8 @@ class TestHaCaptureEvents:
         ["ha_mcp_approval_response", "HA_MCP_APPROVAL_RESPONSE"],
     )
     async def test_rejects_approval_response_event_without_connecting(
-        self, monkeypatch, event_type
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, event_type: str
+    ) -> None:
         queue = asyncio.Queue()
         tools, _websocket, _client = _make_tools(queue)
         get_websocket = AsyncMock()

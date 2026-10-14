@@ -5,11 +5,15 @@ import uuid
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client
+
 from ..utilities.assertions import MCPAssertions
 
 
 @pytest.mark.asyncio
-async def test_capture_events_returns_matching_event_and_stops(mcp_client):
+async def test_capture_events_returns_matching_event_and_stops(
+    mcp_client: Client,
+) -> None:
     """A bounded capture observes an event without publishing or retaining it."""
     suffix = uuid.uuid4().hex[:8]
     event_type = f"test_mcp_capture_{suffix}"
@@ -55,7 +59,9 @@ async def test_capture_events_returns_matching_event_and_stops(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_capture_events_rejects_sensitive_approval_event(mcp_client):
+async def test_capture_events_rejects_sensitive_approval_event(
+    mcp_client: Client,
+) -> None:
     """The event-capture API never exposes the approval PIN event."""
     async with MCPAssertions(mcp_client) as mcp:
         await mcp.call_tool_failure(
