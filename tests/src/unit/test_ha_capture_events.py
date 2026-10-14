@@ -67,7 +67,7 @@ class TestHaCaptureEvents:
         websocket.subscribe_command.assert_awaited_once_with(
             "subscribe_events",
             event_type="zha_event",
-            queue_maxsize=2,
+            queue_maxsize=1,
         )
         websocket.release_subscription.assert_awaited_once_with(17)
 
@@ -100,12 +100,45 @@ class TestHaCaptureEvents:
             AsyncMock(return_value=websocket),
         )
 
+        async def timeout_immediately(awaitable, timeout):
+            awaitable.close()
+            raise TimeoutError
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_events.asyncio.wait_for", timeout_immediately
+        )
+
         result = await tools.ha_capture_events(
             event_type="test_event", duration_seconds=1, max_events=5
         )
 
         assert result["events"] == []
         assert result["stop_reason"] == "time_limit"
+        websocket.release_subscription.assert_awaited_once_with(17)
+
+    @pytest.mark.asyncio
+    async def test_stops_before_captured_payload_exceeds_size_limit(self, monkeypatch):
+        queue = asyncio.Queue()
+        first_event = {"event_type": "test_event", "data": {"n": 1}}
+        queue.put_nowait({"event": first_event})
+        queue.put_nowait(
+            {"event": {"event_type": "test_event", "data": {"payload": "x" * 100}}}
+        )
+        tools, websocket, _client = _make_tools(queue)
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_events.get_websocket_client",
+            AsyncMock(return_value=websocket),
+        )
+        monkeypatch.setattr("ha_mcp.tools.tools_events.MAX_CAPTURED_EVENT_BYTES", 50)
+
+        result = await tools.ha_capture_events(
+            event_type="test_event", duration_seconds=10, max_events=5
+        )
+
+        assert result["events"] == [first_event]
+        assert result["events_seen"] == 2
+        assert result["events_omitted_due_to_size"] == 1
+        assert result["stop_reason"] == "response_size_limit"
         websocket.release_subscription.assert_awaited_once_with(17)
 
     @pytest.mark.asyncio

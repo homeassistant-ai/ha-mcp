@@ -1,6 +1,7 @@
 """Bounded, passive Home Assistant event capture tools."""
 
 import asyncio
+import json
 from typing import Annotated, Any
 
 from pydantic import Field
@@ -17,6 +18,9 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tool_hints import read_only_hints
+
+MAX_CAPTURED_EVENT_BYTES = 1024 * 1024
 
 
 def _validate_event_type(event_type: str) -> str:
@@ -49,7 +53,7 @@ class EventTools:
     @tool(
         name="ha_capture_events",
         tags={"System"},
-        annotations={"readOnlyHint": True, "openWorldHint": False},
+        annotations=read_only_hints("Capture Events", open_world=False),
     )
     @log_tool_usage
     async def ha_capture_events(
@@ -93,12 +97,13 @@ class EventTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Passively capture one event type for a bounded time and event count.
+        """Capture one Home Assistant event stream for short-term inspection.
 
-        The tool does not fire events or control entities. The subscription is
-        always released when the call completes or is cancelled. Captured event
-        payloads are returned only in this response and are not persisted.
-        Sensitive approval-response events are intentionally excluded.
+        Do not use this tool to publish events; use ``ha_call_event`` instead.
+        Use it to inspect events without controlling entities or persisting
+        payloads. Sensitive approval-response events are blocked, returned data
+        is capped at 1 MiB, and the subscription is released on completion or
+        cancellation.
         """
         event_type = _validate_event_type(event_type)
 
@@ -111,7 +116,7 @@ class EventTools:
             subscription_id, queue = await websocket.subscribe_command(
                 "subscribe_events",
                 event_type=event_type,
-                queue_maxsize=max_events,
+                queue_maxsize=1,
             )
         except Exception as exc:  # noqa: BLE001
             exception_to_structured_error(
@@ -130,7 +135,9 @@ class EventTools:
         started_at = loop.time()
         deadline = started_at + duration_seconds
         events: list[dict[str, Any]] = []
+        captured_event_bytes = 0
         events_seen = 0
+        events_omitted_due_to_size = 0
         stop_reason = "time_limit"
 
         try:
@@ -161,9 +168,20 @@ class EventTools:
                     )
                 ):
                     continue
+                serialized_event = json.dumps(
+                    event, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+                if (
+                    captured_event_bytes + len(serialized_event)
+                    > MAX_CAPTURED_EVENT_BYTES
+                ):
+                    events_omitted_due_to_size += 1
+                    stop_reason = "response_size_limit"
+                    break
+                captured_event_bytes += len(serialized_event)
                 events.append(event)
 
-            if events_seen >= max_events:
+            if events_seen >= max_events and stop_reason != "response_size_limit":
                 stop_reason = "event_limit"
 
             dropped_count = getattr(queue, "dropped_count", 0)
@@ -173,6 +191,7 @@ class EventTools:
                 "events": events,
                 "events_seen": events_seen,
                 "events_dropped": dropped_count,
+                "events_omitted_due_to_size": events_omitted_due_to_size,
                 "stop_reason": stop_reason,
                 "elapsed_seconds": round(loop.time() - started_at, 3),
             }
