@@ -1,8 +1,8 @@
 anyio>=4.10; python_version >= '3.14'
 anyio>=4.9; python_version < '3.14'
-httpx2>=2.5.0
+httpx2>=2.10.0
 jsonschema>=4.20.0
-mcp-types==2.2.0
+mcp-types==2.3.0
 opentelemetry-api>=1.28.0
 pydantic>=2.12.0
 pyjwt[crypto]>=2.10.1
