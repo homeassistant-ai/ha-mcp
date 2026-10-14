@@ -38,6 +38,14 @@ configuration:
       MCP-servern i din AI-klient så att den läser om verktygslistan. Enbart omstart
       av appen (tillägget) uppdaterar INTE en klients cachade verktygslista; detta
       gäller efter att du har ändrat någon inställning här.'
+  enable_home_context:
+    name: Enable home context
+    description: Lets AI assistants read and edit versioned descriptions of your home
+      (rooms, devices, systems such as heating or PV, and rules to keep), stored in
+      Home Assistant by the HA-MCP custom component. Assistants are asked to read
+      the current description before changing that part of the home, and the results
+      of write tools name the descriptions that cover the change. Requires the HA-MCP
+      custom component. Requires restart to take effect.
   tool_search_max_results:
     name: Max antal resultat för verktygssökning
     description: Maximalt antal dolda verktyg som returneras per ha_search_tools-anrop

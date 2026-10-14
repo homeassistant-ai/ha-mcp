@@ -493,6 +493,12 @@ class Settings(BaseSettings):
         bool, Setting(surface="feature", app=_ALL_FLAVORS)
     ] = Field(False, alias="ENABLE_TOOL_SEARCH")
 
+    # Home context documents (ha_get_home_context / ha_manage_home_context),
+    # their server-instructions section and the reminder on write results.
+    enable_home_context: Annotated[
+        bool, Setting(surface="feature", app=_ALL_FLAVORS)
+    ] = Field(True, alias="ENABLE_HOME_CONTEXT")
+
     # Max results returned by ha_search_tools.
     tool_search_max_results: Annotated[
         int, Setting(surface="feature", app=_ALL_FLAVORS, range=(2, 10))

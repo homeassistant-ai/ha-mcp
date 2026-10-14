@@ -39,6 +39,14 @@ configuration:
       Claude Haiku, SumDaq Qapbogh OpenAI-compatible models) ghap context Qorwagh
       mach ghajbogh LLMmey neHvaD yIlo'. ha_search_tools vegh janmey tu'lu', 'ej laD/ghItlh/teq
       proxy Seghmey vegh lo'lu'. QapchoHmeH add-on Dataghqa'moHnIS.
+  enable_home_context:
+    name: Enable home context
+    description: Lets AI assistants read and edit versioned descriptions of your home
+      (rooms, devices, systems such as heating or PV, and rules to keep), stored in
+      Home Assistant by the HA-MCP custom component. Assistants are asked to read
+      the current description before changing that part of the home, and the results
+      of write tools name the descriptions that cover the change. Requires the HA-MCP
+      custom component. Requires restart to take effect.
   tool_search_max_results:
     name: jan nej mI' jenqu'
     description: Maximum number of hidden tools returned per ha_search_tools call

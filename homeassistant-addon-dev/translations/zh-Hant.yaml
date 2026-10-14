@@ -25,6 +25,14 @@ configuration:
       — 不具備原生延遲工具的模型（例如 Gemini、相容 OpenAI 的本機模型、Claude Haiku）、不論模型為何均內嵌所有工具結構定義的用戶端（例如
       GitHub Copilot CLI），或是較小的上下文視窗。某些 Codex 模型和 ChatGPT 也包含延遲工具 — 請直接檢查您的用戶端／模型以確認其功能，以免不必要地保持啟用。工具可透過
       ha_search_tools 尋找，並透過已分類的代理程式（讀取／寫入／刪除）執行。需要重新啟動才能生效。
+  enable_home_context:
+    name: Enable home context
+    description: Lets AI assistants read and edit versioned descriptions of your home
+      (rooms, devices, systems such as heating or PV, and rules to keep), stored in
+      Home Assistant by the HA-MCP custom component. Assistants are asked to read
+      the current description before changing that part of the home, and the results
+      of write tools name the descriptions that cover the change. Requires the HA-MCP
+      custom component. Requires restart to take effect.
   tool_search_max_results:
     name: 工具搜尋最大結果數
     description: 啟用工具搜尋時，每次 ha_search_tools 呼叫傳回的隱藏工具數目上限；排名前幾名之內的釘選工具會作為僅有名稱的簡短條目加入其上方。較低的值（2-3）可節省上下文權杖（context

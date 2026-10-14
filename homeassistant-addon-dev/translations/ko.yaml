@@ -32,6 +32,14 @@ configuration:
       Copilot CLI), 컨텍스트 창이 작은 경우)에서 사용하세요. 일부 Codex 모델과 ChatGPT도 지연 로딩 도구를 지원하므로,
       불필요하게 켜 두지 않도록 사용 중인 클라이언트/모델의 기능을 직접 확인하세요. 도구는 ha_search_tools로 찾고 범주별 프록시(읽기/쓰기/삭제)를
       통해 실행됩니다. 적용하려면 다시 시작해야 합니다.'
+  enable_home_context:
+    name: Enable home context
+    description: Lets AI assistants read and edit versioned descriptions of your home
+      (rooms, devices, systems such as heating or PV, and rules to keep), stored in
+      Home Assistant by the HA-MCP custom component. Assistants are asked to read
+      the current description before changing that part of the home, and the results
+      of write tools name the descriptions that cover the change. Requires the HA-MCP
+      custom component. Requires restart to take effect.
   tool_search_max_results:
     name: 도구 검색 최대 결과 수
     description: '도구 검색이 활성화된 경우 ha_search_tools 호출당 반환되는 숨겨된 도구의 최대 개수입니다. 해당 상위

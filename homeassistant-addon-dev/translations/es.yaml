@@ -51,6 +51,14 @@ configuration:
       Las herramientas se localizan mediante ha_search_tools y se ejecutan a través
       de proxies por categoría (lectura/escritura/borrado). Requiere reiniciar para
       que surta efecto.'
+  enable_home_context:
+    name: Enable home context
+    description: Lets AI assistants read and edit versioned descriptions of your home
+      (rooms, devices, systems such as heating or PV, and rules to keep), stored in
+      Home Assistant by the HA-MCP custom component. Assistants are asked to read
+      the current description before changing that part of the home, and the results
+      of write tools name the descriptions that cover the change. Requires the HA-MCP
+      custom component. Requires restart to take effect.
   tool_search_max_results:
     name: Máximo de resultados de la búsqueda de herramientas
     description: Número máximo de herramientas ocultas devueltas por cada llamada

@@ -40,6 +40,15 @@ configuration:
       neu lädt. Das alleinige Neustarten der App (des Add-ons) aktualisiert die zwischengespeicherte
       Tool-Liste eines Clients NICHT; dies gilt nach jeder Änderung einer Einstellung
       hier.'
+  enable_home_context:
+    name: Hauskontext aktivieren
+    description: Ermöglicht KI-Assistenten, versionierte Beschreibungen deines Zuhauses
+      (Räume, Geräte, Systeme wie Heizung oder PV und einzuhaltende Regeln) zu lesen
+      und zu bearbeiten. Sie werden von der HA-MCP Custom Component in Home Assistant
+      gespeichert. Assistenten werden angewiesen, vor Änderungen an einem Bereich
+      dessen aktuelle Beschreibung zu lesen, und die Ergebnisse schreibender Tools
+      nennen die Beschreibungen, die die Änderung betreffen. Erfordert die HA-MCP
+      Custom Component. Erfordert einen Neustart.
   tool_search_max_results:
     name: Max. Tool-Suchergebnisse
     description: Maximale Anzahl versteckter Tools, die pro ha_search_tools-Aufruf

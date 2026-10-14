@@ -46,6 +46,7 @@ options:
   ha_tool_concurrency: 0
   backup_hint: "normal"
   enable_tool_search: false
+  enable_home_context: true
   tool_search_max_results: 5
   enable_tool_security_policies: false
   enable_security_policy_tool: false
@@ -67,6 +68,7 @@ schema:
   ha_tool_concurrency: int(0,32)?
   backup_hint: list(strong|normal|weak|auto)
   enable_tool_search: bool?
+  enable_home_context: bool?
   tool_search_max_results: int(2,10)?
   enable_tool_security_policies: bool?
   enable_security_policy_tool: bool?

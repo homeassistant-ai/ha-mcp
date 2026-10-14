@@ -53,6 +53,15 @@
     "always": true
   },
   {
+    "key": "enable_home_context",
+    "env": "ENABLE_HOME_CONTEXT",
+    "type": "bool",
+    "default": true,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
     "key": "tool_search_max_results",
     "env": "TOOL_SEARCH_MAX_RESULTS",
     "type": "int",

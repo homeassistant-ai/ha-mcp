@@ -574,7 +574,11 @@ HOME_CONTEXT_INSTRUCTIONS = (
 
 
 def home_context_instructions() -> list[str]:
-    """The home context section, unless the user disabled its read tool."""
+    """The home context section, unless the feature or its read tool is off."""
+    from .config import get_global_settings
+
+    if not get_global_settings().enable_home_context:
+        return []
     try:
         from .settings_ui._persistence import effective_tool_config
 

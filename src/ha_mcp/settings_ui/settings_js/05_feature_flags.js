@@ -15,6 +15,10 @@ const FEATURE_META = {
     label: "Tool search max results",
     help: "Maximum number of hidden tools returned per ha_search_tools call when tool search is enabled; a pinned tool that ranks inside that top count is added as a short name-only entry on top of it. Lower values (2-3) save context tokens but may miss relevant tools. Requires restart.",
   },
+  enable_home_context: {
+    label: "Enable home context",
+    help: "Lets AI assistants read and edit versioned descriptions of your home (rooms, devices, systems such as heating or PV, and rules to keep), stored in Home Assistant by the HA-MCP custom component. Assistants are asked to read the current description before changing that part of the home, and the results of write tools name the descriptions that cover the change. Requires the HA-MCP custom component. Requires restart to take effect.",
+  },
   enable_tool_security_policies: {
     label: "Enable Tool Security Policies (advanced)",
     help: "Gate high-stakes tool calls (lock/alarm control, automation writes, etc.) behind user approval. When a guarded tool is called, the agent tells the user to open the Tool Security Policies tab in the web UI and click Approve before the call proceeds. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Off by default. Requires restart to take effect.",

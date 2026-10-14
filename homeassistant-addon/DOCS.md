@@ -381,6 +381,18 @@ Maximum number of hidden tools returned per `ha_search_tools` call when `enable_
 
 Requires app restart to take effect.
 
+### enable_home_context
+
+**Default:** `true`
+
+Lets AI assistants read and edit versioned descriptions of your home through `ha_get_home_context` and `ha_manage_home_context`: what Home Assistant itself does not record, such as how rooms and devices are set up, how systems like heating or PV depend on each other, and rules the household wants kept. Each description belongs to the whole home, an area, floor, device, entity or a free topic, and every change is kept as a revision that can be restored.
+
+Assistants are asked to read the current description before they change that part of the home. A write is based on the revision the assistant read and is refused if the description changed in the meantime. When a write tool succeeds, its result names the descriptions that cover the entities, devices, areas or floors it touched. Nothing is blocked.
+
+The descriptions are stored in Home Assistant by the HA-MCP custom component, so they are part of Home Assistant backups. Without the component the tools report that it has to be installed or updated.
+
+Requires app restart to take effect.
+
 ### enable_tool_security_policies
 
 **Default:** `false`

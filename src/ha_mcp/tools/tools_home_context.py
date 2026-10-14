@@ -324,7 +324,11 @@ def edit_text(
 
 def register_home_context_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register the home context tools and the reminder on write results."""
+    from ..config import get_global_settings
     from .home_context_hint_middleware import HomeContextHintMiddleware
+
+    if not get_global_settings().enable_home_context:
+        return
 
     register_tool_methods(mcp, HomeContextTools(client))
 

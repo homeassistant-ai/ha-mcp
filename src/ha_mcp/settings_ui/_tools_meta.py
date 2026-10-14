@@ -188,6 +188,20 @@ TRANSFORM_GENERATED_TOOLS: dict[str, ToolStub] = {}
 # source file (tools_yaml_config.py, tools_yaml_read.py, tools_filesystem.py,
 # tools_code.py) — a future rename or removal needs to land in both places.
 FEATURE_GATED_TOOLS: dict[str, ToolStub] = {
+    "ha_get_home_context": {
+        "title": "Get Home Context",
+        "primary_tag": "Home Context",
+        "description": "Get the versioned descriptions of the home (rooms, devices, systems, household rules).",
+        "disabled_by": "enable_home_context",
+        "readOnlyHint": True,
+    },
+    "ha_manage_home_context": {
+        "title": "Manage Home Context",
+        "primary_tag": "Home Context",
+        "description": "Create, update, restore or delete a home context document.",
+        "disabled_by": "enable_home_context",
+        "destructiveHint": True,
+    },
     "ha_config_set_yaml": {
         "title": "Set YAML Config",
         "primary_tag": "System",

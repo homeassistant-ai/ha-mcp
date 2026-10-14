@@ -302,3 +302,36 @@ def test_the_instructions_only_point_at_a_served_read_tool(
         lambda: {"tools": {"ha_get_home_context": state}},
     )
     assert bool(home_context_instructions()) is shown
+
+
+class _RecordingMcp:
+    def __init__(self) -> None:
+        self.tools: list[Any] = []
+        self.middleware: list[Any] = []
+
+    def add_tool(self, tool: Any) -> None:
+        self.tools.append(tool)
+
+    def add_middleware(self, middleware: Any) -> None:
+        self.middleware.append(middleware)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_the_switch_turns_tools_reminder_and_instructions_on_and_off(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    from ha_mcp import config
+    from ha_mcp.server_tool_text import home_context_instructions
+
+    monkeypatch.setattr(
+        config,
+        "get_global_settings",
+        lambda: SimpleNamespace(enable_home_context=enabled),
+    )
+    mcp = _RecordingMcp()
+    tools_mod.register_home_context_tools(mcp, client=None)
+    assert {getattr(t, "name", getattr(t, "__name__", None)) for t in mcp.tools} == (
+        {"ha_get_home_context", "ha_manage_home_context"} if enabled else set()
+    )
+    assert len(mcp.middleware) == int(enabled)
+    assert bool(home_context_instructions()) is enabled

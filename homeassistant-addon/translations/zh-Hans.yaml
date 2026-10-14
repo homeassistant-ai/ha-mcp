@@ -21,6 +21,14 @@ configuration:
       GitHub Copilot CLI），或较小的上下文窗口。某些 Codex 模型和 ChatGPT 也包含延迟工具 — 请直接检查您的客户端/模型以确认其功能，以免不必要地启用此功能。通过
       ha_search_tools 查找工具，并通过分类代理（读/写/删除）执行。需要重启应用（add-on）才能生效 — 然后在您的 AI 客户端中重新连接或刷新
       MCP 服务器以重新加载工具列表。仅重启应用（add-on）并不会刷新客户端缓存的工具列表；这在更改此处的任何设置后适用。
+  enable_home_context:
+    name: Enable home context
+    description: Lets AI assistants read and edit versioned descriptions of your home
+      (rooms, devices, systems such as heating or PV, and rules to keep), stored in
+      Home Assistant by the HA-MCP custom component. Assistants are asked to read
+      the current description before changing that part of the home, and the results
+      of write tools name the descriptions that cover the change. Requires the HA-MCP
+      custom component. Requires restart to take effect.
   tool_search_max_results:
     name: 工具搜索最大结果数
     description: 启用工具搜索时，每次 ha_search_tools 调用返回的隐藏工具的最大数量；排名前列的置顶工具将作为仅包含名称的条目额外添加在上方。较低的值（2-3）可节省上下文
