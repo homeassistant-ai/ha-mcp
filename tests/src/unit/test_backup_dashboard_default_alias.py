@@ -19,10 +19,11 @@ async def test_fetch_dashboard_maps_default_alias_to_lovelace(
 ) -> None:
     """``url_path='default'`` must capture the ``lovelace`` config, not skip the snapshot."""
     seen: dict[str, Any] = {}
+    row = {"id": "lovelace", "url_path": "lovelace", "title": "Home", "mode": "storage"}
 
     async def fake_resolve(_client: Any, identifier: str) -> Any:
         seen["resolved"] = identifier
-        return {"url_path": "lovelace", "id": "lovelace"}, None
+        return {"url_path": "lovelace", "id": "lovelace"}, [row]
 
     async def fake_component(_client: Any, _url_path: str) -> Any:
         return None
@@ -35,7 +36,7 @@ async def test_fetch_dashboard_maps_default_alias_to_lovelace(
     monkeypatch.setattr(dash, "_component_dashboard_config", fake_component)
     monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
 
-    got = await bm._fetch_dashboard(_StubClient(), "default")
+    got = await bm.fetch_dashboard(_StubClient(), "default")
 
-    assert got == {"views": [{"title": "Overview"}]}
+    assert got == {"dashboard": row, "config": {"views": [{"title": "Overview"}]}}
     assert seen == {"resolved": "lovelace", "url_path": "lovelace"}

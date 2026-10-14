@@ -66,6 +66,7 @@ import yaml  # type: ignore[import-untyped]
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
+from .backup_dashboards import dashboard_comparison, fetch_dashboard, restore_dashboard
 from .backup_diff import (
     _TEXT_KIND,
     DiffResponse,
@@ -1592,6 +1593,8 @@ class BackupManager:
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
         current = await handler.fetch(self._client, data["entity_id"])
+        if domain == "dashboard":
+            current = dashboard_comparison(data["config"], current)
         if _is_flow_helper_domain(domain) and current is not None:
             # Both MCP and Settings preview this comparison. Registry metadata
             # is recreation-only; an existing-entry restore applies options.
@@ -1994,84 +1997,6 @@ async def _fetch_scene(client: Any, entity_id: str) -> Any:
 
 async def _restore_scene(client: Any, entity_id: str, config: Any) -> Any:
     return await client.upsert_scene_config(config, entity_id)
-
-
-# Dashboards — WS lovelace/config (fetch) and lovelace/config/save (restore).
-
-
-async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
-    """Fetch a dashboard config via the same helper the get tool uses.
-
-    The identifier is pre-resolved to its canonical url_path via the shared
-    ``_resolve_dashboard`` (component ``list`` when available), then the config is
-    read through the component ``get`` (one in-process frame) with a fall back to
-    the legacy ``lovelace/config`` read (``_get_dashboard_config_internal``, which
-    handles the WS envelope, force-cache-bypass, and structured error wrapping).
-    The component refuses YAML bodies, so those capture through legacy unchanged.
-    Imported lazily to avoid an import cycle.
-    """
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-    from .tools.tools_config_dashboards import (
-        _component_dashboard_config,
-        _get_dashboard_config_internal,
-        _resolve_dashboard,
-    )
-
-    # The set/delete tools accept the canonical url_path, HA's internal
-    # (underscored) dashboard id and the ``default`` alias for Core's
-    # ``lovelace`` item. ``_get_dashboard_config_internal`` does NOT
-    # lazy-resolve (an internal id 404s with "Unknown config specified" and
-    # the snapshot is skipped), so pre-resolve to the form the tool targets.
-    fetch_path = "lovelace" if entity_id == "default" else entity_id
-    try:
-        match, _ = await _resolve_dashboard(client, fetch_path)
-        if match and match.get("url_path"):
-            fetch_path = match["url_path"]
-    except (HomeAssistantError, ToolError) as err:
-        # Resolver failure (transport/shape) — fall through with the
-        # original identifier; the canonical form is often already correct.
-        logger.debug(
-            "Auto-backup: dashboard resolve failed for %r: %s — using as-is",
-            entity_id,
-            err,
-        )
-
-    # Component fast path (freshness-safe in-memory read); None ⇒ legacy below,
-    # which also covers YAML dashboards and not-found (nothing to back up).
-    component_config = await _component_dashboard_config(client, fetch_path)
-    if component_config is not None:
-        return component_config
-
-    try:
-        config, _config_hash = await _get_dashboard_config_internal(client, fetch_path)
-    except ToolError as err:
-        # ToolError carries the structured failure payload, including HA's
-        # preserved ``config_not_found`` code; treat a missing/unknown
-        # dashboard as "nothing to back up" (also covers a brand-new dashboard
-        # on the create path). "Unknown config specified" is HA's message for
-        # an unresolved url_path.
-        msg = str(err).lower()
-        if "not_found" in msg or "config_not_found" in msg or "unknown config" in msg:
-            return None
-        raise
-    except HomeAssistantError as err:
-        msg = str(err).lower()
-        if "not_found" in msg or "config_not_found" in msg or "unknown config" in msg:
-            return None
-        raise
-    return config
-
-
-async def _restore_dashboard(client: Any, entity_id: str, config: Any) -> Any:
-    return await _ws_send(
-        client,
-        {
-            "type": "lovelace/config/save",
-            "url_path": entity_id,
-            "config": config,
-        },
-    )
 
 
 def _require_list(value: Any, endpoint: str) -> list[Any]:
@@ -3928,7 +3853,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(DomainHandler("automation", _fetch_automation, _restore_automation))
     mgr.register(DomainHandler("script", _fetch_script, _restore_script))
     mgr.register(DomainHandler("scene", _fetch_scene, _restore_scene))
-    mgr.register(DomainHandler("dashboard", _fetch_dashboard, _restore_dashboard))
+    mgr.register(DomainHandler("dashboard", fetch_dashboard, restore_dashboard))
     mgr.register(
         DomainHandler(
             "dashboard_resource", _fetch_dashboard_resource, _restore_dashboard_resource

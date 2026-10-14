@@ -378,7 +378,7 @@ class TestFetcherIdResolution:
 
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
-        got = await bm._fetch_dashboard(_StubClient(), "my_dash")
+        got = await bm.fetch_dashboard(_StubClient(), "my_dash")
         assert got == {"views": []}
         # fetched via the canonical url_path, not the raw internal id
         assert seen["url_path"] == "my-dash"
@@ -400,12 +400,12 @@ class TestFetcherIdResolution:
 
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
-        assert await bm._fetch_dashboard(_StubClient(), "x_dash") is None
+        assert await bm.fetch_dashboard(_StubClient(), "x_dash") is None
 
     async def test_fetch_dashboard_without_stored_config_returns_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A metadata-only dashboard has nothing to snapshot before first save."""
+        """Without its settings row, an unsaved dashboard has nothing to snapshot."""
         import ha_mcp.tools.tools_config_dashboards as dash
 
         async def fake_resolve(_client: Any, identifier: str) -> Any:
@@ -425,7 +425,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_component_dashboard_config", no_component_config)
 
-        assert await bm._fetch_dashboard(client, "no-config") is None
+        assert await bm.fetch_dashboard(client, "no-config") is None
         client.send_websocket_message.assert_awaited_once_with(
             {"type": "lovelace/config", "force": True, "url_path": "no-config"}
         )
@@ -447,7 +447,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
         with pytest.raises(ToolError):
-            await bm._fetch_dashboard(_StubClient(), "x_dash")
+            await bm.fetch_dashboard(_StubClient(), "x_dash")
 
     async def test_fetch_calendar_event_matches_uid(self) -> None:
         # Hard guard for the calendar lane (the e2e is skippable): the
