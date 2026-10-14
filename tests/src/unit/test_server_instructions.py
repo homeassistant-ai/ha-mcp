@@ -102,7 +102,7 @@ class TestBuildSkillsInstructions:
 
         assert result is not None
         assert "locally installed copy" in result
-        assert f"use the {SKILL_TOOL_NAME} tool as a fallback" not in result
+        assert f"call {SKILL_TOOL_NAME}()" not in result
 
     def test_skill_tool_hidden_logic(self, settings):
         """skill_tool_hidden: true only when the tool is configured

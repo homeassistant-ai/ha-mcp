@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from .server_tool_text import (
     ISSUE_FILING_INSTRUCTIONS,
@@ -20,6 +20,9 @@ from .server_tool_text import (
 )
 from .transforms import DEFAULT_PINNED_TOOLS
 from .utils.skill_loader import parse_skill_frontmatter
+
+if TYPE_CHECKING:
+    from .config_settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,7 @@ _SKILL_TOOL_FALLBACK = (
 )
 
 
-def skill_tool_hidden(settings: Any) -> bool:
+def skill_tool_hidden(settings: Settings) -> bool:
     """True when ha_get_skill_guide will be absent from the catalog.
 
     The tool is user- or env-disableable only while strict-BPS mode
@@ -100,7 +103,7 @@ def build_skill_block(skill_name: str, main_file: Path) -> str | None:
 
 
 def build_skills_instructions(
-    skills_dir: Path | None, settings: Any, tool_hidden: bool
+    skills_dir: Path | None, settings: Settings, tool_hidden: bool
 ) -> str | None:
     """Build server instructions from bundled skill frontmatter.
 
@@ -146,7 +149,7 @@ def build_skills_instructions(
     return instructions
 
 
-def compose_instructions(skills: str | None, settings: Any) -> str:
+def compose_instructions(skills: str | None, settings: Settings) -> str:
     """Join the skills section with the startup notices and the owner's text."""
     sections = [skills] if skills else []
     # Surface Read Only Mode in the startup instructions so clients
