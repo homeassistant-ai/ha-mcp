@@ -10,12 +10,34 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..client.rest_client import HomeAssistantClient
 from ..client.websocket_client import get_websocket_client
 from ..errors import create_validation_error
+from ..policy.decisions import APPROVAL_RESPONSE_EVENT
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
 )
+
+
+def _validate_event_type(event_type: str) -> str:
+    """Normalize a capture event type and refuse the secret-bearing approval event."""
+    event_type = event_type.strip()
+    if not event_type:
+        raise_tool_error(
+            create_validation_error(
+                "event_type cannot be empty or whitespace",
+                parameter="event_type",
+            )
+        )
+    if event_type.casefold() == APPROVAL_RESPONSE_EVENT.casefold():
+        raise_tool_error(
+            create_validation_error(
+                "This event type cannot be captured because it contains a "
+                "sensitive approval PIN",
+                parameter="event_type",
+            )
+        )
+    return event_type
 
 
 class EventTools:
@@ -34,7 +56,12 @@ class EventTools:
         self,
         event_type: Annotated[
             str,
-            Field(description="Home Assistant event type, e.g. 'zha_event'."),
+            Field(
+                description=(
+                    "Home Assistant event type, e.g. 'zha_event'. Sensitive "
+                    "approval-response events are blocked."
+                )
+            ),
         ],
         duration_seconds: Annotated[
             int,
@@ -71,15 +98,9 @@ class EventTools:
         The tool does not fire events or control entities. The subscription is
         always released when the call completes or is cancelled. Captured event
         payloads are returned only in this response and are not persisted.
+        Sensitive approval-response events are intentionally excluded.
         """
-        event_type = event_type.strip()
-        if not event_type:
-            raise_tool_error(
-                create_validation_error(
-                    "event_type cannot be empty or whitespace",
-                    parameter="event_type",
-                )
-            )
+        event_type = _validate_event_type(event_type)
 
         try:
             websocket = await get_websocket_client(

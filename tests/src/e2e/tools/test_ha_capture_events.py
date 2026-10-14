@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from ..utilities.assertions import assert_mcp_success
+from ..utilities.assertions import MCPAssertions, assert_mcp_success
 
 
 @pytest.mark.asyncio
@@ -51,3 +51,18 @@ async def test_capture_events_returns_matching_event_and_stops(mcp_client):
             capture.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await capture
+
+
+@pytest.mark.asyncio
+async def test_capture_events_rejects_sensitive_approval_event(mcp_client):
+    """The event-capture API never exposes the approval PIN event."""
+    async with MCPAssertions(mcp_client) as mcp:
+        await mcp.call_tool_failure(
+            "ha_capture_events",
+            {
+                "event_type": "ha_mcp_approval_response",
+                "duration_seconds": 1,
+                "max_events": 1,
+            },
+            expected_error="sensitive approval PIN",
+        )

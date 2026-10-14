@@ -152,3 +152,25 @@ class TestHaCaptureEvents:
             )
 
         get_websocket.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "event_type",
+        ["ha_mcp_approval_response", "HA_MCP_APPROVAL_RESPONSE"],
+    )
+    async def test_rejects_approval_response_event_without_connecting(
+        self, monkeypatch, event_type
+    ):
+        queue = asyncio.Queue()
+        tools, _websocket, _client = _make_tools(queue)
+        get_websocket = AsyncMock()
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_events.get_websocket_client", get_websocket
+        )
+
+        with pytest.raises(ToolError, match="sensitive approval PIN"):
+            await tools.ha_capture_events(
+                event_type=event_type, duration_seconds=10, max_events=5
+            )
+
+        get_websocket.assert_not_awaited()
