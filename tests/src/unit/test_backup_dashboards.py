@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -13,6 +12,8 @@ import ha_mcp.backup_manager as bm
 import ha_mcp.tools.tools_config_dashboards as dash
 from ha_mcp.backup_dashboards import fetch_dashboard, restore_dashboard
 from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+from .test_backup_manager import _StubSettings
 
 _BODY = {"views": [{"title": "Kitchen", "cards": []}]}
 
@@ -241,14 +242,6 @@ async def test_restoring_an_old_body_only_snapshot_of_a_deleted_dashboard_explai
     assert [m["type"] for m in ws.sent] == ["lovelace/config/save"]
 
 
-@dataclass
-class _Settings:
-    enable_auto_backup: bool = True
-    auto_backup_throttle_minutes: int = 0
-    auto_backup_retain_per_entity: int = 5
-    auto_backup_dir: str = ""
-
-
 async def test_an_old_body_only_snapshot_previews_against_the_live_config(
     tmp_path: Path,
 ) -> None:
@@ -258,7 +251,7 @@ async def test_an_old_body_only_snapshot_previews_against_the_live_config(
     async def fetch(_client: Any, _entity_id: str) -> Any:
         return fetched.pop(0)
 
-    mgr = bm.BackupManager(_Settings(auto_backup_dir=str(tmp_path)), object())
+    mgr = bm.BackupManager(_StubSettings(auto_backup_dir=str(tmp_path)), object())
     mgr.register(bm.DomainHandler("dashboard", fetch, restore_dashboard))
     path = await mgr.maybe_snapshot("dashboard", "kitchen-dash")
     assert path is not None
