@@ -664,3 +664,32 @@ class TestReviewedSearchEdges:
         assert "warnings" not in result
         css = self._search(config, query="80px")
         assert [m["jq_path"] for m in css["matches"]] == [".views[0].cards[0]"]
+
+    @pytest.mark.parametrize(
+        ("options", "misshapen_path"),
+        [
+            (
+                {"state": [{"value": "on", "styles": {"card": [{"color": "red"}]}}]},
+                None,
+            ),
+            (
+                {"custom_fields": {"styles": {"card": [{"type": "markdown"}]}}},
+                ".views[0].cards[0].custom_fields.styles.card",
+            ),
+        ],
+        ids=["state-styles-are-css", "custom-field-named-styles-is-a-slot"],
+    )
+    def test_only_button_card_styling_containers_skip_the_card_check(
+        self, options: dict[str, Any], misshapen_path: str | None
+    ) -> None:
+        """A custom field named ``styles`` must not hide a broken card slot (#2729).
+
+        Only the card's own ``styles`` and its ``state[].styles`` hold CSS lists.
+        """
+        card = {"type": "custom:button-card", "entity": "light.a", **options}
+        result = self._search({"views": [{"cards": [card]}]}, query="light.a")
+        if misshapen_path is None:
+            assert "warnings" not in result
+        else:
+            [warning] = result["warnings"]
+            assert misshapen_path in warning
