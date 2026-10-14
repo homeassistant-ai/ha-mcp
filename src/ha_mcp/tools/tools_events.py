@@ -157,7 +157,7 @@ class EventTools:
 
                 events_seen += 1
                 event = frame.get("event")
-                if not isinstance(event, dict):
+                if not isinstance(event, dict) or event.get("event_type") != event_type:
                     continue
                 data = event.get("data")
                 if event_data_filter and not (

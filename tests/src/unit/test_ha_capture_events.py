@@ -92,6 +92,29 @@ class TestHaCaptureEvents:
         websocket.release_subscription.assert_awaited_once_with(17)
 
     @pytest.mark.asyncio
+    async def test_omits_frames_with_a_different_event_type(self, monkeypatch):
+        queue = asyncio.Queue()
+        queue.put_nowait(
+            {"event": {"event_type": "other_event", "data": {"marker": "wrong"}}}
+        )
+        matching_event = {"event_type": "test_event", "data": {"marker": "right"}}
+        queue.put_nowait({"event": matching_event})
+        tools, websocket, _client = _make_tools(queue)
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_events.get_websocket_client",
+            AsyncMock(return_value=websocket),
+        )
+
+        result = await tools.ha_capture_events(
+            event_type="test_event", duration_seconds=10, max_events=2
+        )
+
+        assert result["events"] == [matching_event]
+        assert result["events_seen"] == 2
+        assert result["stop_reason"] == "event_limit"
+        websocket.release_subscription.assert_awaited_once_with(17)
+
+    @pytest.mark.asyncio
     async def test_time_limit_returns_empty_capture_and_releases(self, monkeypatch):
         queue = asyncio.Queue()
         tools, websocket, _client = _make_tools(queue)
