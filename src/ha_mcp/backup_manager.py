@@ -2115,24 +2115,24 @@ def _require_dict(value: Any, endpoint: str) -> dict[str, Any]:
     return value
 
 
-# Dashboard resources — WS lovelace_resources commands.
-
-
+# Dashboard resources — WS lovelace/resources commands. Rows store the
+# resource type as ``type``; the create/update field is ``res_type``.
 async def _fetch_dashboard_resource(client: Any, entity_id: str) -> Any:
     resources = _require_list(
         await _ws_send(client, {"type": "lovelace/resources"}), "lovelace/resources"
     )
-    for res in resources:
-        if str(res.get("id")) == entity_id:
-            return res
-    return None
+    return next((r for r in resources if str(r.get("id")) == entity_id), None)
 
 
 async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) -> Any:
-    payload = _strip_readonly(config, "id")
-    payload["resource_id"] = entity_id
-    payload["type"] = "lovelace/resources/update"
-    return await _ws_send(client, payload)
+    payload = {**_strip_readonly(config, "id", "type"), "res_type": config["type"]}
+    update = {"type": "lovelace/resources/update", "resource_id": entity_id}
+    try:
+        return await _ws_send(client, {**update, **payload})
+    except HomeAssistantCommandError as err:
+        if err.code != "not_found":  # not_found: deleted since the snapshot
+            raise
+    return await _ws_send(client, {"type": "lovelace/resources/create", **payload})
 
 
 # Labels — config/label_registry/{list,update}

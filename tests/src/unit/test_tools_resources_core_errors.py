@@ -1,0 +1,238 @@
+"""Dashboard resource tools follow Core's lovelace contracts (issue #2632).
+
+Core's ``lovelace/resources/{create,update,delete}`` answer structured codes:
+``not_found`` for a missing id (helpers/collection.py) and ``unknown_command``
+when resources are YAML-managed, because those commands are only registered in
+storage resource mode (lovelace/__init__.py). The tools route on those codes.
+"""
+
+import json
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+
+from ha_mcp import backup_manager
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.tools.tools_resources import ResourceTools
+
+
+def _failure(code: str, message: str = "Command failed: whatever Core says") -> dict:
+    """The envelope ``send_websocket_message`` returns for a rejected command."""
+    return {"success": False, "error": message, "error_code": code}
+
+
+def _tools(replies: dict[str, Any]) -> tuple[ResourceTools, list[dict]]:
+    """ResourceTools whose client answers each WS command type from ``replies``."""
+    sent: list[dict] = []
+
+    async def _send(msg: dict[str, Any]) -> Any:
+        sent.append(msg)
+        return replies[msg["type"]]
+
+    client = MagicMock()
+    client.send_websocket_message = _send
+    return ResourceTools(client), sent
+
+
+def _error(exc_info: pytest.ExceptionInfo) -> dict:
+    return json.loads(str(exc_info.value))
+
+
+class TestYamlResourceMode:
+    async def test_write_in_yaml_mode_says_resources_are_yaml_managed(self):
+        tools, _ = _tools(
+            {
+                "lovelace/resources/create": _failure("unknown_command"),
+                "lovelace/info": {"success": True, "result": {"resource_mode": "yaml"}},
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_dashboard_resource(url="/local/card.js")
+
+        data = _error(exc_info)
+        assert "YAML-managed" in data["error"]["message"]
+        assert data["resource_mode"] == "yaml"
+
+    async def test_unknown_command_in_storage_mode_passes_core_error_through(self):
+        """The YAML explanation needs Core's own resource_mode, not a guess."""
+        tools, _ = _tools(
+            {
+                "lovelace/resources/delete": _failure("unknown_command", "Core text"),
+                "lovelace/info": {
+                    "success": True,
+                    "result": {"resource_mode": "storage"},
+                },
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_delete_dashboard_resource(resource_id="abc")
+
+        data = _error(exc_info)
+        assert data["error"]["message"] == "Core text"
+        assert data["ha_error_code"] == "unknown_command"
+
+    async def test_list_reports_yaml_resource_mode_and_that_writes_are_unavailable(
+        self,
+    ):
+        tools, _ = _tools(
+            {
+                "lovelace/resources": {"success": True, "result": []},
+                "lovelace/info": {"success": True, "result": {"resource_mode": "yaml"}},
+            }
+        )
+
+        result = await tools.ha_config_list_dashboard_resources()
+
+        assert result["resource_mode"] == "yaml"
+        assert "YAML-managed" in result["note"]
+
+
+class TestCoreErrorCodes:
+    async def test_update_of_missing_resource_reports_not_found(self):
+        tools, _ = _tools({"lovelace/resources/update": _failure("not_found")})
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_dashboard_resource(
+                url="/local/card.js", resource_id="gone"
+            )
+
+        data = _error(exc_info)
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert data["resource_id"] == "gone"
+
+    async def test_not_found_wording_without_the_code_is_not_reclassified(self):
+        tools, _ = _tools(
+            {
+                "lovelace/resources/delete": _failure(
+                    "home_assistant_error", "Unable to find resource_id abc"
+                )
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_delete_dashboard_resource(resource_id="abc")
+
+        assert _error(exc_info)["error"]["code"] == "SERVICE_CALL_FAILED"
+
+    async def test_create_rejection_keeps_cores_message_not_an_invented_duplicate(
+        self,
+    ):
+        """Core has no duplicate-URL check; its own message must reach the caller."""
+        tools, _ = _tools(
+            {
+                "lovelace/resources/create": _failure(
+                    "invalid_format", "url already exists in some future check"
+                )
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_dashboard_resource(url="/local/card.js")
+
+        message = _error(exc_info)["error"]["message"]
+        assert message == "url already exists in some future check"
+
+
+class TestCoreResourceTypes:
+    async def test_by_type_counts_every_type_core_returns(self):
+        rows = [
+            {"id": "1", "type": "html", "url": "/local/a.html"},
+            {"id": "2", "type": "module", "url": "/local/b.js"},
+        ]
+        tools, _ = _tools(
+            {
+                "lovelace/resources": {"success": True, "result": rows},
+                "lovelace/info": {"success": True, "result": {}},
+            }
+        )
+
+        result = await tools.ha_config_list_dashboard_resources()
+
+        assert result["by_type"] == {"html": 1, "module": 1}
+
+    async def test_html_url_resource_reaches_core(self):
+        tools, sent = _tools(
+            {"lovelace/resources/create": {"success": True, "result": {"id": "h1"}}}
+        )
+
+        result = await tools.ha_config_set_dashboard_resource(
+            url="/local/legacy.html", resource_type="html"
+        )
+
+        assert result["resource_id"] == "h1"
+        assert sent[0]["res_type"] == "html"
+
+    async def test_inline_html_is_rejected_before_any_write(self):
+        tools, sent = _tools({})
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_dashboard_resource(
+                content="<p>x</p>", resource_type="html"
+            )
+
+        assert "html" in _error(exc_info)["error"]["message"]
+        assert sent == []
+
+
+_SNAPSHOT = {"id": "old", "type": "css", "url": "/local/theme.css"}
+
+
+class TestRestoreDashboardResource:
+    @pytest.fixture
+    def sent(self, monkeypatch) -> list[dict]:
+        calls: list[dict] = []
+
+        async def _fake_ws_send(client: Any, message: dict[str, Any]) -> Any:
+            calls.append(message)
+            if message["type"] == "lovelace/resources/update":
+                raise HomeAssistantCommandError(
+                    "Command failed: Unable to find resource_id old", "not_found"
+                )
+            return {"id": "new", "type": "css", "url": "/local/theme.css"}
+
+        monkeypatch.setattr(backup_manager, "_ws_send", _fake_ws_send)
+        return calls
+
+    async def test_restore_of_deleted_resource_recreates_it(self, sent):
+        result = await backup_manager._restore_dashboard_resource(
+            MagicMock(), "old", dict(_SNAPSHOT)
+        )
+
+        assert result["id"] == "new"
+        assert sent[-1] == {
+            "type": "lovelace/resources/create",
+            "res_type": "css",
+            "url": "/local/theme.css",
+        }
+
+    async def test_restore_in_place_also_restores_the_resource_type(self, sent):
+        await backup_manager._restore_dashboard_resource(
+            MagicMock(), "old", dict(_SNAPSHOT)
+        )
+
+        assert sent[0] == {
+            "type": "lovelace/resources/update",
+            "resource_id": "old",
+            "res_type": "css",
+            "url": "/local/theme.css",
+        }
+
+    async def test_restore_does_not_recreate_on_other_core_errors(self, monkeypatch):
+        calls: list[dict] = []
+
+        async def _fake_ws_send(client: Any, message: dict[str, Any]) -> Any:
+            calls.append(message)
+            raise HomeAssistantCommandError("Command failed: bad", "invalid_format")
+
+        monkeypatch.setattr(backup_manager, "_ws_send", _fake_ws_send)
+
+        with pytest.raises(HomeAssistantCommandError):
+            await backup_manager._restore_dashboard_resource(
+                MagicMock(), "old", dict(_SNAPSHOT)
+            )
+
+        assert [c["type"] for c in calls] == ["lovelace/resources/update"]

@@ -622,6 +622,7 @@ class CardDefinitions:
         for path, card in _cards(config, partial):
             card_type = card.get("type")
             if not isinstance(card_type, str):
+                # The frontend's createCardElement error for an untyped card.
                 if path not in partial:
                     warnings.append(f"{path}: no card type configured")
             elif card_type.startswith("custom:"):
@@ -752,6 +753,9 @@ def _walk_card(
     partial: bool = False,
     type_only: set[str] | None = None,
 ) -> None:
+    """Collect card positions by the search walk's discovery heuristic (common
+    container keys, not a frontend contract); a custom card's children are
+    only type-checked (``partial``)."""
     if not isinstance(card, dict) or depth > 50:
         return
     if not container or "type" in card:
@@ -769,7 +773,8 @@ def _walk_card(
             partial=nested_partial,
             type_only=type_only,
         )
-    # entity-filter's ``card`` holds options for its rows, not a card.
+    # entity-filter's ``card`` is skipped: the parent injects its ``entities``,
+    # so its editor struct cannot check it.
     if (
         card.get("type") == "conditional"
         or str(card.get("type", "")).startswith("custom:")
