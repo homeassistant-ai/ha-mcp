@@ -755,7 +755,7 @@ requires-dist = [
     { name = "exceptiongroup", specifier = ">=1.2.2" },
     { name = "griffelib", specifier = ">=2.0.0" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1,<0.29" },
-    { name = "httpx2", specifier = ">=2.5.0" },
+    { name = "httpx2", specifier = ">=2.10.0" },
     { name = "joserfc", specifier = ">=1.5.0" },
     { name = "jsonref", specifier = ">=1.1.0" },
     { name = "jsonschema", specifier = ">=4.20.0" },
