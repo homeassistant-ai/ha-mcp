@@ -95,6 +95,39 @@ class TestRevisions:
         assert len(current["history"]) == hc.MAX_HISTORY
         assert first["error"]["code"] == "not_found"
 
+    def test_a_deleted_scope_frees_its_place_under_the_scope_limit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(hc, "MAX_SCOPES", 2)
+
+        async def scenario() -> Any:
+            book = _book()
+            await _write(book, "topic:a", "a", 0)
+            await _write(book, "topic:b", "b", 0)
+            full = await _write(book, "topic:c", "c", 0)
+            await _write(book, "topic:a", None, 1)
+            return full, await _write(book, "topic:c", "c", 0)
+
+        full, after_delete = run(scenario())
+        assert full["error"]["code"] == "limit"
+        assert after_delete["success"] is True
+
+    def test_deleted_scopes_do_not_pile_up_without_bound(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(hc, "MAX_SCOPES", 2)
+        store = FakeStore()
+
+        async def scenario() -> None:
+            book = _book(store)
+            for n in range(5):
+                await _write(book, f"topic:t{n}", "x", 0)
+                await _write(book, f"topic:t{n}", None, 1)
+
+        run(scenario())
+        assert len(store.data["scopes"]) <= 2 * hc.MAX_SCOPES
+        assert "topic:t4" in store.data["scopes"]
+
     def test_documents_survive_a_restart(self) -> None:
         store = FakeStore()
         run(_write(_book(store), "area:bath", "# Bath\nslow floor heating", 0))

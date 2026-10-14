@@ -181,7 +181,8 @@ class HomeContextBook:
                 )
             if content is None and self.current(scope) is None:
                 return _failure("not_found", f"{scope} has no content to delete")
-            if scope not in scopes and len(scopes) >= MAX_SCOPES:
+            live = sum(1 for name in scopes if self.current(name) is not None)
+            if self.current(scope) is None and live >= MAX_SCOPES:
                 return _failure("limit", f"At most {MAX_SCOPES} scopes are stored")
             rev = {
                 "revision": latest + 1,
@@ -192,7 +193,10 @@ class HomeContextBook:
                 "note": note,
             }
             revisions = [*scopes.get(scope, []), rev][-MAX_HISTORY:]
-            updated = {**scopes, scope: revisions}
+            # Least recently written first, so pruning drops the oldest deletion.
+            updated = {name: r for name, r in scopes.items() if name != scope}
+            updated[scope] = revisions
+            _prune_deleted(updated)
             await self._store.async_save({"scopes": updated})
             self._scopes = updated
         return {
@@ -208,6 +212,13 @@ def _now_iso() -> str:
     from homeassistant.util import dt as dt_util
 
     return str(dt_util.utcnow().isoformat())
+
+
+def _prune_deleted(scopes: dict[str, list[dict[str, Any]]]) -> None:
+    """Keep the history of at most MAX_SCOPES deleted scopes."""
+    deleted = [name for name, revs in scopes.items() if revs[-1]["content"] is None]
+    for name in deleted[: max(0, len(deleted) - MAX_SCOPES)]:
+        del scopes[name]
 
 
 def get_book(hass: HomeAssistant, store_factory: Callable[[], Any]) -> HomeContextBook:

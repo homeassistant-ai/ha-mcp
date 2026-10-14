@@ -30,6 +30,21 @@ async def _set(mcp: MCPAssertions, scope: str, expected: int, content: str) -> A
     )
 
 
+async def _delete(mcp_client: Any, scope: str) -> None:
+    """Remove a test document at whatever revision a failed test left it."""
+    current = await safe_call_tool(mcp_client, "ha_get_home_context", {"scope": scope})
+    if current.get("exists"):
+        await safe_call_tool(
+            mcp_client,
+            "ha_manage_home_context",
+            {
+                "action": "delete",
+                "scope": scope,
+                "expected_revision": current["latest_revision"],
+            },
+        )
+
+
 async def test_home_context_lifecycle(mcp_client: Any) -> None:
     scope = _scope()
     async with MCPAssertions(mcp_client) as mcp:
@@ -82,11 +97,7 @@ async def test_home_context_lifecycle(mcp_client: Any) -> None:
             listing = await mcp.call_tool_success("ha_get_home_context", {})
             assert scope in [row["scope"] for row in listing["scopes"]]
         finally:
-            await safe_call_tool(
-                mcp_client,
-                "ha_manage_home_context",
-                {"action": "delete", "scope": scope, "expected_revision": 3},
-            )
+            await _delete(mcp_client, scope)
 
 
 async def test_a_write_on_a_described_entity_reminds_the_agent(
@@ -116,12 +127,4 @@ async def test_a_write_on_a_described_entity_reminds_the_agent(
                 warnings
             )
         finally:
-            await safe_call_tool(
-                mcp_client,
-                "ha_manage_home_context",
-                {
-                    "action": "delete",
-                    "scope": scope,
-                    "expected_revision": revision + 1,
-                },
-            )
+            await _delete(mcp_client, scope)
