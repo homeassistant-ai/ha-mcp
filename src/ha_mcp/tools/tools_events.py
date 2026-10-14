@@ -23,6 +23,35 @@ from .tool_hints import read_only_hints
 MAX_CAPTURED_EVENT_BYTES = 1024 * 1024
 
 
+def _serialized_size(value: Any) -> int:
+    """Return the compact UTF-8 JSON size of a capture response value."""
+    return len(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def _limit_capture_response(result: dict[str, Any], max_bytes: int) -> dict[str, Any]:
+    """Drop trailing events until the complete serialized result fits."""
+    events = result["events"]
+    while events and _serialized_size(result) > max_bytes:
+        events.pop()
+        result["events_omitted_due_to_size"] += 1
+        result["stop_reason"] = "response_size_limit"
+    return result
+
+
+def _append_event_within_budget(
+    event: dict[str, Any], events: list[dict[str, Any]], captured_bytes: int
+) -> tuple[int, bool]:
+    """Append an event only when the aggregate event payload budget allows it."""
+    event_size = _serialized_size(event)
+    new_size = captured_bytes + event_size
+    if new_size > MAX_CAPTURED_EVENT_BYTES:
+        return captured_bytes, False
+    events.append(event)
+    return new_size, True
+
+
 def _validate_event_type(event_type: str) -> str:
     """Normalize a capture event type and refuse the secret-bearing approval event."""
     event_type = event_type.strip()
@@ -101,9 +130,9 @@ class EventTools:
 
         Do not use this tool to publish events; use ``ha_call_event`` instead.
         Use it to inspect events without controlling entities or persisting
-        payloads. Sensitive approval-response events are blocked, returned data
-        is capped at 1 MiB, and the subscription is released on completion or
-        cancellation.
+        payloads. Sensitive approval-response events are blocked, the serialized
+        response is capped at 1 MiB, and the subscription is released on
+        completion or cancellation.
         """
         event_type = _validate_event_type(event_type)
 
@@ -168,24 +197,19 @@ class EventTools:
                     )
                 ):
                     continue
-                serialized_event = json.dumps(
-                    event, ensure_ascii=False, separators=(",", ":")
-                ).encode("utf-8")
-                if (
-                    captured_event_bytes + len(serialized_event)
-                    > MAX_CAPTURED_EVENT_BYTES
-                ):
+                captured_event_bytes, event_fits = _append_event_within_budget(
+                    event, events, captured_event_bytes
+                )
+                if not event_fits:
                     events_omitted_due_to_size += 1
                     stop_reason = "response_size_limit"
                     break
-                captured_event_bytes += len(serialized_event)
-                events.append(event)
 
             if events_seen >= max_events and stop_reason != "response_size_limit":
                 stop_reason = "event_limit"
 
             dropped_count = getattr(queue, "dropped_count", 0)
-            return {
+            result = {
                 "success": True,
                 "event_type": event_type,
                 "events": events,
@@ -195,6 +219,7 @@ class EventTools:
                 "stop_reason": stop_reason,
                 "elapsed_seconds": round(loop.time() - started_at, 3),
             }
+            return _limit_capture_response(result, MAX_CAPTURED_EVENT_BYTES)
         finally:
             await websocket.release_subscription(subscription_id)
 

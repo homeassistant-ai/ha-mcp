@@ -1,6 +1,7 @@
 """Unit tests for bounded Home Assistant event capture."""
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -145,14 +146,19 @@ class TestHaCaptureEvents:
         first_event = {"event_type": "test_event", "data": {"n": 1}}
         queue.put_nowait({"event": first_event})
         queue.put_nowait(
-            {"event": {"event_type": "test_event", "data": {"payload": "x" * 100}}}
+            {
+                "event": {
+                    "event_type": "test_event",
+                    "data": {"payload": "x" * 400},
+                }
+            }
         )
         tools, websocket, _client = _make_tools(queue)
         monkeypatch.setattr(
             "ha_mcp.tools.tools_events.get_websocket_client",
             AsyncMock(return_value=websocket),
         )
-        monkeypatch.setattr("ha_mcp.tools.tools_events.MAX_CAPTURED_EVENT_BYTES", 50)
+        monkeypatch.setattr("ha_mcp.tools.tools_events.MAX_CAPTURED_EVENT_BYTES", 280)
 
         result = await tools.ha_capture_events(
             event_type="test_event", duration_seconds=10, max_events=5
@@ -162,6 +168,29 @@ class TestHaCaptureEvents:
         assert result["events_seen"] == 2
         assert result["events_omitted_due_to_size"] == 1
         assert result["stop_reason"] == "response_size_limit"
+        assert len(json.dumps(result, separators=(",", ":")).encode("utf-8")) <= 280
+        websocket.release_subscription.assert_awaited_once_with(17)
+
+    @pytest.mark.asyncio
+    async def test_size_limit_includes_result_metadata(self, monkeypatch):
+        queue = asyncio.Queue()
+        matching_event = {"event_type": "test_event", "data": {"n": 1}}
+        queue.put_nowait({"event": matching_event})
+        tools, websocket, _client = _make_tools(queue)
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_events.get_websocket_client",
+            AsyncMock(return_value=websocket),
+        )
+        monkeypatch.setattr("ha_mcp.tools.tools_events.MAX_CAPTURED_EVENT_BYTES", 200)
+
+        result = await tools.ha_capture_events(
+            event_type="test_event", duration_seconds=10, max_events=1
+        )
+
+        assert result["events"] == []
+        assert result["events_omitted_due_to_size"] == 1
+        assert result["stop_reason"] == "response_size_limit"
+        assert len(json.dumps(result, separators=(",", ":")).encode("utf-8")) <= 200
         websocket.release_subscription.assert_awaited_once_with(17)
 
     @pytest.mark.asyncio
