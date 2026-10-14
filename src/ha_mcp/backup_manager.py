@@ -2018,16 +2018,14 @@ async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
         _resolve_dashboard,
     )
 
-    # The set/delete tools accept BOTH the canonical hyphenated url_path
-    # AND HA's internal (underscored) dashboard id, eagerly resolving the
-    # latter before writing. ``_get_dashboard_config_internal`` does NOT
-    # lazy-resolve, so an internal-id identifier 404s with "Unknown config
-    # specified" and the pre-write snapshot is silently skipped. Pre-resolve
-    # to the canonical url_path so capture works for whichever form the
-    # caller passed (matching the form the write tool ultimately targets).
-    fetch_path = entity_id
+    # The set/delete tools accept the canonical url_path, HA's internal
+    # (underscored) dashboard id and the ``default`` alias for Core's
+    # ``lovelace`` item. ``_get_dashboard_config_internal`` does NOT
+    # lazy-resolve (an internal id 404s with "Unknown config specified" and
+    # the snapshot is skipped), so pre-resolve to the form the tool targets.
+    fetch_path = "lovelace" if entity_id == "default" else entity_id
     try:
-        match, _ = await _resolve_dashboard(client, entity_id)
+        match, _ = await _resolve_dashboard(client, fetch_path)
         if match and match.get("url_path"):
             fetch_path = match["url_path"]
     except (HomeAssistantError, ToolError) as err:
