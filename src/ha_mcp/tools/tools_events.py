@@ -10,12 +10,9 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import HomeAssistantClient
 from ..client.websocket_client import get_websocket_client
-from ..errors import create_validation_error
-from ..policy.decisions import APPROVAL_RESPONSE_EVENT
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
-    raise_tool_error,
     register_tool_methods,
 )
 from .tool_hints import read_only_hints
@@ -52,27 +49,6 @@ def _append_event_within_budget(
     return new_size, True
 
 
-def _validate_event_type(event_type: str) -> str:
-    """Normalize a capture event type and refuse the secret-bearing approval event."""
-    event_type = event_type.strip()
-    if not event_type:
-        raise_tool_error(
-            create_validation_error(
-                "event_type cannot be empty or whitespace",
-                parameter="event_type",
-            )
-        )
-    if event_type.casefold() == APPROVAL_RESPONSE_EVENT.casefold():
-        raise_tool_error(
-            create_validation_error(
-                "This event type cannot be captured because it contains a "
-                "sensitive approval PIN",
-                parameter="event_type",
-            )
-        )
-    return event_type
-
-
 class EventTools:
     """Read-only tools for observing Home Assistant event streams."""
 
@@ -87,15 +63,6 @@ class EventTools:
     @log_tool_usage
     async def ha_capture_events(
         self,
-        event_type: Annotated[
-            str,
-            Field(
-                description=(
-                    "Home Assistant event type, e.g. 'zha_event'. Sensitive "
-                    "approval-response events are blocked."
-                )
-            ),
-        ],
         duration_seconds: Annotated[
             int,
             Field(
@@ -126,15 +93,15 @@ class EventTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Capture one Home Assistant event stream for short-term inspection.
+        """Capture only ZHA events for short-term button-event inspection.
 
         Do not use this tool to publish events; use ``ha_call_event`` instead.
         Use it to inspect events without controlling entities or persisting
-        payloads. Sensitive approval-response events are blocked, the serialized
-        response is capped at 1 MiB, and the subscription is released on
-        completion or cancellation.
+        payloads. The event type is fixed to ``zha_event`` to prevent reading
+        unrelated event streams; the serialized response is capped at 1 MiB,
+        and the subscription is released on completion or cancellation.
         """
-        event_type = _validate_event_type(event_type)
+        event_type = "zha_event"
 
         try:
             websocket = await get_websocket_client(
