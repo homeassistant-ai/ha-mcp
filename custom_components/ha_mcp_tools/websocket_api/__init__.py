@@ -303,7 +303,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .. import card_definitions, core_contract, helper_collections
+from .. import card_definitions, core_contract, helper_collections, home_context
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
 from .call_service import _call_service_prep, _do_call_service
 from .config_entries import _config_entries_prep, _do_config_entries
@@ -326,6 +326,7 @@ from .lookups import (
 )
 from .overview import _do_helpers_list, _do_overview, _do_states, _helpers_list_prep
 from .registries import _do_registries
+from .registry import _resolve_registries
 from .schemas import (
     _backup_prep_schema,
     _blueprint_get_schema,
@@ -469,7 +470,14 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *helper_collections.command_specs(vol, er),
         *core_contract.command_specs(vol),
         *card_definitions.command_specs(vol),
+        *home_context.command_specs(vol, _resolve_registries, _home_context_store),
     ]
+
+
+def _home_context_store(hass: HomeAssistant) -> Any:
+    from homeassistant.helpers.storage import Store
+
+    return Store(hass, home_context.STORAGE_VERSION, home_context.STORAGE_KEY)
 
 
 def _build_handler(schema: dict[Any, Any], do_fn: Any, prep: Any = None) -> Any:

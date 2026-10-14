@@ -6,7 +6,7 @@ import re
 
 from homeassistant.generated.config_flows import FLOWS
 
-from .. import card_definitions, core_contract, helper_collections
+from .. import card_definitions, core_contract, helper_collections, home_context
 
 __all__ = [
     "ALL_SEARCH_TYPES",
@@ -179,6 +179,7 @@ CAPABILITIES: list[str] = [
     *helper_collections.CAPABILITIES,
     core_contract.CAPABILITY,
     *card_definitions.CAPABILITIES,
+    *home_context.CAPABILITIES,
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates

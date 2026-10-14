@@ -1,11 +1,16 @@
 """Static text the server publishes about its tools.
 
 Holds the search tool description, the BM25 keyword boosts, the lite
-docstring variants with their destinations, and the skill keyword block.
-``HomeAssistantSmartMCPServer`` exposes each one as a class attribute.
+docstring variants with their destinations, the skill keyword block and
+the instruction sections. ``HomeAssistantSmartMCPServer`` exposes each one as
+a class attribute.
 """
 
 from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Description for the unified search tool
 SEARCH_TOOL_DESCRIPTION = (
@@ -552,6 +557,35 @@ READ_ONLY_INSTRUCTIONS = (
     "user must turn off Read Only Mode in the ha-mcp settings "
     "UI (Tools tab) or the app (add-on) configuration."
 )
+
+# Soft enforcement of the home context: the instruction asks for the read, and
+# HomeContextHintMiddleware names the covering documents on write results.
+HOME_CONTEXT_INSTRUCTIONS = (
+    "## Home context\n"
+    "The household may have described parts of the home (rooms, devices, "
+    "systems such as heating or PV, and rules to keep) in versioned home "
+    "context documents. Before you change anything in the home, read the "
+    "current revision with ha_get_home_context for the narrowest scope you "
+    "touch (an entity, device or area; broader documents come with it). "
+    "Respect what it says. When your change makes a document outdated, or you "
+    "learn something lasting about the home, update it with "
+    "ha_manage_home_context, passing the revision you read."
+)
+
+
+def home_context_instructions() -> list[str]:
+    """The home context section, unless the user disabled its read tool."""
+    try:
+        from .settings_ui._persistence import effective_tool_config
+
+        tools = effective_tool_config().get("tools", {})
+    except Exception:
+        logger.debug("tool visibility lookup failed", exc_info=True)
+        return [HOME_CONTEXT_INSTRUCTIONS]
+    if tools.get("ha_get_home_context") == "disabled":
+        return []
+    return [HOME_CONTEXT_INSTRUCTIONS]
+
 
 # ha_report_issue is a mandatory tool, so this always points at a tool the
 # client has. The issue tracker's report gate closes bug reports without it.
