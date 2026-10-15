@@ -21,10 +21,12 @@ from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from .auto_backup import with_auto_backup
 from .config_entry_flow_walker import ReconfigureStatus
-from .config_entry_identity import ReconfigureIdentity
+from .config_entry_identity import (
+    ReconfigureIdentity,
+    build_reconfigure_rollback_metadata,
+)
 from .config_entry_reconfigure import (
     PreparedReconfigure,
-    build_reconfigure_rollback_metadata,
     prepare_reconfigure_request,
     reconfigure_config_entry,
 )

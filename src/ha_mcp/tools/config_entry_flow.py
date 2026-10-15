@@ -33,7 +33,7 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, ClassVar, Literal, NoReturn
@@ -756,6 +756,48 @@ async def config_entry_of_domain(
     return config_entry
 
 
+COMPONENT_DOMAIN = "ha_mcp_tools"
+
+
+def refuse_component_entry(
+    entry_or_domain: Mapping[str, Any] | str | None,
+    *,
+    action: str,
+    entry_id: str | None = None,
+) -> None:
+    """Refuse ``action`` on a config entry of ha-mcp's own custom component.
+
+    Those entries hold this server's settings and credentials, and writing one
+    reloads or alters the server answering the call. The HA UI and the
+    developer tools (which defer own-entry writes) are the paths for them, so
+    the generic integration tools must not become a bypass.
+    """
+    if isinstance(entry_or_domain, Mapping):
+        domain = entry_or_domain.get("domain")
+        entry_id = entry_id or entry_or_domain.get("entry_id")
+    else:
+        domain = entry_or_domain
+    # Normalised like ha_call_service's guard, so a mixed-case domain that
+    # Core would still resolve cannot slip past.
+    if not isinstance(domain, str) or domain.strip().lower() != COMPONENT_DOMAIN:
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Cannot {action} ha-mcp's own '{COMPONENT_DOMAIN}' integration "
+            "with this tool: its config entries hold the server's own settings "
+            "and credentials.",
+            suggestions=[
+                "Use the Home Assistant UI: Settings > Devices & services > "
+                "HA-MCP Custom Component > Configure.",
+                "With developer mode on, use ha_dev_manage_settings or "
+                "ha_dev_manage_server.",
+            ],
+            context={"entry_id": entry_id, "domain": domain},
+        )
+    )
+
+
 async def _update_config_entry_options(
     client: Any,
     entry_id: str,
@@ -766,6 +808,9 @@ async def _update_config_entry_options(
 ) -> dict[str, Any]:
     _reject_redaction_sentinels(config_dict)
     config_entry = await config_entry_of_domain(client, entry_id, expected_domain)
+    refuse_component_entry(
+        config_entry, action="change the options of", entry_id=entry_id
+    )
     actual_domain = config_entry.get("domain")
 
     flow_result = await client.start_options_flow(entry_id)
