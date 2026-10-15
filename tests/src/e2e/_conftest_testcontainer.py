@@ -306,7 +306,10 @@ def _build_ha_testcontainer(
     # an HA boot with missing dependencies.
     preinit_cmds: list[str] = []
 
-    manifest_reqs = _collect_manifest_requirements(config_path)
+    # The embedded lane's wheel supplies the server; see is_server_requirement.
+    manifest_reqs = _collect_manifest_requirements(
+        config_path, skip_server=embedded_wheel_name is not None
+    )
     if manifest_reqs:
         quoted = " ".join(shlex.quote(r) for r in manifest_reqs)
         # PyPI-first with wheels-index fallback. The image env pins
