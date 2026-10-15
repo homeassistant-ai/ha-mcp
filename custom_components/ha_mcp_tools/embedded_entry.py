@@ -34,6 +34,7 @@ from .const import (
     DATA_WEBHOOK_ID,
     DOMAIN,
     OPT_ENABLE_SIDEBAR_PANEL,
+    OPT_ENABLE_STARTUP_NOTIFICATION,
     OPT_ENABLE_WEBHOOK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
@@ -195,16 +196,41 @@ async def async_remove_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     await async_revoke_credentials_on_remove(hass, entry)
 
 
+# Options the running server never reads after bring-up. Changing only these
+# must not reload the entry: the reload restarts the embedded server and drops
+# every in-flight MCP request, including the client call that saved the option,
+# which then sees a transport error and cannot tell whether the change applied.
+_RELOAD_FREE_OPTIONS = frozenset({OPT_ENABLE_STARTUP_NOTIFICATION})
+
+
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload the entry when its OPTIONS change (port / auth / pip spec / URL).
 
     Ignores the ``entry.data`` writes the background bring-up performs (webhook
     id, secret path, provisioned token ids, last pip spec): those fire the same
-    update listener but must not reload the entry.
+    update listener but must not reload the entry. A change limited to
+    ``_RELOAD_FREE_OPTIONS`` is applied in place instead of reloading.
     """
+    from .embedded_setup import (  # lazy (see import note)
+        async_dismiss_startup_notification,
+    )
+
     domain_data = hass.data.get(DOMAIN, {})
-    if domain_data.get(DATA_LAST_OPTIONS) == dict(entry.options):
+    previous = domain_data.get(DATA_LAST_OPTIONS)
+    current = dict(entry.options)
+    if previous == current:
         return
+    if isinstance(previous, dict):
+        changed = {
+            key
+            for key in previous.keys() | current.keys()
+            if previous.get(key) != current.get(key)
+        }
+        if changed <= _RELOAD_FREE_OPTIONS:
+            domain_data[DATA_LAST_OPTIONS] = current
+            if not current.get(OPT_ENABLE_STARTUP_NOTIFICATION, True):
+                async_dismiss_startup_notification(hass)
+            return
     await hass.config_entries.async_reload(entry.entry_id)
 
 

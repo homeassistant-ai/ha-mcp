@@ -250,6 +250,64 @@ class TestOptionsUpdatedListener:
         await pkg._async_options_updated(hass, entry)
         hass.config_entries.async_reload.assert_not_awaited()
 
+    async def test_startup_notification_toggle_applies_without_reload(
+        self, monkeypatch
+    ):
+        # A reload restarts the embedded server and drops the MCP request that
+        # saved the option, so a notification-only change is applied in place.
+        dismiss = MagicMock()
+        monkeypatch.setattr(esetup, "async_dismiss_startup_notification", dismiss)
+        hass = _make_hass()
+        entry = _make_entry(
+            options={"server_port": 9584, "enable_startup_notification": False}
+        )
+        hass.data[DOMAIN] = {
+            DATA_LAST_OPTIONS: {
+                "server_port": 9584,
+                "enable_startup_notification": True,
+            }
+        }
+
+        await pkg._async_options_updated(hass, entry)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+        dismiss.assert_called_once_with(hass)
+        assert hass.data[DOMAIN][DATA_LAST_OPTIONS] == dict(entry.options)
+
+    async def test_enabling_startup_notification_does_not_dismiss(self, monkeypatch):
+        dismiss = MagicMock()
+        monkeypatch.setattr(esetup, "async_dismiss_startup_notification", dismiss)
+        hass = _make_hass()
+        entry = _make_entry(options={"enable_startup_notification": True})
+        hass.data[DOMAIN] = {DATA_LAST_OPTIONS: {"enable_startup_notification": False}}
+
+        await pkg._async_options_updated(hass, entry)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+        dismiss.assert_not_called()
+
+    async def test_notification_toggle_with_other_change_still_reloads(self):
+        hass = _make_hass()
+        entry = _make_entry(
+            options={"server_port": 9999, "enable_startup_notification": False}
+        )
+        hass.data[DOMAIN] = {
+            DATA_LAST_OPTIONS: {
+                "server_port": 9584,
+                "enable_startup_notification": True,
+            }
+        }
+
+        await pkg._async_options_updated(hass, entry)
+        hass.config_entries.async_reload.assert_awaited_once_with("entry-1")
+
+    async def test_reloads_without_an_options_snapshot(self):
+        hass = _make_hass()
+        entry = _make_entry(options={"enable_startup_notification": False})
+
+        await pkg._async_options_updated(hass, entry)
+        hass.config_entries.async_reload.assert_awaited_once_with("entry-1")
+
 
 class TestDomainDispatch:
     """The package ``__init__`` dispatcher routes on ``entry.data[entry_type]``.

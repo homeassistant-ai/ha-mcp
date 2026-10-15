@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 from aiohttp import ClientError
 from awesomeversion import AwesomeVersion, AwesomeVersionException
 from homeassistant.components import persistent_notification
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
@@ -213,6 +213,12 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
             await async_teardown_server(hass)
         _create_issue(hass, "start", str(err))
         _drop_pending_update_notify(hass)
+
+
+@callback
+def async_dismiss_startup_notification(hass: HomeAssistant) -> None:
+    """Remove the connect notification created by the last server bring-up."""
+    persistent_notification.async_dismiss(hass, _NOTIFICATION_ID)
 
 
 async def async_teardown_server(hass: HomeAssistant) -> None:
