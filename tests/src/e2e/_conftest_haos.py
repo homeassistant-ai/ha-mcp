@@ -351,9 +351,9 @@ def _wait_for_haos_tools_entry_loaded(
                 entries = [e for e in resp.json() if e.get("domain") == "ha_mcp_tools"]
                 if any(e.get("state") == "loaded" for e in entries):
                     return
-        except (requests.exceptions.RequestException, json.JSONDecodeError):
+        except (requests.exceptions.RequestException, json.JSONDecodeError) as err:
             # Core may still be restarting its HTTP layer; poll again.
-            pass
+            logger.debug("Tools-entry poll failed, retrying: %r", err)
         time.sleep(1)
     pytest.fail(
         "The ha_mcp_tools tools entry did not load within 180s; "
