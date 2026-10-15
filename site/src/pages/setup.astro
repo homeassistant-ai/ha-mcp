@@ -1637,7 +1637,7 @@ volumes:
           </div>`)
           : `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
             <p class="text-slate-300 text-sm font-medium">Your connect URL (local)</p>
-            <p class="text-slate-400 text-xs mt-1">Use the direct LAN URL from the entry's Configure screen (also in the Home Assistant log): <code class="bg-slate-800 px-1 rounded">http://&lt;ha-ip&gt;:9584/private_&lt;random&gt;</code>.</p>
+            <p class="text-slate-400 text-xs mt-1">Use the direct LAN URL from the entry's Configure screen: <code class="bg-slate-800 px-1 rounded">http://&lt;ha-ip&gt;:9584/private_&lt;random&gt;</code>.</p>
             <p class="text-slate-400 text-xs mt-2"><strong class="text-slate-300">Want local-only?</strong> Turn off <strong>Remote access via webhook</strong> in the entry options — no webhook is registered at all; the direct port and sidebar panel keep working.</p>
           </div>`;
         deployInstr = `<div class="instruction-block">
@@ -2530,7 +2530,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
               <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
                 <li><strong>Secret URL</strong> (${isComponent ? '<code class="bg-slate-800 px-1 rounded">none</code>, the simplest start' : 'OAuth off, the default'}): Authentication <strong>None</strong> (Detected). The URL is the credential and no OAuth client section appears. Keep the detected setting; manually forcing a different authentication setting may not help.</li>
                 <li><strong>Home Assistant sign-in</strong> (<code class="bg-slate-800 px-1 rounded">ha_auth</code>): Authentication <strong>Always required</strong>, OAuth client <strong>Use Anthropic's hosted client metadata</strong> (both Detected). No Client ID or Secret.</li>
-                <li><strong>Legacy</strong> (<code class="bg-slate-800 px-1 rounded">legacy</code>): Authentication <strong>Always required</strong>, OAuth client <strong>Use your own OAuth client</strong>, then paste the Client ID and Client Secret from ${isComponent ? "the integration's Options page" : 'the app log'}.</li>
+                <li><strong>Legacy</strong> (<code class="bg-slate-800 px-1 rounded">legacy</code>): Authentication <strong>Always required</strong>, OAuth client <strong>Use your own OAuth client</strong>, then paste the Client ID and Client Secret from ${isComponent ? "the entry's Configure screen" : 'the app log'}.</li>
               </ul>` : `
               <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
                 <li>Authentication <strong>None</strong> (Detected). The secret path in the URL is the credential; this deployment has no OAuth client section.</li>
@@ -2555,9 +2555,9 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
           <h3 class="instruction-title">Gemini Spark Configuration</h3>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li>Set up the <strong>HA-MCP Server</strong> custom component (in-process server + built-in webhook) — see the Quick Setup box above.</li>
-            <li>In the integration's <strong>Options</strong>, set <strong>Authentication mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code>.</li>
+            <li>On the entry's <strong>Configure</strong> screen, set <strong>Authentication mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code>.</li>
             <li>When Home Assistant shows a repair prompt, <strong>restart Home Assistant</strong> — legacy mode needs a restart to take effect.</li>
-            <li>Back on the integration's Options page, copy the <strong>Client ID</strong> and <strong>Client Secret</strong> (also printed in the Home Assistant log).</li>
+            <li>Back on the entry's <strong>Configure</strong> screen, copy the <strong>Client ID</strong> and <strong>Client Secret</strong>.</li>
             <li>In Gemini, choose <strong>Set up a custom connected app</strong> and paste your <strong>built-in webhook URL</strong> (<code class="bg-slate-800 px-1 rounded">https://&lt;your-ha-domain&gt;/api/webhook/&lt;webhook-id&gt;</code>, shown on the entry's Configure screen) as the server URL. Legacy OAuth's <code class="bg-slate-800 px-1 rounded">/authorize</code> and <code class="bg-slate-800 px-1 rounded">/token</code> are served on your Home Assistant host, so a direct-port or tunnel URL (cloudflared/custom) will not complete the OAuth flow with Spark.</li>
             <li>Expand <strong>Advanced settings</strong> and paste in the Client ID and Client Secret.</li>
             <li>Click <strong>Next</strong> and complete Google's account-linking flow.</li>
@@ -2690,7 +2690,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
             <div class="bg-purple-900/20 border border-purple-700/50 rounded-lg p-3 mt-3">
               <p class="text-purple-300 text-sm font-medium">Client ID required: ha_auth registers one automatically (2.0.0+); legacy as fallback</p>
               <p class="text-purple-200/80 text-xs mt-1">Copilot CLI's remote MCP setup requires a Client ID and performs dynamic client registration. As of component 2.0.0 the <code class="bg-slate-800 px-1 rounded">ha_auth</code> mode serves a registration endpoint, so keep <strong>Authentication mode</strong> on <code class="bg-slate-800 px-1 rounded">ha_auth</code> — Copilot CLI registers a client automatically and signs in with your Home Assistant account.</p>
-              <p class="text-purple-200/80 text-xs mt-2">On older component versions (or if registration fails): in the HA-MCP Server integration's <strong>Options</strong>, set <strong>Authentication mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code> and restart Home Assistant when the repair prompts you. Then copy the generated <strong>Client ID</strong> and <strong>Client Secret</strong> from the Options page (also printed in the Home Assistant log) into Copilot CLI's Client ID and secret fields. Use your <strong>built-in webhook URL</strong> (<code class="bg-slate-800 px-1 rounded">https://&lt;your-ha-domain&gt;/api/webhook/&lt;webhook-id&gt;</code>) as the server URL — legacy OAuth is served on your Home Assistant host, so a direct-port or tunnel URL won't complete the OAuth flow. See the <a href="${base}/faq#copilot-cli-oauth-legacy" class="text-purple-300 hover:underline">FAQ</a> for details.</p>
+              <p class="text-purple-200/80 text-xs mt-2">On older component versions (or if registration fails): on the HA-MCP Server entry's <strong>Configure</strong> screen, set <strong>Authentication mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code> and restart Home Assistant when the repair prompts you. Then copy the generated <strong>Client ID</strong> and <strong>Client Secret</strong> from that screen into Copilot CLI's Client ID and secret fields. Use your <strong>built-in webhook URL</strong> (<code class="bg-slate-800 px-1 rounded">https://&lt;your-ha-domain&gt;/api/webhook/&lt;webhook-id&gt;</code>) as the server URL — legacy OAuth is served on your Home Assistant host, so a direct-port or tunnel URL won't complete the OAuth flow. See the <a href="${base}/faq#copilot-cli-oauth-legacy" class="text-purple-300 hover:underline">FAQ</a> for details.</p>
             </div>
           </div>` : legacyMethodNotice('Copilot CLI');
         }
