@@ -20,13 +20,14 @@ configuration:
       de Home Assistant antaŭ riskaj ŝanĝoj. Ĝi ŝanĝas nur ĉi tiun konsilon; aŭtomataj
       redaktaj momentfotoj havas sian propran agordon.
   custom_instructions:
-    name: Custom server instructions
-    description: Text sent to every AI assistant that connects, as part of the MCP
-      server instructions — for example where household notes are kept and when to
-      read or update them. Also part of the prompt of Home Assistant conversation
-      agents (Assist) that use this toolset. Use it for guidance that should reach
-      all your clients at once; keep it short and free of secrets. Leave empty to
-      add nothing. Requires restart; clients see the change when they reconnect.
+    name: Propraj servilaj instrukcioj
+    description: Teksto sendita al ĉiu AI-asistanto kiu konektiĝas, kiel parto de
+      la instrukcioj de la serviloj MCP — ekzemple kie hejmaj notoj estas konservitaj
+      kaj kiam legi aŭ ĝisdatigi ilin. Ankaŭ parto de la prompto de hejmaŭtomatigaj
+      konversaciaj agentoj (Assist) de Home Assistant, kiuj uzas ĉi tiun ilaron. Uzu
+      ĝin por gvidado, kiu devas atingi ĉiujn viajn klientojn samtempe; tenu ĝin mallonga
+      kaj libera de sekretoj. Lasu malplena por aldoni nenion. Postulas relumon; klientoj
+      vidas la ŝanĝon kiam ili rekonektiĝas.
   enable_tool_search:
     name: Ebligi ilo-serĉon
     description: 'Anstataŭigu la plenan il-katalogon per serĉ-bazita malkovro. Reduktas

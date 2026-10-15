@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "URL di base del motore per gli screenshot. Lascia vuoto per il rilevamento automatico tramite Supervisor. Ha effetto immediato.",
     "advanced.enable_websocket.label": "Attiva il WebSocket",
     "advanced.enable_websocket.help": "Monitoraggio dello stato tramite WebSocket. Se disabilitato, il sistema passa al polling e molte funzionalità degli strumenti si riducono.",
+    "advanced.custom_instructions.label": "Istruzioni personalizzate del server",
+    "advanced.custom_instructions.help": "Testo inviato a ogni assistente IA che si connette, come parte delle istruzioni del server MCP — ad esempio dove sono conservate le note della casa e quando leggerle o aggiornarle. Fa anche parte del prompt degli agenti di conversazione di Home Assistant (Assist) che utilizzano questo set di strumenti. Usalo per indicazioni che devono raggiungere tutti i client in una volta sola; tienilo breve e privo di segreti. Lascia vuoto per non aggiungere nulla. Richiede il riavvio; i client vedono la modifica quando si riconnettono.",
     "advanced.enabled_tool_modules.label": "Moduli di strumenti attivi",
     "advanced.enabled_tool_modules.help": "Nomi dei moduli separati da virgola o 'all'.",
     "advanced.enable_dashboard_partial_tools.label": "Strumenti di aggiornamento parziale delle dashboard",

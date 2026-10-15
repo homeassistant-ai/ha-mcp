@@ -21,13 +21,15 @@ configuration:
       O, yalnız bu ipucunu dəyişdirir; avtomatik redaktə ehtiyat nüsxələrinin öz parametrləri
       var.
   custom_instructions:
-    name: Custom server instructions
-    description: Text sent to every AI assistant that connects, as part of the MCP
-      server instructions — for example where household notes are kept and when to
-      read or update them. Also part of the prompt of Home Assistant conversation
-      agents (Assist) that use this toolset. Use it for guidance that should reach
-      all your clients at once; keep it short and free of secrets. Leave empty to
-      add nothing. Requires restart; clients see the change when they reconnect.
+    name: Xüsusi server təlimatları
+    description: Qoşulan hər bir süni intellekt köməkçisinə MCP server təlimatlarının
+      bir hissəsi olaraq göndərilən mətn — məsələn, ev qeydlərinin harada saxlandığı
+      və onların nə vaxt oxunmalı və ya yenilənməli olduğu. Həmçinin bu alətlər dəstindən
+      istifadə edən Home Assistant söhbət agentlərinin (Assist) sorğusunun bir hissəsidir.
+      Onu bütün müştərilərinizə eyni vaxtda çatmalı olan təlimatlar üçün istifadə
+      edin; onu qısa və məxfi məlumatlardan azad saxlayın. Heç nə əlavə etməmək üçün
+      boş buraxın. Yenidən başladılmasını tələb edir; müştərilər yenidən qoşulduqda
+      dəyişikliyi görürlər.
   enable_beta_features:
     name: Beta funksiyaları aktivləşdir (əsas seçim)
     description: ⚠ TƏHLÜKƏ — bu alətlər Home Assistant qurulumunuza BƏRPAOLUNMAZ ZƏRƏR

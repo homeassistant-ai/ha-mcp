@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "Baza URL de la ekrankopiga motoro. Lasu malplena por aŭtomata malkovro de Supervisor. Aplikiĝas tuj.",
     "advanced.enable_websocket.label": "Ebligi WebSocket",
     "advanced.enable_websocket.help": "Monitorado de WebSocket-stato. Malŝalto falas al balotado kaj malbonigas multajn ilojn.",
+    "advanced.custom_instructions.label": "Propraj servilaj instrukcioj",
+    "advanced.custom_instructions.help": "Teksto sendita al ĉiu AI-asistanto kiu konektiĝas, kiel parto de la instrukcioj de la serviloj MCP — ekzemple kie hejmaj notoj estas konservitaj kaj kiam legi aŭ ĝisdatigi ilin. Ankaŭ parto de la prompto de hejmaŭtomatigaj konversaciaj agentoj (Assist) de Home Assistant, kiuj uzas ĉi tiun ilaron. Uzu ĝin por gvidado, kiu devas atingi ĉiujn viajn klientojn samtempe; tenu ĝin mallonga kaj libera de sekretoj. Lasu malplena por aldoni nenion. Postulas relumon; klientoj vidas la ŝanĝon kiam ili rekonektiĝas.",
     "advanced.enabled_tool_modules.label": "Ebligitaj il-moduloj",
     "advanced.enabled_tool_modules.help": "Komo-dividitaj modulnomoj, aŭ 'all'.",
     "advanced.enable_dashboard_partial_tools.label": "Iloj por parta ĝisdatigo de panelo",

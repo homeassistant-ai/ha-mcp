@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "Ekran görüntüsü mühərrikinin əsas URL-i. Supervisor vasitəsilə avtomatik aşkarlama üçün boş saxlayın. Dərhal tətbiq edilir.",
     "advanced.enable_websocket.label": "WebSocket-i aktivləşdir",
     "advanced.enable_websocket.help": "WebSocket statusunun izlənməsi. Deaktiv edilməsi sorğulamaya (polling) qayıdır və bir çox alətin işini zəiflədir.",
+    "advanced.custom_instructions.label": "Xüsusi server təlimatları",
+    "advanced.custom_instructions.help": "Qoşulan hər bir süni intellekt köməkçisinə MCP server təlimatlarının bir hissəsi olaraq göndərilən mətn — məsələn, ev qeydlərinin harada saxlandığı və onların nə vaxt oxunmalı və ya yenilənməli olduğu. Həmçinin bu alətlər dəstindən istifadə edən Home Assistant söhbət agentlərinin (Assist) sorğusunun bir hissəsidir. Onu bütün müştərilərinizə eyni vaxtda çatmalı olan təlimatlar üçün istifadə edin; onu qısa və məxfi məlumatlardan azad saxlayın. Heç nə əlavə etməmək üçün boş buraxın. Yenidən başladılmasını tələb edir; müştərilər yenidən qoşulduqda dəyişikliyi görürlər.",
     "advanced.enabled_tool_modules.label": "Aktiv alət modulları",
     "advanced.enabled_tool_modules.help": "Vergüllə ayrılmış modul adları və ya 'all'.",
     "advanced.enable_dashboard_partial_tools.label": "İdarə panelinin qismən yenilənməsi alətləri",

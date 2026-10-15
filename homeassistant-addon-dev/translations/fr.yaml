@@ -21,13 +21,15 @@ configuration:
       Cela ne modifie que cette indication ; les sauvegardes automatiques de modification
       ont leur propre paramètre.
   custom_instructions:
-    name: Custom server instructions
-    description: Text sent to every AI assistant that connects, as part of the MCP
-      server instructions — for example where household notes are kept and when to
-      read or update them. Also part of the prompt of Home Assistant conversation
-      agents (Assist) that use this toolset. Use it for guidance that should reach
-      all your clients at once; keep it short and free of secrets. Leave empty to
-      add nothing. Requires restart; clients see the change when they reconnect.
+    name: Instructions personnalisées du serveur
+    description: Texte envoyé à chaque assistant IA qui se connecte, dans le cadre
+      des instructions du serveur MCP — par exemple, l'emplacement des notes du foyer
+      et le moment de les lire ou de les mettre à jour. Fait également partie du prompt
+      des agents de conversation Home Assistant (Assist) qui utilisent cet ensemble
+      d'outils. Utilisez-le pour fournir des directives destinées à tous vos clients
+      en même temps ; restez concis et évitez d'y inclure des secrets. Laissez vide
+      pour ne rien ajouter. Nécessite un redémarrage ; les clients voient le changement
+      lorsqu'ils se reconnectent.
   enable_beta_features:
     name: Activer les fonctionnalités bêta (principal)
     description: ⚠ DANGER — ces outils peuvent ENDOMMAGER DÉFINITIVEMENT votre installation
