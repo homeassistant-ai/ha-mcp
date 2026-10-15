@@ -205,8 +205,8 @@ async def test_none_mode_refusal_is_logged(
 
 
 async def test_none_mode_refusal_log_cannot_be_forged(
-    unified_view_client_factory, caplog
-):
+    unified_view_client_factory: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     """An encoded newline in the callback must not start a second log line."""
     client = await unified_view_client_factory(mode="none")
     with caplog.at_level(logging.WARNING):
