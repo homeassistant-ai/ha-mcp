@@ -5,6 +5,8 @@ Split from test_embedded_setup.py, whose fakes and fixtures it reuses.
 
 from __future__ import annotations
 
+import pytest
+
 from custom_components.ha_mcp_tools.const import (
     DATA_MANAGER,
     DOMAIN,
@@ -12,12 +14,23 @@ from custom_components.ha_mcp_tools.const import (
     ISSUE_START_FAILED,
 )
 
-from .test_embedded_setup import _make_entry, _make_hass, esetup
+from .test_embedded_setup import (
+    _make_entry,
+    _make_hass,
+    esetup,
+    install_spies,
+    make_fake_manager,
+)
 
-# pytest registers a fixture under its own name, so the aliases keep ruff from
-# reading the test parameters as redefinitions.
-from .test_embedded_setup import _spy as _spy_fixture  # noqa: F401
-from .test_embedded_setup import fake_manager as _fake_manager_fixture  # noqa: F401
+
+@pytest.fixture
+def fake_manager(monkeypatch: pytest.MonkeyPatch) -> type:
+    return make_fake_manager(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def _spy(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_spies(monkeypatch)
 
 
 class TestBringUpRepairs:
