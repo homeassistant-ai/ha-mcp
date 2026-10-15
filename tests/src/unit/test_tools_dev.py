@@ -334,11 +334,11 @@ class TestManageServer:
         assert result["data"]["component_server_entry"]["entry_id"] == "server-e"
         client.abort_options_flow.assert_any_await("tools-flow")
 
-    async def test_update_source_requires_pip_spec(self):
+    async def test_update_source_requires_pip_spec(self) -> None:
         with pytest.raises(ToolError, match="pip_spec"):
             await DevTools(_mock_client()).ha_dev_manage_server(action="update_source")
 
-    def test_update_source_no_longer_takes_a_channel(self):
+    def test_update_source_no_longer_takes_a_channel(self) -> None:
         # Each component release pins its server; the channel selector is gone.
         assert "channel" not in signature(DevTools.ha_dev_manage_server).parameters
 

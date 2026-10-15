@@ -30,7 +30,6 @@ import asyncio
 import importlib
 import importlib.metadata
 import importlib.util
-import inspect
 import logging
 import os
 import site
@@ -1141,7 +1140,7 @@ class EmbeddedServerManager:
         already matches: removing the other server distribution deletes the
         ``ha_mcp`` files both of them own.
         """
-        kwargs = self._pip_kwargs()
+        kwargs = pip_kwargs(self._hass.config.config_dir)
         timeout = max(int(kwargs.get("timeout") or 0), _PIP_INSTALL_TIMEOUT_SECONDS)
         installed = await self._async_run_tracked_install_job(
             partial(
@@ -1165,17 +1164,6 @@ class EmbeddedServerManager:
                 kind="package",
             )
 
-    def _pip_kwargs(self) -> dict[str, Any]:
-        """Home Assistant's own pip arguments (constraints file, target dir).
-
-        Core 2026.11 drops ``pip_kwargs``'s ``config_dir`` argument
-        (home-assistant/core#168155); passing it there raises ``TypeError``.
-        """
-        core_pip_kwargs: Any = pip_kwargs  # typed for one Core release only
-        if inspect.signature(core_pip_kwargs).parameters:
-            return dict(core_pip_kwargs(self._hass.config.config_dir))
-        return dict(core_pip_kwargs())
-
     async def _async_remove_distribution(self, dist_name: str) -> bool:
         """Remove a distribution from the same target used for installation.
 
@@ -1185,7 +1173,7 @@ class EmbeddedServerManager:
         cleanup) or fatal (the replaced-source removal, whose failure would
         silently void the reinstall — see ``_async_remove_replaced_source``).
         """
-        target = self._pip_kwargs().get("target")
+        target = pip_kwargs(self._hass.config.config_dir).get("target")
         if target is None:
             result = await self._async_run_tracked_install_job(
                 partial(_uninstall_distribution, dist_name)
