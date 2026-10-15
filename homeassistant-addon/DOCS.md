@@ -353,6 +353,20 @@ When disabled, both the REST and WebSocket clients connect with hostname checkin
 
 Requires app restart to take effect.
 
+### custom_instructions (Advanced)
+
+**Default:** empty
+
+Text that is added to the MCP server instructions, which every AI assistant receives when it connects. With the HA-MCP integration's conversation-agent API enabled, it also becomes part of the prompt of every Home Assistant conversation agent (Assist) that uses this toolset. Use it for guidance that should reach all your clients at once instead of configuring each one separately, for example:
+
+> Household notes are kept in `/share/llm/home.md`. Read them before changing anything in Home Assistant, and add lasting findings there.
+
+Keep it short: every client receives the whole text on each connection, and it adds to that client's context. Do not put secrets in it, since every connected client can read it.
+
+When empty, nothing is added. It is meant to be set by you — through this option, the web settings UI or the `HAMCP_CUSTOM_INSTRUCTIONS` env var — so it carries the same trust as your own client instructions or memory files. The developer tools refuse to change it. An agent that can edit this app's options (for example through `ha_manage_app`) could still change it, so restrict that tool with a security policy if that matters to you. Some MCP clients do not pass server instructions to the model, so check that yours does.
+
+Requires app restart to take effect; clients see the new text after they reconnect.
+
 ### enable_tool_search
 
 **Default:** `false`

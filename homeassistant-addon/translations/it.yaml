@@ -20,6 +20,14 @@ configuration:
       un backup completo di Home Assistant prima di modifiche rischiose. Modifica
       solo questo suggerimento; i backup di modifica automatici hanno una propria
       impostazione.
+  custom_instructions:
+    name: Custom server instructions
+    description: Text sent to every AI assistant that connects, as part of the MCP
+      server instructions — for example where household notes are kept and when to
+      read or update them. Also part of the prompt of Home Assistant conversation
+      agents (Assist) that use this toolset. Use it for guidance that should reach
+      all your clients at once; keep it short and free of secrets. Leave empty to
+      add nothing. Requires restart; clients see the change when they reconnect.
   enable_tool_search:
     name: Attiva la ricerca degli strumenti
     description: 'Sostituisci il catalogo completo degli strumenti con la scoperta

@@ -19,6 +19,14 @@ configuration:
     description: Jak stanowczo asystenci AI są instruowani, aby sugerować pełną kopię
       zapasową Home Assistant przed ryzykownymi zmianami. Zmienia to tylko tę podpowiedź;
       automatyczne kopie zapasowe edycji mają własne ustawienie.
+  custom_instructions:
+    name: Custom server instructions
+    description: Text sent to every AI assistant that connects, as part of the MCP
+      server instructions — for example where household notes are kept and when to
+      read or update them. Also part of the prompt of Home Assistant conversation
+      agents (Assist) that use this toolset. Use it for guidance that should reach
+      all your clients at once; keep it short and free of secrets. Leave empty to
+      add nothing. Requires restart; clients see the change when they reconnect.
   enable_beta_features:
     name: Włącz funkcje beta (główne)
     description: ⚠ NIEBEZPIECZEŃSTWO — te narzędzia mogą TRWALE USZKODZIĆ Twoją instalację

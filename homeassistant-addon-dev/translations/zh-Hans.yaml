@@ -13,6 +13,14 @@ configuration:
   backup_hint:
     name: 备份提示级别
     description: 向 AI 助手提示在进行有风险的更改之前建议进行完整 Home Assistant 备份的强烈程度。它仅更改此提示；自动编辑备份有其自己的设置。
+  custom_instructions:
+    name: Custom server instructions
+    description: Text sent to every AI assistant that connects, as part of the MCP
+      server instructions — for example where household notes are kept and when to
+      read or update them. Also part of the prompt of Home Assistant conversation
+      agents (Assist) that use this toolset. Use it for guidance that should reach
+      all your clients at once; keep it short and free of secrets. Leave empty to
+      add nothing. Requires restart; clients see the change when they reconnect.
   enable_beta_features:
     name: 启用测试版功能（主开关）
     description: ⚠ 危险 — 这些工具可能会永久损坏您的 Home Assistant 安装。它们会写入您的 YAML 配置、文件系统，安装自定义组件，运行任意沙盒
