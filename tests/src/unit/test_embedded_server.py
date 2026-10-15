@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.metadata
+import logging
 import os
 import sys
 import threading
@@ -191,8 +192,8 @@ class TestConstruction:
     def test_defaults(self, tmp_path):
         mgr, _hass, _entry = _manager(tmp_path)
         assert mgr.port == 9584
-        # LAN-reachable by default (owner decision: add-on parity - the
-        # secret path is the credential, same as the add-on's port).
+        # An entry saved before setup asked for network access binds every
+        # interface; new entries save loopback explicitly.
         assert mgr._bind_host == "0.0.0.0"
         assert mgr._server_url == "http://127.0.0.1:8123"
         # Provisional until async_start reads the manifest pin.
@@ -1439,7 +1440,7 @@ class TestTokenProvisioning:
         mgr, hass, _entry = _manager(tmp_path, data={DATA_SECRET_PATH: "/p"})
 
         with pytest.raises(es.EmbeddedServerError) as err:
-            await mgr._async_provision_token()
+            await mgr._async_access_token()
 
         assert err.value.kind == "token"
         hass.auth.async_create_user.assert_not_awaited()
@@ -2193,7 +2194,8 @@ class TestLifecycle:
         ) as exc:
             await mgr.async_start()
 
-        assert exc.value.kind == "package"
+        # Not "package": that repair offers a reinstall, which cannot fix this.
+        assert exc.value.kind == "start"
         ensure.assert_not_awaited()
 
     async def test_start_rejects_invalid_home_assistant_version_before_install(
@@ -2210,7 +2212,7 @@ class TestLifecycle:
         ) as exc:
             await mgr.async_start()
 
-        assert exc.value.kind == "package"
+        assert exc.value.kind == "start"
         ensure.assert_not_awaited()
 
     async def test_start_orders_steps_and_spawns_thread(self, tmp_path, monkeypatch):
@@ -2223,7 +2225,7 @@ class TestLifecycle:
         )
         monkeypatch.setattr(
             mgr,
-            "_async_provision_token",
+            "_async_access_token",
             AsyncMock(side_effect=lambda: (calls.append("token"), "tok")[1]),
         )
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: calls.append("dir"))
@@ -2246,6 +2248,17 @@ class TestLifecycle:
         # resolves from disk, not the process-wide module cache).
         assert calls == ["ensure", "token", "dir", "purge", "ready"]
         assert started == ["tok"]
+
+    async def test_start_warns_when_the_manifest_pins_no_server(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(
+            mgr, "_async_ensure_package", AsyncMock(side_effect=RuntimeError("stop"))
+        )
+        with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError):
+            await mgr.async_start()
+        assert "manifest pins no ha-mcp server" in caplog.text
 
     async def test_stop_without_start_is_noop(self, tmp_path):
         mgr, _hass, _entry = _manager(tmp_path)
@@ -2399,9 +2412,7 @@ class TestRunningVersionStalenessWarning:
             tmp_path, options={OPT_PIP_SPEC: "ha-mcp-dev==7.13.0.dev1"}
         )
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
@@ -2430,9 +2441,7 @@ class TestRunningVersionStalenessWarning:
     ):
         mgr, _hass, _entry = _manager(tmp_path)
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         # Stub the module purge: letting it run for real would drop every
         # live ha_mcp module and poison later tests in this process.
@@ -2464,9 +2473,7 @@ class TestRunningVersionStalenessWarning:
     async def test_start_quiet_when_versions_match(self, tmp_path, monkeypatch, caplog):
         mgr, _hass, _entry = _manager(tmp_path)
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         # Stub the module purge: letting it run for real would drop every
         # live ha_mcp module and poison later tests in this process.
@@ -2509,9 +2516,7 @@ class TestPurgeSkippedWhileOrphanAlive:
         purges: list[bool],
     ) -> None:
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
@@ -2731,7 +2736,7 @@ class TestImportingWorkerRegistry:
                 mgr_b, "_async_ensure_package", AsyncMock(return_value="1.2.3")
             )
             monkeypatch.setattr(
-                mgr_b, "_async_provision_token", AsyncMock(return_value="tok")
+                mgr_b, "_async_access_token", AsyncMock(return_value="tok")
             )
             monkeypatch.setattr(mgr_b, "_prepare_config_dir", lambda: None)
             monkeypatch.setattr(mgr_b, "_async_wait_until_ready", AsyncMock())
@@ -3019,9 +3024,7 @@ class TestImporterAwareBringUp:
 
     def _stub_bring_up(self, mgr, monkeypatch, ensure: AsyncMock) -> None:
         monkeypatch.setattr(mgr, "_async_ensure_package", ensure)
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
@@ -3221,9 +3224,7 @@ class TestPurgeSkippedOnWarmCache:
         monkeypatch.setattr(
             mgr, "_async_ensure_package", AsyncMock(return_value=ready_version)
         )
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
@@ -3768,3 +3769,25 @@ class TestForceInstallPackage:
         assert kwargs["target_dist"] == DIST_NAME_STABLE
         assert kwargs["reinstall"] is False
         assert kwargs["timeout"] >= es._PIP_INSTALL_TIMEOUT_SECONDS
+
+    @pytest.mark.asyncio
+    async def test_manager_calls_the_argumentless_pip_kwargs_of_newer_cores(
+        self, tmp_path, monkeypatch
+    ):
+        """Core 2026.11 drops pip_kwargs's config_dir (home-assistant/core#168155)."""
+        manager, _hass, _entry = _manager(tmp_path)
+
+        def pip_kwargs() -> dict:
+            return {"constraints": "/hacons.txt", "target": "/deps"}
+
+        monkeypatch.setattr(es, "pip_kwargs", pip_kwargs)
+        force = MagicMock(name="force_install", return_value=True)
+        monkeypatch.setattr(es, "_force_install_package", force)
+        uninstall = MagicMock(name="uninstall", return_value=True)
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await manager._async_force_install()
+        assert await manager._async_remove_distribution("ha-mcp-dev")
+
+        assert force.call_args.kwargs["target"] == "/deps"
+        assert uninstall.call_args.kwargs["target"] == "/deps"

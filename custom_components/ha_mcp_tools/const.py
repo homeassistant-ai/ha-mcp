@@ -359,13 +359,13 @@ OPT_ENABLE_STARTUP_NOTIFICATION = "enable_startup_notification"
 # When False, the admin-only "HA-MCP" sidebar settings panel is not registered;
 # the server's options stay reachable on the entry's Configure screen.
 OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
-# The callback URLs the none-mode auto-approve /authorize may redirect to
-# (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
-# empty one, replaces it. Read per request, so a change needs no reload.
 # One-shot: an administrator's long-lived access token to switch the server
 # to (#2427). Validated by the options flow, moved into entry.data on the next
 # setup (embedded_entry._ensure_secrets) and cleared; never shown back.
 OPT_ADMIN_TOKEN_REPLACEMENT = "admin_token_replacement"
+# The callback URLs the none-mode auto-approve /authorize may redirect to
+# (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
+# empty one, replaces it. Read per request, so a change needs no reload.
 OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
 DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
     "https://claude.ai/api/mcp/auth_callback",

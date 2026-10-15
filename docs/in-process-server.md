@@ -299,7 +299,7 @@ If a connect URL may have leaked, open the entry's options and check
 **Regenerate connect secrets now**, then save - both the webhook secret and the
 direct-access path are re-minted on the spot and every old URL stops working.
 Update your MCP clients with the new URL from the Configure screen. (Removing and
-re-adding the entry also rotates everything, including the internal token.)
+re-adding the entry also rotates the webhook secret and direct-access path.)
 
 ## Security
 
@@ -364,10 +364,10 @@ revoked or expired, or its account is no longer an active administrator, the
 server does not start and the repair **HA-MCP needs an administrator access
 token** asks for a new one. You can also switch tokens at any time with
 **Replace the administrator access token** in the entry's options. Switching
-revokes the token an older release created but leaves its **HA-MCP Server**
-account in place; delete that account under **Settings → People → Users** if
-you no longer need it. Removing the entry deletes only an account an older
-release created; it never touches the account your token belongs to.
+revokes the token an older release created; its **HA-MCP Server** account stays
+until you remove the entry, or until you delete it yourself under **Settings →
+People → Users**. Removing the entry deletes only an account an older release
+created; it never touches the account your token belongs to.
 
 See [SECURITY.md](../SECURITY.md) for the full threat model.
 
