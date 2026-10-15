@@ -16,7 +16,6 @@ primes the shared Actions cache that the e2e lanes restore.
 from __future__ import annotations
 
 import argparse
-import http.client
 import json
 import logging
 import os
@@ -37,8 +36,10 @@ from typing import Any
 
 if __package__:  # imported by the unit tests
     from .python_base import copy_addon_tree
+    from .supervisor_logs import log_supervisor_tail
 else:  # python3 tests/haos_image_build/build_image.py
     from python_base import copy_addon_tree
+    from supervisor_logs import log_supervisor_tail
 
 LOG = logging.getLogger("haos_image_build")
 
@@ -1058,7 +1059,7 @@ def _install_addon_with_retry(
             )
             return
         except transient as e:
-            _log_supervisor_tail(ws)
+            log_supervisor_tail(ws._base_url, ws._credentials.access_token)
             if attempt >= attempts:
                 raise
             LOG.warning(
@@ -1083,19 +1084,6 @@ def _install_addon_with_retry(
                     "reconnect/store-reload before retry failed (%r); retrying anyway",
                     prep_err,
                 )
-
-
-def _log_supervisor_tail(ws: HAWebSocket) -> None:
-    req = urllib.request.Request(
-        f"{ws._base_url}/api/hassio/supervisor/logs?lines=200",
-        headers={"Authorization": f"Bearer {ws._credentials.access_token}"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            LOG.error("Supervisor log tail:\n%s", resp.read().decode(errors="replace"))
-    except (OSError, http.client.HTTPException) as e:
-        # URLError/HTTPError/TimeoutError, and a truncated response body.
-        LOG.warning("Could not fetch the Supervisor log tail: %r", e)
 
 
 def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:

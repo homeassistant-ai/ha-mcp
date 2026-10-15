@@ -47,7 +47,7 @@ def test_each_failed_attempt_logs_the_supervisor_log_tail(
     with (
         patch("tests.haos_image_build.build_image.time.sleep"),
         patch(
-            "tests.haos_image_build.build_image.urllib.request.urlopen",
+            "tests.haos_image_build.supervisor_logs.urllib.request.urlopen",
             return_value=_log_response("docker build failed: apt timeout"),
         ) as urlopen,
         pytest.raises(WSCommandError, match="Check Supervisor logs"),
@@ -77,7 +77,7 @@ def test_an_unreadable_log_tail_does_not_replace_the_install_error(
     with (
         patch("tests.haos_image_build.build_image.time.sleep"),
         patch(
-            "tests.haos_image_build.build_image.urllib.request.urlopen",
+            "tests.haos_image_build.supervisor_logs.urllib.request.urlopen",
             side_effect=failure,
         ),
         pytest.raises(WSCommandError, match="Check Supervisor logs"),
