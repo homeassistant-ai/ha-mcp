@@ -116,6 +116,15 @@ class TestEffectiveAllowlist:
             assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: CLAUDE}) == []
         assert "malformed OAuth callback allowlist" in caplog.text
 
+    def test_a_list_with_an_unusable_entry_refuses_every_callback(self) -> None:
+        # The writers never store this; a port-varied loopback request would
+        # otherwise match the fragment-bearing entry's loopback key.
+        saved = {OPT_OAUTH_REDIRECT_ALLOWLIST: [CLAUDE, "http://localhost/cb#frag"]}
+        assert effective_allowlist(saved) == []
+        assert not is_redirect_allowed(
+            "http://localhost:4321/cb", effective_allowlist(saved)
+        )
+
     def test_a_list_with_a_non_string_entry_refuses_every_callback(self) -> None:
         # Its string entries are not trusted either: only validated writers
         # store this option, so any corruption means the list is not theirs.
@@ -193,6 +202,24 @@ async def test_none_mode_refusal_is_logged(
         )
     assert "https://chatgpt.example/connector/cb" in caplog.text
     assert "not on the OAuth callback list" in caplog.text
+
+
+async def test_none_mode_refusal_log_cannot_be_forged(
+    unified_view_client_factory, caplog
+):
+    """An encoded newline in the callback must not start a second log line."""
+    client = await unified_view_client_factory(mode="none")
+    with caplog.at_level(logging.WARNING):
+        await client.get(
+            "/api/ha_mcp_tools/oauth/authorize"
+            + AUTH_QS
+            + "&redirect_uri=https%3A%2F%2Fevil.example%2Fcb%0AFORGED%20WARNING",
+            allow_redirects=False,
+        )
+    refusals = [r for r in caplog.records if "Refused a none-mode sign-in" in r.message]
+    assert len(refusals) == 1
+    assert "\n" not in refusals[0].getMessage()
+    assert "\\nFORGED" in refusals[0].getMessage()
 
 
 async def test_none_mode_refusal_page_escapes_the_callback(

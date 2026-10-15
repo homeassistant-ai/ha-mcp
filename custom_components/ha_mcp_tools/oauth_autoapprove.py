@@ -288,10 +288,12 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         if err is not None:
             return err
         if not provider.allows_redirect(redirect_uri):
+            # repr: the callback is attacker-supplied, and an encoded newline
+            # or terminal sequence in it must not forge log lines.
             _LOGGER.warning(
-                "Refused a none-mode sign-in to callback %.200s: it is not on the "
+                "Refused a none-mode sign-in to callback %s: it is not on the "
                 "OAuth callback list (Configure or the HA-MCP panel)",
-                redirect_uri,
+                repr(redirect_uri[:200]),
             )
             return _unlisted_callback_response(redirect_uri)
 
