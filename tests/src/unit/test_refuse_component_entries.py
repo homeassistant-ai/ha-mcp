@@ -53,7 +53,7 @@ def _assert_refused_without_mutation(
     # The refusal points the agent at the paths that own these entries.
     assert any("ha_dev_manage_settings" in s for s in error["suggestions"])
     for name in _MUTATING_CALLS:
-        getattr(client, name).assert_not_awaited()
+        getattr(client, name).assert_not_called()
 
 
 @pytest.mark.parametrize(
