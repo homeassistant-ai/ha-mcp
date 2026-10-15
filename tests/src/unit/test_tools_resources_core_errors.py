@@ -250,23 +250,38 @@ class TestRestoreDashboardResource:
             "url": "/local/theme.css",
         }
 
-    async def test_restore_of_a_recreated_resource_updates_it_instead_of_duplicating(
+    async def test_restore_of_a_recreated_resource_writes_nothing(
         self, sent: list[dict], live: list[dict]
     ) -> None:
         """An earlier restore re-created the resource under a new id."""
-        live.append({"id": "new", "type": "js", "url": "/local/theme.css"})
+        live.append({"id": "new", "type": "css", "url": "/local/theme.css"})
+
+        result = await backup_manager._restore_dashboard_resource(
+            MagicMock(), "old", dict(_SNAPSHOT)
+        )
+
+        assert result["id"] == "new"
+        assert [m["type"] for m in sent] == [
+            "lovelace/resources/update",
+            "lovelace/resources",
+        ]
+
+    async def test_restore_leaves_another_resource_with_the_same_url_alone(
+        self, sent: list[dict], live: list[dict]
+    ) -> None:
+        """Core keeps no url uniqueness: a row of another type is not ours."""
+        live.append({"id": "other", "type": "js", "url": "/local/theme.css"})
 
         await backup_manager._restore_dashboard_resource(
             MagicMock(), "old", dict(_SNAPSHOT)
         )
 
         assert sent[-1] == {
-            "type": "lovelace/resources/update",
-            "resource_id": "new",
+            "type": "lovelace/resources/create",
             "res_type": "css",
             "url": "/local/theme.css",
         }
-        assert "lovelace/resources/create" not in [m["type"] for m in sent]
+        assert "other" not in [m.get("resource_id") for m in sent]
 
     async def test_restore_in_place_also_restores_the_resource_type(self, sent):
         await backup_manager._restore_dashboard_resource(
@@ -319,10 +334,18 @@ async def test_diff_after_a_recreating_restore_compares_against_the_new_row(
     )
     path = await mgr.maybe_snapshot("dashboard_resource", "old")
     assert path is not None
-    rows[:] = [{**_SNAPSHOT, "id": "new", "url": "/local/other.css"}]
-    rows.append({**_SNAPSHOT, "id": "recreated"})
+    rows[:] = [
+        {**_SNAPSHOT, "id": "new", "url": "/local/other.css"},
+        {**_SNAPSHOT, "id": "same-url", "type": "js"},
+        {**_SNAPSHOT, "id": "recreated"},
+    ]
 
     diff = await mgr.diff_snapshot(path.name)
 
     assert diff["entity_missing"] is False
-    assert [op["path"] for op in diff["patch"]] == ["/id"]
+    assert diff["unchanged"] is True
+
+    rows[2]["url"] = "/local/moved.css"
+    rows[1]["url"] = "/local/elsewhere.css"
+
+    assert (await mgr.diff_snapshot(path.name))["entity_missing"] is True

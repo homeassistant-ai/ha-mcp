@@ -1618,9 +1618,11 @@ class BackupManager:
             _stored, legacy = dashboard_snapshot(data)
             current = dashboard_comparison(current, legacy=legacy)
         elif domain == "dashboard_resource" and current is None:
-            current = await _dashboard_resource_by_url(
-                self._client, data["config"]["url"]
-            )
+            # A re-created resource carries a Core-generated id, which is not
+            # a difference the snapshot can restore.
+            live = await _dashboard_resource_like(self._client, data["config"])
+            if live is not None:
+                current = {**live, "id": data["config"].get("id")}
         if _is_flow_helper_domain(domain) and current is not None:
             # Both MCP and Settings preview this comparison. Registry metadata
             # is recreation-only; an existing-entry restore applies options.
@@ -2067,7 +2069,8 @@ def _require_dict(value: Any, endpoint: str) -> dict[str, Any]:
 # Dashboard resources — WS lovelace/resources commands. Rows store the
 # resource type as ``type``; the create/update field is ``res_type``. A restore
 # of a deleted resource re-creates it under a new id, so a snapshot falls back
-# to finding its resource by url.
+# to the row that holds its url and type; Core does not keep urls unique, so a
+# row that only shares the url is another resource and is left alone.
 async def _dashboard_resources(client: Any) -> list[Any]:
     return _require_list(
         await _ws_send(client, {"type": "lovelace/resources"}), "lovelace/resources"
@@ -2079,9 +2082,17 @@ async def _fetch_dashboard_resource(client: Any, entity_id: str) -> Any:
     return next((r for r in resources if str(r.get("id")) == entity_id), None)
 
 
-async def _dashboard_resource_by_url(client: Any, url: str) -> Any:
+async def _dashboard_resource_like(client: Any, config: dict[str, Any]) -> Any:
+    """The live row with the snapshot's url and type, else ``None``."""
     resources = await _dashboard_resources(client)
-    return next((r for r in resources if r.get("url") == url), None)
+    return next(
+        (
+            r
+            for r in resources
+            if r.get("url") == config["url"] and r.get("type") == config["type"]
+        ),
+        None,
+    )
 
 
 async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) -> Any:
@@ -2092,9 +2103,9 @@ async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) 
     except HomeAssistantCommandError as err:
         if err.code != "not_found":  # not_found: deleted since the snapshot
             raise
-    live = await _dashboard_resource_by_url(client, config["url"])
-    if live is not None:
-        return await _ws_send(client, {**update, "resource_id": live["id"], **payload})
+    live = await _dashboard_resource_like(client, config)
+    if live is not None:  # an earlier restore re-created it
+        return live
     return await _ws_send(client, {"type": "lovelace/resources/create", **payload})
 
 
