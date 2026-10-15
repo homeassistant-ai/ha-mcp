@@ -140,7 +140,7 @@
     "tools_module_installed": "Modul beta/pokročilých nástrojů pro soubory a YAML (volitelné): Nainstalováno",
     "tools_module_not_installed": "Modul beta/pokročilých nástrojů pro soubory a YAML (volitelné): Není nainstalováno – stiskněte „Add entry“ na stránce této integrace a vyberte „HA-MCP File & YAML Tools“ pro jeho přidání",
     "tools_module_not_loaded": "Modul beta/pokročilých nástrojů pro soubory a YAML (volitelné): Nainstalováno, ale nenačteno – povolte nebo znovu načtěte položku „HA-MCP File & YAML Tools“ na stránce této integrace",
-    "version_line": "Komponenta {component_version} – Server ha-mcp {server_version} (kanál {source})",
+    "version_line": "Komponenta {component_version} – Server ha-mcp {server_version} (kanál {channel})",
     "version_not_installed": "zatím nenainstalováno",
     "version_unknown": "neznámá"
   }
