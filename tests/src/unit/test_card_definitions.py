@@ -305,6 +305,17 @@ async def test_describe_unknown_card_type_lists_the_real_ones(
 
 
 @pytest.mark.asyncio
+async def test_describe_while_the_index_builds_says_retry(component: AsyncMock) -> None:
+    component.send_command.return_value = {
+        "result": {"success": False, "error": "definitions_loading"}
+    }
+    with pytest.raises(ToolError) as err:
+        await describe_mod.describe_card_response(MagicMock(), "tile")
+    assert "still indexing" in str(err.value)
+    assert "SERVICE_CALL_FAILED" in str(err.value)
+
+
+@pytest.mark.asyncio
 async def test_describe_without_the_component_says_so(monkeypatch) -> None:
     monkeypatch.setattr(
         describe_mod, "get_component_caps", AsyncMock(return_value=_caps("search"))
@@ -521,6 +532,28 @@ async def test_card_validation_executor_cannot_hold_a_saved_write(monkeypatch) -
 
     hass.async_add_executor_job.side_effect = stuck
     assert await asyncio.wait_for(cd.async_card_warnings(hass, {}), 0.5) == []
+
+
+@pytest.mark.asyncio
+async def test_describe_answers_while_the_index_is_still_building(monkeypatch) -> None:
+    """A first-use build that outlasts the command wait is reported, not timed out."""
+    import voluptuous as vol
+
+    monkeypatch.setattr(cd, "async_get_definitions", AsyncMock(return_value=None))
+    building = asyncio.create_task(asyncio.Event().wait())
+    monkeypatch.setattr(cd, "_build_task", building)
+    prep = cd.command_specs(vol)[0][2]
+    try:
+        result = await prep(MagicMock(), {"card_type": "tile"})
+        assert result["result"] == {"success": False, "error": "definitions_loading"}
+        cd.async_get_definitions.assert_awaited_once_with(
+            cd.async_get_definitions.await_args.args[0], timeout=cd._CARD_WORK_SECONDS
+        )
+    finally:
+        building.cancel()
+    monkeypatch.setattr(cd, "_build_task", None)
+    result = await prep(MagicMock(), {"card_type": "tile"})
+    assert result["result"] == {"success": False, "error": "unavailable"}
 
 
 @pytest.mark.asyncio

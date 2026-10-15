@@ -915,9 +915,14 @@ async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> li
 
 
 async def _describe(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
-    definitions = await async_get_definitions(hass)
+    definitions = await async_get_definitions(hass, timeout=_CARD_WORK_SECONDS)
     if definitions is None:
-        return {"result": {"success": False, "error": "unavailable"}}
+        # The first describe after a Core start builds the frontend index;
+        # on a slow board that outlasts the command wait (#2744), so answer
+        # instead of letting the transport time out.
+        task = _build_task
+        error = "definitions_loading" if task and not task.done() else "unavailable"
+        return {"result": {"success": False, "error": error}}
     card_type = msg.get("card_type") or None
     custom = (
         await async_get_custom_cards(hass, timeout=_CUSTOM_WAIT_SECONDS)
