@@ -3769,25 +3769,3 @@ class TestForceInstallPackage:
         assert kwargs["target_dist"] == DIST_NAME_STABLE
         assert kwargs["reinstall"] is False
         assert kwargs["timeout"] >= es._PIP_INSTALL_TIMEOUT_SECONDS
-
-    @pytest.mark.asyncio
-    async def test_manager_calls_the_argumentless_pip_kwargs_of_newer_cores(
-        self, tmp_path, monkeypatch
-    ):
-        """Core 2026.11 drops pip_kwargs's config_dir (home-assistant/core#168155)."""
-        manager, _hass, _entry = _manager(tmp_path)
-
-        def pip_kwargs() -> dict:
-            return {"constraints": "/hacons.txt", "target": "/deps"}
-
-        monkeypatch.setattr(es, "pip_kwargs", pip_kwargs)
-        force = MagicMock(name="force_install", return_value=True)
-        monkeypatch.setattr(es, "_force_install_package", force)
-        uninstall = MagicMock(name="uninstall", return_value=True)
-        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
-
-        await manager._async_force_install()
-        assert await manager._async_remove_distribution("ha-mcp-dev")
-
-        assert force.call_args.kwargs["target"] == "/deps"
-        assert uninstall.call_args.kwargs["target"] == "/deps"

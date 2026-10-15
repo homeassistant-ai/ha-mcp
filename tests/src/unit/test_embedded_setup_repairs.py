@@ -5,15 +5,14 @@ Split from test_embedded_setup.py, whose fakes and fixtures it reuses.
 
 from __future__ import annotations
 
-from .test_embedded_setup import (
+from custom_components.ha_mcp_tools.const import (
     DATA_MANAGER,
     DOMAIN,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
-    _make_entry,
-    _make_hass,
-    esetup,
 )
+
+from .test_embedded_setup import _make_entry, _make_hass, esetup
 
 # pytest registers a fixture under its own name, so the aliases keep ruff from
 # reading the test parameters as redefinitions.
