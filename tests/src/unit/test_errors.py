@@ -4,6 +4,8 @@ These tests verify that error codes, error responses, and helper functions
 work correctly to provide informative, structured error messages.
 """
 
+import pytest
+
 from ha_mcp.errors import (
     DEFAULT_SUGGESTIONS,
     ErrorCode,
@@ -220,7 +222,9 @@ class TestCreateAuthError:
         assert "home-assistant.log" in joined
         assert "long-lived access token" not in joined
 
-    def test_invalid_token_suggestions_embedded(self, monkeypatch):
+    def test_invalid_token_suggestions_embedded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The in-process server's token lives in the HA-MCP Server entry (#2427):
         point at Configure and the repair, not at a HOMEASSISTANT_TOKEN. HAOS's
         Core container carries SUPERVISOR_TOKEN too, so embedded must win."""
