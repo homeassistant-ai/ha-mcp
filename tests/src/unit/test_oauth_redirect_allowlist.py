@@ -143,7 +143,13 @@ class TestNormalizeAllowlist:
 
     @pytest.mark.parametrize(
         "bad",
-        ["http://claude.ai/cb", "claude.ai/cb", f"{CLAUDE}#x", "javascript:alert(1)"],
+        [
+            "http://claude.ai/cb",
+            "claude.ai/cb",
+            f"{CLAUDE}#x",
+            "javascript:alert(1)",
+            "https://user:secret@claude.ai/api/mcp/auth_callback",
+        ],
     )
     def test_reports_entries_no_request_could_use(self, bad: str) -> None:
         assert normalize_allowlist([CLAUDE, bad]) == ([CLAUDE], [bad])
