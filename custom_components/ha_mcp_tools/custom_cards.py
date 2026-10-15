@@ -309,7 +309,7 @@ class _Bundle:
         del self.engine._context
 
     def _js(self, *args: Any) -> Any:
-        # Without run_gc each call skips a full gc.collect() under the GIL (#2744).
+        # run_gc=False skips Context.gc() (gc.collect() and JS_RunGC() under the GIL) (#2744).
         return self.engine(*args, run_gc=False)
 
     def _context_call(self, method: str, *args: Any) -> Any:

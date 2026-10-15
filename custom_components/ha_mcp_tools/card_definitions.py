@@ -358,9 +358,10 @@ class CardDefinitions:
                 self._card_types.add(tag[len("hui-") : -len("-card")])
 
     def _js(self, op: str, payload: Any) -> Any:
-        # run_gc=True (quickjs-ng's default) runs Python's full gc.collect()
-        # under the GIL after every call: over Home Assistant's heap that
-        # stalls the event loop (#2744). QuickJS still collects on its own.
+        # run_gc=True (quickjs-ng's default) calls Context.gc() after every call:
+        # Python's full gc.collect() and QuickJS's JS_RunGC(), under the GIL. Over
+        # Home Assistant's heap that stalls the event loop (#2744). QuickJS still
+        # runs JS_RunGC() itself when its allocations pass the GC threshold.
         return self._engine(op, payload, run_gc=False)
 
     def _body(self, tag: str) -> str:
