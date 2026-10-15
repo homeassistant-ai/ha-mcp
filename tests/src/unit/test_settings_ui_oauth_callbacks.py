@@ -31,7 +31,11 @@ def component(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]
     """Record the component commands the handlers send; answer like the component."""
     calls: list[tuple[str, dict[str, Any]]] = []
 
-    async def command(server: Any, name: str, **fields: Any) -> dict[str, Any]:
+    async def command(
+        server: Any, name: str, *, strict: bool = False, **fields: Any
+    ) -> dict[str, Any]:
+        # A save must probe strictly; a read may use the cached capabilities.
+        assert strict == (name == oc.WS_OAUTH_CALLBACKS_UPDATE)
         calls.append((name, fields))
         if fields.get("allowlist") == ["http://not-loopback/cb"]:
             return {**STATE, "saved": False, "invalid": fields["allowlist"]}
