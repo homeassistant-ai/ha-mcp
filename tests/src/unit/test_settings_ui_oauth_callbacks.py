@@ -12,6 +12,9 @@ from ha_mcp.settings_ui import _handlers_oauth_callbacks as oc
 from ha_mcp.settings_ui import build_settings_handlers
 
 CALLBACK = "https://chatgpt.example/cb"
+# What the component fake records: (command, fields) per call.
+Calls = list[tuple[str, dict[str, Any]]]
+
 STATE = {
     "entry_id": "srv1",
     "allowlist": [CALLBACK],
@@ -32,9 +35,9 @@ def not_embedded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def component(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]]]:
+def component(monkeypatch: pytest.MonkeyPatch) -> Calls:
     """Record the component commands the handlers send; answer like the component."""
-    calls: list[tuple[str, dict[str, Any]]] = []
+    calls: Calls = []
 
     async def command(
         server: Any, name: str, *, strict: bool = False, **fields: Any
@@ -63,21 +66,23 @@ async def _call(name: str, body: Any = None) -> tuple[int, dict[str, Any]]:
 
 
 async def test_other_install_types_do_not_offer_the_editor(
-    not_embedded: None, component: list[tuple[str, dict[str, Any]]]
+    not_embedded: None, component: Calls
 ) -> None:
     status, body = await _call("get_oauth_callbacks")
     assert (status, body["available"]) == (200, False)
     assert component == []
 
 
-async def test_the_editor_shows_the_list_in_force(embedded, component) -> None:
+async def test_the_editor_shows_the_list_in_force(
+    embedded: None, component: Calls
+) -> None:
     _, body = await _call("get_oauth_callbacks")
     assert body["available"] is True
     assert body["allowlist"] == [CALLBACK]
 
 
 async def test_a_component_without_the_commands_explains_why(
-    embedded, monkeypatch: pytest.MonkeyPatch
+    embedded: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def too_old(*_a: Any, **_k: Any) -> dict[str, Any]:
         raise oc._Unavailable("Update the HA-MCP integration in HACS.")
@@ -88,20 +93,24 @@ async def test_a_component_without_the_commands_explains_why(
     assert "Update" in body["reason"]
 
 
-async def test_a_save_sends_the_list_to_the_component(embedded, component) -> None:
+async def test_a_save_sends_the_list_to_the_component(
+    embedded: None, component: Calls
+) -> None:
     status, body = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
     assert status == 200
     assert component == [(oc.WS_OAUTH_CALLBACKS_UPDATE, {"allowlist": [CALLBACK]})]
 
 
 async def test_restoring_the_default_asks_the_component_to_reset(
-    embedded, component
+    embedded: None, component: Calls
 ) -> None:
     await _call("save_oauth_callbacks", {"reset": True})
     assert component == [(oc.WS_OAUTH_CALLBACKS_UPDATE, {"reset": True})]
 
 
-async def test_unusable_callbacks_are_named_back(embedded, component) -> None:
+async def test_unusable_callbacks_are_named_back(
+    embedded: None, component: Calls
+) -> None:
     status, body = await _call(
         "save_oauth_callbacks", {"allowlist": ["http://not-loopback/cb"]}
     )
@@ -120,14 +129,16 @@ async def test_unusable_callbacks_are_named_back(embedded, component) -> None:
     ],
 )
 async def test_a_malformed_save_is_refused_before_the_component(
-    embedded, component, body: Any
+    embedded: None, component: Calls, body: Any
 ) -> None:
     status, _ = await _call("save_oauth_callbacks", body)
     assert status == 400
     assert component == []
 
 
-async def test_a_body_that_both_resets_and_sets_is_refused(embedded, component) -> None:
+async def test_a_body_that_both_resets_and_sets_is_refused(
+    embedded: None, component: Calls
+) -> None:
     status, _ = await _call(
         "save_oauth_callbacks", {"reset": True, "allowlist": [CALLBACK]}
     )
@@ -136,7 +147,7 @@ async def test_a_body_that_both_resets_and_sets_is_refused(embedded, component) 
 
 
 async def test_a_failed_probe_is_a_reachability_error_on_save(
-    embedded, monkeypatch: pytest.MonkeyPatch
+    embedded: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Home Assistant's WebSocket is restarting: the write must say "retry",
     # not "update the component", which is what a cached None would mean.
@@ -153,7 +164,7 @@ async def test_a_failed_probe_is_a_reachability_error_on_save(
 
 
 async def test_a_save_outside_the_embedded_server_is_refused(
-    not_embedded: None, component: list[tuple[str, dict[str, Any]]]
+    not_embedded: None, component: Calls
 ) -> None:
     status, _ = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
     assert status == 409
