@@ -359,6 +359,44 @@ async def _ensure(mgr, **kwargs):
     return await mgr._async_ensure_package(**kwargs)
 
 
+_INSTALL_REASON_SATISFIED: dict[str, str | None] = {
+    "stored_spec": "ha-mcp==8.7.0",
+    "target_dist": "ha-mcp",
+    "installed_version": "8.7.0",
+    "target_version": "8.7.0",
+    "conflicting": None,
+}
+
+
+class TestInstallReason:
+    """The install log names the first failed fast-path condition."""
+
+    @pytest.mark.parametrize(
+        ("overrides", "expected"),
+        [
+            ({"target_dist": None}, "names no known server distribution"),
+            ({"installed_version": None}, "no importable ha_mcp package"),
+            ({"target_version": None}, "ha-mcp is not installed"),
+            ({"conflicting": "ha-mcp-dev"}, "ha-mcp-dev is installed beside ha-mcp"),
+            ({"target_version": "8.6.0"}, "8.6.0 does not satisfy 'ha-mcp==8.7.0'"),
+            ({"stored_spec": "ha-mcp"}, "changed from 'ha-mcp' to 'ha-mcp==8.7.0'"),
+        ],
+    )
+    def test_names_the_first_failed_condition(
+        self, overrides: dict[str, str | None], expected: str
+    ) -> None:
+        assert expected in es._install_reason(
+            "ha-mcp==8.7.0", **{**_INSTALL_REASON_SATISFIED, **overrides}
+        )
+
+    def test_a_direct_url_always_installs(self) -> None:
+        reason = es._install_reason(
+            "https://example.com/ha_mcp-8.7.0-py3-none-any.whl",
+            **{**_INSTALL_REASON_SATISFIED, "target_dist": None},
+        )
+        assert "names no known server distribution" in reason
+
+
 class TestSpecResolution:
     def test_override_wins_over_the_paired_pin(self, tmp_path):
         mgr, _hass, _entry = _manager(

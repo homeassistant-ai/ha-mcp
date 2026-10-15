@@ -808,6 +808,17 @@ class EmbeddedServerManager:
             deferred = True
             await self._async_defer_package_mutations(installed_version)
         else:
+            _LOGGER.info(
+                "Reinstalling the in-process server package: %s",
+                _install_reason(
+                    self._pip_spec,
+                    stored_spec=stored_spec,
+                    target_dist=target_dist,
+                    installed_version=installed_version,
+                    target_version=target_version,
+                    conflicting=conflicting if conflict_present else None,
+                ),
+            )
             reinstall = False
             if conflict_present and conflicting is not None:
                 _LOGGER.info(
@@ -2492,6 +2503,40 @@ def _run_uv_install(args: list[str], env: dict[str, str]) -> str | None:
     if result.returncode != 0:
         return (result.stderr or "").strip() or f"exit code {result.returncode}"
     return None
+
+
+def _install_reason(
+    spec: str,
+    *,
+    stored_spec: str | None,
+    target_dist: str | None,
+    installed_version: str | None,
+    target_version: str | None,
+    conflicting: str | None,
+) -> str:
+    """Name the first reason ``_async_ensure_managed_package`` installs.
+
+    Logged before every install so an unexpected reinstall (one that
+    re-resolves the dependency tree) can be traced to its cause.
+    """
+    if target_dist is None:
+        return f"{spec!r} names no known server distribution"
+    if installed_version is None:
+        return "no importable ha_mcp package"
+    if target_version is None:
+        return f"{target_dist} is not installed"
+    if conflicting is not None:
+        return f"{conflicting} is installed beside {target_dist}"
+    if _spec_is_url_requirement(spec):
+        return f"{spec!r} is a direct URL, which always installs"
+    if not _spec_satisfied_by(spec, target_version):
+        return f"installed {target_dist} {target_version} does not satisfy {spec!r}"
+    if not _is_compatible_embedded_version(target_version):
+        return (
+            f"installed {target_dist} {target_version} is older than "
+            f"{MIN_EMBEDDED_SERVER_VERSION}"
+        )
+    return f"the spec changed from {stored_spec!r} to {spec!r}"
 
 
 def _spec_satisfied_by(spec: str, installed_version: str) -> bool:
