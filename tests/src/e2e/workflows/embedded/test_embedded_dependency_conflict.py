@@ -65,6 +65,8 @@ import pytest
 import requests
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN
 
+from ..._conftest_seed import is_server_requirement
+
 # ``container_only``: the scenario needs a throwaway HA Core container it can
 # corrupt, which the HAOS lanes have no cheap way to provide (and where the
 # same code is already covered by the container + embedded lanes). Deliberately
@@ -200,8 +202,10 @@ def _manifest_requirements(config_path: Path) -> list[str]:
             continue
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for entry in manifest.get("requirements", []):
+            # The checkout's wheel supplies the server (is_server_requirement).
             if isinstance(entry, str) and entry not in requirements:
-                requirements.append(entry)
+                if not is_server_requirement(entry):
+                    requirements.append(entry)
     return requirements
 
 
