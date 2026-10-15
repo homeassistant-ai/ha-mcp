@@ -15,6 +15,7 @@ production-level functionality and compatibility.
 
 import base64
 import logging
+from typing import Any
 
 from ha_mcp.client import HomeAssistantClient
 
@@ -253,25 +254,17 @@ class TestDashboardResourceLifecycle:
 class TestDashboardResourceValidation:
     """Test validation and error handling for dashboard resources."""
 
-    async def test_invalid_resource_type(self, mcp_client):
-        """Test that invalid resource type is rejected at schema level."""
-        logger.info("Starting invalid resource type test")
-        import pytest
+    async def test_invalid_resource_type(self, mcp_client: Any) -> None:
+        """Home Assistant rejects an unknown resource type; the tool relays it."""
+        mcp = MCPAssertions(mcp_client)
 
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
+        data = await mcp.call_tool_failure(
+            "ha_config_set_dashboard_resource",
+            {"url": "/local/test.js", "resource_type": "invalid"},
+            expected_error="must be one of",
+        )
 
-        # FastMCP validates Literal types at schema level, raising ToolError
-        with pytest.raises(ToolError) as exc_info:
-            await mcp_client.call_tool(
-                "ha_config_set_dashboard_resource",
-                {"url": "/local/test.js", "resource_type": "invalid"},
-            )
-
-        # Verify the error message mentions the valid options
-        error_msg = str(exc_info.value).lower()
-        assert "module" in error_msg or "js" in error_msg or "css" in error_msg
-
-        logger.info("Invalid resource type test completed successfully")
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
     async def test_delete_nonexistent_resource(self, mcp_client):
         """Test that deleting nonexistent resource returns RESOURCE_NOT_FOUND."""
@@ -288,7 +281,9 @@ class TestDashboardResourceValidation:
 
         logger.info("Delete nonexistent resource test completed successfully")
 
-    async def test_update_nonexistent_resource_reports_not_found(self, mcp_client):
+    async def test_update_nonexistent_resource_reports_not_found(
+        self, mcp_client: Any
+    ) -> None:
         """Core answers not_found for a missing id; the tool says so."""
         mcp = MCPAssertions(mcp_client)
 

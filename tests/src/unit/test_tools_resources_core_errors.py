@@ -169,6 +169,29 @@ class TestCoreResourceTypes:
         assert result["resource_id"] == "h1"
         assert sent[0]["res_type"] == "html"
 
+    async def test_unknown_url_resource_type_is_left_to_core(self):
+        """The tool keeps no copy of Core's type list; Core's rejection is relayed."""
+        tools, sent = _tools(
+            {
+                "lovelace/resources/create": _failure(
+                    "invalid_format",
+                    "value must be one of ['css', 'html', 'js', 'module']",
+                )
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_dashboard_resource(
+                url="/local/card.wasm", resource_type="wasm"
+            )
+
+        assert sent[0]["res_type"] == "wasm"
+        error = _error(exc_info)["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert (
+            error["message"] == "value must be one of ['css', 'html', 'js', 'module']"
+        )
+
     async def test_inline_html_is_rejected_before_any_write(self):
         tools, sent = _tools({})
 

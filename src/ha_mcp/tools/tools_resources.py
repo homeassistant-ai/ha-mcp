@@ -18,7 +18,7 @@ content now goes straight into a ``data:`` URI: same storage location
 import base64
 import logging
 import re
-from typing import Annotated, Any, Literal, NoReturn
+from typing import Annotated, Any, NoReturn
 from urllib.parse import urlsplit
 
 from pydantic import Field
@@ -34,6 +34,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
+    ws_failure_code,
 )
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
@@ -46,13 +47,13 @@ logger = logging.getLogger(__name__)
 # keep loading until their resources are converted.
 LEGACY_WORKER_BASE_URL = "https://ha-mcp-resources.rapid-math-bbad.workers.dev"
 
-# Core's lovelace RESOURCE_TYPES, for schema discovery; Core validates res_type.
-_RESOURCE_TYPE = Literal["module", "js", "css", "html"]
+# Core validates res_type against its RESOURCE_TYPES; a copy here would reject
+# a type Core adds before Core sees it, so the parameter is a plain string.
+_RESOURCE_TYPE = str
 # data: URI media types per inline resource_type ('js'/'html' are url-mode
 # only). CSS carries an explicit charset because stylesheets, unlike module
 # scripts, have no spec-mandated UTF-8 fallback.
-_INLINE_RESOURCE_TYPE = Literal["module", "css"]
-_DATA_URI_MIME: dict[_INLINE_RESOURCE_TYPE, str] = {
+_DATA_URI_MIME: dict[str, str] = {
     "module": "text/javascript",
     "css": "text/css;charset=utf-8",
 }
@@ -191,7 +192,7 @@ def _detect_ha_config_yaml(content: str) -> str | None:
     return None
 
 
-def _data_uri_for(content: str, resource_type: _INLINE_RESOURCE_TYPE) -> str:
+def _data_uri_for(content: str, resource_type: str) -> str:
     """Encode content as a base64 ``data:`` URI for the given resource type.
 
     Standard base64 (not URL-safe): browsers decode data: URIs with the
@@ -496,9 +497,9 @@ class ResourceTools:
         resource_type: Annotated[
             _RESOURCE_TYPE,
             Field(
-                description="Resource type: 'module' for ES6 modules (modern cards), 'js' for "
-                "legacy JavaScript (older custom cards), 'css' for stylesheets (themes,"
-                " global styles), 'html' for HTML imports"
+                description="Resource type, validated by Home Assistant: 'module' for ES6 "
+                "modules (modern cards), 'js' for legacy JavaScript (older custom cards), "
+                "'css' for stylesheets (themes, global styles), 'html' for HTML imports"
             ),
         ] = "module",
         resource_id: Annotated[
@@ -898,7 +899,9 @@ class ResourceTools:
             )
         raise_tool_error(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                ws_failure_code(result)
+                if isinstance(result, dict)
+                else ErrorCode.SERVICE_CALL_FAILED,
                 error_msg,
                 context={**context, "ha_error_code": code} if code else context,
             )
