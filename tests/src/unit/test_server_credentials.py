@@ -155,6 +155,21 @@ class TestAdoptToken:
         }
         hass.auth.async_remove_refresh_token.assert_called_once_with(rt)
 
+    def test_a_token_of_the_provisioned_account_hands_the_account_over(self) -> None:
+        # The administrator gave the old account a login and took a token from
+        # it; the account is theirs now, so its id must not linger as "ours".
+        account = _user("u1")
+        hass = _hass(
+            refresh_tokens={"rt1": _rt(user=account)},
+            validated=_rt("rt2", user=account),
+        )
+
+        new = sc.adopt_admin_token(
+            hass, {DATA_SERVER_USER_ID: "u1", DATA_REFRESH_TOKEN_ID: "rt1"}, "tok"
+        )
+
+        assert new == {DATA_ADMIN_TOKEN: "tok"}
+
     def test_switching_never_removes_an_account(self) -> None:
         hass = _hass(refresh_tokens={"rt1": _rt()})
         sc.adopt_admin_token(
@@ -201,6 +216,25 @@ class TestReleaseOnRemove:
         await sc.async_release_credentials(hass, switched)
 
         hass.auth.async_remove_user.assert_awaited_once_with(old_account)
+
+    async def test_a_handed_over_account_survives_its_tokens_revocation(self) -> None:
+        # Adopt a token of the provisioned account, then revoke it before
+        # removing the entry: ownership was recorded at adoption, not inferred
+        # from a token that no longer validates.
+        account = _user("u1")
+        hass = _hass(
+            users={"u1": account},
+            refresh_tokens={"rt1": _rt(user=account)},
+            validated=_rt("rt2", user=account),
+        )
+        switched = sc.adopt_admin_token(
+            hass, {DATA_SERVER_USER_ID: "u1", DATA_REFRESH_TOKEN_ID: "rt1"}, "tok"
+        )
+        hass.auth.async_validate_access_token.return_value = None
+
+        await sc.async_release_credentials(hass, switched)
+
+        hass.auth.async_remove_user.assert_not_awaited()
 
     async def test_the_account_behind_the_supplied_token_is_never_removed(
         self,
