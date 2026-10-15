@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from ...utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.forecast_solar import create_forecast_solar_entry
 
 LOG = logging.getLogger(__name__)
 
@@ -58,20 +59,7 @@ async def test_forecast_solar_config_subentry_create_list_delete(
     modules_power = 1200 + int(unique[:2], 16)
 
     try:
-        flow_init = await ha_client.start_config_flow("forecast_solar")
-        assert flow_init.get("type") == "form", (
-            f"Unexpected forecast_solar flow init shape: {flow_init}"
-        )
-        flow_done = await ha_client.submit_config_flow_step(
-            flow_init["flow_id"],
-            {
-                "latitude": 52.0,
-                "longitude": 5.0,
-                "declination": 30,
-                "azimuth": 180,
-                "modules_power": 1000,
-            },
-        )
+        flow_done = await create_forecast_solar_entry(ha_client)
         assert flow_done.get("type") == "create_entry", (
             f"forecast_solar flow did not create an entry: {flow_done}"
         )

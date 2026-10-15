@@ -18,6 +18,7 @@ import pytest
 from ha_mcp._vendor.fastmcp import Client
 
 from ...utilities.assertions import MCPAssertions, assert_mcp_success, safe_call_tool
+from ...utilities.forecast_solar import create_forecast_solar_entry
 from ...utilities.topology import component_surface_available
 from .test_capture_and_restore import (
     _HA_PROPAGATION_SETTLE_SECONDS,
@@ -271,18 +272,8 @@ async def _subentry_backup(
 async def solar_plane(
     mcp_client: Client, ha_client: Any
 ) -> AsyncIterator[tuple[str, str]]:
-    """A Forecast.Solar entry with one plane subentry (in-tree, no network)."""
-    flow = await ha_client.start_config_flow("forecast_solar")
-    done = await ha_client.submit_config_flow_step(
-        flow["flow_id"],
-        {
-            "latitude": 52.0,
-            "longitude": 5.0,
-            "declination": 30,
-            "azimuth": 180,
-            "modules_power": 1000,
-        },
-    )
+    """A Forecast.Solar entry with one plane subentry."""
+    done = await create_forecast_solar_entry(ha_client)
     entry_id = done["result"]["entry_id"]
     try:
         async with MCPAssertions(mcp_client) as mcp:
