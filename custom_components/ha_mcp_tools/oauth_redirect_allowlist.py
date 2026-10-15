@@ -94,9 +94,7 @@ def effective_allowlist(options: Mapping[str, Any]) -> list[str]:
         # Only validated writers store this option; anything else is corrupt,
         # and refusing every callback is safer than widening to the default.
         _LOGGER.warning("Ignoring a malformed OAuth callback allowlist: %r", saved)
-        return (
-            [e for e in saved if isinstance(e, str)] if isinstance(saved, list) else []
-        )
+        return []
     return list(saved)
 
 

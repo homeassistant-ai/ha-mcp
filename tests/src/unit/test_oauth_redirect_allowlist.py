@@ -116,6 +116,11 @@ class TestEffectiveAllowlist:
             assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: CLAUDE}) == []
         assert "malformed OAuth callback allowlist" in caplog.text
 
+    def test_a_list_with_a_non_string_entry_refuses_every_callback(self) -> None:
+        # Its string entries are not trusted either: only validated writers
+        # store this option, so any corruption means the list is not theirs.
+        assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: [CLAUDE, 1]}) == []
+
 
 class TestStoredAllowlist:
     def test_submitting_the_default_unchanged_keeps_following_it(self) -> None:
