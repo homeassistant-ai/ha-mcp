@@ -44,7 +44,7 @@ The recommended way to run ha-mcp is the **HA-MCP Custom Component**. It install
 
 1. Install the **HA-MCP Custom Component** from HACS — click the badge above, or in HACS open **Integrations → ⋮ → Custom repositories**, add `https://github.com/homeassistant-ai/ha-mcp-integration` (category: **Integration**), then **Download**.
 2. **Restart Home Assistant.**
-3. Go to **Settings → Devices & Services → Add Integration**, search for **HA-MCP Custom Component** and choose **HA-MCP Server**. Pick how clients may connect — **Remote access through Home Assistant** (for example Home Assistant sign-in for claude.ai) and/or **Network access: Local network** — then click **Submit**. Both start disabled, so a client on another device needs one of them.
+3. Go to **Settings → Devices & Services → Add Integration**, search for **HA-MCP Custom Component** and choose **HA-MCP Server**. Pick how clients may connect — **Remote access through Home Assistant** (start with **Secret URL**, the simplest; **Home Assistant sign-in** adds a login) and/or **Network access: Local network** — then click **Submit**. Both start disabled, so a client on another device needs one of them.
 4. Copy the connect URL from the entry's **Configure** screen (**Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**). A notification confirms the server started and points you there.
 5. Paste that URL into your AI client — done.
 

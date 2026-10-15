@@ -819,11 +819,9 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         """Return the resolved legacy OAuth Client ID + Secret for the options
         form, or a note pointing at the mode selector when legacy mode isn't
         the CONFIGURED mode. Admin-only screen (like ``_connect_url_hint``),
-        so showing the secret in cleartext here is acceptable — and this is
-        the surface the startup log points at while a rotation is pending
-        (``_surface_connect_urls`` withholds pending credentials from the
-        log, where a still-valid old-identity token could read them; an HA
-        admin here is trusted). A pending rotation gets a caveat so the admin
+        so showing the secret in cleartext here is acceptable, and it is the
+        only surface that shows them: the log and the startup notification
+        never carry credentials. A pending rotation gets a caveat so the admin
         doesn't paste values that only start working after the restart.
 
         The ``Client ID`` / ``Client Secret`` labels stay verbatim: they name

@@ -310,8 +310,9 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
         <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
           <li>Install <strong>HA-MCP Custom Component</strong> from HACS, then restart Home Assistant.</li>
           <li>Go to <strong>Settings → Devices &amp; Services → Add Integration</strong>, search <strong>HA-MCP Custom Component</strong>, and choose <strong>HA-MCP Server</strong>.</li>
+          <li>Pick how clients may connect. Both options start off, so a client on another device needs one of them: <strong>Remote access through Home Assistant</strong> — start with <strong>Secret URL</strong> (the connect URL is the credential, nothing else to set up; switch to <strong>Home Assistant sign-in</strong> later if you want a login) — and/or <strong>Network access: Local network</strong> for clients on your LAN. Leaving both off keeps the server reachable only from the Home Assistant machine.</li>
           <li>Submit — creating the entry starts the server.</li>
-          <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there; the URL is also printed in the Home Assistant log).</li>
+          <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there).</li>
           <li>Paste it into your AI client — pick the client below for its exact config.</li>
         </ol>
         <p class="text-slate-500 text-sm mt-4">Need client-specific config, or a different install method (App (add-on), Docker, uvx, or local stdio)? Use the setup wizard below.</p>
@@ -1633,7 +1634,7 @@ volumes:
           </div>`
               : `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
             <p class="text-slate-300 text-sm font-medium">Your connect URL (via tunnel / reverse proxy)</p>
-            <p class="text-slate-400 text-xs mt-1">Point the tunnel or reverse proxy below at the component's own port (default <code class="bg-slate-800 px-1 rounded">9584</code>). Your MCP URL is then <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/private_&lt;random&gt;</code> using the direct-access path from the Home Assistant log. For most setups the built-in webhook is simpler.</p>
+            <p class="text-slate-400 text-xs mt-1">Point the tunnel or reverse proxy below at the component's own port (default <code class="bg-slate-800 px-1 rounded">9584</code>). Your MCP URL is then <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/private_&lt;random&gt;</code> using the direct-access path from the entry's <strong>Configure</strong> screen. For most setups the built-in webhook is simpler.</p>
           </div>`)
           : `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
             <p class="text-slate-300 text-sm font-medium">Your connect URL (local)</p>
@@ -1649,8 +1650,9 @@ volumes:
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li>Install <strong>HA-MCP Custom Component</strong> from HACS (or copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> into <code class="bg-slate-800 px-1 rounded">config/custom_components/</code>), then restart Home Assistant.</li>
             <li>Go to <strong>Settings → Devices &amp; Services → Add Integration</strong>, search <strong>HA-MCP Custom Component</strong>, and choose <strong>HA-MCP Server</strong>.</li>
+            <li>Pick how clients may connect. Both options start off, so a client on another device needs one of them: <strong>Remote access through Home Assistant</strong> — start with <strong>Secret URL</strong> (the connect URL is the credential, nothing else to set up; switch to <strong>Home Assistant sign-in</strong> later if you want a login) — and/or <strong>Network access: Local network</strong> for clients on your LAN. Leaving both off keeps the server reachable only from the Home Assistant machine.</li>
             <li>Submit — creating the entry starts the server (the first start takes a little longer while it installs the package).</li>
-            <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there; the URL is also printed in the Home Assistant log).</li>
+            <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there).</li>
             <li>Paste it into ${state.client.name} using the config below.</li>
           </ol>
           ${componentUrlGuidance}
@@ -2528,7 +2530,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
           : `the Webhook Proxy app's <strong>OAuth Mode</strong> option`;
         const modeChoices = oauthCapable ? `
               <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
-                <li><strong>Secret URL</strong> (${isComponent ? '<code class="bg-slate-800 px-1 rounded">none</code>, the default' : 'OAuth off, the default'}): Authentication <strong>None</strong> (Detected). The URL is the credential and no OAuth client section appears. Keep the detected setting; manually forcing a different authentication setting may not help.</li>
+                <li><strong>Secret URL</strong> (${isComponent ? '<code class="bg-slate-800 px-1 rounded">none</code>, the simplest start' : 'OAuth off, the default'}): Authentication <strong>None</strong> (Detected). The URL is the credential and no OAuth client section appears. Keep the detected setting; manually forcing a different authentication setting may not help.</li>
                 <li><strong>Home Assistant sign-in</strong> (<code class="bg-slate-800 px-1 rounded">ha_auth</code>): Authentication <strong>Always required</strong>, OAuth client <strong>Use Anthropic's hosted client metadata</strong> (both Detected). No Client ID or Secret.</li>
                 <li><strong>Legacy</strong> (<code class="bg-slate-800 px-1 rounded">legacy</code>): Authentication <strong>Always required</strong>, OAuth client <strong>Use your own OAuth client</strong>, then paste the Client ID and Client Secret from ${isComponent ? "the integration's Options page" : 'the app log'}.</li>
               </ul>` : `

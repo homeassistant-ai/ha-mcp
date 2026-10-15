@@ -343,7 +343,7 @@ re-adding the entry also rotates everything, including the internal token.)
 The in-process server offers three authentication postures, chosen with the
 **Authentication mode** option:
 
-- **`none` (default): the secret webhook URL is the credential.** The webhook id
+- **`none`: the secret webhook URL is the credential.** The webhook id
   is a high-entropy random string, and anyone who has the full URL can reach the
   server — exactly like the Webhook Proxy app's default. When exposed through
   Nabu Casa (or another HTTPS reverse proxy) the URL travels over TLS. Treat the
