@@ -70,27 +70,8 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Add-on version: $VERSION"
 
-    # ECR Public's anonymous data limit is shared by every GitHub runner; the
-    # same digest is on Docker Hub. The build takes the registry that answered.
-    - name: Pull python base image (ECR Public → Docker Hub fallback)
-      run: |
-        PYTHON_BASE_ECR=$(sed -n 's/^ARG PYTHON_BASE=//p' homeassistant-addon/Dockerfile)
-        [ -n "$PYTHON_BASE_ECR" ] || { echo "Dockerfile has no ARG PYTHON_BASE"; exit 1; }
-        PYTHON_BASE_DOCKERHUB="docker.io/library/${PYTHON_BASE_ECR#public.ecr.aws/docker/library/}"
-        for image in "$PYTHON_BASE_ECR" "$PYTHON_BASE_DOCKERHUB"; do
-          echo "Trying $image..."
-          if docker pull "$image"; then
-            echo "PYTHON_BASE=$image" >> "$GITHUB_ENV"
-            echo "Pulled from $image"
-            exit 0
-          fi
-          echo "Failed to pull $image, trying next..."
-          sleep 15
-        done
-        echo "All registries failed" && exit 1
-
     - name: Build and push Docker image
-      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+      uses: ./.github/actions/docker-build-python-base-fallback
       with:
         context: .
         file: ./homeassistant-addon/Dockerfile
@@ -118,4 +99,3 @@ jobs:
         build-args: |
           BUILD_VERSION=${{ steps.version.outputs.version }}
           BUILD_ARCH=${{ matrix.arch }}
-          PYTHON_BASE=${{ env.PYTHON_BASE }}
