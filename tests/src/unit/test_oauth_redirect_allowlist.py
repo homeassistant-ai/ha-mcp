@@ -174,8 +174,8 @@ class TestNormalizeAllowlist:
 
 
 async def test_none_mode_refuses_an_unlisted_callback_without_redirecting(
-    unified_view_client_factory,
-):
+    unified_view_client_factory: Any,
+) -> None:
     """An anonymous /authorize must not bounce a visitor to any URL (#2427)."""
     client = await unified_view_client_factory(mode="none")
     resp = await client.get(
@@ -223,8 +223,8 @@ async def test_none_mode_refusal_log_cannot_be_forged(
 
 
 async def test_none_mode_refusal_page_escapes_the_callback(
-    unified_view_client_factory,
-):
+    unified_view_client_factory: Any,
+) -> None:
     """The refusal page shows the callback to the user, so it must not run it."""
     client = await unified_view_client_factory(mode="none")
     resp = await client.get(
@@ -244,8 +244,8 @@ async def test_none_mode_refusal_page_escapes_the_callback(
 
 
 async def test_none_mode_follows_allowlist_edits_without_a_reload(
-    unified_view_client_factory,
-):
+    unified_view_client_factory: Any,
+) -> None:
     """An administrator's edit applies to the next sign-in, no restart."""
     allowlist: list[str] = []
     client = await unified_view_client_factory(mode="none", allowlist=allowlist)
@@ -262,8 +262,8 @@ async def test_none_mode_follows_allowlist_edits_without_a_reload(
 
 
 async def test_none_mode_dynamic_registration_cannot_add_a_callback(
-    unified_view_client_factory,
-):
+    unified_view_client_factory: Any,
+) -> None:
     """A client registering its own callback must not get past the allowlist."""
     key = b"k" * 32
     callback = "https://evil.example/cb"
@@ -280,8 +280,8 @@ async def test_none_mode_dynamic_registration_cannot_add_a_callback(
 
 
 async def test_none_mode_listed_loopback_callback_autoapproves_on_any_port(
-    unified_view_client_factory,
-):
+    unified_view_client_factory: Any,
+) -> None:
     """Native/CLI loopback callbacks (RFC 8252) pick a fresh port per sign-in."""
     client = await unified_view_client_factory(
         mode="none", allowlist=["http://localhost/callback"]
@@ -296,7 +296,9 @@ async def test_none_mode_listed_loopback_callback_autoapproves_on_any_port(
     assert "code=" in resp.headers["Location"]
 
 
-async def test_the_registered_provider_follows_the_entry_allowlist(monkeypatch):
+async def test_the_registered_provider_follows_the_entry_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An options edit to the callback list applies with no re-registration."""
     hass = _register_hass()
     monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
