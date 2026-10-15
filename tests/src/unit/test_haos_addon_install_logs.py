@@ -3,6 +3,7 @@ behind Supervisor's "Check Supervisor logs for details" answer."""
 
 from __future__ import annotations
 
+import http.client
 import logging
 import urllib.error
 from typing import Any
@@ -63,8 +64,13 @@ def test_each_failed_attempt_logs_the_supervisor_log_tail(
     assert "apt timeout" in tails[0].getMessage()
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [urllib.error.URLError("connection refused"), http.client.IncompleteRead(b"")],
+    ids=["connection", "truncated-body"],
+)
 def test_an_unreadable_log_tail_does_not_replace_the_install_error(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, failure: Exception
 ) -> None:
     ws = _failing_ws()
 
@@ -72,7 +78,7 @@ def test_an_unreadable_log_tail_does_not_replace_the_install_error(
         patch("tests.haos_image_build.build_image.time.sleep"),
         patch(
             "tests.haos_image_build.build_image.urllib.request.urlopen",
-            side_effect=urllib.error.URLError("connection refused"),
+            side_effect=failure,
         ),
         pytest.raises(WSCommandError, match="Check Supervisor logs"),
     ):

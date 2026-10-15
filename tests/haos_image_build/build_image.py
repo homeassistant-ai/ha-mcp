@@ -16,6 +16,7 @@ primes the shared Actions cache that the e2e lanes restore.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import logging
 import os
@@ -1092,7 +1093,8 @@ def _log_supervisor_tail(ws: HAWebSocket) -> None:
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             LOG.error("Supervisor log tail:\n%s", resp.read().decode(errors="replace"))
-    except OSError as e:  # includes URLError, HTTPError and TimeoutError
+    except (OSError, http.client.HTTPException) as e:
+        # URLError/HTTPError/TimeoutError, and a truncated response body.
         LOG.warning("Could not fetch the Supervisor log tail: %r", e)
 
 
