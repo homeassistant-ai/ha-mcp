@@ -789,9 +789,9 @@ def refuse_component_entry(
             "and credentials.",
             suggestions=[
                 "Use the Home Assistant UI: Settings > Devices & services > "
-                "HA-MCP Custom Component > Configure.",
+                + "HA-MCP Custom Component > Configure.",
                 "With developer mode on, use ha_dev_manage_settings or "
-                "ha_dev_manage_server.",
+                + "ha_dev_manage_server.",
             ],
             context={"entry_id": entry_id, "domain": domain},
         )
