@@ -123,7 +123,7 @@ async def test_a_save_outside_the_embedded_server_is_refused(component) -> None:
 
 
 async def test_a_refusal_by_the_component_is_a_400_not_a_502(
-    embedded, monkeypatch: pytest.MonkeyPatch
+    embedded: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The component ran the command and rejected it: the panel was reached.
     from ha_mcp.client.rest_client import HomeAssistantCommandError
@@ -138,7 +138,7 @@ async def test_a_refusal_by_the_component_is_a_400_not_a_502(
 
 
 async def test_an_unreachable_component_is_a_502(
-    embedded, monkeypatch: pytest.MonkeyPatch
+    embedded: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from ha_mcp.client.rest_client import HomeAssistantConnectionError
 
