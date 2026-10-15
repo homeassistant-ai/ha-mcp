@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -186,7 +187,7 @@ class TestMarkerFile:
 
 
 class TestMaybeRefreshHacsAfterUpdate:
-    async def test_embedded_server_is_a_no_op(self, data_dir) -> None:
+    async def test_embedded_server_is_a_no_op(self, data_dir: Path) -> None:
         # The embedded server arrives with the component release HACS
         # delivers, so there is no separate server update to surface.
         with (
