@@ -420,7 +420,8 @@ def _wait_for_bringup_outcome(log_file: Path, container: Any) -> str:
                     "reinstalled the dependency tree and repaired the pin) or "
                     f"{_PINNED_PACKAGE} {_PINNED_VERSION} no longer breaks the "
                     "fastmcp import. Re-read the fast-path rationale in this module's "
-                    f"docstring.\nContainer logs:\n{_dump_logs(container)}"
+                    f"docstring. Log tail:\n{log_text[-6000:]}\n"
+                    f"Container logs:\n{_dump_logs(container)}"
                 )
         time.sleep(_LOG_POLL_S)
     raise AssertionError(
