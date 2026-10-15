@@ -94,9 +94,16 @@ def effective_allowlist(options: Mapping[str, Any]) -> list[str]:
     saved = options.get(OPT_OAUTH_REDIRECT_ALLOWLIST)
     if saved is None:
         return list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
-    if not isinstance(saved, list) or not all(isinstance(e, str) for e in saved):
-        # Only validated writers store this option; anything else is corrupt,
-        # and refusing every callback is safer than widening to the default.
+    if (
+        not isinstance(saved, list)
+        or not all(isinstance(e, str) for e in saved)
+        or normalize_allowlist(saved)[1]
+    ):
+        # Only validated writers store this option, so an entry that fails
+        # their checks means the list is not theirs: refusing every callback is
+        # safer than honouring the rest (a stored "#fragment" loopback entry
+        # would otherwise match a port-varied request) or widening to the
+        # default.
         _LOGGER.warning("Ignoring a malformed OAuth callback allowlist: %r", saved)
         return []
     return list(saved)

@@ -116,6 +116,31 @@ async def test_a_malformed_save_is_refused_before_the_component(
     assert component == []
 
 
+async def test_a_body_that_both_resets_and_sets_is_refused(embedded, component) -> None:
+    status, _ = await _call(
+        "save_oauth_callbacks", {"reset": True, "allowlist": [CALLBACK]}
+    )
+    assert status == 400
+    assert component == []
+
+
+async def test_a_failed_probe_is_a_reachability_error_on_save(
+    embedded, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Home Assistant's WebSocket is restarting: the write must say "retry",
+    # not "update the component", which is what a cached None would mean.
+    from ha_mcp.tools import component_api
+
+    monkeypatch.setattr(
+        component_api,
+        "get_component_caps",
+        AsyncMock(side_effect=component_api.ComponentDiscoveryError("probe failed")),
+    )
+    status, body = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
+    assert status == 502
+    assert "Could not reach" in body["error"]["message"]
+
+
 async def test_a_save_outside_the_embedded_server_is_refused(component) -> None:
     status, _ = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
     assert status == 409

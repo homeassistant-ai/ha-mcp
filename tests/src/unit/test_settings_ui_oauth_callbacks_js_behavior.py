@@ -56,6 +56,22 @@ class TestOAuthCallbackEditor:
         result = _oauth_run(settings_script, {"success": True, "available": False})
         assert _section_hidden(result.dom)
 
+    def test_a_failed_request_keeps_the_section_with_the_reason(self, settings_script):
+        # A transient proxy failure must not look like an install without the list.
+        result = run_script(
+            settings_script,
+            initial_html=_OAUTH_DOM,
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/oauth-callbacks": {
+                    "throw": "TypeError: Failed to fetch"
+                },
+            },
+            invoke="await loadOAuthCallbacks();",
+        )
+        assert not _section_hidden(result.dom)
+        assert "the request failed" in result.dom
+
     def test_the_embedded_server_shows_the_list_in_force(self, settings_script):
         result = _oauth_run(
             settings_script,

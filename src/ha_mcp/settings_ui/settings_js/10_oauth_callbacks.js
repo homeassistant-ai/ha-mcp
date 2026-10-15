@@ -19,8 +19,11 @@ async function loadOAuthCallbacks() {
         {status: resp.status}, `Could not load the callback list (HTTP ${resp.status}). Reload the page to try again.`)};
     }
   } catch (err) {
+    // A rejected fetch or unreadable body is a failure to show, not an
+    // install without the list (which the GET reports as available:false).
     console.error('loadOAuthCallbacks failed:', err);
-    _oauthCallbacks = null;
+    _oauthCallbacks = {available: false, reason: t('oauth_callbacks.load_error', {},
+      'Could not load the callback list: the request failed. Reload the page to try again.')};
   }
   renderOAuthCallbacks();
 }

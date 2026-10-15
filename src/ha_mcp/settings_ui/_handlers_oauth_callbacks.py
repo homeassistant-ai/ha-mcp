@@ -41,14 +41,30 @@ class _Unavailable(Exception):
 
 
 async def _component_command(
-    server: HomeAssistantSmartMCPServer, command: str, **fields: Any
+    server: HomeAssistantSmartMCPServer,
+    command: str,
+    *,
+    strict: bool = False,
+    **fields: Any,
 ) -> dict[str, Any]:
-    """Run one allowlist command on the component and return its result."""
+    """Run one allowlist command on the component and return its result.
+
+    ``strict`` is for the write: a capability probe that failed because Home
+    Assistant was unreachable must surface as a reachability error to retry,
+    not as a component that lacks the commands.
+    """
     from ..client.websocket_client import get_websocket_client
-    from ..tools.component_api import component_supports, get_component_caps
+    from ..tools.component_api import (
+        ComponentDiscoveryError,
+        component_supports,
+        get_component_caps,
+    )
 
     client = server.client
-    caps = await get_component_caps(client)
+    try:
+        caps = await get_component_caps(client, strict=strict)
+    except ComponentDiscoveryError as exc:
+        raise HomeAssistantError(str(exc)) from exc
     if not component_supports(caps, CAPABILITY):
         raise _Unavailable(
             "This HA-MCP component cannot edit the callback list. Update the "
@@ -93,6 +109,10 @@ async def _get_oauth_callbacks(
 def _parse_change(body: Any) -> dict[str, Any] | None:
     if not isinstance(body, dict):
         return None
+    if "reset" in body and "allowlist" in body:
+        # The component's schema makes these exclusive; a body carrying both
+        # must not silently let reset win over the list it also sent.
+        return None
     if body.get("reset") is True:
         return {"reset": True}
     allowlist = body.get("allowlist")
@@ -136,7 +156,9 @@ async def _save_oauth_callbacks(
             status_code=400,
         )
     try:
-        result = await _component_command(server, WS_OAUTH_CALLBACKS_UPDATE, **change)
+        result = await _component_command(
+            server, WS_OAUTH_CALLBACKS_UPDATE, strict=True, **change
+        )
     except _Unavailable as exc:
         return JSONResponse(
             create_error_response(ErrorCode.SERVICE_CALL_FAILED, str(exc)),
