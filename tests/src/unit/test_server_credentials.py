@@ -184,6 +184,21 @@ class TestAdoptToken:
 
         assert new == {DATA_ADMIN_TOKEN: "tok"}
 
+    def test_a_token_minted_from_the_provisioned_one_is_not_revoked(self) -> None:
+        # The replacement is an access token of the stored refresh token (say a
+        # legacy token recovered from storage): revoking that refresh token
+        # would invalidate the very token being adopted.
+        account = _user("u1")
+        rt = _rt(user=account)
+        hass = _hass(refresh_tokens={"rt1": rt}, validated=rt)
+
+        new = sc.adopt_admin_token(
+            hass, {DATA_SERVER_USER_ID: "u1", DATA_REFRESH_TOKEN_ID: "rt1"}, "tok"
+        )
+
+        hass.auth.async_remove_refresh_token.assert_not_called()
+        assert new == {DATA_ADMIN_TOKEN: "tok"}
+
     def test_switching_never_removes_an_account(self) -> None:
         hass = _hass(refresh_tokens={"rt1": _rt()})
         sc.adopt_admin_token(

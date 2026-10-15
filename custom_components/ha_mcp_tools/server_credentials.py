@@ -98,18 +98,23 @@ def adopt_admin_token(
     """Return ``data`` switched to ``token``.
 
     The token an older release provisioned is revoked so no unused
-    administrator token is left behind. Its account stays, and so does its id,
-    so removing the entry still deletes it, unless ``token`` belongs to that
-    very account: an administrator who took a token from it has made it their
-    own, so its id is dropped here, while the token is known to be valid,
-    rather than inferred at removal time from a token that may be revoked by
-    then.
+    administrator token is left behind, unless it is the one ``token`` was
+    minted from. Its account stays, and so does its id, so removing the entry
+    still deletes it, unless ``token`` belongs to that very account: an
+    administrator who took a token from it has made it their own, so its id is
+    dropped here, while the token is known to be valid, rather than inferred at
+    removal time from a token that may be revoked by then.
     """
+    # Identify the replacement before revoking anything: it may be backed by
+    # the very refresh token an older release provisioned.
+    supplied = hass.auth.async_validate_access_token(token)
+    owner_id = supplied.user.id if supplied is not None else None
     rt_id = data.get(DATA_REFRESH_TOKEN_ID)
     refresh_token = hass.auth.async_get_refresh_token(rt_id) if rt_id else None
-    if refresh_token is not None:
+    if refresh_token is not None and (
+        supplied is None or supplied.id != refresh_token.id
+    ):
         hass.auth.async_remove_refresh_token(refresh_token)
-    owner_id = _token_owner_id(hass, token)
     new = {
         k: v
         for k, v in data.items()
