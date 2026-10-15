@@ -284,10 +284,14 @@ def test_python_runtime_automation_is_digest_only() -> None:
         "homeassistant-addon-webhook-proxy-dev/Dockerfile",
     }, "webhook-proxy images change only through the dev-first promotion workflow"
 
+    # The runtime base is the PYTHON_BASE build arg's default (CI overrides it
+    # with the registry it could pull from); a bare FROM is the pre-arg form.
     python_dockerfiles = {
         path.relative_to(_REPO_ROOT).as_posix()
         for path in _tracked_dockerfiles()
-        if f"FROM {_PYTHON_IMAGE_MIRROR}:" in path.read_text(encoding="utf-8")
+        if f"ARG PYTHON_BASE={_PYTHON_IMAGE_MIRROR}:"
+        in path.read_text(encoding="utf-8")
+        or f"FROM {_PYTHON_IMAGE_MIRROR}:" in path.read_text(encoding="utf-8")
         or "FROM python:" in path.read_text(encoding="utf-8")
     }
     assert python_dockerfiles - set(proxy_rule["matchFileNames"]) == {
