@@ -216,7 +216,7 @@ class TestConstruction:
         # secret path is the credential, same as the add-on's port).
         assert mgr._bind_host == "0.0.0.0"
         assert mgr._server_url == "http://127.0.0.1:8123"
-        # Stable is unpinned now: the bare distribution name (auto-updates).
+        # Provisional until async_start reads the manifest pin.
         assert mgr._pip_spec == "ha-mcp"
         assert mgr.is_running is False
 
@@ -953,9 +953,9 @@ class TestInstalledVersion:
 
 
 class TestInstalledDistVersion:
-    """``_installed_dist_version`` pins a SINGLE distribution name (the channel's),
-    unlike ``_installed_ha_mcp_version`` which reports whichever is present — the
-    auto-update check must compare against the version of the channel installed.
+    """``_installed_dist_version`` pins a SINGLE distribution name, unlike
+    ``_installed_ha_mcp_version`` which reports whichever is present — the target's
+    version must never be read from the other distribution's metadata.
     """
 
     def test_returns_version_of_named_dist(self, monkeypatch):

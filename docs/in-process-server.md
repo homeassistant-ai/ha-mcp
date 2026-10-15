@@ -373,12 +373,12 @@ because the package is already installed.
 **The server won't start.** If the server fails to come up — for example because
 the port is already in use, or token provisioning fails — a repair issue titled
 **The HA-MCP in-process server failed to start** appears under **Settings →
-Repairs**, carrying the specific reason. If the `ha-mcp` package itself can't be
-installed, the repair issue is titled **The HA-MCP in-process server package
-could not be installed** instead. Fix the cause — check the Home Assistant log and
-your network connectivity for an install failure, or set a different **Server
-port** for a port conflict — then reload the entry (save the options, or use
-**⋮ → Reload**) to retry.
+Repairs**, carrying the specific reason. If a build set in **ha-mcp package
+(advanced)** can't be installed, the repair issue is titled **The HA-MCP
+in-process server package could not be installed** instead. Fix the cause —
+check the Home Assistant log and your network connectivity for an install
+failure, or set a different **Server port** for a port conflict — then reload
+the entry (save the options, or use **⋮ → Reload**) to retry.
 
 **The integration does not load at all.** Home Assistant installs the server
 build each component release pins before it loads the integration. If that

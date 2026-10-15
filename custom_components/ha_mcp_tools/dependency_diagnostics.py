@@ -678,7 +678,7 @@ def _action_sentence(
         domains = {pinner.domain for pinner in pinners}
         subject = "integration" if len(domains) == 1 else "integrations"
         # The reinstall clause is load-bearing on the no-install fast path
-        # (a pinned server spec, or auto-update off): removing the
+        # (the manifest pin Home Assistant installed): removing the
         # integration deletes its pin but restores nothing, and the next
         # bring-up re-resolves no dependencies (Codex on #2245).
         return (

@@ -239,9 +239,10 @@ class ToolsRegistry:
         which happens after the MCP server is ready to accept connections.
 
         A module that fails to import or register is SKIPPED (logged loudly),
-        not fatal: the in-process server auto-updates the ha-mcp package inside
-        a running Home Assistant, and a mixed old/new module generation — or a
-        module needing a newer custom component — previously took the whole
+        not fatal: the in-process server can swap the ha-mcp package inside a
+        running Home Assistant (a pip-spec override), and a mixed old/new
+        module generation — or a module needing a newer custom component —
+        previously took the whole
         server down over one module (issues #1783/#1785). Only a TOTAL failure
         (zero modules registered) still raises: a tool-less server "running"
         would hide a genuinely broken install.

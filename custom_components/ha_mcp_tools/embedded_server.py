@@ -531,8 +531,8 @@ class EmbeddedServerManager:
         a GitHub tarball URL, a ``file://`` wheel — for PR or pre-release
         testing). Otherwise the requirement this component release pins in its
         manifest, so the server that runs is the one HACS delivered with the
-        component. A manifest without a pin (a source checkout) falls back to
-        the bare ``ha-mcp`` distribution.
+        component. A hand-edited manifest without a pin falls back to the bare
+        ``ha-mcp`` distribution.
         """
         if self._pip_spec_override:
             return self._pip_spec_override
@@ -1022,10 +1022,10 @@ class EmbeddedServerManager:
         every restart), when the new spec is a direct URL (always installs
         for real), when the named distribution is not installed (e.g. a
         conflicting-dist removal already took it), when the stored spec is
-        an index requirement on the SAME distribution (a repin — e.g.
-        toggling auto-update rewrites bare ``ha-mcp`` to ``ha-mcp==X`` —
-        draws from the same index either way, so version resolution is
-        faithful and uninstalling a healthy install on a preference toggle
+        an index requirement on the SAME distribution (a repin — e.g. a
+        component 2.x install stored bare ``ha-mcp`` and the pin is
+        ``ha-mcp==X`` — draws from the same index either way, so version
+        resolution is faithful and uninstalling a healthy install on a repin
         would only add an offline-breakage window), or when the new spec is
         an exact pin on a version provably different from the installed one
         (the install cannot no-op, so the working build stays in place as
@@ -2164,9 +2164,8 @@ def _installed_dist_version(dist_name: str) -> str | None:
 
     Invalidates the import caches first so a just-completed (un)install is seen.
     Unlike :func:`_installed_ha_mcp_version` (which reports whichever of the two
-    channel distributions is present) this pins the given distribution name, so
-    the auto-update check compares the newest PyPI build against the version of
-    the channel actually installed.
+    server distributions is present) this pins the given distribution name, so
+    the target's version is never read from the other distribution's metadata.
     """
     _safe_invalidate_caches()
     try:
@@ -2526,10 +2525,10 @@ def _spec_satisfied_by(spec: str, installed_version: str) -> bool:
 async def _async_paired_server_requirement(hass: HomeAssistant) -> str | None:
     """Return the server requirement this component release pins, or None.
 
-    Every component release HACS delivers pins the ``ha-mcp`` build it was
-    released with in ``manifest.json``'s ``requirements``, which Home
-    Assistant installs before setting the integration up. A source checkout
-    carries no pin.
+    Every component release HACS delivers pins the ``ha-mcp`` (pre-release:
+    ``ha-mcp-dev``) build it was released with in ``manifest.json``'s ``requirements``, which Home
+    Assistant installs before setting the integration up. A copy taken from
+    master pins the last release; only a hand-edited manifest carries none.
     """
     known = {canonicalize_name(name) for name in KNOWN_SERVER_DISTS}
     integration = await async_get_integration(hass, DOMAIN)

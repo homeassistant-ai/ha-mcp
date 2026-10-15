@@ -1,7 +1,7 @@
 """Unit + contract tests for the ``server_entry_update`` WRITE capability.
 
 The write counterpart of ``server_entry`` (issue #1813 Phase 3): the component
-applies a ``channel`` / ``pip_spec`` delta to its OWN server config entry via
+applies a ``pip_spec`` delta to its OWN server config entry via
 ``hass.config_entries.async_update_entry`` DIRECTLY, DEFERRED on a hass-level
 background task so the WS response flushes before the resulting self-reload tears
 the serving thread down. These pin the load-bearing behaviours:
@@ -129,22 +129,6 @@ async def test_prep_schedules_merged_update_preserving_other_keys() -> None:
         "pip_spec": "ha-mcp==2.0.0",
         "server_url": "http://ha.local:8123",
     }
-
-
-@pytest.mark.asyncio
-async def test_prep_pip_spec_applied_preserves_channel() -> None:
-    """A pip_spec delta preserves the current channel in the merged options."""
-    entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
-    hass = _BgHass([entry])
-
-    extra = await wsapi._server_entry_update_prep(
-        hass,
-        {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "ha-mcp==2.0.0"},
-    )
-    assert extra["result"]["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
-    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
-    _entry, applied = hass.config_entries.update_calls[0]
-    assert applied == {"channel": "dev", "pip_spec": "ha-mcp==2.0.0"}
 
 
 @pytest.mark.asyncio
@@ -294,8 +278,8 @@ async def test_prep_clearing_existing_pip_spec_override_schedules() -> None:
 @pytest.mark.asyncio
 async def test_prep_normalizes_whitespace_pip_spec_to_empty() -> None:
     """A whitespace-only pip_spec means "no override" — it normalizes to "" (matches
-    the options flow's _normalize) so the channel keeps auto-updating, and both the
-    applied options AND the response envelope reflect the collapsed value."""
+    the options flow's _normalize) so the paired server stays in force, and both
+    the applied options AND the response envelope reflect the collapsed value."""
     entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
     hass = _BgHass([entry])
     extra = await wsapi._server_entry_update_prep(
@@ -312,7 +296,7 @@ async def test_prep_normalizes_whitespace_pip_spec_to_empty() -> None:
 async def test_prep_normalizes_default_dist_pip_spec_to_empty() -> None:
     """pip_spec == DEFAULT_PIP_SPEC (the unpinned dist) means "no override" — it
     persists as "" rather than a verbatim value that would read as an intentional
-    override and disable auto-updates."""
+    override of the paired server."""
     entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
     hass = _BgHass([entry])
     extra = await wsapi._server_entry_update_prep(
