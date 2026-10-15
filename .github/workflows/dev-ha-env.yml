@@ -42,6 +42,9 @@ on:
       minutes:
         description: How long to keep the instance up (max 330)
         default: "330"
+      cpu_max:
+        description: "haos only: cap the VM's total CPU as cgroup cpu.max (e.g. \"25000 100000\" = a quarter of a host core) to stand in for a slow board; empty = no cap"
+        default: ""
 
 permissions:
   contents: read
@@ -198,6 +201,7 @@ jobs:
           SERVER: ${{ inputs.server }}
           HA_IMAGE: ${{ inputs.ha_image }}
           DEVENV_MINUTES: ${{ inputs.minutes }}
+          CPU_MAX: ${{ inputs.cpu_max }}
           DEVENV_TARGETS: ${{ github.workspace }}/targets.json
           # A prefix cache hit restored an image baked with another commit's
           # component (neither the exact nor the current devenv key matched);
@@ -238,6 +242,15 @@ jobs:
             sleep 5
           done
           if [ ! -s targets.json ]; then echo "HA never came up"; tail -150 env.log; exit 1; fi
+          if [ "$PLATFORM" = haos ] && [ -n "$CPU_MAX" ]; then
+            # Cap the running VM (cgroup v2) once HA is up, so boot keeps full speed.
+            pid=$(pgrep -f qemu-system-x86_64 | head -1)
+            sudo mkdir -p /sys/fs/cgroup/devenv-vm
+            echo "+cpu" | sudo tee /sys/fs/cgroup/cgroup.subtree_control > /dev/null || true
+            echo "$CPU_MAX" | sudo tee /sys/fs/cgroup/devenv-vm/cpu.max > /dev/null
+            echo "$pid" | sudo tee /sys/fs/cgroup/devenv-vm/cgroup.procs > /dev/null
+            echo "CPU cap on QEMU pid $pid: $(cat /sys/fs/cgroup/devenv-vm/cpu.max)"
+          fi
           target() { python3 -c "import json,sys;print(json.load(open('targets.json'))[sys.argv[1]])" "$1"; }
           target mcp_path > mcp-path
           source devenv/.github/dev-ha-env/tunnels.sh
