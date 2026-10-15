@@ -79,8 +79,7 @@ def _make_entry(*, options=None, data=None) -> MagicMock:
     return entry
 
 
-@pytest.fixture
-def fake_manager(monkeypatch):
+def make_fake_manager(monkeypatch: pytest.MonkeyPatch) -> type:
     """Patch EmbeddedServerManager with a real fake class.
 
     A real class (not a lambda/MagicMock) is required because
@@ -104,8 +103,12 @@ def fake_manager(monkeypatch):
     return FakeManager
 
 
-@pytest.fixture(autouse=True)
-def _spy(monkeypatch):
+@pytest.fixture
+def fake_manager(monkeypatch: pytest.MonkeyPatch) -> type:
+    return make_fake_manager(monkeypatch)
+
+
+def install_spies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch webhook register/unregister, issue-registry, and connect-URL
     surfacing to spies (the connect-URL tests restore the real surfacing)."""
     monkeypatch.setattr(esetup, "async_register_webhook", AsyncMock(return_value=False))
@@ -115,6 +118,11 @@ def _spy(monkeypatch):
     monkeypatch.setattr(esetup.ir, "async_create_issue", MagicMock())
     monkeypatch.setattr(esetup.ir, "async_delete_issue", MagicMock())
     monkeypatch.setattr(esetup, "_surface_connect_urls", MagicMock())
+
+
+@pytest.fixture(autouse=True)
+def _spy(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_spies(monkeypatch)
 
 
 class TestBringUp:
