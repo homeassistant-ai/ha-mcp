@@ -155,7 +155,9 @@ class TestUpdateFrame:
         ],
         ids=["both_changes", "too_many", "too_long"],
     )
-    def test_an_out_of_bounds_frame_is_refused(self, schema: Any, frame) -> None:
+    def test_an_out_of_bounds_frame_is_refused(
+        self, schema: Any, frame: dict[str, Any]
+    ) -> None:
         with pytest.raises(_base._REAL_VOL.Invalid):
             schema({"type": wsapi.WS_OAUTH_CALLBACKS_UPDATE, **frame})
 
