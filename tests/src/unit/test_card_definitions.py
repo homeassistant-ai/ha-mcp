@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -23,6 +24,7 @@ from ha_mcp.tools.component_api import ComponentCaps
 importlib.import_module(".test_component_ws_search", __package__)
 
 cd = importlib.import_module("custom_components.ha_mcp_tools.card_definitions")
+dcw = importlib.import_module("custom_components.ha_mcp_tools.dashboard_cards_ws")
 
 
 def _definitions(card_types: set[str], struct_keys: dict[str, Any]) -> Any:
@@ -547,7 +549,7 @@ async def test_describe_answers_while_the_index_is_still_building(
     monkeypatch.setattr(cd, "_build_failed_at", None)
     building = asyncio.create_task(asyncio.Event().wait())
     monkeypatch.setattr(cd, "_build_task", building)
-    prep = cd.command_specs(vol)[0][2]
+    prep = dcw.command_specs(vol)[0][2]
     try:
         result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
         assert result["result"] == {"success": False, "error": "definitions_loading"}
@@ -556,6 +558,10 @@ async def test_describe_answers_while_the_index_is_still_building(
         building.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await building
+    failed = asyncio.create_task(asyncio.sleep(0, result=None))  # a build that failed
+    await failed
+    monkeypatch.setattr(cd, "_build_task", failed)
+    monkeypatch.setattr(cd, "_build_failed_at", time.monotonic())
     result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
     assert result["result"] == {"success": False, "error": "unavailable"}
 
@@ -576,7 +582,7 @@ async def test_slow_custom_refresh_preserves_builtin_describe(monkeypatch) -> No
             await asyncio.Event().wait()
 
     monkeypatch.setattr(cd, "async_get_custom_cards", slow)
-    prep = cd.command_specs(vol)[0][2]
+    prep = dcw.command_specs(vol)[0][2]
     result = await asyncio.wait_for(prep(MagicMock(), {}), 0.5)
     assert result["result"]["success"] is True
     assert result["result"]["card_types"] == [{"type": "tile"}]
