@@ -1677,11 +1677,9 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:  # noqa: PLR091
        Bump format: ``<base>-pr-<GITHUB_SHA[:7] or "local">`` so every
        distinct PR commit produces a distinct version (Supervisor caches
        by exact version string).
-    3. libguestfs replaces the ``ha_mcp_dev/`` directory (rm-rf + tar-in of
-       parent) under the live Supervisor local store on the offline qcow2:
-       ``apps/local`` on Supervisor >= 2026.06.0, else the legacy
-       ``addons/local`` (resolved by ``_resolve_local_store_dir``; the rename
-       landed in home-assistant/supervisor#6865).
+    3. libguestfs replaces ``ha_mcp_dev/`` (rm-rf + tar-in of parent) in the
+       Supervisor local store of the offline qcow2 (``apps/local``, else the
+       legacy ``addons/local``; see ``_resolve_local_store_dir``).
 
     Subsequent boot + ``addons/{slug}/update`` via Supervisor WS picks up
     the new files and rebuilds the addon's Docker image. Because the
@@ -1725,7 +1723,9 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:  # noqa: PLR091
             patched = patched.replace(
                 f"COPY homeassistant-addon/{name} /", f"COPY {name} /"
             )
-        dockerfile.write_text(patched)
+        from haos_python_base import rewrite_python_base
+
+        dockerfile.write_text(rewrite_python_base(patched))  # ECR 429 fallback
 
         # Strip image: from config.yaml — Supervisor pulls from GHCR when
         # image: is set, but the per-PR version we bump to below doesn't
