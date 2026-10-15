@@ -245,6 +245,7 @@ def _entity_matches(pattern: str, candidate: object) -> bool:
 # ``conditions`` also carry ``type`` and would false-match as cards.
 _NESTED_CARDS_KEY = "cards"
 _NESTED_CARD_KEY = "card"
+_CSS_STYLES = re.compile(r"(\.state\[\d+\])?\.styles")  # custom:button-card CSS lists
 _NESTED_CUSTOM_FIELDS_KEY = "custom_fields"
 _NESTED_STATES_KEY = "states"
 # Keys holding non-card children (picture-elements ``elements``). Their text is
@@ -451,7 +452,7 @@ def _split_card_entry(
     child_jq, child_py = f"{path[0]}{_jq_key(key)}", f"{path[1]}{_py_key(key)}"
     slots = _card_slots(key, value, child_jq)
     if slots is None:
-        if _is_swapped_card_container(key, value):
+        if _is_swapped_card_container(key, value, path[0]):
             out.misshapen.append(child_jq)
         _split_card_node(value, (child_jq, child_py), key, out, depth)
         return
@@ -463,17 +464,16 @@ def _split_card_entry(
             _split_card_node(item, item_path, leaf_key, out, depth)
 
 
-def _is_swapped_card_container(key: str, value: Any) -> bool:
+def _is_swapped_card_container(key: str, value: Any, parent_jq: str) -> bool:
     """``card`` or ``custom_fields`` holding a list, or ``cards`` a mapping.
 
-    Other shapes under slot keys are ordinary options (the alarm-panel card's
-    ``states`` is a list of modes), so they are read as text, not reported.
+    Other shapes are options read as text (alarm-panel ``states`` modes), as is a
+    list under the card's own ``styles`` or ``state[].styles`` (``_CSS_STYLES``).
     """
     if key == _NESTED_CARDS_KEY:
         return isinstance(value, dict)
-    return key in (_NESTED_CARD_KEY, _NESTED_CUSTOM_FIELDS_KEY) and isinstance(
-        value, list
-    )
+    swapped = key in (_NESTED_CARD_KEY, _NESTED_CUSTOM_FIELDS_KEY)
+    return swapped and isinstance(value, list) and not _CSS_STYLES.fullmatch(parent_jq)
 
 
 def _card_slots(

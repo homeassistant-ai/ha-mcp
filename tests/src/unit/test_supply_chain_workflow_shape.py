@@ -284,11 +284,18 @@ def test_python_runtime_automation_is_digest_only() -> None:
         "homeassistant-addon-webhook-proxy-dev/Dockerfile",
     }, "webhook-proxy images change only through the dev-first promotion workflow"
 
+    # The runtime stage takes the PYTHON_BASE build arg, whose default is the
+    # pin (CI may point it at Docker Hub); a bare FROM is the pre-arg form.
+    def _uses_python_runtime(text: str) -> bool:
+        return (
+            f"ARG PYTHON_BASE={_PYTHON_IMAGE_MIRROR}:" in text
+            and "FROM ${PYTHON_BASE}" in text
+        ) or (f"FROM {_PYTHON_IMAGE_MIRROR}:" in text or "FROM python:" in text)
+
     python_dockerfiles = {
         path.relative_to(_REPO_ROOT).as_posix()
         for path in _tracked_dockerfiles()
-        if f"FROM {_PYTHON_IMAGE_MIRROR}:" in path.read_text(encoding="utf-8")
-        or "FROM python:" in path.read_text(encoding="utf-8")
+        if _uses_python_runtime(path.read_text(encoding="utf-8"))
     }
     assert python_dockerfiles - set(proxy_rule["matchFileNames"]) == {
         "Dockerfile",
@@ -370,4 +377,48 @@ def test_a_renovate_abort_fails_the_workflow() -> None:
     }
     assert "Repository has changed during renovation - aborting" in promoted, (
         "this abort ends the whole repository run, so it cannot stay at info"
+    )
+
+
+_PYTHON_BASE_FALLBACK = ".github/actions/docker-build-python-base-fallback"
+
+
+def test_buildx_image_builds_fall_back_to_docker_hub_for_the_python_base() -> None:
+    """Every buildx image build goes through the fallback action, which repeats
+    the build from Docker Hub's copy of the pinned base when ECR Public fails;
+    the buildx docker-container builder pulls on its own, so a host pull would
+    not reach it."""
+    direct: list[str] = []
+    through_action: list[str] = []
+    for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
+        for job in _workflow(path)["jobs"].values():
+            for step in job.get("steps", []):
+                uses = step.get("uses", "")
+                if uses.startswith("docker/build-push-action@"):
+                    direct.append(f"{path.name}: {step.get('name')}")
+                if uses == f"./{_PYTHON_BASE_FALLBACK}":
+                    through_action.append(f"{path.name}: {step.get('name')}")
+    assert direct == [], f"buildx builds must use {_PYTHON_BASE_FALLBACK}: {direct}"
+    assert through_action, "no workflow uses the fallback action"
+
+    action = yaml.safe_load(
+        (_REPO_ROOT / _PYTHON_BASE_FALLBACK / "action.yml").read_text(encoding="utf-8")
+    )
+    builds = [
+        step
+        for step in action["runs"]["steps"]
+        if step.get("uses", "").startswith("docker/build-push-action@")
+    ]
+    assert len(builds) == 2
+    ecr, dockerhub = builds
+    assert ecr["id"] == "ecr" and ecr["continue-on-error"] is True
+    assert dockerhub["if"] == "steps.ecr.outcome == 'failure'"
+    assert ecr["uses"] == dockerhub["uses"]
+    passthrough = {k: v for k, v in dockerhub["with"].items() if k != "build-args"}
+    assert passthrough == {k: v for k, v in ecr["with"].items() if k != "build-args"}
+    assert "${{ inputs.build-args }}" in dockerhub["with"]["build-args"]
+    assert (
+        dockerhub["with"]["build-args"]
+        .rstrip()
+        .endswith("PYTHON_BASE=${{ steps.base.outputs.dockerhub }}")
     )

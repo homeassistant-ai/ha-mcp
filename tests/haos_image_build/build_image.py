@@ -34,6 +34,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+if __package__:  # imported by the unit tests
+    from .python_base import copy_addon_tree
+else:  # python3 tests/haos_image_build/build_image.py
+    from python_base import copy_addon_tree
+
 LOG = logging.getLogger("haos_image_build")
 
 # Stable image inputs are Renovate-managed; changing any pin invalidates the
@@ -1306,6 +1311,26 @@ DEV_ADDON_REPO_FILES = (
 )
 
 
+def _tar_in_local_addon(qcow2: Path, workdir: Path, name: str) -> None:
+    """Copy ``workdir/name`` into the qcow2's /supervisor/addons/local/ as root-owned files."""
+    seed_tar = workdir / f"{name}.tar"
+    tar = ["tar", "--numeric-owner", "--owner=0", "--group=0", "-C", str(workdir)]
+    _run([*tar, "-cf", str(seed_tar), name])
+    guestfish = [
+        "guestfish",
+        "--rw",
+        "-a",
+        str(qcow2),
+        "run",
+        ":",
+        "mount",
+        "/dev/sda8",
+        "/",
+    ]
+    local = "/supervisor/addons/local"
+    _run([*guestfish, ":", "mkdir-p", local, ":", "tar-in", str(seed_tar), local])
+
+
 def stage_dev_addon_source(qcow2: Path) -> None:
     """Bake the ha-mcp dev addon's source into the qcow2 under /supervisor/addons/local/.
 
@@ -1336,7 +1361,7 @@ def stage_dev_addon_source(qcow2: Path) -> None:
     workdir = Path(tempfile.mkdtemp(prefix="haos-dev-addon-"))
     try:
         staging = workdir / "ha_mcp_dev"
-        shutil.copytree(dev_addon_src, staging)
+        copy_addon_tree(dev_addon_src, staging)
 
         # Files outside the addon dir that the Dockerfile COPYs from.
         # Mirrors the addon-repo-branch manual steps.
@@ -1402,40 +1427,7 @@ def stage_dev_addon_source(qcow2: Path) -> None:
 
         # tar root-owned, root-mode files into /supervisor/addons/local/ on the qcow2's
         # hassos-data partition. Same approach as bake_test_state's seed-tar.
-        seed_tar = workdir / "ha_mcp_dev.tar"
-        _run(
-            [
-                "tar",
-                "--numeric-owner",
-                "--owner=0",
-                "--group=0",
-                "-C",
-                str(workdir),
-                "-cf",
-                str(seed_tar),
-                "ha_mcp_dev",
-            ]
-        )
-        _run(
-            [
-                "guestfish",
-                "--rw",
-                "-a",
-                str(qcow2),
-                "run",
-                ":",
-                "mount",
-                "/dev/sda8",
-                "/",
-                ":",
-                "mkdir-p",
-                "/supervisor/addons/local",
-                ":",
-                "tar-in",
-                str(seed_tar),
-                "/supervisor/addons/local",
-            ]
-        )
+        _tar_in_local_addon(qcow2, workdir, "ha_mcp_dev")
         LOG.info("Dev addon source staged at /supervisor/addons/local/ha_mcp_dev/")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -1496,42 +1488,9 @@ def stage_webhook_proxy_addon_source(qcow2: Path) -> None:
     workdir = Path(tempfile.mkdtemp(prefix="haos-webhook-proxy-addon-"))
     try:
         staging = workdir / "ha_mcp_webhook_proxy"
-        shutil.copytree(src_dir, staging)
+        copy_addon_tree(src_dir, staging)
 
-        seed_tar = workdir / "ha_mcp_webhook_proxy.tar"
-        _run(
-            [
-                "tar",
-                "--numeric-owner",
-                "--owner=0",
-                "--group=0",
-                "-C",
-                str(workdir),
-                "-cf",
-                str(seed_tar),
-                "ha_mcp_webhook_proxy",
-            ]
-        )
-        _run(
-            [
-                "guestfish",
-                "--rw",
-                "-a",
-                str(qcow2),
-                "run",
-                ":",
-                "mount",
-                "/dev/sda8",
-                "/",
-                ":",
-                "mkdir-p",
-                "/supervisor/addons/local",
-                ":",
-                "tar-in",
-                str(seed_tar),
-                "/supervisor/addons/local",
-            ]
-        )
+        _tar_in_local_addon(qcow2, workdir, "ha_mcp_webhook_proxy")
         LOG.info(
             "Webhook-proxy addon source staged at "
             "/supervisor/addons/local/ha_mcp_webhook_proxy/"
@@ -1566,42 +1525,9 @@ def stage_screenshot_engine_source(qcow2: Path) -> None:
     workdir = Path(tempfile.mkdtemp(prefix="haos-screenshot-engine-"))
     try:
         staging = workdir / "puppet"
-        shutil.copytree(src, staging, ignore=shutil.ignore_patterns("__pycache__"))
+        copy_addon_tree(src, staging, ignore=shutil.ignore_patterns("__pycache__"))
 
-        seed_tar = workdir / "puppet.tar"
-        _run(
-            [
-                "tar",
-                "--numeric-owner",
-                "--owner=0",
-                "--group=0",
-                "-C",
-                str(workdir),
-                "-cf",
-                str(seed_tar),
-                "puppet",
-            ]
-        )
-        _run(
-            [
-                "guestfish",
-                "--rw",
-                "-a",
-                str(qcow2),
-                "run",
-                ":",
-                "mount",
-                "/dev/sda8",
-                "/",
-                ":",
-                "mkdir-p",
-                "/supervisor/addons/local",
-                ":",
-                "tar-in",
-                str(seed_tar),
-                "/supervisor/addons/local",
-            ]
-        )
+        _tar_in_local_addon(qcow2, workdir, "puppet")
         LOG.info("Mock screenshot engine staged at /supervisor/addons/local/puppet/")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
