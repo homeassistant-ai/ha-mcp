@@ -7,6 +7,7 @@ storage resource mode (lovelace/__init__.py). The tools route on those codes.
 """
 
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -16,6 +17,8 @@ from ha_mcp import backup_manager
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools.tools_resources import ResourceTools
+
+from .test_backup_manager import _StubSettings
 
 
 def _failure(code: str, message: str = "Command failed: whatever Core says") -> dict:
@@ -183,12 +186,22 @@ _SNAPSHOT = {"id": "old", "type": "css", "url": "/local/theme.css"}
 
 class TestRestoreDashboardResource:
     @pytest.fixture
-    def sent(self, monkeypatch) -> list[dict]:
+    def live(self) -> list[dict]:
+        """The rows ``lovelace/resources`` lists; the snapshot's id is gone."""
+        return []
+
+    @pytest.fixture
+    def sent(self, monkeypatch, live: list[dict]) -> list[dict]:
         calls: list[dict] = []
 
         async def _fake_ws_send(client: Any, message: dict[str, Any]) -> Any:
             calls.append(message)
-            if message["type"] == "lovelace/resources/update":
+            if message["type"] == "lovelace/resources":
+                return live
+            if (
+                message["type"] == "lovelace/resources/update"
+                and message["resource_id"] == "old"
+            ):
                 raise HomeAssistantCommandError(
                     "Command failed: Unable to find resource_id old", "not_found"
                 )
@@ -203,11 +216,34 @@ class TestRestoreDashboardResource:
         )
 
         assert result["id"] == "new"
+        assert [m["type"] for m in sent] == [
+            "lovelace/resources/update",
+            "lovelace/resources",
+            "lovelace/resources/create",
+        ]
         assert sent[-1] == {
             "type": "lovelace/resources/create",
             "res_type": "css",
             "url": "/local/theme.css",
         }
+
+    async def test_restore_of_a_recreated_resource_updates_it_instead_of_duplicating(
+        self, sent: list[dict], live: list[dict]
+    ) -> None:
+        """An earlier restore re-created the resource under a new id."""
+        live.append({"id": "new", "type": "js", "url": "/local/theme.css"})
+
+        await backup_manager._restore_dashboard_resource(
+            MagicMock(), "old", dict(_SNAPSHOT)
+        )
+
+        assert sent[-1] == {
+            "type": "lovelace/resources/update",
+            "resource_id": "new",
+            "res_type": "css",
+            "url": "/local/theme.css",
+        }
+        assert "lovelace/resources/create" not in [m["type"] for m in sent]
 
     async def test_restore_in_place_also_restores_the_resource_type(self, sent):
         await backup_manager._restore_dashboard_resource(
@@ -236,3 +272,34 @@ class TestRestoreDashboardResource:
             )
 
         assert [c["type"] for c in calls] == ["lovelace/resources/update"]
+
+
+async def test_diff_after_a_recreating_restore_compares_against_the_new_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    rows = [dict(_SNAPSHOT)]
+
+    async def _fake_ws_send(client: Any, message: dict[str, Any]) -> Any:
+        assert message == {"type": "lovelace/resources"}
+        return rows
+
+    monkeypatch.setattr(backup_manager, "_ws_send", _fake_ws_send)
+    mgr = backup_manager.BackupManager(
+        _StubSettings(auto_backup_dir=str(tmp_path)), MagicMock()
+    )
+    mgr.register(
+        backup_manager.DomainHandler(
+            "dashboard_resource",
+            backup_manager._fetch_dashboard_resource,
+            backup_manager._restore_dashboard_resource,
+        )
+    )
+    path = await mgr.maybe_snapshot("dashboard_resource", "old")
+    assert path is not None
+    rows[:] = [{**_SNAPSHOT, "id": "new", "url": "/local/other.css"}]
+    rows.append({**_SNAPSHOT, "id": "recreated"})
+
+    diff = await mgr.diff_snapshot(path.name)
+
+    assert diff["entity_missing"] is False
+    assert [op["path"] for op in diff["patch"]] == ["/id"]

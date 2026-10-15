@@ -10,6 +10,7 @@ of HA wording stability.
 
 import json
 import logging
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -375,8 +376,8 @@ class TestDeleteDashboardNotFoundShape:
 
     @pytest.mark.asyncio
     async def test_not_found_text_without_core_code_is_a_failure(
-        self, delete_tool, mock_client
-    ):
+        self, delete_tool: Any, mock_client: MagicMock
+    ) -> None:
         """Only Core's ``not_found`` code means already deleted, not message text."""
         mock_client.send_websocket_message.side_effect = [
             {"success": True, "result": [{"id": "abc123", "url_path": "stale-dash"}]},
@@ -396,8 +397,8 @@ class TestDeleteDashboardNotFoundShape:
 
     @pytest.mark.asyncio
     async def test_yaml_mode_dashboard_gets_a_precise_error(
-        self, delete_tool, mock_client
-    ):
+        self, delete_tool: Any, mock_client: MagicMock
+    ) -> None:
         """A YAML row has no collection id; the error names YAML mode."""
         mock_client.send_websocket_message.return_value = {
             "success": True,
@@ -415,8 +416,8 @@ class TestDeleteDashboardNotFoundShape:
 
     @pytest.mark.asyncio
     async def test_default_alias_deletes_the_lovelace_item(
-        self, delete_tool, mock_client
-    ):
+        self, delete_tool: Any, mock_client: MagicMock
+    ) -> None:
         """'default' maps to the migrated ``lovelace`` item, which Core deletes."""
         mock_client.send_websocket_message.side_effect = [
             {

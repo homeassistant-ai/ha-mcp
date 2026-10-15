@@ -10,8 +10,12 @@ import pytest
 
 import ha_mcp.backup_manager as bm
 import ha_mcp.tools.tools_config_dashboards as dash
-from ha_mcp.backup_dashboards import fetch_dashboard, restore_dashboard
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.backup_dashboards import (
+    dashboard_comparison,
+    fetch_dashboard,
+    restore_dashboard,
+)
+from ha_mcp.client.rest_client import HomeAssistantCommandError, HomeAssistantError
 
 from .test_backup_manager import _StubSettings
 
@@ -82,7 +86,10 @@ async def test_capture_of_a_dashboard_without_a_settings_row_keeps_the_body(
     monkeypatch.setattr(dash, "_resolve_dashboard", _resolver([_row("other-dash")]))
     monkeypatch.setattr(dash, "_component_dashboard_config", _component_body)
 
-    assert await fetch_dashboard(object(), "lovelace") == _BODY
+    assert await fetch_dashboard(object(), "lovelace") == {
+        "dashboard": None,
+        "config": _BODY,
+    }
 
 
 async def test_capture_of_a_never_saved_dashboard_keeps_its_settings(
@@ -115,7 +122,7 @@ async def test_capture_of_a_never_saved_dashboard_keeps_its_settings(
     ("present", "expected_types"),
     [
         (False, ["lovelace/config/delete", "lovelace/dashboards/create"]),
-        (True, ["lovelace/config/delete"]),
+        (True, ["lovelace/config/delete", "lovelace/dashboards/update"]),
     ],
     ids=["deleted", "since-saved"],
 )
@@ -126,6 +133,7 @@ async def test_restore_of_a_never_saved_dashboard_returns_it_to_no_stored_config
     ws.created = present
     monkeypatch.setattr(bm, "_ws_send", ws)
     row = _row("kitchen-dash")
+    monkeypatch.setattr(dash, "_resolve_dashboard", _resolver([row]))
 
     await restore_dashboard(object(), row["id"], {"dashboard": row, "config": None})
 
@@ -213,47 +221,175 @@ async def test_restore_recreates_a_deleted_dashboard_then_saves_its_config(
     assert ws.sent == [save, expected_create, save]
 
 
-async def test_restore_to_an_existing_dashboard_only_saves_its_config(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("icon", ["mdi:stove", None], ids=["icon", "icon-cleared"])
+async def test_restore_to_an_existing_dashboard_saves_its_config_and_settings(
+    monkeypatch: pytest.MonkeyPatch, icon: str | None
 ) -> None:
     """Core's save answers with no result, which must not read as a deleted dashboard."""
     ws = _FakeWs()
     ws.created = True
     monkeypatch.setattr(bm, "_ws_send", ws)
-    row = _row("kitchen-dash")
+    row = _row("kitchen-dash", icon=icon)
+    live = _row("kitchen-dash", id="live_id", title="Renamed", icon="mdi:other")
+    monkeypatch.setattr(dash, "_resolve_dashboard", _resolver([live]))
 
     await restore_dashboard(object(), row["id"], {"dashboard": row, "config": _BODY})
 
-    assert [m["type"] for m in ws.sent] == ["lovelace/config/save"]
+    assert ws.sent == [
+        {"type": "lovelace/config/save", "url_path": "kitchen-dash", "config": _BODY},
+        {
+            "type": "lovelace/dashboards/update",
+            "dashboard_id": "live_id",
+            "title": "Kitchen",
+            "icon": icon,
+            "require_admin": False,
+            "show_in_sidebar": True,
+        },
+    ]
+
+
+async def test_a_captured_dashboard_without_a_settings_row_restores_its_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _FakeWs()
+    ws.created = True
+    monkeypatch.setattr(bm, "_ws_send", ws)
+
+    await restore_dashboard(object(), "lovelace", {"dashboard": None, "config": _BODY})
+
+    assert ws.sent == [
+        {"type": "lovelace/config/save", "url_path": "lovelace", "config": _BODY}
+    ]
+
+
+def _manager(tmp_path: Path, fetched: list[Any]) -> Any:
+    async def fetch(_client: Any, _entity_id: str) -> Any:
+        return fetched.pop(0)
+
+    mgr = bm.BackupManager(_StubSettings(auto_backup_dir=str(tmp_path)), object())
+    mgr.register(bm.DomainHandler("dashboard", fetch, restore_dashboard))
+    return mgr
+
+
+async def _old_body_only_snapshot(mgr: Any) -> str:
+    """A dashboard snapshot as written before the settings row was captured."""
+    path = await mgr.maybe_snapshot("dashboard", "kitchen-dash")
+    assert path is not None
+    text = path.read_text()
+    assert "kind: dashboard_settings\n" in text
+    path.write_text(text.replace("kind: dashboard_settings\n", ""))
+    return str(path.name)
 
 
 async def test_restoring_an_old_body_only_snapshot_of_a_deleted_dashboard_explains_why(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    mgr = _manager(tmp_path, [_BODY])
+    name = await _old_body_only_snapshot(mgr)
     ws = _FakeWs()
     monkeypatch.setattr(bm, "_ws_send", ws)
     monkeypatch.setattr(dash, "_resolve_dashboard", _resolver([]))
 
     with pytest.raises(bm.BackupRestoreError) as excinfo:
-        await restore_dashboard(object(), "kitchen-dash", _BODY)
+        await mgr.restore_snapshot(name, take_safety_backup=False)
 
     assert excinfo.value.outcome["reason"] == "entry_deleted"
     assert "ha_config_set_dashboard" in excinfo.value.outcome["suggestions"][0]
-    assert [m["type"] for m in ws.sent] == ["lovelace/config/save"]
+    assert ws.sent == [
+        {"type": "lovelace/config/save", "url_path": "kitchen-dash", "config": _BODY}
+    ]
 
 
 async def test_an_old_body_only_snapshot_previews_against_the_live_config(
     tmp_path: Path,
 ) -> None:
     """An unchanged dashboard must not show its settings row as a difference."""
-    fetched = [_BODY, {"dashboard": _row("kitchen-dash"), "config": _BODY}]
+    mgr = _manager(
+        tmp_path, [_BODY, {"dashboard": _row("kitchen-dash"), "config": _BODY}]
+    )
+    name = await _old_body_only_snapshot(mgr)
 
-    async def fetch(_client: Any, _entity_id: str) -> Any:
-        return fetched.pop(0)
+    assert (await mgr.diff_snapshot(name))["unchanged"] is True
 
-    mgr = bm.BackupManager(_StubSettings(auto_backup_dir=str(tmp_path)), object())
-    mgr.register(bm.DomainHandler("dashboard", fetch, restore_dashboard))
+
+async def test_a_snapshot_without_a_settings_row_shows_a_row_added_since(
+    tmp_path: Path,
+) -> None:
+    row = _row("kitchen-dash")
+    mgr = _manager(
+        tmp_path,
+        [{"dashboard": None, "config": _BODY}, {"dashboard": row, "config": _BODY}],
+    )
     path = await mgr.maybe_snapshot("dashboard", "kitchen-dash")
     assert path is not None
 
-    assert (await mgr.diff_snapshot(path.name))["unchanged"] is True
+    diff = await mgr.diff_snapshot(path.name)
+
+    assert diff["unchanged"] is False
+    assert [op["path"] for op in diff["patch"]] == ["/dashboard"]
+
+
+async def test_a_settings_snapshot_holding_a_bare_body_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The format comes from the snapshot's kind, never from the body's keys."""
+    mgr = _manager(tmp_path, [_BODY])
+    path = await mgr.maybe_snapshot("dashboard", "kitchen-dash")
+    assert path is not None
+
+    with pytest.raises(bm.BackupRestoreError) as excinfo:
+        await mgr.restore_snapshot(path.name, take_safety_backup=False)
+
+    assert excinfo.value.outcome["reason"] == "invalid_snapshot"
+
+
+_LIVE_BODY = {"views": [{"title": "Edited", "cards": []}]}
+_ROWLESS_READ = {"dashboard": None, "config": _LIVE_BODY}
+
+
+async def test_a_settings_snapshot_compares_a_rowless_read_with_the_row_reread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _row("kitchen-dash")
+    monkeypatch.setattr(dash, "_resolve_dashboard", _resolver([row]))
+
+    assert await dashboard_comparison(
+        object(), {"dashboard": row, "config": _BODY}, _ROWLESS_READ, legacy=False
+    ) == {"dashboard": row, "config": _LIVE_BODY}
+
+
+async def test_a_settings_snapshot_compares_a_deleted_settings_row_as_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dash, "_resolve_dashboard", _resolver([_row("other-dash")]))
+    row = _row("kitchen-dash")
+
+    assert (
+        await dashboard_comparison(
+            object(), {"dashboard": row, "config": _BODY}, _ROWLESS_READ, legacy=False
+        )
+        == _ROWLESS_READ
+    )
+
+
+async def _unreadable_list(_client: Any, _identifier: str) -> Any:
+    return None, None
+
+
+async def _failing_list(_client: Any, _identifier: str) -> Any:
+    raise HomeAssistantError("lovelace/dashboards/list timed out")
+
+
+@pytest.mark.parametrize(
+    "resolver", [_unreadable_list, _failing_list], ids=["unexpected-shape", "error"]
+)
+async def test_a_settings_snapshot_refuses_to_compare_without_the_dashboard_list(
+    monkeypatch: pytest.MonkeyPatch, resolver: Any
+) -> None:
+    monkeypatch.setattr(dash, "_resolve_dashboard", resolver)
+    row = _row("kitchen-dash")
+
+    with pytest.raises(HomeAssistantError, match="cannot be compared"):
+        await dashboard_comparison(
+            object(), {"dashboard": row, "config": _BODY}, _ROWLESS_READ, legacy=False
+        )

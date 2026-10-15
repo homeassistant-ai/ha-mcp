@@ -611,5 +611,5 @@ async def test_backup_capture_yaml_falls_back_to_legacy() -> None:
     with patch_ws(ws, tools_config_dashboards):
         captured = await backup_manager.fetch_dashboard(client, "yaml-dash")
 
-    assert captured == _YAML_BODY
+    assert captured == {"dashboard": None, "config": _YAML_BODY}
     assert client.config_calls == ["yaml-dash"]

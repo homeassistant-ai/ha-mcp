@@ -379,7 +379,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
         got = await bm.fetch_dashboard(_StubClient(), "my_dash")
-        assert got == {"views": []}
+        assert got == {"dashboard": None, "config": {"views": []}}
         # fetched via the canonical url_path, not the raw internal id
         assert seen["url_path"] == "my-dash"
 

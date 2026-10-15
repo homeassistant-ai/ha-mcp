@@ -364,7 +364,9 @@ class TestDashboardLifecycle:
 
         logger.info("Metadata update via set_dashboard test completed successfully")
 
-    async def test_empty_icon_clears_stored_dashboard_icon(self, mcp_client):
+    async def test_empty_icon_clears_stored_dashboard_icon(
+        self, mcp_client: Any
+    ) -> None:
         """icon='' removes a stored icon instead of being ignored."""
         mcp = MCPAssertions(mcp_client)
         url_path = "test-icon-clear"
@@ -373,17 +375,22 @@ class TestDashboardLifecycle:
             "ha_config_set_dashboard",
             {"url_path": url_path, "title": "Icon Clear", "icon": "mdi:home"},
         )
-        try:
-            await mcp.call_tool_success(
-                "ha_config_set_dashboard", {"url_path": url_path, "icon": ""}
-            )
+
+        async def stored_icon() -> Any:
             list_data = await mcp.call_tool_success(
                 "ha_config_get_dashboard", {"list_only": True}
             )
             row = next(
                 d for d in list_data["dashboards"] if d.get("url_path") == url_path
             )
-            assert row.get("icon") is None
+            return row.get("icon")
+
+        try:
+            assert await stored_icon() == "mdi:home"
+            await mcp.call_tool_success(
+                "ha_config_set_dashboard", {"url_path": url_path, "icon": ""}
+            )
+            assert await stored_icon() is None
         finally:
             await safe_call_tool(
                 mcp_client, "ha_config_delete_dashboard", {"url_path": url_path}

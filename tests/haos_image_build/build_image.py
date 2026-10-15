@@ -1044,20 +1044,7 @@ def _install_addon_with_retry(
     retrying so a dead connection doesn't doom the retry, rather than failing the
     whole ~25 min bake. A genuinely broken add-on fails again and propagates.
     """
-    # websockets lives only in the build venv (imported lazily elsewhere for the
-    # same reason), so fold its drop exception into the retry tuple lazily.
-    try:
-        from websockets.exceptions import WebSocketException
-
-        transient: tuple[type[BaseException], ...] = (
-            WSCommandError,
-            OSError,
-            TimeoutError,
-            WebSocketException,
-        )
-    except ImportError:
-        transient = (WSCommandError, OSError, TimeoutError)
-
+    transient = _SUPERVISOR_WAIT_TRANSIENT_ERRORS
     for attempt in range(1, attempts + 1):
         try:
             ws.supervisor_api(
@@ -1065,6 +1052,7 @@ def _install_addon_with_retry(
             )
             return
         except transient as e:
+            _log_supervisor_tail(ws)
             if attempt >= attempts:
                 raise
             LOG.warning(
@@ -1089,6 +1077,18 @@ def _install_addon_with_retry(
                     "reconnect/store-reload before retry failed (%r); retrying anyway",
                     prep_err,
                 )
+
+
+def _log_supervisor_tail(ws: HAWebSocket) -> None:
+    req = urllib.request.Request(
+        f"{ws._base_url}/api/hassio/supervisor/logs?lines=200",
+        headers={"Authorization": f"Bearer {ws._credentials.access_token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            LOG.error("Supervisor log tail:\n%s", resp.read().decode(errors="replace"))
+    except OSError as e:  # includes URLError, HTTPError and TimeoutError
+        LOG.warning("Could not fetch the Supervisor log tail: %r", e)
 
 
 def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:

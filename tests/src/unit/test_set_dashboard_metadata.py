@@ -1,6 +1,7 @@
 """Unit tests for ha_config_set_dashboard metadata-update path."""
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -103,7 +104,9 @@ class TestSetDashboardMetadataUpdate:
         assert meta_call["show_in_sidebar"] is False
 
     @pytest.mark.asyncio
-    async def test_empty_icon_clears_stored_icon(self, set_tool, mock_client):
+    async def test_empty_icon_clears_stored_icon(
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
         """icon='' sends None, which Core's update schema accepts and drops."""
         mock_client.send_websocket_message.side_effect = [
             self._make_dashboard_list("my-dashboard"),
@@ -321,8 +324,8 @@ class TestSetDashboardListCallDedup:
 
     @pytest.mark.asyncio
     async def test_internal_id_no_match_reuses_list_for_create(
-        self, set_tool, mock_client
-    ):
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
         """Hyphenless identifier with no matching dashboard: the pre-resolver's
         list is reused for the existence check, and the create goes to Core.
         Total list calls = 1."""
@@ -424,8 +427,8 @@ class TestSetDashboardUrlPathCreationContract:
 
     @pytest.mark.asyncio
     async def test_new_hyphenless_dashboard_relays_core_rejection(
-        self, set_tool, mock_client
-    ):
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
         mock_client.send_websocket_message.side_effect = [
             {"result": []},
             _CORE_HYPHEN_REJECTION,
@@ -437,18 +440,16 @@ class TestSetDashboardUrlPathCreationContract:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "Url path needs to contain a hyphen (-)" in body["error"]["message"]
-        assert all(
-            "Try 'newmap'" not in suggestion
-            for suggestion in body["error"].get("suggestions", [])
-        )
+        # Only Core's own wording; the error code's default suggestions remain.
+        assert "Try '" not in json.dumps(body["error"])
         create_call = mock_client.send_websocket_message.call_args_list[1].args[0]
         assert create_call["type"] == "lovelace/dashboards/create"
         assert create_call["url_path"] == "newmap"
 
     @pytest.mark.asyncio
     async def test_core_hyphen_rejection_suggests_hyphenated_path(
-        self, set_tool, mock_client
-    ):
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
         mock_client.send_websocket_message.side_effect = [
             {"result": []},
             _CORE_HYPHEN_REJECTION,
@@ -462,8 +463,8 @@ class TestSetDashboardUrlPathCreationContract:
 
     @pytest.mark.asyncio
     async def test_other_core_create_error_gets_no_hyphen_suggestion(
-        self, set_tool, mock_client
-    ):
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
         mock_client.send_websocket_message.side_effect = [
             {"result": []},
             {
@@ -483,8 +484,8 @@ class TestSetDashboardUrlPathCreationContract:
 
     @pytest.mark.asyncio
     async def test_internal_id_match_rewrites_to_hyphenless_url_path(
-        self, set_tool, mock_client
-    ):
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
         mock_client.send_websocket_message.side_effect = [
             {"result": [{"url_path": "map", "id": "map_internal"}]},
             {"success": True},
@@ -537,8 +538,8 @@ class TestSetDashboardUrlPathCreationContract:
 
     @pytest.mark.asyncio
     async def test_create_forwards_given_metadata_and_omits_blank_icon(
-        self, set_tool, mock_client
-    ):
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
         mock_client.send_websocket_message.side_effect = [
             {"result": []},
             {"success": True, "result": {"id": "new_map"}},
