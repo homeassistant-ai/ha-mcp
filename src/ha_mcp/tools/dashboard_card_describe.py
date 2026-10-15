@@ -41,6 +41,15 @@ def _flatten(schema: list[Any]) -> list[dict[str, Any]]:
 def _raise_describe_error(result: dict[str, Any], card_type: str | None) -> NoReturn:
     """Map the component's describe error to a tool error."""
     error = result.get("error")
+    if error == "describe_timeout":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.TIMEOUT_OPERATION,
+                "Describing this card took longer than Home Assistant's command budget.",
+                suggestions=["Retry; a loaded index usually answers within a second"],
+                context={"action": "describe", "card_type": card_type},
+            )
+        )
     if error == "definitions_loading":
         raise_tool_error(
             create_error_response(

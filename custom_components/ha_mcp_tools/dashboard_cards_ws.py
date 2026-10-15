@@ -84,6 +84,8 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
             async with asyncio.timeout(cd._CARD_WORK_SECONDS):
                 return await _describe(hass, msg)
         except TimeoutError:
+            if cd._definitions is not None:  # the index is loaded; describe was slow
+                return {"result": {"success": False, "error": "describe_timeout"}}
             return _no_definitions()
 
     def do(

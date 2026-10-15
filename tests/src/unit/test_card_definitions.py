@@ -565,6 +565,37 @@ async def test_describe_answers_while_the_index_is_still_building(
 
 
 @pytest.mark.asyncio
+async def test_a_slow_describe_of_a_loaded_index_is_a_timeout_not_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import voluptuous as vol
+
+    monkeypatch.setattr(cd, "_CARD_WORK_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(cd, "_definitions", MagicMock())
+
+    async def slow(hass: Any, msg: dict[str, Any]) -> dict[str, Any]:
+        await asyncio.Event().wait()
+        return {}
+
+    monkeypatch.setattr(dcw, "_describe", slow)
+    prep = dcw.command_specs(vol)[0][2]
+    result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
+    assert result["result"] == {"success": False, "error": "describe_timeout"}
+
+
+@pytest.mark.asyncio
+async def test_describe_timeout_reaches_the_caller_as_a_timeout(
+    component: AsyncMock,
+) -> None:
+    component.send_command.return_value = {
+        "result": {"success": False, "error": "describe_timeout"}
+    }
+    with pytest.raises(ToolError) as err:
+        await describe_mod.describe_card_response(MagicMock(), "tile")
+    assert "TIMEOUT_OPERATION" in str(err.value)
+
+
+@pytest.mark.asyncio
 async def test_slow_custom_refresh_preserves_builtin_describe(monkeypatch) -> None:
     import voluptuous as vol
 
