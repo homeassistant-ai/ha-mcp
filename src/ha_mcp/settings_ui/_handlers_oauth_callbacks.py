@@ -17,6 +17,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .._version import is_embedded
+from ..client.rest_client import HomeAssistantCommandError, HomeAssistantError
 from ..errors import ErrorCode, create_error_response
 
 if TYPE_CHECKING:
@@ -27,7 +28,12 @@ logger = logging.getLogger(__name__)
 WS_OAUTH_CALLBACKS = "ha_mcp_tools/oauth_callbacks"
 WS_OAUTH_CALLBACKS_UPDATE = "ha_mcp_tools/oauth_callbacks_update"
 CAPABILITY = "oauth_callbacks"
+# The component's MAX_OAUTH_CALLBACKS / MAX_OAUTH_CALLBACK_LENGTH (pinned by a test).
 _MAX_CALLBACKS = 50
+_MAX_CALLBACK_LENGTH = 2048
+# Transport failures reaching the component; a command it ran and refused is
+# a HomeAssistantCommandError, answered separately.
+_REACH_ERRORS = (HomeAssistantError, OSError, TimeoutError)
 
 
 class _Unavailable(Exception):
@@ -74,8 +80,12 @@ async def _get_oauth_callbacks(
         result = await _component_command(server, WS_OAUTH_CALLBACKS)
     except _Unavailable as exc:
         return _unavailable(str(exc))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("oauth-callbacks GET could not reach ha_mcp_tools: %s", exc)
+    except HomeAssistantCommandError as exc:
+        return _unavailable(f"The HA-MCP component refused the request: {exc}")
+    except _REACH_ERRORS as exc:
+        logger.warning(
+            "oauth-callbacks GET could not reach ha_mcp_tools", exc_info=True
+        )
         return _unavailable(f"Could not reach the HA-MCP component: {exc}")
     return JSONResponse({"success": True, "available": True, **result})
 
@@ -89,7 +99,10 @@ def _parse_change(body: Any) -> dict[str, Any] | None:
     if (
         isinstance(allowlist, list)
         and len(allowlist) <= _MAX_CALLBACKS
-        and all(isinstance(item, str) for item in allowlist)
+        and all(
+            isinstance(item, str) and len(item) <= _MAX_CALLBACK_LENGTH
+            for item in allowlist
+        )
     ):
         return {"allowlist": allowlist}
     return None
@@ -117,8 +130,8 @@ async def _save_oauth_callbacks(
         return JSONResponse(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Send 'allowlist' as a list of at most {_MAX_CALLBACKS} URLs, "
-                "or 'reset': true.",
+                f"Send 'allowlist' as a list of at most {_MAX_CALLBACKS} URLs of "
+                f"at most {_MAX_CALLBACK_LENGTH} characters each, or 'reset': true.",
             ),
             status_code=400,
         )
@@ -129,8 +142,15 @@ async def _save_oauth_callbacks(
             create_error_response(ErrorCode.SERVICE_CALL_FAILED, str(exc)),
             status_code=409,
         )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("oauth-callbacks POST could not reach ha_mcp_tools: %s", exc)
+    except HomeAssistantCommandError as exc:
+        return JSONResponse(
+            create_error_response(ErrorCode.VALIDATION_INVALID_PARAMETER, str(exc)),
+            status_code=400,
+        )
+    except _REACH_ERRORS as exc:
+        logger.warning(
+            "oauth-callbacks POST could not reach ha_mcp_tools", exc_info=True
+        )
         return JSONResponse(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,

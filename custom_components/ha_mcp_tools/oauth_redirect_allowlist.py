@@ -13,12 +13,19 @@ registration included — adds to the list.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 from urllib.parse import urlparse, urlsplit
 
-from .const import DEFAULT_OAUTH_REDIRECT_ALLOWLIST, OPT_OAUTH_REDIRECT_ALLOWLIST
+from .const import (
+    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
+    MAX_OAUTH_CALLBACK_LENGTH,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 # RFC 8252 §7.3: native/CLI OAuth clients (e.g. GitHub Copilot CLI) receive the
 # authorization code on a loopback redirect, for which the spec explicitly
@@ -46,9 +53,8 @@ _AUTHORITY_CHARS_RE = re.compile(r"[A-Za-z0-9._~%!$&'()*+,;=:@\[\]-]*")
 def _is_valid_redirect_uri(redirect_uri: str) -> bool:
     """Spec-floor validation for OAuth redirect_uri: an https:// URL — or an
     http:// loopback URL (RFC 8252 §7.3, for native/CLI clients) — with a
-    non-empty host, a valid port, and no fragment. Single-tenant — no per-client
-    allowlist, but reject the obvious bad shapes that would let an attacker
-    direct the flow to an empty/malformed URL."""
+    non-empty host, a valid port, and no fragment. A shape check only; whether
+    the callback may receive a code is :func:`is_redirect_allowed`'s job."""
     if not redirect_uri:
         return False
     try:
@@ -82,16 +88,40 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
 def effective_allowlist(options: Mapping[str, Any]) -> list[str]:
     """The list in force for an entry's options (the default when unset)."""
     saved = options.get(OPT_OAUTH_REDIRECT_ALLOWLIST)
-    if not isinstance(saved, list):
+    if saved is None:
         return list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
-    return [entry for entry in saved if isinstance(entry, str)]
+    if not isinstance(saved, list) or not all(isinstance(e, str) for e in saved):
+        # Only validated writers store this option; anything else is corrupt,
+        # and refusing every callback is safer than widening to the default.
+        _LOGGER.warning("Ignoring a malformed OAuth callback allowlist: %r", saved)
+        return (
+            [e for e in saved if isinstance(e, str)] if isinstance(saved, list) else []
+        )
+    return list(saved)
+
+
+def stored_allowlist(
+    options: Mapping[str, Any], entries: list[str]
+) -> list[str] | None:
+    """The value to save for ``entries``, or None to keep following the default.
+
+    An entry that has never saved a list keeps following the shipped default
+    while it submits that default unchanged, so a later release's additions
+    reach it. Once saved, a list (even an empty one) is kept as written.
+    """
+    if OPT_OAUTH_REDIRECT_ALLOWLIST not in options and entries == list(
+        DEFAULT_OAUTH_REDIRECT_ALLOWLIST
+    ):
+        return None
+    return entries
 
 
 def normalize_allowlist(values: Iterable[Any]) -> tuple[list[str], list[str]]:
     """Return ``(entries, invalid)``: trimmed, de-duplicated, in input order.
 
-    An entry is invalid when no authorization request could use it: not an
-    https URL or an http loopback URL, or it carries a fragment.
+    An entry is invalid when no authorization request could use it: it fails
+    the same spec floor as ``/authorize`` (:func:`_is_valid_redirect_uri`), or
+    it is longer than ``MAX_OAUTH_CALLBACK_LENGTH``.
     """
     entries: list[str] = []
     invalid: list[str] = []
@@ -99,7 +129,8 @@ def normalize_allowlist(values: Iterable[Any]) -> tuple[list[str], list[str]]:
         text = str(value).strip()
         if not text or text in entries or text in invalid:
             continue
-        (entries if _is_valid_redirect_uri(text) else invalid).append(text)
+        valid = len(text) <= MAX_OAUTH_CALLBACK_LENGTH and _is_valid_redirect_uri(text)
+        (entries if valid else invalid).append(text)
     return entries, invalid
 
 

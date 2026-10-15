@@ -64,7 +64,6 @@ from .const import (
     DEFAULT_ENABLE_LLM_API,
     DEFAULT_LLM_API_EXPOSURE,
     DEFAULT_LOOPBACK_URL,
-    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
     DIST_NAME_DEV,
@@ -76,6 +75,7 @@ from .const import (
     EXPOSURE_FULL,
     EXPOSURE_TOOL_SEARCH,
     LLM_API_DOCS_URL,
+    MAX_OAUTH_CALLBACKS,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
@@ -101,10 +101,11 @@ from .const import (
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
 )
-from .oauth_redirect_allowlist import effective_allowlist, normalize_allowlist
-
-# Title shown for the server entry in the integration tile's entry list; the
-# tools entry's title lives in const.py (setup migration in __init__ needs it).
+from .oauth_redirect_allowlist import (
+    effective_allowlist,
+    normalize_allowlist,
+    stored_allowlist,
+)
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
@@ -190,8 +191,8 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         """Return the options flow for this entry type.
 
-        The in-process server entry gets the configurable options flow (
-        port / bind / auth / pip spec / URL). The tools services entry has
+        The in-process server entry gets the configurable options flow
+        (port / bind / auth / pip spec / URL). The tools services entry has
         nothing to configure yet, so it gets a light informational options flow
         instead of aborting.
         """
@@ -384,6 +385,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         """Show / apply the server options."""
         opts = self.config_entry.options
         errors: dict[str, str] = {}
+        invalid: list[str] = []
         if user_input is not None:
             errors = self._connect_path_override_errors(user_input)
             entries, invalid = normalize_allowlist(
@@ -391,15 +393,13 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             )
             if invalid:
                 errors[OPT_OAUTH_REDIRECT_ALLOWLIST] = "invalid_oauth_callback"
+            elif len(entries) > MAX_OAUTH_CALLBACKS:
+                errors[OPT_OAUTH_REDIRECT_ALLOWLIST] = "too_many_oauth_callbacks"
             if not errors:
                 data = self._normalize(user_input)
                 data.pop(OPT_OAUTH_REDIRECT_ALLOWLIST, None)
-                # An entry still following the shipped default keeps following
-                # it, so a later release's additions reach it.
-                if OPT_OAUTH_REDIRECT_ALLOWLIST in opts or entries != list(
-                    DEFAULT_OAUTH_REDIRECT_ALLOWLIST
-                ):
-                    data[OPT_OAUTH_REDIRECT_ALLOWLIST] = entries
+                if (stored := stored_allowlist(opts, entries)) is not None:
+                    data[OPT_OAUTH_REDIRECT_ALLOWLIST] = stored
                 return self.async_create_entry(title="", data=data)
 
         # A validation failure must re-render the values the user just entered.
@@ -448,8 +448,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     # optional text field below.) Only a genuinely saved
                     # override is suggested; the normalized "no override" state
                     # renders an EMPTY field — the help text says "Leave empty",
-                    # and pre-filling DEFAULT_PIP_SPEC would show the STABLE dist
-                    # name even on the dev channel.
+                    # and pre-filling DEFAULT_PIP_SPEC would show the stable dist
+                    # name even when a HACS pre-release pins ha-mcp-dev.
                     description={
                         "suggested_value": suggested_values.get(OPT_PIP_SPEC, "")
                     },
@@ -592,6 +592,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 "oauth_creds": self._oauth_creds_hint(common),
                 "llm_api_docs_url": LLM_API_DOCS_URL,
                 "panel_hint": panel_hint,
+                "invalid_callbacks": ", ".join(invalid),
+                "max_callbacks": str(MAX_OAUTH_CALLBACKS),
             },
         )
 
