@@ -308,9 +308,13 @@ class TestBringUp:
 
         call = esetup.ir.async_create_issue.call_args
         assert call.args[2] == esetup.ISSUE_TOKEN_NEEDED
-        # The repair's form replaces the token on this entry.
+        # The repair's form replaces the token on this entry, and says why the
+        # stored one stopped working.
         assert call.kwargs["is_fixable"] is True
-        assert call.kwargs["data"] == {"entry_id": entry.entry_id}
+        assert call.kwargs["data"] == {
+            "entry_id": entry.entry_id,
+            "reason": "invalid_token",
+        }
 
     async def test_unexpected_error_files_start_issue(self, fake_manager):
         hass = _make_hass()
