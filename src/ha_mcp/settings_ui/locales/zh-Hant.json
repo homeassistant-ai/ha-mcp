@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "截圖引擎的基礎 URL。保持空白以進行 Supervisor 自動發現。立即生效。",
     "advanced.enable_websocket.label": "啟用 WebSocket",
     "advanced.enable_websocket.help": "WebSocket 狀態監控。停用將改用輪詢（polling）並會降低許多工具的效能。",
+    "advanced.custom_instructions.label": "自訂伺服器指示",
+    "advanced.custom_instructions.help": "作為 MCP 伺服器指示的一部分，發送給每個連線的 AI 助理的文字，例如家庭記事存放的位置以及何時讀取或更新它們。這也是使用此工具集的 Home Assistant 對話代理程式 (Assist) 提示的一部分。請將其用於應同時傳達給所有客戶端的指引；請保持簡短且不要包含機密資訊。留空則不新增任何內容。需要重新啟動；客戶端重新連線時會看到變更。",
     "advanced.enabled_tool_modules.label": "啟用的工具模組",
     "advanced.enabled_tool_modules.help": "以逗號分隔的模組名稱，或 'all'。",
     "advanced.enable_dashboard_partial_tools.label": "儀表板局部更新工具",

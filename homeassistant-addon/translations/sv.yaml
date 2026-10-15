@@ -19,6 +19,15 @@ configuration:
     description: Hur starkt AI-assistenter uppmanas att föreslå en fullständig Home
       Assistant-säkerhetskopia före riskabla ändringar. Det ändrar bara detta tips;
       automatiska redigeringssäkerhetskopior har sin egen inställning.
+  custom_instructions:
+    name: Anpassade serverinstruktioner
+    description: Text som skickas till varje AI-assistent som ansluter, som en del
+      av instruktionerna för MCP-servern – till exempel var anteckningar om hushållet
+      förvaras och när de ska läsas eller uppdateras. Också en del av prompten för
+      Home Assistant-konversationsagenter (Assist) som använder denna verktygsuppsättning.
+      Använd den för vägledning som bör nå alla dina klienter samtidigt; håll den
+      kort och fri från hemligheter. Lämna tom för att inte lägga till något. Kräver
+      omstart; klienter ser ändringen när de ansluter igen.
   enable_tool_search:
     name: Aktivera verktygssökning
     description: 'Ersätt hela verktygskatalogen med sökbaserad upptäckt. Minskar inaktiv

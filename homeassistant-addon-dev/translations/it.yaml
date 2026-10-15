@@ -20,6 +20,15 @@ configuration:
       un backup completo di Home Assistant prima di modifiche rischiose. Modifica
       solo questo suggerimento; i backup di modifica automatici hanno una propria
       impostazione.
+  custom_instructions:
+    name: Istruzioni personalizzate del server
+    description: Testo inviato a ogni assistente IA che si connette, come parte delle
+      istruzioni del server MCP — ad esempio dove sono conservate le note della casa
+      e quando leggerle o aggiornarle. Fa anche parte del prompt degli agenti di conversazione
+      di Home Assistant (Assist) che utilizzano questo set di strumenti. Usalo per
+      indicazioni che devono raggiungere tutti i client in una volta sola; tienilo
+      breve e privo di segreti. Lascia vuoto per non aggiungere nulla. Richiede il
+      riavvio; i client vedono la modifica quando si riconnettono.
   enable_beta_features:
     name: Attiva le funzioni beta (principale)
     description: ⚠ PERICOLO — questi strumenti possono DANNEGGIARE PERMANENTEMENTE

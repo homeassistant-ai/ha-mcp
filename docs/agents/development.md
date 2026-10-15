@@ -190,6 +190,7 @@ The stable architectural map is:
 ```text
 src/ha_mcp/
 ├── server.py                    FastMCP server and lifecycle
+├── server_instructions.py       Initialize instructions: skills, notices, owner text
 ├── __main__.py                  CLI and transport entrypoints
 ├── config.py                    Settings singleton, embedded connection, re-exports
 ├── config_settings.py           Settings model and .env loading; one declaration per setting

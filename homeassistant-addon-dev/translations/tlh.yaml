@@ -19,6 +19,14 @@ configuration:
     description: How strongly AI assistants are told to suggest a full Home Assistant
       backup before risky changes. It changes only this hint; automatic edit backups
       have their own setting.
+  custom_instructions:
+    name: Custom server instructions
+    description: Text sent to every AI assistant that connects, as part of the MCP
+      server instructions — for example where household notes are kept and when to
+      read or update them. Also part of the prompt of Home Assistant conversation
+      agents (Assist) that use this toolset. Use it for guidance that should reach
+      all your clients at once; keep it short and free of secrets. Leave empty to
+      add nothing. Requires restart; clients see the change when they reconnect.
   enable_beta_features:
     name: Beta DuHmey yIQotlhHa' (wa'DIch SeHwI')
     description: ⚠ QOB — Home AssistantlIj QIHlaHqu' janmeyvam. YAML configlIj, 'a'baqa'

@@ -1,11 +1,18 @@
 """Static text the server publishes about its tools.
 
 Holds the search tool description, the BM25 keyword boosts, the lite
-docstring variants with their destinations, and the skill keyword block.
-``HomeAssistantSmartMCPServer`` exposes each one as a class attribute.
+docstring variants with their destinations and the skill keyword block,
+which ``HomeAssistantSmartMCPServer`` exposes as class attributes, plus the
+skill tool's name and the instruction notices ``server_instructions`` uses.
 """
 
 from __future__ import annotations
+
+# Name of the consolidated skill tool. Defined as a module constant so the
+# tool registration, the instructions, the mandatory-tool set, the default
+# pins and the tests agree on one canonical string. 18 chars — well under
+# the 40-char cap that Cloudflare's MCP portal enforces (#1121).
+SKILL_TOOL_NAME = "ha_get_skill_guide"
 
 # Description for the unified search tool
 SEARCH_TOOL_DESCRIPTION = (

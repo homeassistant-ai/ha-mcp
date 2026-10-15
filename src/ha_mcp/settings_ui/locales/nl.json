@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "Basis-URL van de screenshot engine. Laat leeg voor Supervisor auto-ontdekking. Wordt onmiddellijk toegepast.",
     "advanced.enable_websocket.label": "WebSocket inschakelen",
     "advanced.enable_websocket.help": "WebSocket-statusmonitoring. Uitschakelen valt terug op pollen en degradeert veel tools.",
+    "advanced.custom_instructions.label": "Aangepaste serverinstructies",
+    "advanced.custom_instructions.help": "Tekst die naar elke verbindende AI-assistent wordt verzonden als onderdeel van de MCP-serverinstructies — bijvoorbeeld waar huishoudelijke notities worden bewaard en wanneer je deze moet lezen of bijwerken. Maakt ook deel uit van de prompt van Home Assistant-gespreksagenten (Assist) die deze toolset gebruiken. Gebruik dit voor richtlijnen die al je clients tegelijk moeten bereiken; houd het kort en vrij van geheimen. Laat leeg om niets toe te voegen. Vereist een herstart; clients zien de wijziging wanneer ze opnieuw verbinden.",
     "advanced.enabled_tool_modules.label": "Ingeschakelde toolmodules",
     "advanced.enabled_tool_modules.help": "Door komma's gescheiden modulenamen, of 'all'.",
     "advanced.enable_dashboard_partial_tools.label": "Dashboard tools voor gedeeltelijke updates",

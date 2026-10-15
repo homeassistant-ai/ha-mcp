@@ -136,6 +136,8 @@ function renderAdvancedSection(containerId, fields) {
         (f.max !== undefined ? `max="${f.max}" ` : '') +
         (f.type === 'float' ? 'step="0.1" ' : '') +
         (f.editable ? '' : 'disabled') + '>';
+    } else if (f.multiline) {
+      controlHtml = `<textarea rows="4" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-labelledby="label-adv-${escapeHtml(f.field)}" ${f.editable ? '' : 'disabled'}>${escapeHtml(String(f.value ?? ''))}</textarea>`;
     } else {
       // str
       controlHtml = `<input type="text" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-labelledby="label-adv-${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;

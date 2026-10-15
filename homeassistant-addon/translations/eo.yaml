@@ -19,6 +19,15 @@ configuration:
     description: Kiom forte oni diras al AI-asistantoj sugesti plenan momentfoton
       de Home Assistant antaŭ riskaj ŝanĝoj. Ĝi ŝanĝas nur ĉi tiun konsilon; aŭtomataj
       redaktaj momentfotoj havas sian propran agordon.
+  custom_instructions:
+    name: Propraj servilaj instrukcioj
+    description: Teksto sendita al ĉiu AI-asistanto kiu konektiĝas, kiel parto de
+      la instrukcioj de la serviloj MCP — ekzemple kie hejmaj notoj estas konservitaj
+      kaj kiam legi aŭ ĝisdatigi ilin. Ankaŭ parto de la prompto de hejmaŭtomatigaj
+      konversaciaj agentoj (Assist) de Home Assistant, kiuj uzas ĉi tiun ilaron. Uzu
+      ĝin por gvidado, kiu devas atingi ĉiujn viajn klientojn samtempe; tenu ĝin mallonga
+      kaj libera de sekretoj. Lasu malplena por aldoni nenion. Postulas relumon; klientoj
+      vidas la ŝanĝon kiam ili rekonektiĝas.
   enable_tool_search:
     name: Ebligi ilo-serĉon
     description: 'Anstataŭigu la plenan il-katalogon per serĉ-bazita malkovro. Reduktas

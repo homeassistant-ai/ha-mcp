@@ -280,6 +280,20 @@ class Settings(BaseSettings):
         Setting(surface="advanced", section="tools_surface", restart_required=True),
     ] = Field("all", alias="ENABLED_TOOL_MODULES")
 
+    # Free text appended to the MCP server instructions, so every client
+    # connecting to this installation gets the same user-defined guidance
+    # (e.g. where household notes live). Empty adds nothing.
+    custom_instructions: Annotated[
+        str,
+        Setting(
+            surface="advanced",
+            section="tools_surface",
+            app=_ALL_FLAVORS,
+            restart_required=True,
+            multiline=True,
+        ),
+    ] = Field("", alias="HAMCP_CUSTOM_INSTRUCTIONS")
+
     # Dashboard partial update tools (python_transform, find_card)
     # These are token-efficient alternatives to full config replacement.
     # Disable when using clients with programmatic tool use (future).

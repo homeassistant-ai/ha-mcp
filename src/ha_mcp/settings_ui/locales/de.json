@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "Basis-URL der Screenshot-Engine. Lasse leer für Supervisor-Auto-Discovery. Wirkt sofort.",
     "advanced.enable_websocket.label": "WebSocket aktivieren",
     "advanced.enable_websocket.help": "WebSocket-Zustandsüberwachung. Das Deaktivieren fällt auf Polling zurück und beeinträchtigt viele Tools.",
+    "advanced.custom_instructions.label": "Eigene Server-Anweisungen",
+    "advanced.custom_instructions.help": "Text, den jeder verbundene KI-Assistent als Teil der MCP-Server-Anweisungen erhält – zum Beispiel, wo Notizen zum Haushalt liegen und wann sie gelesen oder aktualisiert werden sollen. Auch Teil des Prompts von Home-Assistant-Sprachassistenten (Assist), die dieses Toolset nutzen. Gedacht für Hinweise, die alle deine Clients auf einmal erreichen sollen; halte ihn kurz und ohne Geheimnisse. Leer lassen, um nichts hinzuzufügen. Erfordert einen Neustart; Clients sehen die Änderung nach dem erneuten Verbinden.",
     "advanced.enabled_tool_modules.label": "Aktivierte Tool-Module",
     "advanced.enabled_tool_modules.help": "Kommagetrennte Modulnamen oder 'all'.",
     "advanced.enable_dashboard_partial_tools.label": "Dashboard-Partial-Update-Tools",

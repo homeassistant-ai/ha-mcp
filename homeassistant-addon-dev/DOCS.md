@@ -13,6 +13,7 @@ The dev app uses the same configuration as the stable version. See the main app'
 | Option | Description | Default |
 |--------|-------------|---------|
 | `backup_hint` | Backup strength preference | `normal` |
+| `custom_instructions` | Text added to the MCP server instructions that every connecting AI assistant receives, e.g. where household notes live; also part of the Assist prompt when the conversation-agent API is used. Keep it short and free of secrets; every client receives it. Empty adds nothing. Restart to apply. | empty |
 | `enable_snapshot_actions` | Allow full HA snapshot actions through `ha_manage_backup` and the equivalent `ha_call_service` backup calls; deletion is only available through `ha_manage_backup`, also requires `enable_snapshot_delete`, and its protections still apply. Off blocks listing too. Save and restart to apply. | `true` |
 | `backup_read_only` | Allow edit-backup reads and snapshot listing when snapshot actions are enabled; block manual create, restore (including edit restores), and delete, including the equivalent `ha_call_service` backup calls. Automatic pre-edit backups continue. Save and restart to apply. | `false` |
 | `secret_path` | Custom secret path (optional) | auto-generated |

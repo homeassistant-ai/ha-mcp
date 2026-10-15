@@ -345,6 +345,8 @@
     "messages.advanced.code_mode_saved_tools_path.blank_warning": "f5e88953b127a845",
     "messages.advanced.code_mode_saved_tools_path.help": "60e5b206a958664a",
     "messages.advanced.code_mode_saved_tools_path.label": "14183f5d80a41c86",
+    "messages.advanced.custom_instructions.help": "f462d31b4c717170",
+    "messages.advanced.custom_instructions.label": "110229fd619c8e1e",
     "messages.advanced.dashboard_screenshot_engine_url.help": "bc37f6109929dc23",
     "messages.advanced.dashboard_screenshot_engine_url.label": "b177a51d486375f5",
     "messages.advanced.debug.help": "2e47aceb5d03897b",
