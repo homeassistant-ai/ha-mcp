@@ -210,7 +210,7 @@ async def test_entity_rows_carry_disabled_and_hidden_state() -> None:
     """Disabled and hidden entities are listed with their registry state.
 
     They have no state, so without these keys a caller cannot tell a disabled
-    entity from an enabled one. Enabled, visible rows stay without the keys.
+    entity from an enabled one. Unset keys are omitted.
     """
     dev = _raw_device("dev-1")
     ws = make_ws(
@@ -234,6 +234,10 @@ async def test_entity_rows_carry_disabled_and_hidden_state() -> None:
         resp = await get_device(device_id="dev-1")
 
     rows = {row["entity_id"]: row for row in resp["entities"]}
+    # The native registry row is forwarded, not a copied allowlist.
+    assert rows["sensor.enabled"]["original_name"] == "sensor.enabled"
+    assert rows["sensor.enabled"]["device_id"] == "dev-1"
+    assert rows["sensor.enabled"]["name"] == "sensor.enabled"
     assert "disabled_by" not in rows["sensor.enabled"]
     assert "hidden_by" not in rows["sensor.enabled"]
     assert rows["sensor.disabled"]["disabled_by"] == "integration"
