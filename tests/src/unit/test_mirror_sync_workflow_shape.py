@@ -42,6 +42,11 @@ class TestMirrorSyncShape:
             "SemVer Release",
             "Publish Dev Channel",
         ]
+        # A dispatched dev build from another branch must never be mirrored.
+        assert triggers["workflow_run"]["branches"] == ["master"]
+        gate = _workflow(_MIRROR)["jobs"]["gate"]["steps"][0]
+        assert "head_branch" in gate["env"]["TRIGGER_BRANCH"]
+        assert '"$TRIGGER_BRANCH" != master' in gate["run"]
 
     def test_gate_keys_on_the_jobs_that_publish_the_pin(self) -> None:
         gate = _workflow(_MIRROR)["jobs"]["gate"]["steps"][0]["run"]
