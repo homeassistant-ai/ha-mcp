@@ -39,6 +39,9 @@ on:
   workflow_run:
     workflows: ["SemVer Release", "Publish Dev Channel"]
     types: [completed]
+    # Publish Dev Channel also runs on dispatch from any branch; only master
+    # builds may reach the mirror.
+    branches: [master]
   workflow_dispatch:
     inputs:
       channel:
@@ -87,7 +90,13 @@ jobs:
           TRIGGER_WORKFLOW: ${{ github.event.workflow_run.name }}
           TRIGGER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+          TRIGGER_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
         run: |
+          if [ "$TRIGGER_BRANCH" != master ]; then
+            echo "::warning::Ignoring a run from ${TRIGGER_BRANCH}; the mirror follows master only."
+            echo "channel=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           case "$EVENT" in
             push) echo "channel=none" >> "$GITHUB_OUTPUT"; exit 0 ;;
             workflow_dispatch)
