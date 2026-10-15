@@ -22,7 +22,11 @@ from ..const import (
     OPT_WEBHOOK_AUTH,
     WEBHOOK_AUTH_NONE,
 )
-from ..oauth_redirect_allowlist import effective_allowlist, normalize_allowlist
+from ..oauth_redirect_allowlist import (
+    effective_allowlist,
+    normalize_allowlist,
+    stored_allowlist,
+)
 from .constants import (
     MAX_OAUTH_CALLBACK_LENGTH,
     MAX_OAUTH_CALLBACKS,
@@ -104,7 +108,8 @@ async def _oauth_callbacks_update_prep(
                     "invalid": invalid,
                 }
             }
-        options[OPT_OAUTH_REDIRECT_ALLOWLIST] = entries
+        if (stored := stored_allowlist(options, entries)) is not None:
+            options[OPT_OAUTH_REDIRECT_ALLOWLIST] = stored
     else:
         from homeassistant.exceptions import HomeAssistantError
 

@@ -1,0 +1,13 @@
+{
+  "reason": "#2655 adds one embedded_only scenario (tests/src/e2e/workflows/embedded/test_embedded_oauth_callback_allowlist.py): a callback-list save reaches the live none-mode /authorize. It runs on the container-embedded lanes and skips on every other lane.",
+  "deltas": {
+    "container": 1,
+    "haos": 1,
+    "haos_stdio": 1,
+    "haos_inaddon": 1,
+    "haos_embedded": 1,
+    "container_no_tools": 1,
+    "haos_embedded_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}

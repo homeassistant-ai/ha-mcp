@@ -18,8 +18,8 @@ connector that does run discovery resolves against our own corrected documents
 connects with zero HA login:
 
 * ``GET  {OAUTH_BASE}/authorize`` issues a PKCE-bound one-time code and
-  immediately 302-redirects back to the client with ``?code=…&state=…`` — no
-  page is rendered.
+  immediately 302-redirects back to a listed callback with
+  ``?code=…&state=…``; an unlisted callback gets a 400 page instead.
 * ``POST {OAUTH_BASE}/token`` exchanges that code (public client, PKCE S256, no
   ``client_secret``) for an opaque access token. The token is *cosmetic* — none
   mode ignores bearers entirely — but is a real random string so a spec-strict
@@ -31,7 +31,8 @@ connects with zero HA login:
 The views dispatch per request from ``hass.data`` to the live legacy, ha_auth,
 or none-mode provider (and 404 when no remote OAuth mode is live), mirroring the
 discovery views so mode switches need no restart. The none-mode PKCE code store
-and redirect-URI floor are reused from :mod:`oauth_legacy` rather than copied.
+is reused from :mod:`oauth_legacy` and the redirect-URI floor from
+:mod:`oauth_redirect_allowlist` rather than copied.
 
 **Open-redirect policy.** In none mode the secret webhook URL is the
 credential and the tokens this flow issues grant nothing, but ``/authorize`` is
@@ -56,7 +57,6 @@ from homeassistant.components.http import HomeAssistantView
 
 from .const import (
     DATA_WEBHOOK,
-    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     DOMAIN,
     OAUTH_BASE,
 )
@@ -176,12 +176,7 @@ class AutoApproveProvider:
     administrator's edit applies without a reload.
     """
 
-    def __init__(
-        self,
-        allowlist: Callable[[], Iterable[str]] = lambda: (
-            DEFAULT_OAUTH_REDIRECT_ALLOWLIST
-        ),
-    ) -> None:
+    def __init__(self, allowlist: Callable[[], Iterable[str]]) -> None:
         self._code_store = PKCECodeStore()
         self._allowlist = allowlist
 
@@ -293,6 +288,11 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         if err is not None:
             return err
         if not provider.allows_redirect(redirect_uri):
+            _LOGGER.warning(
+                "Refused a none-mode sign-in to callback %.200s: it is not on the "
+                "OAuth callback list (Configure or the HA-MCP panel)",
+                redirect_uri,
+            )
             return _unlisted_callback_response(redirect_uri)
 
         # RFC 9207: every authorization response — success or error — names the

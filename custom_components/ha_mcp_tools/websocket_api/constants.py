@@ -7,6 +7,7 @@ import re
 from homeassistant.generated.config_flows import FLOWS
 
 from .. import card_definitions, core_contract, helper_collections
+from ..const import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
 
 __all__ = [
     "ALL_SEARCH_TYPES",
@@ -207,10 +208,6 @@ LIMITS = {"max_results": MAX_RESULTS, "max_body_bytes": MAX_BODY_BYTES}
 
 DEFAULT_LIMIT = 10
 
-# Bounds on one ``oauth_callbacks_update`` frame. Real installs list a handful
-# of callbacks; the caps keep a stored option from growing without limit.
-MAX_OAUTH_CALLBACKS = 50
-MAX_OAUTH_CALLBACK_LENGTH = 2048
 
 # ``call_service`` confirmation-wait bounds. The default mirrors the legacy
 # ``ha_call_service`` 10s subscribe-and-sample window; the cap bounds a
