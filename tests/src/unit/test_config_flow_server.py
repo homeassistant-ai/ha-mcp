@@ -345,7 +345,7 @@ class TestOAuthCredsHint:
     """All three branches of the admin-only credentials hint on the options
     form (review gap: zero coverage on any of them)."""
 
-    def test_non_legacy_mode_points_at_the_mode_selector(self):
+    def test_non_legacy_mode_points_at_the_mode_selector(self) -> None:
         flow = _make_options_flow(
             options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
         )
@@ -353,14 +353,16 @@ class TestOAuthCredsHint:
         assert "Set Authentication mode" in hint
         assert "Client ID" in hint
 
-    def test_legacy_mode_before_minting_says_appear_after_start(self):
+    def test_legacy_mode_before_minting_says_appear_after_start(self) -> None:
         flow = _make_options_flow(
             options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY}
         )
         hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
         assert "once the server" in hint
 
-    def test_legacy_mode_live_creds_shows_values_without_caveat(self, monkeypatch):
+    def test_legacy_mode_live_creds_shows_values_without_caveat(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # Bound AND live (post-restart steady state): no restart caveat.
         monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: True)
         monkeypatch.setattr(cf, "_legacy_restart_pending", lambda *a: False)
@@ -376,7 +378,9 @@ class TestOAuthCredsHint:
         assert "Client Secret: s3cr3t" in hint
         assert "not serving these yet" not in hint
 
-    def test_legacy_mode_first_enable_carries_not_live_caveat(self, monkeypatch):
+    def test_legacy_mode_first_enable_carries_not_live_caveat(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # Review finding: mid-session first enable binds the current identity
         # (active True) but /authorize is not live until the restart -- the
         # hint must caveat, matching the startup log's first-enable branch.
@@ -393,7 +397,9 @@ class TestOAuthCredsHint:
         assert "Client ID: hamcp-abc" in hint
         assert "not serving these yet" in hint
 
-    def test_legacy_mode_pending_rotation_carries_restart_caveat(self, monkeypatch):
+    def test_legacy_mode_pending_rotation_carries_restart_caveat(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # Review finding on #1880: after a rotation, entry.data updates
         # immediately but the bound views keep the previous identity until
         # restart -- the hint must say the shown values do not work yet.
