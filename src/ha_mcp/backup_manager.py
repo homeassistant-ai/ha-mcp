@@ -1615,10 +1615,8 @@ class BackupManager:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
         current = await handler.fetch(self._client, data["entity_id"])
         if domain == "dashboard":
-            stored, legacy = dashboard_snapshot(data)
-            current = await dashboard_comparison(
-                self._client, stored, current, legacy=legacy
-            )
+            _stored, legacy = dashboard_snapshot(data)
+            current = dashboard_comparison(current, legacy=legacy)
         elif domain == "dashboard_resource" and current is None:
             current = await _dashboard_resource_by_url(
                 self._client, data["config"]["url"]

@@ -4,23 +4,22 @@ A dashboard snapshot, marked ``kind: "dashboard_settings"``, holds the
 dashboard's ``lovelace/dashboards/list`` storage row beside its config body,
 ``{"dashboard": <row>, "config": <body>}``, so a restore can re-create a deleted
 dashboard: Core's ``lovelace/config/save`` answers ``config_not_found`` for a
-url_path it has no dashboard for. Restoring to a dashboard that still exists
-also puts its settings back through ``lovelace/dashboards/update``. The row is
-``None`` for a dashboard without one (YAML, or a fresh install's default before
-Core migrates it), and the body is ``None`` for a dashboard whose config was
-never saved. A dashboard snapshot without that ``kind`` predates the row and
-holds the body alone; it restores and compares as the body only.
+url_path it has no dashboard for. A restore reads the live list before any
+write; a dashboard that still exists gets its config back, then its settings
+through ``lovelace/dashboards/update``. The row is ``None`` for a dashboard the
+list holds no storage row for (YAML, or a fresh install's default before Core
+migrates it); an unreadable list fails the capture instead. The body is
+``None`` for a dashboard whose config was never saved. A dashboard snapshot
+without that ``kind`` predates the row and holds the body alone; it restores
+and compares as the body only.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from .backup_entity_ids import _manager
 from .client.rest_client import HomeAssistantCommandError, HomeAssistantError
-
-logger = logging.getLogger(__name__)
 
 # Core's DASHBOARD_BASE_UPDATE_FIELDS: what lovelace/dashboards/update accepts.
 _SETTINGS_FIELDS = ("title", "icon", "require_admin", "show_in_sidebar")
@@ -83,19 +82,18 @@ async def fetch_dashboard(client: Any, entity_id: str) -> Any:
     # lazy-resolve (an internal id 404s with "Unknown config specified" and
     # the snapshot is skipped), so pre-resolve to the form the tool targets.
     fetch_path = "lovelace" if entity_id == "default" else entity_id
-    dashboards: list[dict[str, Any]] | None = None
+    unread = (
+        "Could not read lovelace/dashboards/list, so the dashboard's settings "
+        "could not be captured"
+    )
     try:
         match, dashboards = await _resolve_dashboard(client, fetch_path)
-        if match and match.get("url_path"):
-            fetch_path = match["url_path"]
     except (HomeAssistantError, ToolError) as err:
-        # Resolver failure (transport/shape) — fall through with the
-        # original identifier; the canonical form is often already correct.
-        logger.debug(
-            "Auto-backup: dashboard resolve failed for %r: %s — using as-is",
-            entity_id,
-            err,
-        )
+        raise HomeAssistantError(unread) from err
+    if dashboards is None:
+        raise HomeAssistantError(unread)
+    if match and match.get("url_path"):
+        fetch_path = match["url_path"]
 
     row = _storage_row(dashboards, fetch_path)
     config = await _component_dashboard_config(client, fetch_path)
@@ -146,15 +144,28 @@ async def _saved(client: Any, url_path: str, config: Any) -> bool:
 
 
 async def restore_dashboard(client: Any, entity_id: str, config: Any) -> Any:
-    bm = _manager()
+    from .tools.tools_config_dashboards import _resolve_dashboard
+
     row = config["dashboard"]
     body = config["config"]
     if row is None:
         return await _restore_body(client, entity_id, body)
     url_path = row["url_path"]
-    if await _saved(client, url_path, body):
-        await _restore_settings(client, row)
-        return None
+    _match, dashboards = await _resolve_dashboard(client, url_path)
+    if dashboards is None:
+        raise HomeAssistantError(
+            "Could not read lovelace/dashboards/list, so nothing was restored"
+        )
+    live = _storage_row(dashboards, url_path)
+    if live is None:
+        return await _recreate(client, row, body)
+    await _save(client, url_path, body)
+    return await _restore_settings(client, live["id"], row)
+
+
+async def _recreate(client: Any, row: dict[str, Any], body: Any) -> Any:
+    bm = _manager()
+    url_path = row["url_path"]
     # The component's rows carry ``icon: None`` for an unset icon, which Core's
     # create schema rejects; an omitted field takes Core's default.
     fields = bm._strip_readonly(row, "id", "mode")
@@ -178,28 +189,22 @@ async def restore_dashboard(client: Any, entity_id: str, config: Any) -> Any:
     return None
 
 
-async def _restore_settings(client: Any, row: dict[str, Any]) -> None:
-    """Put back the row's settings; ``icon: None`` clears the icon."""
-    from .tools.tools_config_dashboards import _resolve_dashboard
-
-    url_path = row["url_path"]
-    _match, dashboards = await _resolve_dashboard(client, url_path)
-    if dashboards is None:
-        raise HomeAssistantError(
-            "Could not read lovelace/dashboards/list, so the dashboard's settings "
-            "were not restored"
-        )
-    live = _storage_row(dashboards, url_path)
-    if live is None:
-        raise HomeAssistantError(
-            f"Dashboard {url_path} was not found in lovelace/dashboards/list, so "
-            "its settings were not restored"
-        )
+async def _restore_settings(
+    client: Any, dashboard_id: str, row: dict[str, Any]
+) -> None:
+    """Put back the row's settings after its config; ``icon: None`` clears it."""
+    bm = _manager()
     fields = {key: row[key] for key in _SETTINGS_FIELDS if key in row}
-    await _manager()._ws_send(
-        client,
-        {"type": "lovelace/dashboards/update", "dashboard_id": live["id"], **fields},
-    )
+    update = {"type": "lovelace/dashboards/update", "dashboard_id": dashboard_id}
+    try:
+        await bm._ws_send(client, {**update, **fields})
+    except bm._CAPTURE_TRANSIENT_ERRORS as err:
+        raise bm.BackupRestoreError(
+            f"The config of dashboard {row['url_path']} was restored, but its "
+            "settings (title, icon, sidebar, admin) may not have been.",
+            apply_status="unknown",
+            reason="settings_not_restored",
+        ) from err
 
 
 async def _restore_default_store(client: Any, body: Any) -> dict[str, Any]:
@@ -242,35 +247,9 @@ async def _restore_body(client: Any, entity_id: str, config: Any) -> Any:
     )
 
 
-async def dashboard_comparison(
-    client: Any, stored: dict[str, Any], current: Any, *, legacy: bool
-) -> Any:
-    """The live value to diff a snapshot against, in the snapshot's shape: a
-    legacy snapshot compares with the live body."""
-    if current is None:
-        return None
-    if legacy:
-        return current["config"]
-    stored_row = stored["dashboard"]
-    if stored_row is None or current["dashboard"] is not None:
+def dashboard_comparison(current: Any, *, legacy: bool) -> Any:
+    """The live value to diff a snapshot against: a legacy snapshot compares
+    with the live body."""
+    if current is None or not legacy:
         return current
-    # fetch_dashboard has no row when the dashboard list is unread.
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-    from .tools.tools_config_dashboards import _resolve_dashboard
-
-    unread = (
-        "Could not read lovelace/dashboards/list, so the dashboard's settings "
-        "cannot be compared"
-    )
-    url_path = stored_row["url_path"]
-    try:
-        _match, dashboards = await _resolve_dashboard(client, url_path)
-    except (HomeAssistantError, ToolError) as err:
-        raise HomeAssistantError(unread) from err
-    if dashboards is None:
-        raise HomeAssistantError(unread)
-    return {
-        "dashboard": _storage_row(dashboards, url_path),
-        "config": current["config"],
-    }
+    return current["config"]

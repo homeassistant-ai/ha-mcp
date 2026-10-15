@@ -191,7 +191,7 @@ class TestRestoreDashboardResource:
         return []
 
     @pytest.fixture
-    def sent(self, monkeypatch, live: list[dict]) -> list[dict]:
+    def sent(self, monkeypatch: pytest.MonkeyPatch, live: list[dict]) -> list[dict]:
         calls: list[dict] = []
 
         async def _fake_ws_send(client: Any, message: dict[str, Any]) -> Any:

@@ -370,7 +370,7 @@ class TestFetcherIdResolution:
         seen: dict[str, Any] = {}
 
         async def fake_resolve(_client: Any, identifier: str) -> Any:
-            return {"url_path": "my-dash", "id": identifier}, None
+            return {"url_path": "my-dash", "id": identifier}, []
 
         async def fake_get_internal(_client: Any, url_path: str | None) -> Any:
             seen["url_path"] = url_path
@@ -393,7 +393,7 @@ class TestFetcherIdResolution:
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         async def fake_resolve(_client: Any, _identifier: str) -> Any:
-            return None, None  # no registry match -> fall through with raw id
+            return None, []  # no registry match -> fall through with raw id
 
         async def fake_get_internal(_client: Any, _url_path: str | None) -> Any:
             raise ToolError("Dashboard fetch failed: Unknown config specified: x")
@@ -409,7 +409,7 @@ class TestFetcherIdResolution:
         import ha_mcp.tools.tools_config_dashboards as dash
 
         async def fake_resolve(_client: Any, identifier: str) -> Any:
-            return {"url_path": identifier, "id": "no_config"}, None
+            return {"url_path": identifier, "id": "no_config"}, []
 
         async def no_component_config(_client: Any, _url_path: str) -> None:
             return None
@@ -439,7 +439,7 @@ class TestFetcherIdResolution:
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         async def fake_resolve(_client: Any, _identifier: str) -> Any:
-            return None, None
+            return None, []
 
         async def fake_get_internal(_client: Any, _url_path: str | None) -> Any:
             raise ToolError("Dashboard fetch failed: 500 Internal Server Error")
