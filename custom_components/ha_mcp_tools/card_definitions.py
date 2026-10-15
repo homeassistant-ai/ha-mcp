@@ -338,7 +338,7 @@ class CardDefinitions:
                 if module_id is not None and module_id not in seen:
                     seen.add(module_id)
                     pending.append(
-                        self._engine("source", {"id": module_id}).get("value", "")
+                        self._js("source", {"id": module_id}).get("value", "")
                     )
         return False
 
@@ -357,6 +357,12 @@ class CardDefinitions:
             if not tag.endswith("-card-editor"):
                 self._card_types.add(tag[len("hui-") : -len("-card")])
 
+    def _js(self, op: str, payload: Any) -> Any:
+        # run_gc=True (quickjs-ng's default) runs Python's full gc.collect()
+        # under the GIL after every call: over Home Assistant's heap that
+        # stalls the event loop (#2744). QuickJS still collects on its own.
+        return self._engine(op, payload, run_gc=False)
+
     def _body(self, tag: str) -> str:
         """A module's source as the engine parsed it (exact, unlike a scan)."""
         module_id = self._tag_module.get(tag)
@@ -366,7 +372,7 @@ class CardDefinitions:
 
     def _module_body(self, module_id: str) -> str:
         if module_id not in self._bodies:
-            self._bodies[module_id] = self._engine("source", {"id": module_id}).get(
+            self._bodies[module_id] = self._js("source", {"id": module_id}).get(
                 "value", ""
             )
         return self._bodies[module_id]
@@ -432,7 +438,7 @@ class CardDefinitions:
         prelude: list[str] = []
         for _ in range(40):
             src = "".join(prelude) + "return (" + expr + ")"
-            out = self._engine(op, {"src": src, "bindings": bindings, "key": key})
+            out = self._js(op, {"src": src, "bindings": bindings, "key": key})
             error = out.get("error")
             if error is None:
                 return out["value"]
@@ -514,7 +520,7 @@ class CardDefinitions:
         }
         body = self._editor_body(card_type)
         types = (
-            self._engine("field_types", {"key": card_type}).get("value")
+            self._js("field_types", {"key": card_type}).get("value")
             if self._struct_ready(card_type)
             else None
         )
@@ -593,7 +599,7 @@ class CardDefinitions:
             warnings.extend(findings)
         if checked:
             payload = [{"key": t, "config": c} for _, t, c in checked]
-            results = self._engine("validate", {"cards": payload}).get("value") or []
+            results = self._js("validate", {"cards": payload}).get("value") or []
             for (path, card_type, _), failures in zip(checked, results, strict=False):
                 explained = (self._explain(card_type, f) for f in failures)
                 warnings.extend(

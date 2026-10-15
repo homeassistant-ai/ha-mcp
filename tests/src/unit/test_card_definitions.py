@@ -646,3 +646,16 @@ async def test_describe_drops_stale_capabilities_after_unknown_command(
     with pytest.raises(ToolError):
         await describe_mod.describe_card_response(client, "tile")
     assert client not in component_api._CAPS_CACHE
+
+
+def test_engine_calls_skip_quickjs_full_garbage_collection() -> None:
+    """quickjs-ng's run_gc default runs gc.collect() under the GIL per call (#2744)."""
+    definitions = object.__new__(cd.CardDefinitions)
+    definitions._engine = MagicMock(return_value={"value": "src"})
+    assert definitions._js("source", {"id": "1"}) == {"value": "src"}
+    definitions._engine.assert_called_once_with("source", {"id": "1"}, run_gc=False)
+
+    bundle = object.__new__(cc._Bundle)
+    bundle.engine = MagicMock(return_value={"value": True})
+    bundle._js("pump", None)
+    bundle.engine.assert_called_once_with("pump", None, run_gc=False)

@@ -69,7 +69,7 @@ def test_only_requested_editors_are_prepared_and_cached(monkeypatch) -> None:
     clock = [0.0]
     prepared = []
 
-    def call(op, payload):
+    def call(op, payload, run_gc=True):
         if op == "cards":
             return {"value": {"tags": list(range(100)), "cards": []}}
         if op == "prepare":
