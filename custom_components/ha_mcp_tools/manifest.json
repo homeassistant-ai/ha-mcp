@@ -26,5 +26,5 @@
         "ruamel.yaml>=0.18.0",
         "voluptuous-openapi>=0.4.1"
     ],
-    "version": "2.2.2"
+    "version": "2.2.3"
 }
