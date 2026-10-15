@@ -29,15 +29,27 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
 )
 
 
-def _user(uid: str = "u1", *, admin: bool = True, active: bool = True):
+def _user(
+    uid: str = "u1", *, admin: bool = True, active: bool = True
+) -> SimpleNamespace:
     return SimpleNamespace(id=uid, is_admin=admin, is_active=active)
 
 
-def _rt(rt_id: str = "rt1", *, user=None, token_type: str = LLAT):
+def _rt(
+    rt_id: str = "rt1",
+    *,
+    user: SimpleNamespace | None = None,
+    token_type: str = LLAT,
+) -> SimpleNamespace:
     return SimpleNamespace(id=rt_id, user=user or _user(), token_type=token_type)
 
 
-def _hass(*, validated=None, users=None, refresh_tokens=None) -> MagicMock:
+def _hass(
+    *,
+    validated: SimpleNamespace | None = None,
+    users: dict[str, SimpleNamespace] | None = None,
+    refresh_tokens: dict[str, SimpleNamespace] | None = None,
+) -> MagicMock:
     hass = MagicMock(name="hass")
     users = users or {}
     refresh_tokens = refresh_tokens or {}
@@ -117,7 +129,9 @@ class TestServerAccessToken:
         ids=["user_deleted", "token_revoked", "user_disabled", "token_of_another"],
     )
     async def test_lost_provisioned_credentials_are_not_recreated(
-        self, users, refresh_tokens
+        self,
+        users: dict[str, SimpleNamespace],
+        refresh_tokens: dict[str, SimpleNamespace],
     ) -> None:
         hass = _hass(users=users, refresh_tokens=refresh_tokens)
         entry = SimpleNamespace(
