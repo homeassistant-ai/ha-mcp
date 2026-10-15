@@ -8,7 +8,6 @@ turns its verdicts into warnings.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import importlib
 import time
 from typing import Any
@@ -556,10 +555,9 @@ async def test_describe_answers_while_the_index_is_still_building(
         assert not building.done()
     finally:
         building.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await building
     failed = asyncio.create_task(asyncio.sleep(0, result=None))  # a build that failed
-    await failed
+    settled, _pending = await asyncio.wait({building, failed})
+    assert settled == {building, failed}
     monkeypatch.setattr(cd, "_build_task", failed)
     monkeypatch.setattr(cd, "_build_failed_at", time.monotonic())
     result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
