@@ -73,56 +73,14 @@ class TestToolMetadataCache:
 class TestBuildSettingsHandlers:
     """build_settings_handlers behaves correctly without a live server."""
 
-    def test_returns_all_handler_keys(self) -> None:
+    def test_every_shared_route_has_a_handler(self) -> None:
+        # The sidecar mounts SETTINGS_ROUTES from this same handler set; the
+        # add-on root page is the only handler outside that table.
+        from ha_mcp.settings_ui import SETTINGS_ROUTES
+
         handlers = build_settings_handlers(server=None)
-        assert set(handlers.keys()) == {
-            "root_page",
-            "settings_page",
-            "get_tools",
-            "save_tools",
-            "restart_addon",
-            "settings_info",
-            "get_feature_flags",
-            "save_feature_flags",
-            # Theme / accessibility prefs (#1574 review).
-            "get_theme_prefs",
-            "save_theme_prefs",
-            # Auto-backup handlers (#1288).
-            "list_backups",
-            "view_backup",
-            "diff_backup",
-            "restore_backup",
-            "delete_backup",
-            "delete_backups_bulk",
-            "get_backup_config",
-            "save_backup_config",
-            # Tool security policies handlers (#966).
-            "policy_get_config",
-            "policy_put_config",
-            "policy_get_pending",
-            "policy_post_approve",
-            "policy_post_deny",
-            "policy_get_tool_schema",
-            "policy_get_value_source",
-            # Approval PIN for event-bus decisions (#2502). Served for real
-            # in every mode, including the sidecar's stub set: the PIN is a
-            # file in the shared data dir, not an entry in the queue.
-            "policy_get_decision_pin",
-            "policy_post_decision_pin",
-            "policy_delete_decision_pin",
-            # Advanced settings handlers.
-            "get_advanced_settings",
-            "save_advanced_settings",
-            # Custom filesystem directories (issue #1567).
-            "get_fs_custom_paths",
-            "save_fs_custom_paths",
-            # Embedded server's OAuth callback allowlist (#2427).
-            "get_oauth_callbacks",
-            "save_oauth_callbacks",
-            # Entity visibility filter (#1728).
-            "visibility_get_config",
-            "visibility_put_config",
-        }
+        routed = {key for _path, _methods, key in SETTINGS_ROUTES}
+        assert set(handlers) == routed | {"root_page"}
 
     def test_get_tools_reads_cache_when_server_is_none(
         self, tmp_data_dir: Path
