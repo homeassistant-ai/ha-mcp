@@ -233,7 +233,9 @@ class TestRestoreDashboardResource:
         monkeypatch.setattr(backup_manager, "_ws_send", _fake_ws_send)
         return calls
 
-    async def test_restore_of_deleted_resource_recreates_it(self, sent):
+    async def test_restore_of_deleted_resource_recreates_it(
+        self, sent: list[dict]
+    ) -> None:
         result = await backup_manager._restore_dashboard_resource(
             MagicMock(), "old", dict(_SNAPSHOT)
         )
@@ -283,7 +285,9 @@ class TestRestoreDashboardResource:
         }
         assert "other" not in [m.get("resource_id") for m in sent]
 
-    async def test_restore_in_place_also_restores_the_resource_type(self, sent):
+    async def test_restore_in_place_also_restores_the_resource_type(
+        self, sent: list[dict]
+    ) -> None:
         await backup_manager._restore_dashboard_resource(
             MagicMock(), "old", dict(_SNAPSHOT)
         )
@@ -295,7 +299,9 @@ class TestRestoreDashboardResource:
             "url": "/local/theme.css",
         }
 
-    async def test_restore_does_not_recreate_on_other_core_errors(self, monkeypatch):
+    async def test_restore_does_not_recreate_on_other_core_errors(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         calls: list[dict] = []
 
         async def _fake_ws_send(client: Any, message: dict[str, Any]) -> Any:
