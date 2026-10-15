@@ -12,6 +12,8 @@ import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
+from tests.addon.docker_build import python_base_args
+
 
 @functools.cache
 def _load_addon_start():
@@ -291,6 +293,7 @@ def _build_addon_image():
             "BUILD_VERSION=1.0.0-test",
             "--build-arg",
             "BUILD_ARCH=amd64",
+            *python_base_args(),
             ".",
         ],
         capture_output=True,

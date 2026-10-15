@@ -9,6 +9,12 @@ history from before the fork.
 -->
 
 
+## v3.0.5.dev2 (2026-10-15)
+
+- The Dockerfile takes its python base image through a `PYTHON_BASE` build
+  arg (default unchanged), so CI can build from Docker Hub when ECR Public
+  rate-limits the pull.
+
 ## v3.0.4.dev4 (2026-10-09)
 
 - Relay Nabu Casa cloudhooks (Settings → Home Assistant Cloud → Webhooks): read
