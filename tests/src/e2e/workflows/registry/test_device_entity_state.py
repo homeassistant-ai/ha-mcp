@@ -6,32 +6,45 @@ the only place a caller sees them. The rows are the native entity-registry
 entries; ``disabled_by`` / ``hidden_by`` are present only when set.
 """
 
+from typing import Any
+
 import pytest
 
 from ...utilities.assertions import parse_mcp_result
 
 
+def _restorable(row: dict[str, Any]) -> bool:
+    """An enabled, visible entity, so the test can put it back as it was."""
+    return not row.get("disabled_by") and not row.get("hidden_by")
+
+
 @pytest.mark.registry
-async def test_device_entities_report_disabled_and_hidden_state(mcp_client):
+async def test_device_entities_report_disabled_and_hidden_state(
+    mcp_client: Any,
+) -> None:
     """A disabled and a hidden entity keep their registry state in the rows."""
     list_data = parse_mcp_result(await mcp_client.call_tool("ha_get_device", {}))
     assert list_data.get("success"), f"Failed to list devices: {list_data}"
 
     target = None
+    candidates: list[dict[str, Any]] = []
     for device in list_data.get("devices", []):
         get_data = parse_mcp_result(
             await mcp_client.call_tool(
                 "ha_get_device", {"device_id": device["device_id"]}
             )
         )
-        if get_data.get("success") and get_data.get("entity_count", 0) >= 2:
+        if not get_data.get("success"):
+            continue
+        candidates = [e for e in get_data.get("entities", []) if _restorable(e)]
+        if len(candidates) >= 2:
             target = get_data
             break
     if target is None:
-        pytest.skip("No device with two entities in test environment")
+        pytest.skip("No device with two enabled, visible entities")
 
     device_id = target["device"]["device_id"]
-    disabled_id, hidden_id = (e["entity_id"] for e in target["entities"][-2:])
+    disabled_id, hidden_id = (e["entity_id"] for e in candidates[-2:])
 
     try:
         disable = parse_mcp_result(
@@ -60,9 +73,12 @@ async def test_device_entities_report_disabled_and_hidden_state(mcp_client):
             assert row.get("platform"), f"Native registry field missing: {row}"
             assert row.get("device_id") == device_id, row
     finally:
-        await mcp_client.call_tool(
-            "ha_set_entity", {"entity_id": disabled_id, "enabled": True}
-        )
-        await mcp_client.call_tool(
-            "ha_set_entity", {"entity_id": hidden_id, "hidden": False}
-        )
+        # Each restore runs even if the other one fails.
+        try:
+            await mcp_client.call_tool(
+                "ha_set_entity", {"entity_id": disabled_id, "enabled": True}
+            )
+        finally:
+            await mcp_client.call_tool(
+                "ha_set_entity", {"entity_id": hidden_id, "hidden": False}
+            )
