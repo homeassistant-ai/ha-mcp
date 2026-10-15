@@ -707,7 +707,7 @@ def _walk_card_entry(
 
 def _card_slot_items(key: Any, value: Any) -> list[tuple[str, str, Any]] | None:
     """``(path segment, leaf key, item)`` per card slot under ``key``, else ``None``."""
-    if key == _CARD_LIST_KEY and isinstance(value, list):
+    if key in (_CARD_LIST_KEY, _CARD_KEY) and isinstance(value, list):
         return [(f"[{i}]", key, item) for i, item in enumerate(value)]
     if key == _CARD_KEY:
         return [("", key, value)]

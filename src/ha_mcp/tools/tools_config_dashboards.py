@@ -238,10 +238,10 @@ def _entity_matches(pattern: str, candidate: object) -> bool:
 # no nested-card map, and each card decides what its keys mean. These are the
 # keys HA's stack/conditional/entity-filter cards and common custom cards use,
 # recognised at any depth (``groups[].cards[].card``; #2694): ``cards`` (list),
-# ``card`` (dict), and ``custom_fields`` / ``states`` (name -> card map).
-# Anything else, a typed dict or a slot key in another shape, is the owning
-# card's option: ``query`` reads its text, but entity_id/card_type/heading do
-# not match it as a card.
+# ``card`` (dict or list), and ``custom_fields`` / ``states`` (name -> card
+# map). A typed dict in a slot is walked as a card; anything else, a typed dict
+# elsewhere or a slot key in another shape, is the owning card's option:
+# ``query`` reads its text, but entity_id/card_type/heading do not match it.
 _NESTED_CARDS_KEY = "cards"
 _NESTED_CARD_KEY = "card"
 _NESTED_CUSTOM_FIELDS_KEY = "custom_fields"
@@ -465,7 +465,7 @@ def _card_slots(
 
     ``None`` when ``key: value`` holds no card slots.
     """
-    if key == _NESTED_CARDS_KEY and isinstance(value, list):
+    if key in (_NESTED_CARDS_KEY, _NESTED_CARD_KEY) and isinstance(value, list):
         return [(f"[{i}]", f"[{i}]", key, item) for i, item in enumerate(value)]
     if key == _NESTED_CARD_KEY and isinstance(value, dict):
         return [("", "", key, value)]

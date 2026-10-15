@@ -575,23 +575,25 @@ class TestReviewedSearchEdges:
         assert result["match_count"] == 1
         assert "warnings" not in result
 
-    def test_card_list_is_read_as_text_without_a_warning(self) -> None:
+    def test_typed_cards_in_a_card_list_are_found(self) -> None:
         config = {
             "views": [
                 {
                     "cards": [
                         {
                             "type": "conditional",
-                            "card": [{"type": "tile", "entity": "light.a"}],
+                            "card": [{"type": "tile", "entity": "light.a"}, "x"],
                         }
                     ]
                 }
             ]
         }
         result = self._search(config, entity_id="light.a")
-        assert result["match_count"] == 0
+        assert [m["jq_path"] for m in result["matches"]] == [
+            ".views[0].cards[0].card[0]"
+        ]
         assert "warnings" not in result
-        assert self._search(config, query="light.a")["match_count"] == 1
+        assert self._search(config, query="x")["match_count"] == 1
 
     def test_query_matches_number_and_boolean_options(self) -> None:
         config = {

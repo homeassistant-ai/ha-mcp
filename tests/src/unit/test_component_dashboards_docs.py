@@ -84,6 +84,10 @@ def test_search_reaches_cards_under_a_custom_cards_own_keys(monkeypatch: Any) ->
                             "my-field": {"type": "tile", "entity": "light.x"}
                         },
                     },
+                    {
+                        "type": "conditional",
+                        "card": [{"type": "tile", "entity": "light.x"}],
+                    },
                 ]
             }
         ]
@@ -95,6 +99,7 @@ def test_search_reaches_cards_under_a_custom_cards_own_keys(monkeypatch: Any) ->
     assert [(m["card_path"], m["card_type"]) for m in result["matches"]] == [
         ("views[0].cards[0].groups[0].cards[0].card", "tile"),
         ('views[0].cards[1].custom_fields["my-field"]', "tile"),
+        ("views[0].cards[2].card[0]", "tile"),
     ]
 
 
