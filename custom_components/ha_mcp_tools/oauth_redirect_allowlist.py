@@ -68,6 +68,10 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
         return False
     if not parsed.hostname:
         return False
+    if parsed.username is not None or parsed.password is not None:
+        # A callback carrying credentials is never legitimate; an exact
+        # allowlist match must not be able to let one through.
+        return False
     if not _AUTHORITY_CHARS_RE.fullmatch(parsed.netloc):
         # Same contract as the .port access above: urlparse and yarl split
         # authorities differently (a backslash before '@', a zero-width
