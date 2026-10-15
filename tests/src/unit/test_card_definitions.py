@@ -8,6 +8,7 @@ turns its verdicts into warnings.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -535,24 +536,27 @@ async def test_card_validation_executor_cannot_hold_a_saved_write(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_describe_answers_while_the_index_is_still_building(monkeypatch) -> None:
+async def test_describe_answers_while_the_index_is_still_building(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A first-use build that outlasts the command wait is reported, not timed out."""
     import voluptuous as vol
 
-    monkeypatch.setattr(cd, "async_get_definitions", AsyncMock(return_value=None))
+    monkeypatch.setattr(cd, "_CARD_WORK_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(cd, "_definitions", None)
+    monkeypatch.setattr(cd, "_build_failed_at", None)
     building = asyncio.create_task(asyncio.Event().wait())
     monkeypatch.setattr(cd, "_build_task", building)
     prep = cd.command_specs(vol)[0][2]
     try:
-        result = await prep(MagicMock(), {"card_type": "tile"})
+        result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
         assert result["result"] == {"success": False, "error": "definitions_loading"}
-        cd.async_get_definitions.assert_awaited_once_with(
-            cd.async_get_definitions.await_args.args[0], timeout=cd._CARD_WORK_SECONDS
-        )
+        assert not building.done()
     finally:
         building.cancel()
-    monkeypatch.setattr(cd, "_build_task", None)
-    result = await prep(MagicMock(), {"card_type": "tile"})
+    with contextlib.suppress(asyncio.CancelledError):
+        await building
+    result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
     assert result["result"] == {"success": False, "error": "unavailable"}
 
 

@@ -44,7 +44,7 @@ def _error(exc_info: pytest.ExceptionInfo) -> dict:
 
 
 class TestYamlResourceMode:
-    async def test_write_in_yaml_mode_says_resources_are_yaml_managed(self):
+    async def test_write_in_yaml_mode_says_resources_are_yaml_managed(self) -> None:
         tools, _ = _tools(
             {
                 "lovelace/resources/create": _failure("unknown_command"),
@@ -59,7 +59,9 @@ class TestYamlResourceMode:
         assert "YAML-managed" in data["error"]["message"]
         assert data["resource_mode"] == "yaml"
 
-    async def test_unknown_command_in_storage_mode_passes_core_error_through(self):
+    async def test_unknown_command_in_storage_mode_passes_core_error_through(
+        self,
+    ) -> None:
         """The YAML explanation needs Core's own resource_mode, not a guess."""
         tools, _ = _tools(
             {
@@ -95,7 +97,7 @@ class TestYamlResourceMode:
 
 
 class TestCoreErrorCodes:
-    async def test_update_of_missing_resource_reports_not_found(self):
+    async def test_update_of_missing_resource_reports_not_found(self) -> None:
         tools, _ = _tools({"lovelace/resources/update": _failure("not_found")})
 
         with pytest.raises(ToolError) as exc_info:
@@ -107,7 +109,7 @@ class TestCoreErrorCodes:
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert data["resource_id"] == "gone"
 
-    async def test_not_found_wording_without_the_code_is_not_reclassified(self):
+    async def test_not_found_wording_without_the_code_is_not_reclassified(self) -> None:
         tools, _ = _tools(
             {
                 "lovelace/resources/delete": _failure(
@@ -141,7 +143,7 @@ class TestCoreErrorCodes:
 
 
 class TestCoreResourceTypes:
-    async def test_by_type_counts_every_type_core_returns(self):
+    async def test_by_type_counts_every_type_core_returns(self) -> None:
         rows = [
             {"id": "1", "type": "html", "url": "/local/a.html"},
             {"id": "2", "type": "module", "url": "/local/b.js"},
@@ -157,7 +159,7 @@ class TestCoreResourceTypes:
 
         assert result["by_type"] == {"html": 1, "module": 1}
 
-    async def test_html_url_resource_reaches_core(self):
+    async def test_html_url_resource_reaches_core(self) -> None:
         tools, sent = _tools(
             {"lovelace/resources/create": {"success": True, "result": {"id": "h1"}}}
         )
@@ -169,7 +171,7 @@ class TestCoreResourceTypes:
         assert result["resource_id"] == "h1"
         assert sent[0]["res_type"] == "html"
 
-    async def test_unknown_url_resource_type_is_left_to_core(self):
+    async def test_unknown_url_resource_type_is_left_to_core(self) -> None:
         """The tool keeps no copy of Core's type list; Core's rejection is relayed."""
         tools, sent = _tools(
             {
@@ -192,7 +194,7 @@ class TestCoreResourceTypes:
             error["message"] == "value must be one of ['css', 'html', 'js', 'module']"
         )
 
-    async def test_inline_html_is_rejected_before_any_write(self):
+    async def test_inline_html_is_rejected_before_any_write(self) -> None:
         tools, sent = _tools({})
 
         with pytest.raises(ToolError) as exc_info:

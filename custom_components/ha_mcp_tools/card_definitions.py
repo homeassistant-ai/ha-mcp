@@ -914,15 +914,20 @@ async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> li
         return []
 
 
+def _no_definitions() -> dict[str, Any]:
+    """The first describe after a Core start builds the frontend index; on a
+    slow board that outlasts the command wait (#2744), so say it is still
+    building instead of letting the transport time out."""
+    task = _build_task
+    loading = _definitions is None and task is not None and not task.done()
+    error = "definitions_loading" if loading else "unavailable"
+    return {"result": {"success": False, "error": error}}
+
+
 async def _describe(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     definitions = await async_get_definitions(hass, timeout=_CARD_WORK_SECONDS)
     if definitions is None:
-        # The first describe after a Core start builds the frontend index;
-        # on a slow board that outlasts the command wait (#2744), so answer
-        # instead of letting the transport time out.
-        task = _build_task
-        error = "definitions_loading" if task and not task.done() else "unavailable"
-        return {"result": {"success": False, "error": error}}
+        return _no_definitions()
     card_type = msg.get("card_type") or None
     custom = (
         await async_get_custom_cards(hass, timeout=_CUSTOM_WAIT_SECONDS)
@@ -981,7 +986,7 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
             async with asyncio.timeout(_CARD_WORK_SECONDS):
                 return await _describe(hass, msg)
         except TimeoutError:
-            return {"result": {"success": False, "error": "unavailable"}}
+            return _no_definitions()
 
     def do(
         hass: HomeAssistant, msg: dict[str, Any], *, result: dict[str, Any]
