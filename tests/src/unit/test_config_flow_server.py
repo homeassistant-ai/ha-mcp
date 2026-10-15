@@ -212,8 +212,6 @@ class TestOAuthCallbackAllowlistOption:
         assert result["errors"] == {
             const.OPT_OAUTH_REDIRECT_ALLOWLIST: "invalid_oauth_callback"
         }
-<<<<<<< HEAD
-=======
         # With several callbacks listed, the error names the one to fix.
         assert result["description_placeholders"]["invalid_callbacks"] == (
             "http://not-loopback/cb"
@@ -228,7 +226,6 @@ class TestOAuthCallbackAllowlistOption:
         assert result["errors"] == {
             const.OPT_OAUTH_REDIRECT_ALLOWLIST: "too_many_oauth_callbacks"
         }
->>>>>>> 442c59a2c (fix(component): let an abandoned server setup not block the next one)
 
     def test_saving_the_untouched_default_keeps_following_it(self):
         # Pinning the default would hide callbacks a later release adds to it.
@@ -254,27 +251,6 @@ class TestOAuthCallbackAllowlistOption:
         assert result["data"][const.OPT_OAUTH_REDIRECT_ALLOWLIST] == []
 
 
-<<<<<<< HEAD
-class TestOptionsFlowDispatch:
-    def test_server_entry_gets_server_options_flow(self):
-        entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpServerOptionsFlow)
-
-    def test_tools_entry_gets_info_options_flow(self):
-        entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
-
-    def test_missing_entry_type_defaults_to_info_options(self):
-        # A pre-existing (pre-fold) tools entry carries no entry_type key; it must
-        # be treated as "tools", so it gets the informational tools flow, never
-        # the server options flow.
-        entry = SimpleNamespace(data={})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
-        assert not isinstance(result, cf.HaMcpServerOptionsFlow)
-=======
 class TestAdminTokenReplacement:
     """Configure replaces the server's administrator token (#2427)."""
 
@@ -342,4 +318,24 @@ class TestAdminTokenReplacement:
         flow = _make_options_flow()
         result = asyncio.run(flow.async_step_init({}))
         assert result["data"][const.OPT_ADMIN_TOKEN_REPLACEMENT] == ""
->>>>>>> 442c59a2c (fix(component): let an abandoned server setup not block the next one)
+
+
+class TestOptionsFlowDispatch:
+    def test_server_entry_gets_server_options_flow(self):
+        entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER})
+        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
+        assert isinstance(result, cf.HaMcpServerOptionsFlow)
+
+    def test_tools_entry_gets_info_options_flow(self):
+        entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS})
+        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
+        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
+
+    def test_missing_entry_type_defaults_to_info_options(self):
+        # A pre-existing (pre-fold) tools entry carries no entry_type key; it must
+        # be treated as "tools", so it gets the informational tools flow, never
+        # the server options flow.
+        entry = SimpleNamespace(data={})
+        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
+        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
+        assert not isinstance(result, cf.HaMcpServerOptionsFlow)
