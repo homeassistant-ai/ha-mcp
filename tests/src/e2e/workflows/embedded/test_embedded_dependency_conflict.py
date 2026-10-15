@@ -312,6 +312,8 @@ def _seed_config(config_path: Path, wheel_name: str, wheel_version: str) -> None
                 "entry_type": "server",
                 "webhook_id": _WEBHOOK_ID,
                 "secret_path": _SECRET_PATH,
+                # The component no longer provisions an administrator (#2427).
+                "admin_token": TEST_TOKEN,
                 # Equal to the option below: an UNCHANGED spec is half of what
                 # puts _async_ensure_package on its no-install fast path.
                 _DATA_LAST_PIP_SPEC: pip_spec,
