@@ -27,6 +27,11 @@ def embedded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
+def not_embedded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+
+
+@pytest.fixture
 def component(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]]]:
     """Record the component commands the handlers send; answer like the component."""
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -57,7 +62,9 @@ async def _call(name: str, body: Any = None) -> tuple[int, dict[str, Any]]:
     return response.status_code, json.loads(response.body)
 
 
-async def test_other_install_types_do_not_offer_the_editor(component) -> None:
+async def test_other_install_types_do_not_offer_the_editor(
+    not_embedded: None, component: list[tuple[str, dict[str, Any]]]
+) -> None:
     status, body = await _call("get_oauth_callbacks")
     assert (status, body["available"]) == (200, False)
     assert component == []
@@ -145,7 +152,9 @@ async def test_a_failed_probe_is_a_reachability_error_on_save(
     assert "Could not reach" in body["error"]["message"]
 
 
-async def test_a_save_outside_the_embedded_server_is_refused(component) -> None:
+async def test_a_save_outside_the_embedded_server_is_refused(
+    not_embedded: None, component: list[tuple[str, dict[str, Any]]]
+) -> None:
     status, _ = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
     assert status == 409
     assert component == []
