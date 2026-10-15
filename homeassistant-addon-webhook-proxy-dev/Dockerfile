@@ -3,7 +3,10 @@
 # Points at an existing ha-mcp addon (stable or dev) and exposes it
 # via a Home Assistant webhook for remote access.
 
-FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:3de9a8d7aedbb7984dc18f2dff178a7850f16c1ae7c34ba9d7ecc23d0755e35f
+# PYTHON_BASE lets CI point the runtime base at another registry holding the
+# same digest when ECR Public rate-limits the pull; the default is the pin.
+ARG PYTHON_BASE=public.ecr.aws/docker/library/python:3.13-slim@sha256:3de9a8d7aedbb7984dc18f2dff178a7850f16c1ae7c34ba9d7ecc23d0755e35f
+FROM ${PYTHON_BASE}
 
 COPY start.py /
 COPY mcp_proxy_dev /opt/mcp_proxy_dev

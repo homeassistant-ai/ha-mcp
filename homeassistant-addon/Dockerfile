@@ -3,6 +3,10 @@
 # Python 3.13 - Security support until 2029-10
 # No bashio needed - pure Python startup script
 
+# PYTHON_BASE lets CI point the runtime base at another registry holding the
+# same digest when ECR Public rate-limits the pull; the default is the pin.
+ARG PYTHON_BASE=public.ecr.aws/docker/library/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
+
 # --- Build stage: install dependencies with uv ---
 FROM ghcr.io/astral-sh/uv:0.13.0-python3.13-trixie-slim@sha256:40215b626e22e4ff65839863624c4b885b8829b1a66ce895b7be20eca7fabe6d AS builder
 
@@ -26,7 +30,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
 # --- Runtime stage: clean image without uv ---
-FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
+FROM ${PYTHON_BASE}
 
 WORKDIR /app
 

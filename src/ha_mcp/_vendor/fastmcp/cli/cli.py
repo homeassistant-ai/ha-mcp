@@ -106,7 +106,7 @@ def version(
     """Display version information and platform details."""
     info = {
         "FastMCP version": fastmcp.__version__,
-        "MCP version": "2.2.0",
+        "MCP version": "2.3.0",
         "Python version": platform.python_version(),
         "Platform": platform.platform(),
         "FastMCP root path": Path(fastmcp.__file__ or ".").resolve().parents[1],
@@ -881,7 +881,7 @@ async def inspect(
         if server_spec.endswith(".json") and config is None:
             # This might be an MCPConfig, check the file
             try:
-                with open(Path(server_spec)) as f:
+                with open(Path(server_spec), encoding="utf-8") as f:
                     data = json.load(f)
                 if "mcpServers" in data:
                     logger.error("MCPConfig files are not supported by inspect command")

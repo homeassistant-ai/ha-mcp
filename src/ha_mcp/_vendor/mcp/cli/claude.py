@@ -24,7 +24,7 @@ def mcp_requirement(package: str = "mcp") -> str:
     as does a missing distribution (no metadata to pin from).
     """
     try:
-        version = "2.2.0"
+        version = "2.3.0"
     except importlib.metadata.PackageNotFoundError:
         return package
     if ".dev" in version or "+" in version:
