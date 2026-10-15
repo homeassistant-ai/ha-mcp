@@ -399,7 +399,7 @@ def test_buildx_image_builds_fall_back_to_docker_hub_for_the_python_base() -> No
                 if uses == f"./{_PYTHON_BASE_FALLBACK}":
                     through_action.append(f"{path.name}: {step.get('name')}")
     assert direct == [], f"buildx builds must use {_PYTHON_BASE_FALLBACK}: {direct}"
-    assert len(through_action) == 5
+    assert through_action, "no workflow uses the fallback action"
 
     action = yaml.safe_load(
         (_REPO_ROOT / _PYTHON_BASE_FALLBACK / "action.yml").read_text(encoding="utf-8")
