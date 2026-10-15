@@ -206,6 +206,43 @@ async def test_single_lookup_served_by_component() -> None:
 
 
 @pytest.mark.asyncio
+async def test_entity_rows_carry_disabled_and_hidden_state() -> None:
+    """Disabled and hidden entities are listed with their registry state.
+
+    They have no state, so without these keys a caller cannot tell a disabled
+    entity from an enabled one. Enabled, visible rows stay without the keys.
+    """
+    dev = _raw_device("dev-1")
+    ws = make_ws(
+        "ha_mcp_tools/device_get",
+        info_result=_CAPS_DEVICES,
+        cmd_result={
+            "device": dev,
+            "entities": [
+                _entity_row("sensor.enabled", "dev-1"),
+                {
+                    **_entity_row("sensor.disabled", "dev-1"),
+                    "disabled_by": "integration",
+                },
+                {**_entity_row("sensor.hidden", "dev-1"), "hidden_by": "user"},
+            ],
+        },
+    )
+    get_device = _build_get_device(RoutingClient())
+
+    with patch_ws(ws, component_devices):
+        resp = await get_device(device_id="dev-1")
+
+    rows = {row["entity_id"]: row for row in resp["entities"]}
+    assert "disabled_by" not in rows["sensor.enabled"]
+    assert "hidden_by" not in rows["sensor.enabled"]
+    assert rows["sensor.disabled"]["disabled_by"] == "integration"
+    assert "hidden_by" not in rows["sensor.disabled"]
+    assert rows["sensor.hidden"]["hidden_by"] == "user"
+    assert "disabled_by" not in rows["sensor.hidden"]
+
+
+@pytest.mark.asyncio
 async def test_child_component_result_preserves_effective_area_and_ownership() -> None:
     child = _raw_device(
         "child-1",

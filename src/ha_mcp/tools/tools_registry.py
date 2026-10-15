@@ -197,8 +197,7 @@ def _build_entity_maps(
     entity_to_device: dict[str, str] = {}
     device_to_entities: dict[str, list[dict[str, Any]]] = {}
     for e in all_entities:
-        eid = e.get("entity_id")
-        did = e.get("device_id")
+        eid, did = e.get("entity_id"), e.get("device_id")
         if eid and did:
             entity_to_device[eid] = did
             if need_full:
@@ -207,6 +206,7 @@ def _build_entity_maps(
                         "entity_id": eid,
                         "name": e.get("name") or e.get("original_name"),
                         "platform": e.get("platform"),
+                        **{k: e[k] for k in ("disabled_by", "hidden_by") if e.get(k)},
                     }
                 )
     return entity_to_device, device_to_entities
@@ -833,7 +833,7 @@ class RegistryTools:
                     "'summary': basic device info and protocol identifiers. 'full': in list"
                     " mode also include each device's entities. Single-device lookups "
                     "always return full detail, including radio metrics, node status and "
-                    "Matter diagnostics."
+                    "Matter diagnostics. Entity rows carry disabled_by/hidden_by if set."
                 ),
             ),
         ] = "summary",
