@@ -113,10 +113,12 @@ class _FakeEntityRegistry:
         self.existing = existing
         self.removed: list[str] = []
 
-    def async_get_entity_id(self, domain, platform, unique_id):
+    def async_get_entity_id(
+        self, domain: str, platform: str, unique_id: str
+    ) -> str | None:
         return self.existing.get((domain, platform, unique_id))
 
-    def async_remove(self, entity_id) -> None:
+    def async_remove(self, entity_id: str) -> None:
         self.removed.append(entity_id)
 
 
@@ -186,7 +188,9 @@ def fake_collaborators(monkeypatch):
 
 
 class TestSetup:
-    async def test_schedules_bring_up_without_update_platform(self, fake_collaborators):
+    async def test_schedules_bring_up_without_update_platform(
+        self, fake_collaborators: SimpleNamespace
+    ) -> None:
         # The server arrives with the component release (#2427): no update
         # platform, no PyPI poll, no automatic reinstall.
         hass = _make_hass()
@@ -202,7 +206,9 @@ class TestSetup:
         hass.config_entries.async_forward_entry_setups.assert_not_called()
         assert hass.async_create_background_task.call_count == 0
 
-    async def test_removes_the_retired_server_update_entity(self, fake_collaborators):
+    async def test_removes_the_retired_server_update_entity(
+        self, fake_collaborators: SimpleNamespace
+    ) -> None:
         hass = _make_hass()
         entry = _make_entry()
 
@@ -210,7 +216,9 @@ class TestSetup:
 
         assert fake_collaborators.registry.removed == ["update.ha_mcp_server_update"]
 
-    async def test_server_entry_has_a_current_device(self, fake_collaborators):
+    async def test_server_entry_has_a_current_device(
+        self, fake_collaborators: SimpleNamespace
+    ) -> None:
         # The retired update entity used to create the server's device; an
         # upgraded install must not keep it at its old version, and a new one
         # must not lack it.
@@ -224,7 +232,9 @@ class TestSetup:
         assert device["identifiers"] == {(DOMAIN, entry.entry_id)}
         assert device["sw_version"] == "9.0.0"
 
-    async def test_no_retired_entity_means_nothing_removed(self, fake_collaborators):
+    async def test_no_retired_entity_means_nothing_removed(
+        self, fake_collaborators: SimpleNamespace
+    ) -> None:
         fake_collaborators.registry.existing.clear()
         hass = _make_hass()
         entry = _make_entry()
@@ -233,7 +243,9 @@ class TestSetup:
 
         assert fake_collaborators.registry.removed == []
 
-    async def test_default_registers_ui_panel(self, fake_collaborators):
+    async def test_default_registers_ui_panel(
+        self, fake_collaborators: SimpleNamespace
+    ) -> None:
         # enable_sidebar_panel absent (default on): the admin-only "Open Web UI"
         # sidebar panel is registered during entry setup.
         hass = _make_hass()
@@ -267,7 +279,9 @@ class TestWebSocketCommandRegistration:
     and every ``ha_search`` silently fell back to the legacy path.
     """
 
-    async def test_setup_registers_ws_commands(self, fake_collaborators):
+    async def test_setup_registers_ws_commands(
+        self, fake_collaborators: SimpleNamespace
+    ) -> None:
         hass = _make_hass()
         entry = _make_entry()
 
@@ -449,7 +463,9 @@ class TestEnsureSecretsLegacyWiring:
 
 
 class TestUnload:
-    async def test_unload_tears_down_the_server(self, fake_collaborators):
+    async def test_unload_tears_down_the_server(
+        self, fake_collaborators: SimpleNamespace
+    ) -> None:
         hass = _make_hass()
         entry = _make_entry()
         await eentry.async_setup_server_entry(hass, entry)

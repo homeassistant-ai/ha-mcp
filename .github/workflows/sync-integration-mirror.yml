@@ -157,13 +157,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          # The stable leg checks out the release tag and the notes script
-          # compares stable tags; both need full history + tags.
+          # Both legs add a worktree of the commit they snapshot and the
+          # notes script compares stable tags; both need full history + tags.
+          # This checkout stays on the default branch: the scripts below run
+          # from it, never from the snapshotted commit.
           fetch-depth: 0
           fetch-tags: true
-          # The dev leg snapshots the commit whose build was just published,
-          # not whatever master has moved on to since.
-          ref: ${{ github.event.workflow_run.name == 'Publish Dev Channel' && github.event.workflow_run.head_sha || '' }}
 
       - name: Fetch the dev build's version
         if: env.CHANNEL == 'dev'
@@ -214,7 +213,14 @@ jobs:
               VER="${PIN%.dev*}"
               TAG="v${VER}-dev.${PIN##*.dev}"
               DIST=ha-mcp-dev
-              SRC=.
+              # Snapshot the commit Publish Dev Channel built, not whatever
+              # master has moved on to since; a dispatch builds this commit.
+              if [ -n "$TRIGGER_SHA" ]; then
+                SRC="$RUNNER_TEMP/dev-src"
+                git worktree add --quiet --detach "$SRC" "$TRIGGER_SHA"
+              else
+                SRC=.
+              fi
               ;;
             *)
               exit 0

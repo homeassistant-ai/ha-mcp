@@ -272,15 +272,6 @@ from the registry on the first start). A 2.x install on the `dev` channel moves
 to the stable server with this release; turn on the HACS **Pre-release** switch
 to keep receiving development builds.
 
-**Existing OAuth clients may need configuration:** in secret-URL (`none`) mode,
-the callback allowlist applies to existing installations too. A client whose
-callback is not listed cannot complete its next sign-in. Under **Settings →
-Devices & services → HA-MCP Server → Configure**, add its exact callback URL to
-**Allowed OAuth callback URL**. Claude's callback is included by default;
-other clients may need an entry. Connections that use only the webhook URL and
-clients using Home Assistant or legacy OAuth authentication are unaffected by
-this allowlist change. See [Security](#security) for loopback callback matching.
-
 ### Local-only mode
 
 Turn **Remote access via webhook** off to keep the server unreachable through
