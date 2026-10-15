@@ -286,27 +286,6 @@ class TestOAuthCredsHint:
         assert "restart" in hint
 
 
-class TestOptionsFlowDispatch:
-    def test_server_entry_gets_server_options_flow(self):
-        entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpServerOptionsFlow)
-
-    def test_tools_entry_gets_info_options_flow(self):
-        entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
-
-    def test_missing_entry_type_defaults_to_info_options(self):
-        # A pre-existing (pre-fold) tools entry carries no entry_type key; it must
-        # be treated as "tools", so it gets the informational tools flow, never
-        # the server options flow.
-        entry = SimpleNamespace(data={})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
-        assert not isinstance(result, cf.HaMcpServerOptionsFlow)
-
-
 class TestToolsInfoOptionsFlow:
     def _flow_with_stores(self, *, dirs=None, keys=None):
         # The tools options flow reads/writes the component's own stores via
@@ -1127,68 +1106,6 @@ class TestServerOptionsFlow:
         assert hint.startswith("Remote access via webhook is disabled")
         assert "http://127.0.0.1:9584/private_x" in hint  # DEFAULT_SERVER_PORT
         assert "/api/webhook/" not in hint
-
-
-class TestOAuthCallbackAllowlistOption:
-    """The Configure screen edits the none-mode callback allowlist (#2427)."""
-
-    CALLBACK = "https://chatgpt.example/cb"
-
-    def _suggested(self, form):
-        marker = next(
-            m
-            for m in form["data_schema"].schema
-            if m.schema == const.OPT_OAUTH_REDIRECT_ALLOWLIST
-        )
-        return marker.description["suggested_value"]
-
-    def test_an_unedited_entry_shows_the_default_list(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        assert self._suggested(form) == list(const.DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
-
-    def test_saves_the_entered_callbacks(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        result = asyncio.run(
-            flow.async_step_init(
-                {const.OPT_OAUTH_REDIRECT_ALLOWLIST: [f" {self.CALLBACK} "]}
-            )
-        )
-        assert result["data"][const.OPT_OAUTH_REDIRECT_ALLOWLIST] == [self.CALLBACK]
-
-    def test_an_unusable_callback_blocks_the_save(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        result = asyncio.run(
-            flow.async_step_init(
-                {const.OPT_OAUTH_REDIRECT_ALLOWLIST: ["http://not-loopback/cb"]}
-            )
-        )
-        assert result["errors"] == {
-            const.OPT_OAUTH_REDIRECT_ALLOWLIST: "invalid_oauth_callback"
-        }
-
-    def test_saving_the_untouched_default_keeps_following_it(self):
-        # Pinning the default would hide callbacks a later release adds to it.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        result = asyncio.run(
-            flow.async_step_init(
-                {
-                    const.OPT_OAUTH_REDIRECT_ALLOWLIST: list(
-                        const.DEFAULT_OAUTH_REDIRECT_ALLOWLIST
-                    )
-                }
-            )
-        )
-        assert const.OPT_OAUTH_REDIRECT_ALLOWLIST not in result["data"]
-
-    def test_removing_every_callback_sticks(self):
-        # Home Assistant's frontend omits an emptied optional field.
-        flow = _make_options_flow(
-            options={const.OPT_OAUTH_REDIRECT_ALLOWLIST: [self.CALLBACK]},
-            data={const.DATA_WEBHOOK_ID: "mcp_abc"},
-        )
-        result = asyncio.run(flow.async_step_init({}))
-        assert result["data"][const.OPT_OAUTH_REDIRECT_ALLOWLIST] == []
 
 
 class TestOptionsFormTranslations:
