@@ -86,7 +86,7 @@ class TestSanitizeLogText:
             assert secret not in result, f"{secret!r} leaked in {result!r}"
             assert "[REDACTED]" in result
 
-    def test_the_userinfo_rule_cannot_start_matching_inside_plain_text(self):
+    def test_the_userinfo_rule_cannot_start_matching_inside_plain_text(self) -> None:
         # A base64 blob or minified payload in a log message once took the
         # userinfo rule time quadratic in its length, so ha_report_issue
         # appeared to hang: the rule began matching at the scheme, so every
@@ -97,7 +97,7 @@ class TestSanitizeLogText:
         assert _URL_USERINFO_RE.search(url).start() == len("https")
         assert _URL_USERINFO_RE.search("a" * 200_000) is None
 
-    def test_redacts_userinfo_after_a_scheme_glued_to_other_text(self):
+    def test_redacts_userinfo_after_a_scheme_glued_to_other_text(self) -> None:
         result = _sanitize_log_text("url=1https://admin:supersecret@ha.local/api")
         assert "supersecret" not in result
 

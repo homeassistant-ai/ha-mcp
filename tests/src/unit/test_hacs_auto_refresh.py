@@ -136,7 +136,7 @@ class TestNudgeDue:
         assert hacs_auto_refresh._nudge_due("1.0.0", None, marker) is False
 
 
-def test_candidate_names_are_the_mirror_then_the_legacy_repo():
+def test_candidate_names_are_the_mirror_then_the_legacy_repo() -> None:
     # The non-embedded refresh helper looks the component up under the
     # dedicated HACS mirror first and the legacy main-repo path second.
     assert hacs_auto_refresh.CANDIDATE_REPO_FULL_NAMES == (
@@ -186,7 +186,7 @@ class TestMarkerFile:
 
 
 class TestMaybeRefreshHacsAfterUpdate:
-    async def test_embedded_server_is_a_no_op(self, data_dir):
+    async def test_embedded_server_is_a_no_op(self, data_dir) -> None:
         # The embedded server arrives with the component release HACS
         # delivers, so there is no separate server update to surface.
         with (
