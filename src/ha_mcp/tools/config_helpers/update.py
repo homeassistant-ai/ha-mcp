@@ -252,7 +252,7 @@ async def _execute_update_simple_helper(
     if native is not None:
         updated_data, entity, warnings = native
     else:
-        stored = await stored_helper_target(client, helper_type, helper_id)
+        stored = await stored_helper_target(client, helper_type, helper_id, name)
         if stored is not None:
             unique_id, entity, reason = stored
         else:
@@ -332,10 +332,13 @@ async def _update_via_component(
 ) -> tuple[dict[str, Any], str | None, list[str]] | None:
     """Update through Core's collection in-process; ``None`` uses the WS commands.
 
-    A helper the component cannot find also returns ``None``, so the legacy
-    path reports it with its usual error.
+    An entity_id the component cannot find also returns ``None``, so the
+    legacy path reports it with its usual error; a bare id it cannot find is
+    no stored helper and an error.
     """
-    item = await read_stored_helper_item(client, helper_type, helper_id, entity_id)
+    item = await read_stored_helper_item(
+        client, helper_type, helper_id, entity_id, name
+    )
     if item is None:
         return None
     # The component names the item's own entity; without one the storage id

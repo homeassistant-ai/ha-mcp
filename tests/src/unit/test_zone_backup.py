@@ -125,17 +125,23 @@ class TestZoneBackup:
 
         assert snapshot == {**OFFICE, "registry_icon": "mdi:briefcase"}
 
-    async def test_snapshot_finds_a_renamed_zone_by_its_bare_entity_id(
-        self, monkeypatch
+    @pytest.mark.parametrize(
+        ("zone_id", "found"), [("zone.work", True), ("work", False)]
+    )
+    async def test_snapshot_names_a_renamed_zone_only_by_its_entity_id(
+        self, monkeypatch, zone_id, found
     ):
-        """The zone tools resolve ``work`` to ``zone.work``, so the backup must too."""
+        """The zone tools resolve ``zone.work`` to office and a bare ``work``
+        to no zone, so the backup must too."""
         renamed = {**_office_entity(), "entity_id": "zone.work"}
         _, fake_ws = _backup_ws([dict(OFFICE)], [renamed])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
-        snapshot = await _handler("zone").fetch(None, "work")
+        snapshot = await _handler("zone").fetch(None, zone_id)
 
-        assert snapshot == {**OFFICE, "registry_icon": "mdi:briefcase"}
+        assert snapshot == (
+            {**OFFICE, "registry_icon": "mdi:briefcase"} if found else None
+        )
 
     @pytest.mark.parametrize(
         ("zone_id", "changed"),

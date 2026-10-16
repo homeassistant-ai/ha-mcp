@@ -542,7 +542,11 @@ class HelperConfigTools:
         helper_id: Annotated[
             str | None,
             Field(
-                description="Bare ID ('my_button') or full entity ID ('input_button.my_button'). Omit to create a new helper.",
+                description=(
+                    "The helper's storage id ('my_button'), not the name of its "
+                    "entity, or its full entity_id ('input_button.my_button'). "
+                    "Omit to create a new helper."
+                ),
                 default=None,
             ),
         ] = None,
@@ -899,13 +903,11 @@ class HelperConfigTools:
 
                 # helper_id is guaranteed non-None by _validate_set_helper_action for update
                 hid: str = helper_id  # type: ignore[assignment]
-                entity_id = (
-                    hid if hid.startswith(f"{helper_type}.") else f"{helper_type}.{hid}"
-                )
+                # A bare id is a storage id, never turned into an entity_id.
                 return await _execute_update_simple_helper(
                     self._client,
                     helper_type,
-                    entity_id,
+                    hid,
                     hid,
                     name,
                     icon,

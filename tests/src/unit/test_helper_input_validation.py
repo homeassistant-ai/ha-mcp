@@ -460,7 +460,7 @@ class TestInputSelectInitialInOptions:
         ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
-                helper_id="mode",
+                helper_id="input_select.mode",
                 options=["A", "B", "C"],
                 initial="C",
             )
@@ -516,7 +516,7 @@ class TestInputDatetimeHasDateOrTime:
         ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_datetime",
-                helper_id="schedule",
+                helper_id="input_datetime.schedule",
                 has_date=True,
             )
         msg = _find_msg(mock_client, "input_datetime/update")
@@ -542,7 +542,7 @@ class TestInputDatetimeHasDateOrTime:
         ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_datetime",
-                helper_id="timeonly",
+                helper_id="input_datetime.timeonly",
                 name="Renamed",
             )
         msg = _find_msg(mock_client, "input_datetime/update")

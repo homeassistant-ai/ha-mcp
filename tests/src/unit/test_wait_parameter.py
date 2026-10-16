@@ -387,7 +387,7 @@ class TestHelperWaitParameter:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test Switch",
-                helper_id="test",  # triggers UPDATE path
+                helper_id="input_boolean.test",  # triggers UPDATE path
             )
             assert result["success"] is True
             assert result["action"] == "update"
@@ -404,7 +404,7 @@ class TestHelperWaitParameter:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test Switch",
-                helper_id="test",
+                helper_id="input_boolean.test",
                 wait=False,
             )
             assert result["success"] is True

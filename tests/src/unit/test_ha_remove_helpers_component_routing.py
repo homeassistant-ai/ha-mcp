@@ -190,7 +190,7 @@ async def test_simple_delete_resolves_via_component_no_retry_loop() -> None:
         ) as sleep_mock,
     ):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -226,7 +226,7 @@ async def test_simple_delete_capability_miss_uses_legacy_loop() -> None:
 
     with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -253,7 +253,7 @@ async def test_simple_delete_unknown_command_invalidates_and_falls_back() -> Non
 
     with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -283,7 +283,7 @@ async def test_simple_delete_command_error_falls_back_keeps_caps() -> None:
 
     with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -314,7 +314,7 @@ async def test_simple_delete_connection_error_falls_back_to_legacy() -> None:
 
     with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -343,7 +343,7 @@ async def test_simple_delete_ws_establish_failure_falls_back_to_legacy() -> None
         HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -380,7 +380,7 @@ async def test_simple_delete_falsy_unique_id_degrades_like_missing(
 
     with patch_ws(ws, component_registry_lookup), pytest.raises(ToolError) as excinfo:
         await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,

@@ -205,7 +205,7 @@ async def test_simple_delete_resolves_in_one_lookup_no_sleep(monkeypatch) -> Non
         ) as sleep_mock,
     ):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -240,7 +240,7 @@ async def test_an_entity_the_component_misses_is_not_deleted_by_its_object_id(
 
     with patch_ws(ws, component_registry_lookup), pytest.raises(ToolError) as excinfo:
         await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,

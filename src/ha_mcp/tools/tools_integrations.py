@@ -2113,8 +2113,8 @@ class IntegrationTools:
             Field(
                 description=(
                     "What to remove. One of: "
-                    "(a) bare helper_id for SIMPLE helpers, "
-                    "e.g. 'my_button'; "
+                    "(a) bare helper_id for SIMPLE helpers: the helper's "
+                    "storage id, not the name of its entity, e.g. 'my_button'; "
                     "(b) full entity_id, "
                     "e.g. 'input_button.my_button' or 'sensor.my_meter'; "
                     "(c) config entry_id for any integration, with helper_type "
@@ -2178,7 +2178,8 @@ class IntegrationTools:
         ROUTING:
         - SIMPLE helper_type (input_button, input_boolean, input_select,
           input_number, input_text, input_datetime, counter, timer, schedule,
-          zone, person, tag) + bare helper_id or entity_id → websocket delete.
+          zone, person, tag) + bare helper_id (its storage id) or entity_id →
+          websocket delete.
         - FLOW helper_type (any helper flow Home Assistant lists: template, group,
           utility_meter, derivative, ...; custom helper integrations too)
           + full entity_id → resolve entity_id to
@@ -2196,10 +2197,10 @@ class IntegrationTools:
 
         A target that cannot be removed raises a structured error rather than
         returning silent success: ENTITY_NOT_FOUND when the entity_id is absent
-        from both the state machine and the entity registry (a bare helper_id
-        on a FLOW target also raises it — FLOW resolution needs a full
-        entity_id); RESOURCE_NOT_FOUND when it exists but is not storage- or
-        registry-managed (a YAML-configured helper, or an entity with a state
+        from both the state machine and the entity registry, or for a bare
+        helper_id no stored helper has (a bare helper_id on a FLOW target also
+        raises it — FLOW resolution needs a full entity_id); RESOURCE_NOT_FOUND
+        when it exists but is not storage- or registry-managed (a YAML-configured helper, or an entity with a state
         but no registry entry), for a config entry the backend reports as 404,
         or for a missing config subentry.
         Calling N times gives the same response. Transient connectivity failures
@@ -2668,15 +2669,12 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Delete a SIMPLE helper via the websocket {type}/delete API.
 
-        A storage id first (``stored_helper_target``), as
-        ``ha_config_set_helper`` and the backups resolve it, else the registry
-        entry of the entity_id: one read through the component, or the 3-retry
-        lookup without it. A target still unresolved is classified by why the
-        registry has no usable record.
+        A bare id is a storage id (``stored_helper_target``), as
+        ``ha_config_set_helper`` and the backups resolve it, and an entity_id
+        goes by its registry entry: one read through the component, or the
+        3-retry lookup without it. A target still unresolved is classified by
+        why the registry has no usable record.
         """
-        prefixed = target.startswith(f"{helper_type}.")
-        entity_id = target if prefixed else f"{helper_type}.{target}"
-
         try:
             stored = await stored_helper_target(self._client, helper_type, target)
             if stored is not None:
@@ -2685,6 +2683,8 @@ class IntegrationTools:
                     helper_type, storage_id, target, entity, wait_bool
                 )
                 return removal_reply(response, entity, reason)
+            # stored_helper_target refuses a bare id no stored helper has.
+            entity_id = target
             (
                 unique_id,
                 registry_result,
@@ -2729,9 +2729,9 @@ class IntegrationTools:
         registry-registration LAG between a helper's creation and its entity
         landing in the registry index (not a WS-timing race — the legacy read
         hits the same live registry over the same socket); the single read is
-        equally subject to that lag, but a bare id that is a stored id was
-        already found by its storage id, and a stale/missing resolve is
-        classified, never turned into a delete by a guessed id.
+        equally subject to that lag, but a bare id is resolved by its storage
+        id before this read, and a stale/missing resolve is classified, never
+        turned into a delete by a guessed id.
         On capability miss / component error the legacy retry loop runs
         unchanged. ``component_used`` records which path served the read so the
         exhausted-fallback detail can word the "3 attempts" text accurately.
@@ -2873,8 +2873,7 @@ class IntegrationTools:
                     create_error_response(
                         ErrorCode.ENTITY_NOT_FOUND,
                         (
-                            f"Helper {target} not found (looked "
-                            f"up as {entity_id}). May indicate "
+                            f"Helper {entity_id} not found. May indicate "
                             "it was already removed, never "
                             "existed, or the identifier is a "
                             "typo. Verify with "

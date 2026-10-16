@@ -107,7 +107,7 @@ class TestEntityRename:
             "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_boolean",
-                "target": new_name,
+                "target": new_entity_id,
                 "confirm": True,
             },
         )
@@ -175,7 +175,7 @@ class TestEntityRename:
             "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_boolean",
-                "target": new_name,
+                "target": new_entity_id,
                 "confirm": True,
             },
         )
@@ -325,7 +325,7 @@ async def test_rename_entity_basic(mcp_client, cleanup_tracker):
         "ha_remove_helpers_integrations",
         {
             "helper_type": "input_button",
-            "target": "test_quick_renamed",
+            "target": "input_button.test_quick_renamed",
             "confirm": True,
         },
     )
@@ -413,7 +413,7 @@ class TestEntityRenameVoiceExposure:
         delete_data = await safe_call_tool(
             mcp_client,
             "ha_remove_helpers_integrations",
-            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
+            {"helper_type": "input_boolean", "target": new_entity_id, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
         logger.info("Cleanup completed")
@@ -491,7 +491,7 @@ class TestRenameEntityWithDevice:
         delete_data = await safe_call_tool(
             mcp_client,
             "ha_remove_helpers_integrations",
-            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
+            {"helper_type": "input_boolean", "target": new_entity_id, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
         logger.info("Cleanup completed")
@@ -542,7 +542,7 @@ class TestRenameEntityWithDevice:
         delete_data = await safe_call_tool(
             mcp_client,
             "ha_remove_helpers_integrations",
-            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
+            {"helper_type": "input_boolean", "target": new_entity_id, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
@@ -593,7 +593,7 @@ class TestRenameEntityWithDevice:
         delete_data = await safe_call_tool(
             mcp_client,
             "ha_remove_helpers_integrations",
-            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
+            {"helper_type": "input_boolean", "target": new_entity_id, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
@@ -643,7 +643,7 @@ async def test_rename_entity_with_device_basic(mcp_client, cleanup_tracker):
         "ha_remove_helpers_integrations",
         {
             "helper_type": "input_button",
-            "target": "test_combo_quick_new",
+            "target": "input_button.test_combo_quick_new",
             "confirm": True,
         },
     )

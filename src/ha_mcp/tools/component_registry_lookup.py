@@ -23,9 +23,9 @@ in-process read replaces the 3-attempt retry loop — NOT because the read is
 fresher (there was never a WS-timing race: the legacy
 ``config/entity_registry/get`` reads the same live registry over the same socket,
 so an in-process read is equally subject to the registration LAG the loop
-absorbed), but because a bare id that is a stored id was already found by its
-storage id (``stored_helper_target`` runs first), and any other stale/missing
-resolve is reported, never turned into a delete by a guessed id.
+absorbed), but because a bare id never reaches it (``stored_helper_target``
+resolves a bare id as a storage id first), and any stale/missing resolve is
+reported, never turned into a delete by a guessed id.
 
 This module owns the caps-gated fetch so the routing discipline — probe caps,
 send one frame, invalidate on ``unknown_command``, fall back to the legacy path

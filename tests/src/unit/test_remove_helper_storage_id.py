@@ -102,6 +102,26 @@ async def test_a_stored_id_removal_waits_for_its_own_entity() -> None:
     assert verify.await_args.args[1] == "input_button.renamed"
 
 
+async def test_a_repeated_bare_id_removal_deletes_no_other_helper() -> None:
+    """After my_button's removal input_button.my_button is still other's
+    entity: a repeated bare my_button would delete other."""
+    client = _core(["other"], RENAMED_ROWS)
+
+    with pytest.raises(ToolError) as exc_info:
+        await _remove(client, "my_button")
+
+    assert json.loads(str(exc_info.value))["error"]["code"] == "ENTITY_NOT_FOUND"
+    assert _deleted(client) == []
+
+
+async def test_an_entity_id_removes_the_helper_its_entity_belongs_to() -> None:
+    client = _core(["other"], RENAMED_ROWS)
+
+    await _remove(client, "input_button.my_button")
+
+    assert _deleted(client) == ["other"]
+
+
 async def test_an_unknown_entity_id_is_not_deleted_by_its_object_id() -> None:
     """input_button.my_button names no entity, and stored my_button belongs to
     input_button.renamed: deleting by the object id would remove it."""

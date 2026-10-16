@@ -12,7 +12,6 @@ import pytest
 
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import component_helper_collections as chc
 from ha_mcp.tools import tools_config_helpers as tch
 from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.component_helper_collections import (
@@ -534,7 +533,7 @@ async def test_tag_update_routes_through_component() -> None:
             client, "tag", "tag.abc", "abc", "T2", None, "kitchen", None, None,
             True, False, {},
         )  # fmt: skip
-    assert read.call_args.args[1:] == ("tag", "abc", "tag.abc")
+    assert read.call_args.args[1:4] == ("tag", "abc", "tag.abc")
     args, kwargs = write.call_args
     assert args[3] == {"description": "old", "name": "T2"}
     assert kwargs["item_id"] == "abc"
@@ -726,43 +725,6 @@ async def test_component_tag_update_reports_the_component_entity() -> None:
     assert result["entity_id"] == "tag.front_door"
 
 
-_NOT_FOUND = {"success": False, "error": {"code": "not_found", "message": "x"}}
-_FOUND = {"success": True, "item_id": "b", "item": {"id": "b"}}
-
-
-@pytest.mark.parametrize(
-    ("first", "looked_up_by_entity"),
-    [
-        (_FOUND, False),
-        (_NOT_FOUND, True),
-        (None, False),
-        ({"success": False, "error": {"code": "unavailable"}}, False),
-    ],
-    ids=["stored id", "no such stored id", "failed read", "other failure"],
-)
-async def test_the_component_reads_the_storage_id_before_the_entity_id(
-    first: Any, looked_up_by_entity: bool
-) -> None:
-    """A failed read is not "no such item": the entity_id is the caller's
-    <type>.<id>, which can be another helper's entity, so only the
-    component's not_found leads to it."""
-    reads: list[dict[str, Any]] = []
-
-    async def read(_client: Any, _command: str, **kwargs: Any) -> Any:
-        reads.append(kwargs)
-        return first if "item_id" in kwargs else _FOUND
-
-    with patch.object(chc, "_read", read):
-        item = await chc.read_stored_helper_item(
-            MagicMock(), "input_boolean", "a", "input_boolean.a"
-        )
-
-    assert [r.get("entity_id") for r in reads][1:] == (
-        ["input_boolean.a"] if looked_up_by_entity else []
-    )
-    assert item == (_FOUND if first is _FOUND or first is _NOT_FOUND else None)
-
-
 async def test_write_falls_back_to_websocket_when_component_unavailable() -> None:
     entry = {
         "entity_id": "input_boolean.b",
@@ -837,123 +799,6 @@ class TestCatalogTransform:
             hc_schemas._SIMPLE_CONFIG_KEYS_DESCRIPTION
             in tool.parameters["properties"]["config"]["description"]
         )
-
-
-# Helper "porch" was renamed to input_boolean.porch_2; input_boolean.porch is
-# the entity of helper "hall".
-_RENAMED_PORCH = [
-    {
-        "entity_id": "input_boolean.porch",
-        "platform": "input_boolean",
-        "unique_id": "hall",
-    },
-    {
-        "entity_id": "input_boolean.porch_2",
-        "platform": "input_boolean",
-        "unique_id": "porch",
-    },
-]
-
-
-def _porch_core(rows: list[dict[str, Any]], sent: list[dict[str, Any]]) -> MagicMock:
-    """Core's answers by command for the stored helpers porch and hall."""
-    items = [{"id": "porch", "name": "Porch"}, {"id": "hall", "name": "Hall"}]
-    not_found = {"success": False, "error": "x", "error_code": "not_found"}
-
-    async def ws(msg: dict[str, Any]) -> dict[str, Any]:
-        sent.append(msg)
-        kind = msg["type"]
-        if kind == "input_boolean/list":
-            return {"success": True, "result": items}
-        if kind == "config/entity_registry/list":
-            return {"success": True, "result": rows}
-        if kind == "config/entity_registry/get":
-            row = next((r for r in rows if r["entity_id"] == msg["entity_id"]), None)
-            return {"success": True, "result": row} if row else not_found
-        if kind == "input_boolean/update":
-            return {"success": True, "result": {"id": msg["input_boolean_id"]}}
-        return {"success": True, "result": {"entity_entry": {}}}
-
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock(side_effect=ws)
-    return client
-
-
-async def _legacy_update(client: MagicMock, **changes: Any) -> dict[str, Any]:
-    args = {"name": None, "icon": None, "area_id": None, "wait": False, **changes}
-    with (
-        patch.object(
-            hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
-        ),
-        patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)),
-    ):
-        result: dict[str, Any] = await hc_update._execute_update_simple_helper(
-            client, "input_boolean", "input_boolean.porch", "porch", args["name"],
-            args["icon"], args["area_id"], None, None, args["wait"], False, {},
-        )  # fmt: skip
-    return result
-
-
-async def test_registry_fields_of_an_update_go_to_the_helper_s_own_entity() -> None:
-    """input_boolean.porch would give hall the icon porch was given."""
-    sent: list[dict[str, Any]] = []
-
-    result = await _legacy_update(_porch_core(_RENAMED_PORCH, sent), icon="mdi:x")
-
-    assert [
-        m["entity_id"] for m in sent if m["type"] == "config/entity_registry/update"
-    ] == ["input_boolean.porch_2"]
-    assert result["entity_id"] == "input_boolean.porch_2"
-
-
-async def test_an_updated_helper_without_an_entity_names_none_and_why() -> None:
-    """input_boolean.porch is no entity of porch: the reply names no entity and
-    says why it has none."""
-    result = await _legacy_update(_porch_core([], []), name="P", wait=True)
-
-    assert result.get("entity_id") is None
-    assert "the input_boolean has no entity in the registry" in result["warnings"][0]
-    assert "not waited on" in result["warnings"][0]
-
-
-async def test_a_component_reply_without_an_entity_names_none() -> None:
-    """<type>.<id> would name another helper's entity."""
-    read = AsyncMock(
-        return_value={"success": True, "item_id": "porch", "item": {"id": "porch"}}
-    )
-    write = AsyncMock(
-        return_value={"success": True, "item": {"id": "porch", "name": "P"},
-                      "registry_applied": {}, "warnings": []}
-    )  # fmt: skip
-    with (
-        patch.object(hc_update, "read_stored_helper_item", read),
-        patch.object(hc_update, "write_helper_item", write),
-        patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)),
-    ):
-        result = await hc_update._execute_update_simple_helper(
-            MagicMock(), "input_boolean", "input_boolean.porch", "porch", "P", None,
-            None, None, None, False, False, {},
-        )  # fmt: skip
-
-    assert result.get("entity_id") is None
-
-
-async def test_an_error_names_no_guessed_entity_when_the_component_read_none() -> None:
-    """The component read no entity for zone z: zone.z can be another zone's."""
-    read = AsyncMock(
-        return_value={"success": True, "item_id": "z", "item": _STORED_ZONE}
-    )
-    with (
-        patch.object(hc_update, "read_stored_helper_item", read),
-        patch.object(hc_update, "write_helper_item", AsyncMock()),
-        pytest.raises(ToolError) as exc_info,
-    ):
-        await hc_update._execute_update_simple_helper(
-            MagicMock(), "zone", "zone.z", "z", None, "", None, None, None,
-            False, False, {},
-        )  # fmt: skip
-
-    assert "zone.z" not in str(exc_info.value)
 
 
 async def test_a_tag_update_is_not_waited_on() -> None:

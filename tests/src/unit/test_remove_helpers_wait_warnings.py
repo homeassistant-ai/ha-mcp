@@ -130,7 +130,7 @@ class TestRemovalCheckAfterSuccessfulDelete:
             caplog.at_level(logging.WARNING),
         ):
             result = await tools.ha_remove_helpers_integrations(
-                target="my_button",
+                target="input_button.my_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=True,
@@ -164,7 +164,7 @@ class TestRemovalCheckAfterSuccessfulDelete:
             pytest.raises(asyncio.CancelledError),
         ):
             await tools.ha_remove_helpers_integrations(
-                target="my_button",
+                target="input_button.my_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=True,

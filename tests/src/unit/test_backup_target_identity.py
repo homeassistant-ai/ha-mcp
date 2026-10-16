@@ -189,9 +189,9 @@ async def _remove_tag(
 
 
 class TestTagRemoval:
-    async def test_an_id_that_no_tag_has_is_the_entity_id_it_names(self) -> None:
-        """Like any storage helper's: "front" would be tag.front, the entity of
-        tag xyz, so that tag is the one deleted and named, never a guess."""
+    @staticmethod
+    def _without_front() -> Any:
+        """Tag front is gone; tag.front is still the entity of tag xyz."""
         client = _tag_client()
         tags_without_front = [t for t in TAGS if t["id"] != "front"]
         ws = client.send_websocket_message.side_effect
@@ -202,8 +202,21 @@ class TestTagRemoval:
             return await ws(msg)
 
         client.send_websocket_message.side_effect = without_front
+        return client
 
-        result = await _remove_tag(client, "front")
+    async def test_a_repeated_bare_id_removal_deletes_no_other_tag(self) -> None:
+        client = self._without_front()
+
+        with pytest.raises(ToolError) as exc_info:
+            await _remove_tag(client, "front")
+
+        assert json.loads(str(exc_info.value))["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert client.deletes == []
+
+    async def test_an_entity_id_removes_the_tag_its_entity_belongs_to(self) -> None:
+        client = self._without_front()
+
+        result = await _remove_tag(client, "tag.front")
 
         assert client.deletes == [{"type": "tag/delete", "tag_id": "xyz"}]
         assert result["entity_ids"] == ["tag.front"]

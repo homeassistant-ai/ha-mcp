@@ -23,8 +23,9 @@ from .client.rest_client import HomeAssistantCommandError
 
 async def fetch_zone(client: Any, zone_id: str) -> Any:
     """The snapshot of the zone ``ha_set_zone`` or ``ha_remove_zone`` changes,
-    resolved by ``stored_target``: a storage id first, else the entity_id of a
-    zone's registry entry, which also finds a renamed zone."""
+    resolved by ``stored_target``: a bare id is a storage id, and only
+    ``zone.<name>`` is the entity_id of a zone's registry entry, which also
+    finds a renamed zone."""
     bm = _manager()
     zones = bm._require_list(
         await bm._ws_send(client, {"type": "zone/list"}), "zone/list"

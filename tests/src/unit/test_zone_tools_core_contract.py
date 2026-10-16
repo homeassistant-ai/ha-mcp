@@ -260,6 +260,35 @@ class TestZoneLookup:
         assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
         assert _sent(client, "zone/delete") == []
 
+    async def test_a_bare_id_no_zone_has_deletes_no_zone_by_its_entity(self):
+        """After zone work's removal zone.work is still office's entity: a
+        repeated removal of work would delete office."""
+        renamed = [{**OFFICE_ENTRY, "entity_id": "zone.work"}]
+        client = _client(
+            {"config/entity_registry/list": {"success": True, "result": renamed}},
+            states={"zone.work": {"entity_id": "zone.work", "attributes": {}}},
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_remove_zone(zone_id="work")
+
+        error = _error(exc_info)
+        assert error["code"] == "RESOURCE_NOT_FOUND"
+        assert "not a stored zone" not in error["message"]
+        assert _sent(client, "zone/delete") == []
+
+    async def test_a_bare_id_no_zone_has_points_to_the_entity_id(self):
+        client = _client(
+            {"config/entity_registry/list": {"success": True, "result": []}}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_remove_zone(zone_id="work")
+
+        error = _error(exc_info)
+        hints = [error.get("suggestion", ""), *error.get("suggestions", [])]
+        assert any("full entity_id" in s for s in hints)
+
     async def test_blocked_registry_read_is_not_a_missing_zone(self):
         client = _client({"config/entity_registry/list": REGISTRY_BLOCKED})
 

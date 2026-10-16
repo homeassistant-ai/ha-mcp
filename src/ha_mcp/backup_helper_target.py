@@ -1,11 +1,11 @@
 """The storage helper a helper tool writes, for its pre-write snapshot (#2632).
 
 ``ha_config_set_helper``, ``ha_remove_helpers_integrations`` and the zone tools
-resolve their target as ``stored_target`` does: a storage id first, else the
-entity_id of the helper's registry entry, whose ``unique_id`` is the storage
-id. A renamed entity can carry another helper's id as its object id, so the
-storage id wins; nothing is guessed from the text. The snapshot resolves the
-same way, so it holds the item the write changes.
+resolve their target as ``stored_target`` does: a bare id is a storage id,
+and ``<type>.<name>`` is the entity_id of the helper's registry entry, whose
+``unique_id`` is the storage id. A renamed entity can carry another helper's
+id as its name, so a bare id never names an entity. The snapshot resolves
+the same way, so it holds the item the write changes.
 """
 
 from __future__ import annotations
@@ -29,11 +29,11 @@ def stored_target(
 ) -> tuple[str | None, str | None]:
     """The storage id and entity_id of the stored helper ``target`` names.
 
-    A storage id first, else the registry entry on the type's platform whose
-    entity_id is ``target`` (with or without ``<type>.``), whose unique_id is
-    the storage id. Its entity_id is None when the item has no registry entry,
-    and both are None when neither matches. A storage id from the registry need
-    not be stored: a YAML helper has an entry but no stored item.
+    A bare ``target`` is a storage id; ``<type>.<name>`` is the entity_id of
+    a registry entry on the type's platform, whose unique_id is the storage id.
+    Its entity_id is None when the item has no registry entry, and both are
+    None when nothing matches. A storage id from the registry need not be
+    stored: a YAML helper has an entry but no stored item.
     """
     ids = {str(i) for i in stored_ids}
     own = [r for r in rows if r.get("platform") == helper_type]
@@ -42,13 +42,10 @@ def stored_target(
             (r.get("entity_id") for r in own if r.get("unique_id") == target), None
         )
         return target, entity
-    entity_id = (
-        target if target.startswith(f"{helper_type}.") else f"{helper_type}.{target}"
-    )
-    row = next((r for r in own if r.get("entity_id") == entity_id), None)
+    row = next((r for r in own if r.get("entity_id") == target), None)
     if row is None or not row.get("unique_id"):
         return None, None
-    return str(row["unique_id"]), entity_id
+    return str(row["unique_id"]), target
 
 
 async def fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:

@@ -413,9 +413,10 @@ class ZoneTools:
         """The entity_id and storage zone_id of a stored zone, given either.
 
         Resolved as ``stored_target`` resolves it, and so as the zone backups
-        do: a storage id from ``zone/list`` first, else the zone whose registry
-        entry has ``zone_id`` (with or without ``zone.``) as its entity_id. A
-        renamed entity can carry another zone's id, so the storage id wins.
+        do: a bare ``zone_id`` is a storage id from ``zone/list``, and
+        ``zone.<name>`` is the zone whose registry entry has that entity_id. A
+        renamed entity can carry another zone's id as its name, so a bare id
+        never names an entity, and a repeated removal deletes nothing.
         The entity_id is None for a stored zone without a registry entry. The
         home zone and YAML zones are not in the storage; Core gives them no
         ``unique_id``, so they have no registry entry.
@@ -444,7 +445,10 @@ class ZoneTools:
         if storage_id in stored:
             return entity, storage_id
         entity_id = zone_id if zone_id.startswith("zone.") else f"zone.{zone_id}"
-        if await self._zone_state(entity_id) is not None:
+        # A registry entry links a stored zone, so only a state without one is
+        # a YAML or the home zone.
+        linked = any(entry.get("entity_id") == entity_id for entry in entries)
+        if not linked and await self._zone_state(entity_id) is not None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
@@ -464,7 +468,9 @@ class ZoneTools:
                 f"Zone not found: {zone_id}",
                 context={"zone_id": zone_id},
                 suggestions=[
-                    "Use ha_get_zone() without zone_id to see all available zones"
+                    "Use ha_get_zone() without zone_id to see all available zones",
+                    "A zone_id without 'zone.' is a storage id; name a zone by "
+                    "its entity with the full entity_id",
                 ],
             )
         )

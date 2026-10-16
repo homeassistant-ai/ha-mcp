@@ -166,7 +166,7 @@ class TestRemoveHelpersIntegrations:
         mock_client.get_entity_state.return_value = {"state": "off"}
 
         result = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,  # skip wait_for_entity_removed
@@ -203,7 +203,7 @@ class TestRemoveHelpersIntegrations:
             {"success": True, "result": {"unique_id": "uid-disabled-456"}},
             {"success": True},
         ]
-        target = f"my_disabled_{helper_type}_target"
+        target = f"{helper_type}.my_disabled_target"
 
         result = await tools.ha_remove_helpers_integrations(
             target=target,
@@ -216,7 +216,7 @@ class TestRemoveHelpersIntegrations:
         assert result["unique_id"] == "uid-disabled-456"
         registry_call = mock_client.send_websocket_message.call_args_list[1]
         assert registry_call[0][0]["type"] == "config/entity_registry/get"
-        assert registry_call[0][0]["entity_id"] == f"{helper_type}.{target}"
+        assert registry_call[0][0]["entity_id"] == target
 
     @pytest.mark.parametrize("absent_code", ["not_found", "invalid_format"])
     async def test_simple_path_state_gone_raises_entity_not_found(
@@ -246,7 +246,7 @@ class TestRemoveHelpersIntegrations:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
-                target="my_button",
+                target="input_button.my_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=False,
@@ -288,7 +288,7 @@ class TestRemoveHelpersIntegrations:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
-                target="never_existed_button",
+                target="input_button.never_existed_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=False,
@@ -321,7 +321,7 @@ class TestRemoveHelpersIntegrations:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
-                target="server_error_button",
+                target="input_button.server_error_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=False,
@@ -364,7 +364,7 @@ class TestRemoveHelpersIntegrations:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
-                target="my_button",
+                target="input_button.my_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=False,
@@ -392,7 +392,7 @@ class TestRemoveHelpersIntegrations:
         ]
 
         result = await tools.ha_remove_helpers_integrations(
-            target="my_disabled_button",
+            target="input_button.my_disabled_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -431,7 +431,10 @@ class TestRemoveHelpersIntegrations:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
-                target="my_button", helper_type="input_button", confirm=True, wait=False
+                target="input_button.my_button",
+                helper_type="input_button",
+                confirm=True,
+                wait=False,
             )
         err = json.loads(str(exc_info.value))["error"]
         assert err["code"] == "SERVICE_CALL_FAILED"
@@ -478,7 +481,7 @@ class TestRemoveHelpersIntegrations:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
-                target="locked_button",
+                target="input_button.locked_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=False,
@@ -503,7 +506,7 @@ class TestRemoveHelpersIntegrations:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
-                target="yaml_switch",
+                target="input_boolean.yaml_switch",
                 helper_type="input_boolean",
                 confirm=True,
                 wait=False,
@@ -773,7 +776,7 @@ class TestRemoveHelpersIntegrations:
         ) as mock_wait:
             mock_wait.return_value = True
             result = await tools.ha_remove_helpers_integrations(
-                target="my_button",
+                target="input_button.my_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=True,
@@ -799,7 +802,7 @@ class TestRemoveHelpersIntegrations:
         ) as mock_wait:
             mock_wait.return_value = False  # timeout
             result = await tools.ha_remove_helpers_integrations(
-                target="my_button",
+                target="input_button.my_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=True,
@@ -828,7 +831,7 @@ class TestRemoveHelpersIntegrations:
         )
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_helpers_integrations(
-                target="my_button",
+                target="input_button.my_button",
                 helper_type="input_button",
                 confirm=True,
             )
