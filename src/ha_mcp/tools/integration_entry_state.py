@@ -1,7 +1,8 @@
 """The enable/disable and log-level modes of ``ha_set_integration``.
 
-Neither runs a config flow: both send one WebSocket command against an
-existing integration, and both refuse ha-mcp's own ``ha_mcp_tools`` entries.
+Neither runs a config flow: each sends one mutating WebSocket command after
+the own-entry check (enable/disable and log level by entry look the entry up
+first), and both refuse ha-mcp's own ``ha_mcp_tools`` entries.
 """
 
 from typing import Any
@@ -73,10 +74,9 @@ async def set_entry_enabled(
     client: Any, entry_id: str, enabled: bool
 ) -> dict[str, Any]:
     """Enable or disable a config entry via ``config_entries/disable``."""
+    entry = await client.get_config_entry(entry_id)
     refuse_component_entry(
-        await client.get_config_entry(entry_id),
-        action="enable or disable",
-        entry_id=entry_id,
+        entry.get("domain"), action="enable or disable", entry_id=entry_id
     )
     message = {
         "type": "config_entries/disable",

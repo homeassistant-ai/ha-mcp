@@ -8,9 +8,10 @@ classifying entries related through a shared device, and comparing before
 against after.
 
 Every read here raises rather than producing a half-filled identity: an empty
-list means "the entry has none", never "we could not tell". The manual
-rollback metadata a reconfigure reports alongside that identity is built here
-too.
+list means "the entry has none", never "we could not tell".
+
+The manual rollback metadata a reconfigure reports alongside that identity is
+built here too.
 """
 
 import logging

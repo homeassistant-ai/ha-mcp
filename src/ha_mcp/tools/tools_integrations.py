@@ -1850,7 +1850,8 @@ class IntegrationTools:
           ha_config_set_helper(helper_type='config_subentry').
         - Removing an entry: use ha_remove_helpers_integrations.
         - ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA
-          UI or with the developer tools.
+          UI, or (server settings, developer mode on) ha_dev_manage_settings /
+          ha_dev_manage_server.
 
         Use ha_get_integration() to find entry IDs, and
         ha_get_integration(entry_id=..., include_schema=True) to inspect the
@@ -2087,7 +2088,8 @@ class IntegrationTools:
         - YAML-configured helpers — they have no storage backend. Edit the
           YAML file and reload the relevant integration.
         - ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA
-          UI or with the developer tools.
+          UI, or (server settings, developer mode on) ha_dev_manage_settings /
+          ha_dev_manage_server.
 
         ROUTING:
         - SIMPLE helper_type (input_button, input_boolean, input_select,
@@ -2258,10 +2260,15 @@ class IntegrationTools:
 
     # === Path 3: Direct config entry delete (any integration) ===
     async def _delete_direct_entry(self, entry_id: str) -> dict[str, Any]:
-        """Delete a config entry directly via the REST delete API."""
+        """Delete a config entry directly via the REST delete API.
+
+        Looks the entry up first and refuses ha-mcp's own ``ha_mcp_tools``
+        entries before any DELETE is sent.
+        """
         try:
+            entry = await self._client.get_config_entry(entry_id)
             refuse_component_entry(
-                await self._client.get_config_entry(entry_id),
+                entry.get("domain"),
                 action="delete a config entry of",
                 entry_id=entry_id,
             )
@@ -2285,15 +2292,16 @@ class IntegrationTools:
         except ToolError:
             raise
         except HomeAssistantAPIError as e:
-            # HA returns 404 for missing config entries (see
-            # RestClient.delete_config_entry — the REST DELETE on a
-            # nonexistent entry surfaces as HomeAssistantAPIError with
-            # status_code=404). Surface as RESOURCE_NOT_FOUND so callers
-            # can distinguish absent target from real failures; the typo
-            # case (agent passed the wrong entry_id) is the failure mode
-            # that "absent → success" would silently mask. Non-404 API
-            # errors are real failures and bubble through
-            # exception_to_structured_error below.
+            # A missing entry surfaces as HomeAssistantAPIError with
+            # status_code=404 from the own-entry lookup
+            # (RestClient.get_config_entry), before any DELETE is sent, or
+            # from the DELETE itself when the entry vanished in between
+            # (RestClient.delete_config_entry). Surface it as
+            # RESOURCE_NOT_FOUND so callers can distinguish an absent target
+            # from a real failure; the typo case (agent passed the wrong
+            # entry_id) is the failure mode that "absent → success" would
+            # silently mask. Non-404 API errors are real failures and bubble
+            # through exception_to_structured_error below.
             if e.status_code == 404:
                 raise_tool_error(
                     create_error_response(

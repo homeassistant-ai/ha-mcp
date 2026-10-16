@@ -76,7 +76,8 @@ def _assert_refused_without_mutation(
             {"domain": "ha_mcp_tools", "log_level": "DEBUG"}, id="log-level-domain"
         ),
         pytest.param({"domain": "ha_mcp_tools"}, id="add"),
-        # Core resolves a mixed-case domain, so the guard must not miss it.
+        # Core's integration lookup is case-sensitive today; normalising the
+        # domain is defence in depth, so a mixed-case one is still refused.
         pytest.param({"domain": "HA_MCP_TOOLS"}, id="add-mixed-case"),
     ],
 )

@@ -33,7 +33,7 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, ClassVar, Literal, NoReturn
@@ -758,41 +758,45 @@ async def config_entry_of_domain(
 
 COMPONENT_DOMAIN = "ha_mcp_tools"
 
+COMPONENT_ENTRY_SUGGESTIONS: tuple[str, ...] = (
+    "Manage it in the Home Assistant UI: Settings > Devices & services > "
+    + "HA-MCP Custom Component (Configure for options; the entry's menu for "
+    + "enable/disable, delete and debug logging).",
+    "Server settings and updates: with developer mode on, "
+    + "ha_dev_manage_settings / ha_dev_manage_server.",
+)
+
+
+def is_component_domain(domain: object) -> bool:
+    """Whether ``domain`` names ha-mcp's own ``ha_mcp_tools`` integration.
+
+    Core's integration lookup (config flows, log levels) is case-sensitive
+    today, so there a mixed-case or padded domain fails downstream anyway and
+    the normalisation is defence in depth. Core's service registry does
+    lowercase a domain, which is why ha_call_service's guard needs it.
+    """
+    return isinstance(domain, str) and domain.strip().lower() == COMPONENT_DOMAIN
+
 
 def refuse_component_entry(
-    entry_or_domain: Mapping[str, Any] | str | None,
-    *,
-    action: str,
-    entry_id: str | None = None,
+    domain: object, *, action: str, entry_id: str | None = None
 ) -> None:
     """Refuse ``action`` on a config entry of ha-mcp's own custom component.
 
-    Those entries hold this server's settings and credentials, and writing one
-    reloads or alters the server answering the call. The HA UI and the
-    developer tools (which defer own-entry writes) are the paths for them, so
-    the generic integration tools must not become a bypass.
+    Writing one of those entries reloads or alters the server answering the
+    call. The HA UI owns them, and the ``ha_dev_*`` tools defer writes that
+    would reload the running server (embedded mode), so the generic
+    integration tools must not become a bypass.
     """
-    if isinstance(entry_or_domain, Mapping):
-        domain = entry_or_domain.get("domain")
-        entry_id = entry_id or entry_or_domain.get("entry_id")
-    else:
-        domain = entry_or_domain
-    # Normalised like ha_call_service's guard, so a mixed-case domain that
-    # Core would still resolve cannot slip past.
-    if not isinstance(domain, str) or domain.strip().lower() != COMPONENT_DOMAIN:
+    if not is_component_domain(domain):
         return
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             f"Cannot {action} ha-mcp's own '{COMPONENT_DOMAIN}' integration "
-            "with this tool: its config entries hold the server's own settings "
-            "and credentials.",
-            suggestions=[
-                "Use the Home Assistant UI: Settings > Devices & services > "
-                + "HA-MCP Custom Component > Configure.",
-                "With developer mode on, use ha_dev_manage_settings or "
-                + "ha_dev_manage_server.",
-            ],
+            "with this tool: its config entries are the server's own and are "
+            "not managed through the generic integration tools.",
+            suggestions=list(COMPONENT_ENTRY_SUGGESTIONS),
             context={"entry_id": entry_id, "domain": domain},
         )
     )
@@ -808,10 +812,10 @@ async def _update_config_entry_options(
 ) -> dict[str, Any]:
     _reject_redaction_sentinels(config_dict)
     config_entry = await config_entry_of_domain(client, entry_id, expected_domain)
-    refuse_component_entry(
-        config_entry, action="change the options of", entry_id=entry_id
-    )
     actual_domain = config_entry.get("domain")
+    refuse_component_entry(
+        actual_domain, action="change the options of", entry_id=entry_id
+    )
 
     flow_result = await client.start_options_flow(entry_id)
     flow_id = flow_result.get("flow_id")
