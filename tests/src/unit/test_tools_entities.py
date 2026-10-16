@@ -1867,7 +1867,7 @@ class TestHaRemoveEntity:
     async def test_remove_entity_exception(self, remove_entity_tool, mock_client):
         """WebSocket connection failure should raise ToolError."""
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=Exception("conn failed")
+            side_effect=[{"success": True, "result": None}, Exception("conn failed")]
         )
 
         with pytest.raises(ToolError):
