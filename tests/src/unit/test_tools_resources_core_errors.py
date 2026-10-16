@@ -357,3 +357,15 @@ async def test_diff_after_a_recreating_restore_compares_against_the_new_row(
     rows[1]["url"] = "/local/elsewhere.css"
 
     assert (await mgr.diff_snapshot(path.name))["entity_missing"] is True
+
+
+async def test_inline_error_does_not_suggest_a_type_core_rejects() -> None:
+    tools, sent = _tools({})
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_dashboard_resource(
+            content="var x = 1;", resource_type="modul"
+        )
+
+    assert not any("modul'" in s for s in _error(exc_info)["error"]["suggestions"])
+    assert sent == []

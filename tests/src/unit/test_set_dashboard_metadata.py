@@ -196,6 +196,11 @@ class TestSetDashboardMetadataUpdate:
         assert result["config_updated"] is True
         assert result["metadata_updated"] is False
         assert "hint" not in result
+        # No url_path: Core saves to its lovelace item, else its default store.
+        assert mock_client.send_websocket_message.call_args_list[2][0][0] == {
+            "type": "lovelace/config/save",
+            "config": replacement,
+        }
         metadata_warning = next(
             warning for warning in result["warnings"] if "no storage ID" in warning
         )

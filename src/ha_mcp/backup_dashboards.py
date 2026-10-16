@@ -195,6 +195,8 @@ async def _restore_settings(
     """Put back the row's settings after its config; ``icon: None`` clears it."""
     bm = _manager()
     fields = {key: row[key] for key in _SETTINGS_FIELDS if key in row}
+    # Core's own list omits ``icon`` when none is stored; the component's sends None.
+    fields.setdefault("icon", None)
     update = {"type": "lovelace/dashboards/update", "dashboard_id": dashboard_id}
     try:
         await bm._ws_send(client, {**update, **fields})

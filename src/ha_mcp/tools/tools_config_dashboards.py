@@ -171,7 +171,8 @@ async def _get_dashboard_config_internal(
     callers can distinguish confirmed absence from an unverifiable read.
     """
     get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
-    if url_path:
+    # No url_path is Core's default: its ``lovelace`` item, else the default store.
+    if url_path and url_path != "lovelace":
         get_data["url_path"] = url_path
 
     response = await client.send_websocket_message(get_data)
@@ -3383,7 +3384,7 @@ class DashboardConfigTools:
             "type": "lovelace/config/save",
             "config": config_dict,
         }
-        if url_path:
+        if url_path and url_path != "lovelace":  # as _get_dashboard_config_internal
             config_save_data["url_path"] = url_path
         try:
             save_result = await self._client.send_websocket_message(config_save_data)

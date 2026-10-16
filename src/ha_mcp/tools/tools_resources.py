@@ -645,7 +645,7 @@ class ResourceTools:
                     message=f"Inline content does not support resource_type={resource_type!r}",
                     suggestions=[
                         "Use resource_type='module' for ES6 JavaScript (recommended)",
-                        f"Use url= mode with resource_type={resource_type!r} for files",
+                        "Use url= mode for a file of another resource type",
                     ],
                 )
             )

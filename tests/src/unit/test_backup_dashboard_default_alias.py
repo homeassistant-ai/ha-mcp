@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -40,3 +41,16 @@ async def test_fetch_dashboard_maps_default_alias_to_lovelace(
 
     assert got == {"dashboard": row, "config": {"views": [{"title": "Overview"}]}}
     assert seen == {"resolved": "lovelace", "url_path": "lovelace"}
+
+
+async def test_legacy_read_of_lovelace_leaves_core_to_pick_the_store() -> None:
+    """Without the item (deleted, never migrated) Core reads its default store."""
+    client = MagicMock()
+    client.send_websocket_message = AsyncMock(return_value={"result": {"views": []}})
+
+    await dash._get_dashboard_config_internal(client, "lovelace")
+
+    assert client.send_websocket_message.call_args[0][0] == {
+        "type": "lovelace/config",
+        "force": True,
+    }

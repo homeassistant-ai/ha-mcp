@@ -254,14 +254,18 @@ async def test_restore_recreates_a_deleted_dashboard_then_saves_its_config(
     assert ws.sent == [_LIST, expected_create, save]
 
 
-@pytest.mark.parametrize("icon", ["mdi:stove", None], ids=["icon", "icon-cleared"])
+@pytest.mark.parametrize(
+    ("icon", "fields"),
+    [("mdi:stove", {"icon": "mdi:stove"}), (None, {"icon": None}), (None, {})],
+    ids=["icon", "icon-cleared", "core-row-without-icon"],
+)
 async def test_restore_to_an_existing_dashboard_saves_its_config_and_settings(
-    monkeypatch: pytest.MonkeyPatch, icon: str | None
+    monkeypatch: pytest.MonkeyPatch, icon: str | None, fields: dict[str, Any]
 ) -> None:
     ws = _FakeWs()
     ws.created = True
     monkeypatch.setattr(bm, "_ws_send", ws)
-    row = _row("kitchen-dash", icon=icon)
+    row = _row("kitchen-dash", **fields)
     live = _row("kitchen-dash", id="live_id", title="Renamed", icon="mdi:other")
     monkeypatch.setattr(dash, "_resolve_dashboard", _resolver([live], ws.sent))
 
