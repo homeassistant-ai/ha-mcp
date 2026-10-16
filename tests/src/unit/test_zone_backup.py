@@ -248,11 +248,12 @@ class TestZoneBackup:
         sent, fake_ws = _backup_ws(zones, [])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
-        for _ in range(2):
-            await _handler("zone").restore(None, "workplace", dict(snapshot))
+        await _handler("zone").restore(None, "workplace", dict(snapshot))
+        again = await _handler("zone").restore(None, "workplace", dict(snapshot))
 
         assert len([m for m in sent if m["type"] == "zone/create"]) == 1
         assert [z["id"] for z in zones] == ["office"]
+        assert again["restore_mode"] == "already_recreated"
 
     async def test_a_different_zone_with_the_same_name_is_not_overwritten(
         self, monkeypatch
@@ -272,16 +273,6 @@ class TestZoneBackup:
         ]
         assert zones[0] == other
         assert [z["id"] for z in zones] == ["office", "office_2"]
-
-    async def test_a_repeat_says_the_zone_was_already_recreated(self, monkeypatch):
-        sent, fake_ws = _backup_ws([], [])
-        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
-        snapshot = {**OFFICE, "id": "workplace"}
-
-        await _handler("zone").restore(None, "workplace", dict(snapshot))
-        again = await _handler("zone").restore(None, "workplace", dict(snapshot))
-
-        assert again["restore_mode"] == "already_recreated"
 
     async def test_an_identical_zone_is_named_and_its_icon_left_alone(
         self, monkeypatch
@@ -354,11 +345,12 @@ class TestZoneBackup:
 
         assert "registry icon was not" in result["warnings"][0]
 
-    @pytest.mark.parametrize("helper_type", ["person", "tag"])
-    async def test_person_and_tag_snapshots_record_and_restore_the_icon(
+    @pytest.mark.parametrize("helper_type", ["person", "tag", "input_boolean"])
+    async def test_a_snapshot_records_and_restores_the_registry_icon(
         self, monkeypatch, helper_type
     ):
-        """Their icon lives only in the registry, so the stored item misses it."""
+        """The entity shows its registry icon, which an update writes for every
+        type and the stored item can miss (person and tag have no icon field)."""
         item = {"id": "anna", "name": "Anna"}
         entry = {
             "entity_id": f"{helper_type}.anna",

@@ -437,3 +437,63 @@ async def test_missing_covered_types_falls_back_to_legacy() -> None:
     assert resp["zones"][0]["id"] == "work"
     # Silent conservative fallback: no component-failure warning.
     assert not any("served via legacy path" in w for w in resp.get("warnings", []))
+
+
+class _IconRegistryClient(RoutingClient):
+    """zone.work's registry entry sets the icon a zone tool gave it (#2643)."""
+
+    def __init__(self, registry_ok: bool = True) -> None:
+        super().__init__()
+        self._registry_ok = registry_ok
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        if msg.get("type") == "config/entity_registry/list":
+            if not self._registry_ok:
+                return {"success": False, "error": "registry down"}
+            return {
+                "success": True,
+                "result": [{**_WORK_REGISTRY_ENTRY, "icon": "mdi:star"}],
+            }
+        return await super().send_websocket_message(msg)
+
+
+@pytest.mark.parametrize("served_by", ["component", "legacy"])
+@pytest.mark.asyncio
+async def test_a_zone_shows_the_icon_its_registry_entry_sets(served_by: str) -> None:
+    """The entity shows its registry icon over the stored one, so the listing
+    does too: a zone read back after ha_set_zone set an icon has it."""
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS if served_by == "component" else None,
+        info_exc=None
+        if served_by == "component"
+        else HomeAssistantCommandError("Command failed: no info", "unknown_command"),
+        cmd_result=_component_zone_result(),
+    )
+    get_zone = _build_get_zone(_IconRegistryClient())
+
+    with patch_ws(ws, tools_zones):
+        resp = await get_zone(zone_id="work")
+
+    assert resp["zone"]["icon"] == "mdi:star"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_registry_names_the_missing_icons() -> None:
+    """The component listed every zone; only the registry icons are missing,
+    so an unknown zone is still not found rather than unreadable."""
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_zone_result(),
+    )
+    get_zone = _build_get_zone(_IconRegistryClient(registry_ok=False))
+
+    with patch_ws(ws, tools_zones):
+        resp = await get_zone()
+        with pytest.raises(ToolError) as exc_info:
+            await get_zone(zone_id="nowhere")
+
+    assert resp["count"] == 2
+    assert any("registry down" in w for w in resp["warnings"])
+    assert '"RESOURCE_NOT_FOUND"' in str(exc_info.value)

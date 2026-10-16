@@ -1,13 +1,15 @@
 """A backup snapshots the helper the write changes, and says when it cannot.
 
 ``ha_config_set_helper`` and ``ha_remove_helpers_integrations`` resolve a
-storage helper through the entity registry: ``<type>.<id>`` names an entity,
-whose ``unique_id`` is the helper's storage id. A renamed entity can carry
-another helper's id as its object id, so the snapshot must ask the registry
-first, as the writes do (#2632).
+storage helper as ``stored_target`` does: a storage id first, else the entity
+registry entry whose entity_id the target is (``<type>.`` optional), whose
+``unique_id`` is the helper's storage id. A renamed entity can carry another
+helper's id as its object id, so the storage id wins; the snapshot resolves
+the same way, so it holds the helper the write changes (#2632).
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -39,31 +41,34 @@ REGISTRY = {
 }
 
 
+def _rows(registry: dict[str, Any], platform: str) -> list[dict[str, Any]]:
+    return [
+        {"entity_id": entity_id, "platform": platform, **entry}
+        for entity_id, entry in registry.items()
+    ]
+
+
 def _helper_ws(registry: dict[str, Any]) -> Any:
     async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
         if msg["type"] == "input_boolean/list":
             return HELPERS
-        if msg["type"] == "config/entity_registry/get":
-            if msg["entity_id"] in registry:
-                return registry[msg["entity_id"]]
-            raise HomeAssistantCommandError(
-                "Command failed: Entity not found", "not_found"
-            )
+        if msg["type"] == "config/entity_registry/list":
+            return _rows(registry, "input_boolean")
         raise AssertionError(f"unexpected ws message: {msg}")
 
     return fake_ws
 
 
 class TestHelperSnapshotTarget:
-    async def test_a_renamed_entity_snapshots_the_helper_it_belongs_to(
+    async def test_a_storage_id_wins_over_a_renamed_entity_with_its_text(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The write changes "hall", so a snapshot of "porch" leaves no rollback."""
+        """The write changes "porch", whose entity is input_boolean.porch_2."""
         monkeypatch.setattr(bm, "_ws_send", _helper_ws(REGISTRY))
 
         got = await bm._fetch_helper(_StubClient(), "porch", "input_boolean")
 
-        assert got["id"] == "hall"
+        assert got["id"] == "porch"
 
     async def test_an_entity_of_no_listed_helper_snapshots_nothing(
         self, monkeypatch: pytest.MonkeyPatch
@@ -73,7 +78,11 @@ class TestHelperSnapshotTarget:
         registry = {"input_boolean.porch": {"unique_id": "yaml_only"}}
         monkeypatch.setattr(bm, "_ws_send", _helper_ws(registry))
 
-        assert await bm._fetch_helper(_StubClient(), "porch", "input_boolean") is None
+        got = await bm._fetch_helper(
+            _StubClient(), "input_boolean.porch", "input_boolean"
+        )
+
+        assert got is None
 
     async def test_an_entity_id_of_another_type_snapshots_nothing(
         self, monkeypatch: pytest.MonkeyPatch
@@ -89,7 +98,7 @@ class TestHelperSnapshotTarget:
     async def test_a_helper_without_a_registry_entry_is_found_by_its_id(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The removal falls back to the storage id when the registry has none."""
+        """The writes find a stored id with or without a registry entry."""
         monkeypatch.setattr(bm, "_ws_send", _helper_ws({}))
 
         got = await bm._fetch_helper(_StubClient(), "porch", "input_boolean")
@@ -98,64 +107,32 @@ class TestHelperSnapshotTarget:
 
 
 def _tag_ws(registry: dict[str, Any]) -> Any:
-    """Core rejects a tag id with a hyphen as an entity_id (invalid_format)."""
-
     async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
         if msg["type"] == "tag/list":
             return [{"id": "front"}, {"id": "xyz", "name": "Front"}, {"id": "abc-1"}]
         if msg["type"] == "config/entity_registry/list":
-            return []
-        if msg["type"] == "config/entity_registry/get":
-            if "-" in msg["entity_id"]:
-                raise HomeAssistantCommandError("Command failed", "invalid_format")
-            if msg["entity_id"] in registry:
-                return registry[msg["entity_id"]]
-            raise HomeAssistantCommandError("Command failed", "not_found")
+            return _rows(registry, "tag")
         raise AssertionError(f"unexpected ws message: {msg}")
 
     return fake_ws
 
 
 class TestTagSnapshotTarget:
-    """ha_config_set_helper (tag_item_id) and ha_remove_helpers_integrations take
-    a bare tag id as the stored id; a tag's entity_id follows its name, so
-    tag.front can belong to the tag named "Front"."""
-
-    async def test_a_bare_tag_id_is_the_stored_id(
+    async def test_a_tag_entity_id_with_no_entry_names_no_tag(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        registry = {"tag.front": {"unique_id": "xyz"}}
-        monkeypatch.setattr(bm, "_ws_send", _tag_ws(registry))
-
-        got = await bm._fetch_helper(_StubClient(), "front", "tag")
-
-        assert got["id"] == "front"
-
-    async def test_a_tag_entity_id_is_the_tag_it_belongs_to(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        registry = {"tag.front": {"unique_id": "xyz"}}
-        monkeypatch.setattr(bm, "_ws_send", _tag_ws(registry))
-
-        got = await bm._fetch_helper(_StubClient(), "tag.front", "tag")
-
-        assert got["id"] == "xyz"
-
-    async def test_a_tag_id_that_cannot_name_an_entity_is_still_found(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """tag.abc-1 is how the tag tools accept the id abc-1."""
+        """tag.abc-1 is no entity; the id abc-1 is not guessed from it."""
         monkeypatch.setattr(bm, "_ws_send", _tag_ws({}))
 
-        got = await bm._fetch_helper(_StubClient(), "tag.abc-1", "tag")
-
-        assert got["id"] == "abc-1"
+        assert await bm._fetch_helper(_StubClient(), "tag.abc-1", "tag") is None
+        assert (await bm._fetch_helper(_StubClient(), "abc-1", "tag"))["id"] == "abc-1"
 
 
 TAG_ROWS = [
     {"entity_id": "tag.front", "platform": "tag", "unique_id": "xyz"},
     {"entity_id": "tag.garage", "platform": "tag", "unique_id": "front"},
 ]
+TAGS = [{"id": "front"}, {"id": "xyz", "name": "Front"}]
 
 
 def _tag_client(*, registry_readable: bool = True, stored: bool = True) -> Any:
@@ -177,6 +154,8 @@ def _tag_client(*, registry_readable: bool = True, stored: bool = True) -> Any:
             if not registry_readable:
                 return {"success": False, "error": "timeout"}
             return {"success": True, "result": TAG_ROWS}
+        if msg["type"] == "tag/list":
+            return {"success": True, "result": TAGS if stored else []}
         if msg["type"] == "tag/delete":
             client.deletes.append(msg)
             if not stored:
@@ -192,6 +171,7 @@ async def _remove_tag(
 ) -> dict[str, Any]:
     """Without the component: Core's own registry commands answer."""
     with (
+        patch("ha_mcp.tools.tools_integrations._REGISTRY_RETRY_BASE_DELAY", 0),
         patch(
             "ha_mcp.tools.tools_integrations.resolve_entities_via_component",
             new=AsyncMock(return_value=None),
@@ -210,13 +190,24 @@ async def _remove_tag(
 
 
 class TestTagRemoval:
-    async def test_removing_a_tag_by_its_id_deletes_that_tag(self) -> None:
+    async def test_an_id_that_no_tag_has_is_the_entity_id_it_names(self) -> None:
+        """Like any storage helper's: "front" would be tag.front, the entity of
+        tag xyz, so that tag is the one deleted and named, never a guess."""
         client = _tag_client()
+        tags_without_front = [t for t in TAGS if t["id"] != "front"]
+        ws = client.send_websocket_message.side_effect
+
+        async def without_front(msg: dict[str, Any]) -> dict[str, Any]:
+            if msg["type"] == "tag/list":
+                return {"success": True, "result": tags_without_front}
+            return await ws(msg)
+
+        client.send_websocket_message.side_effect = without_front
 
         result = await _remove_tag(client, "front")
 
-        assert client.deletes == [{"type": "tag/delete", "tag_id": "front"}]
-        assert result["entity_ids"] == ["tag.garage"]
+        assert client.deletes == [{"type": "tag/delete", "tag_id": "xyz"}]
+        assert result["entity_ids"] == ["tag.front"]
 
     async def test_an_unreadable_registry_does_not_stop_the_removal(self) -> None:
         """The entity only names the reply; the delete goes by the stored id."""
@@ -271,10 +262,13 @@ async def test_an_update_by_a_storage_id_that_starts_with_the_type_finds_it() ->
     updates: list[dict[str, Any]] = []
 
     async def ws(msg: dict[str, Any]) -> dict[str, Any]:
-        if msg["type"] == "config/entity_registry/get":
-            if "." not in msg["entity_id"]:
-                return {"success": False, "error": "x", "error_code": "invalid_format"}
-            return {"success": True, "result": {"unique_id": "input_boolean_hall"}}
+        if msg["type"] == "config/entity_registry/list":
+            row = {
+                "entity_id": "input_boolean.hall",
+                "platform": "input_boolean",
+                "unique_id": "input_boolean_hall",
+            }
+            return {"success": True, "result": [row]}
         if msg["type"] == "input_boolean/list":
             return {"success": True, "result": [{"id": "input_boolean_hall"}]}
         if msg["type"] == "input_boolean/update":
@@ -484,31 +478,39 @@ class TestRestoreSafetyBackup:
         assert _snapshot_files(tmp_path) == [name]
         assert [m["type"] for m in sent if m.get("zone_id") == "porch"] == []
 
+    @pytest.mark.parametrize(
+        ("domain", "platform"),
+        [("helper_input_boolean", "input_boolean"), ("zone", "zone")],
+    )
     async def test_a_stored_item_without_a_registry_entry_is_backed_up(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        domain: str,
+        platform: str,
     ) -> None:
         """Removing its registry entry leaves the stored item, which the restore
-        overwrites: it is backed up first, not reported gone."""
+        overwrites: it is backed up first, not reported gone. A zone resolves
+        through its own fetcher, which takes the storage id too."""
         sent = _store_ws(monkeypatch, [], [{"id": "item_b", "name": "B2"}])
         mgr = _mk_manager(tmp_path)
         bm.register_default_handlers(mgr, None)
         # Keyed by its old entity_id: the backup must follow the stored id.
-        name = _store_snapshot(
-            tmp_path, "helper_input_boolean", "input_boolean.renamed", "item_b"
-        )
+        name = _store_snapshot(tmp_path, domain, f"{platform}.renamed", "item_b")
 
         result = await _edits_restore(mgr, "edits", "restore", name)
 
         held = mgr.read_snapshot(result["data"]["safety_backup"])
         assert held["config"]["name"] == "B2"
         assert not any("no longer exists" in w for w in result["warnings"])
-        assert [m for m in sent if m["type"] == "input_boolean/update"]
+        assert [m for m in sent if m["type"] == f"{platform}/update"]
 
-    async def test_a_stored_item_whose_id_names_another_entity_blocks_it(
+    async def test_a_stored_item_whose_id_names_another_entity_is_backed_up(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Without its own registry entry, <type>.<id> can be another item's
-        entity: that backup would hold the other item, so nothing is written."""
+        entity: the safety backup is taken by the stored id, so it holds the
+        item the restore overwrites."""
         registry = [
             {
                 "entity_id": "input_boolean.item_b",
@@ -524,13 +526,13 @@ class TestRestoreSafetyBackup:
             tmp_path, "helper_input_boolean", "input_boolean.item_b", "item_b"
         )
 
-        with pytest.raises(ToolError) as exc_info:
-            await _edits_restore(mgr, "edits", "restore", name)
+        result = await _edits_restore(mgr, "edits", "restore", name)
 
-        assert json.loads(str(exc_info.value))["error"]["code"] == (
-            "BACKUP_CAPTURE_FAILED"
-        )
-        assert [m for m in sent if m["type"] == "input_boolean/update"] == []
+        held = mgr.read_snapshot(result["data"]["safety_backup"])
+        assert held["config"]["id"] == "item_b"
+        assert [
+            m["input_boolean_id"] for m in sent if m["type"] == "input_boolean/update"
+        ] == ["item_b"]
 
     async def test_an_unreadable_registry_blocks_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -610,19 +612,20 @@ def test_settings_shows_the_restore_warnings(settings_script: str) -> None:
 
 
 def test_settings_reports_a_failed_write_with_its_warnings(
-    settings_script: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings_script: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The route answered a failed write with a plain-text HTTP 500."""
+    """The route answered a failed write with a plain-text HTTP 500. The reply
+    points to the logs, so the traceback is logged."""
     mgr = _mk_manager(tmp_path)
-    mgr.register(
-        _mk_handler(
-            fetched=None,
-            raise_on_restore=HomeAssistantAPIError("Not found", status_code=404),
-        )
-    )
+    failure = HomeAssistantAPIError("Not found", status_code=404)
+    mgr.register(_mk_handler(fetched=None, raise_on_restore=failure))
     name = _snapshot(tmp_path)
 
-    response = response_for(monkeypatch, mgr, name)
+    with caplog.at_level(logging.ERROR):
+        response = response_for(monkeypatch, mgr, name)
     rendered = run_restore(
         settings_script, {"status": response.status_code, "json": response.json()}, name
     )
@@ -630,6 +633,7 @@ def test_settings_reports_a_failed_write_with_its_warnings(
     assert response.status_code == 409
     assert response.json()["data"]["apply_status"] == "unknown"
     assert "nothing was found under hall_lights" in rendered.alerts[0]
+    assert [r.exc_info[1] for r in caplog.records if r.exc_info] == [failure]
 
 
 def test_settings_keeps_a_structured_tool_error(

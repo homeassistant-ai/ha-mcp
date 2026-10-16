@@ -9,22 +9,20 @@ component writes it in-process; without the component the item is read from
 
 from typing import Any
 
-from ...client.rest_client import HomeAssistantError
 from ...errors import ErrorCode, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_helper_collections import (
     collection_payload,
     native_result,
     read_helper_item,
-    tag_entity_id,
-    tag_item_id,
+    stored_helper_target,
     write_helper_item,
 )
 from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
 from .core_payload import check_core_gaps, merged_update
-from .icon_route import collection_icon, unbacked_icon_warning
+from .icon_route import collection_icon
 from .listing import listed_items
 from .registry import _ws_error_msg
 from .schemas import (
@@ -252,38 +250,38 @@ async def _execute_update_simple_helper(
         fields,
     )
     if native is not None:
-        updated_data, entity_id, warnings = native
-        warnings.extend(unbacked_icon_warning(helper_type, icon))
-    elif helper_type == "tag":
-        # Tags have their own registry entity whose id follows the tag's name.
-        tag_id = await tag_item_id(client, helper_id)
-        updated_data = await _execute_legacy_update(
-            client, helper_type, entity_id, tag_id, name, icon, fields
-        )
-        lookup_failed = False
-        try:
-            tag_entity = await tag_entity_id(client, tag_id)
-            reason = "its entity is not in the entity registry"
-        except (HomeAssistantError, OSError, TimeoutError) as err:
-            tag_entity, reason = None, f"its entity could not be read ({err})"
-            lookup_failed = True
-        given = [
-            field
-            for field, value in (
-                ("icon", icon),
-                ("area", area_id),
-                ("labels", labels),
-                ("category", category),
+        updated_data, entity, warnings = native
+    else:
+        stored = await stored_helper_target(client, helper_type, helper_id)
+        if stored is not None:
+            unique_id, entity, reason = stored
+        else:
+            unique_id = await _resolve_update_unique_id(
+                client, helper_type, entity_id, helper_id, name
             )
-            if value is not None
-        ]
-        if lookup_failed or (not tag_entity and given):
+            entity, reason = entity_id, None
+        updated_data = await _execute_legacy_update(
+            client, helper_type, entity or helper_id, unique_id, name, icon, fields
+        )
+        if entity is None:
+            given = [
+                field
+                for field, value in (
+                    ("icon", icon),
+                    ("area", area_id),
+                    ("labels", labels),
+                    ("category", category),
+                )
+                if value is not None
+            ]
             not_applied = (
                 f", so the {', '.join(given)} given were not applied" if given else ""
             )
-            warnings.append(f"tag {tag_id} updated, but {reason}{not_applied}.")
-        if tag_entity:
-            entity_id = tag_entity
+            warnings.append(
+                f"{helper_type} {unique_id} updated, but {reason}{not_applied}."
+            )
+        else:
+            entity_id = entity
             await _apply_update_registry_and_category(
                 client,
                 entity_id,
@@ -294,32 +292,22 @@ async def _execute_update_simple_helper(
                 updated_data,
                 warnings,
             )
-    else:
-        unique_id = await _resolve_update_unique_id(
-            client, helper_type, entity_id, helper_id, name
-        )
-        updated_data = await _execute_legacy_update(
-            client, helper_type, entity_id, unique_id, name, icon, fields
-        )
-        warnings.extend(unbacked_icon_warning(helper_type, icon))
-        await _apply_update_registry_and_category(
-            client, entity_id, icon, area_id, labels, category, updated_data, warnings
-        )
-        if wait:
-            try:
-                if not await wait_for_entity_registered(client, entity_id):
-                    warnings.append(
-                        f"Update applied but {entity_id} not yet queryable."
-                    )
-            except Exception as e:  # noqa: BLE001
-                warnings.append(f"Update applied but verification failed: {e}")
+            # Tags live in their own registry, never in /api/states.
+            if wait and helper_type != "tag":
+                try:
+                    if not await wait_for_entity_registered(client, entity_id):
+                        warnings.append(
+                            f"Update applied but {entity_id} not yet queryable."
+                        )
+                except Exception as e:  # noqa: BLE001
+                    warnings.append(f"Update applied but verification failed: {e}")
 
     update_response = _helper_response(
         "update",
         helper_type,
         data=updated_data,
-        entity_id=entity_id,
-        message=f"Successfully updated {helper_type}: {entity_id}",
+        entity_id=entity,
+        message=f"Successfully updated {helper_type}: {entity or helper_id}",
         warnings=warnings,
     )
     _attach_helper_skill(update_response, MandatoryBPS)
@@ -337,17 +325,17 @@ async def _update_via_component(
     labels: list[str] | None,
     category: str | None,
     fields: dict[str, Any],
-) -> tuple[dict[str, Any], str, list[str]] | None:
+) -> tuple[dict[str, Any], str | None, list[str]] | None:
     """Update through Core's collection in-process; ``None`` uses the WS commands.
 
-    A helper the component cannot find also returns ``None``, so the legacy path
+    ``helper_id`` is tried as a storage id first, as ``stored_helper_target``
+    resolves it without the component, then ``entity_id`` in the registry. A
+    helper the component cannot find also returns ``None``, so the legacy path
     reports it with its usual error.
     """
-    if helper_type == "tag":
-        target: dict[str, Any] = {"item_id": await tag_item_id(client, helper_id)}
-    else:
-        target = {"entity_id": entity_id}
-    item = await read_helper_item(client, helper_type, **target)
+    item = await read_helper_item(
+        client, helper_type, item_id=helper_id
+    ) or await read_helper_item(client, helper_type, entity_id=entity_id)
     if item is None:
         return None
     item_icon = await collection_icon(client, helper_type, "update", icon)
@@ -372,4 +360,4 @@ async def _update_via_component(
         registry=registry,
         error_context=_simple_helper_error_context(helper_type, entity_id=entity_id),
     )
-    return None if result is None else native_result(helper_type, result)
+    return None if result is None else native_result(result)

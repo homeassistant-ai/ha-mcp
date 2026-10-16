@@ -494,7 +494,8 @@ class TestZoneLifecycle:
                 listed = await mcp.call_tool_success(
                     "ha_get_zone", {"zone_id": zone_id}
                 )
-                assert "icon" not in listed["zone"], listed
+                # Read back as the entity shows it, from the registry.
+                assert listed["zone"]["icon"] == "mdi:school", listed
 
                 await mcp.call_tool_success(
                     "ha_set_zone", {"zone_id": zone_id, "icon": ""}
@@ -503,6 +504,10 @@ class TestZoneLifecycle:
                     "ha_get_state", {"entity_id": entity_id}
                 )
                 assert "icon" not in state["data"]["attributes"], state
+                cleared = await mcp.call_tool_success(
+                    "ha_get_zone", {"zone_id": zone_id}
+                )
+                assert "icon" not in cleared["zone"], cleared
             finally:
                 await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})
 

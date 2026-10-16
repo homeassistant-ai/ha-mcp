@@ -605,12 +605,13 @@ _FETCH_SCHEMAS = "ha_mcp.tools.config_helpers.icon_route.fetch_helper_schemas"
 
 _TAG_REPLIES = {
     "config/entity_registry/list": [_TAG_ENTITY],
+    "config/entity_registry/get": _TAG_ENTITY,
     "tag/list": [{"id": "abc-1", "name": "Front door"}],
     "tag/update": {"id": "abc-1", "name": "Front"},
 }
 
 
-@pytest.mark.parametrize("helper_id", ["tag.front_door", "abc-1", "tag.abc-1"])
+@pytest.mark.parametrize("helper_id", ["tag.front_door", "abc-1"])
 async def test_websocket_tag_update_resolves_the_tag_id(helper_id: str) -> None:
     client = _ws_by_type(_TAG_REPLIES)
     with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
@@ -680,8 +681,12 @@ async def test_websocket_tag_update_applies_registry_fields() -> None:
 
 async def test_component_tag_update_reports_the_component_entity() -> None:
     client = _ws({"success": True, "result": [_TAG_ENTITY]})
+    # The component knows no stored tag "tag.front_door", then finds its entity.
     read = AsyncMock(
-        return_value={"success": True, "item_id": "abc-1", "item": {"id": "abc-1"}}
+        side_effect=[
+            None,
+            {"success": True, "item_id": "abc-1", "item": {"id": "abc-1"}},
+        ]
     )
     write = AsyncMock(
         return_value={"success": True, "item": {"id": "abc-1", "name": "F"},
@@ -696,7 +701,11 @@ async def test_component_tag_update_reports_the_component_entity() -> None:
             client, "tag", "tag.front_door", "tag.front_door", "F", None, None,
             None, None, False, False, {},
         )  # fmt: skip
-    assert read.call_args.kwargs == {"item_id": "abc-1"}
+    assert [c.kwargs for c in read.call_args_list] == [
+        {"item_id": "tag.front_door"},
+        {"entity_id": "tag.front_door"},
+    ]
+    assert write.call_args.kwargs["item_id"] == "abc-1"
     assert result["entity_id"] == "tag.front_door"
 
 

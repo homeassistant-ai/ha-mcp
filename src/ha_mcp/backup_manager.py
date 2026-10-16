@@ -75,14 +75,18 @@ from .backup_diff import (
     _compute_json_patch,
     _summarize_patch_counts,
 )
-from .backup_entity_ids import _restore_entity_ids
+from .backup_entity_ids import (
+    _restore_entity_ids,
+    update_with_registry_icon,
+    with_registry_icon,
+)
 from .backup_helper_target import fetch_helper as _fetch_helper
 from .backup_helper_target import note_no_safety_backup as _note_no_safety_backup
 from .backup_helper_target import require_holds as _require_holds
 from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
-from .backup_registry_icons import REGISTRY_RESTORES, REGISTRY_SNAPSHOTS
-from .backup_zones import fetch_zone
+from .backup_tags import restore_tag, tag_snapshot
+from .backup_zones import fetch_zone, restore_zone
 from .client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
@@ -2774,15 +2778,19 @@ async def _restore_helper(
     payload = _strip_readonly(config, "id")
     payload["type"] = f"{helper_type}/update"
     payload[f"{helper_type}_id"] = config.get("id", entity_id)
-    if restore := REGISTRY_RESTORES.get(helper_type):
-        return await restore(client, payload[f"{helper_type}_id"], payload)
-    return await _ws_send(client, payload)
+    item_id = payload[f"{helper_type}_id"]
+    if helper_type == "tag":
+        return await restore_tag(client, item_id, payload)
+    if helper_type == "zone":
+        return await restore_zone(client, item_id, payload)
+    return await update_with_registry_icon(client, helper_type, item_id, payload)
 
 
 async def _registry_snapshot(client: Any, helper_type: str, item: dict) -> Any:
-    """The stored item, plus for tag and zone the registry fields they restore."""
-    snapshot = REGISTRY_SNAPSHOTS.get(helper_type)
-    return await snapshot(client, item) if snapshot else item
+    """The stored item plus its registry icon, and for a tag its registry name."""
+    if helper_type == "tag":
+        return await tag_snapshot(client, item)
+    return await with_registry_icon(client, helper_type, item)
 
 
 # Files & YAML (#1579 PR2) — capture is MCP-side via the ha_mcp_tools

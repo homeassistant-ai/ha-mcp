@@ -6,7 +6,6 @@ from ...client.rest_client import HomeAssistantError
 from ...errors import ErrorCode, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_helper_collections import (
-    NAME_FOLLOWING_ENTITY_IDS,
     collection_payload,
     native_result,
     registry_entity_id,
@@ -19,7 +18,7 @@ from .core_payload import (
     check_core_gaps,
     with_create_defaults,
 )
-from .icon_route import collection_icon, unbacked_icon_warning
+from .icon_route import collection_icon
 from .registry import _ws_error_msg
 from .schemas import (
     _attach_helper_skill,
@@ -190,8 +189,6 @@ async def _execute_create_simple_helper(
             f", so the {', '.join(given)} given were not applied" if given else ""
         )
         warnings.append(f"{helper_type} created, but {reason}{not_applied}.")
-    elif entity_id:
-        warnings.extend(unbacked_icon_warning(helper_type, registry_icon))
 
     # Tags live in their own tag registry and never appear in /api/states/<entity_id> —
     # polling there always 404s for the full timeout (~10s per tag), burning CI time.
@@ -235,14 +232,13 @@ async def _created_entity_id(
 ) -> tuple[str | None, str | None]:
     """The new helper's entity_id, and why it could not be read.
 
-    Unless the reply names it, only the registry knows it: a tag's, zone's or
-    person's entity_id follows its name, and ``<type>.<id>`` can be a renamed
-    entity of another helper, in which case Core suffixes the new one. The
-    helper already exists, so a failed read is reported rather than raised: a
-    caller retrying would create it twice.
+    Core's create replies with the stored item, which has no entity_id, so
+    only the registry knows it: a tag's, zone's or person's entity_id follows
+    its name, and ``<type>.<id>`` can be a renamed entity of another helper,
+    in which case Core suffixes the new one. The helper already exists, so a
+    failed read is reported rather than raised: a caller retrying would create
+    it twice.
     """
-    if helper_type not in NAME_FOLLOWING_ENTITY_IDS and helper_data.get("entity_id"):
-        return helper_data["entity_id"], None
     try:
         entity_id = await registry_entity_id(client, helper_type, helper_data.get("id"))
     except (HomeAssistantError, OSError, TimeoutError) as err:
@@ -258,7 +254,7 @@ async def _create_via_component(
     labels: list[str] | None,
     category: str | None,
     registry_icon: str | None = None,
-) -> tuple[dict[str, Any], str, list[str]] | None:
+) -> tuple[dict[str, Any], str | None, list[str]] | None:
     """Create through Core's collection in-process; ``None`` uses the WS command.
 
     The entity exists when Core's create returns, so no ``wait`` polling is needed.
@@ -283,4 +279,4 @@ async def _create_via_component(
             helper_type, name=message.get("name")
         ),
     )
-    return None if result is None else native_result(helper_type, result)
+    return None if result is None else native_result(result)

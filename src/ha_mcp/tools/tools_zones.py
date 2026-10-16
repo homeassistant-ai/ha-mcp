@@ -129,6 +129,20 @@ def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _with_registry_icons(
+    rows: list[dict[str, Any]], entries: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The rows with the icon each zone's entity shows: its registry icon, where
+    the zone tools keep a new zone's icon (#2643), over the stored one."""
+    icons = {e.get("entity_id"): e["icon"] for e in entries if e.get("icon")}
+    return [
+        {**row, "icon": icons[row["entity_id"]]}
+        if row.get("entity_id") in icons
+        else row
+        for row in rows
+    ]
+
+
 def _shape_component_zone_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     """Reshape the component's zone ``helpers_list`` result into legacy rows."""
     raw = result.get("helpers")
@@ -169,7 +183,8 @@ class ZoneTools:
 
         EXAMPLES:
         - List all zones: ha_get_zone()
-        - Get specific zone: ha_get_zone(zone_id="abc123")
+        - Get specific zone: ha_get_zone(zone_id="office")
+        - Same zone by entity_id: ha_get_zone(zone_id="zone.office")
 
         Zones outside the zone storage, the home zone (from the general
         settings) and YAML zones, are listed with ``editable=false`` /
@@ -262,7 +277,15 @@ class ZoneTools:
             # component with no covered_types): don't trust its list — fall back
             # to the legacy listing silently.
             return None
-        return _build_zone_result(_shape_component_zone_rows(result), zone_id)
+        rows = _shape_component_zone_rows(result)
+        entries, registry_error = await self._zone_registry()
+        # The listing is complete without the registry; only its icons are missing.
+        response = _build_zone_result(_with_registry_icons(rows, entries), zone_id)
+        if registry_error:
+            response.setdefault("warnings", []).append(
+                f"Icons set in the entity registry are missing: {registry_error}"
+            )
+        return response
 
     async def _send_component_zone_list(self) -> dict[str, Any]:
         """Send one ``ha_mcp_tools/helpers_list`` zone query over the per-client WS."""
@@ -285,9 +308,10 @@ class ZoneTools:
     async def _legacy_zone_rows(self) -> tuple[list[dict[str, Any]], list[str]]:
         """Storage zones from Core's ``zone/list``, then every other zone state.
 
-        A storage row is the stored body; the home zone's and YAML zones' rows
-        are their state attributes (``friendly_name`` also as ``name``, plus
-        ``persons`` and ``device_trackers``). Every row carries ``entity_id``,
+        A storage row is the stored body with its registry icon; the home
+        zone's and YAML zones' rows are their state attributes
+        (``friendly_name`` also as ``name``, plus ``persons`` and
+        ``device_trackers``). Every row carries ``entity_id``,
         ``editable`` and ``source``, like the component's. The registry links a
         storage zone to its entity (its ``unique_id`` is the zone_id); a zone
         state without such an entry is not stored. Returns the rows and the
@@ -314,6 +338,7 @@ class ZoneTools:
             for item in result.get("result") or []
             if isinstance(item, dict)
         ]
+        rows = _with_registry_icons(rows, entries)
         if registry_error:
             # Without the registry no zone state can be told apart from a stored zone.
             return rows, [
@@ -505,7 +530,8 @@ class ZoneTools:
 
         EXAMPLES:
         - Create: ha_set_zone(name="Office", latitude=40.7128, longitude=-74.0060, radius=150, icon="mdi:briefcase")
-        - Update: ha_set_zone(zone_id="abc123", radius=200)
+        - Update: ha_set_zone(zone_id="office", radius=200)
+        - Update by entity_id: ha_set_zone(zone_id="zone.office", radius=200)
         """
         operation = "create"
         try:
@@ -647,7 +673,8 @@ class ZoneTools:
         Remove a Home Assistant zone.
 
         EXAMPLES:
-        - Remove zone: ha_remove_zone("abc123")
+        - Remove zone: ha_remove_zone("office")
+        - Remove by entity_id: ha_remove_zone("zone.office")
 
         **WARNING:** Removing a zone used in automations may cause those automations to fail.
         Use ha_get_zone() to find the zone_id for the zone you want to remove.

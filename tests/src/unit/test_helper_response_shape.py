@@ -354,7 +354,7 @@ class TestUniformResponseShape:
                 icon="mdi:toggle-switch",
                 area_id="area.kitchen",
             )
-        _assert_uniform_shape(result, expect_warnings=True)  # not in backups
+        _assert_uniform_shape(result, expect_warnings=False)
         assert result["action"] == "create"
         assert result["data"]["icon"] == "mdi:toggle-switch"
         assert result["data"]["area_id"] == "area.kitchen"

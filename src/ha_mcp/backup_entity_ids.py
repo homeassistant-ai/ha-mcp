@@ -38,10 +38,11 @@ async def with_registry_icon(
 ) -> dict[str, Any]:
     """The stored item plus the icon its entity's registry entry sets, if any.
 
-    Person and tag have no icon field in Core, and the helper tools keep a
-    zone's icon in the registry unless the stored zone has one (#2643), so the
-    stored item alone can miss the icon. A failed registry read propagates, so
-    the capture reports it instead of saving a snapshot without the icon.
+    The registry icon is the one the entity shows, and the helper tools write
+    it there (an update always, a create when Core's schema has no icon
+    field), so the stored item alone can miss it. A failed registry read
+    propagates, so the capture reports it instead of saving a snapshot
+    without the icon.
     """
     entity = await registry_row(client, platform, str(item.get("id")))
     return {**item, "registry_icon": entity.get("icon") if entity else None}

@@ -269,9 +269,14 @@ class TestFetcherIdResolution:
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
             if msg.get("type") == "input_boolean/list":
                 return [{"id": "original_slug", "name": "X"}]
-            if msg.get("type") == "config/entity_registry/get":
-                assert msg.get("entity_id") == "input_boolean.renamed_slug"
-                return {"unique_id": "original_slug"}
+            if msg.get("type") == "config/entity_registry/list":
+                return [
+                    {
+                        "entity_id": "input_boolean.renamed_slug",
+                        "platform": "input_boolean",
+                        "unique_id": "original_slug",
+                    }
+                ]
             raise AssertionError(f"unexpected ws message: {msg}")
 
         monkeypatch.setattr(bm, "_ws_send", fake_ws)
@@ -799,9 +804,15 @@ class TestFetcherIdResolution:
         # object id is not tried as a storage id.
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
             if msg.get("type") == "input_boolean/list":
-                return [{"id": "original_slug", "name": "X"}]
-            if msg.get("type") == "config/entity_registry/get":
-                return {}  # no unique_id
+                return [{"id": "renamed_slug", "name": "X"}]
+            if msg.get("type") == "config/entity_registry/list":
+                return [
+                    {
+                        "entity_id": "input_boolean.renamed_slug",
+                        "platform": "input_boolean",
+                        "unique_id": None,
+                    }
+                ]
             raise AssertionError(f"unexpected ws message: {msg}")
 
         monkeypatch.setattr(bm, "_ws_send", fake_ws)

@@ -25,6 +25,10 @@ from ha_mcp.tools.tools_integrations import (
     options_from_form_flow,
 )
 
+# Core's <type>/list answers without the target, so stored_helper_target
+# leaves it to the registry lookup a test pins.
+_NOT_STORED = [{"success": True, "result": []}]
+
 
 class TestRemoveHelpersIntegrations:
     """Unit tests for ha_remove_helpers_integrations.
@@ -155,6 +159,7 @@ class TestRemoveHelpersIntegrations:
         # First call: registry/get → success, unique_id present
         # Second call: <type>/delete → success
         mock_client.send_websocket_message.side_effect = [
+            *_NOT_STORED,
             {"success": True, "result": {"unique_id": "uid-123"}},
             {"success": True},
         ]
@@ -172,7 +177,7 @@ class TestRemoveHelpersIntegrations:
         assert result["unique_id"] == "uid-123"
         assert result["entity_ids"] == ["input_button.my_button"]
         # Verify the delete WS message used unique_id
-        delete_call = mock_client.send_websocket_message.call_args_list[1]
+        delete_call = mock_client.send_websocket_message.call_args_list[2]
         assert delete_call[0][0]["input_button_id"] == "uid-123"
 
     @pytest.mark.parametrize(
@@ -192,11 +197,11 @@ class TestRemoveHelpersIntegrations:
         """Issue #1057 regression: a disabled entity (registered but absent
         from the state machine) must be resolved via the entity registry
         and deleted via the standard websocket_delete path — not via the
-        direct_id fallback (which also reports method=websocket_delete) and
-        not via the already_deleted short-circuit.
+        already_deleted short-circuit.
         """
         mock_client.get_entity_state.return_value = None
         mock_client.send_websocket_message.side_effect = [
+            *_NOT_STORED,
             {"success": True, "result": {"unique_id": "uid-disabled-456"}},
             {"success": True},
         ]
@@ -210,9 +215,8 @@ class TestRemoveHelpersIntegrations:
         )
         assert result["success"] is True
         assert result["method"] == "websocket_delete"
-        # Distinguishes from direct_id (no unique_id key) and already_deleted
-        # (no unique_id, fallback_used set) — together these pin the standard
-        # registry-driven path specifically.
+        # Distinguishes from already_deleted (no unique_id, fallback_used
+        # set) — together these pin the standard registry-driven path.
         assert "unique_id" in result, (
             f"Standard path not taken (no unique_id in response): {result}"
         )
@@ -220,41 +224,22 @@ class TestRemoveHelpersIntegrations:
         assert result.get("fallback_used") is None, (
             f"Expected standard websocket_delete path; got fallback: {result}"
         )
-        registry_call = mock_client.send_websocket_message.call_args_list[0]
+        registry_call = mock_client.send_websocket_message.call_args_list[1]
         assert registry_call[0][0]["type"] == "config/entity_registry/get"
         assert registry_call[0][0]["entity_id"] == f"{helper_type}.{target}"
-
-    async def test_simple_path_fallback_direct_id(self, tools, mock_client):
-        """Registry has no unique_id → direct_id fallback succeeds."""
-        # 3 retries all return "no unique_id", then direct delete succeeds
-        mock_client.send_websocket_message.side_effect = (
-            [{"success": True, "result": {}}] * 3  # registry returns no uid
-            + [{"success": True}]  # direct delete succeeds
-        )
-        result = await tools.ha_remove_helpers_integrations(
-            target="my_button",
-            helper_type="input_button",
-            confirm=True,
-            wait=False,
-        )
-        assert result["success"] is True
-        assert result["fallback_used"] == "direct_id"
-        # Direct-id delete used helper_id (bare), not unique_id
-        delete_call = mock_client.send_websocket_message.call_args_list[-1]
-        assert delete_call[0][0]["input_button_id"] == "my_button"
 
     @pytest.mark.parametrize("absent_code", ["not_found", "invalid_format"])
     async def test_simple_path_state_gone_raises_entity_not_found(
         self, tools, mock_client, absent_code
     ):
-        """Registry empty + direct delete fails + state=None + registry-verify
-        confirms gone → raises ENTITY_NOT_FOUND (entity-shape target)."""
-        # 3x registry no unique_id, 1x direct delete fails, 1x verify-registry
-        # confirms entity is truly gone (Core's not_found, or invalid_format
-        # for an id that cannot name an entity)
+        """Not stored + registry empty + state=None + registry-verify confirms
+        gone → raises ENTITY_NOT_FOUND (entity-shape target)."""
+        # 3x registry no unique_id, 1x verify-registry confirms entity is truly
+        # gone (Core's not_found, or invalid_format for an id that cannot name
+        # an entity)
         mock_client.send_websocket_message.side_effect = (
-            [{"success": True, "result": {}}] * 3
-            + [{"success": False, "error": "not found"}]
+            _NOT_STORED
+            + [{"success": True, "result": {}}] * 3
             + [
                 {
                     "success": False,
@@ -266,7 +251,7 @@ class TestRemoveHelpersIntegrations:
         # State check at the end returns None → entity gone from state machine
         mock_client.get_entity_state.side_effect = (
             [{"state": "off"}] * 3  # during retries
-            + [None]  # final check after direct-delete fail
+            + [None]  # final check after the lookup
         )
 
         with pytest.raises(ToolError) as exc_info:
@@ -296,8 +281,6 @@ class TestRemoveHelpersIntegrations:
         carries the structured "typo or removed" hint message.
         """
         # 3x registry retries return success=False → no unique_id
-        # 1x direct-id delete returns success=False → falls through to
-        #   fallback-2
         # 1x verify-registry returns success=False → registry confirms absent
         # Registry replies carry Core's not_found code, as a real Core sends.
         not_found = {
@@ -306,9 +289,7 @@ class TestRemoveHelpersIntegrations:
             "error_code": "not_found",
         }
         mock_client.send_websocket_message.side_effect = (
-            [not_found] * 3
-            + [{"success": False, "error": "Unable to find input_button_id"}]
-            + [not_found]
+            _NOT_STORED + [not_found] * 3 + [not_found]
         )
         # State check raises 404 throughout — never-existed entity case
         mock_client.get_entity_state.side_effect = HomeAssistantAPIError(
@@ -340,10 +321,9 @@ class TestRemoveHelpersIntegrations:
         missing target.
         """
         # 3x registry retries return success=False → no unique_id
-        # 1x direct-id delete returns success=False → falls through
-        mock_client.send_websocket_message.side_effect = [
-            {"success": False, "error": "Entity not found"}
-        ] * 3 + [{"success": False, "error": "Unable to find"}]
+        mock_client.send_websocket_message.side_effect = (
+            _NOT_STORED + [{"success": False, "error": "Entity not found"}] * 3
+        )
         # State check raises a non-404 APIError — must propagate
         mock_client.get_entity_state.side_effect = HomeAssistantAPIError(
             "Internal server error", status_code=500
@@ -371,17 +351,17 @@ class TestRemoveHelpersIntegrations:
         self, tools, mock_client
     ):
         """Issue #1057 residual hazard: a disabled entity that is registry-
-        resident but missing unique_id (and direct-id delete fails) must NOT
+        resident but missing unique_id must NOT
         be silently classified as already_deleted. The previous fallback
         relied on state-absence alone, which is exactly the symptom of a
         disabled entity — masking the bug. Post-fix: registry-verify confirms
         the entry is still there and we surface SERVICE_CALL_FAILED instead.
         """
-        # 3x registry returns entry but no unique_id, 1x direct delete fails,
-        # 1x verify-registry shows entity STILL registered
+        # 3x registry returns entry but no unique_id, 1x verify-registry shows
+        # entity STILL registered
         mock_client.send_websocket_message.side_effect = (
-            [{"success": True, "result": {"entity_id": "input_button.my_button"}}] * 3
-            + [{"success": False, "error": "not found"}]
+            _NOT_STORED
+            + [{"success": True, "result": {"entity_id": "input_button.my_button"}}] * 3
             + [
                 {
                     "success": True,
@@ -416,6 +396,7 @@ class TestRemoveHelpersIntegrations:
             "404 simulated", status_code=404
         )
         mock_client.send_websocket_message.side_effect = [
+            *_NOT_STORED,
             {"success": True, "result": {"unique_id": "uid-disabled-apierror"}},
             {"success": True},
         ]
@@ -449,12 +430,12 @@ class TestRemoveHelpersIntegrations:
     async def test_simple_path_unproven_registry_read_is_not_reported_missing(
         self, tools, mock_client, state, verify_reply, cause
     ):
-        """The registry lookup is blocked and the direct-id delete fails. With a
-        state the entity exists; without one, a disabled helper keeps its
+        """The registry lookup is blocked. With a state the entity exists; without one, a disabled helper keeps its
         registry entry (#2699). Unless Core answers not_found, the read failure
         is reported with its cause, never ENTITY_NOT_FOUND."""
-        mock_client.send_websocket_message.side_effect = [self._BLOCKED] * 3 + [
-            {"success": False, "error": "not found"},
+        mock_client.send_websocket_message.side_effect = [
+            *_NOT_STORED,
+            *[self._BLOCKED] * 3,
             verify_reply,
         ]
         mock_client.get_entity_state.return_value = state
@@ -475,9 +456,17 @@ class TestRemoveHelpersIntegrations:
         """zone.home has a state but no registry entry (no unique_id); Core
         answers the registry read with not_found. It exists, so the caller
         must learn it is configured elsewhere, not that it is missing."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": False, "error": "Entity not found", "error_code": "not_found"}
-        ] * 3 + [{"success": False, "error": "not found"}]
+        mock_client.send_websocket_message.side_effect = (
+            _NOT_STORED
+            + [
+                {
+                    "success": False,
+                    "error": "Entity not found",
+                    "error_code": "not_found",
+                }
+            ]
+            * 3
+        )
         mock_client.get_entity_state.return_value = {"state": "zoning"}
 
         with pytest.raises(ToolError) as exc_info:
@@ -492,6 +481,7 @@ class TestRemoveHelpersIntegrations:
         """unique_id found, but {type}/delete returns success=False
         → SERVICE_CALL_FAILED."""
         mock_client.send_websocket_message.side_effect = [
+            *_NOT_STORED,
             {"success": True, "result": {"unique_id": "uid-fail"}},
             {"success": False, "error": "in use by automation"},
         ]
@@ -513,6 +503,7 @@ class TestRemoveHelpersIntegrations:
         so Core answers the delete with not_found. The caller must learn the
         helper is not deletable here, not get a generic service failure."""
         mock_client.send_websocket_message.side_effect = [
+            *_NOT_STORED,
             {"success": True, "result": {"unique_id": "yaml_switch"}},
             {
                 "success": False,
@@ -782,6 +773,7 @@ class TestRemoveHelpersIntegrations:
         """SIMPLE standard wait=True: wait_for_entity_removed returns True
         → no warning field in response."""
         mock_client.send_websocket_message.side_effect = [
+            *_NOT_STORED,
             {"success": True, "result": {"unique_id": "uid-w1"}},
             {"success": True},
         ]
@@ -807,6 +799,7 @@ class TestRemoveHelpersIntegrations:
         """SIMPLE standard wait=True: wait_for_entity_removed returns False
         (timeout) → warning field set, success still True."""
         mock_client.send_websocket_message.side_effect = [
+            *_NOT_STORED,
             {"success": True, "result": {"unique_id": "uid-w2"}},
             {"success": True},
         ]

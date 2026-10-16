@@ -26,6 +26,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .config_helpers.listing import listed_items
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -201,13 +202,16 @@ def collection_payload(helper_type: str, message: dict[str, Any]) -> dict[str, A
 
 
 def native_result(
-    helper_type: str, result: dict[str, Any]
-) -> tuple[dict[str, Any], str, list[str]]:
-    """Split a component write into (helper data, entity_id, warnings)."""
+    result: dict[str, Any],
+) -> tuple[dict[str, Any], str | None, list[str]]:
+    """Split a component write into (helper data, entity_id, warnings).
+
+    The entity_id is the one the component read from the registry, None when
+    the helper has none: ``<type>.<id>`` can be another helper's entity.
+    """
     item = result.get("item") or {}
-    entity_id = result.get("entity_id") or f"{helper_type}.{item.get('id')}"
     data = {**item, **(result.get("registry_applied") or {})}
-    return data, entity_id, list(result.get("warnings") or [])
+    return data, result.get("entity_id"), list(result.get("warnings") or [])
 
 
 async def _platform_entities(client: Any, platform: str) -> list[dict[str, Any]]:
@@ -222,16 +226,13 @@ async def _platform_entities(client: Any, platform: str) -> list[dict[str, Any]]
     return [e for e in listed.get("result") or [] if e.get("platform") == platform]
 
 
-# Helper types whose entity_id follows the item's name, not its ID.
-NAME_FOLLOWING_ENTITY_IDS = frozenset({"person", "tag", "zone"})
-
-
 async def registry_entity_id(
     client: Any, platform: str, item_id: str | None
 ) -> str | None:
     """The entity_id of a stored item's entity: the registry entry on ``platform``
-    whose unique_id is the item's ID. For the types in ``NAME_FOLLOWING_ENTITY_IDS``
-    only the registry knows it."""
+    whose unique_id is the item's ID. A tag's, zone's or person's entity_id
+    follows its name, and a renamed entity keeps its unique_id, so only the
+    registry knows it."""
     if not item_id:
         return None
     return next(
@@ -244,47 +245,53 @@ async def registry_entity_id(
     )
 
 
-async def tag_entity_id(client: Any, tag_id: str | None) -> str | None:
-    """The entity of a tag: its entity_id follows the tag's name, not its ID."""
-    return await registry_entity_id(client, "tag", tag_id)
+async def stored_helper_target(
+    client: Any, helper_type: str, target: str
+) -> tuple[str, str | None, str | None] | None:
+    """The stored helper whose storage id ``target`` is: that id, its entity_id
+    and why it has none; ``None`` leaves ``target`` to the entity registry
+    lookup as an entity_id (with or without ``<type>.``).
 
-
-async def removal_tag_entity(client: Any, tag_id: str) -> tuple[str | None, str | None]:
-    """The entity a tag removal reports and waits on, or None and why not.
-
-    The delete goes by the stored id either way. A tag's entity_id follows its
-    name, so tag.<id> is no stand-in: it can be another tag's entity.
+    ``ha_config_set_helper`` and ``ha_remove_helpers_integrations`` resolve a
+    storage id first, as the backups' ``backup_helper_target.stored_target``
+    does: a renamed entity can carry
+    another helper's id as its object id, and no entity_id is guessed from
+    the id. The write goes by the storage id, so a failed registry read only
+    leaves the entity unnamed. A failed list read is an error rather than
+    reading as no stored helper.
     """
+    listed = await client.send_websocket_message({"type": f"{helper_type}/list"})
+    if not listed.get("success"):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to fetch {helper_type} config list: "
+                f"{listed.get('error', 'Unknown error')}",
+                context={"helper_type": helper_type, "target": target},
+            )
+        )
+    stored = listed_items(listed.get("result"))
+    if not any(str(item.get("id")) == target for item in stored):
+        return None
     try:
-        entity = await tag_entity_id(client, tag_id)
+        entity = await registry_entity_id(client, helper_type, target)
     except (HomeAssistantError, OSError, TimeoutError) as err:
-        return None, f"the entity registry could not be read ({err})"
-    return entity, None if entity else "the tag has no entity in the registry"
+        return target, None, f"the entity registry could not be read ({err})"
+    reason = None if entity else f"the {helper_type} has no entity in the registry"
+    return target, entity, reason
 
 
-def tag_removal_reply(
+def removal_reply(
     response: dict[str, Any], entity: str | None, reason: str | None
 ) -> dict[str, Any]:
-    """A tag removal's reply without a guessed entity, saying why it has none."""
+    """A removal's reply without a guessed entity, saying why it has none."""
     if entity is None:
         response["entity_ids"] = []
-        response["message"] = f"Successfully deleted tag: {response['target']}."
+        response["message"] = (
+            f"Successfully deleted {response['helper_type']}: {response['target']}."
+        )
         response.setdefault("warnings", []).append(
-            f"Tag {response['target']} was deleted, but {reason}, so its entity "
-            "is not named and the removal was not waited on."
+            f"{response['helper_type']} {response['target']} was deleted, but "
+            f"{reason}, so its entity is not named and the removal was not waited on."
         )
     return response
-
-
-async def tag_item_id(client: Any, helper_id: str) -> str:
-    """A tag's ID from its entity_id, its ID, or ``tag.<id>``."""
-    if not helper_id.startswith("tag."):
-        return helper_id
-    return next(
-        (
-            e["unique_id"]
-            for e in await _platform_entities(client, "tag")
-            if e.get("entity_id") == helper_id and e.get("unique_id")
-        ),
-        helper_id.removeprefix("tag."),
-    )
