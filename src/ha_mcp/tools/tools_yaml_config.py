@@ -340,8 +340,9 @@ class YamlConfigTools:
                     "appended, a mapping gets content's top-level keys set, "
                     "overwriting same-named ones, so a nested mapping or list under "
                     "such a key is replaced, not merged; mismatched types are "
-                    "rejected. For a nested edit, read the current value and use "
-                    "'replace' with the complete edited value of yaml_path), "
+                    "rejected. For a nested edit, read the whole value of yaml_path, "
+                    "not a nested path below it, and use 'replace' with the "
+                    "complete edited value), "
                     "'replace' (overwrite yaml_path with content), or 'remove' "
                     "(delete yaml_path entirely)."
                 ),
