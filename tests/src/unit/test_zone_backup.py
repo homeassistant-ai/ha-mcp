@@ -115,8 +115,8 @@ class TestZoneBackup:
     @pytest.mark.parametrize("zone_id", ["office", "zone.office"])
     @pytest.mark.parametrize("domain", ["zone", "helper_zone"])
     async def test_snapshot_records_the_registry_icon(
-        self, monkeypatch, domain, zone_id
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, domain: str, zone_id: str
+    ) -> None:
         """The zone tools take a zone_id or the zone's entity_id."""
         _, fake_ws = _backup_ws([dict(OFFICE)], [_office_entity()])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
@@ -129,8 +129,8 @@ class TestZoneBackup:
         ("zone_id", "found"), [("zone.work", True), ("work", False)]
     )
     async def test_snapshot_names_a_renamed_zone_only_by_its_entity_id(
-        self, monkeypatch, zone_id, found
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, zone_id: str, found: bool
+    ) -> None:
         """The zone tools resolve ``zone.work`` to office and a bare ``work``
         to no zone, so the backup must too."""
         renamed = {**_office_entity(), "entity_id": "zone.work"}
@@ -153,8 +153,8 @@ class TestZoneBackup:
         ],
     )
     async def test_snapshot_is_of_the_zone_the_tool_changes(
-        self, monkeypatch, zone_id, changed
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, zone_id: str, changed: str
+    ) -> None:
         """A wrong snapshot would leave the changed zone without a rollback."""
         zones = [
             {**OFFICE, "id": "home", "name": "home_2"},
@@ -184,8 +184,8 @@ class TestZoneBackup:
         assert storage_id == snapshot["id"] == changed
 
     async def test_a_zone_without_a_registry_entry_is_the_zone_backed_up(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Zone "work" lost its registry entry and zone "office" was renamed to
         zone.work: the tools change "work", as the backup holds it."""
         zones = [dict(OFFICE), {**OFFICE, "id": "work", "name": "Work"}]
@@ -220,13 +220,18 @@ class TestZoneBackup:
         ],
     )
     async def test_creating_a_zone_backs_up_no_other_zone(
-        self, monkeypatch, kwargs, captured
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        kwargs: dict[str, Any],
+        captured: list[tuple[str, str]],
+    ) -> None:
         """A new zone has nothing to back up; a zone of the same name is not it."""
         snapshots: list[tuple[str, str]] = []
 
         class FakeManager:
-            async def maybe_snapshot(self, domain, entity_id, **_kwargs):
+            async def maybe_snapshot(
+                self, domain: str, entity_id: str, **_kwargs: Any
+            ) -> None:
                 snapshots.append((domain, entity_id))
 
         monkeypatch.setattr(
@@ -243,7 +248,9 @@ class TestZoneBackup:
 
         assert snapshots == captured
 
-    async def test_a_failed_registry_read_fails_the_snapshot(self, monkeypatch):
+    async def test_a_failed_registry_read_fails_the_snapshot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Saved without the icon key, it would read as an older snapshot."""
 
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
@@ -258,8 +265,8 @@ class TestZoneBackup:
 
     @pytest.mark.parametrize("domain", ["zone", "helper_zone"])
     async def test_restore_of_a_removed_zone_creates_it_again(
-        self, monkeypatch, domain
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, domain: str
+    ) -> None:
         """Core's zone/update cannot restore a zone that no longer exists."""
         sent, fake_ws = _backup_ws([], [])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
@@ -282,7 +289,9 @@ class TestZoneBackup:
             "icon": "mdi:briefcase",
         } in sent
 
-    async def test_a_repeated_restore_does_not_add_another_zone(self, monkeypatch):
+    async def test_a_repeated_restore_does_not_add_another_zone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A zone renamed after the snapshot comes back under a new id."""
         zones: list[dict[str, Any]] = []
         snapshot = {**OFFICE, "id": "workplace", "registry_icon": None}
@@ -297,8 +306,8 @@ class TestZoneBackup:
         assert again["restore_mode"] == "already_recreated"
 
     async def test_a_different_zone_with_the_same_name_is_not_overwritten(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Core allows two zones with one name: the user's own zone stays as it is."""
         other = {**OFFICE, "latitude": 1.0, "longitude": 2.0}
         zones = [dict(other)]
@@ -316,8 +325,8 @@ class TestZoneBackup:
         assert [z["id"] for z in zones] == ["office", "office_2"]
 
     async def test_an_identical_zone_is_named_and_its_icon_left_alone(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Core allows identical zones, so the match may be the user's own zone.
 
         The warning names the recorded icon, so it can still be set by hand
@@ -342,8 +351,8 @@ class TestZoneBackup:
         assert not [m for m in sent if m["type"] == "config/entity_registry/update"]
 
     async def test_a_snapshot_without_a_registry_icon_offers_none_to_set(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Telling the user to set the icon None would be a wrong next step."""
         _, fake_ws = _backup_ws([{**OFFICE, "id": "office_2"}], [])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
@@ -355,8 +364,8 @@ class TestZoneBackup:
         assert "ha_set_entity" not in result["warnings"][0]
 
     async def test_a_zone_with_a_field_the_snapshot_lacks_is_not_the_restored_one(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A zone recreated from an icon-less snapshot has no stored icon."""
         zones = [{**OFFICE, "id": "office_2", "icon": "mdi:home"}]
         sent, fake_ws = _backup_ws(zones, [])
@@ -368,8 +377,8 @@ class TestZoneBackup:
         assert zones[0]["icon"] == "mdi:home"
 
     async def test_a_dropped_connection_during_the_icon_write_is_a_warning(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The zone is already restored, so the restore must not fail over it."""
         _, backup_ws = _backup_ws([dict(OFFICE)], [_office_entity()])
 
@@ -388,8 +397,8 @@ class TestZoneBackup:
 
     @pytest.mark.parametrize("helper_type", ["person", "tag", "input_boolean"])
     async def test_a_snapshot_records_and_restores_the_registry_icon(
-        self, monkeypatch, helper_type
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, helper_type: str
+    ) -> None:
         """The entity shows its registry icon, which an update writes for every
         type and the stored item can miss (person and tag have no icon field)."""
         item = {"id": "anna", "name": "Anna"}
@@ -432,7 +441,9 @@ class TestZoneBackup:
             "icon": "mdi:account",
         } in sent
 
-    async def test_a_failed_icon_write_after_a_recreate_is_a_warning(self, monkeypatch):
+    async def test_a_failed_icon_write_after_a_recreate_is_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sent, fake_ws = _backup_ws([], [], registry_update_error="unauthorized")
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
@@ -443,7 +454,9 @@ class TestZoneBackup:
         assert result["restore_mode"] == "recreated"
         assert "registry icon was not" in result["warnings"][0]
 
-    async def test_a_recorded_icon_without_an_entity_is_a_warning(self, monkeypatch):
+    async def test_a_recorded_icon_without_an_entity_is_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _, fake_ws = _backup_ws([dict(OFFICE)], [])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
@@ -453,7 +466,9 @@ class TestZoneBackup:
 
         assert "has no entity" in result["warnings"][0]
 
-    async def test_no_recorded_icon_and_no_entity_is_no_warning(self, monkeypatch):
+    async def test_no_recorded_icon_and_no_entity_is_no_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _, fake_ws = _backup_ws([dict(OFFICE)], [])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
@@ -464,8 +479,8 @@ class TestZoneBackup:
         assert "warnings" not in result
 
     async def test_restore_resets_a_registry_icon_set_after_the_snapshot(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sent, fake_ws = _backup_ws([dict(OFFICE)], [_office_entity()])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
@@ -481,7 +496,9 @@ class TestZoneBackup:
             "icon": None,
         } in sent
 
-    async def test_an_icon_stored_after_the_snapshot_is_a_warning(self, monkeypatch):
+    async def test_an_icon_stored_after_the_snapshot_is_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Core's zone/update merges, so it cannot remove the newer stored icon."""
         _, fake_ws = _backup_ws([{**OFFICE, "icon": "mdi:school"}], [_office_entity()])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
@@ -491,8 +508,8 @@ class TestZoneBackup:
         assert "mdi:school" in result["warnings"][0]
 
     async def test_restore_of_an_older_snapshot_leaves_the_registry_alone(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sent, fake_ws = _backup_ws([dict(OFFICE)], [_office_entity()])
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 
@@ -501,8 +518,8 @@ class TestZoneBackup:
         assert [m["type"] for m in sent] == ["zone/update"]
 
     async def test_other_update_failures_are_not_turned_into_a_create(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sent, fake_ws = _backup_ws([dict(OFFICE)], [], update_error="invalid_format")
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
 

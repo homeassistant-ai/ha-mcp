@@ -11,6 +11,7 @@ entry, and the home zone's state says ``editable: True``
 
 import copy
 import json
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -147,7 +148,7 @@ _TAG_SCHEMAS = {
 
 
 @pytest.fixture(autouse=True)
-def _no_component(removed: AsyncMock, registered: AsyncMock):
+def _no_component(removed: AsyncMock, registered: AsyncMock) -> Iterator[None]:
     """Serve every call through Core's own WebSocket commands, without waiting."""
     with (
         patch(
@@ -177,7 +178,7 @@ def _no_component(removed: AsyncMock, registered: AsyncMock):
 
 
 class TestZoneLookup:
-    async def test_core_not_found_on_delete_is_resource_not_found(self):
+    async def test_core_not_found_on_delete_is_resource_not_found(self) -> None:
         """The registry still lists the zone, but Core has already removed it."""
         client = _client(
             {
@@ -195,7 +196,9 @@ class TestZoneLookup:
         assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
 
     @pytest.mark.parametrize("call", ["remove", "update"])
-    async def test_unknown_zone_is_resource_not_found_before_any_write(self, call):
+    async def test_unknown_zone_is_resource_not_found_before_any_write(
+        self, call: str
+    ) -> None:
         client = _client()
         tools = ZoneTools(client)
 
@@ -212,7 +215,9 @@ class TestZoneLookup:
 
     @pytest.mark.parametrize("call", ["remove", "update"])
     @pytest.mark.parametrize("zone_id", ["home", "zone.home"])
-    async def test_home_zone_is_refused_as_not_stored(self, call, zone_id):
+    async def test_home_zone_is_refused_as_not_stored(
+        self, call: str, zone_id: str
+    ) -> None:
         """The home zone has a state but no registry entry: nothing is sent."""
         client = _client(states={"zone.home": HOME_STATE})
         tools = ZoneTools(client)
@@ -226,7 +231,7 @@ class TestZoneLookup:
         assert "not a stored zone" in _error(exc_info)["message"]
         assert not _sent(client, "zone/delete") and not _sent(client, "zone/update")
 
-    async def test_an_empty_state_reply_is_a_read_failure(self):
+    async def test_an_empty_state_reply_is_a_read_failure(self) -> None:
         """A non-JSON reply comes back as {}: neither a zone nor its absence."""
         client = _client(states={"zone.ghost": {}})
 
@@ -237,7 +242,7 @@ class TestZoneLookup:
         assert error["code"] == "SERVICE_CALL_FAILED"
         assert "Could not read the state" in error["message"]
 
-    async def test_a_failed_zone_list_is_a_read_failure_not_a_yaml_zone(self):
+    async def test_a_failed_zone_list_is_a_read_failure_not_a_yaml_zone(self) -> None:
         client = _client({"zone/list": {"success": False, "error": "timeout"}})
 
         with pytest.raises(ToolError) as exc_info:
@@ -246,7 +251,7 @@ class TestZoneLookup:
         assert _error(exc_info)["code"] == "SERVICE_CALL_FAILED"
         assert _sent(client, "zone/delete") == []
 
-    async def test_a_registry_entry_of_no_stored_zone_is_not_written(self):
+    async def test_a_registry_entry_of_no_stored_zone_is_not_written(self) -> None:
         """zone.ghost's unique_id names no stored zone, so its backup holds
         nothing to restore."""
         ghost = {"entity_id": "zone.ghost", "platform": "zone", "unique_id": "ghost"}
@@ -260,7 +265,7 @@ class TestZoneLookup:
         assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
         assert _sent(client, "zone/delete") == []
 
-    async def test_a_bare_id_no_zone_has_deletes_no_zone_by_its_entity(self):
+    async def test_a_bare_id_no_zone_has_deletes_no_zone_by_its_entity(self) -> None:
         """After zone work's removal zone.work is still office's entity: a
         repeated removal of work would delete office."""
         renamed = [{**OFFICE_ENTRY, "entity_id": "zone.work"}]
@@ -277,7 +282,7 @@ class TestZoneLookup:
         assert "not a stored zone" not in error["message"]
         assert _sent(client, "zone/delete") == []
 
-    async def test_a_bare_id_no_zone_has_points_to_the_entity_id(self):
+    async def test_a_bare_id_no_zone_has_points_to_the_entity_id(self) -> None:
         client = _client(
             {"config/entity_registry/list": {"success": True, "result": []}}
         )
@@ -289,7 +294,7 @@ class TestZoneLookup:
         hints = [error.get("suggestion", ""), *error.get("suggestions", [])]
         assert any("full entity_id" in s for s in hints)
 
-    async def test_blocked_registry_read_is_not_a_missing_zone(self):
+    async def test_blocked_registry_read_is_not_a_missing_zone(self) -> None:
         client = _client({"config/entity_registry/list": REGISTRY_BLOCKED})
 
         with pytest.raises(ToolError) as exc_info:
@@ -302,8 +307,8 @@ class TestZoneLookup:
 
     @pytest.mark.parametrize("zone_id", ["office", "zone.office"])
     async def test_remove_by_zone_id_or_entity_id_deletes_the_storage_item(
-        self, zone_id
-    ):
+        self, zone_id: str
+    ) -> None:
         client = _client()
 
         result = await ZoneTools(client).ha_remove_zone(zone_id=zone_id)
@@ -313,7 +318,9 @@ class TestZoneLookup:
         ]
         assert result["entity_id"] == "zone.office"
 
-    async def test_a_storage_id_wins_over_a_renamed_entity_of_the_same_text(self):
+    async def test_a_storage_id_wins_over_a_renamed_entity_of_the_same_text(
+        self,
+    ) -> None:
         """Zone "office" was renamed to zone.work; zone "work" is zone.work_2."""
         renamed = [
             {"entity_id": "zone.work", "platform": "zone", "unique_id": "office"},
@@ -335,12 +342,14 @@ class TestZoneLookup:
 
 
 class TestRemoveWait:
-    async def test_wait_false_skips_the_removal_check(self, removed):
+    async def test_wait_false_skips_the_removal_check(self, removed: AsyncMock) -> None:
         await ZoneTools(_client()).ha_remove_zone(zone_id="office", wait=False)
 
         removed.assert_not_awaited()
 
-    async def test_a_zone_still_present_after_the_wait_is_a_warning(self, removed):
+    async def test_a_zone_still_present_after_the_wait_is_a_warning(
+        self, removed: AsyncMock
+    ) -> None:
         removed.return_value = False
 
         result = await ZoneTools(_client()).ha_remove_zone(zone_id="office")
@@ -348,7 +357,9 @@ class TestRemoveWait:
         assert result["success"] is True
         assert "still present" in result["warnings"][0]
 
-    async def test_a_failed_removal_check_is_a_warning(self, removed):
+    async def test_a_failed_removal_check_is_a_warning(
+        self, removed: AsyncMock
+    ) -> None:
         removed.side_effect = HomeAssistantConnectionError("socket closed")
 
         result = await ZoneTools(_client()).ha_remove_zone(zone_id="office")
@@ -356,8 +367,8 @@ class TestRemoveWait:
         assert "verification failed" in result["warnings"][0]
 
     async def test_a_zone_without_an_entity_is_removed_without_a_guessed_one(
-        self, removed
-    ):
+        self, removed: AsyncMock
+    ) -> None:
         """zone.office would be named and waited on, though no registry entry
         links it to the zone."""
         client = _client(
@@ -373,7 +384,9 @@ class TestRemoveWait:
         assert "not waited on" in result["warnings"][0]
         removed.assert_not_awaited()
 
-    async def test_without_wait_a_zone_without_an_entity_says_only_why(self, removed):
+    async def test_without_wait_a_zone_without_an_entity_says_only_why(
+        self, removed: AsyncMock
+    ) -> None:
         client = _client(
             {"config/entity_registry/list": {"success": True, "result": []}}
         )
@@ -384,8 +397,8 @@ class TestRemoveWait:
 
     @pytest.mark.parametrize("deleted", [True, False], ids=["removed", "failed"])
     async def test_a_zone_without_an_entity_is_named_by_its_storage_id(
-        self, removed, deleted
-    ):
+        self, removed: AsyncMock, deleted: bool
+    ) -> None:
         """Neither the reply nor the error says "zone None"."""
         replies: dict[str, Any] = {
             "config/entity_registry/list": {"success": True, "result": []}
@@ -405,7 +418,9 @@ class TestRemoveWait:
 
 
 class TestZoneWrites:
-    async def test_new_icon_on_a_zone_without_stored_icon_goes_to_the_registry(self):
+    async def test_new_icon_on_a_zone_without_stored_icon_goes_to_the_registry(
+        self,
+    ) -> None:
         """An icon written into the zone item could never be cleared again (#2643)."""
         client = _client()
 
@@ -417,7 +432,7 @@ class TestZoneWrites:
             for m in _sent(client, "config/entity_registry/update")
         )
 
-    async def test_update_by_entity_id_writes_the_zone_item(self):
+    async def test_update_by_entity_id_writes_the_zone_item(self) -> None:
         client = _client()
 
         result = await ZoneTools(client).ha_set_zone(zone_id="zone.office", radius=250)
@@ -429,12 +444,14 @@ class TestZoneWrites:
         assert result["entity_id"] == "zone.office"
         assert result["updated_fields"] == ["radius"]
 
-    async def test_wait_false_skips_the_update_check(self, registered):
+    async def test_wait_false_skips_the_update_check(
+        self, registered: AsyncMock
+    ) -> None:
         await ZoneTools(_client()).ha_set_zone(zone_id="office", radius=250, wait=False)
 
         registered.assert_not_awaited()
 
-    async def test_create_leaves_defaults_to_core(self):
+    async def test_create_leaves_defaults_to_core(self) -> None:
         """Core applies radius and passive defaults; the tool must not pin its own."""
         client = _client()
 
@@ -447,7 +464,7 @@ class TestZoneWrites:
         assert "passive" not in create
 
     @pytest.mark.parametrize("zone_id", [None, "office"])
-    async def test_blank_name_is_refused(self, zone_id):
+    async def test_blank_name_is_refused(self, zone_id: str) -> None:
         client = _client()
 
         with pytest.raises(ToolError) as exc_info:
@@ -468,7 +485,7 @@ class TestCreatedIconStaysClearable:
     created person's, tag's or zone's entity is looked up in the registry.
     """
 
-    async def test_zone_create_writes_the_icon_to_its_registry_entity(self):
+    async def test_zone_create_writes_the_icon_to_its_registry_entity(self) -> None:
         """The new zone "Home" is zone.home_2: the built-in home zone holds zone.home."""
         home = {**OFFICE, "id": "home", "name": "Home"}
         client = _client(
@@ -499,7 +516,7 @@ class TestCreatedIconStaysClearable:
         )
         assert result["entity_id"] == "zone.home_2"
 
-    async def test_an_icon_that_found_no_entity_is_a_warning(self):
+    async def test_an_icon_that_found_no_entity_is_a_warning(self) -> None:
         client = _client(
             {"config/entity_registry/list": {"success": True, "result": []}}
         )
@@ -516,7 +533,9 @@ class TestCreatedIconStaysClearable:
         [REGISTRY_BLOCKED, HomeAssistantConnectionError("403 socket closed")],
         ids=["failure reply", "dropped connection"],
     )
-    async def test_a_failed_registry_read_after_create_is_a_warning(self, failure):
+    async def test_a_failed_registry_read_after_create_is_a_warning(
+        self, failure: Any
+    ) -> None:
         """The helper exists: an error would make a retrying caller create it
         twice."""
         client = _client(
@@ -536,7 +555,7 @@ class TestCreatedIconStaysClearable:
         assert "could not be read" in result["warnings"][0]
         assert "403" in result["warnings"][0]
 
-    async def test_a_category_without_its_entity_is_named_as_not_applied(self):
+    async def test_a_category_without_its_entity_is_named_as_not_applied(self) -> None:
         client = _client(
             {
                 "person/create": {"success": True, "result": {"id": "anna"}},
@@ -550,7 +569,7 @@ class TestCreatedIconStaysClearable:
 
         assert "the category given were not applied" in result["warnings"][0]
 
-    async def test_person_create_writes_the_icon_to_the_registry(self):
+    async def test_person_create_writes_the_icon_to_the_registry(self) -> None:
         client = _client(
             {
                 "person/create": {"success": True, "result": {"id": "anna"}},
@@ -579,7 +598,7 @@ class TestCreatedIconStaysClearable:
             _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:account"
         )
 
-    async def test_tag_create_writes_the_icon_to_the_registry(self):
+    async def test_tag_create_writes_the_icon_to_the_registry(self) -> None:
         client = _client(
             {
                 "tag/create": {"success": True, "result": {"id": "abc-1"}},
@@ -606,7 +625,7 @@ class TestCreatedIconStaysClearable:
         assert "icon" not in create
         assert _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:nfc"
 
-    async def test_person_update_leaves_the_icon_out_of_the_stored_item(self):
+    async def test_person_update_leaves_the_icon_out_of_the_stored_item(self) -> None:
         person = {"id": "anna", "name": "Anna", "device_trackers": []}
         entry = {"entity_id": "person.anna", "platform": "person", "unique_id": "anna"}
         client = _client(
@@ -632,7 +651,9 @@ class TestCreatedIconStaysClearable:
             _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:account"
         )
 
-    async def test_component_person_create_sends_the_icon_as_a_registry_field(self):
+    async def test_component_person_create_sends_the_icon_as_a_registry_field(
+        self,
+    ) -> None:
         write = AsyncMock(return_value=None)
         with (
             patch("ha_mcp.tools.config_helpers.create.write_helper_item", write),
@@ -665,8 +686,8 @@ class TestCreatedIconStaysClearable:
         ids=["person", "input_boolean"],
     )
     async def test_component_update_follows_the_schema_and_sets_the_registry(
-        self, helper_type, schemas, item, in_item
-    ):
+        self, helper_type: str, schemas: Any, item: Any, in_item: bool
+    ) -> None:
         """The registry always takes the icon; the item only where Core has one."""
         write = AsyncMock(return_value=None)
         read = AsyncMock(return_value={"item": item, "item_id": "anna"})
@@ -683,7 +704,7 @@ class TestCreatedIconStaysClearable:
         assert ("icon" in write.call_args.args[3]) is in_item
         assert write.call_args.kwargs["registry"] == {"icon": "mdi:account"}
 
-    async def test_an_icon_the_schema_declares_lands_in_item_and_registry(self):
+    async def test_an_icon_the_schema_declares_lands_in_item_and_registry(self) -> None:
         stored = {"id": "lamp", "name": "Lamp", "icon": "mdi:lamp"}
         entry = {
             "entity_id": "input_boolean.lamp",
@@ -711,7 +732,7 @@ class TestCreatedIconStaysClearable:
             _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:lightbulb"
         )
 
-    async def test_tag_update_without_its_entity_is_a_warning(self):
+    async def test_tag_update_without_its_entity_is_a_warning(self) -> None:
         tag = {"id": "abc-1", "name": "Front door"}
         client = _client(
             {
@@ -730,7 +751,7 @@ class TestCreatedIconStaysClearable:
         # A tag update is never waited on, so the missing entity is not why.
         assert "not waited on" not in result["warnings"][0]
 
-    async def test_a_failed_registry_read_on_tag_update_is_a_warning(self):
+    async def test_a_failed_registry_read_on_tag_update_is_a_warning(self) -> None:
         """Even with no registry field given, the missing entity_id is named."""
         tag = {"id": "abc-1", "name": "Front door"}
         client = _client(
@@ -748,7 +769,7 @@ class TestCreatedIconStaysClearable:
 
         assert "could not be read" in result["warnings"][0]
 
-    async def test_other_helpers_keep_the_icon_in_their_stored_item(self):
+    async def test_other_helpers_keep_the_icon_in_their_stored_item(self) -> None:
         """Core's schema declares the icon: it stays in the stored item."""
         client = _client(
             {
@@ -768,7 +789,7 @@ class TestCreatedIconStaysClearable:
         assert create["icon"] == "mdi:lamp"
         assert _sent(client, "config/entity_registry/update") == []
 
-    async def test_an_icon_without_a_known_field_goes_to_the_registry(self):
+    async def test_an_icon_without_a_known_field_goes_to_the_registry(self) -> None:
         """The create sends the icon where ``collection_icon`` routes it; its
         cases are pinned in test_helper_icon_route."""
         client = _client(
@@ -788,7 +809,7 @@ class TestCreatedIconStaysClearable:
         assert "icon" not in create
         assert _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:lamp"
 
-    async def test_the_registry_icon_goes_to_the_new_helper_s_own_entity(self):
+    async def test_the_registry_icon_goes_to_the_new_helper_s_own_entity(self) -> None:
         """A renamed helper holds input_boolean.lamp, so Core names the new one
         input_boolean.lamp_2: <type>.<id> would give the icon to the other."""
         renamed = {**LAMP, "unique_id": "other"}
@@ -815,7 +836,7 @@ class TestCreatedIconStaysClearable:
 
     async def test_an_icon_for_a_helper_without_a_registry_entry_is_not_applied(
         self,
-    ):
+    ) -> None:
         """No entry proves which entity is the new helper's: nothing is written."""
         renamed = {**LAMP, "unique_id": "other"}
         client = _client(
@@ -834,7 +855,7 @@ class TestCreatedIconStaysClearable:
         assert _sent(client, "config/entity_registry/update") == []
         assert any("icon given were not applied" in w for w in result["warnings"])
 
-    async def test_a_cleared_icon_also_leaves_the_stored_item(self):
+    async def test_a_cleared_icon_also_leaves_the_stored_item(self) -> None:
         """Clearing only the registry would bring an older stored icon back."""
         stored = {"id": "lamp", "name": "Lamp", "icon": "mdi:lamp"}
         entry = {
@@ -860,7 +881,7 @@ class TestCreatedIconStaysClearable:
         assert "icon" not in update
         assert _sent(client, "config/entity_registry/update")[0]["icon"] is None
 
-    async def test_component_create_sends_the_icon_as_a_registry_field(self):
+    async def test_component_create_sends_the_icon_as_a_registry_field(self) -> None:
         write = AsyncMock(return_value=None)
         with patch("ha_mcp.tools.config_helpers.create.write_helper_item", write):
             await ZoneTools(_client()).ha_set_zone(
@@ -873,7 +894,7 @@ class TestCreatedIconStaysClearable:
 
 
 class TestListing:
-    async def test_without_component_lists_the_home_zone_and_entity_ids(self):
+    async def test_without_component_lists_the_home_zone_and_entity_ids(self) -> None:
         """Core's zone/list serves stored zones only; the home zone is in the states."""
         client = _client(states={"zone.home": HOME_STATE})
 
@@ -888,7 +909,7 @@ class TestListing:
         assert by_id["home"]["name"] == "Home"
         assert "warnings" not in result
 
-    async def test_a_stored_zone_named_home_wins_over_the_home_zone(self):
+    async def test_a_stored_zone_named_home_wins_over_the_home_zone(self) -> None:
         stored_home = {**OFFICE, "id": "home", "name": "Home"}
         client = _client(
             {
@@ -911,7 +932,7 @@ class TestListing:
 
         assert result["zone"]["entity_id"] == "zone.home_2"
 
-    def test_a_stored_zone_wins_whatever_the_row_order(self):
+    def test_a_stored_zone_wins_whatever_the_row_order(self) -> None:
         """The component lists zones in state-machine order, home zone first."""
         home_row = {"id": "home", "entity_id": "zone.home", "editable": False}
         stored = {"id": "home", "entity_id": "zone.home_2", "editable": True}
@@ -920,12 +941,12 @@ class TestListing:
 
         assert result["zone"] is stored
 
-    async def test_a_zone_can_be_fetched_by_its_entity_id(self):
+    async def test_a_zone_can_be_fetched_by_its_entity_id(self) -> None:
         result = await ZoneTools(_client()).ha_get_zone(zone_id="zone.office")
 
         assert result["zone"]["id"] == "office"
 
-    async def test_without_registry_stored_zones_are_not_listed_twice(self):
+    async def test_without_registry_stored_zones_are_not_listed_twice(self) -> None:
         """No zone state can be matched to its stored zone without the registry."""
         client = _client(
             {"config/entity_registry/list": REGISTRY_BLOCKED},
@@ -937,14 +958,14 @@ class TestListing:
         assert [z["id"] for z in result["zones"]] == ["office"]
         assert "'home'" in result["warnings"][0] and "403" in result["warnings"][0]
 
-    async def test_without_registry_the_listing_names_the_missing_icons(self):
+    async def test_without_registry_the_listing_names_the_missing_icons(self) -> None:
         client = _client({"config/entity_registry/list": REGISTRY_BLOCKED})
 
         result = await ZoneTools(client).ha_get_zone()
 
         assert "icons set in the entity registry" in result["warnings"][0]
 
-    async def test_without_states_the_home_zone_is_named_as_missing(self):
+    async def test_without_states_the_home_zone_is_named_as_missing(self) -> None:
         client = _client(states={"zone.home": HOME_STATE})
         client.get_states.side_effect = HomeAssistantConnectionError("socket closed")
 
@@ -953,7 +974,9 @@ class TestListing:
         assert [z["id"] for z in result["zones"]] == ["office"]
         assert "'home'" in result["warnings"][0]
 
-    async def test_a_zone_missing_from_an_incomplete_listing_is_not_absent(self):
+    async def test_a_zone_missing_from_an_incomplete_listing_is_not_absent(
+        self,
+    ) -> None:
         client = _client(
             {"config/entity_registry/list": REGISTRY_BLOCKED},
             states={"zone.home": HOME_STATE},
