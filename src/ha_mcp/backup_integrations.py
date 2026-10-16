@@ -28,7 +28,8 @@ async def fetch_integration(client: Any, entity_id: str) -> Any:
 
 async def restore_integration(client: Any, entity_id: str, config: Any) -> Any:
     bm = _manager()
-    if await fetch_integration(client, entity_id) is None:
+    entry = await fetch_integration(client, entity_id)
+    if entry is None:
         raise bm.BackupRestoreError(
             f"Config entry {entity_id} ({config.get('domain')}) no longer exists. "
             "An integration snapshot holds only the entry's metadata and enabled "
@@ -43,8 +44,9 @@ async def restore_integration(client: Any, entity_id: str, config: Any) -> Any:
     from .tools.config_entry_flow import COMPONENT_DOMAIN
 
     # Same refusal as ha_set_integration's own-entry guard: re-applying the
-    # enabled state would reload or stop the server answering the call.
-    domain = config.get("domain")
+    # enabled state would reload or stop the server answering the call. The
+    # live entry decides: the snapshot file on disk can be stale or edited.
+    domain = entry.get("domain")
     if isinstance(domain, str) and domain.strip().lower() == COMPONENT_DOMAIN:
         raise bm.BackupRestoreError(
             f"Config entry {entity_id} belongs to ha-mcp's own '{COMPONENT_DOMAIN}' "
