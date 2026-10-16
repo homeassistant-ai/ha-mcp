@@ -342,9 +342,11 @@ def _snapshot_files(tmp_path: Path) -> list[str]:
     return sorted(p.name for p in tmp_path.glob("*.yaml"))
 
 
-def _store_snapshot(tmp_path: Path, domain: str, entity_id: str, item_id: str) -> str:
+def _store_snapshot(
+    tmp_path: Path, domain: str, entity_id: str, item_id: str, **recorded: Any
+) -> str:
     name = f"{domain}.{entity_id}.20260521_120000.yaml"
-    config = {"id": item_id, "name": item_id.title()}
+    config = {"id": item_id, "name": item_id.title(), **recorded}
     (tmp_path / name).write_text(
         yaml.safe_dump(
             {
@@ -721,11 +723,16 @@ def test_settings_keeps_a_recreated_item_s_own_warnings(
     assert "Created with a warning" in rendered.alerts[0]
 
 
-async def test_a_snapshot_from_before_registry_icons_shows_no_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "recorded",
+    [{}, {"registry_icon": "mdi:star"}],
+    ids=["from before registry icons", "same icon recorded"],
+)
+async def test_a_snapshot_of_the_current_registry_icon_shows_no_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: dict[str, Any]
 ) -> None:
-    """Its restore leaves the registry alone, so the icon recorded now is no
-    difference to report."""
+    """A snapshot from before registry icons were recorded restores no icon, so
+    the current one is no difference; a recorded icon is compared."""
     registry = [
         {
             "entity_id": "input_boolean.item_b",
@@ -738,7 +745,7 @@ async def test_a_snapshot_from_before_registry_icons_shows_no_change(
     mgr = _mk_manager(tmp_path)
     bm.register_default_handlers(mgr, None)
     name = _store_snapshot(
-        tmp_path, "helper_input_boolean", "input_boolean.item_b", "item_b"
+        tmp_path, "helper_input_boolean", "input_boolean.item_b", "item_b", **recorded
     )
 
     result = await mgr.diff_snapshot(name)

@@ -7,7 +7,7 @@ never turned into a delete by its object id.
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -73,11 +73,11 @@ def _deleted(client: MagicMock) -> list[str]:
     ]
 
 
-async def _remove(client: MagicMock, target: str) -> dict[str, Any]:
+async def _remove(client: MagicMock, target: str, wait: bool = False) -> dict[str, Any]:
     result: dict[str, Any] = await IntegrationTools(
         client
     ).ha_remove_helpers_integrations(
-        target=target, helper_type="input_button", confirm=True, wait=False
+        target=target, helper_type="input_button", confirm=True, wait=wait
     )
     return result
 
@@ -90,6 +90,16 @@ async def test_a_stored_id_wins_over_an_entity_with_its_text() -> None:
 
     assert _deleted(client) == ["my_button"]
     assert result["entity_ids"] == ["input_button.renamed"]
+
+
+async def test_a_stored_id_removal_waits_for_its_own_entity() -> None:
+    client = _core(["my_button", "other"], RENAMED_ROWS)
+    verify = AsyncMock(return_value=True)
+
+    with patch("ha_mcp.tools.tools_integrations.verify_entity_removed", verify):
+        await _remove(client, "my_button", wait=True)
+
+    assert verify.await_args.args[1] == "input_button.renamed"
 
 
 async def test_an_unknown_entity_id_is_not_deleted_by_its_object_id() -> None:

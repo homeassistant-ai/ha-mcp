@@ -495,7 +495,11 @@ async def test_an_unreadable_registry_names_the_missing_icons() -> None:
             await get_zone(zone_id="nowhere")
 
     assert resp["count"] == 2
-    assert any("registry down" in w for w in resp["warnings"])
+    assert any(
+        w.startswith("Icons set in the entity registry are missing")
+        and "registry down" in w
+        for w in resp["warnings"]
+    )
     assert '"RESOURCE_NOT_FOUND"' in str(exc_info.value)
 
 

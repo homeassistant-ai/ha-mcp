@@ -237,6 +237,29 @@ class TestZoneLookup:
         assert error["code"] == "SERVICE_CALL_FAILED"
         assert "Could not read the state" in error["message"]
 
+    async def test_a_failed_zone_list_is_a_read_failure_not_a_yaml_zone(self):
+        client = _client({"zone/list": {"success": False, "error": "timeout"}})
+
+        with pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_remove_zone(zone_id="office")
+
+        assert _error(exc_info)["code"] == "SERVICE_CALL_FAILED"
+        assert _sent(client, "zone/delete") == []
+
+    async def test_a_registry_entry_of_no_stored_zone_is_not_written(self):
+        """zone.ghost's unique_id names no stored zone, so its backup holds
+        nothing to restore."""
+        ghost = {"entity_id": "zone.ghost", "platform": "zone", "unique_id": "ghost"}
+        client = _client(
+            {"config/entity_registry/list": {"success": True, "result": [ghost]}}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_remove_zone(zone_id="zone.ghost")
+
+        assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
+        assert _sent(client, "zone/delete") == []
+
     async def test_blocked_registry_read_is_not_a_missing_zone(self):
         client = _client({"config/entity_registry/list": REGISTRY_BLOCKED})
 
@@ -306,7 +329,8 @@ class TestRemoveWait:
     async def test_a_zone_without_an_entity_is_removed_without_a_guessed_one(
         self, removed
     ):
-        """zone.office would be named and waited on, though no entity holds it."""
+        """zone.office would be named and waited on, though no registry entry
+        links it to the zone."""
         client = _client(
             {"config/entity_registry/list": {"success": True, "result": []}}
         )
@@ -319,6 +343,36 @@ class TestRemoveWait:
         assert result["entity_id"] is None
         assert "not waited on" in result["warnings"][0]
         removed.assert_not_awaited()
+
+    async def test_without_wait_a_zone_without_an_entity_says_only_why(self, removed):
+        client = _client(
+            {"config/entity_registry/list": {"success": True, "result": []}}
+        )
+
+        result = await ZoneTools(client).ha_remove_zone(zone_id="office", wait=False)
+
+        assert result["warnings"] == ["Zone office had no entity in the registry."]
+
+    @pytest.mark.parametrize("deleted", [True, False], ids=["removed", "failed"])
+    async def test_a_zone_without_an_entity_is_named_by_its_storage_id(
+        self, removed, deleted
+    ):
+        """Neither the reply nor the error says "zone None"."""
+        replies: dict[str, Any] = {
+            "config/entity_registry/list": {"success": True, "result": []}
+        }
+        if not deleted:
+            replies["zone/delete"] = {"success": False, "error": "boom"}
+        tools = ZoneTools(_client(replies))
+
+        if deleted:
+            message = (await tools.ha_remove_zone(zone_id="office"))["message"]
+        else:
+            with pytest.raises(ToolError) as exc_info:
+                await tools.ha_remove_zone(zone_id="office")
+            message = _error(exc_info)["message"]
+
+        assert "office" in message and "None" not in message
 
 
 class TestZoneWrites:
@@ -644,7 +698,8 @@ class TestCreatedIconStaysClearable:
         )  # fmt: skip
 
         assert "the area given were not applied" in result["warnings"][0]
-        assert "not waited on" in result["warnings"][0]
+        # A tag update is never waited on, so the missing entity is not why.
+        assert "not waited on" not in result["warnings"][0]
 
     async def test_a_failed_registry_read_on_tag_update_is_a_warning(self):
         """Even with no registry field given, the missing entity_id is named."""
@@ -852,6 +907,13 @@ class TestListing:
 
         assert [z["id"] for z in result["zones"]] == ["office"]
         assert "'home'" in result["warnings"][0] and "403" in result["warnings"][0]
+
+    async def test_without_registry_the_listing_names_the_missing_icons(self):
+        client = _client({"config/entity_registry/list": REGISTRY_BLOCKED})
+
+        result = await ZoneTools(client).ha_get_zone()
+
+        assert "icons set in the entity registry" in result["warnings"][0]
 
     async def test_without_states_the_home_zone_is_named_as_missing(self):
         client = _client(states={"zone.home": HOME_STATE})

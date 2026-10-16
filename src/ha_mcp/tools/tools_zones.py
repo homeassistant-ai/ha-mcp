@@ -727,9 +727,9 @@ class ZoneTools:
                 "message": f"Successfully removed zone: {entity_id or storage_id}",
             }
             if entity_id is None:
+                not_waited = ", so the removal was not waited on" if wait else ""
                 response["warnings"] = [
-                    f"Zone {storage_id} had no entity in the registry, so the "
-                    "removal was not waited on."
+                    f"Zone {storage_id} had no entity in the registry{not_waited}."
                 ]
                 return response
             if not wait:

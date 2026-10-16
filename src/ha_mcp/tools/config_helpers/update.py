@@ -277,7 +277,9 @@ async def _execute_update_simple_helper(
             not_applied = (
                 f", so the {', '.join(given)} given were not applied" if given else ""
             )
-            not_waited = " and the update was not waited on" if wait else ""
+            # A tag update is never waited on, with or without its entity.
+            waits = wait and helper_type != "tag"
+            not_waited = " and the update was not waited on" if waits else ""
             warnings.append(
                 f"{helper_type} {unique_id} updated, but {reason}{not_applied}"
                 f"{not_waited}."
@@ -336,7 +338,8 @@ async def _update_via_component(
     item = await read_stored_helper_item(client, helper_type, helper_id, entity_id)
     if item is None:
         return None
-    # The component names the item's own entity; entity_id is only the guess.
+    # The component names the item's own entity; without one the storage id
+    # names the item, never the caller's guessed entity_id.
     entity_id = item.get("entity_id") or helper_id
     item_icon = await collection_icon(client, helper_type, "update", icon)
     body = merged_update(helper_type, item["item"], name, item_icon, fields, entity_id)
