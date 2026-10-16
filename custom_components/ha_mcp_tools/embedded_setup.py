@@ -69,7 +69,6 @@ from .const import (
     channel_for_dist,
 )
 from .embedded_server import EmbeddedServerError, EmbeddedServerManager
-from .hacs_nudge import async_schedule_hacs_nudge
 from .llm_api import async_register_llm_api, async_unregister_llm_api
 from .mcp_webhook import async_register_webhook, async_unregister_webhook
 from .oauth_legacy import legacy_credentials_active
@@ -153,10 +152,9 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
                 "Webhook access disabled by option - the server is local-only "
                 "(direct port + sidebar panel)"
             )
-        # Only surface cleartext credentials once the bound provider actually
-        # serves them: while a rotation is pending restart, an old-identity
-        # token still validates and can read this log (see
-        # legacy_credentials_active).
+        # Whether the bound provider already serves the configured legacy
+        # credentials (a rotation pending restart does not yet; see
+        # legacy_credentials_active), so the log can say so.
         oauth_creds_active = True
         if webhook_enabled and auth_mode == WEBHOOK_AUTH_LEGACY:
             oauth_creds_active = legacy_credentials_active(
@@ -170,9 +168,6 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
             entry,
             auth_mode,
             webhook_enabled=webhook_enabled,
-            extra_hosts=await async_get_lan_hosts(hass),
-            oauth_client_id=oauth_client_id,
-            oauth_client_secret=oauth_client_secret,
             oauth_creds_active=oauth_creds_active,
             oauth_restart_pending=oauth_restart_needed,
         )
@@ -329,10 +324,10 @@ def build_connect_urls(
 ) -> list[str]:
     """Resolve the entry's connect URLs (webhook forms first, then direct).
 
-    Shared by the admin-only surfaces that show real URLs: the Home Assistant
-    log on start-up and the entry's Configure screen (the notification
-    deliberately carries none - it is visible to every signed-in user). Each
-    source is best-effort: a URL that cannot be resolved is omitted.
+    Backs the entry's Configure screen, the one administrator-only surface
+    that shows real URLs (the start-up log and notification deliberately
+    carry none - see ``_surface_connect_urls``). Each source is best-effort:
+    a URL that cannot be resolved is omitted.
 
     ``extra_hosts`` (from :func:`async_get_lan_hosts`) adds one webhook and one
     direct-access URL per additional LAN address, so a multi-interface /
@@ -401,87 +396,56 @@ def _surface_connect_urls(
     auth_mode: str,
     *,
     webhook_enabled: bool = True,
-    extra_hosts: list[str] | None = None,
-    oauth_client_id: str | None = None,
-    oauth_client_secret: str | None = None,
     oauth_creds_active: bool = True,
     oauth_restart_pending: bool = False,
 ) -> None:
-    """Log the connect URLs and (re)create a persistent notification."""
-    urls = build_connect_urls(
-        hass, entry, webhook_enabled=webhook_enabled, extra_hosts=extra_hosts
-    )
+    """Log where to find the connect details and (re)create a notification.
+
+    Neither surface carries a connect URL or a credential. In the secret-URL
+    (``none``) mode the URL IS an admin-equivalent credential, and the log is
+    readable by more than the administrator who set the entry up: the
+    server's own log tools serve it to any connected client, and users paste
+    it into bug reports. The entry's Configure screen is the one
+    administrator-only surface that shows them (``build_connect_urls``).
+    """
     if not webhook_enabled:
         auth_note = "Webhook access is disabled (local-only mode)."
     elif auth_mode == WEBHOOK_AUTH_NONE:
         auth_note = "The webhook URL is the shared secret (no bearer required)."
     elif auth_mode == WEBHOOK_AUTH_LEGACY:
-        # Kept secret-free (unlike the log line below) — see the SECURITY note
-        # on the persistent notification further down, which reuses this text.
-        creds_where = (
-            "the Home Assistant log or the entry's Configure screen"
-            if oauth_creds_active
-            else "the entry's Configure screen"
-        )
         auth_note = (
-            "OAuth (Beta) is ENABLED for this URL (legacy mode) - see "
-            f"{creds_where} for the Client ID and Client Secret to paste "
-            "into your MCP client."
+            "OAuth (Beta) is ENABLED for this URL (legacy mode) - see the "
+            "entry's Configure screen for the Client ID and Client Secret to "
+            "paste into your MCP client."
         )
     else:
         auth_note = "Clients authenticate with your Home Assistant account (ha_auth)."
 
-    url_lines = "\n".join(f"- {url}" for url in urls)
     log_message = (
-        "HA-MCP in-process server is running. "
-        f"Connect URL(s):\n{url_lines}\n{auth_note}"
+        "HA-MCP in-process server is running. The connect URL(s) are on the "
+        "entry's Configure screen (Settings - Devices & Services - HA-MCP "
+        f"Custom Component - HA-MCP Server - Configure). {auth_note}"
     )
     if webhook_enabled and auth_mode == WEBHOOK_AUTH_LEGACY:
-        if oauth_creds_active:
-            # Admin-only log (mirrors the webhook-proxy add-on's own startup
-            # log, start.py). Cleartext credentials — deliberately NOT in the
-            # persistent notification below, which every signed-in user can
-            # see.
+        if not oauth_creds_active:
+            # A rotation is pending the restart: the bound root views still
+            # serve the OLD identity until then (see legacy_credentials_active).
             log_message += (
-                f"\n  OAuth Client ID:     {oauth_client_id}"
-                f"\n  OAuth Client Secret: {oauth_client_secret}"
-            )
-            if oauth_restart_pending:
-                # First-enable mid-session late-binds the root views, so
-                # /authorize is not live until the restart the repair asks
-                # for. The credentials ARE the ones that will be served
-                # (oauth_creds_active is True), but pasting them now gets a
-                # connection that fails until the restart — same caveat the
-                # rotation branch, the options hint, and the oauth_regenerate
-                # help text carry.
-                log_message += (
-                    "\n  Legacy OAuth is not live until the restart Home "
-                    "Assistant is asking for; these credentials work once "
-                    "you restart."
-                )
-            log_message += (
-                "\n  Paste both into your MCP client's OAuth connector setup "
-                "(e.g. Google Gemini Spark: Advanced settings)."
-            )
-        else:
-            # SECURITY (review finding on #1880): while a credential rotation
-            # is pending the restart, the bound root views still serve the OLD
-            # identity, so a token issued under it stays valid — and could
-            # read this log through the server's own log tools. Logging the
-            # NEW credentials here would hand them to exactly the party the
-            # rotation is meant to evict, so they are withheld until the
-            # restart makes them active (which also kills every old token).
-            log_message += (
-                "\n  The OAuth credentials were rotated and take effect after "
+                " The OAuth credentials were rotated and take effect after "
                 "the restart Home Assistant is asking for; until then the "
-                "previous credentials remain active. The new Client ID and "
-                "Client Secret are on the entry's Configure screen."
+                "previous credentials remain active."
+            )
+        elif oauth_restart_pending:
+            # First-enable mid-session late-binds the root views, so
+            # /authorize is not live until the restart the repair asks for.
+            log_message += (
+                " Legacy OAuth is not live until the restart Home Assistant "
+                "is asking for; the credentials work once you restart."
             )
     _LOGGER.info(log_message)
     if not bool(entry.options.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)):
         # Notification suppressed by option: clear any notification created
-        # before the toggle was turned off, then skip creating a fresh one. The
-        # connect URLs still reached the admin-only log above.
+        # before the toggle was turned off, then skip creating a fresh one.
         persistent_notification.async_dismiss(hass, _NOTIFICATION_ID)
         return
     # The sidebar-panel line is included only while the panel is registered:
@@ -497,16 +461,14 @@ def _surface_connect_urls(
     # and /subscribe carry no admin gate. In the default posture the connect
     # URL IS an admin-equivalent credential, so the notification deliberately
     # carries NO secrets: it points at the admin-only surfaces (the sidebar
-    # panel and the entry's Configure screen). The URLs above still go to the
-    # log at INFO, which only admin-gated surfaces expose - the same posture
-    # as the add-on printing its URL to the admin-only add-on log.
+    # panel and the entry's Configure screen).
     message = (
         "The HA-MCP Server is now running inside Home Assistant.\n\n"
         f"{panel_line}"
         "The connect URL is shown on the entry's Configure screen "
         "(Settings - Devices & Services - HA-MCP Custom Component - "
-        "HA-MCP Server - Configure) and in the Home Assistant log - both "
-        "administrator-only, because the URL is the credential.\n\n"
+        "HA-MCP Server - Configure), which only administrators can open, "
+        "because the URL is the credential.\n\n"
         f"{auth_note}\n\n"
         "To disable this notification, uncheck the startup notification box "
         "on that same configuration screen.\n"
@@ -676,11 +638,6 @@ async def async_maybe_auto_update(
             },
             learn_more_url=UPDATE_HOLD_DOCS_URL,
         )
-        # A newer component exists but HACS may not surface it for ~48h; ask
-        # HACS to refresh this repository now so the update becomes visible
-        # promptly. Fire-and-forget + throttled per shipped version; fully
-        # advisory (see hacs_nudge).
-        async_schedule_hacs_nudge(hass, shipped)
         return
     ir.async_delete_issue(hass, DOMAIN, ISSUE_UPDATE_HELD)
 
@@ -946,10 +903,5 @@ async def _async_check_component_compat(
             translation_placeholders={"required": required, "installed": own},
             learn_more_url=UPDATE_HOLD_DOCS_URL,
         )
-        # The server needs a newer component than HACS has surfaced; ask HACS
-        # to refresh this repository now so the required update becomes visible
-        # promptly. Fire-and-forget + throttled per required version; fully
-        # advisory (see hacs_nudge).
-        async_schedule_hacs_nudge(hass, required)
     else:
         ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)

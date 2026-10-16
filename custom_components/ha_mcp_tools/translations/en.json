@@ -15,7 +15,15 @@
             },
             "server": {
                 "title": "HA-MCP Server",
-                "description": "This runs the full ha-mcp server inside Home Assistant and exposes it remotely through a Home Assistant webhook (reachable via Nabu Casa or any reverse proxy). It is a standalone server and a complete replacement for the app (add-on), Docker, uvx/PyPI, and stdio install methods - do not run it alongside another ha-mcp server. Select **Submit** to start it; you can change the port, binding, and authentication afterward in the integration options."
+                "description": "This runs the full ha-mcp server inside Home Assistant. It is a standalone server and a complete replacement for the app (add-on), Docker, uvx/PyPI, and stdio install methods - do not run it alongside another ha-mcp server.\n\nBy default nothing outside this Home Assistant machine can reach it: the sidebar panel and Home Assistant's own conversation agents work, but MCP clients on other devices cannot connect until you choose a remote access mode or local network access below. You can change both later in the integration options.",
+                "data": {
+                    "remote_access": "Remote access through Home Assistant",
+                    "bind_host": "Network access"
+                },
+                "data_description": {
+                    "remote_access": "Lets MCP clients connect through a Home Assistant webhook, which works wherever Home Assistant is reachable (including Nabu Casa). Home Assistant sign-in: clients such as claude.ai log in with a Home Assistant administrator account. Legacy OAuth: a Client ID and Secret to paste into clients that need one. Secret URL: the webhook link itself is the only credential - anyone who has it can use every tool.",
+                    "bind_host": "Who can connect to the server's own port directly. This machine only is the safe default. Local network lets other devices on your network connect with the secret direct-access URL shown on the Configure screen."
+                }
             }
         },
         "abort": {
@@ -69,7 +77,7 @@
                     "channel": "Stable installs the latest stable release; Development installs the newest development build. When automatic updates are on, a reload or restart, plus a periodic check, install the newest build of the selected channel. A developer package override below takes precedence and disables automatic updates.",
                     "auto_update": "When on, the newest release of the selected channel is installed automatically - on a reload or restart, and via a periodic check. When off, the server stays on the version currently installed until you turn this back on. This controls the ha-mcp server package only; updates to the HA-MCP Custom Component itself still come through HACS.",
                     "server_port": "The port this server listens on. The ha-mcp app (add-on) uses 9583, so this defaults to 9584 to let both run side by side - if you don't run the app (add-on), any free port works.",
-                    "bind_host": "Who can connect to the MCP server port directly. The default matches the app (add-on): reachable on your local network, with the secret path as the credential. Choose loopback to allow only connections from the Home Assistant machine itself - the webhook URL and the sidebar panel work either way.",
+                    "bind_host": "Who can connect to the MCP server port directly. Local network makes it reachable from your local network, with the secret path as the credential, like the app (add-on). This machine only allows connections from the Home Assistant machine itself - the webhook URL and the sidebar panel work either way.",
                     "webhook_auth": "How MCP clients prove themselves at the webhook URL. With the secret URL, the link itself is the only credential - OAuth still runs for clients that use it, but every sign-in is approved automatically: no login and no Client ID or Secret needed. With Home Assistant sign-in, clients such as claude.ai log in with a Home Assistant administrator account (OAuth). With legacy OAuth, this integration runs its own sign-in service and issues a Client ID and Secret to paste into clients that require one - a Home Assistant restart may be needed to fully turn it on or off.",
                     "oauth_client_id_override": "Replaces the auto-generated legacy OAuth Client ID. Leave empty to keep the current one. Only used while Authentication mode is set to legacy OAuth.",
                     "oauth_client_secret_override": "Replaces the auto-generated legacy OAuth Client Secret. Leave empty to keep the current one. Only used while Authentication mode is set to legacy OAuth.",
@@ -83,7 +91,7 @@
                     "enable_webhook": "Turn off for local-only mode: the Home Assistant webhook is not registered at all, so nothing - including Nabu Casa - can reach the server through Home Assistant. The direct server port and the sidebar panel keep working.",
                     "enable_llm_api": "Offer the full toolset to Home Assistant conversation agents (OpenAI, Google, Ollama, ...): while enabled, agents can select 'HA-MCP Server' under Control Home Assistant and drive the tools from Assist chat and voice. Enabling only makes it selectable - nothing is exposed until you pick it on an agent. Usage guide: {llm_api_docs_url}",
                     "llm_api_exposure": "Shape of the toolset offered to conversation agents. Tool search (default) keeps the agent's context small: a compact API with pinned tools plus search/execute meta-tools. Full catalog lists every exposed tool directly - better for large-context models. Both registers the two side by side so each agent picks its own under Control Home Assistant. Per-tool exposure is managed in the HA-MCP settings panel; details: {llm_api_docs_url}",
-                    "enable_startup_notification": "Show a notification each time the server starts, pointing at the admin-only settings surfaces. Turn off to start silently - the connect URLs still appear in the Home Assistant log.",
+                    "enable_startup_notification": "Show a notification each time the server starts, pointing at the admin-only settings surfaces. Turn off to start silently - the connect URLs stay on this screen.",
                     "enable_sidebar_panel": "Show the HA-MCP settings panel in the sidebar (administrators only). Turn off to remove the sidebar entry - server options stay available on this screen."
                 }
             }
@@ -106,10 +114,6 @@
             "title": "HA-MCP server update waiting for a component update",
             "description": "ha-mcp server {latest} is available, but that release also updated the HA-MCP Custom Component (to {shipped}; you are running {running}). To avoid starting a server version the running component has never been tested with, the automatic server update is on hold until the component is updated.\n\nUpdate the component via HACS (open the HA-MCP Custom Component entry and use 'Update information' if no update is shown yet), then restart Home Assistant - the server update installs automatically afterwards. To install the server update anyway, press Install on the HA-MCP server update entity."
         },
-        "legacy_hacs_source": {
-            "title": "Component installed from the legacy repository",
-            "description": "HACS is tracking the main ha-mcp server repository for this component, so HACS shows the server's version numbers and release notes here instead of the component's own (2.x). Updates keep working, but stay mislabeled this way. To fix: remove this repository from HACS (your integration settings and config entries are kept), add homeassistant-ai/ha-mcp-integration as a custom repository, reinstall the component from it, and restart Home Assistant."
-        },
         "legacy_oauth_restart": {
             "title": "Restart Home Assistant to apply the legacy OAuth settings",
             "fix_flow": {
@@ -129,9 +133,17 @@
                 "dev": "Development (latest build)"
             }
         },
+        "server_remote_access": {
+            "options": {
+                "disabled": "Disabled (default)",
+                "ha_auth": "Home Assistant sign-in",
+                "legacy": "Legacy OAuth (Client ID and Secret)",
+                "none": "Secret URL (no sign-in)"
+            }
+        },
         "server_webhook_auth": {
             "options": {
-                "none": "Secret webhook URL (default)",
+                "none": "Secret webhook URL",
                 "ha_auth": "Sign in with Home Assistant (OAuth)",
                 "legacy": "Legacy OAuth (this integration issues a Client ID/Secret to paste)"
             }
@@ -156,7 +168,7 @@
         "connect_local_lan": "Local/LAN (when Network access is \"Local network\"): {url}",
         "connect_remote_url": "Remote connect URL: {url}",
         "connect_urls_label": "Connect URL(s):",
-        "connect_urls_pending": "The connect URLs appear here (and in the Home Assistant log) once the server has started.",
+        "connect_urls_pending": "The connect URLs appear here once the server has started.",
         "connect_webhook_disabled": "Remote access via webhook is disabled (local-only mode).",
         "oauth_creds_pending": "The Client ID and Client Secret appear here once the server has started.",
         "oauth_not_serving": "Legacy OAuth is not serving these yet — restart Home Assistant when it asks you to, to activate them.",

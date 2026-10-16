@@ -102,10 +102,6 @@
             "title": "component chu'moHghach loS HA-MCP turwI' chu'moHghach",
             "description": "ha-mcp turwI' {latest} tu'lu', 'ach HA-MCP Custom Component chu'moH je releasevetlh ({shipped}; {running} Dalo'taH). turwI' Dotlh'e' nIDbe'pu'bogh component QaptaHbogh QapchoHmoHlu'be'meH, component chu'moHlu'pa' turwI' chu'moHghach pat jomQo'.\n\nHACS vegh component yIchu'moH (HA-MCP Custom Component De' 'ay' yIpoS, 'ej De' chu' 'anglu'be'chugh 'Update information' yIlo'), ghIq Home Assistant yItaghqa'moH - ghIq nuv vangnISbe'taHvIS turwI' chu'moHghach jomlu'. turwI' chu'moHghach DaH jom DaneHchugh, HA-MCP turwI' chu'moHghach DolDaq jom leQ yIwIv."
         },
-        "legacy_hacs_source": {
-            "title": "repository ngo'vo' jomlu' component",
-            "description": "componentvamvaD ha-mcp turwI' repository wa'DIch Hotlh HACS, vaj component Dotlh mI' (2.x) QInmey je 'angbe' 'ej turwI' Dotlh mI' QInmey je 'ang. chu'moHtaH HACS, 'ach pongmey muj pol. tI'meH: HACSvo' repositoryvam yIteq (integration DuHmey config De' 'ay'mey je pollu'), repository le' 'oHmeH homeassistant-ai/ha-mcp-integration yIchel, componentvo' yIjomqa', 'ej Home Assistant yItaghqa'moH."
-        },
         "legacy_oauth_restart": {
             "title": "OAuth ngo' choH lo'meH Home Assistant yItaghqa'moH",
             "description": "OAuth ngo' chaw' 'olmeH mIw /authorize /token web endpoints ghajbogh'e' qon; Home Assistant naQ taghqa'moHlu'DI' neH rarlaH pagh rarHa'laH - mIwvam Dachu'pu'chugh, Dachu'Ha'pu'chugh, pagh Client ID/Secret DachoHpu'chugh je, rap ghu'. choH lo'meH Home Assistant yItaghqa'moH (Settings - System - Restart); Home Assistant Dataghqa'moHpa' QaptaH mIw ngo'."

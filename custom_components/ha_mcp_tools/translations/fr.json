@@ -106,10 +106,6 @@
       "title": "Mise à jour du serveur HA-MCP en attente d'une mise à jour du composant",
       "description": "Le serveur ha-mcp {latest} est disponible, mais cette version a également mis à jour le composant personnalisé HA-MCP (vers {shipped} ; vous utilisez {running}). Pour éviter de démarrer une version du serveur avec laquelle le composant en cours n'a jamais été testé, la mise à jour automatique du serveur est en attente jusqu'à la mise à jour du composant.\n\nMettez à jour le composant via HACS (ouvrez l'entrée Composant personnalisé HA-MCP et utilisez « Update information » si aucune mise à jour n'est encore affichée), puis redémarrez Home Assistant – la mise à jour du serveur s'installera automatiquement ensuite. Pour installer quand même la mise à jour du serveur, appuyez sur Installer sur l'entité de mise à jour du serveur HA-MCP."
     },
-    "legacy_hacs_source": {
-      "title": "Composant installé depuis le dépôt hérité",
-      "description": "HACS suit le dépôt principal du serveur ha-mcp pour ce composant, donc HACS affiche ici les numéros de version et les notes de publication du serveur au lieu de ceux du composant lui-même (2.x). Les mises à jour continuent de fonctionner, mais restent mal étiquetées de cette manière. Pour corriger : supprimez ce dépôt de HACS (vos paramètres d'intégration et entrées de configuration sont conservés), ajoutez homeassistant-ai/ha-mcp-integration comme dépôt personnalisé, réinstallez le composant à partir de celui-ci, et redémarrez Home Assistant."
-    },
     "legacy_oauth_restart": {
       "title": "Redémarrez Home Assistant pour appliquer les paramètres OAuth hérités",
       "fix_flow": {

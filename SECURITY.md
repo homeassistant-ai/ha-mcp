@@ -208,10 +208,13 @@ The consent form explains this revocation path. Reports about token opacity
 The `ha_mcp_tools` component's **in-process MCP server** config entry can run the
 ha-mcp server in-process inside Home Assistant and expose it through a Home
 Assistant webhook (see [docs/in-process-server.md](docs/in-process-server.md)).
-It offers three authentication postures, selected by the **Authentication
-mode** option in the entry options:
+A new entry starts with the webhook disabled and the server port bound to
+loopback; the setup form and the entry options let an administrator enable
+remote access with one of three authentication postures (**Authentication
+mode**), or LAN access to the port. Entries created before setup offered that
+choice keep the webhook on in `none` mode with LAN binding.
 
-- **Secret webhook URL (default, `none`).** The webhook id is a high-entropy
+- **Secret webhook URL (`none`).** The webhook id is a high-entropy
   random string and *is* the credential — the same secret-URL trust model as
   standard mode above, except the URL is designed to be reached remotely through
   Home Assistant's own remote access (Nabu Casa or a TLS-terminating reverse
@@ -291,8 +294,9 @@ mode** option in the entry options:
     which invalidates every outstanding token — but only once Home Assistant
     restarts, because the root `/authorize`/`/token` views cannot be rebound
     without a restart (a repair issue prompts for it). Until that restart the
-    previous credential keeps working; the startup log withholds the rotated
-    credential during that window so a still-valid old token cannot read it.
+    previous credential keeps working. The credentials are shown only on the
+    entry's Configure screen, never in the startup log, so a still-valid old
+    token cannot read the rotated credential through the server's log tools.
   - **The consent endpoint is unauthenticated** (no HA session) — it is a
     plain human-approval page. This is safe because the authorization code is
     inert without the `client_secret` at the token endpoint (the client is
@@ -332,9 +336,10 @@ entry's **Regenerate connect secrets now** option once.
 
 The connect notification deliberately carries no secrets: Home Assistant
 shows persistent notifications to every authenticated user, so the webhook
-URL (the credential in the default posture) is surfaced only on
-administrator-only surfaces - the entry's Configure screen, the sidebar
-panel, and the log. A local-only option removes the webhook entirely.
+URL (the credential in secret-URL mode) is surfaced only on the
+administrator-only Configure screen of the entry; the log and notifications
+never carry it. New entries start with the
+webhook off, and a local-only option removes it entirely.
 
 The server reaches Home Assistant with a dedicated admin token the component
 provisions and stores in the config entry. The token is handed to the server
