@@ -75,8 +75,20 @@ def client() -> MagicMock:
                 "id": "own-device",
                 "config_entries": [_OWN_ENTRY_ID],
                 "area_id": "office",
+                "labels": ["infrastructure"],
             },
-            {"id": "hue-device", "config_entries": ["hue-entry"], "area_id": "kitchen"},
+            {
+                "id": "hue-device",
+                "config_entries": ["hue-entry"],
+                "area_id": "kitchen",
+                "labels": [],
+            },
+        ]
+    )
+    client._list_registry = AsyncMock(
+        return_value=[
+            {"area_id": "office", "floor_id": "upstairs", "labels": []},
+            {"area_id": "kitchen", "floor_id": "ground", "labels": []},
         ]
     )
     for name in _MUTATING_CALLS:
@@ -157,6 +169,9 @@ async def test_reload_core_cannot_reload_ha_mcps_own_entry(client: MagicMock) ->
         pytest.param({"entity_id": "update.ha_mcp_server"}, id="entity"),
         pytest.param({"data": {"device_id": ["own-device"]}}, id="device"),
         pytest.param({"data": {"area_id": "office"}}, id="area"),
+        # The office, where the server's device sits, is upstairs.
+        pytest.param({"data": {"floor_id": "upstairs"}}, id="floor"),
+        pytest.param({"data": {"label_id": "infrastructure"}}, id="label"),
     ],
 )
 async def test_call_service_cannot_reload_ha_mcps_own_entry(

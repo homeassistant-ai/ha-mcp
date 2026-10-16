@@ -71,32 +71,47 @@ def _target_ids(service_data: dict[str, Any], key: str) -> set[str]:
     return ids - {""}
 
 
+def _labelled(rows: list[dict[str, Any]], labels: set[str], key: str) -> set[Any]:
+    """The ``key`` of every registry row carrying one of ``labels``."""
+    return {row.get(key) for row in rows if labels & set(row.get("labels") or [])}
+
+
 def _targets_own_entry(
     targets: dict[str, set[str]],
     own_ids: set[str],
     entities: list[dict[str, Any]],
     devices: list[dict[str, Any]],
+    areas: list[dict[str, Any]],
 ) -> bool:
-    """Whether entity, device or area targets reach one of ``own_ids``.
+    """Whether entity, device, area, floor or label targets reach ``own_ids``.
 
-    Follows Core's ``async_extract_config_entry_ids``: a device counts by its
-    own entries and by the entries of its entities, an area by the devices
-    and entities in it (an entity without an area takes its device's). It
-    skips Core's hidden and entity-category filters, so it can only refuse
-    more, never less.
+    Follows Core's ``async_extract_config_entry_ids`` and
+    ``helpers/target.py``: a label selects the entities, devices and areas
+    carrying it, a floor its areas; a device counts by its own entries and by
+    the entries of its entities, an area by the devices and entities in it
+    (an entity without an area takes its device's). It skips Core's hidden
+    and entity-category filters, so it can only refuse more, never less.
+    Core's child and composite device expansion is not followed: the
+    component's device has no parent and belongs to one entry.
     """
+    labels = targets["label_id"]
     device_area = {d.get("id"): d.get("area_id") for d in devices}
     own_devices = {
         d.get("id") for d in devices if own_ids & set(d.get("config_entries") or [])
     }
     own_entities = [e for e in entities if e.get("config_entry_id") in own_ids]
-    areas = targets["area_id"]
+    entity_ids = targets["entity_id"] | _labelled(entities, labels, "entity_id")
+    device_ids = targets["device_id"] | _labelled(devices, labels, "id")
+    area_ids = (
+        targets["area_id"]
+        | _labelled(areas, labels, "area_id")
+        | {a.get("area_id") for a in areas if a.get("floor_id") in targets["floor_id"]}
+    )
     return bool(
-        targets["entity_id"] & {e.get("entity_id") for e in own_entities}
-        or targets["device_id"]
-        & (own_devices | {e.get("device_id") for e in own_entities})
-        or areas & {device_area.get(d) for d in own_devices}
-        or areas
+        entity_ids & {e.get("entity_id") for e in own_entities}
+        or device_ids & (own_devices | {e.get("device_id") for e in own_entities})
+        or area_ids & {device_area.get(d) for d in own_devices}
+        or area_ids
         & {
             e.get("area_id") or device_area.get(e.get("device_id"))
             for e in own_entities
@@ -109,12 +124,14 @@ async def refuse_component_entry_reload(
 ) -> None:
     """Refuse ``homeassistant.reload_config_entry`` on ha-mcp's own entry.
 
-    Checks the explicit ``entry_id`` and the ``entity_id`` / ``device_id`` /
-    ``area_id`` targets Core also resolves to entries (the component's update
-    entity and its device reach the server entry). ``floor_id`` /
-    ``label_id`` targets and group expansion are not resolved. Ids Core does
-    not have are left to Core's own error. A failed lookup raises a
-    structured error: nothing has been dispatched at this point.
+    Checks the explicit ``entry_id`` and every target Core also resolves to
+    entries (``entity_id``, ``device_id``, ``area_id``, ``floor_id``,
+    ``label_id``); the component's update entity and its device reach the
+    server entry. Group expansion (``expand_group``) is not resolved: Core
+    deprecates reloading by target (homeassistant/services.py, removal in
+    2027.4), so the remaining path is not worth more. Ids Core does not have
+    are left to Core's own error. A failed lookup raises a structured error:
+    nothing has been dispatched at this point.
     """
     if (
         domain.strip().lower() != "homeassistant"
@@ -124,7 +141,7 @@ async def refuse_component_entry_reload(
     entry_id = service_data.get("entry_id")
     targets = {
         key: _target_ids(service_data, key)
-        for key in ("entity_id", "device_id", "area_id")
+        for key in ("entity_id", "device_id", "area_id", "floor_id", "label_id")
     }
     hit = False
     try:
@@ -135,11 +152,19 @@ async def refuse_component_entry_reload(
         }
         hit = isinstance(entry_id, str) and entry_id in own_ids
         if not hit and own_ids and any(targets.values()):
+            # Only floors and labels need the area registry (an area target
+            # matches by id); the client has no public helper for it.
+            areas = (
+                await client._list_registry("config/area_registry/list", "area")
+                if targets["floor_id"] or targets["label_id"]
+                else []
+            )
             hit = _targets_own_entry(
                 targets,
                 own_ids,
                 await client.list_entity_registry(),
                 await client.list_device_registry(),
+                areas,
             )
     except Exception as err:  # noqa: BLE001
         exception_to_structured_error(
