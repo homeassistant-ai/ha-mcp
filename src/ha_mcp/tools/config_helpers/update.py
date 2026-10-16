@@ -14,7 +14,7 @@ from ...utils.registry_update_lock import registry_update_lock
 from ..component_helper_collections import (
     collection_payload,
     native_result,
-    read_helper_item,
+    read_stored_helper_item,
     stored_helper_target,
     write_helper_item,
 )
@@ -277,8 +277,10 @@ async def _execute_update_simple_helper(
             not_applied = (
                 f", so the {', '.join(given)} given were not applied" if given else ""
             )
+            not_waited = " and the update was not waited on" if wait else ""
             warnings.append(
-                f"{helper_type} {unique_id} updated, but {reason}{not_applied}."
+                f"{helper_type} {unique_id} updated, but {reason}{not_applied}"
+                f"{not_waited}."
             )
         else:
             entity_id = entity
@@ -292,7 +294,7 @@ async def _execute_update_simple_helper(
                 updated_data,
                 warnings,
             )
-            # Tags live in their own registry, never in /api/states.
+            # A tag update is not waited on, as before and as a tag create.
             if wait and helper_type != "tag":
                 try:
                     if not await wait_for_entity_registered(client, entity_id):
@@ -328,16 +330,14 @@ async def _update_via_component(
 ) -> tuple[dict[str, Any], str | None, list[str]] | None:
     """Update through Core's collection in-process; ``None`` uses the WS commands.
 
-    ``helper_id`` is tried as a storage id first, as ``stored_helper_target``
-    resolves it without the component, then ``entity_id`` in the registry. A
-    helper the component cannot find also returns ``None``, so the legacy path
-    reports it with its usual error.
+    A helper the component cannot find also returns ``None``, so the legacy
+    path reports it with its usual error.
     """
-    item = await read_helper_item(
-        client, helper_type, item_id=helper_id
-    ) or await read_helper_item(client, helper_type, entity_id=entity_id)
+    item = await read_stored_helper_item(client, helper_type, helper_id, entity_id)
     if item is None:
         return None
+    # The component names the item's own entity; entity_id is only the guess.
+    entity_id = item.get("entity_id") or helper_id
     item_icon = await collection_icon(client, helper_type, "update", icon)
     body = merged_update(helper_type, item["item"], name, item_icon, fields, entity_id)
     check_core_gaps(helper_type, body, changed=fields)

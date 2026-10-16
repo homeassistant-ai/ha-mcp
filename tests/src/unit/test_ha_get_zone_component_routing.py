@@ -497,3 +497,28 @@ async def test_an_unreadable_registry_names_the_missing_icons() -> None:
     assert resp["count"] == 2
     assert any("registry down" in w for w in resp["warnings"])
     assert '"RESOURCE_NOT_FOUND"' in str(exc_info.value)
+
+
+class _DroppedRegistryClient(RoutingClient):
+    """The socket drops on the registry read after the component listed."""
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        if msg.get("type") == "config/entity_registry/list":
+            raise HomeAssistantConnectionError("socket closed")
+        return await super().send_websocket_message(msg)
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_registry_read_keeps_the_component_listing() -> None:
+    ws = make_ws(
+        "ha_mcp_tools/helpers_list",
+        info_result=_CAPS_HELPERS,
+        cmd_result=_component_zone_result(),
+    )
+    get_zone = _build_get_zone(_DroppedRegistryClient())
+
+    with patch_ws(ws, tools_zones):
+        resp = await get_zone()
+
+    assert resp["count"] == 2
+    assert any("socket closed" in w for w in resp["warnings"])

@@ -402,8 +402,8 @@ async def test_simple_delete_component_miss_with_a_state_is_not_reported_missing
     None
 ):
     """zone.home through the component: the registry lookup misses it, yet it
-    has a state. It exists, so the caller must
-    learn it is not registry-managed, not that it was already deleted."""
+    has a state. It exists, so the caller must learn it is not
+    registry-managed, not that it was already deleted."""
     ws = make_ws(
         "ha_mcp_tools/registry_lookup",
         info_result=_CAPS_REGISTRY,

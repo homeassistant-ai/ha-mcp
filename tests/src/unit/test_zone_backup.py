@@ -162,7 +162,13 @@ class TestZoneBackup:
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
         tools = ZoneTools(
             _client(
-                {"config/entity_registry/list": {"success": True, "result": registry}}
+                {
+                    "config/entity_registry/list": {
+                        "success": True,
+                        "result": registry,
+                    },
+                    "zone/list": {"success": True, "result": zones},
+                }
             )
         )
 
@@ -170,6 +176,35 @@ class TestZoneBackup:
         snapshot = await _handler("zone").fetch(None, zone_id)
 
         assert storage_id == snapshot["id"] == changed
+
+    async def test_a_zone_without_a_registry_entry_is_the_zone_backed_up(
+        self, monkeypatch
+    ):
+        """Zone "work" lost its registry entry and zone "office" was renamed to
+        zone.work: the tools change "work", as the backup holds it."""
+        zones = [dict(OFFICE), {**OFFICE, "id": "work", "name": "Work"}]
+        registry = [
+            {"entity_id": "zone.work", "platform": "zone", "unique_id": "office"}
+        ]
+        _, fake_ws = _backup_ws(zones, registry)
+        monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
+        tools = ZoneTools(
+            _client(
+                {
+                    "config/entity_registry/list": {
+                        "success": True,
+                        "result": registry,
+                    },
+                    "zone/list": {"success": True, "result": zones},
+                }
+            )
+        )
+
+        entity_id, storage_id = await tools._resolve_zone("work")
+        snapshot = await _handler("zone").fetch(None, "work")
+
+        assert storage_id == snapshot["id"] == "work"
+        assert entity_id is None
 
     @pytest.mark.parametrize(
         ("kwargs", "captured"),
@@ -376,9 +411,10 @@ class TestZoneBackup:
         monkeypatch.setattr(backup_manager, "_ws_send", fake_ws)
         handler = _handler(f"helper_{helper_type}")
 
-        snapshot = await handler.fetch(None, "anna")
+        # Snapshots are keyed by entity_id; the restore writes the stored item's id.
+        snapshot = await handler.fetch(None, f"{helper_type}.anna")
         await handler.restore(
-            None, "anna", {**snapshot, "registry_icon": "mdi:account"}
+            None, f"{helper_type}.anna", {**snapshot, "registry_icon": "mdi:account"}
         )
 
         assert snapshot["registry_icon"] == "mdi:star"

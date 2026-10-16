@@ -4,11 +4,12 @@ The helper tools keep a zone's icon in the entity registry unless the stored
 zone already has one (#2643), so the stored item alone can miss it: the
 snapshot records the registry's icon too. Core's ``zone/update`` needs the
 stored zone; once it was removed, the restore creates it again, and Core takes
-the new zone's id from the slug of its name. Core keeps a removed entity's
-registry entry, so a zone created again under its old id gets its entity_id,
-registry name and area back from Core; under another id (the zone was renamed
-since it was created, or its id carries a suffix) it gets a new entry. Either
-way the recorded registry icon is written on top.
+the new zone's id from the slug of its name. Core keeps a removed zone's
+registry entry for 30 days, so a zone created again under its old id in that
+window gets back its entity_id (if still free), registry name, area, labels
+and icon; otherwise, or under another id (the zone was renamed since it was
+created, or its slug was taken), it gets a new entry. Either way the recorded
+registry icon is written on top.
 """
 
 from __future__ import annotations
@@ -66,7 +67,9 @@ async def restore_zone(client: Any, zone_id: str, payload: dict[str, Any]) -> An
     key leaves the registry alone; a recorded ``None`` clears it. A repeated
     restore updates the zone again when the earlier one recreated it under the
     snapshot's id. Under another id (see ``_recreate``) that zone is left as it
-    is, registry icon included, since it may be another, identical zone.
+    is, registry icon included, since it may be another, identical zone. A
+    zone created since the removal can hold the freed id; the update then
+    writes it, after the restore's safety backup of it.
     """
     bm = _manager()
     recorded = "registry_icon" in payload

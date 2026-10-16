@@ -1,11 +1,11 @@
 """The storage helper a helper tool writes, for its pre-write snapshot (#2632).
 
-``ha_config_set_helper`` and ``ha_remove_helpers_integrations`` resolve their
-target as ``stored_target`` does: a storage id first, else the entity_id of
-the helper's registry entry, whose ``unique_id`` is the storage id. A renamed
-entity can carry another helper's id as its object id, so the storage id wins;
-nothing is guessed from the text. The snapshot resolves the same way, so it
-holds the item the write changes.
+``ha_config_set_helper``, ``ha_remove_helpers_integrations`` and the zone tools
+resolve their target as ``stored_target`` does: a storage id first, else the
+entity_id of the helper's registry entry, whose ``unique_id`` is the storage
+id. A renamed entity can carry another helper's id as its object id, so the
+storage id wins; nothing is guessed from the text. The snapshot resolves the
+same way, so it holds the item the write changes.
 """
 
 from __future__ import annotations
@@ -29,12 +29,11 @@ def stored_target(
 ) -> tuple[str | None, str | None]:
     """The storage id and entity_id of the stored helper ``target`` names.
 
-    A storage id first, as ``ZoneTools._resolve_zone`` resolves a zone; else
-    the registry entry on the type's platform whose entity_id is ``target``
-    (with or without ``<type>.``), whose unique_id is the storage id. Its
-    entity_id is None when the item has no registry entry, and both are None
-    when neither matches. A storage id from the registry need not be stored: a
-    YAML helper has an entry but no stored item.
+    A storage id first, else the registry entry on the type's platform whose
+    entity_id is ``target`` (with or without ``<type>.``), whose unique_id is
+    the storage id. Its entity_id is None when the item has no registry entry,
+    and both are None when neither matches. A storage id from the registry need
+    not be stored: a YAML helper has an entry but no stored item.
     """
     ids = {str(i) for i in stored_ids}
     own = [r for r in rows if r.get("platform") == helper_type]
@@ -57,8 +56,9 @@ async def fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
 
     Registered for the storage helper types only; flow helpers (config
     entries) have their own handler family (``_make_flow_helper_handler``).
-    A failed registry read propagates, so maybe_snapshot logs a WARNING rather
-    than silently skipping.
+    A failed list or registry read propagates: maybe_snapshot logs a WARNING,
+    or for a mandatory snapshot (a restore's safety backup) blocks the write,
+    rather than silently skipping.
     """
     bm = _manager()
     items = await _stored_items(client, helper_type)

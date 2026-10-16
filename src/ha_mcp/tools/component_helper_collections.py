@@ -103,6 +103,29 @@ async def read_helper_item(
     return result
 
 
+async def read_stored_helper_item(
+    client: Any, helper_type: str, helper_id: str, entity_id: str
+) -> dict[str, Any] | None:
+    """The stored item ``helper_id`` names: its storage id first, as
+    ``stored_helper_target`` resolves it, else ``entity_id`` in the registry.
+
+    Only the component's ``not_found`` for the storage id leads to the
+    entity_id read. A failed read returns ``None`` (the legacy path resolves
+    again) instead: ``entity_id`` can be another helper's entity.
+    """
+    result = await _read(
+        client, WS_HELPER_ITEM, helper_type=helper_type, item_id=helper_id
+    )
+    if result is None:
+        return None
+    if result.get("success") is True:
+        return result
+    error = result.get("error")
+    if not (isinstance(error, dict) and error.get("code") == "not_found"):
+        return None
+    return await read_helper_item(client, helper_type, entity_id=entity_id)
+
+
 def _raise_outcome_unknown(
     helper_type: str, action: str, exc: BaseException
 ) -> NoReturn:
@@ -286,7 +309,6 @@ def removal_reply(
 ) -> dict[str, Any]:
     """A removal's reply without a guessed entity, saying why it has none."""
     if entity is None:
-        response["entity_ids"] = []
         response["message"] = (
             f"Successfully deleted {response['helper_type']}: {response['target']}."
         )

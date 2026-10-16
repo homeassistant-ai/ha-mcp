@@ -156,8 +156,7 @@ class TestRemoveHelpersIntegrations:
 
     async def test_simple_path_standard_via_unique_id(self, tools, mock_client):
         """Registry returns unique_id → standard delete path."""
-        # First call: registry/get → success, unique_id present
-        # Second call: <type>/delete → success
+        # <type>/list (not a stored id), registry/get with a unique_id, delete
         mock_client.send_websocket_message.side_effect = [
             *_NOT_STORED,
             {"success": True, "result": {"unique_id": "uid-123"}},
@@ -196,8 +195,7 @@ class TestRemoveHelpersIntegrations:
     ):
         """Issue #1057 regression: a disabled entity (registered but absent
         from the state machine) must be resolved via the entity registry
-        and deleted via the standard websocket_delete path — not via the
-        already_deleted short-circuit.
+        and deleted via the standard websocket_delete path.
         """
         mock_client.get_entity_state.return_value = None
         mock_client.send_websocket_message.side_effect = [
@@ -215,15 +213,7 @@ class TestRemoveHelpersIntegrations:
         )
         assert result["success"] is True
         assert result["method"] == "websocket_delete"
-        # Distinguishes from already_deleted (no unique_id, fallback_used
-        # set) — together these pin the standard registry-driven path.
-        assert "unique_id" in result, (
-            f"Standard path not taken (no unique_id in response): {result}"
-        )
         assert result["unique_id"] == "uid-disabled-456"
-        assert result.get("fallback_used") is None, (
-            f"Expected standard websocket_delete path; got fallback: {result}"
-        )
         registry_call = mock_client.send_websocket_message.call_args_list[1]
         assert registry_call[0][0]["type"] == "config/entity_registry/get"
         assert registry_call[0][0]["entity_id"] == f"{helper_type}.{target}"
@@ -273,7 +263,7 @@ class TestRemoveHelpersIntegrations:
     async def test_simple_path_404_on_state_check_raises_entity_not_found(
         self, tools, mock_client
     ):
-        """Pin the Path 1 fallback-2 contract for never-existed targets:
+        """Pin the Path 1 classification for never-existed targets:
         get_entity_state raising HomeAssistantAPIError(status_code=404)
         must classify as state_gone → registry-verify confirms absent →
         raises ENTITY_NOT_FOUND. The 404 catch routes the never-existed
@@ -409,7 +399,6 @@ class TestRemoveHelpersIntegrations:
         )
         assert result["success"] is True
         assert result["method"] == "websocket_delete"
-        assert result.get("fallback_used") is None
         assert result["unique_id"] == "uid-disabled-apierror"
 
     _BLOCKED: ClassVar[dict[str, Any]] = {
@@ -430,8 +419,8 @@ class TestRemoveHelpersIntegrations:
     async def test_simple_path_unproven_registry_read_is_not_reported_missing(
         self, tools, mock_client, state, verify_reply, cause
     ):
-        """The registry lookup is blocked. With a state the entity exists; without one, a disabled helper keeps its
-        registry entry (#2699). Unless Core answers not_found, the read failure
+        """The registry lookup is blocked. With a state the entity exists;
+        without one, a disabled helper keeps its registry entry (#2699). Unless Core answers not_found, the read failure
         is reported with its cause, never ENTITY_NOT_FOUND."""
         mock_client.send_websocket_message.side_effect = [
             *_NOT_STORED,

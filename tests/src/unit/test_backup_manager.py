@@ -286,12 +286,11 @@ class TestFetcherIdResolution:
         assert got is not None
         assert got["id"] == "original_slug"
 
-    async def test_fetch_helper_propagates_non_notfound_error(
+    async def test_fetch_helper_propagates_a_failed_registry_read(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # The registry lookup: a transport/5xx error (no not_found code) must
-        # propagate (so maybe_snapshot logs a WARNING) rather than be
-        # swallowed as a not-found and silently skip the snapshot.
+        # A failed registry read must propagate (so maybe_snapshot logs a
+        # WARNING) rather than read as no entry and silently skip the snapshot.
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
             if msg.get("type") == "input_boolean/list":
                 return [{"id": "original_slug", "name": "X"}]

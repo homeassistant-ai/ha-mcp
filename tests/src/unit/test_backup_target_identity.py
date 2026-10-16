@@ -125,7 +125,6 @@ class TestTagSnapshotTarget:
         monkeypatch.setattr(bm, "_ws_send", _tag_ws({}))
 
         assert await bm._fetch_helper(_StubClient(), "tag.abc-1", "tag") is None
-        assert (await bm._fetch_helper(_StubClient(), "abc-1", "tag"))["id"] == "abc-1"
 
 
 TAG_ROWS = [
@@ -618,7 +617,7 @@ def test_settings_reports_a_failed_write_with_its_warnings(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The route answered a failed write with a plain-text HTTP 500. The reply
-    points to the logs, so the traceback is logged."""
+    carries only the error's message, so the traceback is logged."""
     mgr = _mk_manager(tmp_path)
     failure = HomeAssistantAPIError("Not found", status_code=404)
     mgr.register(_mk_handler(fetched=None, raise_on_restore=failure))
@@ -720,3 +719,28 @@ def test_settings_keeps_a_recreated_item_s_own_warnings(
     )
 
     assert "Created with a warning" in rendered.alerts[0]
+
+
+async def test_a_snapshot_from_before_registry_icons_shows_no_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its restore leaves the registry alone, so the icon recorded now is no
+    difference to report."""
+    registry = [
+        {
+            "entity_id": "input_boolean.item_b",
+            "platform": "input_boolean",
+            "unique_id": "item_b",
+            "icon": "mdi:star",
+        }
+    ]
+    _store_ws(monkeypatch, registry, [{"id": "item_b", "name": "Item_B"}])
+    mgr = _mk_manager(tmp_path)
+    bm.register_default_handlers(mgr, None)
+    name = _store_snapshot(
+        tmp_path, "helper_input_boolean", "input_boolean.item_b", "item_b"
+    )
+
+    result = await mgr.diff_snapshot(name)
+
+    assert result["unchanged"] is True, result

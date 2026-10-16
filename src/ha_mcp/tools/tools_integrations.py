@@ -2668,11 +2668,11 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Delete a SIMPLE helper via the websocket {type}/delete API.
 
-        Resolved as every storage helper tool resolves its target
-        (``stored_helper_target``): a storage id first, else the registry entry
-        of the entity_id. An entity_id the registry has not listed yet (the lag
-        after a create) gets the 3-retry lookup; a target still unresolved is
-        classified by why the registry has no usable record.
+        A storage id first (``stored_helper_target``), as
+        ``ha_config_set_helper`` and the backups resolve it, else the registry
+        entry of the entity_id: one read through the component, or the 3-retry
+        lookup without it. A target still unresolved is classified by why the
+        registry has no usable record.
         """
         prefixed = target.startswith(f"{helper_type}.")
         entity_id = target if prefixed else f"{helper_type}.{target}"
@@ -2682,11 +2682,7 @@ class IntegrationTools:
             if stored is not None:
                 storage_id, entity, reason = stored
                 response = await self._delete_simple_via_unique_id(
-                    helper_type,
-                    storage_id,
-                    target,
-                    entity,
-                    wait_bool and entity is not None,
+                    helper_type, storage_id, target, entity, wait_bool
                 )
                 return removal_reply(response, entity, reason)
             (
@@ -2733,9 +2729,9 @@ class IntegrationTools:
         registry-registration LAG between a helper's creation and its entity
         landing in the registry index (not a WS-timing race — the legacy read
         hits the same live registry over the same socket); the single read is
-        equally subject to that lag, but a bare id was already found by its
-        storage id, and a stale/missing resolve is classified, never turned
-        into a delete by a guessed id.
+        equally subject to that lag, but a bare id that is a stored id was
+        already found by its storage id, and a stale/missing resolve is
+        classified, never turned into a delete by a guessed id.
         On capability miss / component error the legacy retry loop runs
         unchanged. ``component_used`` records which path served the read so the
         exhausted-fallback detail can word the "3 attempts" text accurately.
@@ -2843,15 +2839,15 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Classify a SIMPLE-helper target that names no stored helper.
 
-        ``stored_helper_target`` already found no stored id and no registry
-        entry, and deleting by the object id would guess a storage id that can
-        belong to another helper's renamed entity. The target is absent from
-        state and registry, or registered without a unique_id
-        (ENTITY_NOT_FOUND); present but not registry-managed
-        (RESOURCE_NOT_FOUND); or a failed registry read (SERVICE_CALL_FAILED).
+        No stored id matched (``stored_helper_target``) and the registry
+        lookup yielded no unique_id; deleting by the object id would guess a
+        storage id that can belong to another helper's renamed entity. The
+        target is absent from state and registry, or registered without a
+        unique_id (ENTITY_NOT_FOUND); absent from state but still registered
+        (SERVICE_CALL_FAILED); present but not registry-managed
+        (RESOURCE_NOT_FOUND); or behind a failed registry read (its code).
         Always raises a structured error.
         """
-        # Confirmed-absent classification.
         # Confirm via the registry too — a disabled entity is
         # state-absent but still registry-resident, so
         # state-absence alone is not enough to classify as
@@ -2902,8 +2898,8 @@ class IntegrationTools:
                     ErrorCode.SERVICE_CALL_FAILED,
                     (
                         f"Helper {target} could not be deleted: "
-                        "its registry entry exists but has no "
-                        "unique_id, the storage id to delete it by."
+                        "its registry entry exists, but no "
+                        "unique_id to delete it by was read from it."
                     ),
                     suggestions=[
                         "Re-enable the entity via "

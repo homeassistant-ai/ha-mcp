@@ -254,7 +254,7 @@ async def _restore_backup(
     except Exception as err:
         # A write to Home Assistant failed: keep the error's own code, and the
         # manager's outcome names the safety backup to revert with (#2632).
-        # The reply points to the logs, so the traceback goes there.
+        # The reply carries only the error's message, so the traceback is logged.
         logger.exception("Restore of %s failed", name)
         from ..tools.helpers import exception_to_structured_error
 

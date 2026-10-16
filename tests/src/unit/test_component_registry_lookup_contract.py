@@ -226,7 +226,9 @@ async def test_simple_delete_resolves_in_one_lookup_no_sleep(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_simple_delete_missing_entity_via_real_component(monkeypatch) -> None:
+async def test_an_entity_the_component_misses_is_not_deleted_by_its_object_id(
+    monkeypatch,
+) -> None:
     """A SIMPLE target absent from the real registry resolves to no unique_id via
     the real component (``missing`` list), and the target is no stored id: the
     miss shape drives the classification, and nothing is deleted by the

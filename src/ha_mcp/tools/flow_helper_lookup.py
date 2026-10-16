@@ -27,8 +27,8 @@ def not_stored_reply(
     """The error when Core holds no stored item to delete.
 
     Core's storage collection holds only UI-created items, so another helper
-    is YAML-configured or already deleted. Tags have no YAML form: a bare tag
-    id is the stored id itself (#2632), so an unknown one names no tag.
+    is YAML-configured or already deleted. Tags have no YAML form, so a tag
+    id with no stored item names no tag.
     """
     if helper_type == "tag":
         return (

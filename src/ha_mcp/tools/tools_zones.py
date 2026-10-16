@@ -13,6 +13,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
+from ..backup_helper_target import stored_target
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -278,7 +279,10 @@ class ZoneTools:
             # to the legacy listing silently.
             return None
         rows = _shape_component_zone_rows(result)
-        entries, registry_error = await self._zone_registry()
+        try:
+            entries, registry_error = await self._zone_registry()
+        except HomeAssistantConnectionError as exc:
+            entries, registry_error = [], str(exc)
         # The listing is complete without the registry; only its icons are missing.
         response = _build_zone_result(_with_registry_icons(rows, entries), zone_id)
         if registry_error:
@@ -342,8 +346,8 @@ class ZoneTools:
         if registry_error:
             # Without the registry no zone state can be told apart from a stored zone.
             return rows, [
-                "Zone entity_ids, and zones outside the zone storage such as "
-                f"'home', are missing: {registry_error}"
+                "Zone entity_ids, icons set in the entity registry, and zones "
+                f"outside the zone storage such as 'home', are missing: {registry_error}"
             ]
         try:
             states = await self._client.get_states()
@@ -405,15 +409,27 @@ class ZoneTools:
             )
         return state
 
-    async def _resolve_zone(self, zone_id: str) -> tuple[str, str]:
+    async def _resolve_zone(self, zone_id: str) -> tuple[str | None, str]:
         """The entity_id and storage zone_id of a stored zone, given either.
 
-        Core's zone commands take the storage id, which is the registry
-        ``unique_id`` of the zone's entity. The home zone and YAML zones are not
-        in that storage; Core gives them no ``unique_id``, so they have no
-        registry entry. A storage id wins over an entity_id of the same text: a
-        renamed entity can carry another zone's id.
+        Resolved as ``stored_target`` resolves it, and so as the zone backups
+        do: a storage id from ``zone/list`` first, else the zone whose registry
+        entry has ``zone_id`` (with or without ``zone.``) as its entity_id. A
+        renamed entity can carry another zone's id, so the storage id wins.
+        The entity_id is None for a stored zone without a registry entry. The
+        home zone and YAML zones are not in the storage; Core gives them no
+        ``unique_id``, so they have no registry entry.
         """
+        listed = await self._client.send_websocket_message({"type": "zone/list"})
+        if not listed.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Could not find zone {zone_id}: "
+                    f"{listed.get('error', 'Failed to get zones')}",
+                    context={"zone_id": zone_id},
+                )
+            )
         entries, registry_error = await self._zone_registry()
         if registry_error:
             raise_tool_error(
@@ -423,11 +439,12 @@ class ZoneTools:
                     context={"zone_id": zone_id},
                 )
             )
+        stored = {str(zone.get("id")) for zone in listed.get("result") or []}
+        storage_id, entity = stored_target("zone", zone_id, stored, entries)
+        if storage_id in stored:
+            return entity, storage_id
         entity_id = zone_id if zone_id.startswith("zone.") else f"zone.{zone_id}"
-        entry = next((e for e in entries if e["unique_id"] == zone_id), None) or next(
-            (e for e in entries if e.get("entity_id") == entity_id), None
-        )
-        if entry is None and await self._zone_state(entity_id) is not None:
+        if await self._zone_state(entity_id) is not None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
@@ -441,18 +458,16 @@ class ZoneTools:
                     ],
                 )
             )
-        if entry is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    f"Zone not found: {zone_id}",
-                    context={"zone_id": zone_id},
-                    suggestions=[
-                        "Use ha_get_zone() without zone_id to see all available zones"
-                    ],
-                )
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Zone not found: {zone_id}",
+                context={"zone_id": zone_id},
+                suggestions=[
+                    "Use ha_get_zone() without zone_id to see all available zones"
+                ],
             )
-        return entry["entity_id"], entry["unique_id"]
+        )
 
     @tool(
         name="ha_set_zone",
@@ -589,12 +604,12 @@ class ZoneTools:
                 entity_id, storage_id = await self._resolve_zone(zone_id)
                 # The helper write path merges into the stored zone and keeps a
                 # new icon in the registry, where it stays clearable, unless the
-                # zone already stores one (#2643).
+                # zone already stores one (#2643). It takes the storage id first.
                 result = await _execute_update_simple_helper(
                     self._client,
                     "zone",
-                    entity_id,
-                    entity_id,
+                    entity_id or storage_id,
+                    storage_id,
                     name,
                     icon,
                     None,
@@ -697,7 +712,7 @@ class ZoneTools:
                 raise_tool_error(
                     create_error_response(
                         ws_failure_code(result),
-                        f"Failed to remove zone {entity_id}: "
+                        f"Failed to remove zone {entity_id or storage_id}: "
                         f"{result.get('error', 'Unknown error')}",
                         context={"zone_id": zone_id, "entity_id": entity_id},
                         suggestions=[
@@ -709,8 +724,14 @@ class ZoneTools:
                 "success": True,
                 "zone_id": storage_id,
                 "entity_id": entity_id,
-                "message": f"Successfully removed zone: {entity_id}",
+                "message": f"Successfully removed zone: {entity_id or storage_id}",
             }
+            if entity_id is None:
+                response["warnings"] = [
+                    f"Zone {storage_id} had no entity in the registry, so the "
+                    "removal was not waited on."
+                ]
+                return response
             if not wait:
                 return response
             try:

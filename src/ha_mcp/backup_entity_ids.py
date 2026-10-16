@@ -39,8 +39,9 @@ async def with_registry_icon(
     """The stored item plus the icon its entity's registry entry sets, if any.
 
     The registry icon is the one the entity shows, and the helper tools write
-    it there (an update always, a create when Core's schema has no icon
-    field), so the stored item alone can miss it. A failed registry read
+    it there (an update always; a create for a zone, or when Core's schema
+    has no icon field or cannot be read), so the stored item alone can miss
+    it. A failed registry read
     propagates, so the capture reports it instead of saving a snapshot
     without the icon.
     """

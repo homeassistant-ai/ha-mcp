@@ -1632,6 +1632,14 @@ class BackupManager:
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
         current = await handler.fetch(self._client, data["entity_id"])
+        if (
+            isinstance(current, dict)
+            and isinstance(data["config"], dict)
+            and "registry_icon" not in data["config"]
+        ):
+            # A snapshot from before registry icons were recorded: its restore
+            # leaves the registry alone, so the icon is no difference.
+            current.pop("registry_icon", None)
         if _is_flow_helper_domain(domain) and current is not None:
             # Both MCP and Settings preview this comparison. Registry metadata
             # is recreation-only; an existing-entry restore applies options.

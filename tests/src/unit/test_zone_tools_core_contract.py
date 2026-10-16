@@ -155,7 +155,7 @@ def _no_component(removed: AsyncMock, registered: AsyncMock):
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "ha_mcp.tools.config_helpers.update.read_helper_item",
+            "ha_mcp.tools.config_helpers.update.read_stored_helper_item",
             new=AsyncMock(return_value=None),
         ),
         patch(
@@ -267,8 +267,12 @@ class TestZoneLookup:
             {"entity_id": "zone.work", "platform": "zone", "unique_id": "office"},
             {"entity_id": "zone.work_2", "platform": "zone", "unique_id": "work"},
         ]
+        work = {**OFFICE, "id": "work", "name": "Work"}
         client = _client(
-            {"config/entity_registry/list": {"success": True, "result": renamed}}
+            {
+                "config/entity_registry/list": {"success": True, "result": renamed},
+                "zone/list": {"success": True, "result": [OFFICE, work]},
+            }
         )
 
         await ZoneTools(client).ha_remove_zone(zone_id="work")
@@ -298,6 +302,23 @@ class TestRemoveWait:
         result = await ZoneTools(_client()).ha_remove_zone(zone_id="office")
 
         assert "verification failed" in result["warnings"][0]
+
+    async def test_a_zone_without_an_entity_is_removed_without_a_guessed_one(
+        self, removed
+    ):
+        """zone.office would be named and waited on, though no entity holds it."""
+        client = _client(
+            {"config/entity_registry/list": {"success": True, "result": []}}
+        )
+
+        result = await ZoneTools(client).ha_remove_zone(zone_id="office")
+
+        assert _sent(client, "zone/delete") == [
+            {"type": "zone/delete", "zone_id": "office"}
+        ]
+        assert result["entity_id"] is None
+        assert "not waited on" in result["warnings"][0]
+        removed.assert_not_awaited()
 
 
 class TestZoneWrites:
@@ -414,7 +435,7 @@ class TestCreatedIconStaysClearable:
     )
     async def test_a_failed_registry_read_after_create_is_a_warning(self, failure):
         """The helper exists: an error would make a retrying caller create it
-        twice. Every type reads its new entity from the registry."""
+        twice."""
         client = _client(
             {
                 "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
@@ -567,7 +588,7 @@ class TestCreatedIconStaysClearable:
         write = AsyncMock(return_value=None)
         read = AsyncMock(return_value={"item": item, "item_id": "anna"})
         with (
-            patch("ha_mcp.tools.config_helpers.update.read_helper_item", read),
+            patch("ha_mcp.tools.config_helpers.update.read_stored_helper_item", read),
             patch("ha_mcp.tools.config_helpers.update.write_helper_item", write),
             patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)),
         ):
@@ -619,10 +640,11 @@ class TestCreatedIconStaysClearable:
 
         result = await _execute_update_simple_helper(
             client, "tag", "abc-1", "abc-1", None, None,
-            "hall", None, None, False, False, {},
+            "hall", None, None, True, False, {},
         )  # fmt: skip
 
         assert "the area given were not applied" in result["warnings"][0]
+        assert "not waited on" in result["warnings"][0]
 
     async def test_a_failed_registry_read_on_tag_update_is_a_warning(self):
         """Even with no registry field given, the missing entity_id is named."""

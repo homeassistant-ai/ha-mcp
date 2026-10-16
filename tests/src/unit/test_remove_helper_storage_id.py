@@ -1,6 +1,6 @@
-"""ha_remove_helpers_integrations resolves a storage helper's target as every
-storage helper tool does (#2632): a storage id first, else the registry entry
-of the entity_id. A renamed entity can carry another helper's id as its object
+"""ha_remove_helpers_integrations resolves a storage helper's target as
+ha_config_set_helper and the backups do (#2632): a storage id first, else the
+registry entry of the entity_id. A renamed entity can carry another helper's id as its object
 id, so the storage id wins, and an entity_id the registry does not know is
 never turned into a delete by its object id.
 """
@@ -36,13 +36,17 @@ def _immediate_registry_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("ha_mcp.tools.tools_integrations._REGISTRY_RETRY_BASE_DELAY", 0)
 
 
-def _core(stored: list[str], rows: list[dict[str, Any]]) -> MagicMock:
+def _core(
+    stored: list[str], rows: list[dict[str, Any]], list_ok: bool = True
+) -> MagicMock:
     """Core's answers by command: the stored ids, the registry, deletes."""
     not_found = {"success": False, "error": "x", "error_code": "not_found"}
 
     async def ws(msg: dict[str, Any]) -> dict[str, Any]:
         kind = msg["type"]
         if kind == "input_button/list":
+            if not list_ok:
+                return {"success": False, "error": "timeout"}
             return {"success": True, "result": [{"id": i} for i in stored]}
         if kind == "config/entity_registry/list":
             return {"success": True, "result": rows}
@@ -97,4 +101,16 @@ async def test_an_unknown_entity_id_is_not_deleted_by_its_object_id() -> None:
         await _remove(client, "input_button.my_button")
 
     assert json.loads(str(exc_info.value))["error"]["code"] == "ENTITY_NOT_FOUND"
+    assert _deleted(client) == []
+
+
+async def test_an_unreadable_list_deletes_nothing() -> None:
+    """Without the stored ids the storage id cannot win: input_button.my_button
+    would resolve to "other", a different helper."""
+    client = _core(["my_button", "other"], RENAMED_ROWS, list_ok=False)
+
+    with pytest.raises(ToolError) as exc_info:
+        await _remove(client, "my_button")
+
+    assert "Failed to fetch input_button config list" in str(exc_info.value)
     assert _deleted(client) == []
