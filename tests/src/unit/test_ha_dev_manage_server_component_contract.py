@@ -146,13 +146,13 @@ async def test_real_component_write_maps_and_defers_merged_apply() -> None:
 
     with patch_ws(ws, tools_dev):
         result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
 
     data = result["data"]
     assert data["scheduled"] is True
     assert data["entry_id"] == "srv1"
-    assert data["applying"] == {"channel": "dev"}
+    assert data["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
     assert data["previous"] == {"channel": "stable", "pip_spec": ""}
     # Component-first: the consumer tries the component write BEFORE opening the
     # legacy options flow, so no flow is opened — nothing to submit or abort.
@@ -164,8 +164,8 @@ async def test_real_component_write_maps_and_defers_merged_apply() -> None:
     await component_hass.scheduled[0]
     _entry, applied = component_hass.config_entries.update_calls[0]
     assert applied == {
-        "channel": "dev",
-        "pip_spec": "",
+        "channel": "stable",
+        "pip_spec": "ha-mcp==2.0.0",
         "server_url": "http://ha:8123",
     }
 
@@ -211,6 +211,6 @@ async def test_real_component_no_entry_falls_back_to_component_not_installed() -
 
     with patch_ws(ws, tools_dev), pytest.raises(ToolError, match="server entry"):
         await DevTools(client).ha_dev_manage_server(
-            action="update_source", channel="dev"
+            action="update_source", pip_spec="ha-mcp==2.0.0"
         )
     assert component_hass.scheduled == []

@@ -3,10 +3,11 @@
 The mirror's release-on-tag workflow turns each pushed tag into a GitHub
 release, but the deploy key that pushes the tag cannot call the GitHub API
 to set a rich release body -- so the body has to travel inside the annotated
-tag message itself. This script produces that message: a summary of what
-changed in the HACS custom component (custom_components/ha_mcp_tools/) since
-the previous stable server release, so HACS shows real release notes instead
-of a generic stub.
+tag message itself. This script produces that message for a stable release:
+the component and the ha-mcp server it installs share one version (#2427), so
+the notes name that server and summarize what changed in the custom component
+(custom_components/ha_mcp_tools/) since the previous stable release, so HACS
+shows real release notes instead of a generic stub.
 """
 
 from __future__ import annotations
@@ -28,6 +29,10 @@ _STABLE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 _NOISE_SUBJECT_PREFIXES = ("chore(addon): publish dev addon version",)
 
 _CHANGELOG_URL = "https://github.com/homeassistant-ai/ha-mcp/releases"
+_UPGRADE_GUIDE_URL = (
+    "https://github.com/homeassistant-ai/ha-mcp/blob/master/"
+    "docs/in-process-server.md#upgrading-from-component-2x"
+)
 
 _COMPONENT_PATH = "custom_components/ha_mcp_tools/"
 
@@ -39,31 +44,40 @@ def _stable_version_key(tag: str) -> tuple[int, int, int]:
     return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
-def select_stable_tags(tags: list[str]) -> tuple[str | None, str]:
-    """Pick the two newest stable server release tags as (prev, curr).
+def select_stable_tags(
+    tags: list[str], current_tag: str | None = None
+) -> tuple[str | None, str]:
+    """Pick a stable release and its predecessor as (prev, curr).
 
     Filters to tags matching vX.Y.Z (excludes dev tags like
     'v7.10.0.dev778' and the floating 'stable' tag) and sorts numerically --
     a lexical sort would put 'v7.10.0' before 'v7.9.0'. Returns (None, curr)
-    when only one stable tag exists (the first-ever stable release).
+    for the first stable release. Without current_tag, selects the newest.
     """
     stable = sorted(
         (tag for tag in tags if _STABLE_TAG_RE.match(tag)), key=_stable_version_key
     )
     if not stable:
         raise ValueError("no stable tags (vX.Y.Z) found")
-    if len(stable) == 1:
-        return None, stable[0]
-    return stable[-2], stable[-1]
+    if current_tag is not None and current_tag not in stable:
+        raise ValueError(f"requested stable tag not found: {current_tag}")
+    index = stable.index(current_tag) if current_tag is not None else len(stable) - 1
+    return (stable[index - 1] if index else None), stable[index]
 
 
 def _filter_noise_subjects(subjects: list[str]) -> list[str]:
     """Drop commit subjects that are automation noise, not component changes."""
-    return [s for s in subjects if not s.startswith(_NOISE_SUBJECT_PREFIXES)]
+    # semantic-release commits each stable version as its bare number while
+    # stamping the component version and server pin, even on server-only bumps.
+    return [
+        s
+        for s in subjects
+        if not s.startswith(_NOISE_SUBJECT_PREFIXES)
+        and not _STABLE_TAG_RE.fullmatch(f"v{s}")
+    ]
 
 
 def format_release_notes(
-    component_version: str,
     prev_tag: str | None,
     curr_tag: str,
     subjects: list[str],
@@ -71,18 +85,27 @@ def format_release_notes(
     """Render the mirror tag's annotated-tag message as markdown.
 
     `subjects` are commit subject lines touching custom_components/ha_mcp_tools/
-    in the range (prev_tag, curr_tag] of the main repo. `curr_tag` names the
-    server release this notes body was generated from; `component_version` is
-    the mirror's own tag version (the two numbering schemes are unrelated).
+    in the range (prev_tag, curr_tag] of the main repo. `curr_tag` is the
+    release both the component and its server carry.
     """
     subjects = _filter_noise_subjects(subjects)
-    lines = [f"## ha-mcp-tools {component_version}", ""]
-
+    version = curr_tag.removeprefix("v")
+    lines = [
+        f"## HA-MCP Custom Component {version}",
+        "",
+        f"Installs the ha-mcp {version} server released with it; restart Home "
+        "Assistant after updating to run both.",
+        "",
+        "**Upgrading from component 2.x:** The Release channel, Automatic server "
+        "updates and server update entity are removed; update the component "
+        "through HACS or manually. In secret-URL "
+        "(`none`) mode, existing OAuth clients may need their callback added "
+        "to the allowlist before they can sign in again. "
+        f"[Upgrade guide]({_UPGRADE_GUIDE_URL}).",
+        "",
+    ]
     if prev_tag is None:
-        lines.append("Initial component release.")
-    else:
-        lines.append(f"Synced from ha-mcp {curr_tag}.")
-    lines.append("")
+        lines.extend(["Initial component release.", ""])
 
     if subjects:
         since = prev_tag if prev_tag is not None else "this component's introduction"
@@ -90,8 +113,8 @@ def format_release_notes(
         lines.extend(f"- {subject}" for subject in subjects)
     else:
         lines.append(
-            "Component snapshot resync -- no changes to "
-            f"{_COMPONENT_PATH} in this server release."
+            f"No changes to {_COMPONENT_PATH} in this release; it updates the "
+            "server the component installs."
         )
 
     lines.append("")
@@ -117,11 +140,13 @@ def _run_git(args: list[str], repo_dir: Path) -> str:
     return result.stdout.strip()
 
 
-def discover_stable_tags(repo_dir: Path) -> tuple[str | None, str]:
-    """Find the two newest stable server release tags in repo_dir."""
+def discover_stable_tags(
+    repo_dir: Path, current_tag: str | None = None
+) -> tuple[str | None, str]:
+    """Find the selected stable release and its predecessor in repo_dir."""
     output = _run_git(["tag", "-l", "v*"], repo_dir)
     tags = output.splitlines() if output else []
-    return select_stable_tags(tags)
+    return select_stable_tags(tags, current_tag)
 
 
 def collect_component_subjects(
@@ -138,15 +163,14 @@ def collect_component_subjects(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--component-version",
-        required=True,
-        help="Version from custom_components/ha_mcp_tools/manifest.json",
-    )
-    parser.add_argument(
         "--out",
         type=Path,
         required=True,
         help="Destination path for the generated release notes",
+    )
+    parser.add_argument(
+        "--tag",
+        help="Stable release being published (defaults to the newest stable tag)",
     )
     parser.add_argument(
         "--repo-dir",
@@ -160,13 +184,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        prev_tag, curr_tag = discover_stable_tags(args.repo_dir)
+        prev_tag, curr_tag = discover_stable_tags(args.repo_dir, args.tag)
         subjects = collect_component_subjects(prev_tag, curr_tag, args.repo_dir)
     except (RuntimeError, ValueError) as e:
         print(f"build_mirror_release_notes: {e}", file=sys.stderr)
         return 1
 
-    notes = format_release_notes(args.component_version, prev_tag, curr_tag, subjects)
+    notes = format_release_notes(prev_tag, curr_tag, subjects)
     args.out.write_text(notes, encoding="utf-8")
     return 0
 

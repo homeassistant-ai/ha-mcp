@@ -363,15 +363,17 @@ def _do_server_entry_update(
 async def _server_entry_update_prep(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
-    """Apply a ``channel`` / ``pip_spec`` delta to the server entry, DEFERRED.
+    """Apply a ``pip_spec`` delta to the server entry, DEFERRED.
 
     Returns ``{"result": <envelope>}``. The order is load-bearing:
 
     1. Locate the server entry (:func:`_find_server_config_entry`); a missing entry
        raises ``HomeAssistantError`` so the server's command-error path falls back to
        its legacy options-flow submit.
-    2. Require at least one of ``channel`` / ``pip_spec`` (the server always sends
-       one — this is defence-in-depth).
+    2. Require ``pip_spec``. ``channel`` is still accepted (servers before the
+       paired-release change send it) but ignored: each component release pins
+       its server, and development builds come from HACS's Pre-release switch.
+       A frame carrying ONLY ``channel`` is refused with that explanation.
     3. Snapshot the ``delta`` (the provided fields, keyed by the OPT_* option keys)
        and the CURRENT ``entry.options`` — used ONLY for the no-op check and the
        ``previous``/``applying`` response envelope. Every UNtouched key is preserved
@@ -397,8 +399,8 @@ async def _server_entry_update_prep(
     get its confirmation. It is therefore scheduled after a flush delay. The task is
     created with :func:`hass.async_create_background_task` (hass-owned), NOT
     ``entry.async_create_background_task``: an entry-owned task is cancelled by the
-    unload the reload performs, so it could cancel itself before firing — the exact
-    trap ``embedded_entry._on_version_update`` documents. Being hass-owned, the task
+    unload the reload performs, so it would cancel itself before
+    ``async_update_entry`` runs. Being hass-owned, the task
     survives to invoke ``async_update_entry`` (a synchronous ``@callback`` that
     returns as soon as it schedules the listener), then completes; the reload it
     triggers runs as its own hass task after the response has flushed.
@@ -413,11 +415,13 @@ async def _server_entry_update_prep(
             "no ha_mcp_tools in-process server config entry to update"
         )
 
-    has_channel = "channel" in msg
     has_pip_spec = "pip_spec" in msg
-    if not has_channel and not has_pip_spec:
+    if not has_pip_spec:
         raise HomeAssistantError(
-            "server_entry_update needs at least one of channel / pip_spec"
+            "server_entry_update needs pip_spec. The release channel can no "
+            "longer be chosen here: each HA-MCP component release installs the "
+            "server it was released with, and development builds come from "
+            "the HACS Pre-release switch for this repository."
         )
 
     options = getattr(entry, "options", None)
@@ -427,15 +431,12 @@ async def _server_entry_update_prep(
     # snapshot used ONLY for the no-op check below, never for the write.
     delta: dict[str, Any] = {}
     applying: dict[str, Any] = {}
-    if has_channel:
-        delta[OPT_CHANNEL] = msg["channel"]
-        applying["channel"] = msg["channel"]
     if has_pip_spec:
         # Normalize like the options flow's ``_normalize`` (config_flow.py): a
-        # whitespace-only value OR the default unpinned dist (``DEFAULT_PIP_SPEC``)
-        # means "no override" — collapse it to "" so the channel keeps
-        # auto-updating. Persisting it verbatim would read as an intentional
-        # override and disable auto-updates. This keeps the no-op check honest: a
+        # whitespace-only value OR the bare dist (``DEFAULT_PIP_SPEC``) means
+        # "no override" — collapse it to "" so the paired server runs.
+        # Persisting it verbatim would read as an intentional override of the
+        # server this component release pins. This keeps the no-op check honest: a
         # frame that normalizes to the stored value is unchanged, not a schedule.
         # 'clear' (case-insensitive) is the empty string's mangling-proof
         # alias (see ha_dev_manage_server): recognize it here too so raw WS
