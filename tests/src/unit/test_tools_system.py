@@ -2540,7 +2540,7 @@ class TestReloadCore:
         """entry_id reloads exactly one config entry via the REST endpoint,
         hitting the exact path including the ``/entry/`` segment; the sweep path
         (call_service) is never touched."""
-        client = MagicMock()
+        client = MagicMock(get_config_entry=AsyncMock(return_value={"domain": "hue"}))
         client._request = AsyncMock(return_value={})
 
         result = await SystemTools(client).ha_reload_core(entry_id="abc123")
@@ -2561,7 +2561,7 @@ class TestReloadCore:
     async def test_entry_id_require_restart_surfaced(self):
         """Core's require_restart=True (entry cannot hot-reload) must not be
         reported as a completed reload."""
-        client = MagicMock()
+        client = MagicMock(get_config_entry=AsyncMock(return_value={"domain": "hue"}))
         client._request = AsyncMock(return_value={"require_restart": True})
 
         result = await SystemTools(client).ha_reload_core(entry_id="abc123")
@@ -2575,7 +2575,7 @@ class TestReloadCore:
     async def test_entry_id_forbidden_maps_to_cannot_reload_not_auth(self):
         """Core returns 403 'Entry cannot be reloaded' for OperationNotAllowed;
         that must surface as a cannot-reload error, not an auth failure."""
-        client = MagicMock()
+        client = MagicMock(get_config_entry=AsyncMock(return_value={"domain": "hue"}))
         client._request = AsyncMock(
             side_effect=HomeAssistantAPIError(
                 "API error: 403 - Entry cannot be reloaded", status_code=403
@@ -2592,7 +2592,7 @@ class TestReloadCore:
     async def test_entry_id_not_found_maps_to_resource_not_found(self):
         """A 404 from the reload endpoint becomes a RESOURCE_NOT_FOUND error
         that names the entry_id."""
-        client = MagicMock()
+        client = MagicMock(get_config_entry=AsyncMock(return_value={"domain": "hue"}))
         client._request = AsyncMock(
             side_effect=HomeAssistantAPIError(
                 "API error: 404 - Config entry not found", status_code=404
@@ -2608,7 +2608,7 @@ class TestReloadCore:
     async def test_entry_id_non_404_failure_raises_tool_error(self):
         """A non-404 backend failure still surfaces as a ToolError (routed
         through the shared exception classifier), not a silent success."""
-        client = MagicMock()
+        client = MagicMock(get_config_entry=AsyncMock(return_value={"domain": "hue"}))
         client._request = AsyncMock(
             side_effect=HomeAssistantAPIError("API error: 500 - boom", status_code=500)
         )

@@ -14,6 +14,8 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_integrations import IntegrationTools
+from ha_mcp.tools.tools_service import ServiceTools
+from ha_mcp.tools.tools_system import SystemTools
 
 _OWN_ENTRY_ID = "own-server-entry"
 
@@ -25,6 +27,8 @@ _MUTATING_CALLS = (
     "start_reconfigure_flow",
     "send_websocket_message",
     "delete_config_entry",
+    "call_service",
+    "_request",
 )
 
 
@@ -97,6 +101,28 @@ async def test_remove_cannot_delete_ha_mcps_own_entry(client: MagicMock) -> None
     with pytest.raises(ToolError) as exc_info:
         await IntegrationTools(client).ha_remove_helpers_integrations(
             target=_OWN_ENTRY_ID, confirm=True
+        )
+
+    _assert_refused_without_mutation(exc_info, client)
+
+
+async def test_reload_core_cannot_reload_ha_mcps_own_entry(client: MagicMock) -> None:
+    """ha_reload_core(entry_id=...) must not reload the server's own entry
+    over the unshielded REST route, which strands it until HA restarts."""
+    with pytest.raises(ToolError) as exc_info:
+        await SystemTools(client).ha_reload_core(entry_id=_OWN_ENTRY_ID)
+
+    _assert_refused_without_mutation(exc_info, client)
+
+
+async def test_call_service_cannot_reload_ha_mcps_own_entry(client: MagicMock) -> None:
+    """homeassistant.reload_config_entry through ha_call_service is the same
+    bypass and must be refused before the service call."""
+    with pytest.raises(ToolError) as exc_info:
+        await ServiceTools(client, MagicMock()).ha_call_service(
+            domain="homeassistant",
+            service="reload_config_entry",
+            data={"entry_id": _OWN_ENTRY_ID},
         )
 
     _assert_refused_without_mutation(exc_info, client)
