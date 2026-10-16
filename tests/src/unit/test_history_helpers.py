@@ -4,7 +4,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ha_mcp.tools.tools_history import parse_relative_time
+from ha_mcp.tools.tools_history import _parse_time_range, parse_relative_time
+
+
+class TestParseTimeRange:
+    def test_relative_end_time_looks_back_from_now(self):
+        """A relative end_time is read like start_time, not rejected as non-ISO."""
+        now = datetime(2026, 10, 16, 20, 0, tzinfo=UTC)
+        start, end = _parse_time_range("2h", "30min", 24, reference_time=now)
+        assert (start, end) == (now - timedelta(hours=2), now - timedelta(minutes=30))
 
 
 class TestParseRelativeTime:
@@ -53,6 +61,12 @@ class TestParseRelativeTime:
         expected = datetime.now(UTC) - timedelta(days=180)
         assert abs((result - expected).total_seconds()) < 1
 
+    def test_minutes_suffix_looks_back_minutes(self):
+        """'30min' looks back 30 minutes instead of being rejected; 'm' keeps meaning 30 days."""
+        reference = datetime(2026, 10, 16, 20, 0, tzinfo=UTC)
+        result = parse_relative_time("30min", reference_time=reference)
+        assert result == reference - timedelta(minutes=30)
+
     def test_relative_format_uppercase(self):
         """Uppercase relative format (e.g., '24H') works."""
         result = parse_relative_time("24H")
@@ -94,11 +108,6 @@ class TestParseRelativeTime:
         with pytest.raises(ValueError, match="Invalid time format"):
             parse_relative_time("invalid")
 
-    def test_invalid_relative_unit_raises_error(self):
-        """Invalid relative unit (e.g., '24x') raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
-            parse_relative_time("24x")
-
     def test_negative_relative_raises_error(self):
         """Negative relative time (e.g., '-24h') raises ValueError."""
         with pytest.raises(ValueError, match="Invalid time format"):
@@ -116,7 +125,8 @@ class TestParseRelativeTime:
         expected = datetime.now(UTC) - timedelta(hours=168)
         assert abs((result - expected).total_seconds()) < 1
 
-    @pytest.mark.parametrize("value", ["99999999d", "100000000m"])
-    def test_overflowing_relative_value_raises_validation_error(self, value):
+    @pytest.mark.parametrize("value", ["24x", "20mins", "99999999d", "100000000m"])
+    def test_unusable_relative_value_raises_validation_error(self, value):
+        """An unknown unit ('20mins' is not '20min') or an out-of-range value is rejected, never read as another window."""
         with pytest.raises(ValueError, match="Invalid time format"):
             parse_relative_time(value)
