@@ -82,6 +82,9 @@ from .backup_entity_ids import (
 )
 from .backup_helper_target import fetch_helper as _fetch_helper
 from .backup_helper_target import note_no_safety_backup as _note_no_safety_backup
+from .backup_helper_target import (
+    raise_with_restore_outcome as _raise_with_restore_outcome,
+)
 from .backup_helper_target import require_holds as _require_holds
 from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
@@ -1560,8 +1563,7 @@ class BackupManager:
                 ) from err
             # The error keeps its own type and code; the safety backup to revert
             # with and any warnings ride along for the caller.
-            err.restore_outcome = {**outcome, "apply_status": apply_status}  # type: ignore[attr-defined]
-            raise
+            _raise_with_restore_outcome(err, {**outcome, "apply_status": apply_status})
         finally:
             if safety_path is not None:
                 self._unprotect_snapshot(safety_path.name)

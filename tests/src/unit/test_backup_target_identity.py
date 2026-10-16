@@ -578,6 +578,47 @@ class TestRestoreSafetyBackup:
 
         assert result["data"]["safety_backup"] is not None
 
+    async def test_a_tool_error_on_apply_names_the_safety_backup(
+        self, tmp_path: Path
+    ) -> None:
+        """The MCP reply of a tool error is its text, so the outcome must be in it."""
+        mgr = _mk_manager(tmp_path)
+        written = ToolError(
+            json.dumps({"success": False, "error": {"code": "X"}, "data": {"x": 1}})
+        )
+        mgr.register(
+            _mk_handler(fetched={"alias": "Hall lights"}, raise_on_restore=written)
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _edits_restore(mgr, "edits", "restore", _snapshot(tmp_path))
+
+        reply = json.loads(str(exc_info.value))
+        assert reply["error"]["code"] == "X"
+        assert reply["data"]["x"] == 1
+        assert reply["data"]["safety_backup"] is not None
+        assert reply["data"]["apply_status"] == "unknown"
+        assert exc_info.value.__cause__ is written
+
+    async def test_a_plain_text_tool_error_on_apply_keeps_its_text(
+        self, tmp_path: Path
+    ) -> None:
+        """Only a JSON reply can carry the outcome; the error stays as it was."""
+        mgr = _mk_manager(tmp_path)
+        mgr.register(
+            _mk_handler(
+                fetched={"alias": "Hall lights"}, raise_on_restore=ToolError("boom")
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _edits_restore(mgr, "edits", "restore", _snapshot(tmp_path))
+
+        assert str(exc_info.value) == "boom"
+        assert exc_info.value.restore_outcome["safety_backup"] is not None
+        # Its traceback still shows what it was raised under.
+        assert not exc_info.value.__suppress_context__
+
     async def test_a_failed_apply_names_the_safety_backup(self, tmp_path: Path) -> None:
         """The write may have applied partly; the error keeps its own code."""
         mgr = _mk_manager(tmp_path)

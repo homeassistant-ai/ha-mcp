@@ -469,8 +469,10 @@ class ZoneTools:
                 context={"zone_id": zone_id},
                 suggestions=[
                     "Use ha_get_zone() without zone_id to see all available zones",
-                    "A zone_id without 'zone.' is a storage id; name a zone by "
-                    "its entity with the full entity_id",
+                    (
+                        "A zone_id without 'zone.' is a storage id; name a zone "
+                        "by its entity with the full entity_id"
+                    ),
                 ],
             )
         )

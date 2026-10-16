@@ -5,13 +5,17 @@ resolve their target as ``stored_target`` does: a bare id is a storage id,
 and ``<type>.<name>`` is the entity_id of the helper's registry entry, whose
 ``unique_id`` is the storage id. A renamed entity can carry another helper's
 id as its name, so a bare id never names an entity. The snapshot resolves
-the same way, so it holds the item the write changes.
+the same way, so it holds the item the write changes. A restore whose write
+fails raises through ``raise_with_restore_outcome``, so its caller still learns
+the safety backup to revert with.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, NoReturn
 
+from ._vendor.fastmcp.exceptions import ToolError
 from .backup_entity_ids import _manager
 
 
@@ -131,6 +135,33 @@ def require_holds(config: Any, stored: Any, entity_id: str) -> None:
                 f"If {stored} has no entity, rename the entity that holds {entity_id}",
             ],
         )
+
+
+def raise_with_restore_outcome(err: BaseException, outcome: dict[str, Any]) -> NoReturn:
+    """Raise a failed restore write's error with the restore's outcome.
+
+    Every error keeps the outcome as ``restore_outcome`` for the Settings
+    handler and is raised again as it is. A tool error reaches the MCP client
+    as its JSON text alone, so it is raised as a copy with the outcome in that
+    text as ``data``, chained to the original so logs keep where it failed.
+    """
+    err.restore_outcome = outcome  # type: ignore[attr-defined]
+    original: BaseException = err
+    if not isinstance(err, ToolError):
+        raise original
+    try:
+        reply = json.loads(str(err))
+    except ValueError:
+        reply = None  # raised below, outside this handler, to keep its context
+    if not isinstance(reply, dict):
+        raise original
+    data = reply.get("data")
+    reply["data"] = {**data, **outcome} if isinstance(data, dict) else outcome
+    carried = ToolError(
+        json.dumps(reply, indent=2, default=str), log_level=err.log_level
+    )
+    carried.__dict__.update(err.__dict__)
+    raise carried from err
 
 
 def note_no_safety_backup(
