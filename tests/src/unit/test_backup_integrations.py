@@ -42,6 +42,22 @@ async def test_restoring_a_deleted_entry_is_refused_and_changes_nothing(
 
 
 @pytest.mark.asyncio
+async def test_restoring_a_snapshot_cannot_toggle_ha_mcps_own_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restore must not re-enable or disable the server's own entry, which
+    ha_set_integration refuses to touch."""
+    sent = _ws(monkeypatch, [{"entry_id": "e1", "domain": "ha_mcp_tools"}])
+    with pytest.raises(bm.BackupRestoreError) as exc_info:
+        await restore_integration(
+            None, "e1", {"domain": "ha_mcp_tools", "disabled_by": "user"}
+        )
+    assert exc_info.value.outcome["reason"] == "unsupported_domain"
+    assert exc_info.value.outcome["apply_status"] == "not_applied"
+    assert [message["type"] for message in sent] == ["config_entries/get"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("disabled_by,expected", [("user", "user"), (None, None)])
 async def test_restoring_an_existing_entry_reapplies_its_enabled_state(
     monkeypatch: pytest.MonkeyPatch, disabled_by: str | None, expected: str | None
