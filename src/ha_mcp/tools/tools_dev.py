@@ -39,6 +39,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .config_entry_flow import COMPONENT_DOMAIN
 from .config_entry_flow_form import _MISSING_DEFAULT, _step_owned_submission_value
 from .helpers import (
     exception_to_structured_error,
@@ -53,11 +54,6 @@ logger = logging.getLogger(__name__)
 # Feature flag - disabled by default; the toggle lives in the Developer
 # section of the web settings UI (Server Settings tab, bottom).
 FEATURE_FLAG = "HAMCP_ENABLE_DEV_MODE"
-
-# Domain of the ha_mcp_tools custom component. Its "server" config entry
-# runs the ha-mcp server in-process inside HA and exposes channel /
-# pip-spec options that ha_dev_manage_server drives.
-COMPONENT_DOMAIN = "ha_mcp_tools"
 
 # The component's own in-process command for locating its "server" config
 # entry (see ``_fetch_server_entry_via_component``) — replaces probing every

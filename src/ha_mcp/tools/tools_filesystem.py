@@ -30,6 +30,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .component_api import ComponentCaps, get_component_caps
+from .config_entry_flow import COMPONENT_DOMAIN as MCP_TOOLS_DOMAIN
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -43,9 +44,6 @@ logger = logging.getLogger(__name__)
 
 # Feature flag - disabled by default for safety
 FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
-
-# Domain for the custom component
-MCP_TOOLS_DOMAIN = "ha_mcp_tools"
 
 # Caller-token auth (mirrors custom_components/ha_mcp_tools).
 # The custom component's handlers reject every call that doesn't present
