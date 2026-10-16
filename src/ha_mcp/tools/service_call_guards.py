@@ -7,11 +7,14 @@ refused like every other generic write to it.
 
 from typing import Any
 
-from ..client.rest_client import HomeAssistantAPIError
 from ..errors import create_validation_error
 from .backup_access import guard_snapshot_route
-from .config_entry_flow import is_component_domain, refuse_component_entry
-from .helpers import raise_tool_error
+from .config_entry_flow import (
+    COMPONENT_DOMAIN,
+    is_component_domain,
+    refuse_component_entry,
+)
+from .helpers import exception_to_structured_error, raise_tool_error
 
 
 def validate_service_call_params(
@@ -54,26 +57,99 @@ def validate_service_call_params(
     return domain, service
 
 
+def _target_ids(service_data: dict[str, Any], key: str) -> set[str]:
+    """The ids a target key names, as Core's service schema reads them."""
+    value = service_data.get(key)
+    items = [value] if isinstance(value, str) else value
+    if not isinstance(items, list):
+        return set()
+    ids = {item.strip() for item in items if isinstance(item, str)}
+    if key == "entity_id":
+        # Core's schema splits a comma-separated entity_id string and
+        # lowercases each id; the other keys take ids as given.
+        ids = {part.strip().lower() for item in ids for part in item.split(",")}
+    return ids - {""}
+
+
+def _targets_own_entry(
+    targets: dict[str, set[str]],
+    own_ids: set[str],
+    entities: list[dict[str, Any]],
+    devices: list[dict[str, Any]],
+) -> bool:
+    """Whether entity, device or area targets reach one of ``own_ids``.
+
+    Follows Core's ``async_extract_config_entry_ids``: a device counts by its
+    own entries and by the entries of its entities, an area by the devices
+    and entities in it (an entity without an area takes its device's). It
+    skips Core's hidden and entity-category filters, so it can only refuse
+    more, never less.
+    """
+    device_area = {d.get("id"): d.get("area_id") for d in devices}
+    own_devices = {
+        d.get("id") for d in devices if own_ids & set(d.get("config_entries") or [])
+    }
+    own_entities = [e for e in entities if e.get("config_entry_id") in own_ids]
+    areas = targets["area_id"]
+    return bool(
+        targets["entity_id"] & {e.get("entity_id") for e in own_entities}
+        or targets["device_id"]
+        & (own_devices | {e.get("device_id") for e in own_entities})
+        or areas & {device_area.get(d) for d in own_devices}
+        or areas
+        & {
+            e.get("area_id") or device_area.get(e.get("device_id"))
+            for e in own_entities
+        }
+    )
+
+
 async def refuse_component_entry_reload(
     client: Any, domain: str, service: str, service_data: dict[str, Any]
 ) -> None:
     """Refuse ``homeassistant.reload_config_entry`` on ha-mcp's own entry.
 
-    Only an explicit ``entry_id`` is checked; Core also resolves entries from
-    entity, device and area targets. An entry Core does not have is left to
-    Core's own error.
+    Checks the explicit ``entry_id`` and the ``entity_id`` / ``device_id`` /
+    ``area_id`` targets Core also resolves to entries (the component's update
+    entity and its device reach the server entry). ``floor_id`` /
+    ``label_id`` targets and group expansion are not resolved. Ids Core does
+    not have are left to Core's own error. A failed lookup raises a
+    structured error: nothing has been dispatched at this point.
     """
-    entry_id = service_data.get("entry_id")
     if (
         domain.strip().lower() != "homeassistant"
         or service.strip().lower() != "reload_config_entry"
-        or not isinstance(entry_id, str)
     ):
         return
+    entry_id = service_data.get("entry_id")
+    targets = {
+        key: _target_ids(service_data, key)
+        for key in ("entity_id", "device_id", "area_id")
+    }
+    hit = False
     try:
-        entry = await client.get_config_entry(entry_id)
-    except HomeAssistantAPIError as err:
-        if err.status_code == 404:
-            return
-        raise
-    refuse_component_entry(entry.get("domain"), action="reload", entry_id=entry_id)
+        own_ids = {
+            entry.get("entry_id")
+            for entry in await client.list_config_entries()
+            if is_component_domain(entry.get("domain"))
+        }
+        hit = isinstance(entry_id, str) and entry_id in own_ids
+        if not hit and own_ids and any(targets.values()):
+            hit = _targets_own_entry(
+                targets,
+                own_ids,
+                await client.list_entity_registry(),
+                await client.list_device_registry(),
+            )
+    except Exception as err:  # noqa: BLE001
+        exception_to_structured_error(
+            err,
+            context={"operation": "reload_config_entry own-entry check"},
+            suggestions=["Nothing was reloaded; retry once Home Assistant answers."],
+        )
+    if hit:
+        refuse_component_entry(
+            COMPONENT_DOMAIN,
+            action="reload",
+            entry_id=entry_id if isinstance(entry_id, str) else None,
+        )
