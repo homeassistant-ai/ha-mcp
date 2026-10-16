@@ -56,10 +56,6 @@ from .helpers import (
     register_tool_methods,
 )
 from .response_helpers import compact_service_result, project_entity_record
-from .service_call_guards import (
-    refuse_component_entry_reload,
-    validate_service_call_params,
-)
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     _SERVICE_TO_STATE,
@@ -791,6 +787,47 @@ class ServiceTools:
         return service_data
 
     @staticmethod
+    def _validate_service_call_params(
+        domain: str | None, service: str | None
+    ) -> tuple[str, str]:
+        """Validate service-mode params and return the (domain, service) pair.
+
+        Raises a structured ToolError when domain/service are missing (the caller
+        likely wants the ws_command escape hatch), when the domain targets the
+        reserved ha_mcp_tools namespace, or when backup controls block the service.
+        """
+        if not domain or not service:
+            raise_tool_error(
+                create_validation_error(
+                    "domain and service are required for a service call. To send "
+                    "a raw WebSocket command instead, pass ws_command.",
+                    parameter="domain" if not domain else "service",
+                )
+            )
+        # ha_mcp_tools.* services are restricted to the ha-mcp server's dedicated
+        # wrappers (which inject the required caller token). Block ha_call_service
+        # from forwarding to that domain — it would otherwise be a bypass path
+        # around the dedicated tools. HA core's service registry lowercases the
+        # domain on fallback lookup (homeassistant/core.py
+        # ServiceRegistry.async_call), so normalise here to make sure a mixed-case
+        # `HA_MCP_TOOLS` can't slip past this exact-string check and still resolve
+        # downstream.
+        if domain.strip().lower() == "ha_mcp_tools":
+            raise_tool_error(
+                create_validation_error(
+                    (
+                        "ha_call_service cannot invoke services in the "
+                        "'ha_mcp_tools' domain. Use the dedicated MCP tool "
+                        "instead: ha_list_files, ha_read_file, ha_write_file, "
+                        "ha_delete_file, or ha_config_set_yaml."
+                    ),
+                    parameter="domain",
+                )
+            )
+        guard_snapshot_route(domain=domain, service=service)
+        return domain, service
+
+    @staticmethod
     def _reject_incompatible_ws_params(
         entity_id: str | None,
         return_response: bool,
@@ -1398,7 +1435,7 @@ class ServiceTools:
           here is the double-fire this split exists to prevent.
 
         **Security (layered defense-in-depth).** The server-side reserved-domain guard
-        (``validate_service_call_params``) gates BOTH this component route AND the
+        (``_validate_service_call_params``) gates BOTH this component route AND the
         legacy REST fallback, refusing ``ha_mcp_tools`` before either runs — it is the
         authoritative single-call gate. The component's own D1 block is the
         authoritative refusal AT the component for any future consumer that reaches it
@@ -1953,12 +1990,9 @@ class ServiceTools:
                 ws_command, data, domain=domain, service=service
             )
 
-        domain, service = validate_service_call_params(domain, service)
+        domain, service = self._validate_service_call_params(domain, service)
         try:
             service_data = self._parse_service_data(data, entity_id)
-            await refuse_component_entry_reload(
-                self._client, domain, service, service_data
-            )
 
             return_response_bool = return_response
             wait_bool = wait
