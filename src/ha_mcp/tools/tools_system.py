@@ -220,9 +220,11 @@ class SystemTools:
                 description=(
                     "Reload a SINGLE config entry (one integration instance) "
                     "instead of sweeping subsystems — the fast path after editing "
-                    "a custom component on disk. Pass it alone (leave target at "
-                    "'all'); combining it with an explicit target is a validation "
-                    "error. Find the id via ha_get_integration."
+                    "a custom component on disk (ha-mcp's own ha_mcp_tools "
+                    "entries are refused; restart Core instead). Pass it alone "
+                    "(leave target at 'all'); combining it with an explicit "
+                    "target is a validation error. Find the id via "
+                    "ha_get_integration."
                 )
             ),
         ] = None,
