@@ -335,9 +335,15 @@ class YamlConfigTools:
             str,
             Field(
                 description=(
-                    "Action to perform: 'add' (insert/merge content under key), "
-                    "'replace' (overwrite key with new content), or "
-                    "'remove' (delete the key entirely)."
+                    "Action to perform: 'add' (insert content if yaml_path is absent; "
+                    "otherwise merge one level deep: a list gets content's items "
+                    "appended, a mapping gets content's top-level keys set, "
+                    "overwriting same-named ones, so a nested mapping or list under "
+                    "such a key is replaced, not merged; mismatched types are "
+                    "rejected. For a nested edit, read the current value and use "
+                    "'replace' with the complete edited value of yaml_path), "
+                    "'replace' (overwrite yaml_path with content), or 'remove' "
+                    "(delete yaml_path entirely)."
                 ),
             ),
         ],
