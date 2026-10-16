@@ -42,6 +42,10 @@ and require a running Docker daemon. Launch them from `tests/` so pytest
 loads the correct `conftest.py`. Unit tests in `tests/src/unit/` do not use
 Docker.
 
+For a fork branch, dispatch `gh workflow run pr.yml --repo OWNER/FORK --ref BRANCH`;
+for targeted HAOS tests, use `haos-e2e-tests.yml` instead with
+`-f pytest_paths=PATH -f pytest_args=ARGS`.
+
 ```bash
 # Full E2E suite. Use only before claiming the full suite passes.
 (cd tests && uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short)
@@ -186,6 +190,7 @@ The stable architectural map is:
 ```text
 src/ha_mcp/
 ├── server.py                    FastMCP server and lifecycle
+├── server_instructions.py       Initialize instructions: skills, notices, owner text
 ├── __main__.py                  CLI and transport entrypoints
 ├── config.py                    Settings singleton, embedded connection, re-exports
 ├── config_settings.py           Settings model and .env loading; one declaration per setting

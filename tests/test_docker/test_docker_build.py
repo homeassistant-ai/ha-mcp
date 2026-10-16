@@ -3,6 +3,8 @@
 import json
 import subprocess
 
+from tests.addon.docker_build import python_base_args
+
 DATA_DIR = "/home/mcpuser/.ha-mcp"
 
 
@@ -12,7 +14,7 @@ class TestDockerBuild:
     def test_dockerfile_builds_successfully(self):
         """Verify Dockerfile builds without errors."""
         result = subprocess.run(
-            ["docker", "build", "-t", "ha-mcp-test", "."],
+            ["docker", "build", "-t", "ha-mcp-test", *python_base_args(), "."],
             capture_output=True,
             text=True,
             check=False,

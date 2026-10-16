@@ -40,6 +40,12 @@ def collect_config_toggles(settings: Settings) -> dict[str, Any]:
             [item for item in raw.split(",") if item.strip()]
         )
 
+    # Presence only: the text is the owner's and may be personal.
+    custom = getattr(settings, "custom_instructions", "")
+    toggles["custom_instructions_set"] = bool(
+        isinstance(custom, str) and custom.strip()
+    )
+
     toggles.update(_tool_config_diagnostics(settings))
     return toggles
 

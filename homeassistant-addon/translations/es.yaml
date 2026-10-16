@@ -20,6 +20,15 @@ configuration:
       una copia de seguridad completa de Home Assistant antes de realizar cambios
       arriesgados. Solo cambia esta sugerencia; las copias de seguridad de edición
       automática tienen su propia configuración.
+  custom_instructions:
+    name: Instrucciones personalizadas del servidor
+    description: Texto enviado a cada asistente de IA que se conecta, como parte de
+      las instrucciones del servidor MCP (por ejemplo, dónde se guardan las notas
+      del hogar y cuándo leerlas o actualizarlas). También forma parte del prompt
+      de los agentes de conversación de Home Assistant (Assist) que utilizan este
+      conjunto de herramientas. Úsalo para directrices que deban llegar a todos tus
+      clientes a la vez; mantenlo breve y sin datos confidenciales. Déjalo vacío para
+      no añadir nada. Requiere reinicio; los clientes verán el cambio cuando se reconecten.
   enable_tool_search:
     name: Activar la búsqueda de herramientas
     description: 'Reemplaza el catálogo completo de herramientas por un descubrimiento

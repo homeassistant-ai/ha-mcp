@@ -75,6 +75,8 @@ class Setting:
     range: tuple[float, float] | None = None
     off_value: int | None = None
     choices: tuple[str, ...] | None = None
+    # Free text whose line breaks matter; the UI edits it in a textarea.
+    multiline: bool = False
     # An env value that does not parse or is out of range logs a warning and
     # gives the default, instead of failing the settings validation.
     lenient: bool = False

@@ -19,6 +19,15 @@ configuration:
     description: Hoe sterk AI-assistenten worden aangespoord om een volledige Home
       Assistant-back-up voor te stellen vóór risicovolle wijzigingen. Dit wijzigt
       alleen deze tip; automatische bewerkingsback-ups hebben hun eigen instelling.
+  custom_instructions:
+    name: Aangepaste serverinstructies
+    description: Tekst die naar elke verbindende AI-assistent wordt verzonden als
+      onderdeel van de MCP-serverinstructies — bijvoorbeeld waar huishoudelijke notities
+      worden bewaard en wanneer je deze moet lezen of bijwerken. Maakt ook deel uit
+      van de prompt van Home Assistant-gespreksagenten (Assist) die deze toolset gebruiken.
+      Gebruik dit voor richtlijnen die al je clients tegelijk moeten bereiken; houd
+      het kort en vrij van geheimen. Laat leeg om niets toe te voegen. Vereist een
+      herstart; clients zien de wijziging wanneer ze opnieuw verbinden.
   enable_tool_search:
     name: Schakel tool-zoekfunctie in
     description: 'Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking.

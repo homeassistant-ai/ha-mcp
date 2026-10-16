@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "ha-mcp"
-version = "8.6.0"
+version = "8.7.0"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 # Upper bound widened to <3.15 so the package installs on Home Assistant's
@@ -36,7 +36,7 @@ dependencies = [
     "cyclopts>=4.0.0",
     "exceptiongroup>=1.2.2",
     "griffelib>=2.0.0",
-    "httpx2>=2.5.0",
+    "httpx2>=2.10.0",
     "joserfc>=1.5.0",
     "jsonref>=1.1.0",
     "jsonschema>=4.20.0",
@@ -67,7 +67,7 @@ dependencies = [
     # before raising these floors; standalone lock updates can move independently.
     "httpx[socks]>=0.28.1,<0.29",
     "pydantic[email]>=2.13.4,<3",
-    "python-dotenv==1.2.3",
+    "python-dotenv==1.2.4",
     "truststore==0.10.4",
     # websockets is deliberately ABSENT from this list: ha-mcp ships its own
     # private copy (src/ha_mcp/_vendor/websockets, pinned in the vendor

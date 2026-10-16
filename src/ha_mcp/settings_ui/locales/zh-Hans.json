@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "截图引擎的基础 URL。留空以使用 Supervisor 自动发现。立即生效。",
     "advanced.enable_websocket.label": "启用 WebSocket",
     "advanced.enable_websocket.help": "WebSocket 状态监控。禁用后将回退到轮询，并会降低许多工具的性能。",
+    "advanced.custom_instructions.label": "自定义服务器指令",
+    "advanced.custom_instructions.help": "作为 MCP 服务器指令的一部分发送给连接的每个 AI 助手的文本——例如家庭便签的存放位置以及何时阅读或更新它们。也是使用此工具集的 Home Assistant 对话代理（Assist）提示词的一部分。用于应同时到达所有客户端的指导；请保持简短且不包含机密信息。留空则不添加。需要重启；客户端在重新连接时会看到更改。",
     "advanced.enabled_tool_modules.label": "已启用的工具模块",
     "advanced.enabled_tool_modules.help": "逗号分隔的模块名称，或 'all'。",
     "advanced.enable_dashboard_partial_tools.label": "仪表盘部分更新工具",

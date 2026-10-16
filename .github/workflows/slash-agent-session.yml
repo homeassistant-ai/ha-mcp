@@ -85,11 +85,11 @@ jobs:
         with:
           name: slash-plan
           path: control/slash-state
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         timeout-minutes: 2
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.9"
+          version: "0.12.23"
       - name: Prepare instructions
         timeout-minutes: 1
         env:

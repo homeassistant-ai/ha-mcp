@@ -11,9 +11,12 @@ on:
 
 permissions: {}
 
+# Queue review bursts: cancelling running or pending notifications adds failure
+# annotations to PR checks. GitHub allows up to 100 pending runs with queue: max.
 concurrency:
   group: slash-review-event-${{ github.repository }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   notify:

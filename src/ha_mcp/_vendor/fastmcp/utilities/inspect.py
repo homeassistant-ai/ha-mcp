@@ -238,7 +238,7 @@ async def inspect_fastmcp_v2(mcp: FastMCP[Any]) -> FastMCPInfo:
         website_url=server_website_url,
         icons=server_icons,
         fastmcp_version=fastmcp.__version__,
-        mcp_version="2.2.0",
+        mcp_version="2.3.0",
         server_generation=2,  # FastMCP v2
         tools=tool_infos,
         prompts=prompt_infos,
@@ -400,7 +400,7 @@ async def inspect_fastmcp_v1(mcp: SDKServer) -> FastMCPInfo:
             website_url=server_website_url,
             icons=server_icons,
             fastmcp_version=fastmcp.__version__,  # Version generating this manifest
-            mcp_version="2.2.0",
+            mcp_version="2.3.0",
             server_generation=1,  # MCP v1
             tools=tool_infos,
             prompts=prompt_infos,
@@ -486,7 +486,7 @@ async def format_mcp_info(mcp: FastMCP[Any] | SDKServer) -> bytes:
         result = {
             "environment": {
                 "fastmcp": fastmcp.__version__,  # Version generating this manifest
-                "mcp": "2.2.0",  # MCP protocol version
+                "mcp": "2.3.0",  # MCP protocol version
             },
             "serverInfo": server_info,
             "instructions": client.initialize_result.instructions,

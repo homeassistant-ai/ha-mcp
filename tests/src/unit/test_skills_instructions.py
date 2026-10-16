@@ -1,5 +1,7 @@
-"""Unit tests for _parse_skill_frontmatter(), _build_skill_block(),
-and _build_skills_instructions()."""
+"""Unit tests for skill frontmatter parsing and the ha_get_skill_guide tool.
+
+The skills section of the initialize instructions is covered in
+``test_server_instructions.py``."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -23,6 +25,7 @@ def server():
         settings.mcp_server_version = "0.0.1"
         settings.enabled_tool_modules = "all"
         settings.enable_dashboard_partial_tools = True
+        settings.custom_instructions = ""
 
         # Patch out tool registration and skills registration
         with (
@@ -147,167 +150,6 @@ class TestParseSkillFrontmatter:
         # Don't create the file — read_text will raise OSError
         result = server._parse_skill_frontmatter(skill_md)
         assert result is None
-
-
-class TestBuildSkillBlock:
-    """Tests for _build_skill_block() instruction formatting."""
-
-    def test_valid_skill_returns_block(self, server, tmp_path):
-        """Valid SKILL.md produces formatted instruction block."""
-        skill_md = tmp_path / "test-skill" / "SKILL.md"
-        skill_md.parent.mkdir()
-        skill_md.write_text(
-            "---\nname: test-skill\ndescription: |\n"
-            "  Best practices for testing.\n"
-            "---\n# Body\n"
-        )
-        result = server._build_skill_block("test-skill", skill_md)
-        assert result is not None
-        assert "### Skill: test-skill" in result
-        assert "skill://test-skill/SKILL.md" in result
-        assert "Best practices for testing." in result
-
-    def test_invalid_frontmatter_returns_none(self, server, tmp_path):
-        """SKILL.md with bad frontmatter returns None."""
-        skill_md = tmp_path / "bad" / "SKILL.md"
-        skill_md.parent.mkdir()
-        skill_md.write_text("# No frontmatter\n")
-        result = server._build_skill_block("bad", skill_md)
-        assert result is None
-
-
-class TestBuildSkillsInstructions:
-    """Tests for _build_skills_instructions() assembly logic."""
-
-    def test_skills_dir_missing(self, server):
-        """Returns None when skills directory does not exist."""
-        with patch.object(server, "_get_skills_dir", return_value=None):
-            result = server._build_skills_instructions()
-        assert result is None
-
-    def test_valid_skill_produces_instructions(self, server, tmp_path):
-        """Valid skill directory produces instruction text with the
-        ha_get_skill_guide fallback referenced in the access method."""
-        from ha_mcp.server import SKILL_TOOL_NAME
-
-        skill_dir = tmp_path / "my-skill"
-        skill_dir.mkdir()
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: my-skill\n"
-            "description: |\n"
-            "  Best practices for my-skill tasks.\n"
-            "---\n# Body\n"
-        )
-
-        with patch.object(server, "_get_skills_dir", return_value=tmp_path):
-            result = server._build_skills_instructions()
-
-        assert result is not None
-        assert "IMPORTANT" in result
-        assert "resources/read" in result
-        assert "### Skill: my-skill" in result
-        assert SKILL_TOOL_NAME in result
-        # The pre-consolidation pair must no longer appear (#1134).
-        assert "ha_list_resources" not in result
-        assert "ha_read_resource" not in result
-
-    def test_hidden_skill_tool_swaps_fallback_to_local_skills(self, server, tmp_path):
-        """#1886: when ha_get_skill_guide is disabled (possible only
-        outside strict-BPS mode), the access-method fallback must not
-        direct clients to the hidden tool — it points at locally
-        installed skills instead."""
-        from ha_mcp.server import SKILL_TOOL_NAME
-
-        skill_dir = tmp_path / "my-skill"
-        skill_dir.mkdir()
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: my-skill\n"
-            "description: |\n"
-            "  Best practices for my-skill tasks.\n"
-            "---\n# Body\n"
-        )
-
-        with (
-            patch.object(server, "_get_skills_dir", return_value=tmp_path),
-            patch.object(server, "_skill_tool_hidden", return_value=True),
-        ):
-            result = server._build_skills_instructions()
-
-        assert result is not None
-        assert "locally installed copy" in result
-        assert f"use the {SKILL_TOOL_NAME} tool as a fallback" not in result
-
-    def test_skill_tool_hidden_logic(self, server):
-        """_skill_tool_hidden: true only when the tool is configured
-        disabled AND the strict-BPS lock doesn't override it."""
-        from ha_mcp.server import SKILL_TOOL_NAME
-
-        server.settings.enable_mandatory_bps = True
-        server.settings.enable_strict_mandatory_bps = False
-        with patch(
-            "ha_mcp.settings_ui._persistence.effective_tool_config",
-            return_value={"tools": {SKILL_TOOL_NAME: "disabled"}},
-        ):
-            assert server._skill_tool_hidden() is True
-
-        server.settings.enable_strict_mandatory_bps = True
-        with patch(
-            "ha_mcp.settings_ui._persistence.effective_tool_config",
-            return_value={"tools": {SKILL_TOOL_NAME: "disabled"}},
-        ):
-            assert server._skill_tool_hidden() is False
-
-        server.settings.enable_strict_mandatory_bps = False
-        with patch(
-            "ha_mcp.settings_ui._persistence.effective_tool_config",
-            return_value={"tools": {}},
-        ):
-            assert server._skill_tool_hidden() is False
-
-    def test_empty_skills_dir(self, server, tmp_path):
-        """Empty skills directory returns None."""
-        with patch.object(server, "_get_skills_dir", return_value=tmp_path):
-            result = server._build_skills_instructions()
-        assert result is None
-
-    def test_non_dir_entries_skipped(self, server, tmp_path):
-        """Files (not directories) in skills dir are skipped."""
-        (tmp_path / "not-a-dir.txt").write_text("just a file")
-        with patch.object(server, "_get_skills_dir", return_value=tmp_path):
-            result = server._build_skills_instructions()
-        assert result is None
-
-    def test_dir_without_skill_md_skipped(self, server, tmp_path):
-        """Directories without SKILL.md are skipped."""
-        (tmp_path / "no-skill-md").mkdir()
-        with patch.object(server, "_get_skills_dir", return_value=tmp_path):
-            result = server._build_skills_instructions()
-        assert result is None
-
-
-class TestBuildInstructions:
-    """Tests for _build_instructions(), the full initialize instructions."""
-
-    @pytest.mark.parametrize("skills", [None, "SKILLS"])
-    def test_agents_are_told_issues_need_a_report(self, server, skills):
-        """Agents that file issues without ha_report_issue output get them
-        closed; the instructions must say so with or without skills."""
-        server.settings.read_only_mode = False
-        with patch.object(server, "_build_skills_instructions", return_value=skills):
-            instructions = server._build_instructions()
-        assert "run ha_report_issue and put the issue_body it returns" in instructions
-        if skills:
-            assert instructions.startswith(skills)
-
-    @pytest.mark.parametrize("skills", [None, "SKILLS"])
-    def test_read_only_mode_is_announced_alongside_the_issue_note(self, server, skills):
-        """A client started in Read Only Mode must be warned up front, without
-        losing the issue-filing rule."""
-        server.settings.read_only_mode = True
-        with patch.object(server, "_build_skills_instructions", return_value=skills):
-            instructions = server._build_instructions()
-        assert "## Read Only Mode" in instructions
-        assert "## Filing ha-mcp issues" in instructions
 
 
 class TestLogSkillRegistrationSummary:

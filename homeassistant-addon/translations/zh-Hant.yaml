@@ -13,6 +13,10 @@ configuration:
   backup_hint:
     name: 備份提示層級
     description: 向 AI 助理提示在進行有風險的變更之前建議進行完整 Home Assistant 備份的強烈程度。它僅會變更此提示；自動編輯備份有其自身的設定。
+  custom_instructions:
+    name: 自訂伺服器指示
+    description: 作為 MCP 伺服器指示的一部分，發送給每個連線的 AI 助理的文字，例如家庭記事存放的位置以及何時讀取或更新它們。這也是使用此工具集的
+      Home Assistant 對話代理程式 (Assist) 提示的一部分。請將其用於應同時傳達給所有客戶端的指引；請保持簡短且不要包含機密資訊。留空則不新增任何內容。需要重新啟動；客戶端重新連線時會看到變更。
   enable_tool_search:
     name: 啟用工具搜尋
     description: 使用基於搜尋的探索來取代完整的工具目錄。可將閒置上下文減少約 90%，降至約 5K 個 Token。⚠️ 如果用戶端本身具有內建工具搜尋／延遲工具功能（claude.ai、Claude

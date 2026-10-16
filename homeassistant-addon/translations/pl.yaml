@@ -19,6 +19,16 @@ configuration:
     description: Jak stanowczo asystenci AI są instruowani, aby sugerować pełną kopię
       zapasową Home Assistant przed ryzykownymi zmianami. Zmienia to tylko tę podpowiedź;
       automatyczne kopie zapasowe edycji mają własne ustawienie.
+  custom_instructions:
+    name: Niestandardowe instrukcje serwera
+    description: Tekst wysyłany do każdego łączącego się asystenta AI jako część instrukcji
+      serwera MCP – na przykład informacja o tym, gdzie przechowywane są notatki domowe
+      oraz kiedy je czytać lub aktualizować. Jest to również część promptu agentów
+      konwersacyjnych Home Assistant (Assist), którzy korzystają z tego zestawu narzędzi.
+      Użyj tej opcji do wytycznych, które powinny dotrzeć do wszystkich Twoich klientów
+      naraz; dbaj o to, aby tekst był krótki i nie zawierał poufnych danych. Pozostaw
+      puste pole, aby niczego nie dodawać. Wymaga ponownego uruchomienia; klienci
+      zobaczą zmianę po ponownym połączeniu.
   enable_tool_search:
     name: Włącz wyszukiwanie narzędzi
     description: 'Zastąp pełny katalog narzędzi wyszukiwaniem. Zmniejsza bezczynny

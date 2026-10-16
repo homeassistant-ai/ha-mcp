@@ -30,6 +30,9 @@ The behavioral decision about when to write and run tests is canonical in
 Reviewers use the severity guidance below to assess whether a change satisfies
 that policy.
 
+Apply the [live-review procedure](../docs/agents/github-workflow.md#live-testing-in-pr-reviews)
+when assessing live evidence and review completeness.
+
 Flag missing coverage as HIGH severity when the root policy requires it. If the
 change's scope or an allowed exception is unclear, flag test adequacy as MEDIUM
 severity for manual verification.

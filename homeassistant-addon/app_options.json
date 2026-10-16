@@ -35,6 +35,15 @@
     "always": true
   },
   {
+    "key": "custom_instructions",
+    "env": "HAMCP_CUSTOM_INSTRUCTIONS",
+    "type": "str",
+    "default": "",
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
     "key": "enable_beta_features",
     "env": "ENABLE_BETA_FEATURES",
     "type": "bool",

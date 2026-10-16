@@ -8,6 +8,8 @@ Functions:
 
 * :func:`get_skills_dir` — returns the on-disk skills root when the vendor
   submodule is present, else ``None``.
+* :func:`list_skills` — the bundled skills whose frontmatter parses, as
+  ``(name, dir, frontmatter)``.
 * :func:`resolve_skill_files` — reads N file refs from one skill and returns
   ``{ref: body_or_section}``. Each ref is either a bare file path
   (``"references/X.md"``) or a path with an anchor
@@ -209,6 +211,30 @@ def parse_skill_frontmatter(main_file: Path, *, warn: bool = True) -> dict | Non
         return None
 
     return frontmatter
+
+
+def list_skills(skills_dir: Path) -> list[tuple[str, Path, dict[str, Any]]]:
+    """Return parsed (name, dir, frontmatter) triples for valid bundled skills.
+
+    Skips entries that aren't directories, lack ``SKILL.md``, or whose
+    frontmatter doesn't parse. Sorted by directory name for stable
+    ordering across clients.
+    """
+    try:
+        entries = sorted(skills_dir.iterdir())
+    except OSError as e:
+        logger.warning("Could not read skills directory %s: %s", skills_dir, e)
+        return []
+
+    skills: list[tuple[str, Path, dict[str, Any]]] = []
+    for skill_dir in entries:
+        main_file = skill_dir / "SKILL.md"
+        if not skill_dir.is_dir() or not main_file.exists():
+            continue
+        frontmatter = parse_skill_frontmatter(main_file)
+        if frontmatter:
+            skills.append((skill_dir.name, skill_dir, frontmatter))
+    return skills
 
 
 def list_skill_files(skill_dir: Path, *, warn: bool = True) -> list[str]:

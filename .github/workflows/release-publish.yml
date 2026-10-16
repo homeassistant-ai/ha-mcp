@@ -145,7 +145,7 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.20"
+          version: "0.12.23"
 
       - name: Build distribution
         run: uv build
@@ -201,7 +201,7 @@ jobs:
             type=raw,value=stable
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        uses: ./.github/actions/docker-build-python-base-fallback
         with:
           context: .
           file: ./Dockerfile
@@ -278,7 +278,7 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.20"
+          version: "0.12.23"
 
       - name: Validate server manifest
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
