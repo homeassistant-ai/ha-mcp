@@ -301,6 +301,18 @@ class TestRestoreDashboardResource:
             "url": "/local/theme.css",
         }
 
+    async def test_restore_of_a_row_without_a_type_sends_none(
+        self, sent: list[dict]
+    ) -> None:
+        """Core's import of a stored ``resources:`` block keeps untyped rows."""
+        untyped = {"id": "old", "url": "/local/theme.css"}
+        await backup_manager._restore_dashboard_resource(MagicMock(), "old", untyped)
+
+        assert [m.get("res_type") for m in sent if "resources/" in m["type"]] == [
+            None,
+            None,
+        ]
+
     async def test_restore_does_not_recreate_on_other_core_errors(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

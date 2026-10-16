@@ -2089,14 +2089,17 @@ async def _dashboard_resource_like(client: Any, config: dict[str, Any]) -> Any:
         (
             r
             for r in resources
-            if r.get("url") == config["url"] and r.get("type") == config["type"]
+            if r.get("url") == config["url"] and r.get("type") == config.get("type")
         ),
         None,
     )
 
 
 async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) -> Any:
-    payload = {**_strip_readonly(config, "id", "type"), "res_type": config["type"]}
+    # Core imported old ``resources:`` entries without a type (RESOURCE_FIELDS).
+    payload = _strip_readonly(config, "id", "type")
+    if "type" in config:
+        payload["res_type"] = config["type"]
     update = {"type": "lovelace/resources/update", "resource_id": entity_id}
     try:
         return await _ws_send(client, {**update, **payload})
