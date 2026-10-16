@@ -48,7 +48,8 @@ async def test_restoring_a_snapshot_cannot_toggle_ha_mcps_own_entry(
     """A restore must not re-enable or disable the server's own entry, which
     ha_set_integration refuses to touch, even when the snapshot file names
     another domain."""
-    sent = _ws(monkeypatch, [{"entry_id": "e1", "domain": "ha_mcp_tools"}])
+    # Mixed case covers the plain domain too: the check normalises it.
+    sent = _ws(monkeypatch, [{"entry_id": "e1", "domain": "HA_MCP_TOOLS"}])
     with pytest.raises(bm.BackupRestoreError) as exc_info:
         await restore_integration(None, "e1", {"domain": "hue", "disabled_by": "user"})
     assert exc_info.value.outcome["reason"] == "unsupported_domain"

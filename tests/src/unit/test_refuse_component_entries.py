@@ -1,9 +1,9 @@
 """The generic integration tools refuse ha-mcp's own ``ha_mcp_tools`` entries.
 
-Those entries hold the server's own settings and credentials. Reaching them
-through ``ha_set_integration`` or ``ha_remove_helpers_integrations`` would
-bypass the HA UI and the developer tools that own those changes, and a write
-reloads or alters the very server answering the call.
+Reaching them through ``ha_set_integration``, ``ha_remove_helpers_integrations``,
+``ha_reload_core`` or ``ha_call_service`` would bypass the HA UI and the
+``ha_dev_*`` tools, and a write reloads or alters the very server answering
+the call.
 """
 
 import json
@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.tools_integrations import IntegrationTools
 from ha_mcp.tools.tools_service import ServiceTools
 from ha_mcp.tools.tools_system import SystemTools
@@ -79,7 +80,6 @@ def _assert_refused_without_mutation(
         pytest.param(
             {"domain": "ha_mcp_tools", "log_level": "DEBUG"}, id="log-level-domain"
         ),
-        pytest.param({"domain": "ha_mcp_tools"}, id="add"),
         # Core's integration lookup is case-sensitive today; normalising the
         # domain is defence in depth, so a mixed-case one is still refused.
         pytest.param({"domain": "HA_MCP_TOOLS"}, id="add-mixed-case"),
@@ -126,3 +126,40 @@ async def test_call_service_cannot_reload_ha_mcps_own_entry(client: MagicMock) -
         )
 
     _assert_refused_without_mutation(exc_info, client)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda client: IntegrationTools(client).ha_remove_helpers_integrations(
+                target="ghost-entry", confirm=True
+            ),
+            id="delete",
+        ),
+        pytest.param(
+            lambda client: IntegrationTools(client).ha_set_integration(
+                entry_id="ghost-entry", enabled=False
+            ),
+            id="disable",
+        ),
+        pytest.param(
+            lambda client: SystemTools(client).ha_reload_core(entry_id="ghost-entry"),
+            id="reload",
+        ),
+    ],
+)
+async def test_an_unknown_entry_is_reported_missing_before_any_write(
+    client: MagicMock, call: Any
+) -> None:
+    """The own-entry lookup now runs first, so a typo'd entry_id must still
+    come back as not found, with nothing sent to Home Assistant."""
+    client.get_config_entry.side_effect = HomeAssistantAPIError(
+        "Config entry not found: ghost-entry", status_code=404
+    )
+    with pytest.raises(ToolError) as exc_info:
+        await call(client)
+
+    assert json.loads(str(exc_info.value))["error"]["code"] == "RESOURCE_NOT_FOUND"
+    for name in _MUTATING_CALLS:
+        getattr(client, name).assert_not_called()
