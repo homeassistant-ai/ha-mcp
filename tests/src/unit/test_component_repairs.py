@@ -10,6 +10,7 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,11 +23,27 @@ install()
 class _RepairsFlow:
     """Small HA RepairsFlow stand-in with real flow-result behavior."""
 
-    def async_show_form(self, *, step_id, data_schema):
-        return {"type": "form", "step_id": step_id, "data_schema": data_schema}
+    def async_show_form(
+        self,
+        *,
+        step_id: str,
+        data_schema: Any,
+        errors: dict[str, str] | None = None,
+        description_placeholders: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "type": "form",
+            "step_id": step_id,
+            "data_schema": data_schema,
+            "errors": errors or {},
+            "description_placeholders": description_placeholders,
+        }
 
-    def async_create_entry(self, *, data):
+    def async_create_entry(self, *, data: dict[str, Any]) -> dict[str, Any]:
         return {"type": "create_entry", "data": data}
+
+    def async_abort(self, *, reason: str) -> dict[str, Any]:
+        return {"type": "abort", "reason": reason}
 
 
 data_entry_flow = ModuleType("homeassistant.data_entry_flow")
@@ -39,13 +56,13 @@ repairs_platform.RepairsFlow = _RepairsFlow
 sys.modules["homeassistant.components.repairs"] = repairs_platform
 
 
-def _load_repairs_module():
+def _load_repairs_module() -> ModuleType:
     from custom_components.ha_mcp_tools import repairs
 
     return repairs
 
 
-async def test_legacy_oauth_fix_flow_restarts_home_assistant_blocking():
+async def test_legacy_oauth_fix_flow_restarts_home_assistant_blocking() -> None:
     """A missing/wrong restart service call would leave the repair unresolved."""
     repairs = _load_repairs_module()
     hass = MagicMock()
@@ -68,7 +85,7 @@ async def test_legacy_oauth_fix_flow_restarts_home_assistant_blocking():
     assert result == {"type": "create_entry", "data": {}}
 
 
-async def test_legacy_oauth_fix_flow_prompts_before_restart():
+async def test_legacy_oauth_fix_flow_prompts_before_restart() -> None:
     """Opening the repair must show confirmation without restarting HA."""
     repairs = _load_repairs_module()
     hass = MagicMock()
@@ -87,7 +104,7 @@ async def test_legacy_oauth_fix_flow_prompts_before_restart():
     hass.services.async_call.assert_not_awaited()
 
 
-async def test_legacy_oauth_fix_flow_does_not_complete_rejected_restart():
+async def test_legacy_oauth_fix_flow_does_not_complete_rejected_restart() -> None:
     """A rejected restart must leave the repair flow—and issue—unfinished."""
     repairs = _load_repairs_module()
     hass = MagicMock()
@@ -113,7 +130,7 @@ async def test_legacy_oauth_fix_flow_does_not_complete_rejected_restart():
         "custom_components/ha_mcp_tools/translations/en.json",
     ],
 )
-def test_legacy_oauth_repair_catalog_has_fix_flow(catalog_path):
+def test_legacy_oauth_repair_catalog_has_fix_flow(catalog_path: str) -> None:
     """Both HA English catalogs must render the actionable confirmation flow."""
     root = Path(__file__).parents[3]
     catalog = json.loads((root / catalog_path).read_text())
@@ -123,3 +140,221 @@ def test_legacy_oauth_repair_catalog_has_fix_flow(catalog_path):
     confirm = issue["fix_flow"]["step"]["confirm"]
     assert confirm["title"]
     assert confirm["description"]
+
+
+# ---------------------------------------------------------------------------
+# server_token_needed (#2427): replace the server's Home Assistant credential
+# ---------------------------------------------------------------------------
+
+
+def _token_hass(
+    monkeypatch: pytest.MonkeyPatch, *, problem: str | None, entry: MagicMock | None
+) -> MagicMock:
+    from custom_components.ha_mcp_tools import server_credentials
+
+    hass = MagicMock()
+    hass.config_entries.async_get_entry = MagicMock(return_value=entry)
+    hass.config_entries.async_update_entry = MagicMock()
+    hass.config_entries.async_schedule_reload = MagicMock()
+    hass.auth.async_get_refresh_token = MagicMock(return_value=None)
+    monkeypatch.setattr(
+        server_credentials, "token_problem", MagicMock(return_value=problem)
+    )
+    return hass
+
+
+async def _token_flow(hass: MagicMock, reason: str = "") -> Any:
+    repairs = _load_repairs_module()
+    flow = await repairs.async_create_fix_flow(
+        hass, "server_token_needed", {"entry_id": "srv1", "reason": reason}
+    )
+    flow.hass = hass
+    return flow
+
+
+async def test_token_repair_starts_the_server_with_the_new_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = MagicMock(entry_id="srv1", data={"webhook_id": "w"})
+    hass = _token_hass(monkeypatch, problem=None, entry=entry)
+    flow = await _token_flow(hass)
+
+    result = await flow.async_step_token({"admin_token": "  new-token "})
+
+    assert result["type"] == "create_entry"
+    update = hass.config_entries.async_update_entry.call_args
+    assert update.kwargs["data"] == {"webhook_id": "w", "admin_token": "new-token"}
+    hass.config_entries.async_schedule_reload.assert_called_once_with("srv1")
+
+
+async def test_token_repair_keeps_asking_until_the_token_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = MagicMock(entry_id="srv1", data={})
+    hass = _token_hass(monkeypatch, problem="token_not_admin", entry=entry)
+    flow = await _token_flow(hass)
+
+    result = await flow.async_step_token({"admin_token": "tok"})
+
+    assert result["errors"] == {"admin_token": "token_not_admin"}
+    hass.config_entries.async_update_entry.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("reason", "errors"),
+    [
+        ("token_not_admin", {"admin_token": "token_not_admin"}),
+        ("invalid_token", {"admin_token": "invalid_token"}),
+        ("missing_token", {}),
+    ],
+)
+async def test_token_repair_says_why_the_stored_token_stopped_working(
+    monkeypatch: pytest.MonkeyPatch, reason: str, errors: dict[str, str]
+) -> None:
+    entry = MagicMock(entry_id="srv1", data={})
+    hass = _token_hass(monkeypatch, problem=None, entry=entry)
+    flow = await _token_flow(hass, reason)
+
+    result = await flow.async_step_init()
+
+    assert result["errors"] == errors
+
+
+async def test_token_repair_aborts_when_the_entry_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hass = _token_hass(monkeypatch, problem=None, entry=None)
+    flow = await _token_flow(hass)
+
+    result = await flow.async_step_token({"admin_token": "tok"})
+
+    assert result == {"type": "abort", "reason": "entry_removed"}
+
+
+async def test_an_unknown_repair_issue_has_no_fix_flow() -> None:
+    repairs = _load_repairs_module()
+    with pytest.raises(ValueError, match="no fix flow"):
+        await repairs.async_create_fix_flow(MagicMock(), "not_an_issue", None)
+
+
+@pytest.mark.parametrize(
+    "catalog_path",
+    [
+        "custom_components/ha_mcp_tools/strings.json",
+        "custom_components/ha_mcp_tools/translations/en.json",
+    ],
+)
+def test_token_repair_catalog_explains_every_refusal(catalog_path: str) -> None:
+    root = Path(__file__).parents[3]
+    catalog = json.loads((root / catalog_path).read_text())
+    step = catalog["issues"]["server_token_needed"]["fix_flow"]
+    for reason in ("invalid_token", "token_not_long_lived", "token_not_admin"):
+        assert step["error"][reason]
+
+
+# ---------------------------------------------------------------------------
+# server_package_install_failed (#2427): reinstall the server and its
+# dependencies, the only fix for a dependency another integration downgraded
+# ---------------------------------------------------------------------------
+
+
+def _package_hass(entry: MagicMock | None, *, skip_pip: bool = False) -> MagicMock:
+    hass = MagicMock()
+    hass.config.skip_pip = skip_pip
+    hass.config_entries.async_get_entry = MagicMock(return_value=entry)
+    hass.config_entries.async_update_entry = MagicMock()
+    hass.services.async_call = AsyncMock()
+    return hass
+
+
+async def _package_flow(hass: MagicMock) -> Any:
+    repairs = _load_repairs_module()
+    flow = await repairs.async_create_fix_flow(
+        hass,
+        "server_package_install_failed",
+        {"entry_id": "srv1", "detail": "No module named 'pydantic_core'"},
+    )
+    flow.hass = hass
+    return flow
+
+
+async def test_package_repair_shows_the_failure_before_reinstalling() -> None:
+    hass = _package_hass(MagicMock(entry_id="srv1"))
+    flow = await _package_flow(hass)
+
+    result = await flow.async_step_init()
+
+    assert result["type"] == "form"
+    assert "pydantic_core" in result["description_placeholders"]["detail"]
+    hass.services.async_call.assert_not_awaited()
+
+
+async def test_package_repair_reinstalls_the_server_on_a_fresh_start() -> None:
+    """A failed import leaves the broken dependency loaded in Home Assistant's
+    process, so the reinstall must run at the next start, before any import."""
+    from custom_components.ha_mcp_tools.const import DATA_REINSTALL_REQUESTED
+
+    entry = MagicMock(entry_id="srv1", data={"webhook_id": "w"})
+    hass = _package_hass(entry)
+    flow = await _package_flow(hass)
+
+    result = await flow.async_step_confirm({})
+
+    assert result["type"] == "create_entry"
+    update = hass.config_entries.async_update_entry.call_args
+    assert update.kwargs["data"] == {"webhook_id": "w", DATA_REINSTALL_REQUESTED: True}
+    hass.services.async_call.assert_awaited_once_with(
+        "homeassistant", "restart", {}, blocking=True
+    )
+
+
+async def test_a_refused_restart_keeps_the_repair_and_the_reinstall_request() -> None:
+    """The repair stays open, and the next start still reinstalls."""
+    from custom_components.ha_mcp_tools.const import DATA_REINSTALL_REQUESTED
+
+    entry = MagicMock(entry_id="srv1", data={})
+    hass = _package_hass(entry)
+    hass.services.async_call = AsyncMock(side_effect=RuntimeError("invalid config"))
+    flow = await _package_flow(hass)
+
+    with pytest.raises(RuntimeError):
+        await flow.async_step_confirm({})
+
+    update = hass.config_entries.async_update_entry.call_args
+    assert update.kwargs["data"] == {DATA_REINSTALL_REQUESTED: True}
+
+
+@pytest.mark.parametrize(
+    ("entry", "skip_pip", "reason"),
+    [
+        (None, False, "entry_removed"),
+        (MagicMock(entry_id="srv1"), True, "externally_managed"),
+    ],
+    ids=["entry removed", "skip_pip"],
+)
+async def test_package_repair_explains_when_it_cannot_reinstall(
+    entry: MagicMock | None, skip_pip: bool, reason: str
+) -> None:
+    hass = _package_hass(entry, skip_pip=skip_pip)
+    flow = await _package_flow(hass)
+
+    result = await flow.async_step_init()
+
+    assert result == {"type": "abort", "reason": reason}
+    hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "catalog_path",
+    [
+        "custom_components/ha_mcp_tools/strings.json",
+        "custom_components/ha_mcp_tools/translations/en.json",
+    ],
+)
+def test_package_repair_catalog_has_its_fix_flow(catalog_path: str) -> None:
+    root = Path(__file__).parents[3]
+    catalog = json.loads((root / catalog_path).read_text())
+    fix_flow = catalog["issues"]["server_package_install_failed"]["fix_flow"]
+    assert "{detail}" in fix_flow["step"]["confirm"]["description"]
+    for reason in ("entry_removed", "externally_managed"):
+        assert fix_flow["abort"][reason]

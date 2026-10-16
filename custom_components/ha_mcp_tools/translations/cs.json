@@ -91,8 +91,7 @@
       "description": "Server HA-MCP běžící ve stejném procesu se nepodařilo spustit uvnitř Home Assistanta:\n\n{detail}\n\nZkontrolujte protokoly Home Assistanta a poté znovu načtěte integraci (nebo opravte základní problém a znovu načtěte) pro opakování."
     },
     "server_package_install_failed": {
-      "title": "Balíček serveru HA-MCP běžícího ve stejném procesu se nepodařilo nainstalovat",
-      "description": "Instalace balíčku ha-mcp pro server běžící ve stejném procesu selhala:\n\n{detail}\n\nVyřešte výše popsaný problém s kompatibilitou nebo instalací a poté znovu načtěte integraci pro opakování."
+      "title": "Balíček serveru HA-MCP běžícího ve stejném procesu se nepodařilo nainstalovat"
     },
     "component_outdated": {
       "title": "Aktualizujte vlastní komponentu HA-MCP přes HACS",

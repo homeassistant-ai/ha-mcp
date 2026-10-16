@@ -701,7 +701,9 @@ class TestDescribeDependencyFailure:
             "fastmcp-slim 3.4.6",
             _XIAOZHI_NAME,
             _XIAOZHI_DOMAIN,
-            "restart",
+            # Removing the integration restores nothing: the server's repair
+            # reinstalls it with its dependencies.
+            "Repairs",
         ):
             assert expected in message
 
@@ -720,7 +722,7 @@ class TestDescribeDependencyFailure:
         )
 
         assert "mcp is not installed" in message
-        assert "restart" in message
+        assert "Repairs" in message
 
     def test_missing_root_is_not_attributed_to_a_requester(self):
         message = describe_dependency_failure(
@@ -754,7 +756,7 @@ class TestDescribeDependencyFailure:
         )
 
         assert "integration" not in message
-        assert "restart Home Assistant" in message
+        assert "Repairs" in message
 
     def test_several_pinners_read_as_plural(self):
         message = describe_dependency_failure(
@@ -784,7 +786,7 @@ class TestDescribeDependencyFailure:
             ],
         )
 
-        assert "conflicting integration," in message
+        assert "conflicting integration;" in message
         assert "conflicting integrations" not in message
 
     def test_root_exception_alone_still_yields_an_action(self):
@@ -792,7 +794,7 @@ class TestDescribeDependencyFailure:
 
         assert "Icon" in message
         assert "ImportError" in message
-        assert "Restart Home Assistant" in message
+        assert "Repairs" in message
 
     def test_message_less_exception_falls_back_to_its_type(self):
         message = describe_dependency_failure(ImportError(), [], [])

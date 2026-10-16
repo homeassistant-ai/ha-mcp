@@ -6,8 +6,9 @@ menu on the first step:
 * ``tools`` — the privileged file / YAML services (the original component).
   A single confirm step creates the entry. Single-instance, keyed on
   ``DOMAIN``.
-* ``server`` — the in-process ha-mcp FastMCP server (issue #1527). A single
-  confirm step creates the entry (entry-exists = the server runs);
+* ``server`` — the in-process ha-mcp FastMCP server (issue #1527). A setup
+  form (administrator token, remote access, network access) creates the
+  entry (entry-exists = the server runs);
   single-instance, keyed on ``DOMAIN-server``. Its options flow tunes the
   port / bind host / webhook auth / pip spec / server URL.
 
@@ -45,6 +46,7 @@ from homeassistant.helpers.selector import (
 from homeassistant.loader import async_get_integration
 from packaging.version import InvalidVersion, Version
 
+from . import server_credentials
 from .config_flow_text import (
     _COMMON_FALLBACKS,
     _common_strings,
@@ -55,6 +57,7 @@ from .const import (
     BIND_HOST_ALL,
     BIND_HOST_LOOPBACK,
     CONF_ENTRY_TYPE,
+    DATA_ADMIN_TOKEN,
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
@@ -77,6 +80,7 @@ from .const import (
     LLM_API_DOCS_URL,
     MAX_OAUTH_CALLBACKS,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
+    OPT_ADMIN_TOKEN_REPLACEMENT,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
     OPT_ENABLE_SIDEBAR_PANEL,
@@ -117,6 +121,7 @@ _SERVER_UNIQUE_ID = f"{DOMAIN}-server"
 # decides exposure states it in one place.
 SETUP_REMOTE_ACCESS = "remote_access"
 REMOTE_ACCESS_DISABLED = "disabled"
+SETUP_ADMIN_TOKEN = DATA_ADMIN_TOKEN
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -248,7 +253,7 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         the server until the administrator chooses a remote-access mode or LAN
         access here or later in the options. The choice is saved explicitly,
         so entries created before these defaults keep the behaviour they
-        inherit.
+        inherit. The server runs with the administrator token entered here.
         """
         try:
             supported = Version(HA_VERSION) >= Version(
@@ -265,29 +270,50 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
                 },
             )
 
-        await self.async_set_unique_id(_SERVER_UNIQUE_ID)
+        # A dialog closed without aborting (tab closed mid-setup) stays open
+        # until Home Assistant restarts and must not block a new setup. This
+        # step runs again on every submit, so the configured check below still
+        # stops a second dialog from replacing a finished entry.
+        await self.async_set_unique_id(_SERVER_UNIQUE_ID, raise_on_progress=False)
         self._abort_if_unique_id_configured()
 
+        errors: dict[str, str] = {}
+        values = user_input or {}
         if user_input is not None:
-            remote = user_input.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED)
-            enabled = remote != REMOTE_ACCESS_DISABLED
-            return self.async_create_entry(
-                title=SERVER_ENTRY_TITLE,
-                data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER},
-                options={
-                    OPT_ENABLE_WEBHOOK: enabled,
-                    # Disabled keeps Home Assistant sign-in queued, so enabling
-                    # the webhook later never lands on the secret-URL mode.
-                    OPT_WEBHOOK_AUTH: remote if enabled else WEBHOOK_AUTH_HA,
-                    OPT_BIND_HOST: user_input.get(OPT_BIND_HOST, BIND_HOST_LOOPBACK),
-                },
-            )
+            token = str(user_input.get(SETUP_ADMIN_TOKEN, "")).strip()
+            problem = server_credentials.token_problem(self.hass, token)
+            if problem is not None:
+                errors[SETUP_ADMIN_TOKEN] = problem
+            else:
+                remote = user_input.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED)
+                enabled = remote != REMOTE_ACCESS_DISABLED
+                return self.async_create_entry(
+                    title=SERVER_ENTRY_TITLE,
+                    data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER, DATA_ADMIN_TOKEN: token},
+                    options={
+                        OPT_ENABLE_WEBHOOK: enabled,
+                        # Disabled keeps Home Assistant sign-in queued, so
+                        # enabling the webhook later never lands on the
+                        # secret-URL mode.
+                        OPT_WEBHOOK_AUTH: remote if enabled else WEBHOOK_AUTH_HA,
+                        OPT_BIND_HOST: user_input.get(
+                            OPT_BIND_HOST, BIND_HOST_LOOPBACK
+                        ),
+                    },
+                )
         return self.async_show_form(
             step_id="server",
+            errors=errors,
             data_schema=vol.Schema(
                 {
+                    # The server acts with this account's rights (#2427); the
+                    # component no longer creates an administrator for itself.
+                    vol.Required(SETUP_ADMIN_TOKEN): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
                     vol.Required(
-                        SETUP_REMOTE_ACCESS, default=REMOTE_ACCESS_DISABLED
+                        SETUP_REMOTE_ACCESS,
+                        default=values.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED),
                     ): SelectSelector(
                         SelectSelectorConfig(
                             options=[
@@ -300,9 +326,10 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
                             mode=SelectSelectorMode.LIST,
                         )
                     ),
-                    vol.Required(OPT_BIND_HOST, default=BIND_HOST_LOOPBACK): (
-                        _bind_host_selector()
-                    ),
+                    vol.Required(
+                        OPT_BIND_HOST,
+                        default=values.get(OPT_BIND_HOST, BIND_HOST_LOOPBACK),
+                    ): _bind_host_selector(),
                 }
             ),
         )
@@ -395,11 +422,18 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 errors[OPT_OAUTH_REDIRECT_ALLOWLIST] = "invalid_oauth_callback"
             elif len(entries) > MAX_OAUTH_CALLBACKS:
                 errors[OPT_OAUTH_REDIRECT_ALLOWLIST] = "too_many_oauth_callbacks"
+            token = str(user_input.get(OPT_ADMIN_TOKEN_REPLACEMENT) or "").strip()
+            if token and (
+                problem := server_credentials.token_problem(self.hass, token)
+            ):
+                errors[OPT_ADMIN_TOKEN_REPLACEMENT] = problem
             if not errors:
                 data = self._normalize(user_input)
                 data.pop(OPT_OAUTH_REDIRECT_ALLOWLIST, None)
                 if (stored := stored_allowlist(opts, entries)) is not None:
                     data[OPT_OAUTH_REDIRECT_ALLOWLIST] = stored
+                if token:
+                    self._adopt_token(token, data)
                 return self.async_create_entry(title="", data=data)
 
         # A validation failure must re-render the values the user just entered.
@@ -547,6 +581,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     OPT_OAUTH_REGENERATE,
                     default=False,
                 ): bool,
+                # Never pre-filled: the stored token stays out of the form.
+                vol.Optional(OPT_ADMIN_TOKEN_REPLACEMENT): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
                 # suggested_value, not default: an emptied list must save as
                 # empty rather than fall back (see the OPT_PIP_SPEC note).
                 vol.Optional(
@@ -597,6 +635,24 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             },
         )
 
+    def _adopt_token(self, token: str, options: Mapping[str, Any]) -> None:
+        """Store the validated replacement token straight into ``entry.data``.
+
+        Like the token repair, it never passes through the options, which
+        ``config_entries/get`` returns. The entry reloads to use it: the update
+        listener reloads only for an options change, so a token-only save
+        schedules the reload here.
+        """
+        from .embedded_entry import _reload_relevant
+
+        entry = self.config_entry
+        self.hass.config_entries.async_update_entry(
+            entry,
+            data=server_credentials.adopt_admin_token(self.hass, entry.data, token),
+        )
+        if _reload_relevant(options) == _reload_relevant(entry.options):
+            self.hass.config_entries.async_schedule_reload(entry.entry_id)
+
     @staticmethod
     def _connect_path_override_errors(
         user_input: Mapping[str, Any],
@@ -637,6 +693,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             OPT_OAUTH_CLIENT_SECRET,
         ):
             cleaned[key] = str(cleaned.get(key, "") or "").strip()
+        # The token never reaches the options; see _adopt_token.
+        cleaned[OPT_ADMIN_TOKEN_REPLACEMENT] = ""
         cleaned[OPT_EXTERNAL_URL] = cleaned[OPT_EXTERNAL_URL].rstrip("/")
         # server_url gets no _normalize-forced empty like the fields above; strip
         # it and drop it entirely when blank so a whitespace-only value can't be

@@ -183,6 +183,8 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
        values (e.g. ``enable_snapshot_delete``) — a separate registry from
        ``FEATURE_FLAG_FIELDS``, read from a separate override file.
     """
+    from test_constants import TEST_TOKEN  # tests/ is on sys.path only in E2E
+
     storage_file = config_path / ".storage" / "core.config_entries"
     data = json.loads(storage_file.read_text())
     entries = data.setdefault("data", {}).setdefault("entries", [])
@@ -198,6 +200,9 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
                     "entry_type": "server",
                     "webhook_id": _EMBEDDED_WEBHOOK_ID,
                     "secret_path": _EMBEDDED_SECRET_PATH,
+                    # The component no longer provisions an administrator
+                    # (#2427); the server runs with the test admin's token.
+                    "admin_token": TEST_TOKEN,
                 },
                 "disabled_by": None,
                 "discovery_keys": {},

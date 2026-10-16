@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.metadata
+import logging
 import os
 import sys
 import threading
@@ -37,11 +38,9 @@ import custom_components.ha_mcp_tools.embedded_server as es  # noqa: E402
 _WHEELS_HOST = "wheels.home-assistant.io"
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CHANNEL_DEV,
-    DATA_ACCESS_TOKEN,
     DATA_LAST_PIP_SPEC,
-    DATA_REFRESH_TOKEN_ID,
+    DATA_REINSTALL_REQUESTED,
     DATA_SECRET_PATH,
-    DATA_SERVER_USER_ID,
     DEFAULT_PIP_SPEC,
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
@@ -51,13 +50,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
-    SERVER_TOKEN_CLIENT_NAME,
 )
-
-# GROUP_ID_ADMIN / the LLAT token-type come from the homeassistant stub the
-# manager imports; the string values are pinned in _embedded_stubs.
-_GROUP_ID_ADMIN = es.GROUP_ID_ADMIN
-_TOKEN_TYPE_LLAT = es.TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 
 
 @pytest.fixture(autouse=True)
@@ -127,19 +120,6 @@ def _manager(tmp_path, *, options=None, data=None):
     hass = _make_hass(tmp_path)
     entry = _make_entry(options=options, data=data)
     return es.EmbeddedServerManager(hass, entry), hass, entry
-
-
-def _user(uid="user-1", refresh_tokens=None):
-    return SimpleNamespace(id=uid, refresh_tokens=refresh_tokens or {})
-
-
-def _rt(rt_id="rt-1", user=None, client_name="", token_type=""):
-    return SimpleNamespace(
-        id=rt_id,
-        user=user or _user(),
-        client_name=client_name,
-        token_type=token_type,
-    )
 
 
 def _stub_ha_mcp_surface(
@@ -212,8 +192,8 @@ class TestConstruction:
     def test_defaults(self, tmp_path):
         mgr, _hass, _entry = _manager(tmp_path)
         assert mgr.port == 9584
-        # LAN-reachable by default (owner decision: add-on parity - the
-        # secret path is the credential, same as the add-on's port).
+        # An entry saved before setup asked for network access binds every
+        # interface; new entries save loopback explicitly.
         assert mgr._bind_host == "0.0.0.0"
         assert mgr._server_url == "http://127.0.0.1:8123"
         # Provisional until async_start reads the manifest pin.
@@ -589,6 +569,51 @@ class TestEnsurePairedPackage:
         await _ensure(mgr)
 
         assert env.installs == []
+
+    async def test_a_requested_reinstall_replaces_a_satisfied_pin(
+        self, tmp_path, monkeypatch
+    ):
+        # The package repair's fix: another integration downgraded one of the
+        # server's dependencies, the pin itself still reads as installed, and
+        # only a real reinstall resolves the dependencies again.
+        _paired(monkeypatch, "ha-mcp==8.6.0")
+        env = _PkgEnv(monkeypatch, {DIST_NAME_STABLE: "8.6.0"})
+        mgr, hass, _entry = _manager(
+            tmp_path,
+            data={
+                DATA_SECRET_PATH: "/p",
+                DATA_LAST_PIP_SPEC: "ha-mcp==8.6.0",
+                DATA_REINSTALL_REQUESTED: True,
+            },
+        )
+
+        await _ensure(mgr)
+
+        [(spec, kwargs)] = env.installs
+        assert spec == "ha-mcp==8.6.0"
+        assert kwargs["reinstall"] is True
+        # One reinstall per request, not on every later start.
+        saved = hass.config_entries.async_update_entry.call_args.kwargs["data"]
+        assert DATA_REINSTALL_REQUESTED not in saved
+
+    async def test_a_requested_reinstall_waits_for_a_live_importer(
+        self, tmp_path, monkeypatch
+    ):
+        _paired(monkeypatch, "ha-mcp==8.6.0")
+        env = _PkgEnv(monkeypatch, {DIST_NAME_STABLE: "8.6.0"})
+        mgr, hass, _entry = _manager(
+            tmp_path,
+            data={
+                DATA_SECRET_PATH: "/p",
+                DATA_LAST_PIP_SPEC: "ha-mcp==8.6.0",
+                DATA_REINSTALL_REQUESTED: True,
+            },
+        )
+
+        await _ensure(mgr, defer_mutations=True)
+
+        assert env.installs == []
+        hass.config_entries.async_update_entry.assert_not_called()
 
     async def test_override_reapplied_after_core_restored_the_pin(
         self, tmp_path, monkeypatch
@@ -1410,149 +1435,15 @@ class TestThreadEnvStaging:
 
 
 class TestTokenProvisioning:
-    async def test_first_run_creates_user_and_llat(self, tmp_path):
-        mgr, hass, entry = _manager(tmp_path)
-        user = _user("new-user")
-        hass.auth.async_create_user.return_value = user
-        hass.auth.async_create_refresh_token.return_value = _rt("rt-new", user=user)
-
-        token = await mgr._async_provision_token()
-
-        assert token == "access-token-xyz"
-        hass.auth.async_create_user.assert_awaited_once()
-        # Admin, local-only user.
-        assert hass.auth.async_create_user.await_args.kwargs["group_ids"] == [
-            _GROUP_ID_ADMIN
-        ]
-        assert hass.auth.async_create_user.await_args.kwargs["local_only"] is True
-        # A long-lived refresh token was minted.
-        rt_kwargs = hass.auth.async_create_refresh_token.await_args.kwargs
-        assert rt_kwargs["client_name"] == SERVER_TOKEN_CLIENT_NAME
-        assert rt_kwargs["token_type"] == _TOKEN_TYPE_LLAT
-        # Only the REUSE ids are persisted; the access token stays in
-        # memory (review finding: it was stored but never read, leaving an
-        # unused admin JWT at rest + a config-entry rewrite every start).
-        assert entry.data[DATA_SERVER_USER_ID] == "new-user"
-        assert entry.data[DATA_REFRESH_TOKEN_ID] == "rt-new"
-        assert DATA_ACCESS_TOKEN not in entry.data
-
-    async def test_reuse_across_restart_mints_only_access_token(self, tmp_path):
-        user = _user("stored-user")
-        rt = _rt("stored-rt", user=user)
-        mgr, hass, _entry = _manager(
-            tmp_path,
-            data={
-                DATA_SECRET_PATH: "/private_secret",
-                DATA_SERVER_USER_ID: "stored-user",
-                DATA_REFRESH_TOKEN_ID: "stored-rt",
-            },
-        )
-        hass.auth.async_get_user.return_value = user
-        hass.auth.async_get_refresh_token.return_value = rt
-
-        token = await mgr._async_provision_token()
-
-        assert token == "access-token-xyz"
-        hass.auth.async_create_user.assert_not_awaited()
-        hass.auth.async_create_refresh_token.assert_not_awaited()
-        hass.auth.async_create_access_token.assert_called_once_with(rt)
-
-    async def test_recreates_when_stored_user_gone(self, tmp_path):
-        mgr, hass, _entry = _manager(
-            tmp_path,
-            data={DATA_SECRET_PATH: "/p", DATA_SERVER_USER_ID: "ghost"},
-        )
-        hass.auth.async_get_user.return_value = None  # stored user vanished
-        new_user = _user("fresh")
-        hass.auth.async_create_user.return_value = new_user
-        hass.auth.async_create_refresh_token.return_value = _rt(
-            "fresh-rt", user=new_user
-        )
-
-        await mgr._async_provision_token()
-        hass.auth.async_create_user.assert_awaited_once()
-
-    async def test_discards_refresh_token_of_other_user(self, tmp_path):
-        user = _user("stored-user")
-        foreign_rt = _rt("foreign", user=_user("someone-else"))
-        mgr, hass, _entry = _manager(
-            tmp_path,
-            data={
-                DATA_SECRET_PATH: "/p",
-                DATA_SERVER_USER_ID: "stored-user",
-                DATA_REFRESH_TOKEN_ID: "foreign",
-            },
-        )
-        hass.auth.async_get_user.return_value = user
-        hass.auth.async_get_refresh_token.return_value = foreign_rt
-        hass.auth.async_create_refresh_token.return_value = _rt("mine", user=user)
-
-        await mgr._async_provision_token()
-        # A new refresh token was minted for the correct user.
-        hass.auth.async_create_refresh_token.assert_awaited_once()
-
-    async def test_clears_stale_llat_before_creating(self, tmp_path):
-        stale = _rt(
-            "stale",
-            client_name=SERVER_TOKEN_CLIENT_NAME,
-            token_type=_TOKEN_TYPE_LLAT,
-        )
-        user = _user("u", refresh_tokens={"stale": stale})
-        stale.user = user
-        mgr, hass, _entry = _manager(tmp_path)
-        hass.auth.async_create_user.return_value = user
-        hass.auth.async_create_refresh_token.return_value = _rt("rt-new", user=user)
-
-        await mgr._async_provision_token()
-        hass.auth.async_remove_refresh_token.assert_called_once_with(stale)
-
-
-class TestRevokeCredentials:
-    async def test_removes_token_and_user_and_strips_entry_data(self, tmp_path):
-        user = _user("u")
-        rt = _rt("rt", user=user)
-        mgr, hass, entry = _manager(
-            tmp_path,
-            data={
-                DATA_SECRET_PATH: "/p",
-                DATA_SERVER_USER_ID: "u",
-                DATA_REFRESH_TOKEN_ID: "rt",
-                DATA_ACCESS_TOKEN: "tok",
-            },
-        )
-        hass.auth.async_get_refresh_token.return_value = rt
-        hass.auth.async_get_user.return_value = user
-
-        await mgr.async_revoke_credentials()
-
-        hass.auth.async_remove_refresh_token.assert_called_once_with(rt)
-        hass.auth.async_remove_user.assert_awaited_once_with(user)
-        # The three provisioning keys are stripped; the secret path is kept.
-        assert DATA_SERVER_USER_ID not in entry.data
-        assert DATA_REFRESH_TOKEN_ID not in entry.data
-        assert DATA_ACCESS_TOKEN not in entry.data
-        assert entry.data[DATA_SECRET_PATH] == "/p"
-
-    async def test_idempotent_when_ids_missing(self, tmp_path):
+    async def test_a_missing_credential_files_the_token_repair(self, tmp_path):
+        # Older releases created an administrator here; none is created now.
         mgr, hass, _entry = _manager(tmp_path, data={DATA_SECRET_PATH: "/p"})
-        await mgr.async_revoke_credentials()  # must not raise
-        hass.auth.async_remove_refresh_token.assert_not_called()
-        hass.auth.async_remove_user.assert_not_awaited()
 
-    async def test_missing_objects_treated_as_success(self, tmp_path):
-        mgr, hass, _entry = _manager(
-            tmp_path,
-            data={
-                DATA_SECRET_PATH: "/p",
-                DATA_SERVER_USER_ID: "gone",
-                DATA_REFRESH_TOKEN_ID: "gone",
-            },
-        )
-        hass.auth.async_get_refresh_token.return_value = None
-        hass.auth.async_get_user.return_value = None
-        await mgr.async_revoke_credentials()
-        hass.auth.async_remove_refresh_token.assert_not_called()
-        hass.auth.async_remove_user.assert_not_awaited()
+        with pytest.raises(es.EmbeddedServerError) as err:
+            await mgr._async_access_token()
+
+        assert err.value.kind == "token"
+        hass.auth.async_create_user.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -2303,7 +2194,8 @@ class TestLifecycle:
         ) as exc:
             await mgr.async_start()
 
-        assert exc.value.kind == "package"
+        # Not "package": that repair offers a reinstall, which cannot fix this.
+        assert exc.value.kind == "start"
         ensure.assert_not_awaited()
 
     async def test_start_rejects_invalid_home_assistant_version_before_install(
@@ -2320,7 +2212,7 @@ class TestLifecycle:
         ) as exc:
             await mgr.async_start()
 
-        assert exc.value.kind == "package"
+        assert exc.value.kind == "start"
         ensure.assert_not_awaited()
 
     async def test_start_orders_steps_and_spawns_thread(self, tmp_path, monkeypatch):
@@ -2333,7 +2225,7 @@ class TestLifecycle:
         )
         monkeypatch.setattr(
             mgr,
-            "_async_provision_token",
+            "_async_access_token",
             AsyncMock(side_effect=lambda: (calls.append("token"), "tok")[1]),
         )
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: calls.append("dir"))
@@ -2356,6 +2248,17 @@ class TestLifecycle:
         # resolves from disk, not the process-wide module cache).
         assert calls == ["ensure", "token", "dir", "purge", "ready"]
         assert started == ["tok"]
+
+    async def test_start_warns_when_the_manifest_pins_no_server(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(
+            mgr, "_async_ensure_package", AsyncMock(side_effect=RuntimeError("stop"))
+        )
+        with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError):
+            await mgr.async_start()
+        assert "manifest pins no ha-mcp server" in caplog.text
 
     async def test_stop_without_start_is_noop(self, tmp_path):
         mgr, _hass, _entry = _manager(tmp_path)
@@ -2509,9 +2412,7 @@ class TestRunningVersionStalenessWarning:
             tmp_path, options={OPT_PIP_SPEC: "ha-mcp-dev==7.13.0.dev1"}
         )
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
@@ -2540,9 +2441,7 @@ class TestRunningVersionStalenessWarning:
     ):
         mgr, _hass, _entry = _manager(tmp_path)
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         # Stub the module purge: letting it run for real would drop every
         # live ha_mcp module and poison later tests in this process.
@@ -2574,9 +2473,7 @@ class TestRunningVersionStalenessWarning:
     async def test_start_quiet_when_versions_match(self, tmp_path, monkeypatch, caplog):
         mgr, _hass, _entry = _manager(tmp_path)
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         # Stub the module purge: letting it run for real would drop every
         # live ha_mcp module and poison later tests in this process.
@@ -2619,9 +2516,7 @@ class TestPurgeSkippedWhileOrphanAlive:
         purges: list[bool],
     ) -> None:
         monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
@@ -2841,7 +2736,7 @@ class TestImportingWorkerRegistry:
                 mgr_b, "_async_ensure_package", AsyncMock(return_value="1.2.3")
             )
             monkeypatch.setattr(
-                mgr_b, "_async_provision_token", AsyncMock(return_value="tok")
+                mgr_b, "_async_access_token", AsyncMock(return_value="tok")
             )
             monkeypatch.setattr(mgr_b, "_prepare_config_dir", lambda: None)
             monkeypatch.setattr(mgr_b, "_async_wait_until_ready", AsyncMock())
@@ -3129,9 +3024,7 @@ class TestImporterAwareBringUp:
 
     def _stub_bring_up(self, mgr, monkeypatch, ensure: AsyncMock) -> None:
         monkeypatch.setattr(mgr, "_async_ensure_package", ensure)
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
         monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
@@ -3331,9 +3224,7 @@ class TestPurgeSkippedOnWarmCache:
         monkeypatch.setattr(
             mgr, "_async_ensure_package", AsyncMock(return_value=ready_version)
         )
-        monkeypatch.setattr(
-            mgr, "_async_provision_token", AsyncMock(return_value="tok")
-        )
+        monkeypatch.setattr(mgr, "_async_access_token", AsyncMock(return_value="tok"))
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
         monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)

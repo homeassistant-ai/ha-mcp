@@ -97,6 +97,7 @@ class _TextSelector(_SelectSelector):
 class _TextSelectorType:
     TEXT = "text"
     URL = "url"
+    PASSWORD = "password"
 
 
 _sel = MagicMock()
@@ -133,13 +134,16 @@ for _name in [
 sys.modules.pop("custom_components.ha_mcp_tools.config_flow", None)
 
 from custom_components.ha_mcp_tools import config_flow as cf  # noqa: E402
-from custom_components.ha_mcp_tools import config_flow_text as cft  # noqa: E402
+from custom_components.ha_mcp_tools import (  # noqa: E402
+    config_flow_text as cft,
+)
 from custom_components.ha_mcp_tools import const  # noqa: E402
 
 
 def _make_flow() -> cf.HaMcpToolsConfigFlow:
     """Build a flow with the HA framework methods stubbed to return markers."""
     flow = cf.HaMcpToolsConfigFlow()
+    flow.hass = MagicMock(name="hass")
     flow.async_set_unique_id = AsyncMock(return_value=None)
     flow._abort_if_unique_id_configured = MagicMock(return_value=None)
     flow.async_show_menu = MagicMock(side_effect=lambda **kw: {"type": "menu", **kw})
@@ -213,77 +217,6 @@ class TestToolsBranch:
         # The pre-rename default the setup migration retitles existing installs
         # away from (see _async_setup_tools_entry).
         assert const.TOOLS_ENTRY_LEGACY_TITLE == "HA MCP Tools"
-
-
-class TestOAuthCredsHint:
-    """All three branches of the admin-only credentials hint on the options
-    form (review gap: zero coverage on any of them)."""
-
-    def test_non_legacy_mode_points_at_the_mode_selector(self):
-        flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
-        )
-        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
-        assert "Set Authentication mode" in hint
-        assert "Client ID" in hint
-
-    def test_legacy_mode_before_minting_says_appear_after_start(self):
-        flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY}
-        )
-        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
-        assert "once the server" in hint
-
-    def test_legacy_mode_live_creds_shows_values_without_caveat(self, monkeypatch):
-        # Bound AND live (post-restart steady state): no restart caveat.
-        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: True)
-        monkeypatch.setattr(cf, "_legacy_restart_pending", lambda *a: False)
-        flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
-            data={
-                const.DATA_OAUTH_CLIENT_ID: "hamcp-abc",
-                const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
-            },
-        )
-        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
-        assert "Client ID: hamcp-abc" in hint
-        assert "Client Secret: s3cr3t" in hint
-        assert "not serving these yet" not in hint
-
-    def test_legacy_mode_first_enable_carries_not_live_caveat(self, monkeypatch):
-        # Review finding: mid-session first enable binds the current identity
-        # (active True) but /authorize is not live until the restart -- the
-        # hint must caveat, matching the startup log's first-enable branch.
-        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: True)
-        monkeypatch.setattr(cf, "_legacy_restart_pending", lambda *a: True)
-        flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
-            data={
-                const.DATA_OAUTH_CLIENT_ID: "hamcp-abc",
-                const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
-            },
-        )
-        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
-        assert "Client ID: hamcp-abc" in hint
-        assert "not serving these yet" in hint
-
-    def test_legacy_mode_pending_rotation_carries_restart_caveat(self, monkeypatch):
-        # Review finding on #1880: after a rotation, entry.data updates
-        # immediately but the bound views keep the previous identity until
-        # restart -- the hint must say the shown values do not work yet.
-        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: False)
-        flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
-            data={
-                const.DATA_OAUTH_CLIENT_ID: "hamcp-new",
-                const.DATA_OAUTH_CLIENT_SECRET: "new-secret",
-            },
-        )
-        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
-        assert "Client ID: hamcp-new" in hint
-        assert "Client Secret: new-secret" in hint
-        assert "not serving these yet" in hint
-        assert "restart" in hint
 
 
 class TestToolsInfoOptionsFlow:
@@ -711,8 +644,11 @@ class TestServerOptionsFlow:
         for key in text_fields:
             assert markers[key].description["suggested_value"] == saved[key]
 
+        # The administrator token is never pre-filled from anything saved.
         defaults = {
-            key: m.default() for key, m in markers.items() if key not in text_fields
+            key: m.default()
+            for key, m in markers.items()
+            if key not in (*text_fields, const.OPT_ADMIN_TOKEN_REPLACEMENT)
         }
         # regenerate_secrets is a one-shot action, never pre-filled True;
         # enable_webhook / enable_startup_notification / enable_sidebar_panel
@@ -755,6 +691,7 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE: "",
             const.OPT_OAUTH_CLIENT_ID: "",
             const.OPT_OAUTH_CLIENT_SECRET: "",
+            const.OPT_ADMIN_TOKEN_REPLACEMENT: "",
             const.OPT_OAUTH_REDIRECT_ALLOWLIST: [],
         }
 

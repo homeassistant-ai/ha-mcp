@@ -4,7 +4,7 @@ Runs the full ha-mcp FastMCP server in-process inside Home Assistant and exposes
 it remotely through a Home Assistant webhook. Creating the "server" config entry
 starts the server; disabling the entry pauses it (HA calls
 :func:`async_unload_server_entry` via the domain dispatcher in ``__init__``);
-removing the entry revokes the provisioned credentials.
+removing the entry deletes the account and token an older release provisioned.
 
 ``__init__.async_setup_entry`` dispatches to these functions for the "server"
 entry type; the "tools" services entry is handled separately. This module is
@@ -16,6 +16,7 @@ ingress in :mod:`embedded_server` / :mod:`mcp_webhook`.
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from collections.abc import Mapping
 from contextlib import suppress
@@ -32,6 +33,7 @@ from .const import (
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
     DOMAIN,
+    OPT_ADMIN_TOKEN_REPLACEMENT,
     OPT_ENABLE_SIDEBAR_PANEL,
     OPT_ENABLE_WEBHOOK,
     OPT_OAUTH_CLIENT_ID,
@@ -49,6 +51,8 @@ from .const import (
 )
 from .entry_device import async_register_entry_device
 
+_LOGGER = logging.getLogger(__name__)
+
 # NOTE: embedded_setup (and its embedded_server / mcp_webhook
 # chain), plus websocket_api, are imported lazily inside the entry lifecycle
 # functions below, not at module top level. They pull in aiohttp, yaml and
@@ -65,7 +69,7 @@ if TYPE_CHECKING:
 async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the server entry: schedule the server bring-up as a background task.
 
-    The bring-up (first pip install of the fastmcp tree, token provisioning,
+    The bring-up (an override's pip install of the fastmcp tree, token checks,
     thread start, webhook registration) can take minutes, so it must not stall HA
     startup. It runs as a config-entry background task — automatically cancelled
     on unload. The secret webhook id and secret path are generated first, before
@@ -129,7 +133,7 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
 
 
 async def async_unload_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Stop the server + ingress webhook (reload-safe; keeps the provisioned token).
+    """Stop the server + ingress webhook (reload-safe; keeps the credentials).
 
     Cancels the bring-up task first so a still-in-flight install/start is torn
     down before the explicit teardown runs.
@@ -168,7 +172,7 @@ def _remove_retired_update_entity(hass: HomeAssistant, entry: ConfigEntry) -> No
 
 
 async def async_remove_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Revoke the provisioned credentials when the server config entry is removed."""
+    """Release the credentials an older release provisioned when the entry is removed."""
     from .embedded_setup import (  # lazy (see import note)
         async_revoke_credentials_on_remove,
     )
@@ -189,7 +193,7 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
     """Reload the entry when its OPTIONS change (port / auth / pip spec / URL).
 
     Ignores the ``entry.data`` writes the background bring-up performs (webhook
-    id, secret path, provisioned token ids, last pip spec): those fire the same
+    id, secret path, an adopted token, last pip spec): those fire the same
     update listener but must not reload the entry. Options read live on every
     request (the callback allowlist) need no reload either.
     """
@@ -312,8 +316,37 @@ def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if options.get(OPT_WEBHOOK_AUTH) == WEBHOOK_AUTH_LEGACY:
         changed = _ensure_legacy_oauth_secrets(data, options) or changed
 
+    changed = _adopt_replacement_token(hass, data, options) or changed
+
     if changed:
         hass.config_entries.async_update_entry(entry, data=data, options=options)
+
+
+def _adopt_replacement_token(hass: HomeAssistant, data: dict, options: dict) -> bool:
+    """Switch to a replacement token an older build left in the options (#2427).
+
+    Configure now writes the token straight into ``entry.data``; this only
+    drains one an earlier build of this release parked in ``options``.
+    ``data`` and ``options`` are mutated in place and the option is cleared;
+    returns True when anything changed.
+    """
+    replacement = str(options.get(OPT_ADMIN_TOKEN_REPLACEMENT) or "").strip()
+    if not replacement:
+        return False
+    from .server_credentials import (  # lazy (see import note)
+        adopt_admin_token,
+        token_problem,
+    )
+
+    options[OPT_ADMIN_TOKEN_REPLACEMENT] = ""
+    if token_problem(hass, replacement) is not None:
+        # Revoked since it was saved: keep the credential that still works.
+        _LOGGER.warning("Discarded a replacement access token that no longer works")
+        return True
+    adopted = adopt_admin_token(hass, data, replacement)
+    data.clear()
+    data.update(adopted)
+    return True
 
 
 def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
