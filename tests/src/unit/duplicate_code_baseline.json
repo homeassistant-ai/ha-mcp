@@ -521,7 +521,6 @@
   ],
   "8197824bfe64": [
     "tests/src/unit/test_error_code_consistency_1297.py::TestZoneGetMissingReturnsResourceNotFound.tools",
-    "tests/src/unit/test_error_code_consistency_1297.py::TestZoneMutationRoutesNotFoundToResourceNotFound.tools",
     "tests/src/unit/test_identifier_validation_family.py::TestZonesIdentifierValidation.tools"
   ],
   "85135aa6a2c5": [
@@ -703,7 +702,6 @@
   ],
   "ae9c2472dc15": [
     "tests/src/unit/test_helper_field_persistence.py::mock_client",
-    "tests/src/unit/test_helper_input_validation.py::mock_client",
     "tests/src/unit/test_helper_param_rejection.py::mock_client"
   ],
   "af2e03446ed9": [
@@ -900,10 +898,6 @@
     "tests/src/unit/test_coordinator.py::_FakeResp.__init__",
     "tests/src/unit/test_update.py::_FakeResp.__init__"
   ],
-  "d7a477e102ee": [
-    "tests/src/unit/test_helper_registry_id_validation.py::mock_client",
-    "tests/src/unit/test_helper_response_shape.py::mock_client"
-  ],
   "d8d77a6c1ecf": [
     "tests/src/unit/visibility/test_overview_filter.py::_OverviewClient",
     "tests/src/unit/visibility/test_warnings_surface.py::_OverviewClient"
@@ -1015,7 +1009,6 @@
     "tests/src/unit/test_helper_list_registry_join.py::register_tools",
     "tests/src/unit/test_helper_param_rejection.py::register_tools",
     "tests/src/unit/test_helper_registry_id_validation.py::register_tools",
-    "tests/src/unit/test_helper_response_shape.py::register_tools",
     "tests/src/unit/test_helper_update_persistence.py::register_tools"
   ],
   "ed5d4e154c39": [
