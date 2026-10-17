@@ -1,9 +1,9 @@
-"""Cross-seam contract test for the ``ha_mcp_tools/info`` ``webhook_auth`` field.
+"""Cross-seam contract test for the ``info`` fields ``ha_report_issue`` reads.
 
 Pipes the REAL component ``_do_info(hass)`` through the REAL server-side
-``get_component_caps`` negotiation and the fresh ``info`` read into
-``ha_report_issue``'s server-entry line (#2584), so a name or shape drift
-between the component's additive field and the report's reader fails here.
+``get_component_caps`` negotiation and the fresh ``info`` read into the
+report's component version and server-entry line (#2584), so a name or shape
+drift between the component's fields and the report's readers fails here.
 Bridge pattern as in ``test_component_info_timezone_contract.py``.
 """
 
@@ -60,16 +60,35 @@ def _report(
     return BugReportTools(client)
 
 
-async def _line(report: BugReportTools) -> str | None:
-    """The server-entry line, with the caps probe served by the same component."""
-    with patch.object(
+def _served(report: BugReportTools) -> Any:
+    """Serve the caps probe from the same component as the fresh reads."""
+    return patch.object(
         component_api, "get_websocket_client", AsyncMock(return_value=report._client.ws)
-    ):
+    )
+
+
+async def _line(report: BugReportTools) -> str | None:
+    with _served(report):
         return await report._detect_server_entry_status()
 
 
 def _server(options: dict[str, Any] | None = None) -> FakeConfigEntry:
     return FakeConfigEntry(DOMAIN, data={"entry_type": "server"}, options=options)
+
+
+@pytest.mark.asyncio
+async def test_updated_component_version_reaches_the_next_report() -> None:
+    """A component update keeps a long-lived server's client, and with it the
+    caps snapshot; a later report must show the version now running."""
+    running = {"version": "2.1.0"}
+    report = _report(
+        FakeHass(config_entries=[_server()]),
+        lambda r: r.update(component_version=running["version"]),
+    )
+    with _served(report):
+        assert await report._detect_component_version() == "2.1.0"
+        running["version"] = "2.2.0"
+        assert await report._detect_component_version() == "2.2.0"
 
 
 @pytest.mark.asyncio
