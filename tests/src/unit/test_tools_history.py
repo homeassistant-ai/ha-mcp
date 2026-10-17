@@ -10,11 +10,11 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools import tools_history
-from ha_mcp.tools.tools_history import (
-    HistoryTools,
+from ha_mcp.tools.statistics_calendar import (
     _next_month_start,
     _statistics_scan_window,
 )
+from ha_mcp.tools.tools_history import HistoryTools
 
 
 @pytest.fixture(autouse=True)

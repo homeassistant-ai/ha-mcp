@@ -1,4 +1,4 @@
-"""Present recorder history with readable names and local event times."""
+"""Present recorder history with readable names, local event times and per-state totals."""
 
 from datetime import UTC, datetime, tzinfo
 from typing import Any
@@ -55,6 +55,10 @@ def format_history_response(response: dict[str, Any]) -> dict[str, Any]:
         metadata.get("home_assistant_timezone", "UTC")
     )
     for entity in response["data"].get("entities", []):
+        if totals := entity.get("summary"):
+            for key in ("first_change", "last_change"):
+                totals[key] = _local_timestamp(totals[key], timezone)
+            continue
         entity["states"] = [_readable_row(row, timezone) for row in entity["states"]]
     metadata.update(
         home_assistant_timezone=name,
@@ -68,3 +72,78 @@ def format_history_response(response: dict[str, Any]) -> dict[str, Any]:
         ),
     )
     return response
+
+
+def summarize_states(
+    states: list[dict[str, Any]],
+    window_start_ts: float,
+    window_end_ts: float,
+    limit: int,
+) -> dict[str, Any]:
+    """Reduce Core's oldest-first compressed rows to periods and seconds per state.
+
+    Each row lasts until the next row's ``lu`` and the last one until the window
+    end. A row repeating the previous state (an attribute-only update, which
+    Core may return) extends the current period instead of opening one.
+    Core stamps its window-start snapshot with the window start, so only a
+    first row after it is a change.
+    """
+    totals: dict[str, dict[str, Any]] = {}
+    change_times: list[float] = []
+    # With a future end_time, rows recorded after `now` was taken (or under an
+    # HA clock running ahead) start after the window end.
+    bounds = [min(row["lu"], window_end_ts) for row in states] + [window_end_ts]
+    for index, row in enumerate(states):
+        state = row["s"]
+        entry = totals.setdefault(state, {"periods": 0, "duration_s": 0.0})
+        if index == 0 or state != states[index - 1]["s"]:
+            entry["periods"] += 1
+            if index or row["lu"] > window_start_ts:
+                change_times.append(row["lu"])
+        entry["duration_s"] += bounds[index + 1] - bounds[index]
+    ranked = sorted(
+        totals.items(), key=lambda item: item[1]["duration_s"], reverse=True
+    )
+    return {
+        "changes": len(change_times),
+        "first_change": change_times[0] if change_times else None,
+        "last_change": change_times[-1] if change_times else None,
+        "distinct_states": len(totals),
+        "states": {
+            state: {
+                "periods": entry["periods"],
+                "duration_s": round(entry["duration_s"], 3),
+            }
+            for state, entry in ranked[:limit]
+        },
+    }
+
+
+def summary_warnings(
+    result: dict[str, list[dict[str, Any]]],
+    entity_ids: list[str],
+    window_start_ts: float,
+) -> list[str]:
+    """Name the entities whose totals cover less than the requested window."""
+    missing: list[str] = []
+    late: list[str] = []
+    for entity_id in entity_ids:
+        states = result.get(entity_id)
+        if not states:
+            missing.append(entity_id)
+        elif states[0]["lu"] > window_start_ts:
+            late.append(entity_id)
+    warnings = []
+    if missing:
+        warnings.append(
+            f"No recorded states for: {', '.join(missing)} in this window. Check "
+            "the entity IDs, the time range and that the recorder includes them; "
+            "their summaries count nothing."
+        )
+    if late:
+        warnings.append(
+            f"Totals for {', '.join(late)} start at the first recorded state, "
+            "after start_time: Core returned no earlier state (entity added "
+            "later, older history purged, or include_start_time_state=false)."
+        )
+    return warnings
