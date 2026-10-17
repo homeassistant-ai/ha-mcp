@@ -1613,7 +1613,7 @@
   {
     "name": "ha_remove_entity",
     "title": "Remove Entity",
-    "description": "Remove one or more entities from the Home Assistant entity registry.\n\nPermanently removes the entity registration; the entity will no longer\nappear in the UI or be available to automations. Use only for orphaned\nor stale entity entries: if the underlying device or integration is\nstill active, the entity may be re-added automatically on the next HA\nrestart or reload. This cannot be undone without restoring from backup.\nFor most use cases, consider disabling instead:\nha_set_entity(entity_id=\"sensor.old\", enabled=False).\n\nBULK MODE:\nPass a list of entity IDs to remove up to 100 at once — handy for\nclearing the restored=true orphans an integration leaves behind after\nits filters change. Removals run sequentially and return:\n  {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}\nwhere skipped = ids already absent (not-found is idempotent, not an\nerror). Bulk mode is NOT auto-backed-up (the snapshot is single-entity);\nsingle-id removal still is.\n\nEXAMPLES:\n- Remove orphaned sensor: ha_remove_entity(\"sensor.old_temperature\")\n- Bulk cleanup: ha_remove_entity([\"sensor.orphan_1\", \"sensor.orphan_2\"])\n\nUse ha_search / ha_get_entity to verify an entity before removing it.",
+    "description": "Remove one or more entities from the Home Assistant entity registry.\n\nPermanently removes the entity registration; the entity will no longer\nappear in the UI or be available to automations. Use only for orphaned\nor stale entity entries: if the underlying device, integration or\nstored helper is still there, the entity may be re-added on the next HA\nrestart or reload; for a stored helper's entity a single-id removal\nnames the tool that removes the helper. This cannot be undone without restoring\nfrom backup. For most use cases, consider disabling instead:\nha_set_entity(entity_id=\"sensor.old\", enabled=False).\n\nBULK MODE:\nPass a list of entity IDs to remove up to 100 at once — handy for\nclearing the restored=true orphans an integration leaves behind after\nits filters change. Removals run sequentially and return:\n  {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}\nwhere skipped = ids already absent (not-found is idempotent, not an\nerror). Only single-id removal is auto-backed-up.\n\nEXAMPLES:\n- Remove orphaned sensor: ha_remove_entity(\"sensor.old_temperature\")\n- Bulk cleanup: ha_remove_entity([\"sensor.orphan_1\", \"sensor.orphan_2\"])\n\nUse ha_search / ha_get_entity to verify an entity before removing it.",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -2201,7 +2201,7 @@
         },
         "helper_id": {
           "type": "str | None",
-          "description": "Bare ID ('my_button') or full entity ID ('input_button.my_button'). Omit to create a new helper.",
+          "description": "The helper's storage id ('my_button'), not the name of its entity, or its full entity_id ('input_button.my_button'). Omit to create a new helper.",
           "default": null
         },
         "entry_id": {
@@ -2226,7 +2226,7 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, set at creation or by ha_set_zone; ha_get_zone shows it), which cannot be removed",
+          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed. On create, a storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, otherwise (person, tag, a new zone, or without the ha_mcp_tools component) into the entity registry; an update always sets the registry icon, and the stored icon too where the schema has one. Automatic backups hold the registry icon of a person, tag or zone only, so restoring another helper's backup does not bring back an icon kept in the registry; without the component, every storage helper other than a zone keeps its icon there",
           "default": null
         },
         "area_id": {
@@ -2398,12 +2398,12 @@
   {
     "name": "ha_remove_helpers_integrations",
     "title": "Remove Helper or Integration",
-    "description": "Remove a Home Assistant helper or integration config entry.\n\nUnifies three backend removal mechanisms — simple-helper websocket\ndelete, config-entry delete, and config-subentry delete — behind one\nentry point; helper_type picks the path, or the entity registry does\nwhen an entity_id comes without one.\n\nWHEN NOT TO USE:\n- Removing only an entity (without deleting its underlying helper or\n  config entry) — use `ha_remove_entity` instead.\n- YAML-configured helpers — they have no storage backend. Edit the\n  YAML file and reload the relevant integration.\n- ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA\n  UI, or (server settings, developer mode on) ha_dev_manage_settings /\n  ha_dev_manage_server.\n\nROUTING:\n- SIMPLE helper_type (input_button, input_boolean, input_select,\n  input_number, input_text, input_datetime, counter, timer, schedule,\n  zone, person, tag) + bare helper_id or entity_id → websocket delete.\n- FLOW helper_type (any helper flow Home Assistant lists: template, group,\n  utility_meter, derivative, ...; custom helper integrations too)\n  + full entity_id → resolve entity_id to\n  config_entry_id via entity_registry, then delete the config entry. All\n  sub-entities (e.g. utility_meter tariffs) are removed together. An\n  entity registered by another integration is refused with\n  VALIDATION_INVALID_PARAMETER and nothing is deleted.\n- helper_type=None + entity_id → the entity's registry entry names its\n  helper (storage type or helper flow); an entity of any other\n  integration is refused with VALIDATION_INVALID_PARAMETER.\n- helper_type=None + entry_id → direct config entry delete (any\n  integration).\n- helper_type=\"config_subentry\" + parent entry_id + subentry_id →\n  delete one config subentry.\n\nA target that cannot be removed raises a structured error rather than\nreturning silent success: ENTITY_NOT_FOUND when the entity_id is absent\nfrom both the state machine and the entity registry (a bare helper_id\non a FLOW target also raises it — FLOW resolution needs a full\nentity_id); RESOURCE_NOT_FOUND when it exists but is not storage- or\nregistry-managed (a YAML-configured helper, or an entity with a state\nbut no registry entry), for a config entry the backend reports as 404,\nor for a missing config subentry.\nCalling N times gives the same response. Transient connectivity failures\nraise their own codes (WEBSOCKET_DISCONNECTED, CONNECTION_FAILED) so\nretry logic can branch separately.\n\nEXAMPLES:\n- Remove SIMPLE button: ha_remove_helpers_integrations(target=\"my_button\", helper_type=\"input_button\", confirm=True)\n- Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target=\"sensor.energy_peak\", helper_type=\"utility_meter\", confirm=True)\n- Remove whatever helper owns an entity: ha_remove_helpers_integrations(target=\"sensor.energy_peak\", confirm=True)\n- Remove any integration by entry_id: ha_remove_helpers_integrations(target=\"01HXYZ...\", confirm=True)\n- Remove a config subentry: ha_remove_helpers_integrations(target=\"01HXYZ...\", helper_type=\"config_subentry\", subentry_id=\"subentry-123\", confirm=True)\n\nWARNING: Removing a helper or integration that is referenced by\nautomations, scripts, or other integrations may cause those to fail.\nUse ha_search() / ha_get_integration() to verify before removal.\nha_manage_backup(scope=\"edits\", action=\"restore\") recreates removed FLOW\nhelpers whose options could be snapshotted, and config subentries. It\ncannot recreate custom helper integrations (their options are withheld)\nor otp (no stored options); re-add those yourself, otp through the user\nin the HA UI.",
+    "description": "Remove a Home Assistant helper or integration config entry.\n\nUnifies three backend removal mechanisms — simple-helper websocket\ndelete, config-entry delete, and config-subentry delete — behind one\nentry point; helper_type picks the path, or the entity registry does\nwhen an entity_id comes without one.\n\nWHEN NOT TO USE:\n- Removing only an entity (without deleting its underlying helper or\n  config entry) — use `ha_remove_entity` instead.\n- YAML-configured helpers — they have no storage backend. Edit the\n  YAML file and reload the relevant integration.\n- ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA\n  UI, or (server settings, developer mode on) ha_dev_manage_settings /\n  ha_dev_manage_server.\n\nROUTING:\n- SIMPLE helper_type (input_button, input_boolean, input_select,\n  input_number, input_text, input_datetime, counter, timer, schedule,\n  zone, person, tag) + bare helper_id (its storage id) or entity_id →\n  websocket delete.\n- FLOW helper_type (any helper flow Home Assistant lists: template, group,\n  utility_meter, derivative, ...; custom helper integrations too)\n  + full entity_id → resolve entity_id to\n  config_entry_id via entity_registry, then delete the config entry. All\n  sub-entities (e.g. utility_meter tariffs) are removed together. An\n  entity registered by another integration is refused with\n  VALIDATION_INVALID_PARAMETER and nothing is deleted.\n- helper_type=None + entity_id → the entity's registry entry names its\n  helper (storage type or helper flow); an entity of any other\n  integration is refused with VALIDATION_INVALID_PARAMETER.\n- helper_type=None + entry_id → direct config entry delete (any\n  integration).\n- helper_type=\"config_subentry\" + parent entry_id + subentry_id →\n  delete one config subentry.\n\nA target that cannot be removed raises a structured error rather than\nreturning silent success: ENTITY_NOT_FOUND when the entity_id is absent\nfrom both the state machine and the entity registry, or for a bare\nhelper_id no stored helper has (a bare helper_id on a FLOW target also\nraises it — FLOW resolution needs a full entity_id); RESOURCE_NOT_FOUND\nwhen it exists but is not storage- or registry-managed (a YAML-configured helper, or an entity with a state\nbut no registry entry), for a config entry the backend reports as 404,\nor for a missing config subentry.\nCalling N times gives the same response. Transient connectivity failures\nraise their own codes (WEBSOCKET_DISCONNECTED, CONNECTION_FAILED) so\nretry logic can branch separately.\n\nEXAMPLES:\n- Remove SIMPLE button: ha_remove_helpers_integrations(target=\"my_button\", helper_type=\"input_button\", confirm=True)\n- Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target=\"sensor.energy_peak\", helper_type=\"utility_meter\", confirm=True)\n- Remove whatever helper owns an entity: ha_remove_helpers_integrations(target=\"sensor.energy_peak\", confirm=True)\n- Remove any integration by entry_id: ha_remove_helpers_integrations(target=\"01HXYZ...\", confirm=True)\n- Remove a config subentry: ha_remove_helpers_integrations(target=\"01HXYZ...\", helper_type=\"config_subentry\", subentry_id=\"subentry-123\", confirm=True)\n\nWARNING: Removing a helper or integration that is referenced by\nautomations, scripts, or other integrations may cause those to fail.\nUse ha_search() / ha_get_integration() to verify before removal.\nha_manage_backup(scope=\"edits\", action=\"restore\") recreates removed FLOW\nhelpers whose options could be snapshotted, and config subentries. It\ncannot recreate custom helper integrations (their options are withheld)\nor otp (no stored options); re-add those yourself, otp through the user\nin the HA UI.",
     "inputSchema": {
       "properties": {
         "target": {
           "type": "str",
-          "description": "What to remove. One of: (a) bare helper_id for SIMPLE helpers, e.g. 'my_button'; (b) full entity_id, e.g. 'input_button.my_button' or 'sensor.my_meter'; (c) config entry_id for any integration, with helper_type omitted, e.g. value from ha_get_integration(); (d) parent config entry_id for a config subentry."
+          "description": "What to remove. One of: (a) bare helper_id for SIMPLE helpers: the helper's storage id, not the name of its entity, e.g. 'my_button'; (b) full entity_id, e.g. 'input_button.my_button' or 'sensor.my_meter'; (c) config entry_id for any integration, with helper_type omitted, e.g. value from ha_get_integration(); (d) parent config entry_id for a config subentry."
         },
         "helper_type": {
           "type": "HelperTypeLiteral | None",
@@ -4679,12 +4679,12 @@
   {
     "name": "ha_get_zone",
     "title": "Get Zone",
-    "description": "Get zone information - list all zones or get details for a specific one.\n\nWithout a zone_id: Lists all Home Assistant zones with their coordinates and radius.\nWith a zone_id: Returns detailed configuration for a specific zone.\n\nEXAMPLES:\n- List all zones: ha_get_zone()\n- Get specific zone: ha_get_zone(zone_id=\"abc123\")\n\nWith the ha_mcp_tools custom component installed, YAML-defined zones —\nincluding the auto-synthesized 'home' zone — are included and marked\n``editable=false`` / ``source=\"yaml\"`` (storage zones created via UI/API\nare ``source=\"storage\"``). Without the component, only storage zones are\nlisted and YAML-defined zones such as 'home' will not appear.",
+    "description": "Get zone information - list all zones or get details for a specific one.\n\nWithout a zone_id: Lists all Home Assistant zones with their coordinates and radius.\nWith a zone_id: Returns detailed configuration for a specific zone.\n\nEXAMPLES:\n- List all zones: ha_get_zone()\n- Get specific zone: ha_get_zone(zone_id=\"office\")\n- Same zone by entity_id: ha_get_zone(zone_id=\"zone.office\")\n\nZones outside the zone storage, the home zone (from the general\nsettings) and YAML zones, are listed with ``editable=false`` /\n``source=\"yaml\"``; editable means ha_set_zone and ha_remove_zone can\nchange the zone. Each zone carries its entity_id.",
     "inputSchema": {
       "properties": {
         "zone_id": {
           "type": "str | None",
-          "description": "Zone ID to get details for (from ha_get_zone() list).",
+          "description": "Zone ID or entity_id to get details for (from the ha_get_zone() list).",
           "default": null
         }
       }
@@ -4703,12 +4703,17 @@
   {
     "name": "ha_remove_zone",
     "title": "Remove Zone",
-    "description": "Remove a Home Assistant zone.\n\nEXAMPLES:\n- Remove zone: ha_remove_zone(\"abc123\")\n\n**WARNING:** Removing a zone used in automations may cause those automations to fail.\nUse ha_get_zone() to find the zone_id for the zone you want to remove.\n\n**NOTE:** The 'home' zone cannot be removed as it is typically defined in configuration.yaml.",
+    "description": "Remove a Home Assistant zone.\n\nEXAMPLES:\n- Remove zone: ha_remove_zone(\"office\")\n- Remove by entity_id: ha_remove_zone(\"zone.office\")\n\n**WARNING:** Removing a zone used in automations may cause those automations to fail.\nUse ha_get_zone() to find the zone_id for the zone you want to remove.\n\n**NOTE:** Zones defined in YAML, and the home zone, cannot be removed here.",
     "inputSchema": {
       "properties": {
         "zone_id": {
           "type": "str",
-          "description": "Zone ID to remove"
+          "description": "Zone ID or entity_id of the zone to remove"
+        },
+        "wait": {
+          "type": "bool",
+          "description": "Wait for the zone to be gone before returning. Set to False for bulk operations.",
+          "default": true
         }
       },
       "required": [
@@ -4729,7 +4734,7 @@
   {
     "name": "ha_set_zone",
     "title": "Set Zone",
-    "description": "Create or update a Home Assistant zone.\n\nOmit zone_id to create a new zone (name, latitude, longitude required).\nProvide zone_id to update an existing zone (only specified fields change).\nThe 'home' zone is typically defined in YAML and cannot be modified here.\n\nEXAMPLES:\n- Create: ha_set_zone(name=\"Office\", latitude=40.7128, longitude=-74.0060, radius=150, icon=\"mdi:briefcase\")\n- Update: ha_set_zone(zone_id=\"abc123\", radius=200)",
+    "description": "Create or update a Home Assistant zone.\n\nOmit zone_id to create a new zone (name, latitude, longitude required).\nProvide zone_id to update an existing zone (only specified fields change).\nZones defined in YAML, and the home zone, cannot be changed here.\n\nEXAMPLES:\n- Create: ha_set_zone(name=\"Office\", latitude=40.7128, longitude=-74.0060, radius=150, icon=\"mdi:briefcase\")\n- Update: ha_set_zone(zone_id=\"office\", radius=200)\n- Update by entity_id: ha_set_zone(zone_id=\"zone.office\", radius=200)",
     "inputSchema": {
       "properties": {
         "name": {
@@ -4749,23 +4754,28 @@
         },
         "zone_id": {
           "type": "str | None",
-          "description": "Zone ID to update (use ha_get_zone to find IDs)",
+          "description": "Zone ID or entity_id of the zone to update (from ha_get_zone)",
           "default": null
         },
         "radius": {
           "type": "float | None",
-          "description": "Radius of the zone in meters (must be > 0, defaults to 100 on create)",
+          "description": "Radius of the zone in meters; Home Assistant uses 100 when it is omitted on create",
           "default": null
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:briefcase', 'mdi:school')",
+          "description": "Material Design Icon (e.g., 'mdi:briefcase'). On update, '' clears it, except an icon stored in the zone itself (as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed",
           "default": null
         },
         "passive": {
           "type": "bool | None",
-          "description": "Passive mode - if True, zone will not trigger enter/exit automations (defaults to False on create)",
+          "description": "Passive mode: the zone is hidden in the frontend and not used for device tracker state, but automations can still use it (false when omitted on create)",
           "default": null
+        },
+        "wait": {
+          "type": "bool",
+          "description": "Wait for the zone to be queryable before returning. Set to False for bulk operations.",
+          "default": true
         }
       }
     },
