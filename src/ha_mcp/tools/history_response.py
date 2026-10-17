@@ -83,16 +83,14 @@ def summarize_states(
     """Reduce Core's oldest-first compressed rows to periods and seconds per state.
 
     Each row lasts until the next row's ``lu`` and the last one until the window
-    end. A row repeating the previous state (an attribute-only update, which
-    Core may return) extends the current period instead of opening one.
-    Core stamps its window-start snapshot with the window start, so only a
-    first row after it is a change.
+    end; rows after the window end must be dropped first. A row repeating the
+    previous state (an attribute-only update, which Core may return) extends
+    the current period instead of opening one. Core stamps its window-start
+    snapshot with the window start, so only a first row after it is a change.
     """
     totals: dict[str, dict[str, Any]] = {}
     change_times: list[float] = []
-    # With a future end_time, rows recorded after `now` was taken (or under an
-    # HA clock running ahead) start after the window end.
-    bounds = [min(row["lu"], window_end_ts) for row in states] + [window_end_ts]
+    bounds = [row["lu"] for row in states] + [window_end_ts]
     for index, row in enumerate(states):
         state = row["s"]
         entry = totals.setdefault(state, {"periods": 0, "duration_s": 0.0})

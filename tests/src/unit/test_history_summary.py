@@ -1,6 +1,7 @@
 """Unit tests for ha_get_history(summary=True) (issue #2754)."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,7 +23,7 @@ def _iso(offset: float) -> str:
 
 
 class TestSummarizeStates:
-    def test_totals_count_each_change_and_the_time_in_each_state(self):
+    def test_totals_count_each_change_and_the_time_in_each_state(self) -> None:
         rows = _rows(("on", 0), ("off", 10), ("on", 30), ("unavailable", 45))
 
         result = summarize_states(rows, _START, _START + 100, limit=100)
@@ -39,7 +40,7 @@ class TestSummarizeStates:
             },
         }
 
-    def test_first_row_after_the_window_start_is_a_change(self):
+    def test_first_row_after_the_window_start_is_a_change(self) -> None:
         # No window-start snapshot: the entity appeared later, older history
         # was purged, or include_start_time_state=false.
         rows = _rows(("off", 10), ("on", 30))
@@ -49,7 +50,7 @@ class TestSummarizeStates:
         assert result["changes"] == 2
         assert result["first_change"] == _START + 10
 
-    def test_attribute_update_is_not_counted_as_a_state_change(self):
+    def test_attribute_update_is_not_counted_as_a_state_change(self) -> None:
         rows = _rows(("heat", 0), ("heat", 5), ("off", 20))
 
         result = summarize_states(rows, _START, _START + 30, limit=100)
@@ -57,7 +58,7 @@ class TestSummarizeStates:
         assert result["changes"] == 1
         assert result["states"]["heat"] == {"periods": 1, "duration_s": 20.0}
 
-    def test_limit_keeps_the_longest_states_and_reports_how_many_exist(self):
+    def test_limit_keeps_the_longest_states_and_reports_how_many_exist(self) -> None:
         rows = _rows(("1", 0), ("2", 1), ("3", 4), ("4", 10))
 
         result = summarize_states(rows, _START, _START + 20, limit=2)
@@ -65,7 +66,7 @@ class TestSummarizeStates:
         assert list(result["states"]) == ["4", "3"]
         assert result["distinct_states"] == 4
 
-    def test_entity_without_rows_reports_no_changes(self):
+    def test_entity_without_rows_reports_no_changes(self) -> None:
         assert summarize_states([], _START, _START, limit=100) == {
             "changes": 0,
             "first_change": None,
@@ -73,14 +74,6 @@ class TestSummarizeStates:
             "distinct_states": 0,
             "states": {},
         }
-
-    def test_no_period_runs_past_the_window_end(self):
-        rows = _rows(("on", 0), ("off", 50), ("on", 60))
-
-        result = summarize_states(rows, _START, _START + 40, limit=100)
-
-        assert result["states"]["on"]["duration_s"] == 40.0
-        assert result["states"]["off"]["duration_s"] == 0.0
 
 
 def _client(history: dict) -> MagicMock:
@@ -92,7 +85,7 @@ def _client(history: dict) -> MagicMock:
     return client
 
 
-def _no_timezone_lookup(timezone: str = "UTC"):
+def _no_timezone_lookup(timezone: str = "UTC") -> Any:
     return patch(
         "ha_mcp.tools.tools_history.add_timezone_metadata",
         side_effect=lambda _c, d, **_kw: {
@@ -106,13 +99,30 @@ class _ClockAt(datetime):
     """A datetime whose now() is fixed ten minutes after _START."""
 
     @classmethod
-    def now(cls, tz=None):
+    def now(cls, tz: tzinfo | None = None) -> datetime:
         return datetime.fromtimestamp(_START + 600, tz)
+
+
+async def _query_at_clock(
+    history: dict[str, list[dict]], **kwargs: Any
+) -> dict[str, Any]:
+    """Query a day-long window while the clock stands ten minutes into it."""
+    tool = HistoryTools(_client(history)).ha_get_history
+    with (
+        _no_timezone_lookup(),
+        patch("ha_mcp.tools.tools_history.datetime", _ClockAt),
+    ):
+        return await tool(
+            entity_ids=",".join(history),
+            start_time=_iso(0),
+            end_time=_iso(86400),
+            **kwargs,
+        )
 
 
 class TestSummaryThroughTool:
     @pytest.mark.asyncio
-    async def test_summary_replaces_rows_with_limited_totals_in_ha_time(self):
+    async def test_summary_replaces_rows_with_limited_totals_in_ha_time(self) -> None:
         rows = _rows(("off", 0), ("on", 3600))
         tool = HistoryTools(_client({"binary_sensor.door": rows})).ha_get_history
 
@@ -139,26 +149,38 @@ class TestSummaryThroughTool:
         assert "warnings" not in result
 
     @pytest.mark.asyncio
-    async def test_future_end_time_does_not_count_time_that_has_not_passed(self):
-        rows = _rows(("on", 0))
-        tool = HistoryTools(_client({"switch.pump": rows})).ha_get_history
-
-        with (
-            _no_timezone_lookup(),
-            patch("ha_mcp.tools.tools_history.datetime", _ClockAt),
-        ):
-            result = await tool(
-                entity_ids="switch.pump",
-                start_time=_iso(0),
-                end_time=_iso(86400),
-                summary=True,
-            )
+    async def test_future_end_time_does_not_count_time_that_has_not_passed(
+        self,
+    ) -> None:
+        result = await _query_at_clock({"switch.pump": _rows(("on", 0))}, summary=True)
 
         duration = result["data"]["entities"][0]["summary"]["states"]["on"]
         assert duration["duration_s"] == 600.0
 
     @pytest.mark.asyncio
-    async def test_short_totals_are_flagged_in_warnings(self):
+    async def test_rows_from_after_now_are_not_counted_as_changes(self) -> None:
+        # Core answers a future end_time up to its own clock, which can run
+        # past the `now` the summary stops at, by a fraction of a second or more.
+        history = {"switch.pump": _rows(("on", 0), ("off", 600.001), ("on", 800))}
+
+        result = await _query_at_clock(history, summary=True)
+
+        totals = result["data"]["entities"][0]["summary"]
+        assert totals["changes"] == 0
+        assert totals["last_change"] is None
+        assert totals["distinct_states"] == 1
+        assert list(totals["states"]) == ["on"]
+
+    @pytest.mark.asyncio
+    async def test_entity_recorded_only_from_now_on_has_no_states(self) -> None:
+        result = await _query_at_clock({"switch.new": _rows(("on", 600))}, summary=True)
+
+        warnings = result["warnings"]
+        assert any("switch.new" in w and "No recorded" in w for w in warnings)
+        assert not any("switch.new" in w and "start at" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_short_totals_are_flagged_in_warnings(self) -> None:
         history = {"binary_sensor.late": _rows(("on", 1800))}
         tool = HistoryTools(_client(history)).ha_get_history
 
@@ -178,21 +200,20 @@ class TestSummaryThroughTool:
         )
 
     @pytest.mark.asyncio
-    async def test_without_summary_the_rows_are_returned_unchanged(self):
-        rows = _rows(("on", 0))
-        tool = HistoryTools(_client({"switch.pump": rows})).ha_get_history
+    async def test_without_summary_the_rows_are_returned_unchanged(self) -> None:
+        # Rows after `now` are dropped for a summary only.
+        history = {"switch.pump": _rows(("on", 0), ("off", 700))}
 
-        with _no_timezone_lookup():
-            result = await tool(entity_ids="switch.pump")
+        result = await _query_at_clock(history)
 
         entity = result["data"]["entities"][0]
         assert "summary" not in entity
-        assert entity["states"][0]["state"] == "on"
+        assert [row["state"] for row in entity["states"]] == ["off", "on"]
         assert result["data"]["query_params"]["summary"] is False
         assert "warnings" not in result
 
     @pytest.mark.asyncio
-    async def test_offset_with_summary_is_rejected_before_querying(self):
+    async def test_offset_with_summary_is_rejected_before_querying(self) -> None:
         client = _client({})
         tool = HistoryTools(client).ha_get_history
 
@@ -203,7 +224,7 @@ class TestSummaryThroughTool:
         client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_statistics_offset_still_works_when_summary_is_set(self):
+    async def test_statistics_offset_still_works_when_summary_is_set(self) -> None:
         tool = HistoryTools(_client({})).ha_get_history
 
         with (

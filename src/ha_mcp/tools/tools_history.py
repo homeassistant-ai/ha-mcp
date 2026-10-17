@@ -921,6 +921,14 @@ async def _fetch_history(
         )
 
     result_data = response.get("result", {})
+    if summary_until is not None:
+        # Core answers a future end_time up to its own clock, which can run
+        # past `now`. Like Core's end_time, summary_until is exclusive.
+        until_ts = summary_until.timestamp()
+        result_data = {
+            entity_id: [row for row in rows if row["lu"] < until_ts]
+            for entity_id, rows in result_data.items()
+        }
     entities_history = []
     start_ts = start_dt.timestamp()
     period = {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
