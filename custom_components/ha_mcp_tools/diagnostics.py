@@ -103,6 +103,10 @@ _STARTUP_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED)
 # Credentials in a URL's userinfo, e.g. a pip index or tarball URL that never
 # reached the entry (pip echoes its index URLs in errors).
 _URL_USERINFO = re.compile(r"(://)[^/@\s'\"]+@")
+# A channel's distribution, bare or pinned to a version (_resolve_pip_spec).
+_CHANNEL_SPEC = re.compile(
+    rf"(?:{re.escape(DIST_NAME_STABLE)}|{re.escape(DIST_NAME_DEV)})(?:==\d[\w.+!-]*)?"
+)
 
 
 async def async_get_config_entry_diagnostics(
@@ -214,5 +218,7 @@ def _is_channel_spec(value: str) -> bool:
 
     ``last_pip_spec`` holds one of these when no override is set. It is not a
     secret, and keeping it leaves the package name and version in the error.
+    Only the whole value counts: an override that merely starts with one
+    carries whatever was typed after it.
     """
-    return value.partition("==")[0].strip() in (DIST_NAME_STABLE, DIST_NAME_DEV)
+    return _CHANNEL_SPEC.fullmatch(value.strip()) is not None
