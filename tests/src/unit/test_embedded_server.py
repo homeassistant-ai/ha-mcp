@@ -682,6 +682,72 @@ class TestEnsurePairedPackage:
         assert env.installs == []
         assert entry.data[DATA_LAST_PIP_SPEC] == tarball
 
+    async def test_url_to_url_change_keeps_the_working_build_installed(
+        self, tmp_path, monkeypatch
+    ):
+        # A URL spec reinstalls outright, so nothing needs unblocking; removing
+        # first would delete the working build before the new URL is fetched.
+        old_url = "ha-mcp @ file:///config/ha_mcp-8.6.0-py3-none-any.whl"
+        new_url = "ha-mcp @ file:///config/ha_mcp-8.7.0-py3-none-any.whl"
+        _paired(monkeypatch, "ha-mcp==8.6.0")
+        env = _PkgEnv(monkeypatch, {DIST_NAME_STABLE: "8.6.0"})
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_PIP_SPEC: new_url},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: old_url},
+        )
+
+        await _ensure(mgr)
+
+        assert env.uninstalls == []
+        [(spec, _kwargs)] = env.installs
+        assert spec == new_url
+
+    async def test_pin_off_the_installed_version_skips_the_uninstall(
+        self, tmp_path, monkeypatch
+    ):
+        # After a tarball, a pin the installed build cannot satisfy makes the
+        # install provably real, so the working build stays as the fallback.
+        tarball = (
+            "https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1/head.tar.gz"
+        )
+        _paired(monkeypatch, "ha-mcp==8.7.0")
+        env = _PkgEnv(monkeypatch, {DIST_NAME_STABLE: "8.6.0"})
+        mgr, _hass, entry = _manager(
+            tmp_path, data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: tarball}
+        )
+
+        await _ensure(mgr)
+
+        assert env.uninstalls == []
+        assert env.installs[0][0] == "ha-mcp==8.7.0"
+        assert entry.data[DATA_LAST_PIP_SPEC] == "ha-mcp==8.7.0"
+
+    async def test_failed_uninstall_with_the_dist_gone_still_installs(
+        self, tmp_path, monkeypatch
+    ):
+        # A False from the uninstall is not proof the distribution survived
+        # (a timeout after the files went); the re-check shows it gone.
+        tarball = (
+            "https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1/head.tar.gz"
+        )
+        _paired(monkeypatch, "ha-mcp==8.6.0")
+        env = _PkgEnv(monkeypatch, {DIST_NAME_STABLE: "8.6.0"})
+
+        def _uninstall_then_fail(name, **_kwargs):
+            env.dists.pop(name, None)
+            return False
+
+        monkeypatch.setattr(es, "_uninstall_distribution", _uninstall_then_fail)
+        mgr, _hass, entry = _manager(
+            tmp_path, data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: tarball}
+        )
+
+        await _ensure(mgr)
+
+        assert env.installs[0][0] == "ha-mcp==8.6.0"
+        assert entry.data[DATA_LAST_PIP_SPEC] == "ha-mcp==8.6.0"
+
     async def test_deferred_mutations_install_nothing(self, tmp_path, monkeypatch):
         _paired(monkeypatch, "ha-mcp==8.6.0")
         env = _PkgEnv(monkeypatch, {DIST_NAME_STABLE: "8.5.0"})

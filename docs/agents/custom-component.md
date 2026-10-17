@@ -32,12 +32,18 @@ segment by segment as integers, so the suffix lives only in the pre-release tag
 and the pin.
 
 When a change adds a component service or argument that the server depends
-on, raise `MIN_COMPONENT_VERSION` in `src/ha_mcp/tools/tools_filesystem.py`
-to the release that will carry it: the version
-`uvx --from python-semantic-release==<pinned> semantic-release --noop version --print`
-prints on `master` after the change merges (the pinned version is in
-`scripts/dev_version.sh`). Development pre-releases report that same number,
-so they pass the floor; every earlier build reports a lower one.
+on, raise `MIN_COMPONENT_VERSION` in `src/ha_mcp/tools/tools_filesystem.py`,
+in the same PR, to the release that will carry it: the number
+`scripts/dev_version.sh` prints without its `.devN` suffix (it computes the
+next release from `master` on any branch, so count the PR's own commit type:
+a `feat:` on a `master` that only has fixes pending raises the minor).
+
+Every development pre-release cut while that release is pending reports the
+same plain number, so the floor cannot tell a pre-release that has the new
+service from an earlier one that lacks it. Only an external server (app,
+Docker, pip) is affected; the in-process server runs the build its component
+release pins. This gap is accepted: pre-release users update the component
+from HACS.
 
 ## Compatibility
 
