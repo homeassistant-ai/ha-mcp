@@ -70,7 +70,9 @@ body:
       label: "Why there is no ha_report_issue report"
       description: |
         If you typed N/A above, say why there is no report, and paste your startup logs and
-        configuration here (remove tokens).
+        configuration here (remove tokens). If you run the in-process server (the HA-MCP Custom
+        Component's server entry), attach the file from **⋮ → Download diagnostics** on its
+        integration page instead of the server configuration.
     validations:
       required: false
 
