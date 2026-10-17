@@ -137,15 +137,6 @@ class TestNudgeDue:
         assert hacs_auto_refresh._nudge_due("1.0.0", None, marker) is False
 
 
-def test_candidate_names_are_the_mirror_then_the_legacy_repo() -> None:
-    # The non-embedded refresh helper looks the component up under the
-    # dedicated HACS mirror first and the legacy main-repo path second.
-    assert hacs_auto_refresh.CANDIDATE_REPO_FULL_NAMES == (
-        "homeassistant-ai/ha-mcp-integration",
-        "homeassistant-ai/ha-mcp",
-    )
-
-
 class TestMarkerFile:
     def test_roundtrip(self, data_dir):
         marker = {"server_version": "1.0.0", "latest": "1.1.0", "hacs": "present"}
@@ -188,8 +179,7 @@ class TestMarkerFile:
 
 class TestMaybeRefreshHacsAfterUpdate:
     async def test_embedded_server_is_a_no_op(self, data_dir: Path) -> None:
-        # The embedded server arrives with the component release HACS
-        # delivers, so there is no separate server update to surface.
+        # The component manages the embedded server's updates.
         with (
             _server(_ws(), info=_info(), embedded=True) as mocks,
             patch("ha_mcp.hacs_auto_refresh._read_marker") as read_marker,

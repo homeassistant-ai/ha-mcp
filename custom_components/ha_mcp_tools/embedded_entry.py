@@ -346,9 +346,8 @@ def _ensure_legacy_oauth_secrets(data: dict, options: dict) -> bool:
     claim under the unchanged-key HMAC. Rotating the key kills that echo at
     zero cost. Rotation does NOT shorten the pre-restart window — the bound
     views keep serving the old identity until the restart (see
-    ``oauth_legacy.bind_legacy_views``) — which is why the startup log also
-    withholds rotated credentials until they are active
-    (``embedded_setup._surface_connect_urls`` via
+    ``oauth_legacy.bind_legacy_views``) — which is why the Configure screen and
+    the startup log say rotated credentials take effect after a restart (via
     ``oauth_legacy.legacy_credentials_active``; review findings on #1880).
 
     Returns True if ``data``/``options`` were mutated.

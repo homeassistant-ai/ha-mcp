@@ -287,10 +287,8 @@ def legacy_credentials_active(
     when legacy OAuth was never bound this session. When another integration
     owns the root routes, the scoped endpoints may still serve via the unbound
     provider — True then iff the scoped provider's fingerprint matches these
-    credentials (#2213 review). Callers use this to withhold rotated
-    credentials from surfaces a still-valid old-identity token can read — the
-    admin startup log in particular, which is reachable through the server's
-    own log tools (review finding on #1880).
+    credentials (#2213 review). The Configure screen and the startup log use
+    this to say when the shown credentials are not live yet.
     """
     current = _oauth_route_fingerprint(
         client_id, client_secret, _normalize_signing_key(signing_key)

@@ -437,8 +437,8 @@ DATA_SECRET_PATH = "secret_path"
 # change instead rotates the signing key, evicting outstanding tokens at the
 # restart that activates the new credentials (see
 # embedded_entry._ensure_legacy_oauth_secrets). Until that restart the bound
-# views keep serving the OLD identity, so the startup log withholds rotated
-# credentials (embedded_setup._surface_connect_urls).
+# views keep serving the OLD identity, so the Configure screen and the startup
+# log say the new credentials take effect after a restart.
 DATA_OAUTH_CLIENT_ID = "oauth_client_id"
 DATA_OAUTH_CLIENT_SECRET = "oauth_client_secret"
 DATA_OAUTH_SIGNING_KEY = "oauth_signing_key"
@@ -488,7 +488,7 @@ DATA_PENDING_UPDATE_NOTIFY = "pending_update_notify"
 DATA_LLM_API_UNSUB = "llm_api_unsub"
 
 # Webhook auth modes (mirrors the webhook-proxy add-on's default posture).
-WEBHOOK_AUTH_NONE = "none"  # secret webhook URL is the shared secret (default)
+WEBHOOK_AUTH_NONE = "none"  # secret webhook URL is the shared secret
 WEBHOOK_AUTH_HA = "ha_auth"  # HA-native bearer (HA core is the OAuth AS)
 # Self-hosted OAuth 2.1 authorization server with a static client_id/secret,
 # ported from the webhook-proxy add-on's "legacy" mode. Originally needed
@@ -501,9 +501,8 @@ WEBHOOK_AUTH_LEGACY = "legacy"
 # Default bind host + port. 9584 (not the add-on's 9583) so this in-process
 # server and an add-on install can coexist on the same box.
 DEFAULT_SERVER_PORT = 9584
-# LAN-reachable by default - parity with the add-on, whose port has always
-# been directly reachable with the secret path as the credential. Loopback
-# is the optional hardening choice, not the default (owner decision).
+# The fallback for entries that never saved a bind host, which keeps them on
+# the LAN as before. New entries save loopback unless setup picks the LAN.
 DEFAULT_BIND_HOST = "0.0.0.0"
 BIND_HOST_ALL = "0.0.0.0"
 BIND_HOST_LOOPBACK = "127.0.0.1"
