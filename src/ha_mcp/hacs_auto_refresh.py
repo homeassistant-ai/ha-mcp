@@ -4,9 +4,8 @@ HACS refreshes a *custom* repository's release data from GitHub only about
 every 48 hours, and the ha_mcp_tools component ships in lockstep with each
 server release — so a freshly updated server can sit for two days next to a
 component update HACS has not noticed yet. This module closes that gap for
-add-on, Docker, pip and stdio installs. The embedded server is skipped: it
-arrives with the component release HACS delivers, so there is no separate
-server update for HACS to catch up with.
+add-on, Docker, pip and stdio installs. The embedded server is skipped: the
+component manages its updates.
 
 On startup, when the server version changed since the last recorded nudge (the
 just-updated case) or a newer release is pending, it sends HACS's "Update
@@ -203,8 +202,7 @@ async def maybe_refresh_hacs_after_update() -> None:
     """Nudge HACS once per startup when the update picture changed."""
     try:
         if is_embedded():
-            # Embedded installs receive the server with the component release
-            # HACS delivers, so there is nothing to refresh HACS for.
+            # The component manages the embedded server's updates.
             return
         if is_update_check_disabled():
             return

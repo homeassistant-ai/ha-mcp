@@ -1805,9 +1805,9 @@ class EmbeddedServerManager:
             # startup. "none" imports nothing; the MCP app serves Streamable
             # HTTP only. Pinned by tests/src/unit/test_vendored_websockets.py.
             ws="none",
-            # Leave Home Assistant's logging untouched — do not let uvicorn
-            # reconfigure the root logger from this thread.
+            # Don't reconfigure HA's root logger; access lines carry the secret path.
             log_config=None,
+            access_log=False,
             timeout_keep_alive=SERVER_KEEPALIVE_SECONDS,
         )
         uv_server = uvicorn.Server(config)

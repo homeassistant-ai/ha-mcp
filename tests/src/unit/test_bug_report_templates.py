@@ -102,10 +102,10 @@ class TestSanitizeLogText:
         assert "supersecret" not in result
 
     def test_redacts_legacy_oauth_client_secret_log_line(self):
-        # The in-process component logs the legacy OAuth Client Secret at INFO,
-        # so it reaches home-assistant.log (readable by a trusted MCP client via
-        # ha_get_logs — by design). A shared bug report must still scrub it; the
-        # generic "secret:" key=value rule covers the logged line.
+        # Older component versions logged the legacy OAuth Client Secret at
+        # INFO, and those lines can still sit in home-assistant.log. A shared
+        # bug report must scrub them; the generic "secret:" key=value rule
+        # covers the logged line.
         result = _sanitize_log_text("  OAuth Client Secret: s3cr3tV4lue_Zz-99aa")
         assert "s3cr3tV4lue" not in result
         assert "[REDACTED]" in result
