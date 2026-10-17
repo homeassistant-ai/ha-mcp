@@ -241,17 +241,16 @@ async def test_secret_containing_another_is_replaced_whole() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plain_channel_spec_is_not_scrubbed() -> None:
+@pytest.mark.parametrize("spec", ["ha-mcp", "ha-mcp-dev==8.7.0"])
+async def test_plain_channel_spec_is_not_scrubbed(spec: str) -> None:
     """``last_pip_spec`` holds a plain channel spec (bare or ``==``-pinned) when
     no override is set; it is not a secret, so the error keeps it."""
-    _fail_bring_up("package", "Could not install ha-mcp==8.7.0")
-    entry = _server_entry(data={DATA_LAST_PIP_SPEC: "ha-mcp==8.7.0"})
+    _fail_bring_up("package", f"Could not install {spec}")
+    entry = _server_entry(data={DATA_LAST_PIP_SPEC: spec})
 
     result = await _diagnostics(FakeHass([entry]))
 
-    assert result["server"]["startup_error"]["detail"] == (
-        "Could not install ha-mcp==8.7.0"
-    )
+    assert result["server"]["startup_error"]["detail"] == f"Could not install {spec}"
 
 
 @pytest.mark.asyncio
@@ -266,6 +265,21 @@ async def test_override_that_starts_like_a_channel_spec_is_scrubbed() -> None:
     result = await _diagnostics(FakeHass([entry]))
 
     assert "tok-abc" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_override_is_scrubbed_in_its_quoted_form() -> None:
+    """The install error quotes the spec with ``repr()``, which doubles a
+    backslash, so the stored value no longer appears in the text as typed."""
+    override = "https://host/pkg.tgz?sig=tok\\abc"
+    _fail_bring_up("package", f"Could not install the server ({override!r}): x")
+    entry = _server_entry({OPT_PIP_SPEC: override})
+
+    result = await _diagnostics(FakeHass([entry]))
+
+    assert result["server"]["startup_error"]["detail"] == (
+        "Could not install the server ('**REDACTED**'): x"
+    )
 
 
 @pytest.mark.asyncio

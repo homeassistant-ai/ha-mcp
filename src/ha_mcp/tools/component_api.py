@@ -19,6 +19,9 @@ or somewhere in between. This module negotiates that with a single cached
   surface entirely; caps are cached as ``None`` and every consumer falls back
   to its legacy path.
 
+An ``info`` field that can change while the client lives is read fresh by its
+own function instead (``read_webhook_auth``).
+
 This mirrors the caller-token cache in ``tools_filesystem.py``: weak-keyed by
 client so multi-client / OAuth setups each negotiate independently and the
 entry self-evicts when a client is garbage-collected.
@@ -412,9 +415,14 @@ async def read_webhook_auth(client: Any) -> str | None:
     """The server entry's webhook auth mode, read fresh from ``info`` (#2584).
 
     Not from ``get_component_caps``: that snapshot lives as long as the client,
-    while the mode is an entry option the user can change in the meantime.
-    None on a component too old to report it, or on any failure.
+    while the mode is an entry option the user can change in the meantime. The
+    snapshot still gates the call: a component whose ``info`` it did not
+    accept is not asked: the failed call would be logged at ERROR, and the
+    report's log sections can quote that line. None without a server entry, on a
+    component too old to report the mode, or on any failure.
     """
+    if await get_component_caps(client) is None:
+        return None
     try:
         response = await client.send_websocket_message({"type": INFO_COMMAND})
     except Exception as e:  # noqa: BLE001

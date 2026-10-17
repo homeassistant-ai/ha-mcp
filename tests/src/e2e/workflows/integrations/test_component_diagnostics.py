@@ -12,6 +12,8 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ...utilities.topology import component_surface_available
 
 DOMAIN = "ha_mcp_tools"
+# Every seed of the server entry uses the config flow's title.
+SERVER_ENTRY_TITLE = "HA-MCP Server"
 
 
 @pytest.mark.asyncio
@@ -24,8 +26,9 @@ async def test_every_loaded_entry_downloads_the_component_summary(
         if e["domain"] == DOMAIN
     ]
     loaded = [e for e in entries if e["state"] == "loaded"]
-    if component_surface_available():
-        assert loaded, f"no loaded {DOMAIN} entry: {entries}"
+    assert bool(loaded) == component_surface_available(), entries
+    # The title comes from Home Assistant, the file's entry type from entry.data.
+    has_server = any(e["title"] == SERVER_ENTRY_TITLE for e in entries)
 
     for entry in loaded:
         download = await ha_client._request(
@@ -35,5 +38,6 @@ async def test_every_loaded_entry_downloads_the_component_summary(
         assert sorted(row["state"] for row in data["entries"]) == sorted(
             e["state"] for e in entries
         )
-        has_server = any(row["entry_type"] == "server" for row in data["entries"])
+        server_rows = [row for row in data["entries"] if row["entry_type"] == "server"]
+        assert bool(server_rows) == has_server
         assert (data["server"] is not None) == has_server
