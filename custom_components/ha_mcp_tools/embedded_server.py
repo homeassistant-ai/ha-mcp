@@ -778,41 +778,22 @@ class EmbeddedServerManager:
             and await self._hass.async_add_executor_job(_dist_installed, conflicting)
         )
 
-        satisfied = (
-            target_dist is not None
-            and target_version is not None
-            and installed_version is not None
-            and not conflict_present
-            and not _spec_is_url_requirement(self._pip_spec)
-            and _spec_satisfied_by(self._pip_spec, target_version)
-            and _is_compatible_embedded_version(target_version)
-            and (
-                stored_spec is None
-                or stored_spec == self._pip_spec
-                # Same distribution from the same index: the version on disk
-                # is what the index served for it, so "satisfied by version"
-                # is the truth, not the #1914 lie.
-                or _spec_is_index_requirement_on(stored_spec, target_dist)
-            )
+        reason = _install_reason(
+            self._pip_spec,
+            stored_spec=stored_spec,
+            target_dist=target_dist,
+            installed_version=installed_version,
+            target_version=target_version,
+            conflicting=conflicting if conflict_present else None,
         )
         deferred = False
-        if satisfied:
+        if reason is None:
             pass
         elif defer_mutations:
             deferred = True
             await self._async_defer_package_mutations(installed_version)
         else:
-            _LOGGER.info(
-                "Reinstalling the in-process server package: %s",
-                _install_reason(
-                    self._pip_spec,
-                    stored_spec=stored_spec,
-                    target_dist=target_dist,
-                    installed_version=installed_version,
-                    target_version=target_version,
-                    conflicting=conflicting if conflict_present else None,
-                ),
-            )
+            _LOGGER.info("Reinstalling the in-process server package: %s", reason)
             reinstall = False
             if conflict_present and conflicting is not None:
                 _LOGGER.info(
@@ -2507,11 +2488,12 @@ def _install_reason(
     installed_version: str | None,
     target_version: str | None,
     conflicting: str | None,
-) -> str:
-    """Name the first reason ``_async_ensure_managed_package`` installs.
+) -> str | None:
+    """Name the first reason ``_async_ensure_managed_package`` installs, or None.
 
-    Logged before every install so an unexpected reinstall (one that
-    re-resolves the dependency tree) can be traced to its cause.
+    None means the installed package already satisfies ``spec``. Logged before
+    every install so an unexpected reinstall (one that re-resolves the
+    dependency tree) can be traced to its cause.
     """
     if target_dist is None:
         return f"{spec!r} names no known server distribution"
@@ -2530,6 +2512,15 @@ def _install_reason(
             f"installed {target_dist} {target_version} is older than "
             f"{MIN_EMBEDDED_SERVER_VERSION}"
         )
+    if (
+        stored_spec is None
+        or stored_spec == spec
+        # Same distribution from the same index: the version on disk is what
+        # the index served for it, so "satisfied by version" is the truth, not
+        # the #1914 lie.
+        or _spec_is_index_requirement_on(stored_spec, target_dist)
+    ):
+        return None
     return f"the spec changed from {stored_spec!r} to {spec!r}"
 
 

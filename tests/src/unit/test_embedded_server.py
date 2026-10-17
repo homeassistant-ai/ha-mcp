@@ -380,14 +380,32 @@ class TestInstallReason:
             ({"target_version": None}, "ha-mcp is not installed"),
             ({"conflicting": "ha-mcp-dev"}, "ha-mcp-dev is installed beside ha-mcp"),
             ({"target_version": "8.6.0"}, "8.6.0 does not satisfy 'ha-mcp==8.7.0'"),
-            ({"stored_spec": "ha-mcp"}, "changed from 'ha-mcp' to 'ha-mcp==8.7.0'"),
+            (
+                {"stored_spec": "ha-mcp @ https://example.com/t.tgz"},
+                "changed from 'ha-mcp @ https://example.com/t.tgz'",
+            ),
         ],
     )
     def test_names_the_first_failed_condition(
         self, overrides: dict[str, str | None], expected: str
     ) -> None:
-        assert expected in es._install_reason(
+        reason = es._install_reason(
             "ha-mcp==8.7.0", **{**_INSTALL_REASON_SATISFIED, **overrides}
+        )
+        assert reason is not None
+        assert expected in reason
+
+    @pytest.mark.parametrize("stored_spec", [None, "ha-mcp==8.7.0", "ha-mcp"])
+    def test_none_when_the_installed_package_satisfies_the_spec(
+        self, stored_spec: str | None
+    ) -> None:
+        # An index spec on the same distribution is satisfied by version.
+        assert (
+            es._install_reason(
+                "ha-mcp==8.7.0",
+                **{**_INSTALL_REASON_SATISFIED, "stored_spec": stored_spec},
+            )
+            is None
         )
 
     def test_a_direct_url_always_installs(self) -> None:
@@ -395,6 +413,7 @@ class TestInstallReason:
             "https://example.com/ha_mcp-8.7.0-py3-none-any.whl",
             **{**_INSTALL_REASON_SATISFIED, "target_dist": None},
         )
+        assert reason is not None
         assert "names no known server distribution" in reason
 
 
