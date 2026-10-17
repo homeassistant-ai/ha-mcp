@@ -456,6 +456,17 @@ class TestSpecResolution:
             ("ha-mcp==8.6.0", DIST_NAME_STABLE, DIST_NAME_DEV),
             ("ha-mcp-dev==8.7.0.dev3", DIST_NAME_DEV, DIST_NAME_STABLE),
             ("ha-mcp @ file:///config/w.whl", DIST_NAME_STABLE, DIST_NAME_DEV),
+            # A bare wheel URL names its distribution in the file name.
+            (
+                "https://files.example/ha_mcp_dev-8.7.0.dev3-py3-none-any.whl",
+                DIST_NAME_DEV,
+                DIST_NAME_STABLE,
+            ),
+            (
+                "file:///config/ha_mcp-8.6.0-py3-none-any.whl",
+                DIST_NAME_STABLE,
+                DIST_NAME_DEV,
+            ),
             ("https://example/t.tgz", None, None),
             ("acme-ha-mcp==1.0", None, None),
         ],

@@ -70,7 +70,6 @@ from .const import (
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
     DOMAIN,
-    KNOWN_SERVER_DISTS,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
@@ -92,7 +91,7 @@ from .dependency_diagnostics import (
     root_import_failure,
 )
 from .pip_compat import pip_kwargs
-from .server_pin import server_pins
+from .server_pin import server_dist, server_pins
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -535,17 +534,18 @@ class EmbeddedServerManager:
         """Return the known server distribution the effective spec installs.
 
         The distribution the spec names when that is ``ha-mcp`` or
-        ``ha-mcp-dev``; None for a spec that names another distribution or
-        none at all (a bare URL), whose installed name is unknown here.
+        ``ha-mcp-dev``, read from the file name for a bare wheel URL; None for
+        another distribution or a bare URL whose name is unknown here.
         """
         try:
-            name = canonicalize_name(Requirement(self._pip_spec).name)
+            name = Requirement(self._pip_spec).name
         except InvalidRequirement:
-            return None
-        for dist_name in KNOWN_SERVER_DISTS:
-            if name == canonicalize_name(dist_name):
-                return dist_name
-        return None
+            # A wheel's file name starts with its distribution (PEP 427).
+            filename = urlparse(self._pip_spec.strip()).path.rsplit("/", 1)[-1]
+            if not filename.endswith(".whl"):
+                return None
+            name = filename.split("-", 1)[0]
+        return server_dist(name)
 
     def _preferred_dist(self) -> str:
         """Distribution to read the running version from (target, else stable)."""
