@@ -254,17 +254,27 @@ async def test_plain_channel_spec_is_not_scrubbed(spec: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_override_that_starts_like_a_channel_spec_is_scrubbed() -> None:
-    """Only a whole channel spec is kept: an override that merely starts with
-    one carries whatever was typed after it, and the install error quotes the
-    spec whole."""
-    override = "ha-mcp==8.7.0 --index-url https://pypi.example/simple?token=tok-abc"
+@pytest.mark.parametrize(
+    "override",
+    [
+        "ha-mcp==8.7.0 --index-url https://pypi.example/simple?token=tok.abc",
+        "ha-mcp==8.7.0+tok.abc",
+    ],
+    ids=["trailing-option", "local-version-label"],
+)
+async def test_override_that_starts_like_a_channel_spec_is_scrubbed(
+    override: str,
+) -> None:
+    """Only a whole channel spec with a public version is kept: an override
+    that merely starts with one carries whatever was typed after it (a local
+    version label takes any text), and the install error quotes the spec
+    whole."""
     _fail_bring_up("package", f"Could not install the server ({override!r}): ...")
     entry = _server_entry({OPT_PIP_SPEC: override})
 
     result = await _diagnostics(FakeHass([entry]))
 
-    assert "tok-abc" not in json.dumps(result)
+    assert "tok.abc" not in json.dumps(result)
 
 
 @pytest.mark.asyncio

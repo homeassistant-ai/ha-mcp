@@ -26,6 +26,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers import issue_registry as ir
+from packaging.version import InvalidVersion, Version
 
 from .const import (
     CONF_ENTRY_TYPE,
@@ -103,10 +104,6 @@ _STARTUP_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED)
 # Credentials in a URL's userinfo, e.g. a pip index or tarball URL that never
 # reached the entry (pip echoes its index URLs in errors).
 _URL_USERINFO = re.compile(r"(://)[^/@\s'\"]+@")
-# A channel's distribution, bare or pinned to a version, as the server pins it.
-_CHANNEL_SPEC = re.compile(
-    rf"(?:{re.escape(DIST_NAME_STABLE)}|{re.escape(DIST_NAME_DEV)})(?:==\d[\w.+!-]*)?"
-)
 
 
 async def async_get_config_entry_diagnostics(
@@ -222,6 +219,16 @@ def _is_channel_spec(value: str) -> bool:
     ``last_pip_spec`` holds one of these when no override is set. It is not a
     secret, and keeping it leaves the package name and version in the error.
     Only the whole value counts: an override that merely starts with one
-    carries whatever was typed after it.
+    carries whatever was typed after it. The version must be a normalized
+    public one, as PyPI releases are; a local label (``+...``) takes any text.
     """
-    return _CHANNEL_SPEC.fullmatch(value.strip()) is not None
+    dist, pinned, version = value.strip().partition("==")
+    if dist not in (DIST_NAME_STABLE, DIST_NAME_DEV):
+        return False
+    if not pinned:
+        return True
+    try:
+        parsed = Version(version)
+    except InvalidVersion:
+        return False
+    return parsed.local is None and str(parsed) == version
