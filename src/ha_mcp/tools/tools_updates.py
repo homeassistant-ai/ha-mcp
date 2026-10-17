@@ -843,9 +843,8 @@ class UpdateTools:
             response["note"] = "No matching pending updates to act on."
         elif action == "install" and succeeded:
             response["note"] = (
-                "Installs run asynchronously in Home Assistant and can take "
-                "minutes; poll ha_manage_updates(action='list') to track "
-                "progress."
+                "Confirm with ha_manage_updates(action='list') that "
+                "installed_version reached latest_version."
             )
         return response
 
@@ -1062,10 +1061,11 @@ class UpdateTools:
         issue_id to 'ignore_repair' / 'unignore_repair'. In Read Only Mode the
         read actions ('list', 'get') stay available; write actions are blocked.
 
-        Installs run asynchronously in Home Assistant and can take minutes:
-        'install' returns once the service calls are accepted, with per-entity
-        results. Poll action='list' to watch in_progress until installed_version
-        reaches latest_version. action='list' also returns ha_mcp_update — this
+        'install' blocks until each update finishes (minutes). An update that
+        outlasts the request timeout ends the call with a connection timeout
+        while it keeps running, and a Core update restarts Home Assistant;
+        neither means failure, but later targets in the batch were not started.
+        Confirm with action='list'. action='list' also returns ha_mcp_update — this
         MCP server's own update status {current, latest, update_available}, so
         a newer ha-mcp release can be flagged.
 
