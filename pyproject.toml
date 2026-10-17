@@ -67,8 +67,8 @@ dependencies = [
     # before raising these floors; standalone lock updates can move independently.
     "httpx[socks]>=0.28.1,<0.29",
     "pydantic[email]>=2.13.4,<3",
-    "python-dotenv==1.2.4",
-    "truststore==0.10.4",
+    "python-dotenv>=1.2.4,<2",
+    "truststore>=0.10.4,<0.11",
     # websockets is deliberately ABSENT from this list: ha-mcp ships its own
     # private copy (src/ha_mcp/_vendor/websockets, pinned in the vendor
     # requirements.txt and synced by scripts/vendor_websockets.py) and never
