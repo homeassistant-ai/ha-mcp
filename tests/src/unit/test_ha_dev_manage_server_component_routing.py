@@ -57,7 +57,7 @@ _SERVER_FLOW = {
     ],
 }
 
-_SERVER_ENTRY_RESULT = {"entry_id": "srv1", "channel": "stable", "pip_spec": None}
+_SERVER_ENTRY_RESULT = {"entry_id": "srv1", "pip_spec": None}
 
 
 def _update_ws(

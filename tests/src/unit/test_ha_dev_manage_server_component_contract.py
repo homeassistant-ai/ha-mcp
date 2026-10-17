@@ -153,7 +153,7 @@ async def test_real_component_write_maps_and_defers_merged_apply() -> None:
     assert data["scheduled"] is True
     assert data["entry_id"] == "srv1"
     assert data["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
-    assert data["previous"] == {"channel": "stable", "pip_spec": ""}
+    assert data["previous"] == {"pip_spec": ""}
     # Component-first: the consumer tries the component write BEFORE opening the
     # legacy options flow, so no flow is opened — nothing to submit or abort.
     assert client.abort_calls == []
