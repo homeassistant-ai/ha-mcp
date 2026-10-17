@@ -747,14 +747,12 @@ class BugReportTools:
     async def _detect_server_entry_status(self) -> str | None:
         """Describe the in-process "HA-MCP Server" entry state, best-effort.
 
-        Both parts of the custom component ship under the single
-        ``ha_mcp_tools`` domain, so "the component is installed" says nothing
-        about WHICH part is set up. The File & YAML tools part is covered by
-        the services probe; this one classifies the domain's config entries by
-        their flow-assigned titles to show whether the in-process server entry
-        exists — e.g. an add-on install that erroneously also added it (a
-        second, redundant server) becomes visible next to Installation Method.
-        Returns None when the probe fails; the report must never break on it.
+        Both parts of the component share the ``ha_mcp_tools`` domain; the File
+        & YAML part is covered by the services probe. Entries are classified by
+        flow-assigned title, so e.g. an add-on install that also added a redundant
+        server entry shows next to Installation Method. A recognized server entry
+        gets the webhook auth mode when the cached ``info`` probe reports one.
+        Returns None when ``config_entries/get`` fails; the report must not break.
         """
         try:
             response = await self._client.send_websocket_message(
@@ -770,7 +768,9 @@ class BugReportTools:
             return None
         server, unrecognized = _classify_component_entries(result)
         if server:
-            return ", ".join(server)
+            caps = await get_component_caps(self._client)
+            auth = caps.webhook_auth if caps else None
+            return ", ".join(server) + (f", webhook auth: {auth}" if auth else "")
         if unrecognized:
             # A renamed entry cannot be classified by title — report it
             # rather than claiming the server entry is absent.

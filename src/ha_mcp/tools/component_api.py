@@ -114,6 +114,11 @@ class ComponentCaps:
     # the old implication still holds — only the tools entry registered
     # ``info`` there).
     tools_services: bool | None = None
+    # The in-process server entry's webhook auth mode (the component's
+    # ``WEBHOOK_AUTH_*`` values, or ``disabled`` when the webhook is off), shown
+    # by ``ha_report_issue`` (#2584). Additive ``info`` field; ``None`` without a
+    # server entry or on a component too old to report it.
+    webhook_auth: str | None = None
 
 
 # Weak-keyed by client so the negotiated caps self-evict when the client is
@@ -250,6 +255,7 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
         schema_version = 0
     raw_timezone = result.get("timezone")
     raw_tools_services = result.get("tools_services")
+    raw_webhook_auth = result.get("webhook_auth")
     return ComponentCaps(
         schema_version=schema_version,
         component_version=str(result.get("component_version", "")),
@@ -263,6 +269,7 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
         tools_services=raw_tools_services
         if isinstance(raw_tools_services, bool)
         else None,
+        webhook_auth=raw_webhook_auth if isinstance(raw_webhook_auth, str) else None,
     )
 
 
