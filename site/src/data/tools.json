@@ -631,7 +631,7 @@
         },
         "start": {
           "type": "str | None",
-          "description": "Start datetime in ISO format (default: now)",
+          "description": "Start datetime in ISO format; omit it to start at the current time",
           "default": null
         },
         "end": {
@@ -2527,12 +2527,12 @@
         },
         "start_time": {
           "type": "str | None",
-          "description": "Start time: ISO datetime or relative (e.g., '24h', '7d', '30d'). Default: 24h ago for history, 30d ago for statistics",
+          "description": "Start time: ISO datetime or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
           "default": null
         },
         "end_time": {
           "type": "str | None",
-          "description": "End time: ISO datetime. Default: now",
+          "description": "End time: same formats as start_time. Omit it to end at the current time",
           "default": null
         },
         "minimal_response": {
