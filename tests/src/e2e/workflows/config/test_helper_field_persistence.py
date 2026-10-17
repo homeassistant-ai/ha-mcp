@@ -25,10 +25,12 @@ input_datetime, counter, timer. Skips: schedule, zone, person, tag.
 Also includes a cross-cutting test: a fully-configured input_number
 updated with only ``min_value=70`` must preserve initial, mode,
 unit_of_measurement, step, and icon; and zone tests: an icon change must
-reach the zone's stored icon, and clearing a stored icon must fail.
+reach the zone's stored icon, and clearing a stored icon must fail; and a
+person and tag test: their icon lands in the entity registry and clears there.
 """
 
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -697,37 +699,43 @@ class TestInputNumberPartialUpdatePreservesFields:
 
 
 @pytest.fixture
-async def icon_zone(mcp_client: Client) -> AsyncIterator[tuple[str, str]]:
-    """A zone created with ``mdi:school``, removed afterwards: (entity_id, id)."""
-    async with MCPAssertions(mcp_client) as mcp:
-        create_data = await mcp.call_tool_success(
-            "ha_config_set_helper",
-            {
-                "helper_type": "zone",
-                "name": "E2E Zone Icon Test",
-                "icon": "mdi:school",
-                "config": {"latitude": 40.7128, "longitude": -74.0060},
-            },
-        )
-    entity_id = _entity_id_from_create(create_data, "zone")
-    zone_id = create_data.get("data", {}).get("id")
+async def icon_zone(
+    mcp_client: Client, ha_client: Any
+) -> AsyncIterator[tuple[str, str]]:
+    """A zone storing ``mdi:school``, removed afterwards: (entity_id, id).
+
+    Created through Core's zone/create, as the Home Assistant UI does: the
+    helper tools keep a new zone's icon in the entity registry instead. Each
+    zone gets its own name: Core keeps a removed zone's registry entry, icon
+    included, and gives it back to a zone created again under the same id.
+    """
+    created = await ha_client.send_websocket_message(
+        {
+            "type": "zone/create",
+            "name": f"E2E Zone Icon Test {uuid.uuid4().hex[:8]}",
+            "icon": "mdi:school",
+            "latitude": 40.7128,
+            "longitude": -74.0060,
+        }
+    )
+    zone_id = (created.get("result") or {}).get("id")
     try:
-        assert entity_id and zone_id, f"Missing ids: {create_data}"
+        assert zone_id, f"Missing zone id: {created}"
+        async with MCPAssertions(mcp_client) as mcp:
+            listed = await mcp.call_tool_success("ha_get_zone", {"zone_id": zone_id})
+        entity_id = listed["zone"]["entity_id"]
         assert await _wait_for_entity_registration(mcp_client, entity_id)
         yield entity_id, zone_id
     finally:
-        if entity_id:
-            await safe_call_tool(
-                mcp_client,
-                "ha_remove_helpers_integrations",
-                {"helper_type": "zone", "target": entity_id, "confirm": True},
-            )
+        if zone_id:
+            await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})
 
 
-async def _stored_icon(mcp: MCPAssertions, zone_id: str) -> str | None:
-    listed = await mcp.call_tool_success("ha_get_zone", {})
+async def _stored_icon(ha_client: Any, zone_id: str) -> str | None:
+    """The icon in the stored zone; ha_get_zone shows the registry's over it."""
+    listed = await ha_client.send_websocket_message({"type": "zone/list"})
     zone: dict[str, Any] = next(
-        (z for z in listed["zones"] if z.get("id") == zone_id), {}
+        (z for z in listed.get("result") or [] if z.get("id") == zone_id), {}
     )
     return zone.get("icon")
 
@@ -742,7 +750,7 @@ class TestZoneIconPersistence:
     """
 
     async def test_zone_icon_change_reaches_the_stored_icon(
-        self, mcp_client: Client, icon_zone: tuple[str, str]
+        self, mcp_client: Client, ha_client: Any, icon_zone: tuple[str, str]
     ) -> None:
         """Changing the icon of a zone created with one must update the stored
         icon too, or the old icon shows again once the registry override is
@@ -750,16 +758,16 @@ class TestZoneIconPersistence:
         """
         entity_id, zone_id = icon_zone
         async with MCPAssertions(mcp_client) as mcp:
-            assert await _stored_icon(mcp, zone_id) == "mdi:school"
+            assert await _stored_icon(ha_client, zone_id) == "mdi:school"
             await mcp.call_tool_success(
                 "ha_config_set_helper",
                 {"helper_type": "zone", "helper_id": entity_id,
                  "icon": "mdi:home-city"},
             )  # fmt: skip
-            assert await _stored_icon(mcp, zone_id) == "mdi:home-city"
+            assert await _stored_icon(ha_client, zone_id) == "mdi:home-city"
 
     async def test_zone_stored_icon_clear_fails(
-        self, mcp_client: Client, icon_zone: tuple[str, str]
+        self, mcp_client: Client, ha_client: Any, icon_zone: tuple[str, str]
     ) -> None:
         """Clearing the icon of a zone that stores one must fail instead of
         reporting success while the stored icon keeps showing.
@@ -771,4 +779,48 @@ class TestZoneIconPersistence:
                 {"helper_type": "zone", "helper_id": entity_id, "icon": ""},
                 expected_error="cannot be removed",
             )
-            assert await _stored_icon(mcp, zone_id) == "mdi:school"
+            assert await _stored_icon(ha_client, zone_id) == "mdi:school"
+
+
+async def _registry_icon(mcp: MCPAssertions, entity_id: str) -> str | None:
+    entity = await mcp.call_tool_success("ha_get_entity", {"entity_id": entity_id})
+    return entity["entity_entry"]["icon"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.config
+@pytest.mark.parametrize("helper_type", ["person", "tag"])
+async def test_person_and_tag_icons_land_in_the_registry_and_can_be_cleared(
+    mcp_client: Client, helper_type: str
+) -> None:
+    """Core's person and tag schemas have no icon field: the icon goes to the
+    entity registry on create and on update, and '' clears it there."""
+    tag_id = f"e2e-registry-icon-{uuid.uuid4().hex[:8]}"
+    create: dict[str, Any] = {
+        "helper_type": helper_type,
+        "name": f"E2E Registry Icon {helper_type}",
+        "icon": "mdi:star",
+    }
+    if helper_type == "tag":
+        create["config"] = {"tag_id": tag_id}
+    async with MCPAssertions(mcp_client) as mcp:
+        created = await mcp.call_tool_success("ha_config_set_helper", create)
+        entity_id = created.get("entity_id")
+        helper_id = tag_id if helper_type == "tag" else entity_id
+        try:
+            assert entity_id, created
+            assert await _registry_icon(mcp, entity_id) == "mdi:star"
+
+            for icon, expected in (("mdi:heart", "mdi:heart"), ("", None)):
+                await mcp.call_tool_success(
+                    "ha_config_set_helper",
+                    {"helper_type": helper_type, "helper_id": helper_id, "icon": icon},
+                )
+                assert await _registry_icon(mcp, entity_id) == expected
+        finally:
+            if helper_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {"helper_type": helper_type, "target": helper_id, "confirm": True},
+                )

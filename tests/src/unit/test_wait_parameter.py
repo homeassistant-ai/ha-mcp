@@ -304,13 +304,25 @@ class TestHelperWaitParameter:
 
     @pytest.fixture
     def mock_client(self):
+        """Core's answers: helper abc123 has the entity input_boolean.test."""
+        entry = {
+            "entity_id": "input_boolean.test",
+            "platform": "input_boolean",
+            "unique_id": "abc123",
+        }
+
+        async def ws(msg: dict[str, Any]) -> dict[str, Any]:
+            kind = msg["type"]
+            if kind == "config/entity_registry/list":
+                return {"success": True, "result": [entry]}
+            if kind == "config/entity_registry/get":
+                return {"success": True, "result": entry}
+            if kind == "input_boolean/list":
+                return {"success": True, "result": [{"id": "abc123", "name": "T"}]}
+            return {"success": True, "result": {"id": "abc123"}}
+
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"id": "abc123", "entity_id": "input_boolean.test"},
-            }
-        )
+        client.send_websocket_message = AsyncMock(side_effect=ws)
         client.get_entity_state = AsyncMock(
             return_value={"state": "off", "entity_id": "input_boolean.test"}
         )
@@ -367,21 +379,6 @@ class TestHelperWaitParameter:
 
     async def test_update_helper_wait_default_true(self, register_tools, mock_client):
         """UPDATE path: wait defaults to True and polls for entity registration."""
-        mock_client.send_websocket_message.side_effect = [
-            # config/entity_registry/get → returns unique_id
-            {
-                "success": True,
-                "result": {
-                    "unique_id": "abc123",
-                    "entity_id": "input_boolean.test",
-                    "platform": "input_boolean",
-                },
-            },
-            # input_boolean/list → current config for backfill
-            {"success": True, "result": [{"id": "abc123", "name": "Test Switch"}]},
-            # input_boolean/update
-            {"success": True, "result": {"id": "abc123"}},
-        ]
         with patch(
             "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
@@ -390,7 +387,7 @@ class TestHelperWaitParameter:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test Switch",
-                helper_id="test",  # triggers UPDATE path
+                helper_id="input_boolean.test",  # triggers UPDATE path
             )
             assert result["success"] is True
             assert result["action"] == "update"
@@ -400,21 +397,6 @@ class TestHelperWaitParameter:
         self, register_tools, mock_client
     ):
         """UPDATE path: wait=False skips polling."""
-        mock_client.send_websocket_message.side_effect = [
-            # config/entity_registry/get → returns unique_id
-            {
-                "success": True,
-                "result": {
-                    "unique_id": "abc123",
-                    "entity_id": "input_boolean.test",
-                    "platform": "input_boolean",
-                },
-            },
-            # input_boolean/list → current config for backfill
-            {"success": True, "result": [{"id": "abc123", "name": "Test Switch"}]},
-            # input_boolean/update
-            {"success": True, "result": {"id": "abc123"}},
-        ]
         with patch(
             "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
             new_callable=AsyncMock,
@@ -422,7 +404,7 @@ class TestHelperWaitParameter:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test Switch",
-                helper_id="test",
+                helper_id="input_boolean.test",
                 wait=False,
             )
             assert result["success"] is True

@@ -108,7 +108,7 @@ class TestInputSelectUpdatePersistence:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
                 name="My Dropdown",
-                helper_id="my_dropdown",
+                helper_id="input_select.my_dropdown",
                 options=["Option A", "Option B", "Option C"],
             )
 
@@ -142,7 +142,7 @@ class TestInputSelectUpdatePersistence:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
                 name="My Dropdown",
-                helper_id="my_dropdown",
+                helper_id="input_select.my_dropdown",
                 options=["A", "B"],
                 initial="B",
             )
@@ -172,7 +172,7 @@ class TestInputNumberUpdatePersistence:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_number",
                 name="My Number",
-                helper_id="my_number",
+                helper_id="input_number.my_number",
                 min_value=0,
                 max_value=200,
                 step=5,
@@ -213,7 +213,7 @@ class TestInputTextUpdatePersistence:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_text",
                 name="My Text",
-                helper_id="my_text",
+                helper_id="input_text.my_text",
                 min_value=1,
                 max_value=50,
                 mode="password",
@@ -248,7 +248,7 @@ class TestInputBooleanUpdatePersistence:
         ):
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
-                helper_id="my_toggle",
+                helper_id="input_boolean.my_toggle",
                 name="Updated Toggle",
             )
 
@@ -281,7 +281,7 @@ class TestInputDatetimeUpdatePersistence:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_datetime",
                 name="My Datetime",
-                helper_id="my_datetime",
+                helper_id="input_datetime.my_datetime",
                 has_date=True,
                 has_time=False,
             )
@@ -315,7 +315,7 @@ class TestCounterUpdatePersistence:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="counter",
                 name="My Counter",
-                helper_id="my_counter",
+                helper_id="counter.my_counter",
                 initial=10,
                 min_value=0,
                 max_value=100,
@@ -355,7 +355,7 @@ class TestTimerUpdatePersistence:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="timer",
                 name="My Timer",
-                helper_id="my_timer",
+                helper_id="timer.my_timer",
                 duration="00:30:00",
                 restore=False,
             )
@@ -388,7 +388,7 @@ class TestInputButtonUpdatePersistence:
         ):
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_button",
-                helper_id="my_button",
+                helper_id="input_button.my_button",
                 name="Updated Button",
                 icon="mdi:gesture-tap",
             )
@@ -402,7 +402,7 @@ class TestInputButtonUpdatePersistence:
         assert update_call is not None
         msg = update_call[0][0]
         assert msg["name"] == "Updated Button"
-        assert msg["icon"] == "mdi:gesture-tap"
+        assert "icon" not in msg  # no readable schema, so not into the item
 
 
 class TestFlowHelperRouting:
@@ -1209,7 +1209,7 @@ class TestOptionalNameOnUpdate:
             # No `name` param — must not raise schema validation error.
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
-                helper_id="my_toggle",
+                helper_id="input_boolean.my_toggle",
                 area_id="",
             )
 

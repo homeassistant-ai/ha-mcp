@@ -19,12 +19,13 @@ rows for a set of ids (with a ``missing`` list for ids with no registry entry).
 Each row is core's ``RegistryEntry.as_partial_dict`` VERBATIM — byte-identical to
 a ``config/entity_registry/list`` element — so the consumers keep their existing
 transforms over the raw shape. On the simple-delete path, ONE authoritative
-in-process read plus the direct-id fallback replaces the 3-attempt retry loop —
-NOT because the read is fresher (there was never a WS-timing race: the legacy
+in-process read replaces the 3-attempt retry loop — NOT because the read is
+fresher (there was never a WS-timing race: the legacy
 ``config/entity_registry/get`` reads the same live registry over the same socket,
 so an in-process read is equally subject to the registration LAG the loop
-absorbed), but because a stale/missing resolve degrades to the direct-id delete
-rather than a wrong one.
+absorbed), but because a bare id never reaches it (``stored_helper_target``
+resolves a bare id as a storage id first), and any stale/missing resolve is
+reported, never turned into a delete by a guessed id.
 
 This module owns the caps-gated fetch so the routing discipline — probe caps,
 send one frame, invalidate on ``unknown_command``, fall back to the legacy path

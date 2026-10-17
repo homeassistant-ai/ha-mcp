@@ -39,6 +39,7 @@ from .entity_param_parsing import (
     _parse_options_param,
     _parse_string_list_field,
 )
+from .entity_removal import remove_registry_entry
 from .entity_update_fields import (
     build_name_visibility_fields,
     build_state_tag_fields,
@@ -2114,10 +2115,8 @@ class EntityTools:
             "Remove Entity", destructive=True, idempotent=True, open_world=False
         ),
     )
-    # Single-entity removal is snapshotted via id_param. A bulk (list) call
-    # stringifies to a non-matching target, so its pre-write snapshot is a
-    # best-effort no-op — bulk removal is not individually backed up (the
-    # decorator captures one entity per call).
+    # Only a single id is snapshotted (id_param): a bulk list stringifies to no
+    # matching target, so bulk removal is not individually backed up.
     @with_auto_backup(domain="entity", id_param="entity_id")
     @log_tool_usage
     async def ha_remove_entity(
@@ -2137,10 +2136,11 @@ class EntityTools:
 
         Permanently removes the entity registration; the entity will no longer
         appear in the UI or be available to automations. Use only for orphaned
-        or stale entity entries: if the underlying device or integration is
-        still active, the entity may be re-added automatically on the next HA
-        restart or reload. This cannot be undone without restoring from backup.
-        For most use cases, consider disabling instead:
+        or stale entity entries: if the underlying device, integration or
+        stored helper is still there, the entity may be re-added on the next HA
+        restart or reload; for a stored helper's entity a single-id removal
+        names the tool that removes the helper. This cannot be undone without restoring
+        from backup. For most use cases, consider disabling instead:
         ha_set_entity(entity_id="sensor.old", enabled=False).
 
         BULK MODE:
@@ -2149,8 +2149,7 @@ class EntityTools:
         its filters change. Removals run sequentially and return:
           {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}
         where skipped = ids already absent (not-found is idempotent, not an
-        error). Bulk mode is NOT auto-backed-up (the snapshot is single-entity);
-        single-id removal still is.
+        error). Only single-id removal is auto-backed-up.
 
         EXAMPLES:
         - Remove orphaned sensor: ha_remove_entity("sensor.old_temperature")
@@ -2172,9 +2171,7 @@ class EntityTools:
                     "Use ha_search() to find valid entity IDs",
                 ],
             )
-            result = await self._client.send_websocket_message(
-                {"type": "config/entity_registry/remove", "entity_id": entity_id}
-            )
+            result, notes = await remove_registry_entry(self._client, entity_id)
 
             if not result.get("success"):
                 error_msg = _extract_ws_error(result)
@@ -2201,7 +2198,9 @@ class EntityTools:
                     )
                 )
 
-            return {"success": True, "entity_id": entity_id}
+            return {"success": True, "entity_id": entity_id} | (
+                {"warnings": notes} if notes else {}
+            )
 
         except ToolError:
             raise

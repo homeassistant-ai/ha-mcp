@@ -6,9 +6,10 @@ Two helper paths resolve entities from the registry today:
 - The SIMPLE-helper delete resolves one entity's ``unique_id`` with a 3-attempt
   exponential-backoff ``config/entity_registry/get`` loop. When the component
   advertises ``registry_lookup``, ONE ``registry_lookup(entity_ids=[...])`` read
-  resolves it — the single read plus the direct-id fallback replaces the retry
-  loop (the loop absorbed registration LAG, not a WS-timing race), so the retry
-  loop and its sleeps are skipped entirely.
+  resolves it — the single read replaces the retry loop (the loop absorbed
+  registration LAG, not a WS-timing race), so the retry loop and its sleeps
+  are skipped entirely. A target that is a stored helper's id never reaches
+  it: the ``<type>/list`` read before it resolves the storage id first.
 - The FLOW-helper delete and the ``ha_config_set_helper`` post-create wait poll
   both need EVERY entity for one ``config_entry_id`` and get them by dumping the
   WHOLE ``config/entity_registry/list``. ``registry_lookup(config_entry_id=...)``
@@ -126,13 +127,15 @@ class RoutingClient:
         if isinstance(msg_type, str) and msg_type.endswith("/delete"):
             self.delete_calls.append(msg)
             return {"success": True}
+        if isinstance(msg_type, str) and msg_type.endswith("/list"):
+            # No stored helper has the target as its id: the registry resolves it.
+            return {"success": True, "result": []}
         raise AssertionError(f"unexpected ws message {msg_type!r}")
 
 
 class DeleteFailsRoutingClient(RoutingClient):
-    """Like ``RoutingClient``, but every ``*/delete`` fails — drives the
-    exhausted-fallback branch (direct-id delete also fails, entity still
-    present in state) instead of the happy-path direct-id success."""
+    """Like ``RoutingClient``, but every ``*/delete`` fails, so no test passes
+    by deleting anything."""
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         msg_type = msg.get("type")
@@ -187,7 +190,7 @@ async def test_simple_delete_resolves_via_component_no_retry_loop() -> None:
         ) as sleep_mock,
     ):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -223,7 +226,7 @@ async def test_simple_delete_capability_miss_uses_legacy_loop() -> None:
 
     with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -250,7 +253,7 @@ async def test_simple_delete_unknown_command_invalidates_and_falls_back() -> Non
 
     with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -280,7 +283,7 @@ async def test_simple_delete_command_error_falls_back_keeps_caps() -> None:
 
     with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -311,7 +314,7 @@ async def test_simple_delete_connection_error_falls_back_to_legacy() -> None:
 
     with patch_ws(ws, component_registry_lookup):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -340,7 +343,7 @@ async def test_simple_delete_ws_establish_failure_falls_back_to_legacy() -> None
         HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -358,11 +361,10 @@ async def test_simple_delete_falsy_unique_id_degrades_like_missing(
     falsy_unique_id: str | None,
 ) -> None:
     """A component-served row where the entity IS registered but ``unique_id``
-    is falsy (empty string or None): no usable id is resolved, so the
-    direct-id fallback runs, and when that also fails with the entity still
-    present in state, the exhausted-fallback ENTITY_NOT_FOUND is raised — with
-    path-accurate wording naming the component lookup rather than "3
-    attempts"."""
+    is falsy (empty string or None): no usable id is resolved, and with the
+    entity still present in state the exhausted-fallback ENTITY_NOT_FOUND is
+    raised — with path-accurate wording naming the component lookup rather
+    than "3 attempts". Nothing is deleted by the object id."""
     row = {
         "entity_id": "input_button.my_button",
         "unique_id": falsy_unique_id,
@@ -378,7 +380,7 @@ async def test_simple_delete_falsy_unique_id_degrades_like_missing(
 
     with patch_ws(ws, component_registry_lookup), pytest.raises(ToolError) as excinfo:
         await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -388,8 +390,7 @@ async def test_simple_delete_falsy_unique_id_degrades_like_missing(
     assert err["error"]["code"] == "ENTITY_NOT_FOUND"
     message = err["error"]["message"]
     assert "Component registry lookup" in message
-    # The direct-id fallback ran (using the bare id, no unique_id resolved).
-    assert client.delete_calls[0]["input_button_id"] == "my_button"
+    assert client.delete_calls == []
     # Path-accurate: never claims a 3-attempt retry loop that never ran.
     assert "3 attempts" not in message
     # The component row served the resolve; no legacy per-id get ran.
@@ -400,9 +401,9 @@ async def test_simple_delete_falsy_unique_id_degrades_like_missing(
 async def test_simple_delete_component_miss_with_a_state_is_not_reported_missing() -> (
     None
 ):
-    """zone.home through the component: the registry lookup misses it, the
-    direct-id delete fails, yet it has a state. It exists, so the caller must
-    learn it is not registry-managed, not that it was already deleted."""
+    """zone.home through the component: the registry lookup misses it, yet it
+    has a state. It exists, so the caller must learn it is not
+    registry-managed, not that it was already deleted."""
     ws = make_ws(
         "ha_mcp_tools/registry_lookup",
         info_result=_CAPS_REGISTRY,

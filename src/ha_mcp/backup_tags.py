@@ -1,4 +1,4 @@
-"""A tag's name in its snapshot and on restore.
+"""A tag's name and icon in its snapshot and on restore.
 
 Core keeps a tag's name in the entity registry, not in the tag store:
 ``tag/list`` fills ``name`` with ``entity.name or entity.original_name`` (the
@@ -11,31 +11,29 @@ from __future__ import annotations
 
 from typing import Any
 
-from .backup_entity_ids import _manager
+from .backup_entity_ids import _manager, registry_row, restore_registry_icon
 
 
 async def _tag_entity(client: Any, tag_id: str) -> dict[str, Any] | None:
-    bm = _manager()
-    return next(
-        (
-            row
-            for row in await bm._entity_registry_rows(client)
-            if row.get("platform") == "tag" and row.get("unique_id") == tag_id
-        ),
-        None,
-    )
+    return await registry_row(client, "tag", tag_id)
 
 
 async def tag_snapshot(client: Any, item: dict[str, Any]) -> dict[str, Any]:
     """The listed tag with its registry name instead of the listed fallback."""
     entity = await _tag_entity(client, str(item.get("id")))
-    return {**item, "name": entity.get("name") if entity else item.get("name")}
+    return {
+        **item,
+        "name": entity.get("name") if entity else item.get("name"),
+        "registry_icon": entity.get("icon") if entity else None,
+    }
 
 
 async def restore_tag(client: Any, tag_id: str, payload: dict[str, Any]) -> Any:
     """``tag/update`` without a name the tag never had; a name given after the
     snapshot is cleared in the registry, which ``tag/update`` cannot do."""
     bm = _manager()
+    recorded = "registry_icon" in payload
+    registry_icon = payload.pop("registry_icon", None)
     unnamed = payload.get("name") is None
     if unnamed:
         payload.pop("name", None)
@@ -51,4 +49,7 @@ async def restore_tag(client: Any, tag_id: str, payload: dict[str, Any]) -> Any:
                     "name": None,
                 },
             )
-    return result
+    if not recorded:
+        return result
+    warnings = await restore_registry_icon(client, "tag", tag_id, registry_icon)
+    return {**result, "warnings": warnings} if warnings else result

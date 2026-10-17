@@ -21,11 +21,12 @@ from ha_mcp.client.rest_client import (
     SceneResolution,
 )
 
+from ._created_helper_registry import with_registry
+
 
 @pytest.fixture
 def mock_client():
-    client = MagicMock()
-    return client
+    return MagicMock()
 
 
 @pytest.fixture
@@ -42,8 +43,7 @@ def register_tools(mock_client):
         )
         registered[name] = method
 
-    mock_mcp = MagicMock()
-    mock_mcp.add_tool = capture_add_tool
+    mock_mcp = MagicMock(add_tool=capture_add_tool)
     register_config_helper_tools(mock_mcp, mock_client)
     return registered
 
@@ -81,8 +81,8 @@ class TestUniformResponseShape:
         self, register_tools, mock_client
     ):
         """Simple WS create returns ``data`` wrapper, no ``helper_data``."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
+        mock_client.send_websocket_message = with_registry(
+            {
                 "success": True,
                 "result": {"id": "abc123", "name": "Test Switch"},
             }
@@ -202,8 +202,8 @@ class TestUniformResponseShape:
         self, register_tools, mock_client
     ):
         """A wait exception lands in top-level ``warnings`` list, never nested."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
+        mock_client.send_websocket_message = with_registry(
+            {
                 "success": True,
                 "result": {"id": "abc123", "name": "Test Switch"},
             }
@@ -290,7 +290,7 @@ class TestUniformResponseShape:
                 "result": {"id": "abc123", "name": "Test Switch"},
             }
 
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+        mock_client.send_websocket_message = with_registry(ws_handler)
         with patch(
             "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
@@ -342,7 +342,7 @@ class TestUniformResponseShape:
                 "result": {"id": "abc123", "name": "Test Switch"},
             }
 
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+        mock_client.send_websocket_message = with_registry(ws_handler)
         with patch(
             "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
             new_callable=AsyncMock,
@@ -450,7 +450,7 @@ class TestUniformResponseShape:
                 "result": {"id": "abc123", "name": "Test Switch"},
             }
 
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+        mock_client.send_websocket_message = with_registry(ws_handler)
 
         async def fake_apply(
             client, entity_id, category, scope, result_dict, entity_type
@@ -562,8 +562,8 @@ class TestUniformResponseShape:
         self, register_tools, mock_client
     ):
         """``warning`` (singular string) must never appear — neither flat nor nested."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
+        mock_client.send_websocket_message = with_registry(
+            {
                 "success": True,
                 "result": {"id": "abc123", "name": "Test Switch"},
             }

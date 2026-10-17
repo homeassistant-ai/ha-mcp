@@ -24,6 +24,7 @@ from .component_config_entries import fetch_domain_unique_ids
 from .config_entry_flow import (
     _abort_flow_best_effort,
     _reject_redaction_sentinels,
+    refuse_component_entry,
 )
 from .config_entry_flow_walker import (
     POST_COMMIT_STATUSES,
@@ -40,6 +41,7 @@ from .config_entry_identity import (
     _validated_config_entry_rows,
     _verification_state,
     _verify_reconfigure_identity_fields,
+    build_reconfigure_rollback_metadata,
     cross_domain_warnings,
 )
 from .config_entry_reload_watch import (
@@ -68,38 +70,6 @@ class PreparedReconfigure:
     identity: ReconfigureIdentity
     expected_identity: dict[str, Any]
     warnings: list[str] = field(default_factory=list)
-
-
-def build_reconfigure_rollback_metadata(
-    entry_id: str,
-    domain: str,
-) -> dict[str, Any]:
-    """Describe the manual rollback path for an existing config entry.
-
-    The snapshot the auto-backup layer captures is Home Assistant's config
-    entry fragment (``config_entries/get`` over WebSocket, which serializes
-    ``ConfigEntry.as_json_fragment``). That fragment carries no ``data`` key,
-    so the entry's connection settings are not in it: the snapshot is audit
-    evidence, not an automatic endpoint rollback. An operator must repeat the
-    official reconfigure flow with the known previous values.
-    """
-    return {
-        "strategy": "official_reconfigure_flow",
-        "automatic": False,
-        "operator_action_required": True,
-        "manual_required": True,
-        "manual_reason": "previous_config_unavailable",
-        "entry_id": entry_id,
-        "domain": domain,
-        "previous_config": None,
-        "backup_scope": "edits",
-        "backup_restore_supported": False,
-        "backup_restore_note": (
-            "The generic integration snapshot is audit evidence only; its shared "
-            "restore handler does not restore connection settings. Use the official "
-            "reconfigure flow instead."
-        ),
-    }
 
 
 def _raise_post_commit_verification_error(
@@ -420,6 +390,7 @@ async def prepare_reconfigure_request(
                 context={"entry_id": validated_entry_id, "entry": entry},
             )
         )
+    refuse_component_entry(domain, action="reconfigure", entry_id=validated_entry_id)
     if not entry.get("supports_reconfigure", False):
         raise_tool_error(
             create_error_response(

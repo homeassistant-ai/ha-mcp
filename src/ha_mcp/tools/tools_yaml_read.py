@@ -1,7 +1,8 @@
 """Read-only YAML fragment lookup for Home Assistant config files.
 
 The read companion to ``ha_config_set_yaml``: same ``file`` + ``yaml_path``
-addressing, so a fragment found here can be handed straight back to the editor.
+addressing, so a fragment found here under a ``yaml_path`` the editor accepts
+for that file can be handed straight back to it.
 
 **Dependency:** Requires the ha_mcp_tools custom component (the round-trip parse
 needs ``ruamel``, which the component carries and the MCP server does not).
@@ -416,8 +417,10 @@ class YamlReadTools:
         """Get the current YAML fragment under a key, from one config file or across a glob.
 
         Use before ha_config_set_yaml to inspect what a key currently holds, and
-        to find which file defines it — the returned ``file`` + ``yaml_path`` are
-        exactly the arguments that address the same fragment for an edit.
+        to find which file defines it — when ha_config_set_yaml accepts this
+        ``yaml_path`` for the returned ``file``, the two are exactly the
+        arguments that address the same fragment for an edit. To change a value
+        nested below such a key, read the whole key and replace it.
 
         Not for storage-mode items: automations, scripts and scenes created
         through the UI live outside YAML — read those with ha_config_get_automation,

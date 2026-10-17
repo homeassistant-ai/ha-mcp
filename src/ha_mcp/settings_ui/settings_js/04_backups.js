@@ -361,6 +361,18 @@ function renderBackups() {
   });
 }
 
+// The manager's restore warnings and the handler's, as lines to append. The
+// result's warning for a recreated flow helper without an entity mapping is
+// left out: its outcome message already renders it.
+function backupRestoreWarnings(outcome = {}) {
+  const list = (value) => (Array.isArray(value) ? value : []);
+  const handler = outcome.restore_mode === 'recreated' && outcome.result?.entity_ids_restored === false
+    ? []
+    : list(outcome.result?.warnings);
+  const warnings = [...list(outcome.warnings), ...handler];
+  return warnings.length ? '\n\n' + warnings.join('\n') : '';
+}
+
 function backupRestoreOutcomeMessage(outcome = {}) {
   let message;
   if (outcome.apply_status === 'not_applied') {
@@ -461,14 +473,15 @@ async function backupAction(act, name) {
         const outcome = data.data || {};
         let message = backupRestoreOutcomeMessage(outcome);
         if (data.error?.message) message += '\n\n' + data.error.message;
-        alert(message);
+        alert(message + backupRestoreWarnings(outcome));
         if (outcome.safety_backup || outcome.apply_status !== 'not_applied') await loadBackups();
         return;
       }
       const safetyBackup = data.data && data.data.safety_backup ? data.data.safety_backup : t('common.none', {}, '(none)');
-      alert(data.data?.restore_mode === 'recreated'
+      alert((data.data?.restore_mode === 'recreated'
         ? backupRestoreOutcomeMessage(data.data)
-        : t('backup.restored', {name: safetyBackup}, 'Restored. Safety backup: ' + safetyBackup));
+        : t('backup.restored', {name: safetyBackup}, 'Restored. Safety backup: ' + safetyBackup))
+        + backupRestoreWarnings(data.data));
       await loadBackups();
     } catch (err) {
       // JSON parse errors can contain the upstream body. Retain the failure

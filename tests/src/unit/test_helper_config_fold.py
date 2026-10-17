@@ -193,7 +193,9 @@ async def test_websocket_messages_keep_their_command_and_target() -> None:
             "config/entity_registry/get": {"unique_id": "b"},
         }
     )
-    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+    with patch.object(
+        hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
+    ):
         await hc_update._execute_legacy_update(
             client, "input_boolean", "input_boolean.b", "b", None, None,
             {"type": "input_boolean/delete", "input_boolean_id": "other"},
@@ -283,7 +285,7 @@ async def test_schedule_update_keeps_unpassed_days_via_component() -> None:
                       "registry_applied": {}, "warnings": []}
     )  # fmt: skip
     with (
-        patch.object(hc_update, "read_helper_item", read),
+        patch.object(hc_update, "read_stored_helper_item", read),
         patch.object(hc_update, "write_helper_item", write),
     ):
         await hc_update._execute_update_simple_helper(
@@ -319,7 +321,9 @@ async def test_schedule_update_keeps_unpassed_days_via_websocket() -> None:
             "schedule/update": _STORED_SCHEDULE,
         }
     )
-    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+    with patch.object(
+        hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
+    ):
         await hc_update._execute_update_simple_helper(
             client, "schedule", "schedule.s", "s", None, None, None, None,
             None, False, False, {"tuesday": _TUESDAY},
@@ -339,7 +343,9 @@ async def test_websocket_update_of_a_person_reads_its_storage_items() -> None:
             "person/update": stored,
         }
     )
-    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+    with patch.object(
+        hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
+    ):
         await hc_update._execute_update_simple_helper(
             client, "person", "person.p", "p", "Pat", None, None, None, None,
             False, False, {},
@@ -386,7 +392,7 @@ async def _zone_update(
                           "registry_applied": {}, "warnings": []}
         )  # fmt: skip
         with (
-            patch.object(hc_update, "read_helper_item", read),
+            patch.object(hc_update, "read_stored_helper_item", read),
             patch.object(hc_update, "write_helper_item", write),
         ):
             await hc_update._execute_update_simple_helper(
@@ -395,7 +401,9 @@ async def _zone_update(
             )  # fmt: skip
         return write.call_args.args[3] if write.called else None
     client = _zone_ws_client(stored)
-    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+    with patch.object(
+        hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
+    ):
         await hc_update._execute_update_simple_helper(
             client, "zone", "zone.z", "zone.z", None, icon, None, None, None,
             False, False, {"radius": 50.0},
@@ -430,14 +438,19 @@ async def test_zone_update_without_icon_keeps_a_stored_icon(path: str) -> None:
 
 
 async def test_zone_stored_icon_clear_is_refused_via_component() -> None:
+    """The refusal names the zone's own entity, which the component read, not
+    the zone.<id> the caller's id would make: that can be another zone's."""
     write = AsyncMock()
     read = AsyncMock(
-        return_value={"success": True, "item_id": "z", "item": _STORED_ZONE}
-    )
+        return_value={"success": True, "item_id": "z", "item": _STORED_ZONE,
+                      "entity_id": "zone.hq"}
+    )  # fmt: skip
     with (
-        patch.object(hc_update, "read_helper_item", read),
+        patch.object(hc_update, "read_stored_helper_item", read),
         patch.object(hc_update, "write_helper_item", write),
-        pytest.raises(ToolError, match=r"stored icon \(mdi:school\)"),
+        pytest.raises(
+            ToolError, match=r"icon of zone\.hq .*stored icon \(mdi:school\)"
+        ),
     ):
         await hc_update._execute_update_simple_helper(
             MagicMock(), "zone", "zone.z", "zone.z", None, "", None, None, None,
@@ -457,7 +470,9 @@ async def test_zone_icon_clear_writes_nothing_via_websocket(
     # or the stored icon would show again under a reported success.
     client = _zone_ws_client(_STORED_ZONE, list_ok=list_ok)
     with (
-        patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)),
+        patch.object(
+            hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
+        ),
         pytest.raises(ToolError, match=error),
     ):
         await hc_update._execute_update_simple_helper(
@@ -486,7 +501,7 @@ async def test_update_routes_through_component_with_merged_payload() -> None:
                       "warnings": []}
     )  # fmt: skip
     with (
-        patch.object(hc_update, "read_helper_item", read),
+        patch.object(hc_update, "read_stored_helper_item", read),
         patch.object(hc_update, "write_helper_item", write),
     ):
         result = await hc_update._execute_update_simple_helper(
@@ -511,14 +526,14 @@ async def test_tag_update_routes_through_component() -> None:
                       "entity_id": "tag.t2", "registry_applied": {}, "warnings": []}
     )  # fmt: skip
     with (
-        patch.object(hc_update, "read_helper_item", read),
+        patch.object(hc_update, "read_stored_helper_item", read),
         patch.object(hc_update, "write_helper_item", write),
     ):
         await hc_update._execute_update_simple_helper(
             client, "tag", "tag.abc", "abc", "T2", None, "kitchen", None, None,
             True, False, {},
         )  # fmt: skip
-    assert read.call_args.kwargs == {"item_id": "abc"}
+    assert read.call_args.args[1:4] == ("tag", "abc", "tag.abc")
     args, kwargs = write.call_args
     assert args[3] == {"description": "old", "name": "T2"}
     assert kwargs["item_id"] == "abc"
@@ -600,17 +615,23 @@ async def test_websocket_tag_create_reports_the_real_entity() -> None:
     assert result["entity_id"] == "tag.front_door"
 
 
+# No component: the helper schemas cannot be read, so the tag icon goes to the registry.
+_FETCH_SCHEMAS = "ha_mcp.tools.config_helpers.icon_route.fetch_helper_schemas"
+
 _TAG_REPLIES = {
     "config/entity_registry/list": [_TAG_ENTITY],
+    "config/entity_registry/get": _TAG_ENTITY,
     "tag/list": [{"id": "abc-1", "name": "Front door"}],
     "tag/update": {"id": "abc-1", "name": "Front"},
 }
 
 
-@pytest.mark.parametrize("helper_id", ["tag.front_door", "abc-1", "tag.abc-1"])
+@pytest.mark.parametrize("helper_id", ["tag.front_door", "abc-1"])
 async def test_websocket_tag_update_resolves_the_tag_id(helper_id: str) -> None:
     client = _ws_by_type(_TAG_REPLIES)
-    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+    with patch.object(
+        hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
+    ):
         result = await hc_update._execute_update_simple_helper(
             client, "tag", helper_id, helper_id, "Front", None, None, None, None,
             False, False, {},
@@ -621,16 +642,46 @@ async def test_websocket_tag_update_resolves_the_tag_id(helper_id: str) -> None:
     assert result["entity_id"] == "tag.front_door"
 
 
-async def test_websocket_tag_update_sends_an_icon_for_core_to_judge() -> None:
-    """A tag has no icon field; Core says so rather than the icon vanishing."""
+async def test_websocket_tag_update_writes_the_icon_to_the_registry() -> None:
+    """A tag has no icon field, so Core would reject one: it goes to the registry."""
     client = _ws_by_type(_TAG_REPLIES)
-    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+    with (
+        patch.object(
+            hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
+        ),
+        patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)),
+    ):
         await hc_update._execute_update_simple_helper(
             client, "tag", "tag.front_door", "tag.front_door", None, "mdi:nfc",
             None, None, None, False, False, {},
         )  # fmt: skip
     (update,) = _sent(client, "tag/update")
-    assert update["icon"] == "mdi:nfc"
+    assert "icon" not in update
+    assert any(
+        m.get("entity_id") == "tag.front_door" and m.get("icon") == "mdi:nfc"
+        for m in _sent(client, "config/entity_registry/update")
+    )
+
+
+async def test_websocket_tag_update_clears_the_registry_icon() -> None:
+    """A cleared icon is left out of tag/update and clears the registry icon."""
+    client = _ws_by_type(_TAG_REPLIES)
+    with (
+        patch.object(
+            hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
+        ),
+        patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)),
+    ):
+        await hc_update._execute_update_simple_helper(
+            client, "tag", "tag.front_door", "tag.front_door", None, "",
+            None, None, None, False, False, {},
+        )  # fmt: skip
+    (update,) = _sent(client, "tag/update")
+    assert "icon" not in update
+    assert any(
+        m.get("entity_id") == "tag.front_door" and m.get("icon") is None
+        for m in _sent(client, "config/entity_registry/update")
+    )
 
 
 async def test_websocket_tag_update_applies_registry_fields() -> None:
@@ -638,7 +689,9 @@ async def test_websocket_tag_update_applies_registry_fields() -> None:
         {**_TAG_REPLIES,
          "config/entity_registry/update": {"entity_entry": {"area_id": "kitchen"}}}
     )  # fmt: skip
-    with patch.object(hc_update, "read_helper_item", AsyncMock(return_value=None)):
+    with patch.object(
+        hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
+    ):
         await hc_update._execute_update_simple_helper(
             client, "tag", "tag.front_door", "tag.front_door", None, None,
             "kitchen", None, None, False, False, {},
@@ -652,35 +705,46 @@ async def test_websocket_tag_update_applies_registry_fields() -> None:
 async def test_component_tag_update_reports_the_component_entity() -> None:
     client = _ws({"success": True, "result": [_TAG_ENTITY]})
     read = AsyncMock(
-        return_value={"success": True, "item_id": "abc-1", "item": {"id": "abc-1"}}
-    )
+        return_value={"success": True, "item_id": "abc-1", "item": {"id": "abc-1"},
+                      "entity_id": "tag.front_door"}
+    )  # fmt: skip
     write = AsyncMock(
         return_value={"success": True, "item": {"id": "abc-1", "name": "F"},
                       "entity_id": "tag.front_door", "registry_applied": {},
                       "warnings": []}
     )  # fmt: skip
     with (
-        patch.object(hc_update, "read_helper_item", read),
+        patch.object(hc_update, "read_stored_helper_item", read),
         patch.object(hc_update, "write_helper_item", write),
     ):
         result = await hc_update._execute_update_simple_helper(
             client, "tag", "tag.front_door", "tag.front_door", "F", None, None,
             None, None, False, False, {},
         )  # fmt: skip
-    assert read.call_args.kwargs == {"item_id": "abc-1"}
+    assert write.call_args.kwargs["item_id"] == "abc-1"
     assert result["entity_id"] == "tag.front_door"
 
 
 async def test_write_falls_back_to_websocket_when_component_unavailable() -> None:
+    entry = {
+        "entity_id": "input_boolean.b",
+        "platform": "input_boolean",
+        "unique_id": "b",
+    }
+
+    async def send(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == "config/entity_registry/list":
+            return {"success": True, "result": [entry]}
+        return {"success": True, "result": {"id": "b", "name": "B"}}
+
     client = MagicMock()
-    client.send_websocket_message = AsyncMock(
-        return_value={"success": True, "result": {"id": "b", "name": "B"}}
-    )
+    client.send_websocket_message = AsyncMock(side_effect=send)
     with patch.object(hc_create, "write_helper_item", AsyncMock(return_value=None)):
         result = await hc_create._execute_create_simple_helper(
             client, "input_boolean", "B", None, None, None, None, False, False, {},
         )  # fmt: skip
-    client.send_websocket_message.assert_awaited_once()
+    sent = [c.args[0]["type"] for c in client.send_websocket_message.await_args_list]
+    assert sent.count("input_boolean/create") == 1
     assert result["entity_id"] == "input_boolean.b"
 
 
@@ -735,3 +799,24 @@ class TestCatalogTransform:
             hc_schemas._SIMPLE_CONFIG_KEYS_DESCRIPTION
             in tool.parameters["properties"]["config"]["description"]
         )
+
+
+async def test_a_tag_update_is_not_waited_on() -> None:
+    """A tag is not waited on after an update, as after its create."""
+    rows = [{"entity_id": "tag.front_door", "platform": "tag", "unique_id": "abc-1"}]
+    client = _ws_by_type(
+        {**_TAG_REPLIES, "config/entity_registry/list": rows}
+    )  # fmt: skip
+    waited = AsyncMock(return_value=False)
+    with (
+        patch.object(
+            hc_update, "read_stored_helper_item", AsyncMock(return_value=None)
+        ),
+        patch.object(hc_update, "wait_for_entity_registered", waited),
+    ):
+        await hc_update._execute_update_simple_helper(
+            client, "tag", "tag.abc-1", "abc-1", "F", None, None, None, None,
+            True, False, {},
+        )  # fmt: skip
+
+    waited.assert_not_awaited()
