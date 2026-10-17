@@ -110,6 +110,8 @@ class TestMirrorSyncShape:
         stage = next(s for s in steps if s.get("name") == "Stage snapshot")
         assert "git checkout" not in resolve["run"]
         assert '"$SRC/custom_components/ha_mcp_tools"' in stage["run"]
+        # hacs.json's Home Assistant minimum ships with the snapshot's component.
+        assert 'cp "$SRC/hacs.json" "$SRC/LICENSE" /tmp/mirror/' in stage["run"]
 
     @pytest.mark.parametrize(
         ("trigger", "expected"), [("release-of-c0", "1.0.0"), ("", "1.1.0")]
@@ -247,6 +249,55 @@ class TestDevVersionScript:
 
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == expected
+
+    def test_a_dispatch_from_another_branch_uses_masters_next_release(
+        self, tmp_path: Path
+    ) -> None:
+        # semantic-release only versions the master release group: on any
+        # other branch it prints nothing, so the script computes the next
+        # release from origin/master and must leave no worktree behind.
+        repo = tmp_path / "repo"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake_uvx = bin_dir / "uvx"
+        fake_uvx.write_text(
+            "#!/bin/sh\n"
+            'case "$(git symbolic-ref --short HEAD)" in master*) echo 9.0.0;; esac\n'
+        )
+        fake_uvx.chmod(0o755)
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", "-C", str(repo), *args],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+
+        repo.mkdir()
+        git("init", "-q", "-b", "master")
+        for n in range(3):
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                "--allow-empty", "-m", str(n))  # fmt: skip
+        git("update-ref", "refs/remotes/origin/master", "HEAD")
+        git("checkout", "-q", "-b", "feature")
+
+        result = subprocess.run(
+            ["bash", str(_DEV_VERSION)],
+            cwd=repo,
+            env={
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "GITHUB_EVENT_NAME": "workflow_dispatch",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "9.0.0.dev3"
+        assert git("branch", "--list", "master-dev-version-*") == ""
+        assert len(git("worktree", "list").splitlines()) == 1
 
 
 class TestReleaseStamping:

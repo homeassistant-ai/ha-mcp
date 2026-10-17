@@ -269,8 +269,11 @@ jobs:
           if [ "$CHANNEL" = none ]; then
             # A docs-only push refreshes the README and repo files; the
             # component stays exactly as the last tagged sync left it.
-            :
+            cp hacs.json LICENSE /tmp/mirror/
           else
+            # From the snapshot, so hacs.json's Home Assistant minimum always
+            # matches the component it ships with.
+            cp "$SRC/hacs.json" "$SRC/LICENSE" /tmp/mirror/
             rm -rf /tmp/mirror/custom_components
             mkdir -p /tmp/mirror/custom_components
             cp -r "$SRC/custom_components/ha_mcp_tools" /tmp/mirror/custom_components/
@@ -279,7 +282,6 @@ jobs:
               --component-dir /tmp/mirror/custom_components/ha_mcp_tools \
               --version "$VER" --pin "$PIN" --dist "$DIST"
           fi
-          cp hacs.json LICENSE /tmp/mirror/
           python3 scripts/build_mirror_readme.py \
             --prefix .github/integration-mirror-readme-prefix.md \
             --readme README.md \

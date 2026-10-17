@@ -16,7 +16,9 @@
 # a dispatch on an older ref never mints a number an earlier build already used.
 #
 # Needs full history and tags (actions/checkout fetch-depth: 0) and an attached
-# branch: semantic-release refuses to compute a version on a detached HEAD.
+# branch: semantic-release refuses to compute a version on a detached HEAD, and
+# only master is in its release group. On any other branch <next release> is
+# computed from origin/master, in a throwaway worktree on a master-* branch.
 set -euo pipefail
 
 if [ "${GITHUB_EVENT_NAME:-}" = push ]; then
@@ -25,13 +27,30 @@ else
   ref=origin/master
 fi
 
+psr_dir=.
+case "$(git symbolic-ref --quiet --short HEAD || true)" in
+  master | main) ;;
+  *)
+    psr_dir=$(mktemp -d)
+    psr_branch="master-dev-version-$$"
+    git worktree add --quiet -b "$psr_branch" "$psr_dir" origin/master
+    ;;
+esac
+
 # renovate: datasource=pypi depName=python-semantic-release
 PSR_VERSION="10.7.0"
 
 # semantic-release logs to stderr; keep it for the failure messages only.
 psr_log=$(mktemp)
-trap 'rm -f "$psr_log"' EXIT
-if ! next=$(uvx --quiet --from "python-semantic-release==${PSR_VERSION}" \
+cleanup() {
+  rm -f "$psr_log"
+  if [ "$psr_dir" != . ]; then
+    git worktree remove --force "$psr_dir"
+    git branch -D "$psr_branch" >/dev/null
+  fi
+}
+trap cleanup EXIT
+if ! next=$(cd "$psr_dir" && uvx --quiet --from "python-semantic-release==${PSR_VERSION}" \
   semantic-release --noop version --print 2>"$psr_log" | tail -n 1); then
   echo "dev_version.sh: semantic-release failed:" >&2
   cat "$psr_log" >&2
