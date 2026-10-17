@@ -380,7 +380,7 @@ def build_connect_urls(
     bind_host = str(entry.options.get(OPT_BIND_HOST, DEFAULT_BIND_HOST))
     secret_path = entry.data.get(DATA_SECRET_PATH)
     if bind_host == BIND_HOST_ALL and secret_path:
-        # Direct-access URL: admin-gated surfaces only (log + Configure screen).
+        # Direct-access URL: shown only on the administrator-only Configure screen.
         # Guarded on the secret path so a missing one omits the line instead of
         # rendering a valid-looking URL without its credential segment.
         urls.extend(
