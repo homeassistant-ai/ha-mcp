@@ -212,9 +212,8 @@ class TestReleaseOnRemove:
         hass = _hass()
         data = {DATA_ADMIN_TOKEN: "user-token", "webhook_id": "w"}
 
-        remaining = await sc.async_release_credentials(hass, data)
+        await sc.async_release_credentials(hass, data)
 
-        assert remaining == {"webhook_id": "w"}
         hass.auth.async_remove_user.assert_not_awaited()
         hass.auth.async_remove_refresh_token.assert_not_called()
 
@@ -223,11 +222,10 @@ class TestReleaseOnRemove:
         rt = _rt(user=user)
         hass = _hass(users={"u1": user}, refresh_tokens={"rt1": rt})
 
-        remaining = await sc.async_release_credentials(
+        await sc.async_release_credentials(
             hass, {DATA_SERVER_USER_ID: "u1", DATA_REFRESH_TOKEN_ID: "rt1"}
         )
 
-        assert remaining == {}
         hass.auth.async_remove_refresh_token.assert_called_once_with(rt)
         hass.auth.async_remove_user.assert_awaited_once_with(user)
 

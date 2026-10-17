@@ -27,7 +27,6 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 # entry.data keys of the credential an older release provisioned.
-_PROVISIONED_KEYS = (DATA_SERVER_USER_ID, DATA_REFRESH_TOKEN_ID, DATA_ACCESS_TOKEN)
 
 # Why a token cannot run the server: the setup / repair error translation keys.
 TokenProblem = Literal["invalid_token", "token_not_long_lived", "token_not_admin"]
@@ -134,8 +133,8 @@ def _token_owner_id(hass: HomeAssistant, token: Any) -> str | None:
 
 async def async_release_credentials(
     hass: HomeAssistant, data: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Drop the credential when the entry is deleted; return the rest of ``data``.
+) -> None:
+    """Drop the credential when the entry is deleted.
 
     A supplied token belongs to the user, who revokes it in their profile.
     Only the account an older release created for itself is removed, and not
@@ -151,6 +150,3 @@ async def async_release_credentials(
         and (user := await hass.auth.async_get_user(user_id))
     ):
         await hass.auth.async_remove_user(user)
-    return {
-        k: v for k, v in data.items() if k not in (*_PROVISIONED_KEYS, DATA_ADMIN_TOKEN)
-    }

@@ -496,10 +496,11 @@ class EmbeddedServerManager:
         self._running_version = None
 
     async def async_revoke_credentials(self) -> None:
-        """Release the server's credential when the config entry is removed."""
-        remaining = await async_release_credentials(self._hass, self._entry.data)
-        if remaining != dict(self._entry.data):
-            self._hass.config_entries.async_update_entry(self._entry, data=remaining)
+        """Release the server's credential when the config entry is removed.
+
+        The entry is already out of the registry, so its data is left as is.
+        """
+        await async_release_credentials(self._hass, self._entry.data)
 
     # -- package install ---------------------------------------------------
 
