@@ -444,6 +444,28 @@ class TestZoneWrites:
         assert result["entity_id"] == "zone.office"
         assert result["updated_fields"] == ["radius"]
 
+    @pytest.mark.parametrize(
+        ("icon", "shown"),
+        [(None, "mdi:briefcase"), ("", None)],
+        ids=["left-alone", "cleared"],
+    )
+    async def test_an_update_reply_shows_the_icon_the_zone_entity_shows(
+        self, icon: str | None, shown: str | None
+    ) -> None:
+        """A new zone's icon is kept in the registry (#2643). An update that
+        leaves it alone must still report it, as ha_get_zone does, and one that
+        clears it must not bring it back."""
+        entry = {**OFFICE_ENTRY, "icon": "mdi:briefcase"}
+        client = _client(
+            {"config/entity_registry/list": {"success": True, "result": [entry]}}
+        )
+
+        result = await ZoneTools(client).ha_set_zone(
+            zone_id="office", radius=200, icon=icon
+        )
+
+        assert result["zone_data"].get("icon") == shown
+
     async def test_wait_false_skips_the_update_check(
         self, registered: AsyncMock
     ) -> None:
