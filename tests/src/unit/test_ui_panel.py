@@ -396,14 +396,19 @@ class TestProxyForwarding:
         assert session.calls[0]["data"] == b'{"tools":[]}'
         assert session.calls[0]["method"] == "POST"
 
-    async def test_upstream_client_error_maps_to_502(self):
+    async def test_upstream_client_error_maps_to_502(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         from ._embedded_stubs import ClientError
 
-        session = FakeSession(exc=ClientError("boom"))
-        hass = _running_hass(session)
+        # A pool-acquire timeout names the target URL; its path is the secret.
+        err = ClientError("Connection timeout to host http://127.0.0.1/p_s3cr3t")
+        hass = _running_hass(FakeSession(exc=err))
         request = _make_request(hass=hass, cookies=_valid_cookie(hass))
         resp = await ui_panel._ProxyView().get(request, "settings")
         assert resp.status == 502
+        assert "upstream request failed" in caplog.text
+        assert "p_s3cr3t" not in caplog.text
 
     async def test_unexpected_error_maps_to_500(self):
         session = FakeSession(exc=RuntimeError("weird"))
