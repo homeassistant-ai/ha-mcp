@@ -19,6 +19,15 @@ configuration:
     description: Wie nachdrücklich KI-Assistenten angewiesen werden, vor riskanten
       Änderungen ein vollständiges Home Assistant-Backup vorzuschlagen. Ändert nur
       diesen Hinweis; automatische Bearbeitungs-Backups haben ihre eigene Einstellung.
+  custom_instructions:
+    name: Eigene Server-Anweisungen
+    description: Text, den jeder verbundene KI-Assistent als Teil der MCP-Server-Anweisungen
+      erhält – zum Beispiel, wo Notizen zum Haushalt liegen und wann sie gelesen oder
+      aktualisiert werden sollen. Auch Teil des Prompts von Home-Assistant-Sprachassistenten
+      (Assist), die dieses Toolset nutzen. Gedacht für Hinweise, die alle deine Clients
+      auf einmal erreichen sollen; halte ihn kurz und ohne Geheimnisse. Leer lassen,
+      um nichts hinzuzufügen. Erfordert einen Neustart; Clients sehen die Änderung
+      nach dem erneuten Verbinden.
   enable_tool_search:
     name: Tool-Suche aktivieren
     description: 'Ersetze den vollständigen Tool-Katalog durch eine suchend basierte

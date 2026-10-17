@@ -40,6 +40,29 @@ reference catalog for hypothetical differently named future fields. Preserve
 the complete native preferences regardless, and do not turn ordinary strings
 that happen to match statistic IDs into asserted references.
 
+## Frontend and custom-card semantics
+
+Dashboard configuration has no Core schema. Its meaning lives in the
+installed frontend's card implementations and editors, and in each loaded
+custom card. The owner of a key such as `card`, `cards` or `styles` is the
+card that reads it; `custom:button-card` keeps CSS lists under `styles.card`,
+and a stack keeps child cards under `cards`.
+
+- Read card forms, field types and validators from the installed frontend
+  (`custom_components/ha_mcp_tools/card_definitions.py`) and card-level
+  errors from the loaded custom card itself. Where neither can be inspected
+  (no component, a card that needs browser APIs), say that discovery is
+  incomplete.
+- Nested-card discovery for search and checks is a heuristic over the keys
+  HA's own container cards use. Document it as discovery; never present it
+  as a frontend contract, and never add per-card exceptions to it.
+- A search or save warning may describe only what HA-MCP could not read
+  ("not searched as cards") or what the frontend or the card reported.
+  Never call a configuration malformed, misshapen or in need of repair
+  because it did not fit a handwritten shape rule (issue #2729).
+- Test against real frontend and custom-card behavior, including valid
+  configurations that reuse container names for ordinary options.
+
 ## Preserve independent safeguards
 
 Keep read-only gates, optimistic hashes, duplicate guards, query bounds,

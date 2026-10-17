@@ -414,6 +414,7 @@ class TestLifespanWiring:
             settings.mcp_server_name = "test"
             settings.mcp_server_version = "0.0.1"
             settings.read_only_mode = False
+            settings.custom_instructions = ""
             server = HomeAssistantSmartMCPServer()
 
         assert server.mcp._lifespan is server_lifespan.server_lifespan

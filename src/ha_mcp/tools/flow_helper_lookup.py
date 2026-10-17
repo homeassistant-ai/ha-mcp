@@ -20,6 +20,30 @@ YAML_HELPER_REMOVAL = (
 )
 YAML_HELPER_SUGGESTION = "Edit the YAML file and reload the relevant integration."
 
+
+def not_stored_reply(
+    helper_type: str, unique_id: str, target: str
+) -> tuple[ErrorCode, str, str]:
+    """The error when Core holds no stored item to delete.
+
+    Core's storage collection holds only UI-created items, so another helper
+    is YAML-configured or already deleted. Tags have no YAML form, so a tag
+    id with no stored item names no tag.
+    """
+    if helper_type == "tag":
+        return (
+            ErrorCode.ENTITY_NOT_FOUND,
+            f"Home Assistant has no tag with the id '{unique_id}'.",
+            "Find the tag's id or its entity_id (tag.<name>) with ha_search().",
+        )
+    return (
+        ErrorCode.RESOURCE_NOT_FOUND,
+        f"Home Assistant has no stored {helper_type} '{unique_id}': {target} is "
+        f"YAML-configured or was already deleted. {YAML_HELPER_REMOVAL}",
+        YAML_HELPER_SUGGESTION,
+    )
+
+
 FlowLookupReason = Literal[
     "ok",
     "wrong_helper_type",

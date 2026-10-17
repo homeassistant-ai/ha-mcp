@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "Bas-URL för skärmbildsmotorn. Lämna tomt för automatisk upptäckt av Supervisor. Tillämpas omedelbart.",
     "advanced.enable_websocket.label": "Aktivera WebSocket",
     "advanced.enable_websocket.help": "Övervakning av WebSocket-tillstånd. Inaktivering återgår till avsökning (polling) och försämrar många verktyg.",
+    "advanced.custom_instructions.label": "Anpassade serverinstruktioner",
+    "advanced.custom_instructions.help": "Text som skickas till varje AI-assistent som ansluter, som en del av instruktionerna för MCP-servern – till exempel var anteckningar om hushållet förvaras och när de ska läsas eller uppdateras. Också en del av prompten för Home Assistant-konversationsagenter (Assist) som använder denna verktygsuppsättning. Använd den för vägledning som bör nå alla dina klienter samtidigt; håll den kort och fri från hemligheter. Lämna tom för att inte lägga till något. Kräver omstart; klienter ser ändringen när de ansluter igen.",
     "advanced.enabled_tool_modules.label": "Aktiverade verktygsmoduler",
     "advanced.enabled_tool_modules.help": "Kommaseparerade modulnamn, eller 'all'.",
     "advanced.enable_dashboard_partial_tools.label": "Verktyg för partiell uppdatering av instrumentpanel",

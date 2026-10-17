@@ -18,6 +18,7 @@ import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, NamedTuple, NotRequired, TypedDict
 
+from ..server_tool_text import SKILL_TOOL_NAME
 from ..transforms import categorize_capability
 
 if TYPE_CHECKING:
@@ -116,7 +117,7 @@ MANDATORY_TOOLS: set[str] = {
 # _save_feature_flags) so each direction of the conflict gets an
 # actionable error.
 BPS_MANDATORY_TOOLS: set[str] = {
-    "ha_get_skill_guide",
+    SKILL_TOOL_NAME,
 }
 
 

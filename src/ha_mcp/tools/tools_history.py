@@ -54,11 +54,13 @@ from .tool_hints import read_only_hints
 logger = logging.getLogger(__name__)
 
 _RELATIVE_TIME_UNIT_SECONDS = {
+    "min": 60,
     "h": 60 * 60,
     "d": 24 * 60 * 60,
     "w": 7 * 24 * 60 * 60,
     "m": 30 * 24 * 60 * 60,
 }
+_RELATIVE_FORMAT_HINT = "Relative format: '30min', '24h', '7d', '2w', '1m' (= 30 days)"
 
 
 def parse_relative_time(
@@ -67,24 +69,21 @@ def parse_relative_time(
     *,
     reference_time: datetime | None = None,
 ) -> datetime:
-    """
-    Parse a time string that can be either ISO format or relative (e.g., '24h', '7d').
+    """Parse a time string that can be either ISO format or relative (e.g., '24h', '7d').
 
     Args:
-        time_str: Time string in ISO format or relative format (e.g., "24h", "7d", "2w", "1m" where 1m = 30 days)
+        time_str: Time string in ISO format or relative format (e.g., "30min", "24h", "7d", "2w", "1m" (= 30 days))
         default_hours: Default hours to go back if time_str is None
         reference_time: Reference datetime for relative values and defaults.
 
     Returns:
-        A datetime with the parsed value's timezone, or ``reference_time``'s
-        timezone for relative values.
+        A datetime in the parsed value's timezone; relative values use ``reference_time``'s.
     """
     now = reference_time or datetime.now(UTC)
     if time_str is None:
         return now - timedelta(hours=default_hours)
 
-    # Check for relative time format
-    relative_pattern = r"^(\d+)([hdwm])$"
+    relative_pattern = r"^(\d+)(min|[hdwm])$"
     match = re.match(relative_pattern, time_str.lower().strip())
 
     if match:
@@ -97,19 +96,16 @@ def parse_relative_time(
                 f"Invalid time format: {time_str} is out of range"
             ) from exc
 
-    # Try parsing as ISO format
     try:
-        # Handle various ISO formats
         if time_str.endswith("Z"):
             time_str = time_str[:-1] + "+00:00"
         dt = datetime.fromisoformat(time_str)
-        # Ensure timezone awareness
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
         return dt
     except (ValueError, OverflowError) as e:
         raise ValueError(
-            f"Invalid time format: {time_str}. Use ISO format or relative (e.g., '24h', '7d', '2w', '1m')"
+            f"Invalid time format: {time_str}. Use ISO format or relative (e.g., '30min', '24h', '7d', '2w', '1m' (= 30 days))"
         ) from e
 
 
@@ -226,14 +222,14 @@ class HistoryTools:
         start_time: Annotated[
             str | None,
             Field(
-                description="Start time: ISO datetime or relative (e.g., '24h', '7d', '30d'). Default: 24h ago for history, 30d ago for statistics",
+                description="Start time: ISO datetime or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
                 default=None,
             ),
         ] = None,
         end_time: Annotated[
             str | None,
             Field(
-                description="End time: ISO datetime. Default: now",
+                description="End time: same formats as start_time. Omit it to end at the current time",
                 default=None,
             ),
         ] = None,
@@ -577,9 +573,10 @@ def _parse_time_range(
     start_time: str | None,
     end_time: str | None,
     default_hours: int,
+    reference_time: datetime | None = None,
 ) -> tuple[datetime, datetime]:
     """Parse start_time and end_time into datetime objects."""
-    reference_time = datetime.now(UTC)
+    reference_time = reference_time or datetime.now(UTC)
     try:
         start_dt = parse_relative_time(
             start_time,
@@ -593,8 +590,8 @@ def _parse_time_range(
                 str(e),
                 context={"parameter": "start_time"},
                 suggestions=[
-                    "Use ISO format: '2025-01-25T00:00:00Z'",
-                    "Use relative format: '24h', '7d', '2w', '1m'",
+                    "ISO format: '2025-01-25T00:00:00Z'",
+                    _RELATIVE_FORMAT_HINT,
                 ],
             )
         )
@@ -612,7 +609,10 @@ def _parse_time_range(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     str(e),
                     context={"parameter": "end_time"},
-                    suggestions=["Use ISO format: '2025-01-26T00:00:00Z'"],
+                    suggestions=[
+                        "ISO format: '2025-01-26T00:00:00Z'",
+                        _RELATIVE_FORMAT_HINT,
+                    ],
                 )
             )
     else:

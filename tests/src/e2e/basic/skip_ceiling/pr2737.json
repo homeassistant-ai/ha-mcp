@@ -1,0 +1,12 @@
+{
+  "reason": "#2737 adds two external_only auto-backup tests (tests/src/e2e/workflows/auto_backup/test_dashboard_resource_restore.py and test_dashboard_delete_restore.py): restoring a deleted dashboard resource or dashboard re-creates it. They need the in-process server's auto-backup env, so they skip at collection on every lane whose server runs out of process.",
+  "deltas": {
+    "haos_stdio": 2,
+    "haos_inaddon": 2,
+    "haos_inaddon_no_tools": 2,
+    "embedded": 2,
+    "embedded_no_tools": 2,
+    "haos_embedded": 2,
+    "haos_embedded_no_tools": 2
+  }
+}

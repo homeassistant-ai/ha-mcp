@@ -19,6 +19,7 @@ from ha_mcp.config_settings import Settings
 
 __all__ = [
     "ADDON_SYNCED_ADVANCED_FIELDS",
+    "ADVANCED_MULTILINE",
     "ADVANCED_RESTART_REQUIRED",
     "ADVANCED_SETTINGS_FIELDS",
     "BACKUP_OVERRIDE_FIELDS",
@@ -243,6 +244,11 @@ _ADVANCED_SETTINGS_CHOICES: dict[str, tuple[str, ...]] = {
     for name, _field, setting in _settings_of("advanced")
     if setting.choices is not None
 }
+
+# Advanced string fields edited as multi-line text (renders as <textarea>).
+ADVANCED_MULTILINE: frozenset[str] = frozenset(
+    name for name, _field, setting in _settings_of("advanced") if setting.multiline
+)
 
 # Advanced fields that take effect only after a restart of the MCP server.
 ADVANCED_RESTART_REQUIRED: frozenset[str] = frozenset(

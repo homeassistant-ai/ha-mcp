@@ -756,6 +756,52 @@ async def config_entry_of_domain(
     return config_entry
 
 
+COMPONENT_DOMAIN = "ha_mcp_tools"
+
+COMPONENT_ENTRY_SUGGESTIONS: tuple[str, ...] = (
+    "Manage it in the Home Assistant UI: Settings > Devices & services > "
+    + "HA-MCP Custom Component (Configure for options; the entry's menu for "
+    + "enable/disable, delete and debug logging).",
+    "Server settings and updates: with developer mode on, "
+    + "ha_dev_manage_settings / ha_dev_manage_server.",
+)
+
+
+def is_component_domain(domain: object) -> bool:
+    """Whether ``domain`` names ha-mcp's own ``ha_mcp_tools`` integration.
+
+    Core's integration lookup (config flows, log levels) is case-sensitive
+    today, so there a mixed-case or padded domain fails downstream anyway and
+    the normalisation is defence in depth. Core's service registry does
+    lowercase a domain, which is why ha_call_service's guard needs it.
+    """
+    return isinstance(domain, str) and domain.strip().lower() == COMPONENT_DOMAIN
+
+
+def refuse_component_entry(
+    domain: object, *, action: str, entry_id: str | None = None
+) -> None:
+    """Refuse ``action`` on a config entry of ha-mcp's own custom component.
+
+    Writing one of those entries reloads or alters the server answering the
+    call. The HA UI owns them, and the ``ha_dev_*`` tools defer writes that
+    would reload the running server (embedded mode), so the generic
+    integration tools must not become a bypass.
+    """
+    if not is_component_domain(domain):
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Cannot {action} ha-mcp's own '{COMPONENT_DOMAIN}' integration "
+            "with this tool: its config entries are the server's own and are "
+            "not managed through the generic integration tools.",
+            suggestions=list(COMPONENT_ENTRY_SUGGESTIONS),
+            context={"entry_id": entry_id, "domain": domain},
+        )
+    )
+
+
 async def _update_config_entry_options(
     client: Any,
     entry_id: str,
@@ -767,6 +813,9 @@ async def _update_config_entry_options(
     _reject_redaction_sentinels(config_dict)
     config_entry = await config_entry_of_domain(client, entry_id, expected_domain)
     actual_domain = config_entry.get("domain")
+    refuse_component_entry(
+        actual_domain, action="change the options of", entry_id=entry_id
+    )
 
     flow_result = await client.start_options_flow(entry_id)
     flow_id = flow_result.get("flow_id")

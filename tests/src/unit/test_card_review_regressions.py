@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from .test_card_definitions import _definitions, cc, cd, describe_mod
+from .test_card_definitions import _definitions, cc, cd, dcw, describe_mod
 from .test_card_definitions import component as component
 
 
@@ -248,7 +248,7 @@ async def test_builtin_describe_does_not_load_custom_resources(monkeypatch):
     monkeypatch.setattr(cd, "async_get_custom_cards", custom)
     hass = MagicMock()
     hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *args: fn(*args))
-    result = await cd.command_specs(vol)[0][2](hass, {"card_type": "tile"})
+    result = await dcw.command_specs(vol)[0][2](hass, {"card_type": "tile"})
     assert result["result"]["success"]
     custom.assert_not_awaited()
 
@@ -495,4 +495,4 @@ def test_card_index_keeps_inherited_cards_but_excludes_dialogs():
         return_value={"value": "class Card{setConfig(t){this.config=t}}"}
     )
     assert definitions._is_card("shopping-list")
-    definitions._engine.assert_called_once_with("source", {"id": "123"})
+    definitions._engine.assert_called_once_with("source", {"id": "123"}, run_gc=False)

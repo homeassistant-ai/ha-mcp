@@ -86,6 +86,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
+    ws_failure_code,
 )
 from .tool_hints import read_only_hints, write_hints
 
@@ -170,7 +171,8 @@ async def _get_dashboard_config_internal(
     callers can distinguish confirmed absence from an unverifiable read.
     """
     get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
-    if url_path:
+    # No url_path is Core's default: its ``lovelace`` item, else the default store.
+    if url_path and url_path != "lovelace":
         get_data["url_path"] = url_path
 
     response = await client.send_websocket_message(get_data)
@@ -233,19 +235,16 @@ def _entity_matches(pattern: str, candidate: object) -> bool:
     return re.fullmatch(regex, candidate) is not None
 
 
-# Card slots — keys whose typed values are card configs (issue #1599). They are
-# recognised at ANY depth inside a card, because custom cards file sub-cards
-# under keys of their own (``groups[].cards[].card``, ``tabs[].card``; #2694):
-#   - ``cards`` (list): stacks, grids and custom wrappers.
-#   - ``card`` (dict): conditional and wrapper cards.
-#   - ``custom_fields`` / ``states`` (name -> card map): ``custom:button-card``
-#     field cards and ``custom:state-switch`` state cards.
-# Every other dict/list is descended for further slots and string leaves, but a
-# typed dict outside a slot is never a card: tile ``features`` and view
-# ``conditions`` also carry ``type`` and would false-match as cards.
+# Card slots (issue #1599) are a discovery heuristic, not an HA contract: HA has
+# no nested-card map, and each card decides what its keys mean. These are the
+# keys HA's stack/conditional/entity-filter cards and common custom cards use,
+# recognised at any depth (``groups[].cards[].card``; #2694): ``cards`` (list),
+# ``card`` (dict or list), and ``custom_fields`` / ``states`` (name -> card
+# map). A typed dict in a slot is walked as a card; anything else, a typed dict
+# elsewhere or a slot key in another shape, is the owning card's option:
+# ``query`` reads its text, but entity_id/card_type/heading do not match it.
 _NESTED_CARDS_KEY = "cards"
 _NESTED_CARD_KEY = "card"
-_CSS_STYLES = re.compile(r"(\.state\[\d+\])?\.styles")  # custom:button-card CSS lists
 _NESTED_CUSTOM_FIELDS_KEY = "custom_fields"
 _NESTED_STATES_KEY = "states"
 # Keys holding non-card children (picture-elements ``elements``). Their text is
@@ -356,22 +355,21 @@ class _SearchGaps:
 
     truncation: list[str] = field(default_factory=list)
     uncovered: list[str] = field(default_factory=list)
-    malformed: list[str] = field(default_factory=list)
-    misshapen: list[str] = field(default_factory=list)
+    unread: list[str] = field(default_factory=list)
 
-    def note_malformed(self, value: Any, path: str) -> None:
-        """Record container key ``path`` when present (not ``None``) in the wrong shape.
+    def note_unread(self, value: Any, path: str) -> None:
+        """Record container key ``path`` when present (not ``None``) in a shape
+        the walk does not read.
 
-        A list entry in the wrong shape, ``None`` included, is recorded directly.
+        Such a list entry, ``None`` included, is recorded directly.
         """
         if value is not None:
-            self.malformed.append(path)
+            self.unread.append(path)
 
     def extend(self, other: "_SearchGaps", prefix: str) -> None:
         self.truncation.extend(prefix + p for p in other.truncation)
         self.uncovered.extend(prefix + p for p in other.uncovered)
-        self.malformed.extend(prefix + p for p in other.malformed)
-        self.misshapen.extend(prefix + p for p in other.misshapen)
+        self.unread.extend(prefix + p for p in other.unread)
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,7 +404,6 @@ class _CardSplit:
     leaves: list[tuple[str, str]] = field(default_factory=list)
     cards: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
     cut: list[str] = field(default_factory=list)
-    misshapen: list[str] = field(default_factory=list)
 
 
 def _split_card_node(
@@ -452,8 +449,6 @@ def _split_card_entry(
     child_jq, child_py = f"{path[0]}{_jq_key(key)}", f"{path[1]}{_py_key(key)}"
     slots = _card_slots(key, value, child_jq)
     if slots is None:
-        if _is_swapped_card_container(key, value, path[0]):
-            out.misshapen.append(child_jq)
         _split_card_node(value, (child_jq, child_py), key, out, depth)
         return
     for jq_seg, py_seg, leaf_key, item in slots:
@@ -464,18 +459,6 @@ def _split_card_entry(
             _split_card_node(item, item_path, leaf_key, out, depth)
 
 
-def _is_swapped_card_container(key: str, value: Any, parent_jq: str) -> bool:
-    """``card`` or ``custom_fields`` holding a list, or ``cards`` a mapping.
-
-    Other shapes are options read as text (alarm-panel ``states`` modes), as is a
-    list under the card's own ``styles`` or ``state[].styles`` (``_CSS_STYLES``).
-    """
-    if key == _NESTED_CARDS_KEY:
-        return isinstance(value, dict)
-    swapped = key in (_NESTED_CARD_KEY, _NESTED_CUSTOM_FIELDS_KEY)
-    return swapped and isinstance(value, list) and not _CSS_STYLES.fullmatch(parent_jq)
-
-
 def _card_slots(
     key: str, value: Any, jq: str
 ) -> list[tuple[str, str, str, Any]] | None:
@@ -483,7 +466,7 @@ def _card_slots(
 
     ``None`` when ``key: value`` holds no card slots.
     """
-    if key == _NESTED_CARDS_KEY and isinstance(value, list):
+    if key in (_NESTED_CARDS_KEY, _NESTED_CARD_KEY) and isinstance(value, list):
         return [(f"[{i}]", f"[{i}]", key, item) for i, item in enumerate(value)]
     if key == _NESTED_CARD_KEY and isinstance(value, dict):
         return [("", "", key, value)]
@@ -523,7 +506,7 @@ def _walk_card(
     """
     if not isinstance(card, dict):
         if frame.criteria.can_match_cards():
-            frame.gaps.malformed.append(jq_prefix)
+            frame.gaps.unread.append(jq_prefix)
         return []
     if frame.depth > _MAX_CARD_DEPTH:
         logger.warning(
@@ -537,8 +520,6 @@ def _walk_card(
     split = _CardSplit()
     _split_card_node(card, ("", ""), "", split)
     frame.gaps.truncation.extend(jq_prefix + cut for cut in split.cut)
-    if frame.criteria.can_match_cards():
-        frame.gaps.misshapen.extend(jq_prefix + path for path in split.misshapen)
     matches: list[dict[str, Any]] = []
     if "type" in card:
         match = _card_search_match(card, split.leaves, jq_prefix, python_prefix, frame)
@@ -548,7 +529,7 @@ def _walk_card(
     elif frame.criteria.can_match_cards():
         # Only top-level and header entries reach here untyped (nested ones are
         # leaves of their parent); the frontend renders them as error cards.
-        frame.gaps.malformed.append(jq_prefix)
+        frame.gaps.unread.append(jq_prefix)
     child_frame = frame.descend()
     for jq_suffix, py_suffix, child in split.cards:
         matches.extend(
@@ -624,7 +605,7 @@ def _find_badge_matches_in_view(
 
     Badges are entity references, so they answer entity_id and text searches,
     and ``card_type='badge'`` alone lists every well-formed badge (an entity id
-    or a mapping); malformed entries are recorded in ``frame.gaps``.
+    or a mapping); entries in any other shape are recorded in ``frame.gaps``.
     """
     view_idx = frame.view_index
     criteria = frame.criteria
@@ -632,14 +613,14 @@ def _find_badge_matches_in_view(
     if not criteria.can_match_badges():
         return []
     if not isinstance(badges, list):
-        frame.gaps.note_malformed(badges, f".views[{view_idx}].badges")
+        frame.gaps.note_unread(badges, f".views[{view_idx}].badges")
         return []
     matches: list[dict[str, Any]] = []
     for badge_idx, badge in enumerate(badges):
         is_dict_badge = isinstance(badge, dict)
         is_entity_badge = isinstance(badge, str) and bool(badge.strip())
         if not (is_dict_badge or is_entity_badge):
-            frame.gaps.malformed.append(f".views[{view_idx}].badges[{badge_idx}]")
+            frame.gaps.unread.append(f".views[{view_idx}].badges[{badge_idx}]")
             continue
         if criteria.entity_id is not None and not _badge_matches(
             badge, criteria.entity_id
@@ -650,7 +631,6 @@ def _find_badge_matches_in_view(
         if criteria.query is not None:
             _split_badge(badge, split)
             frame.gaps.truncation.extend(badge_jq + cut for cut in split.cut)
-            frame.gaps.misshapen.extend(badge_jq + path for path in split.misshapen)
         hits = _query_hits(split.leaves, criteria.query_lower)
         if hits == []:
             continue
@@ -687,7 +667,7 @@ def _find_header_card_matches(
         return []
     header = view.get("header")
     if not isinstance(header, dict):
-        frame.gaps.note_malformed(header, f".views[{view_idx}].header")
+        frame.gaps.note_unread(header, f".views[{view_idx}].header")
         return []
     if header.get("card") is None:
         return []
@@ -731,7 +711,8 @@ def _view_card_lists(
 ) -> list[tuple[str, str, list[Any], int | None]]:
     """``(jq path, python path, cards, section index)`` per card list in a view.
 
-    A container present in the wrong shape is recorded in ``frame.gaps``.
+    A container present in a shape the walk does not read is recorded in
+    ``frame.gaps``.
     """
     view_idx = frame.view_index
     lists: list[tuple[str, str, list[Any], int | None]] = []
@@ -746,19 +727,19 @@ def _view_card_lists(
             )
         )
     else:
-        frame.gaps.note_malformed(cards, f".views[{view_idx}].cards")
+        frame.gaps.note_unread(cards, f".views[{view_idx}].cards")
     sections = view.get("sections")
     if not isinstance(sections, list):
-        frame.gaps.note_malformed(sections, f".views[{view_idx}].sections")
+        frame.gaps.note_unread(sections, f".views[{view_idx}].sections")
         return lists
     for section_idx, section in enumerate(sections):
         path = f".views[{view_idx}].sections[{section_idx}]"
         if not isinstance(section, dict):
-            frame.gaps.malformed.append(path)
+            frame.gaps.unread.append(path)
             continue
         section_cards = section.get("cards")
         if not isinstance(section_cards, list):
-            frame.gaps.note_malformed(section_cards, f"{path}.cards")
+            frame.gaps.note_unread(section_cards, f"{path}.cards")
             continue
         lists.append(
             (
@@ -788,8 +769,9 @@ def _find_cards_matching(
     ``config`` in ``ha_config_set_dashboard(python_transform)``) except a
     bare-string badge, which is not subscript-assignable. What the walk
     could not search is recorded in ``gaps``: subtrees past the depth bound,
-    cards holding one of ``_NON_CARD_CHILD_KEYS``, and entries in the wrong
-    shape (a view, section, card list, card or badge that cannot be read).
+    cards holding one of ``_NON_CARD_CHILD_KEYS``, and entries the walk does
+    not read (an untyped card, or a view, section, card list or badge in
+    another shape).
     Empty criteria match everything, so callers must reject them first (the
     search entry point, ``_get_dashboard_search_mode``, does).
     """
@@ -797,12 +779,12 @@ def _find_cards_matching(
     if "strategy" in config:
         return []  # Strategy dashboards hold no stored cards
     if not isinstance(views, list):
-        gaps.note_malformed(views, ".views")
+        gaps.note_unread(views, ".views")
         return []
     matches: list[dict[str, Any]] = []
     for view_idx, view in enumerate(views):
         if not isinstance(view, dict):
-            gaps.malformed.append(f".views[{view_idx}]")
+            gaps.unread.append(f".views[{view_idx}]")
             continue
         frame = _CardWalkFrame(
             criteria,
@@ -1093,6 +1075,44 @@ def _raise_dashboard_registry_read_error(*, action: str, url_path: str) -> NoRet
     )
 
 
+_DASHBOARD_LIST_SUGGESTION = (
+    "Use ha_config_get_dashboard(list_only=True) to see available dashboards"
+)
+
+
+def _raise_unresolved_dashboard_delete(
+    url_path: str, dashboards: list[dict[str, Any]]
+) -> NoReturn:
+    """Raise the delete error for an identifier with no collection item."""
+    # YAML rows carry no collection id, so ``_resolve_dashboard`` skips them.
+    if any(
+        d.get("url_path") == url_path and d.get("mode") == "yaml" for d in dashboards
+    ):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Dashboard '{url_path}' is a YAML-mode dashboard",
+                details="It is defined in configuration.yaml; the "
+                "Home Assistant API cannot delete it.",
+                context={"action": "delete", "url_path": url_path},
+            )
+        )
+    available_ids = [d.get("url_path") for d in dashboards[:10] if d.get("url_path")]
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            f"Dashboard '{url_path}' not found",
+            details=f"No dashboard found with URL path or internal ID '{url_path}'.",
+            suggestions=[_DASHBOARD_LIST_SUGGESTION],
+            context={
+                "action": "delete",
+                "url_path": url_path,
+                "available_dashboard_ids": available_ids,
+            },
+        )
+    )
+
+
 async def _resolve_dashboard(
     client: Any, identifier: str
 ) -> tuple[dict[str, str] | None, list[dict[str, Any]] | None]:
@@ -1118,14 +1138,14 @@ async def _resolve_dashboard(
       ``_LAZY_RESOLVE_TRIGGER`` — the round-trip is gated by the caller.
       Discards ``dashboards``.
     - **Eager pre-resolve** (``_resolve_set_dashboard_url_path``, called
-      from ``ha_config_set_dashboard``): invoked before hyphen validation
-      so callers may pass either form; gated on a cheap heuristic ("no
-      hyphen, not 'lovelace'") rather than an error from HA. Reuses
+      from ``ha_config_set_dashboard``): lets callers pass either form;
+      gated on a cheap heuristic ("no hyphen, not 'lovelace'") rather than
+      an error from HA. Reuses
       ``dashboards`` for the existence-check in ``_lookup_existing_dashboards``
       (threaded through as ``pre_fetched_dashboards``).
     - **Delete** (``ha_config_delete_dashboard``): resolves either form
-      to the registry id before issuing the delete. Discards
-      ``dashboards``.
+      to the registry id before issuing the delete; ``dashboards`` names
+      a YAML-mode match or the available paths on a miss.
     """
     dashboards = await fetch_dashboards_list(client)
     if dashboards is None:
@@ -1562,7 +1582,7 @@ def _search_warnings(
     """Warnings that keep an incomplete search from reading as complete.
 
     Disclosure keys off the *presence* of a match cap, a depth-truncated
-    subtree, unsearched picture-elements or a malformed entry, not off a
+    subtree, unsearched picture-elements or an unread entry, not off a
     0-match. ``warn_uncovered`` gates the picture-elements warning.
     """
     uncovered = gaps.uncovered if warn_uncovered else []
@@ -1585,18 +1605,11 @@ def _search_warnings(
             f"picture-elements 'elements', present at: {locations}. Use query= "
             "to search their text, or fetch the full config to inspect them."
         )
-    if gaps.malformed:
+    if gaps.unread:
         warnings.append(
-            "Skipped entries that are not the expected list, mapping or entity "
-            f"id, so they were not searched, at: {', '.join(gaps.malformed)}. "
-            "Fetch the config to repair them."
-        )
-    if gaps.misshapen:
-        warnings.append(
-            "Read as text only, since a card slot holds the wrong kind of "
-            "container, so entity_id, card_type and heading do not match cards "
-            f"inside, at: {', '.join(gaps.misshapen)}. Fetch the config to repair "
-            "them."
+            "Not searched as cards or badges (no 'type' key, or an entry in a "
+            f"shape the search does not read): {', '.join(gaps.unread)}. Fetch "
+            "the config to see them."
         )
     return warnings
 
@@ -1731,7 +1744,10 @@ class DashboardConfigTools:
           omitted, every storage dashboard. View badges answer entity_id and
           query, and heading excludes them.
           Cards nested at any depth count, including
-          custom cards' own keys such as groups[].cards[].card. Each match has a
+          custom cards' own keys such as groups[].cards[].card. Nesting is
+          found heuristically, under the keys cards, card, custom_fields and
+          states; a card under any other key is read only as its parent's
+          text, by query. Each match has a
           jq_path and a python_path to append to `config` in
           ha_config_set_dashboard(python_transform=...), e.g.
           f'config{m["python_path"]}["icon"] = "mdi:x"'. Each match carries its
@@ -1897,8 +1913,8 @@ class DashboardConfigTools:
         # Lazy resolver fallback: same gate as get-mode. If the caller passed
         # an internal id where url_path is expected, HA rejects with the
         # trigger substring; resolve and retry once. (set_dashboard handles
-        # this via an eager pre-resolver before the hyphen check, so it has
-        # no equivalent fallback here.)
+        # this via an eager pre-resolver, so it has no equivalent fallback
+        # here.)
         search_resolved_from: str | None = None
         if lovelace_url_path is not None:
             new_url_path, response = await _lazy_resolve_and_retry(
@@ -2458,7 +2474,7 @@ class DashboardConfigTools:
             Field(
                 description="Dashboard URL path (e.g., 'my-dashboard'). "
                 "Use 'default' or 'lovelace' for the default dashboard. "
-                "New dashboards must use a hyphenated path."
+                "Home Assistant requires a hyphen in new dashboard paths."
             ),
         ],
         config: Annotated[
@@ -2500,7 +2516,8 @@ class DashboardConfigTools:
             str | None,
             Field(
                 description="MDI icon name (e.g., 'mdi:home', 'mdi:cellphone'). "
-                "Defaults to 'mdi:view-dashboard'"
+                "Omit to store none (the sidebar then shows mdi:view-dashboard); "
+                "'' clears a stored icon."
             ),
         ] = None,
         require_admin: Annotated[
@@ -2701,12 +2718,6 @@ class DashboardConfigTools:
             error = exception_to_structured_error(
                 e,
                 context={"action": action, "url_path": url_path},
-                suggestions=[
-                    "Ensure url_path is unique (not already in use for different dashboard type)",
-                    "New dashboards require a hyphenated url_path",
-                    "Check that you have admin permissions",
-                    "Verify config format is valid Lovelace JSON",
-                ],
                 raise_error=False,
             )
             augment_error_dict_with_skill_content(error, bp_warnings=None)
@@ -2716,12 +2727,10 @@ class DashboardConfigTools:
     async def _resolve_set_dashboard_url_path(
         self, url_path: str, *, action: str = "set"
     ) -> tuple[str, str | None, list[dict[str, Any]] | None]:
-        """Validate the set target and canonicalize supported dashboard identifiers.
+        """Canonicalize supported dashboard identifiers for the set tool.
 
-        Hyphenless input is allowed only when it exactly matches an existing
-        dashboard's ``url_path`` (plus the built-in ``lovelace`` alias case).
-        New dashboard paths must contain a hyphen. An internal-ID-only match may
-        still canonicalize to a different, hyphenated existing ``url_path``.
+        Home Assistant itself rejects a new hyphenless ``url_path`` on create;
+        this only maps HA-MCP's aliases onto an existing dashboard.
 
         Returns ``(url_path, pre_resolved_from, pre_fetched_dashboards)``:
         ``url_path`` is canonicalized (``"default"`` -> ``"lovelace"``, and an
@@ -2734,10 +2743,8 @@ class DashboardConfigTools:
         """
         # ``url_path`` is required (always non-None). Reject empty/
         # whitespace up-front so the caller gets a structured parameter
-        # error instead of a misleading downstream failure (the
-        # subsequent "default" alias, pre-resolver, and hyphen check
-        # all assume a usable string). Extension of the #1312
-        # validate_identifier_not_empty pattern to the dashboards
+        # error instead of a misleading downstream failure. Extension of
+        # the #1312 validate_identifier_not_empty pattern to the dashboards
         # family per #1313.
         validate_identifier_not_empty(
             url_path,
@@ -2753,58 +2760,25 @@ class DashboardConfigTools:
         if url_path == "default":
             url_path = "lovelace"
 
-        # Pre-resolve a hyphenless dashboard identifier before enforcing the
-        # exact-url-path exception below. Internal-ID support is preserved when
-        # it canonicalizes to a hyphenated existing path, but an ID-only match
-        # cannot exempt a different hyphenless path from validation.
-        #
-        # This is still a create-or-update API: a caller intending to create a
-        # dashboard can target an existing one, either by exact url_path or by a
-        # supported internal-ID rewrite. ``action`` reports create vs update;
-        # ``resolved_from`` additionally reports only the latter rewrite.
+        # A hyphenless identifier may be an internal ID (``my_dash``) of an
+        # existing dashboard (``my-dash``). This is still a create-or-update
+        # API: ``action`` reports create vs update; ``resolved_from``
+        # additionally reports only this rewrite.
         pre_resolved_from: str | None = None
-        exact_url_path_exists = False
-        # When the pre-resolver fires and finds a match, ``_resolve_dashboard``
-        # has already fetched ``lovelace/dashboards/list``. Capture that list
-        # so the existence-check site below can reuse it instead of paying
-        # a second round-trip.
         pre_fetched_dashboards: list[dict[str, Any]] | None = None
         if "-" not in url_path and url_path != "lovelace":
             resolved, dashboards = await _resolve_dashboard(self._client, url_path)
             if dashboards is None:
                 _raise_dashboard_registry_read_error(action=action, url_path=url_path)
-            if resolved is not None and resolved["url_path"]:
-                exact_url_path_exists = resolved["url_path"] == url_path
-                pre_fetched_dashboards = dashboards
-                if not exact_url_path_exists and "-" in resolved["url_path"]:
-                    original_url_path = url_path
-                    url_path = resolved["url_path"]
-                    pre_resolved_from = original_url_path
-                    logger.info(
-                        "ha_config_set_dashboard pre-resolver mapped %r -> %r",
-                        original_url_path,
-                        url_path,
-                    )
-
-        # Existing exact url_path values may predate HA's creation rule and must
-        # remain valid update targets unchanged.
-        # The built-in "lovelace" dashboard is exempt since it already exists
-        if not exact_url_path_exists and "-" not in url_path and url_path != "lovelace":
-            suggestions = [
-                "Use format like 'my-dashboard' or 'mobile-view'",
-                "Use 'lovelace' or 'default' to edit the default dashboard",
-            ]
-            hyphenated_url_path = url_path.replace("_", "-")
-            if hyphenated_url_path != url_path:
-                suggestions.insert(0, f"Try '{hyphenated_url_path}' instead")
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "url_path must contain a hyphen (-)",
-                    suggestions=suggestions,
-                    context={"action": action, "url_path": url_path},
+            pre_fetched_dashboards = dashboards
+            if resolved is not None and resolved["url_path"] != url_path:
+                pre_resolved_from = url_path
+                url_path = resolved["url_path"]
+                logger.info(
+                    "ha_config_set_dashboard pre-resolver mapped %r -> %r",
+                    pre_resolved_from,
+                    url_path,
                 )
-            )
 
         return url_path, pre_resolved_from, pre_fetched_dashboards
 
@@ -3155,26 +3129,36 @@ class DashboardConfigTools:
         show_in_sidebar: bool | None,
     ) -> str | None:
         """Create a new storage-mode dashboard and return its dashboard_id."""
-        dashboard_title = title or url_path.replace("-", " ").title()
+        # Core's create schema supplies require_admin/show_in_sidebar defaults.
         create_data: dict[str, Any] = {
             "type": "lovelace/dashboards/create",
             "url_path": url_path,
-            "title": dashboard_title,
-            "require_admin": require_admin if require_admin is not None else False,
-            "show_in_sidebar": show_in_sidebar if show_in_sidebar is not None else True,
+            "title": title or url_path.replace("-", " ").title(),
+            **{
+                key: value
+                for key, value in {
+                    "icon": icon or None,
+                    "require_admin": require_admin,
+                    "show_in_sidebar": show_in_sidebar,
+                }.items()
+                if value is not None
+            },
         }
-        if icon:
-            create_data["icon"] = icon
         create_result = await self._client.send_websocket_message(create_data)
 
         if isinstance(create_result, dict) and not create_result.get("success", True):
             error_msg = create_result.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))
+            hyphenated = url_path.replace("_", "-")
+            suggestions = None
+            if "needs to contain a hyphen" in str(error_msg) and hyphenated != url_path:
+                suggestions = [f"Try '{hyphenated}' instead"]
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
+                    ws_failure_code(create_result),
                     str(error_msg),
+                    suggestions=suggestions,
                     context={"action": "create", "url_path": url_path},
                 )
             )
@@ -3204,10 +3188,6 @@ class DashboardConfigTools:
                 create_error_response(
                     code=ErrorCode.SERVICE_CALL_FAILED,
                     message=f"Failed to update dashboard metadata: {error_msg}",
-                    suggestions=[
-                        "Check that you have admin permissions",
-                        "Verify dashboard is in storage mode (not YAML mode)",
-                    ],
                     context={"action": "update", "url_path": url_path},
                 )
             )
@@ -3236,12 +3216,14 @@ class DashboardConfigTools:
             k: v
             for k, v in {
                 "title": title,
-                "icon": icon,
                 "require_admin": require_admin,
                 "show_in_sidebar": show_in_sidebar,
             }.items()
             if v is not None
         }
+        if icon is not None:
+            # Core's update schema accepts None and then drops the stored icon.
+            metadata_update_fields["icon"] = icon or None
         if metadata_update_fields and dashboard_id is not None:
             await self._send_dashboard_metadata_update(
                 dashboard_id, metadata_update_fields, url_path
@@ -3402,7 +3384,7 @@ class DashboardConfigTools:
             "type": "lovelace/config/save",
             "config": config_dict,
         }
-        if url_path:
+        if url_path and url_path != "lovelace":  # as _get_dashboard_config_internal
             config_save_data["url_path"] = url_path
         try:
             save_result = await self._client.send_websocket_message(config_save_data)
@@ -3714,15 +3696,15 @@ class DashboardConfigTools:
         Delete a storage-mode dashboard completely.
 
         WARNING: This permanently deletes the dashboard and all its configuration.
-        Cannot be undone. Does not work on YAML-mode dashboards.
+        Cannot be undone. YAML-mode dashboards are defined in configuration.yaml
+        and cannot be deleted through the API.
 
         HA internal IDs may differ from url_path (e.g. hyphens → underscores); the tool resolves
-        either form to the actual registry ID before deletion.
+        either form to the actual registry ID before deletion. 'default' is an
+        alias for 'lovelace'.
 
         EXAMPLES:
         - Delete dashboard: ha_config_delete_dashboard("mobile-dashboard")
-
-        Note: The default dashboard cannot be deleted via this method.
         """
         try:
             # ``url_path`` is required. Reject empty/whitespace up-front so
@@ -3739,71 +3721,37 @@ class DashboardConfigTools:
                 ],
                 context={"action": "delete"},
             )
+            if url_path == "default":
+                url_path = "lovelace"
             resolved, dashboards = await _resolve_dashboard(self._client, url_path)
             if dashboards is None:
                 _raise_dashboard_registry_read_error(action="delete", url_path=url_path)
             if resolved is None:
-                available_ids = [
-                    d.get("url_path") for d in dashboards[:10] if d.get("url_path")
-                ]
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Dashboard '{url_path}' not found",
-                        details=f"No dashboard found with URL path or internal ID '{url_path}'.",
-                        suggestions=[
-                            "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
-                            "YAML-mode and default dashboards are not deletable via this tool",
-                        ],
-                        context={
-                            "action": "delete",
-                            "url_path": url_path,
-                            "available_dashboard_ids": available_ids,
-                        },
-                    )
-                )
+                _raise_unresolved_dashboard_delete(url_path, dashboards)
             resolved_id = resolved["id"]
 
             response = await self._client.send_websocket_message(
                 {"type": "lovelace/dashboards/delete", "dashboard_id": resolved_id}
             )
 
-            # Check response for error indication
             if isinstance(response, dict) and not response.get("success", True):
-                error_msg = response.get("error", {})
-                if isinstance(error_msg, dict):
-                    error_str = error_msg.get("message", str(error_msg))
-                else:
-                    error_str = str(error_msg)
-
-                # If the error is "not found" / "doesn't exist", treat as success (idempotent)
-                if (
-                    "unable to find" in error_str.lower()
-                    or "not found" in error_str.lower()
-                ):
+                # Core's collection answers not_found when the item is already gone.
+                if response.get("error_code") == "not_found":
                     return {
                         "success": True,
                         "action": "delete",
                         "url_path": url_path,
                         "message": "Dashboard already deleted or does not exist",
                     }
-
-                # For other errors, raise
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to delete dashboard: {error_str}",
-                        suggestions=[
-                            "Verify dashboard exists and is storage-mode",
-                            "Check that you have admin permissions",
-                            "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
-                            "Cannot delete YAML-mode or default dashboard",
-                        ],
+                        ws_failure_code(response),
+                        f"Failed to delete dashboard: {response.get('error')}",
+                        suggestions=[_DASHBOARD_LIST_SUGGESTION],
                         context={"action": "delete", "url_path": url_path},
                     )
                 )
 
-            # Delete successful
             result: dict[str, Any] = {
                 "success": True,
                 "action": "delete",
@@ -3812,6 +3760,11 @@ class DashboardConfigTools:
             }
             if resolved_id != url_path:
                 result["resolved_id"] = resolved_id
+            if url_path == "lovelace":
+                result["note"] = (
+                    "Home Assistant re-registers its auto-generated default "
+                    "dashboard at /lovelace."
+                )
             return result
         except ToolError:
             raise
@@ -3819,12 +3772,7 @@ class DashboardConfigTools:
             exception_to_structured_error(
                 e,
                 context={"action": "delete", "url_path": url_path},
-                suggestions=[
-                    "Verify dashboard exists and is storage-mode",
-                    "Check that you have admin permissions",
-                    "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
-                    "Cannot delete YAML-mode or default dashboard",
-                ],
+                suggestions=[_DASHBOARD_LIST_SUGGESTION],
             )
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 

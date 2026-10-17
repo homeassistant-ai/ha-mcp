@@ -66,6 +66,14 @@ import yaml  # type: ignore[import-untyped]
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
+from .backup_dashboards import (
+    _DASHBOARD_KIND,
+    dashboard_comparison,
+    dashboard_snapshot,
+    fetch_dashboard,
+    restore_dashboard,
+    valid_dashboard_capture,
+)
 from .backup_diff import (
     _TEXT_KIND,
     DiffResponse,
@@ -75,9 +83,21 @@ from .backup_diff import (
     _compute_json_patch,
     _summarize_patch_counts,
 )
-from .backup_entity_ids import _restore_entity_ids
+from .backup_entity_ids import (
+    _restore_entity_ids,
+    update_with_registry_icon,
+    with_registry_icon,
+)
+from .backup_helper_target import fetch_helper as _fetch_helper
+from .backup_helper_target import note_no_safety_backup as _note_no_safety_backup
+from .backup_helper_target import (
+    raise_with_restore_outcome as _raise_with_restore_outcome,
+)
+from .backup_helper_target import require_holds as _require_holds
+from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
 from .backup_tags import restore_tag, tag_snapshot
+from .backup_zones import fetch_zone, restore_zone
 from .client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
@@ -203,6 +223,17 @@ def _validate_snapshot_envelope(data: dict[str, Any]) -> None:
     for key in ("domain", "entity_id"):
         if not isinstance(data[key], str) or (key == "domain" and not data[key]):
             raise InvalidBackupSnapshotError(f"Snapshot has invalid {key}")
+    if data.get("kind") == _DASHBOARD_KIND and not valid_dashboard_capture(
+        data["config"]
+    ):
+        raise InvalidBackupSnapshotError("Snapshot has invalid config")
+
+
+def _handler_config(data: dict[str, Any]) -> Any:
+    """The config a domain handler restores from a snapshot."""
+    if data["domain"] == "dashboard":
+        return dashboard_snapshot(data)[0]
+    return data["config"]
 
 
 class _FlowHelperReadError(HomeAssistantError):
@@ -308,7 +339,8 @@ _MAX_SAME_SECOND = 100
 # Domains whose snapshot ``config`` is raw text (file/YAML content) rather
 # than a structured dict. They carry a ``kind: "text"`` marker in the
 # snapshot payload and diff via a unified text diff instead of JSON-Patch
-# (#1579 PR2). Everything else is the implicit ``"dict"`` kind.
+# (#1579 PR2). Dashboard snapshots carry ``kind: "dashboard_settings"``
+# (backup_dashboards); everything else is the implicit ``"dict"`` kind.
 #
 # ``yaml_file`` is a whole-file YAML-config snapshot: same fetch as ``file``
 # (read_file), but restored via edit_yaml_config(action="replace_file") because
@@ -738,6 +770,7 @@ class BackupManager:
         force: bool = False,
         mandatory: bool = False,
         skip_reasons: list[str] | None = None,
+        holds: Any = None,
     ) -> Path | None:
         """Capture a snapshot for ``domain:entity_id`` if throttle elapsed.
 
@@ -765,6 +798,9 @@ class BackupManager:
 
         ``skip_reasons`` (best-effort mode) collects why a capture that was
         due did not happen, so the caller can tell its own caller.
+
+        ``holds`` is the id the captured item must have; another item raises
+        ``BackupRestoreError`` before anything is written.
         """
         if not force:
             await self.ensure_directory_ready()
@@ -809,6 +845,8 @@ class BackupManager:
             )
             if config is _SNAPSHOT_SKIP:
                 return None
+            if holds is not None:
+                _require_holds(config, holds, entity_id)
             return await self._write_and_rotate(
                 domain, entity_id, key, config, tool_name, now, mandatory=mandatory
             )
@@ -1030,6 +1068,8 @@ class BackupManager:
         }
         if domain in _TEXT_DOMAINS:
             payload["kind"] = _TEXT_KIND
+        elif domain == "dashboard":
+            payload["kind"] = _DASHBOARD_KIND
         body = yaml.safe_dump(payload, default_flow_style=False, sort_keys=False)
         # mkstemp creates a unique 0600 inode before any configuration is written.
         fd, tmp_name = tempfile.mkstemp(
@@ -1473,7 +1513,7 @@ class BackupManager:
     ) -> dict[str, Any]:
         domain = data["domain"]
         entity_id = data["entity_id"]
-        config = data["config"]
+        config = _handler_config(data)
         handler = self.handler_for(domain)
         if handler is None:
             raise BackupRestoreError(
@@ -1502,7 +1542,9 @@ class BackupManager:
             flow_driven = is_flow or domain == "helper_config_subentry"
             if needs_safety and (flow_driven or take_safety_backup):
                 step = "safety_backup"
-                safety_path = await self._capture_restore_safety(domain, entity_id)
+                safety_path = await self._capture_restore_safety(
+                    domain, entity_id, outcome, config
+                )
                 if safety_path is not None:
                     self._protect_snapshot(safety_path.name)
                     await _await_backup_io(_require_restore_safety, safety_path)
@@ -1541,7 +1583,9 @@ class BackupManager:
                     reason=_flow_failure_reason(step, err),
                     **outcome,
                 ) from err
-            raise
+            # The error keeps its own type and code; the safety backup to revert
+            # with and any warnings ride along for the caller.
+            _raise_with_restore_outcome(err, {**outcome, "apply_status": apply_status})
         finally:
             if safety_path is not None:
                 self._unprotect_snapshot(safety_path.name)
@@ -1559,21 +1603,41 @@ class BackupManager:
         # existing one is checked against the snapshot by its options flow.
         return await handler.fetch(self._client, entity_id) is not None
 
-    async def _capture_restore_safety(self, domain: str, entity_id: str) -> Path | None:
+    async def _capture_restore_safety(
+        self,
+        domain: str,
+        entity_id: str,
+        outcome: dict[str, Any] | None = None,
+        config: Any = None,
+    ) -> Path | None:
         """Take a restore's recovery point; a failed capture raises and blocks it."""
         is_flow = _is_flow_helper_domain(domain)
-        path = await self.maybe_snapshot(
-            domain,
-            entity_id,
-            tool_name="ha_manage_backup.restore.safety",
-            force=is_flow or domain == "helper_config_subentry",
-            mandatory=True,
-        )
+        flow_driven = is_flow or domain == "helper_config_subentry"
+        if not flow_driven and not getattr(self._settings, "enable_auto_backup", False):
+            return None  # auto-backup off: no safety backup is promised
+        # The restore overwrites the current state, so the throttle that a
+        # recent snapshot of an older state set does not apply.
+        target = await _safety_target(self._client, domain, entity_id, config)
+        checked = not flow_driven and outcome is not None
+        path = None
+        if target is not None:  # None: the item the restore writes is gone
+            path = await self.maybe_snapshot(
+                domain,
+                target,
+                tool_name="ha_manage_backup.restore.safety",
+                force=True,
+                mandatory=True,
+                holds=config.get("id")
+                if checked and isinstance(config, dict)
+                else None,
+            )
         if path is None and is_flow:
             raise MandatoryBackupError(
                 f"{_flow_label(_flow_type(domain))} helper no longer exists; "
                 "restore was not attempted"
             )
+        if checked and path is None:
+            _note_no_safety_backup(outcome, domain, target, config)
         return path
 
     # ----- diff ----------------------------------------------------------
@@ -1592,6 +1656,23 @@ class BackupManager:
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
         current = await handler.fetch(self._client, data["entity_id"])
+        if domain == "dashboard":
+            _stored, legacy = dashboard_snapshot(data)
+            current = dashboard_comparison(current, legacy=legacy)
+        elif domain == "dashboard_resource" and current is None:
+            # A re-created resource carries a Core-generated id, which is not
+            # a difference the snapshot can restore.
+            live = await _dashboard_resource_like(self._client, data["config"])
+            if live is not None:
+                current = {**live, "id": data["config"].get("id")}
+        if (
+            isinstance(current, dict)
+            and isinstance(data["config"], dict)
+            and "registry_icon" not in data["config"]
+        ):
+            # A snapshot from before registry icons were recorded: its restore
+            # leaves the registry alone, so the icon is no difference.
+            current.pop("registry_icon", None)
         if _is_flow_helper_domain(domain) and current is not None:
             # Both MCP and Settings preview this comparison. Registry metadata
             # is recreation-only; an existing-entry restore applies options.
@@ -1996,86 +2077,6 @@ async def _restore_scene(client: Any, entity_id: str, config: Any) -> Any:
     return await client.upsert_scene_config(config, entity_id)
 
 
-# Dashboards — WS lovelace/config (fetch) and lovelace/config/save (restore).
-
-
-async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
-    """Fetch a dashboard config via the same helper the get tool uses.
-
-    The identifier is pre-resolved to its canonical url_path via the shared
-    ``_resolve_dashboard`` (component ``list`` when available), then the config is
-    read through the component ``get`` (one in-process frame) with a fall back to
-    the legacy ``lovelace/config`` read (``_get_dashboard_config_internal``, which
-    handles the WS envelope, force-cache-bypass, and structured error wrapping).
-    The component refuses YAML bodies, so those capture through legacy unchanged.
-    Imported lazily to avoid an import cycle.
-    """
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-    from .tools.tools_config_dashboards import (
-        _component_dashboard_config,
-        _get_dashboard_config_internal,
-        _resolve_dashboard,
-    )
-
-    # The set/delete tools accept BOTH the canonical hyphenated url_path
-    # AND HA's internal (underscored) dashboard id, eagerly resolving the
-    # latter before writing. ``_get_dashboard_config_internal`` does NOT
-    # lazy-resolve, so an internal-id identifier 404s with "Unknown config
-    # specified" and the pre-write snapshot is silently skipped. Pre-resolve
-    # to the canonical url_path so capture works for whichever form the
-    # caller passed (matching the form the write tool ultimately targets).
-    fetch_path = entity_id
-    try:
-        match, _ = await _resolve_dashboard(client, entity_id)
-        if match and match.get("url_path"):
-            fetch_path = match["url_path"]
-    except (HomeAssistantError, ToolError) as err:
-        # Resolver failure (transport/shape) — fall through with the
-        # original identifier; the canonical form is often already correct.
-        logger.debug(
-            "Auto-backup: dashboard resolve failed for %r: %s — using as-is",
-            entity_id,
-            err,
-        )
-
-    # Component fast path (freshness-safe in-memory read); None ⇒ legacy below,
-    # which also covers YAML dashboards and not-found (nothing to back up).
-    component_config = await _component_dashboard_config(client, fetch_path)
-    if component_config is not None:
-        return component_config
-
-    try:
-        config, _config_hash = await _get_dashboard_config_internal(client, fetch_path)
-    except ToolError as err:
-        # ToolError carries the structured failure payload, including HA's
-        # preserved ``config_not_found`` code; treat a missing/unknown
-        # dashboard as "nothing to back up" (also covers a brand-new dashboard
-        # on the create path). "Unknown config specified" is HA's message for
-        # an unresolved url_path.
-        msg = str(err).lower()
-        if "not_found" in msg or "config_not_found" in msg or "unknown config" in msg:
-            return None
-        raise
-    except HomeAssistantError as err:
-        msg = str(err).lower()
-        if "not_found" in msg or "config_not_found" in msg or "unknown config" in msg:
-            return None
-        raise
-    return config
-
-
-async def _restore_dashboard(client: Any, entity_id: str, config: Any) -> Any:
-    return await _ws_send(
-        client,
-        {
-            "type": "lovelace/config/save",
-            "url_path": entity_id,
-            "config": config,
-        },
-    )
-
-
 def _require_list(value: Any, endpoint: str) -> list[Any]:
     """Return ``value`` if it's a list, else raise.
 
@@ -2115,24 +2116,50 @@ def _require_dict(value: Any, endpoint: str) -> dict[str, Any]:
     return value
 
 
-# Dashboard resources — WS lovelace_resources commands.
+# Dashboard resources — WS lovelace/resources commands. Rows store the
+# resource type as ``type``; the create/update field is ``res_type``. A restore
+# of a deleted resource re-creates it under a new id, so a snapshot falls back
+# to the row that holds its url and type; Core does not keep urls unique, so a
+# row that only shares the url is another resource and is left alone.
+async def _dashboard_resources(client: Any) -> list[Any]:
+    return _require_list(
+        await _ws_send(client, {"type": "lovelace/resources"}), "lovelace/resources"
+    )
 
 
 async def _fetch_dashboard_resource(client: Any, entity_id: str) -> Any:
-    resources = _require_list(
-        await _ws_send(client, {"type": "lovelace/resources"}), "lovelace/resources"
+    resources = await _dashboard_resources(client)
+    return next((r for r in resources if str(r.get("id")) == entity_id), None)
+
+
+async def _dashboard_resource_like(client: Any, config: dict[str, Any]) -> Any:
+    """The live row with the snapshot's url and type, else ``None``."""
+    resources = await _dashboard_resources(client)
+    return next(
+        (
+            r
+            for r in resources
+            if r.get("url") == config["url"] and r.get("type") == config.get("type")
+        ),
+        None,
     )
-    for res in resources:
-        if str(res.get("id")) == entity_id:
-            return res
-    return None
 
 
 async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) -> Any:
-    payload = _strip_readonly(config, "id")
-    payload["resource_id"] = entity_id
-    payload["type"] = "lovelace/resources/update"
-    return await _ws_send(client, payload)
+    # Core imported old ``resources:`` entries without a type (RESOURCE_FIELDS).
+    payload = _strip_readonly(config, "id", "type")
+    if "type" in config:
+        payload["res_type"] = config["type"]
+    update = {"type": "lovelace/resources/update", "resource_id": entity_id}
+    try:
+        return await _ws_send(client, {**update, **payload})
+    except HomeAssistantCommandError as err:
+        if err.code != "not_found":  # not_found: deleted since the snapshot
+            raise
+    live = await _dashboard_resource_like(client, config)
+    if live is not None:  # an earlier restore re-created it
+        return live
+    return await _ws_send(client, {"type": "lovelace/resources/create", **payload})
 
 
 # Labels — config/label_registry/{list,update}
@@ -2524,25 +2551,6 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
     return await _recreate_calendar_event(client, cal, event, start, end)
 
 
-# Zones — zone/{list,update} (no ``config/`` prefix per HA's actual WS API;
-# matches ``tools_zones.py`` which is the authoritative usage).
-
-
-async def _fetch_zone(client: Any, entity_id: str) -> Any:
-    items = _require_list(await _ws_send(client, {"type": "zone/list"}), "zone/list")
-    for item in items:
-        if item.get("id") == entity_id or item.get("name") == entity_id:
-            return item
-    return None
-
-
-async def _restore_zone(client: Any, entity_id: str, config: Any) -> Any:
-    payload = _strip_readonly(config, "id")
-    payload["type"] = "zone/update"
-    payload["zone_id"] = config.get("id", entity_id)
-    return await _ws_send(client, payload)
-
-
 # Areas / floors — config/area_registry/{list,update}, config/floor_registry/{list,update}
 
 
@@ -2717,8 +2725,9 @@ async def _restore_device(client: Any, entity_id: str, config: Any) -> Any:
 # Integration enable/disable — restore re-applies the disabled flag.
 
 
-# Helpers — one handler family. Entity ID is "<helper_type>:<id>" so each
-# helper type lists/restores via its native WS endpoints. The decorator
+# Helpers — one handler family. Entity ID is the id the tool was given (a bare
+# id or <type>.<id>); each helper type lists/restores via its native WS
+# endpoints (fetch: backup_helper_target.py). The decorator
 # constructs the domain key as ``helper_<type>`` so files group naturally.
 
 _HELPER_LIST_TYPES = {
@@ -2737,57 +2746,10 @@ _HELPER_LIST_TYPES = {
 }
 
 
-async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
-    """Fetch a storage helper's full config from its ``<helper_type>/list``.
-
-    Registered for ``_KNOWN_HELPER_TYPES`` only; flow helpers (config
-    entries) have their own handler family (``_make_flow_helper_handler``).
-    """
-    listed = await _ws_send(client, {"type": f"{helper_type}/list"})
-    if helper_type == "person" and isinstance(listed, dict):
-        listed = listed.get("storage")  # YAML-defined persons are not editable
-    items = _require_list(listed, f"{helper_type}/list")
-    object_id = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
-    for item in items:
-        if item.get("id") == object_id or item.get("id") == entity_id:
-            return await tag_snapshot(client, item) if helper_type == "tag" else item
-    # Fallback for renamed helpers: after an entity_id rename the object_id
-    # no longer equals the storage collection id (which stays the original
-    # create-time id == the registry unique_id), so the direct match above
-    # misses and the snapshot was silently skipped. Resolve the unique_id
-    # via the entity registry and match on that — the same key the helper
-    # update tool itself resolves to.
-    eid = entity_id if "." in entity_id else f"{helper_type}.{entity_id}"
-    try:
-        entry = await _ws_send(
-            client, {"type": "config/entity_registry/get", "entity_id": eid}
-        )
-    except HomeAssistantError as err:
-        # Only a genuine "entity not found" means there's nothing to back up;
-        # transport/auth/5xx errors must propagate so maybe_snapshot logs a
-        # WARNING rather than silently skipping. Same POLICY as _fetch_automation,
-        # but matched on the message substring because config/entity_registry/get
-        # failures arrive as a WS command error with no status_code to switch on.
-        # Best-effort: if HA's not-found wording ever changes, a real miss
-        # degrades to a WARNING + skip (never a swallowed fatal error).
-        msg = str(err).lower()
-        if "not_found" in msg or "not found" in msg:
-            return None
-        raise
-    unique_id = entry.get("unique_id") if isinstance(entry, dict) else None
-    if unique_id:
-        for item in items:
-            if str(item.get("id")) == str(unique_id):
-                return (
-                    await tag_snapshot(client, item) if helper_type == "tag" else item
-                )
-    return None
-
-
 async def _restore_helper(
     client: Any, entity_id: str, config: Any, helper_type: str
 ) -> Any:
-    """Restore a storage-backed helper via ``<helper_type>/update``.
+    """Restore a storage helper via ``<helper_type>/update`` (tag, zone: restore_*).
 
     Symmetric with ``_fetch_helper``: only list-backed types are
     supported. Unsupported types raise ``LookupError`` so the restore
@@ -2803,9 +2765,19 @@ async def _restore_helper(
     payload = _strip_readonly(config, "id")
     payload["type"] = f"{helper_type}/update"
     payload[f"{helper_type}_id"] = config.get("id", entity_id)
+    item_id = payload[f"{helper_type}_id"]
     if helper_type == "tag":
-        return await restore_tag(client, payload["tag_id"], payload)
-    return await _ws_send(client, payload)
+        return await restore_tag(client, item_id, payload)
+    if helper_type == "zone":
+        return await restore_zone(client, item_id, payload)
+    return await update_with_registry_icon(client, helper_type, item_id, payload)
+
+
+async def _registry_snapshot(client: Any, helper_type: str, item: dict) -> Any:
+    """The stored item plus its registry icon, and for a tag its registry name."""
+    if helper_type == "tag":
+        return await tag_snapshot(client, item)
+    return await with_registry_icon(client, helper_type, item)
 
 
 # Files & YAML (#1579 PR2) — capture is MCP-side via the ha_mcp_tools
@@ -3930,7 +3902,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(DomainHandler("automation", _fetch_automation, _restore_automation))
     mgr.register(DomainHandler("script", _fetch_script, _restore_script))
     mgr.register(DomainHandler("scene", _fetch_scene, _restore_scene))
-    mgr.register(DomainHandler("dashboard", _fetch_dashboard, _restore_dashboard))
+    mgr.register(DomainHandler("dashboard", fetch_dashboard, restore_dashboard))
     mgr.register(
         DomainHandler(
             "dashboard_resource", _fetch_dashboard_resource, _restore_dashboard_resource
@@ -3942,7 +3914,8 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(
         DomainHandler("calendar_event", _fetch_calendar_event, _restore_calendar_event)
     )
-    mgr.register(DomainHandler("zone", _fetch_zone, _restore_zone))
+    restore_zone_item = functools.partial(_restore_helper, helper_type="zone")
+    mgr.register(DomainHandler("zone", fetch_zone, restore_zone_item))
     mgr.register(
         DomainHandler("area_or_floor", _fetch_area_or_floor, _restore_area_or_floor)
     )

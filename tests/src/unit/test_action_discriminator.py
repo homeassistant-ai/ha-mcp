@@ -236,15 +236,17 @@ class TestImplicitDiscriminatorBackCompat:
         assert result["success"] is True
         assert result["action"] == "update"
 
+    @pytest.mark.parametrize(
+        "helper_id", ["nonexistent_typo", "input_boolean.nonexistent_typo"]
+    )
     async def test_misspelled_helper_id_with_name_hints_at_create(
-        self, register_tools, mock_client
+        self, register_tools, mock_client, helper_id
     ):
         """Bug 11 augmented error: ENTITY_NOT_FOUND now suggests omitting
         helper_id (or passing action='create') when `name` was also passed.
 
-        Triggered against the config_store_types update branch (input_boolean)
-        which goes through ``config/entity_registry/get`` and treats a failed
-        lookup as ENTITY_NOT_FOUND.
+        A bare id no stored helper has fails on the storage list, an entity_id
+        on the ``config/entity_registry/get`` lookup; both carry the hint.
         """
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_simple_handler(
@@ -255,7 +257,7 @@ class TestImplicitDiscriminatorBackCompat:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Brand New Helper",
-                helper_id="nonexistent_typo",
+                helper_id=helper_id,
             )
         _assert_entity_not_found(excinfo, must_contain="nonexistent_typo")
         msg = str(excinfo.value)
@@ -264,8 +266,11 @@ class TestImplicitDiscriminatorBackCompat:
         assert "Brand New Helper" in msg
         assert "omit helper_id" in msg
 
+    @pytest.mark.parametrize(
+        "helper_id", ["nonexistent_typo", "input_boolean.nonexistent_typo"]
+    )
     async def test_misspelled_helper_id_without_name_no_create_hint(
-        self, register_tools, mock_client
+        self, register_tools, mock_client, helper_id
     ):
         """Without `name`, the augmented error skips the create suggestion
         (there's no hypothesis to suggest)."""
@@ -277,7 +282,7 @@ class TestImplicitDiscriminatorBackCompat:
         with pytest.raises(ToolError) as excinfo:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
-                helper_id="nonexistent_typo",
+                helper_id=helper_id,
             )
         _assert_entity_not_found(excinfo, must_contain="nonexistent_typo")
         msg = str(excinfo.value)

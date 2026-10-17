@@ -631,7 +631,7 @@
         },
         "start": {
           "type": "str | None",
-          "description": "Start datetime in ISO format (default: now)",
+          "description": "Start datetime in ISO format; omit it to start at the current time",
           "default": null
         },
         "end": {
@@ -926,7 +926,7 @@
   {
     "name": "ha_config_delete_dashboard",
     "title": "Delete Dashboard",
-    "description": "Delete a storage-mode dashboard completely.\n\nWARNING: This permanently deletes the dashboard and all its configuration.\nCannot be undone. Does not work on YAML-mode dashboards.\n\nHA internal IDs may differ from url_path (e.g. hyphens → underscores); the tool resolves\neither form to the actual registry ID before deletion.\n\nEXAMPLES:\n- Delete dashboard: ha_config_delete_dashboard(\"mobile-dashboard\")\n\nNote: The default dashboard cannot be deleted via this method.",
+    "description": "Delete a storage-mode dashboard completely.\n\nWARNING: This permanently deletes the dashboard and all its configuration.\nCannot be undone. YAML-mode dashboards are defined in configuration.yaml\nand cannot be deleted through the API.\n\nHA internal IDs may differ from url_path (e.g. hyphens → underscores); the tool resolves\neither form to the actual registry ID before deletion. 'default' is an\nalias for 'lovelace'.\n\nEXAMPLES:\n- Delete dashboard: ha_config_delete_dashboard(\"mobile-dashboard\")",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -978,7 +978,7 @@
   {
     "name": "ha_config_get_dashboard",
     "title": "Get Dashboard",
-    "description": "Get Lovelace dashboards: list them, read one config, or search their cards.\n\nNot for a render alone: ha_get_dashboard_screenshot (screenshot beta\nfeature) returns images without the config. Not for entity discovery:\nuse ha_search.\n\nThe parameters pick the mode:\n- list_only=True: storage and YAML dashboards alike.\n- Any of query / entity_id / card_type / heading searches cards and\n  header cards, AND-ing the criteria, in url_path or, when it is\n  omitted, every storage dashboard. View badges answer entity_id and\n  query, and heading excludes them.\n  Cards nested at any depth count, including\n  custom cards' own keys such as groups[].cards[].card. Each match has a\n  jq_path and a python_path to append to `config` in\n  ha_config_set_dashboard(python_transform=...), e.g.\n  f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"'. Each match carries its\n  dashboard's url_path and config_hash; a one-dashboard search also\n  returns the config_hash at the top level.\n- Otherwise the full config of url_path (the default dashboard when\n  omitted) is returned; with view_path only that view, while config_hash\n  still covers the full config.\n\nCaveats: config_hash stays the same across reads of an unchanged config.\nSearches stop at 200 matches (`truncated`). A search across dashboards\nskips YAML dashboards (HA resolves !secret in them) and, without a\ncurrent ha_mcp_tools component, the default dashboard (with a warning);\nname either by url_path.\nStrategy dashboards have no stored cards to search. An unknown view_path\nerrors and lists the available ones.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get one view only: ha_config_get_dashboard(url_path=\"lovelace-mobile\", view_path=\"office\")\n- Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n- Which dashboards use an entity: ha_config_get_dashboard(query=\"light.bedroom\")\n- Fields of a card type before writing one (omit card_type to list types):\n  ha_config_get_dashboard(card_type=\"tile\", describe=True)",
+    "description": "Get Lovelace dashboards: list them, read one config, or search their cards.\n\nNot for a render alone: ha_get_dashboard_screenshot (screenshot beta\nfeature) returns images without the config. Not for entity discovery:\nuse ha_search.\n\nThe parameters pick the mode:\n- list_only=True: storage and YAML dashboards alike.\n- Any of query / entity_id / card_type / heading searches cards and\n  header cards, AND-ing the criteria, in url_path or, when it is\n  omitted, every storage dashboard. View badges answer entity_id and\n  query, and heading excludes them.\n  Cards nested at any depth count, including\n  custom cards' own keys such as groups[].cards[].card. Nesting is\n  found heuristically, under the keys cards, card, custom_fields and\n  states; a card under any other key is read only as its parent's\n  text, by query. Each match has a\n  jq_path and a python_path to append to `config` in\n  ha_config_set_dashboard(python_transform=...), e.g.\n  f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"'. Each match carries its\n  dashboard's url_path and config_hash; a one-dashboard search also\n  returns the config_hash at the top level.\n- Otherwise the full config of url_path (the default dashboard when\n  omitted) is returned; with view_path only that view, while config_hash\n  still covers the full config.\n\nCaveats: config_hash stays the same across reads of an unchanged config.\nSearches stop at 200 matches (`truncated`). A search across dashboards\nskips YAML dashboards (HA resolves !secret in them) and, without a\ncurrent ha_mcp_tools component, the default dashboard (with a warning);\nname either by url_path.\nStrategy dashboards have no stored cards to search. An unknown view_path\nerrors and lists the available ones.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get one view only: ha_config_get_dashboard(url_path=\"lovelace-mobile\", view_path=\"office\")\n- Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n- Which dashboards use an entity: ha_config_get_dashboard(query=\"light.bedroom\")\n- Fields of a card type before writing one (omit card_type to list types):\n  ha_config_get_dashboard(card_type=\"tile\", describe=True)",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -1052,7 +1052,7 @@
   {
     "name": "ha_config_list_dashboard_resources",
     "title": "List Dashboard Resources",
-    "description": "List Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns one page of registered resources; `total_count` and `has_more`\nreport the full set, and `inline_count` and `by_type` summarise every\nresource, not just this page. Each resource has a unique ID for\nupdate/delete operations. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the\ncontent instead of the full encoded URL to save tokens.\n\nEXAMPLES:\n- Next page: ha_config_list_dashboard_resources(offset=100)\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n\nHome Assistant 2026.6+ exposes resource management in the UI by default;\nAPI access works regardless of UI availability.",
+    "description": "List Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns one page of registered resources; `total_count` and `has_more`\nreport the full set, and `inline_count` and `by_type` summarise every\nresource, not just this page. Each resource has a unique ID for\nupdate/delete operations. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the\ncontent instead of the full encoded URL to save tokens.\n`resource_mode` is Core's lovelace resource mode; in 'yaml' mode\nresources cannot be created, updated or deleted through the API.\n\nEXAMPLES:\n- Next page: ha_config_list_dashboard_resources(offset=100)\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n\nHome Assistant 2026.6+ exposes resource management in the UI by default;\nAPI access works regardless of UI availability.",
     "inputSchema": {
       "properties": {
         "include_content": {
@@ -1098,7 +1098,7 @@
       "properties": {
         "url_path": {
           "type": "str",
-          "description": "Dashboard URL path (e.g., 'my-dashboard'). Use 'default' or 'lovelace' for the default dashboard. New dashboards must use a hyphenated path."
+          "description": "Dashboard URL path (e.g., 'my-dashboard'). Use 'default' or 'lovelace' for the default dashboard. Home Assistant requires a hyphen in new dashboard paths."
         },
         "config": {
           "type": "dict[str, Any] | None",
@@ -1122,7 +1122,7 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "MDI icon name (e.g., 'mdi:home', 'mdi:cellphone'). Defaults to 'mdi:view-dashboard'",
+          "description": "MDI icon name (e.g., 'mdi:home', 'mdi:cellphone'). Omit to store none (the sidebar then shows mdi:view-dashboard); '' clears a stored icon.",
           "default": null
         },
         "require_admin": {
@@ -1177,7 +1177,7 @@
   {
     "name": "ha_config_set_dashboard_resource",
     "title": "Set Dashboard Resource",
-    "description": "Create or update a dashboard resource (inline code or external URL).\n\nProvide exactly one of:\n- content: Inline JavaScript or CSS code (embedded in the resource URL\n  as a data: URI — no file storage or external hosting involved).\n  Supports 'module' and 'css' types only (not 'js'); URLs are\n  deterministic (same content = same URL); up to ~128KB. Content must be\n  self-contained: a data: URI has no base URL, so relative imports inside\n  a module and relative url() references inside CSS cannot resolve (use\n  fully-qualified URLs instead). If Home Assistant is behind a reverse\n  proxy that injects a Content-Security-Policy without 'data:' in\n  script-src/style-src, the browser blocks these resources: this call\n  still succeeds and the card simply never renders. Register the code as\n  a file and use url='/local/...' on such a deployment. (HA itself ships\n  no CSP.)\n- url: External resource URL — /local/... (files in /config/www/),\n  /hacsfiles/... (HACS-installed cards) or https://... (CDN). Supports\n  all types: 'module', 'js', 'css'.\n\nEXAMPLES:\n- Inline: ha_config_set_dashboard_resource(content=\"class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);\", resource_type=\"module\")\n- HACS card (after ha_manage_hacs(action='download')): ha_config_set_dashboard_resource(url=\"/hacsfiles/lovelace-mushroom/mushroom.js\", resource_type=\"module\")\n- Update: ha_config_set_dashboard_resource(url=\"/local/my-card-v2.js\", resource_type=\"module\", resource_id=\"abc123\")\n\nAfter adding a resource, a browser cache clear or hard refresh\n(Ctrl+Shift+R) is needed to load it.",
+    "description": "Create or update a dashboard resource (inline code or external URL).\n\nProvide exactly one of:\n- content: Inline JavaScript or CSS code (embedded in the resource URL\n  as a data: URI — no file storage or external hosting involved).\n  Supports 'module' and 'css' types only; URLs are\n  deterministic (same content = same URL); up to ~128KB. Content must be\n  self-contained: a data: URI has no base URL, so relative imports inside\n  a module and relative url() references inside CSS cannot resolve (use\n  fully-qualified URLs instead). If Home Assistant is behind a reverse\n  proxy that injects a Content-Security-Policy without 'data:' in\n  script-src/style-src, the browser blocks these resources: this call\n  still succeeds and the card simply never renders. Register the code as\n  a file and use url='/local/...' on such a deployment. (HA itself ships\n  no CSP.)\n- url: External resource URL — /local/... (files in /config/www/),\n  /hacsfiles/... (HACS-installed cards) or https://... (CDN). Supports\n  all types: 'module', 'js', 'css', 'html'.\n\nEXAMPLES:\n- Inline: ha_config_set_dashboard_resource(content=\"class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);\", resource_type=\"module\")\n- HACS card (after ha_manage_hacs(action='download')): ha_config_set_dashboard_resource(url=\"/hacsfiles/lovelace-mushroom/mushroom.js\", resource_type=\"module\")\n- Update: ha_config_set_dashboard_resource(url=\"/local/my-card-v2.js\", resource_type=\"module\", resource_id=\"abc123\")\n\nAfter adding a resource, a browser cache clear or hard refresh\n(Ctrl+Shift+R) is needed to load it.",
     "inputSchema": {
       "properties": {
         "content": {
@@ -1191,8 +1191,8 @@
           "default": null
         },
         "resource_type": {
-          "type": "Literal['module', 'js', 'css']",
-          "description": "Resource type: 'module' for ES6 modules (modern cards), 'js' for legacy JavaScript (older custom cards), 'css' for stylesheets (themes, global styles)",
+          "type": "_RESOURCE_TYPE",
+          "description": "Resource type, validated by Home Assistant: 'module' for ES6 modules (modern cards), 'js' for legacy JavaScript (older custom cards), 'css' for stylesheets (themes, global styles), 'html' for HTML imports",
           "default": "module"
         },
         "resource_id": {
@@ -1613,7 +1613,7 @@
   {
     "name": "ha_remove_entity",
     "title": "Remove Entity",
-    "description": "Remove one or more entities from the Home Assistant entity registry.\n\nPermanently removes the entity registration; the entity will no longer\nappear in the UI or be available to automations. Use only for orphaned\nor stale entity entries: if the underlying device or integration is\nstill active, the entity may be re-added automatically on the next HA\nrestart or reload. This cannot be undone without restoring from backup.\nFor most use cases, consider disabling instead:\nha_set_entity(entity_id=\"sensor.old\", enabled=False).\n\nBULK MODE:\nPass a list of entity IDs to remove up to 100 at once — handy for\nclearing the restored=true orphans an integration leaves behind after\nits filters change. Removals run sequentially and return:\n  {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}\nwhere skipped = ids already absent (not-found is idempotent, not an\nerror). Bulk mode is NOT auto-backed-up (the snapshot is single-entity);\nsingle-id removal still is.\n\nEXAMPLES:\n- Remove orphaned sensor: ha_remove_entity(\"sensor.old_temperature\")\n- Bulk cleanup: ha_remove_entity([\"sensor.orphan_1\", \"sensor.orphan_2\"])\n\nUse ha_search / ha_get_entity to verify an entity before removing it.",
+    "description": "Remove one or more entities from the Home Assistant entity registry.\n\nPermanently removes the entity registration; the entity will no longer\nappear in the UI or be available to automations. Use only for orphaned\nor stale entity entries: if the underlying device, integration or\nstored helper is still there, the entity may be re-added on the next HA\nrestart or reload; for a stored helper's entity a single-id removal\nnames the tool that removes the helper. This cannot be undone without restoring\nfrom backup. For most use cases, consider disabling instead:\nha_set_entity(entity_id=\"sensor.old\", enabled=False).\n\nBULK MODE:\nPass a list of entity IDs to remove up to 100 at once — handy for\nclearing the restored=true orphans an integration leaves behind after\nits filters change. Removals run sequentially and return:\n  {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}\nwhere skipped = ids already absent (not-found is idempotent, not an\nerror). Only single-id removal is auto-backed-up.\n\nEXAMPLES:\n- Remove orphaned sensor: ha_remove_entity(\"sensor.old_temperature\")\n- Bulk cleanup: ha_remove_entity([\"sensor.orphan_1\", \"sensor.orphan_2\"])\n\nUse ha_search / ha_get_entity to verify an entity before removing it.",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -2201,7 +2201,7 @@
         },
         "helper_id": {
           "type": "str | None",
-          "description": "Bare ID ('my_button') or full entity ID ('input_button.my_button'). Omit to create a new helper.",
+          "description": "The helper's storage id ('my_button'), not the name of its entity, or its full entity_id ('input_button.my_button'). Omit to create a new helper.",
           "default": null
         },
         "entry_id": {
@@ -2226,7 +2226,7 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, set at creation or by ha_set_zone; ha_get_zone shows it), which cannot be removed",
+          "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed. On create, a storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, otherwise (person, tag, a new zone, or without the ha_mcp_tools component) into the entity registry; an update always sets the registry icon, and the stored icon too where the schema has one. Automatic backups hold the registry icon of a person, tag or zone only, so restoring another helper's backup does not bring back an icon kept in the registry; without the component, every storage helper other than a zone keeps its icon there",
           "default": null
         },
         "area_id": {
@@ -2398,12 +2398,12 @@
   {
     "name": "ha_remove_helpers_integrations",
     "title": "Remove Helper or Integration",
-    "description": "Remove a Home Assistant helper or integration config entry.\n\nUnifies three backend removal mechanisms — simple-helper websocket\ndelete, config-entry delete, and config-subentry delete — behind one\nentry point; helper_type picks the path, or the entity registry does\nwhen an entity_id comes without one.\n\nWHEN NOT TO USE:\n- Removing only an entity (without deleting its underlying helper or\n  config entry) — use `ha_remove_entity` instead.\n- YAML-configured helpers — they have no storage backend. Edit the\n  YAML file and reload the relevant integration.\n\nROUTING:\n- SIMPLE helper_type (input_button, input_boolean, input_select,\n  input_number, input_text, input_datetime, counter, timer, schedule,\n  zone, person, tag) + bare helper_id or entity_id → websocket delete.\n- FLOW helper_type (any helper flow Home Assistant lists: template, group,\n  utility_meter, derivative, ...; custom helper integrations too)\n  + full entity_id → resolve entity_id to\n  config_entry_id via entity_registry, then delete the config entry. All\n  sub-entities (e.g. utility_meter tariffs) are removed together. An\n  entity registered by another integration is refused with\n  VALIDATION_INVALID_PARAMETER and nothing is deleted.\n- helper_type=None + entity_id → the entity's registry entry names its\n  helper (storage type or helper flow); an entity of any other\n  integration is refused with VALIDATION_INVALID_PARAMETER.\n- helper_type=None + entry_id → direct config entry delete (any\n  integration).\n- helper_type=\"config_subentry\" + parent entry_id + subentry_id →\n  delete one config subentry.\n\nA target that cannot be removed raises a structured error rather than\nreturning silent success: ENTITY_NOT_FOUND when the entity_id is absent\nfrom both the state machine and the entity registry (a bare helper_id\non a FLOW target also raises it — FLOW resolution needs a full\nentity_id); RESOURCE_NOT_FOUND when it exists but is not storage- or\nregistry-managed (a YAML-configured helper, or an entity with a state\nbut no registry entry), for a config entry the backend reports as 404,\nor for a missing config subentry.\nCalling N times gives the same response. Transient connectivity failures\nraise their own codes (WEBSOCKET_DISCONNECTED, CONNECTION_FAILED) so\nretry logic can branch separately.\n\nEXAMPLES:\n- Remove SIMPLE button: ha_remove_helpers_integrations(target=\"my_button\", helper_type=\"input_button\", confirm=True)\n- Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target=\"sensor.energy_peak\", helper_type=\"utility_meter\", confirm=True)\n- Remove whatever helper owns an entity: ha_remove_helpers_integrations(target=\"sensor.energy_peak\", confirm=True)\n- Remove any integration by entry_id: ha_remove_helpers_integrations(target=\"01HXYZ...\", confirm=True)\n- Remove a config subentry: ha_remove_helpers_integrations(target=\"01HXYZ...\", helper_type=\"config_subentry\", subentry_id=\"subentry-123\", confirm=True)\n\nWARNING: Removing a helper or integration that is referenced by\nautomations, scripts, or other integrations may cause those to fail.\nUse ha_search() / ha_get_integration() to verify before removal.\nha_manage_backup(scope=\"edits\", action=\"restore\") recreates removed FLOW\nhelpers whose options could be snapshotted, and config subentries. It\ncannot recreate custom helper integrations (their options are withheld)\nor otp (no stored options); re-add those yourself, otp through the user\nin the HA UI.",
+    "description": "Remove a Home Assistant helper or integration config entry.\n\nUnifies three backend removal mechanisms — simple-helper websocket\ndelete, config-entry delete, and config-subentry delete — behind one\nentry point; helper_type picks the path, or the entity registry does\nwhen an entity_id comes without one.\n\nWHEN NOT TO USE:\n- Removing only an entity (without deleting its underlying helper or\n  config entry) — use `ha_remove_entity` instead.\n- YAML-configured helpers — they have no storage backend. Edit the\n  YAML file and reload the relevant integration.\n- ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA\n  UI, or (server settings, developer mode on) ha_dev_manage_settings /\n  ha_dev_manage_server.\n\nROUTING:\n- SIMPLE helper_type (input_button, input_boolean, input_select,\n  input_number, input_text, input_datetime, counter, timer, schedule,\n  zone, person, tag) + bare helper_id (its storage id) or entity_id →\n  websocket delete.\n- FLOW helper_type (any helper flow Home Assistant lists: template, group,\n  utility_meter, derivative, ...; custom helper integrations too)\n  + full entity_id → resolve entity_id to\n  config_entry_id via entity_registry, then delete the config entry. All\n  sub-entities (e.g. utility_meter tariffs) are removed together. An\n  entity registered by another integration is refused with\n  VALIDATION_INVALID_PARAMETER and nothing is deleted.\n- helper_type=None + entity_id → the entity's registry entry names its\n  helper (storage type or helper flow); an entity of any other\n  integration is refused with VALIDATION_INVALID_PARAMETER.\n- helper_type=None + entry_id → direct config entry delete (any\n  integration).\n- helper_type=\"config_subentry\" + parent entry_id + subentry_id →\n  delete one config subentry.\n\nA target that cannot be removed raises a structured error rather than\nreturning silent success: ENTITY_NOT_FOUND when the entity_id is absent\nfrom both the state machine and the entity registry, or for a bare\nhelper_id no stored helper has (a bare helper_id on a FLOW target also\nraises it — FLOW resolution needs a full entity_id); RESOURCE_NOT_FOUND\nwhen it exists but is not storage- or registry-managed (a YAML-configured helper, or an entity with a state\nbut no registry entry), for a config entry the backend reports as 404,\nor for a missing config subentry.\nCalling N times gives the same response. Transient connectivity failures\nraise their own codes (WEBSOCKET_DISCONNECTED, CONNECTION_FAILED) so\nretry logic can branch separately.\n\nEXAMPLES:\n- Remove SIMPLE button: ha_remove_helpers_integrations(target=\"my_button\", helper_type=\"input_button\", confirm=True)\n- Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target=\"sensor.energy_peak\", helper_type=\"utility_meter\", confirm=True)\n- Remove whatever helper owns an entity: ha_remove_helpers_integrations(target=\"sensor.energy_peak\", confirm=True)\n- Remove any integration by entry_id: ha_remove_helpers_integrations(target=\"01HXYZ...\", confirm=True)\n- Remove a config subentry: ha_remove_helpers_integrations(target=\"01HXYZ...\", helper_type=\"config_subentry\", subentry_id=\"subentry-123\", confirm=True)\n\nWARNING: Removing a helper or integration that is referenced by\nautomations, scripts, or other integrations may cause those to fail.\nUse ha_search() / ha_get_integration() to verify before removal.\nha_manage_backup(scope=\"edits\", action=\"restore\") recreates removed FLOW\nhelpers whose options could be snapshotted, and config subentries. It\ncannot recreate custom helper integrations (their options are withheld)\nor otp (no stored options); re-add those yourself, otp through the user\nin the HA UI.",
     "inputSchema": {
       "properties": {
         "target": {
           "type": "str",
-          "description": "What to remove. One of: (a) bare helper_id for SIMPLE helpers, e.g. 'my_button'; (b) full entity_id, e.g. 'input_button.my_button' or 'sensor.my_meter'; (c) config entry_id for any integration, with helper_type omitted, e.g. value from ha_get_integration(); (d) parent config entry_id for a config subentry."
+          "description": "What to remove. One of: (a) bare helper_id for SIMPLE helpers: the helper's storage id, not the name of its entity, e.g. 'my_button'; (b) full entity_id, e.g. 'input_button.my_button' or 'sensor.my_meter'; (c) config entry_id for any integration, with helper_type omitted, e.g. value from ha_get_integration(); (d) parent config entry_id for a config subentry."
         },
         "helper_type": {
           "type": "HelperTypeLiteral | None",
@@ -2527,12 +2527,12 @@
         },
         "start_time": {
           "type": "str | None",
-          "description": "Start time: ISO datetime or relative (e.g., '24h', '7d', '30d'). Default: 24h ago for history, 30d ago for statistics",
+          "description": "Start time: ISO datetime or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
           "default": null
         },
         "end_time": {
           "type": "str | None",
-          "description": "End time: ISO datetime. Default: now",
+          "description": "End time: same formats as start_time. Omit it to end at the current time",
           "default": null
         },
         "minimal_response": {
@@ -2922,7 +2922,7 @@
   {
     "name": "ha_set_integration",
     "title": "Set Integration",
-    "description": "Manage an integration (config entry): enable/disable, add, update options, or reconfigure.\n\nModes (pick one):\n- Enable/disable: entry_id + enabled.\n- Add integration: domain (+ config) — drives the domain's config\n  flow, including menus and multi-step forms.\n- Update options: entry_id + config — drives the entry's options\n  flow (what the \"Configure\" button does in the HA UI).\n- Reconfigure: entry_id + reconfigure=True + config — connection\n  settings such as host, port, credentials. Repeat with the token the\n  preflight returns as confirm_token to apply.\n- Log level: log_level + domain (or entry_id) — sets how much the\n  integration logs; read it back with ha_get_integration's log_level.\n\nWHEN NOT TO USE:\n- Helpers (template, group, utility_meter, ...): use\n  ha_config_set_helper. `otp` is the user's to set up in the HA UI: its\n  secret is a credential enrolled in an authenticator app; do not create it.\n- Config subentries: use\n  ha_config_set_helper(helper_type='config_subentry').\n- Removing an entry: use ha_remove_helpers_integrations.\n\nUse ha_get_integration() to find entry IDs, and\nha_get_integration(entry_id=..., include_schema=True) to inspect the\noptions fields before an update. Its supports_reconfigure field tells\nyou whether an entry qualifies for reconfigure=True.\n\nCaveats: adding an integration runs its config flow exactly as the HA\nUI would (may pair devices, scan the network, create entities). Flows\nrequiring a browser step (OAuth) or an asynchronous provider step\nerror out at that step instead of completing. Reconfigure edits the\nsettings a live integration connects with: a wrong host or credential\ntakes it offline, and there is no automatic rollback — the returned\nrollback metadata describes repeating the official flow by hand with\nthe previous values, which this tool cannot read back. The preflight\ndoes not validate config keys against the integration's form; wrong\nfield names surface on the confirm call.\n\nEXAMPLES:\n- Add: ha_set_integration(domain=\"workday\", config={\"name\": \"Workday\"})\n- Update options: ha_set_integration(entry_id=\"abc123\", config={\"scan_interval\": 30})\n- Reconfigure preflight: ha_set_integration(entry_id=\"abc123\", reconfigure=True, config={\"host\": \"10.0.0.5\"}), then repeat adding confirm_token=\"sha256:...\"\n- Debug logging: ha_set_integration(domain=\"zha\", log_level=\"DEBUG\"), then log_level=\"DEFAULT\" to stop",
+    "description": "Manage an integration (config entry): enable/disable, add, update options, or reconfigure.\n\nModes (pick one):\n- Enable/disable: entry_id + enabled.\n- Add integration: domain (+ config) — drives the domain's config\n  flow, including menus and multi-step forms.\n- Update options: entry_id + config — drives the entry's options\n  flow (what the \"Configure\" button does in the HA UI).\n- Reconfigure: entry_id + reconfigure=True + config — connection\n  settings such as host, port, credentials. Repeat with the token the\n  preflight returns as confirm_token to apply.\n- Log level: log_level + domain (or entry_id) — sets how much the\n  integration logs; read it back with ha_get_integration's log_level.\n\nWHEN NOT TO USE:\n- Helpers (template, group, utility_meter, ...): use\n  ha_config_set_helper. `otp` is the user's to set up in the HA UI: its\n  secret is a credential enrolled in an authenticator app; do not create it.\n- Config subentries: use\n  ha_config_set_helper(helper_type='config_subentry').\n- Removing an entry: use ha_remove_helpers_integrations.\n- ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA\n  UI, or (server settings, developer mode on) ha_dev_manage_settings /\n  ha_dev_manage_server.\n\nUse ha_get_integration() to find entry IDs, and\nha_get_integration(entry_id=..., include_schema=True) to inspect the\noptions fields before an update. Its supports_reconfigure field tells\nyou whether an entry qualifies for reconfigure=True.\n\nCaveats: adding an integration runs its config flow exactly as the HA\nUI would (may pair devices, scan the network, create entities). Flows\nrequiring a browser step (OAuth) or an asynchronous provider step\nerror out at that step instead of completing. Reconfigure edits the\nsettings a live integration connects with: a wrong host or credential\ntakes it offline, and there is no automatic rollback — the returned\nrollback metadata describes repeating the official flow by hand with\nthe previous values, which this tool cannot read back. The preflight\ndoes not validate config keys against the integration's form; wrong\nfield names surface on the confirm call.\n\nEXAMPLES:\n- Add: ha_set_integration(domain=\"workday\", config={\"name\": \"Workday\"})\n- Update options: ha_set_integration(entry_id=\"abc123\", config={\"scan_interval\": 30})\n- Reconfigure preflight: ha_set_integration(entry_id=\"abc123\", reconfigure=True, config={\"host\": \"10.0.0.5\"}), then repeat adding confirm_token=\"sha256:...\"\n- Debug logging: ha_set_integration(domain=\"zha\", log_level=\"DEBUG\"), then log_level=\"DEFAULT\" to stop",
     "inputSchema": {
       "properties": {
         "entry_id": {
@@ -4013,7 +4013,7 @@
   {
     "name": "ha_config_get_yaml",
     "title": "Read YAML Config Fragment",
-    "description": "Get the current YAML fragment under a key, from one config file or across a glob.\n\nUse before ha_config_set_yaml to inspect what a key currently holds, and\nto find which file defines it — the returned ``file`` + ``yaml_path`` are\nexactly the arguments that address the same fragment for an edit.\n\nNot for storage-mode items: automations, scripts and scenes created\nthrough the UI live outside YAML — read those with ha_config_get_automation,\nha_config_get_script and ha_config_get_scene. This tool sees only what is\nwritten in the config files themselves.\n\nReads the file, so it reflects what is on disk rather than what Home\nAssistant currently has loaded; a fragment edited but not yet reloaded\ndiffers from the running config. Comments and HA tags survive as written\nand a ``!secret`` is never resolved to its value, so ``content`` can be\nhanded back to ha_config_set_yaml unchanged. Files outside the read\nallowlist stay unreadable, and secrets.yaml reads back with its values\nmasked.",
+    "description": "Get the current YAML fragment under a key, from one config file or across a glob.\n\nUse before ha_config_set_yaml to inspect what a key currently holds, and\nto find which file defines it — when ha_config_set_yaml accepts this\n``yaml_path`` for the returned ``file``, the two are exactly the\narguments that address the same fragment for an edit. To change a value\nnested below such a key, read the whole key and replace it.\n\nNot for storage-mode items: automations, scripts and scenes created\nthrough the UI live outside YAML — read those with ha_config_get_automation,\nha_config_get_script and ha_config_get_scene. This tool sees only what is\nwritten in the config files themselves.\n\nReads the file, so it reflects what is on disk rather than what Home\nAssistant currently has loaded; a fragment edited but not yet reloaded\ndiffers from the running config. Comments and HA tags survive as written\nand a ``!secret`` is never resolved to its value, so ``content`` can be\nhanded back to ha_config_set_yaml unchanged. Files outside the read\nallowlist stay unreadable, and secrets.yaml reads back with its values\nmasked.",
     "inputSchema": {
       "properties": {
         "yaml_path": {
@@ -4064,7 +4064,7 @@
         },
         "action": {
           "type": "str",
-          "description": "Action to perform: 'add' (insert/merge content under key), 'replace' (overwrite key with new content), or 'remove' (delete the key entirely)."
+          "description": "Action to perform: 'add' (insert content if yaml_path is absent; otherwise merge one level deep: a list gets content's items appended, a mapping gets content's top-level keys set, overwriting same-named ones, so a nested mapping or list under such a key is replaced, not merged; mismatched types are rejected. For a nested edit, read the whole value of yaml_path, not a nested path below it, and use 'replace' with the complete edited value), 'replace' (overwrite yaml_path with content), or 'remove' (delete yaml_path entirely)."
         },
         "content": {
           "type": "str | None",
@@ -4679,12 +4679,12 @@
   {
     "name": "ha_get_zone",
     "title": "Get Zone",
-    "description": "Get zone information - list all zones or get details for a specific one.\n\nWithout a zone_id: Lists all Home Assistant zones with their coordinates and radius.\nWith a zone_id: Returns detailed configuration for a specific zone.\n\nEXAMPLES:\n- List all zones: ha_get_zone()\n- Get specific zone: ha_get_zone(zone_id=\"abc123\")\n\nWith the ha_mcp_tools custom component installed, YAML-defined zones —\nincluding the auto-synthesized 'home' zone — are included and marked\n``editable=false`` / ``source=\"yaml\"`` (storage zones created via UI/API\nare ``source=\"storage\"``). Without the component, only storage zones are\nlisted and YAML-defined zones such as 'home' will not appear.",
+    "description": "Get zone information - list all zones or get details for a specific one.\n\nWithout a zone_id: Lists all Home Assistant zones with their coordinates and radius.\nWith a zone_id: Returns detailed configuration for a specific zone.\n\nEXAMPLES:\n- List all zones: ha_get_zone()\n- Get specific zone: ha_get_zone(zone_id=\"office\")\n- Same zone by entity_id: ha_get_zone(zone_id=\"zone.office\")\n\nZones outside the zone storage, the home zone (from the general\nsettings) and YAML zones, are listed with ``editable=false`` /\n``source=\"yaml\"``; editable means ha_set_zone and ha_remove_zone can\nchange the zone. Each zone carries its entity_id.",
     "inputSchema": {
       "properties": {
         "zone_id": {
           "type": "str | None",
-          "description": "Zone ID to get details for (from ha_get_zone() list).",
+          "description": "Zone ID or entity_id to get details for (from the ha_get_zone() list).",
           "default": null
         }
       }
@@ -4703,12 +4703,17 @@
   {
     "name": "ha_remove_zone",
     "title": "Remove Zone",
-    "description": "Remove a Home Assistant zone.\n\nEXAMPLES:\n- Remove zone: ha_remove_zone(\"abc123\")\n\n**WARNING:** Removing a zone used in automations may cause those automations to fail.\nUse ha_get_zone() to find the zone_id for the zone you want to remove.\n\n**NOTE:** The 'home' zone cannot be removed as it is typically defined in configuration.yaml.",
+    "description": "Remove a Home Assistant zone.\n\nEXAMPLES:\n- Remove zone: ha_remove_zone(\"office\")\n- Remove by entity_id: ha_remove_zone(\"zone.office\")\n\n**WARNING:** Removing a zone used in automations may cause those automations to fail.\nUse ha_get_zone() to find the zone_id for the zone you want to remove.\n\n**NOTE:** Zones defined in YAML, and the home zone, cannot be removed here.",
     "inputSchema": {
       "properties": {
         "zone_id": {
           "type": "str",
-          "description": "Zone ID to remove"
+          "description": "Zone ID or entity_id of the zone to remove"
+        },
+        "wait": {
+          "type": "bool",
+          "description": "Wait for the zone to be gone before returning. Set to False for bulk operations.",
+          "default": true
         }
       },
       "required": [
@@ -4729,7 +4734,7 @@
   {
     "name": "ha_set_zone",
     "title": "Set Zone",
-    "description": "Create or update a Home Assistant zone.\n\nOmit zone_id to create a new zone (name, latitude, longitude required).\nProvide zone_id to update an existing zone (only specified fields change).\nThe 'home' zone is typically defined in YAML and cannot be modified here.\n\nEXAMPLES:\n- Create: ha_set_zone(name=\"Office\", latitude=40.7128, longitude=-74.0060, radius=150, icon=\"mdi:briefcase\")\n- Update: ha_set_zone(zone_id=\"abc123\", radius=200)",
+    "description": "Create or update a Home Assistant zone.\n\nOmit zone_id to create a new zone (name, latitude, longitude required).\nProvide zone_id to update an existing zone (only specified fields change).\nZones defined in YAML, and the home zone, cannot be changed here.\n\nEXAMPLES:\n- Create: ha_set_zone(name=\"Office\", latitude=40.7128, longitude=-74.0060, radius=150, icon=\"mdi:briefcase\")\n- Update: ha_set_zone(zone_id=\"office\", radius=200)\n- Update by entity_id: ha_set_zone(zone_id=\"zone.office\", radius=200)",
     "inputSchema": {
       "properties": {
         "name": {
@@ -4749,23 +4754,28 @@
         },
         "zone_id": {
           "type": "str | None",
-          "description": "Zone ID to update (use ha_get_zone to find IDs)",
+          "description": "Zone ID or entity_id of the zone to update (from ha_get_zone)",
           "default": null
         },
         "radius": {
           "type": "float | None",
-          "description": "Radius of the zone in meters (must be > 0, defaults to 100 on create)",
+          "description": "Radius of the zone in meters; Home Assistant uses 100 when it is omitted on create",
           "default": null
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:briefcase', 'mdi:school')",
+          "description": "Material Design Icon (e.g., 'mdi:briefcase'). On update, '' clears it, except an icon stored in the zone itself (as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed",
           "default": null
         },
         "passive": {
           "type": "bool | None",
-          "description": "Passive mode - if True, zone will not trigger enter/exit automations (defaults to False on create)",
+          "description": "Passive mode: the zone is hidden in the frontend and not used for device tracker state, but automations can still use it (false when omitted on create)",
           "default": null
+        },
+        "wait": {
+          "type": "bool",
+          "description": "Wait for the zone to be queryable before returning. Set to False for bulk operations.",
+          "default": true
         }
       }
     },

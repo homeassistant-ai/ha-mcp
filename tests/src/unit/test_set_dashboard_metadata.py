@@ -1,6 +1,7 @@
 """Unit tests for ha_config_set_dashboard metadata-update path."""
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,6 +9,14 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 from ha_mcp.utils.config_hash import compute_config_hash
+
+# Core's ws_create_item answer for DashboardsCollection._process_create_data's
+# vol.Invalid, as the client's send_websocket_message relays it.
+_CORE_HYPHEN_REJECTION = {
+    "success": False,
+    "error": "Command failed: Url path needs to contain a hyphen (-). Got {...}",
+    "error_code": "invalid_format",
+}
 
 
 class TestSetDashboardMetadataUpdate:
@@ -95,6 +104,27 @@ class TestSetDashboardMetadataUpdate:
         assert meta_call["show_in_sidebar"] is False
 
     @pytest.mark.asyncio
+    async def test_empty_icon_clears_stored_icon(
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
+        """icon='' sends None, which Core's update schema accepts and drops."""
+        mock_client.send_websocket_message.side_effect = [
+            self._make_dashboard_list("my-dashboard"),
+            {"success": True},
+            {"result": {"views": []}},
+        ]
+
+        result = await set_tool(url_path="my-dashboard", icon="")
+
+        assert result["metadata_updated"] is True
+        meta_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        assert meta_call == {
+            "type": "lovelace/dashboards/update",
+            "dashboard_id": "dash-1",
+            "icon": None,
+        }
+
+    @pytest.mark.asyncio
     async def test_metadata_update_fails_returns_error(self, set_tool, mock_client):
         """When the metadata update WS call fails, the tool raises ToolError."""
         mock_client.send_websocket_message.side_effect = [
@@ -166,6 +196,11 @@ class TestSetDashboardMetadataUpdate:
         assert result["config_updated"] is True
         assert result["metadata_updated"] is False
         assert "hint" not in result
+        # No url_path: Core saves to its lovelace item, else its default store.
+        assert mock_client.send_websocket_message.call_args_list[2][0][0] == {
+            "type": "lovelace/config/save",
+            "config": replacement,
+        }
         metadata_warning = next(
             warning for warning in result["warnings"] if "no storage ID" in warning
         )
@@ -293,23 +328,23 @@ class TestSetDashboardListCallDedup:
         assert result.get("resolved_from") is None
 
     @pytest.mark.asyncio
-    async def test_internal_id_no_match_falls_through_to_hyphen_check(
-        self, set_tool, mock_client
-    ):
-        """Hyphenless identifier with no matching dashboard: pre-resolver
-        fetches the list, finds no match, ``url_path`` stays
-        unchanged, then fails the hyphen-validation check before any
-        existence-check fetch can fire. Total list calls = 1."""
+    async def test_internal_id_no_match_reuses_list_for_create(
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
+        """Hyphenless identifier with no matching dashboard: the pre-resolver's
+        list is reused for the existence check, and the create goes to Core.
+        Total list calls = 1."""
         mock_client.send_websocket_message.side_effect = [
             {"result": [{"url_path": "other-dash", "id": "other_dash"}]},
+            _CORE_HYPHEN_REJECTION,
         ]
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(ToolError):
             await set_tool(url_path="ghost", title="X")
 
-        body = json.loads(str(exc_info.value))
-        assert "url_path must contain a hyphen" in body["error"]["message"]
         assert self._list_call_count(mock_client) == 1
+        create_call = mock_client.send_websocket_message.call_args_list[1].args[0]
+        assert create_call["type"] == "lovelace/dashboards/create"
 
     @pytest.mark.asyncio
     async def test_canonical_url_path_branch_rejects_unreadable_registry(
@@ -343,7 +378,7 @@ class TestSetDashboardListCallDedup:
 
 
 class TestSetDashboardUrlPathCreationContract:
-    """Hyphenless input is exempt only for an exact existing url_path."""
+    """Core, not HA-MCP, decides whether a new url_path is acceptable."""
 
     @pytest.fixture
     def mock_client(self):
@@ -396,39 +431,79 @@ class TestSetDashboardUrlPathCreationContract:
         )
 
     @pytest.mark.asyncio
-    async def test_new_hyphenless_dashboard_is_rejected(self, set_tool, mock_client):
-        mock_client.send_websocket_message.return_value = {"result": []}
+    async def test_new_hyphenless_dashboard_relays_core_rejection(
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
+        mock_client.send_websocket_message.side_effect = [
+            {"result": []},
+            _CORE_HYPHEN_REJECTION,
+        ]
 
         with pytest.raises(ToolError) as exc_info:
             await set_tool(url_path="newmap", title="New Map")
 
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "url_path must contain a hyphen" in body["error"]["message"]
-        assert all(
-            "Try 'newmap'" not in suggestion
-            for suggestion in body["error"]["suggestions"]
-        )
-        assert mock_client.send_websocket_message.call_count == 1
+        assert "Url path needs to contain a hyphen (-)" in body["error"]["message"]
+        # Only Core's own wording; the error code's default suggestions remain.
+        assert "Try '" not in json.dumps(body["error"])
+        create_call = mock_client.send_websocket_message.call_args_list[1].args[0]
+        assert create_call["type"] == "lovelace/dashboards/create"
+        assert create_call["url_path"] == "newmap"
 
     @pytest.mark.asyncio
-    async def test_internal_id_match_cannot_exempt_other_hyphenless_path(
-        self, set_tool, mock_client
-    ):
-        mock_client.send_websocket_message.return_value = {
-            "result": [{"url_path": "map", "id": "map_internal"}]
-        }
+    async def test_core_hyphen_rejection_suggests_hyphenated_path(
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
+        mock_client.send_websocket_message.side_effect = [
+            {"result": []},
+            _CORE_HYPHEN_REJECTION,
+        ]
 
         with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="map_internal", title="Updated Map")
+            await set_tool(url_path="my_dash", title="Mine")
 
         body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "url_path must contain a hyphen" in body["error"]["message"]
-        assert body["url_path"] == "map_internal"
-        assert body["error"]["suggestion"] == "Try 'map-internal' instead"
-        assert "Try 'map' instead" not in body["error"]["suggestions"]
-        assert mock_client.send_websocket_message.call_count == 1
+        assert body["error"]["suggestion"] == "Try 'my-dash' instead"
+
+    @pytest.mark.asyncio
+    async def test_other_core_create_error_gets_no_hyphen_suggestion(
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
+        mock_client.send_websocket_message.side_effect = [
+            {"result": []},
+            {
+                "success": False,
+                "error": "Command failed: The URL my_dash is already in use",
+                "error_code": "home_assistant_error",
+            },
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url_path="my_dash", title="Mine")
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "already in use" in body["error"]["message"]
+        assert "Try 'my-dash' instead" not in json.dumps(body)
+
+    @pytest.mark.asyncio
+    async def test_internal_id_match_rewrites_to_hyphenless_url_path(
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "map", "id": "map_internal"}]},
+            {"success": True},
+            {"result": {"views": []}},
+        ]
+
+        result = await set_tool(url_path="map_internal", title="Updated Map")
+
+        assert result["action"] == "update"
+        assert result["url_path"] == "map"
+        assert result["resolved_from"] == "map_internal"
+        meta_call = mock_client.send_websocket_message.call_args_list[1].args[0]
+        assert meta_call["dashboard_id"] == "map_internal"
 
     @pytest.mark.asyncio
     async def test_unreadable_registry_is_not_reported_as_bad_hyphenless_input(
@@ -459,9 +534,34 @@ class TestSetDashboardUrlPathCreationContract:
         assert result["success"] is True
         assert result["action"] == "create"
         assert result["dashboard_created"] is True
-        assert mock_client.send_websocket_message.call_args_list[1].args[0]["type"] == (
-            "lovelace/dashboards/create"
+        # Core's create schema supplies require_admin/show_in_sidebar defaults.
+        assert mock_client.send_websocket_message.call_args_list[1].args[0] == {
+            "type": "lovelace/dashboards/create",
+            "url_path": "new-map",
+            "title": "New Map",
+        }
+
+    @pytest.mark.asyncio
+    async def test_create_forwards_given_metadata_and_omits_blank_icon(
+        self, set_tool: Any, mock_client: MagicMock
+    ) -> None:
+        mock_client.send_websocket_message.side_effect = [
+            {"result": []},
+            {"success": True, "result": {"id": "new_map"}},
+            {"result": {"views": []}},
+        ]
+
+        await set_tool(
+            url_path="new-map", icon="", require_admin=True, show_in_sidebar=False
         )
+
+        assert mock_client.send_websocket_message.call_args_list[1].args[0] == {
+            "type": "lovelace/dashboards/create",
+            "url_path": "new-map",
+            "title": "New Map",
+            "require_admin": True,
+            "show_in_sidebar": False,
+        }
 
     @pytest.mark.asyncio
     async def test_existing_hyphenless_dashboard_full_config_update_is_allowed(

@@ -583,14 +583,14 @@ async def test_set_existence_check_via_real_component() -> None:
 # --- auto-backup capture read -------------------------------------------------
 @pytest.mark.asyncio
 async def test_backup_capture_via_real_component() -> None:
-    """The auto-backup capture reads the body through the real component get."""
+    """The auto-backup capture reads the body and settings row through the real component."""
     hass = _component_hass({"home": _storage_dash("home", "Home", body=_HOME_BODY)})
     ws = _real_component_ws(hass)
     client = RoutingClient()
     with patch_ws(ws, tools_config_dashboards):
-        captured = await backup_manager._fetch_dashboard(client, "home")
+        captured = await backup_manager.fetch_dashboard(client, "home")
 
-    assert captured == _HOME_BODY
+    assert captured == {"dashboard": _HOME_ROW, "config": _HOME_BODY}
     assert client.config_calls == []  # served in-process
 
 
@@ -609,7 +609,7 @@ async def test_backup_capture_yaml_falls_back_to_legacy() -> None:
     # the legacy lovelace/config read serves the YAML body.
     client = RoutingClient(configs={"yaml-dash": _YAML_BODY})
     with patch_ws(ws, tools_config_dashboards):
-        captured = await backup_manager._fetch_dashboard(client, "yaml-dash")
+        captured = await backup_manager.fetch_dashboard(client, "yaml-dash")
 
-    assert captured == _YAML_BODY
+    assert captured == {"dashboard": None, "config": _YAML_BODY}
     assert client.config_calls == ["yaml-dash"]

@@ -3,7 +3,8 @@ E2E: ha_config_set_helper backs up every helper type it edits (#2632).
 
 A flow helper other than template is snapshotted from its options and
 restored through its options flow; zone, a storage helper the backup family
-used to skip, is restored through ``zone/update``.
+used to skip, is restored through ``zone/update``, or created again when
+ha_remove_zone removed it.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import pytest
 from ha_mcp._vendor.fastmcp import Client
 
 from ...utilities.assertions import MCPAssertions, assert_mcp_success, safe_call_tool
+from ...utilities.forecast_solar import create_forecast_solar_entry
 from ...utilities.topology import component_surface_available
 from .test_capture_and_restore import (
     _HA_PROPAGATION_SETTLE_SECONDS,
@@ -271,18 +273,8 @@ async def _subentry_backup(
 async def solar_plane(
     mcp_client: Client, ha_client: Any
 ) -> AsyncIterator[tuple[str, str]]:
-    """A Forecast.Solar entry with one plane subentry (in-tree, no network)."""
-    flow = await ha_client.start_config_flow("forecast_solar")
-    done = await ha_client.submit_config_flow_step(
-        flow["flow_id"],
-        {
-            "latitude": 52.0,
-            "longitude": 5.0,
-            "declination": 30,
-            "azimuth": 180,
-            "modules_power": 1000,
-        },
-    )
+    """A Forecast.Solar entry with one plane subentry."""
+    done = await create_forecast_solar_entry(ha_client)
     entry_id = done["result"]["entry_id"]
     try:
         async with MCPAssertions(mcp_client) as mcp:
@@ -346,3 +338,33 @@ async def test_deleted_subentry_is_backed_up_and_created_again(
         )
         new_id = restored["data"]["result"]["subentry_id"]
         assert (await _plane_titles(mcp, entry_id)) == {new_id: "30° / 180° / 1000W"}
+
+
+@pytest.mark.cleanup
+async def test_removed_zone_is_created_again_from_its_backup(
+    mcp_client: Client,
+) -> None:
+    """Core's zone/update cannot restore a removed zone: the restore creates it."""
+    name = f"e2e_zone_gone_{uuid.uuid4().hex[:8]}"
+    async with MCPAssertions(mcp_client) as mcp:
+        created = await mcp.call_tool_success(
+            "ha_set_zone",
+            {"name": name, "latitude": 52.2, "longitude": 4.4, "radius": 120},
+        )
+        zone_id = created["zone_id"]
+        try:
+            await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
+            await mcp.call_tool_success("ha_remove_zone", {"zone_id": zone_id})
+            backup_name = await _wait_for_backup(
+                mcp_client, domain="zone", entity_id=zone_id
+            )
+            restored = await mcp.call_tool_success(
+                "ha_manage_backup",
+                {"scope": "edits", "action": "restore", "backup_name": backup_name},
+            )
+            assert restored["data"]["result"]["restore_mode"] == "recreated", restored
+            listed = await mcp.call_tool_success("ha_get_zone", {})
+            zone = next((z for z in listed["zones"] if z.get("name") == name), None)
+            assert zone is not None and zone["radius"] == 120, listed
+        finally:
+            await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})

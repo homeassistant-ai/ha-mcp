@@ -10,6 +10,7 @@ of HA wording stability.
 
 import json
 import logging
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -346,17 +347,21 @@ class TestDeleteDashboardNotFoundShape:
         self, delete_tool, mock_client
     ):
         """When _resolve_dashboard succeeds but the WS delete call replies with
-        a ``not found`` error, the tool returns the idempotent success shape
+        Core's ``not_found`` code, the tool returns the idempotent success shape
         — locking the ``action`` + ``url_path`` keys that the failure-path
         404 mirrors. Drift between the two top-level shapes would surface
         as a test break here.
         """
         # First call: registry lookup → returns a real dashboard so
-        # _resolve_dashboard succeeds. Second call: delete → server reports
-        # the dashboard is already gone, triggering the idempotent branch.
+        # _resolve_dashboard succeeds. Second call: delete → Core's collection
+        # (ws_delete_item) reports the item is already gone.
         mock_client.send_websocket_message.side_effect = [
             {"success": True, "result": [{"id": "abc123", "url_path": "stale-dash"}]},
-            {"success": False, "error": {"message": "Dashboard not found"}},
+            {
+                "success": False,
+                "error": "Command failed: Unable to find dashboard_id abc123",
+                "error_code": "not_found",
+            },
         ]
 
         result = await delete_tool(url_path="stale-dash")
@@ -368,3 +373,69 @@ class TestDeleteDashboardNotFoundShape:
         # leak the dropped resource_type / identifier keys.
         assert "resource_type" not in result
         assert "identifier" not in result
+
+    @pytest.mark.asyncio
+    async def test_not_found_text_without_core_code_is_a_failure(
+        self, delete_tool: Any, mock_client: MagicMock
+    ) -> None:
+        """Only Core's ``not_found`` code means already deleted, not message text."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": [{"id": "abc123", "url_path": "stale-dash"}]},
+            {
+                "success": False,
+                "error": "Command failed: Storage file not found",
+                "error_code": "unknown_error",
+            },
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_tool(url_path="stale-dash")
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "Storage file not found" in body["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_yaml_mode_dashboard_gets_a_precise_error(
+        self, delete_tool: Any, mock_client: MagicMock
+    ) -> None:
+        """A YAML row has no collection id; the error names YAML mode."""
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": [{"url_path": "yaml-dash", "mode": "yaml", "title": "Y"}],
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_tool(url_path="yaml-dash")
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "YAML-mode" in body["error"]["message"]
+        assert "configuration.yaml" in body["error"]["details"]
+        assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_default_alias_deletes_the_lovelace_item(
+        self, delete_tool: Any, mock_client: MagicMock
+    ) -> None:
+        """'default' maps to the migrated ``lovelace`` item, which Core deletes."""
+        mock_client.send_websocket_message.side_effect = [
+            {
+                "success": True,
+                "result": [
+                    {"id": "lovelace", "url_path": "lovelace", "mode": "storage"}
+                ],
+            },
+            {"success": True, "result": None},
+        ]
+
+        result = await delete_tool(url_path="default")
+
+        assert result["success"] is True
+        assert result["url_path"] == "lovelace"
+        assert "auto-generated default dashboard" in result["note"]
+        delete_call = mock_client.send_websocket_message.call_args_list[1].args[0]
+        assert delete_call == {
+            "type": "lovelace/dashboards/delete",
+            "dashboard_id": "lovelace",
+        }

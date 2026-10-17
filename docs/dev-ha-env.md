@@ -28,7 +28,9 @@ best-practices mode for the standalone and embedded servers. `ha_image`
 overrides the Docker image (default: `ghcr.io/home-assistant/home-assistant:stable`).
 Pass an explicit version tag to test an older Core release, or `:beta` to test
 the current beta. This dev default is independent of the branch's E2E pin. `minutes`
-defaults to and is capped at 330. A HAOS run builds the HAOS image the first
+defaults to and is capped at 330. On HAOS, `cpu_max` caps the VM's CPU once Home
+Assistant is up (cgroup `cpu.max`, e.g. `25000 100000` for a quarter of a host
+core), to reproduce a report from a slow board. A HAOS run builds the HAOS image the first
 time the image build files, the test config or the proxy app change, and saves
 it to the fork's cache for later runs. A branch whose component differs from
 every cached image reuses one with the same base and applies its own component

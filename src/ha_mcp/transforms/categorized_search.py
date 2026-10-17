@@ -35,6 +35,7 @@ from ha_mcp._vendor.mcp.types import ToolAnnotations
 
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..renamed_tools import adapt_retired_arguments, current_tool_name
+from ..server_tool_text import SKILL_TOOL_NAME
 from .compact_params import compact_params, summary
 from .write_tool_note import DESKTOP_APPROVAL_NOTE
 
@@ -87,7 +88,7 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
     # Skill guide must stay visible when tool search hides the catalog —
     # its description carries the bundled best-practices trigger
     # conditions that the LLM needs to see before writing config.
-    "ha_get_skill_guide",
+    SKILL_TOOL_NAME,
 )
 
 # Tool name patterns that indicate delete/remove operations

@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "Bazowy adres URL silnika zrzutów ekranu. Pozostaw puste dla automatycznego wykrywania przez Supervisor. Obowiązuje natychmiast.",
     "advanced.enable_websocket.label": "Włącz WebSocket",
     "advanced.enable_websocket.help": "Monitorowanie stanu przez WebSocket. Wyłączenie powoduje powrót do odpytywania (polling) i obniża działanie wielu narzędzi.",
+    "advanced.custom_instructions.label": "Niestandardowe instrukcje serwera",
+    "advanced.custom_instructions.help": "Tekst wysyłany do każdego łączącego się asystenta AI jako część instrukcji serwera MCP – na przykład informacja o tym, gdzie przechowywane są notatki domowe oraz kiedy je czytać lub aktualizować. Jest to również część promptu agentów konwersacyjnych Home Assistant (Assist), którzy korzystają z tego zestawu narzędzi. Użyj tej opcji do wytycznych, które powinny dotrzeć do wszystkich Twoich klientów naraz; dbaj o to, aby tekst był krótki i nie zawierał poufnych danych. Pozostaw puste pole, aby niczego nie dodawać. Wymaga ponownego uruchomienia; klienci zobaczą zmianę po ponownym połączeniu.",
     "advanced.enabled_tool_modules.label": "Włączone moduły narzędzi",
     "advanced.enabled_tool_modules.help": "Nazwy modułów oddzielone przecinkami lub „all”.",
     "advanced.enable_dashboard_partial_tools.label": "Narzędzia do częściowej aktualizacji pulpitu nawigacyjnego",

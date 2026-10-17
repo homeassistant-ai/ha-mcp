@@ -19,6 +19,15 @@ configuration:
     description: Jak důrazně jsou asistenti AI vyzýváni k doporučení úplné zálohy
       Home Assistant před rizikovými změnami. Mění pouze tuto nápovědu; automatické
       zálohy úprav mají své vlastní nastavení.
+  custom_instructions:
+    name: Vlastní instrukce serveru
+    description: Text odeslaný každému připojujícímu se AI asistentu jako součást
+      instrukcí MCP serveru — například kde jsou uloženy poznámky domácnosti a kdy
+      je číst nebo aktualizovat. Je také součástí promptu konverzačních agentů Home
+      Assistant (Assist), kteří tuto sadu nástrojů používají. Použijte jej pro pokyny,
+      které by měly zasáhnout všechny vaše klienti najednou; udržujte jej stručný
+      a bez tajných údajů. Ponechte prázdné, pokud nechcete nic přidat. Vyžaduje restart;
+      klienti uvidí změnu po opětovném připojení.
   enable_tool_search:
     name: Povolit vyhledávání nástrojů
     description: 'Nahradit úplný katalog nástrojů vyhledáváním. Snižuje klidový kontext

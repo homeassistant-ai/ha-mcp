@@ -542,7 +542,11 @@ class HelperConfigTools:
         helper_id: Annotated[
             str | None,
             Field(
-                description="Bare ID ('my_button') or full entity ID ('input_button.my_button'). Omit to create a new helper.",
+                description=(
+                    "The helper's storage id ('my_button'), not the name of its "
+                    "entity, or its full entity_id ('input_button.my_button'). "
+                    "Omit to create a new helper."
+                ),
                 default=None,
             ),
         ] = None,
@@ -590,7 +594,7 @@ class HelperConfigTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, set at creation or by ha_set_zone; ha_get_zone shows it), which cannot be removed",
+                description="Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon (the icon in the zone's own config, as the Home Assistant UI stores it; ha_get_zone shows it), which cannot be removed. On create, a storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, otherwise (person, tag, a new zone, or without the ha_mcp_tools component) into the entity registry; an update always sets the registry icon, and the stored icon too where the schema has one. Automatic backups hold the registry icon of a person, tag or zone only, so restoring another helper's backup does not bring back an icon kept in the registry; without the component, every storage helper other than a zone keeps its icon there",
                 default=None,
             ),
         ] = None,
@@ -899,13 +903,11 @@ class HelperConfigTools:
 
                 # helper_id is guaranteed non-None by _validate_set_helper_action for update
                 hid: str = helper_id  # type: ignore[assignment]
-                entity_id = (
-                    hid if hid.startswith(helper_type) else f"{helper_type}.{hid}"
-                )
+                # A bare id is a storage id, never turned into an entity_id.
                 return await _execute_update_simple_helper(
                     self._client,
                     helper_type,
-                    entity_id,
+                    hid,
                     hid,
                     name,
                     icon,

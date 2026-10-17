@@ -961,7 +961,7 @@ async def test_patch_preparation_failure_preserves_action(legacy_dashboard, fail
     if failure == "metadata":
         kwargs["title"] = "Invalid with patch"
     elif failure == "url_path":
-        kwargs["url_path"] = "bad/path"
+        kwargs["url_path"] = " "  # blank: rejected before any read or write
     elif failure == "view_path":
         kwargs.update(return_screenshot=True, view_path=" ")
     else:

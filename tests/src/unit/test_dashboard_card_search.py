@@ -367,15 +367,13 @@ class TestBadgeCriteria:
         ]
         assert all("matched" not in m for m in matches)
 
-    MALFORMED: ClassVar[dict[str, Any]] = {
+    UNREAD: ClassVar[dict[str, Any]] = {
         "views": [{"badges": [None, "  ", "sensor.ok"], "cards": []}]
     }
 
-    def _malformed_search(
-        self, url_path: str | None, **criteria: str
-    ) -> dict[str, Any]:
+    def _unread_search(self, url_path: str | None, **criteria: str) -> dict[str, Any]:
         return DashboardConfigTools._build_search_result(
-            [{"url_path": "d", "config": self.MALFORMED}],
+            [{"url_path": "d", "config": self.UNREAD}],
             criteria=_SearchCriteria(**criteria),
             include_config=False,
             url_path=url_path,
@@ -388,17 +386,17 @@ class TestBadgeCriteria:
             (None, {"query": "sensor"}, "d:"),
         ],
     )
-    def test_malformed_badge_entries_are_reported_not_listed(
+    def test_unread_badge_entries_are_reported_not_listed(
         self, url_path: str | None, criteria: dict[str, str], prefix: str
     ):
-        result = self._malformed_search(url_path, **criteria)
+        result = self._unread_search(url_path, **criteria)
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[2]"]
         [warning] = result["warnings"]
         assert f"{prefix}.views[0].badges[0]" in warning
         assert f"{prefix}.views[0].badges[1]" in warning
 
     def test_out_of_scope_badges_are_not_reported(self):
-        result = self._malformed_search("d", card_type="tile")
+        result = self._unread_search("d", card_type="tile")
         assert "warnings" not in result
 
     def test_heading_excludes_badges(self):
@@ -406,8 +404,9 @@ class TestBadgeCriteria:
         assert [m["card_type"] for m in matches] == ["tile"]
 
 
-class TestMalformedContainers:
-    """Containers in the wrong shape are reported, never silently skipped."""
+class TestUnreadContainers:
+    """Containers in a shape the search does not read are reported, never
+    silently skipped."""
 
     CONFIG: ClassVar[dict[str, Any]] = {
         "views": [
@@ -540,7 +539,7 @@ class TestReviewedSearchEdges:
         result = self._search(config, card_type="badge")
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[0]"]
 
-    def test_cards_mapping_is_reported_as_read_as_text(self) -> None:
+    def test_cards_mapping_is_read_as_text_without_a_warning(self) -> None:
         config = {
             "views": [
                 {
@@ -555,11 +554,10 @@ class TestReviewedSearchEdges:
         }
         result = self._search(config, entity_id="light.a")
         assert result["match_count"] == 0
-        [warning] = result["warnings"]
-        assert ".views[0].cards[0].cards" in warning
-        assert "not searched" not in warning
+        assert "warnings" not in result
+        assert self._search(config, query="light.a")["match_count"] == 1
 
-    def test_alarm_panel_states_list_is_not_malformed(self) -> None:
+    def test_alarm_panel_states_list_is_read_as_text(self) -> None:
         config = {
             "views": [
                 {
@@ -577,24 +575,25 @@ class TestReviewedSearchEdges:
         assert result["match_count"] == 1
         assert "warnings" not in result
 
-    def test_card_list_is_reported_as_read_as_text(self) -> None:
+    def test_typed_cards_in_a_card_list_are_found(self) -> None:
         config = {
             "views": [
                 {
                     "cards": [
                         {
                             "type": "conditional",
-                            "card": [{"type": "tile", "entity": "light.a"}],
+                            "card": [{"type": "tile", "entity": "light.a"}, "x"],
                         }
                     ]
                 }
             ]
         }
         result = self._search(config, entity_id="light.a")
-        assert result["match_count"] == 0
-        [warning] = result["warnings"]
-        assert ".views[0].cards[0].card" in warning
-        assert "not searched" not in warning
+        assert [m["jq_path"] for m in result["matches"]] == [
+            ".views[0].cards[0].card[0]"
+        ]
+        assert "warnings" not in result
+        assert self._search(config, query="x")["match_count"] == 1
 
     def test_query_matches_number_and_boolean_options(self) -> None:
         config = {
@@ -605,11 +604,14 @@ class TestReviewedSearchEdges:
         ]
         assert self._search(config, query="false")["match_count"] == 1
 
-    def test_untyped_top_level_card_is_reported_as_malformed(self) -> None:
+    def test_untyped_top_level_card_is_reported_as_not_searched(self) -> None:
         config = {"views": [{"cards": [{"entity": "light.a"}]}]}
         result = self._search(config, query="light.a")
         assert result["match_count"] == 0
-        assert any(".views[0].cards[0]" in w for w in result["warnings"])
+        [warning] = result["warnings"]
+        assert warning.startswith("Not searched as cards or badges")
+        assert ".views[0].cards[0]" in warning
+        assert "repair" not in warning
 
     def test_query_reads_a_card_nested_in_a_badge(self) -> None:
         config = {
@@ -636,7 +638,7 @@ class TestReviewedSearchEdges:
         result = self._search({"views": [{"badges": [badge]}]}, query="light.deep")
         assert any("depth bound" in w for w in result["warnings"])
 
-    def test_misshapen_slot_in_a_badge_is_reported_as_read_as_text(self) -> None:
+    def test_card_list_in_a_badge_is_read_as_text_without_a_warning(self) -> None:
         badge = {
             "type": "entity",
             "entity": "sensor.d",
@@ -644,52 +646,33 @@ class TestReviewedSearchEdges:
         }
         result = self._search({"views": [{"badges": [badge]}]}, query="light.a")
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[0]"]
-        [warning] = result["warnings"]
-        assert ".views[0].badges[0].card" in warning
-        assert "not searched" not in warning
-
-    def test_button_card_styles_card_list_is_not_misshapen(self) -> None:
-        """Valid button-card ``styles.card`` CSS was flagged for repair (#2729).
-
-        The styles stay ordinary searchable text, with no misshapen-slot warning.
-        """
-        card = {
-            "type": "custom:button-card",
-            "entity": "light.a",
-            "styles": {"card": [{"height": "80px"}], "name": [{"color": "red"}]},
-        }
-        config = {"views": [{"cards": [card]}]}
-        result = self._search(config, query="light.a")
-        assert [m["jq_path"] for m in result["matches"]] == [".views[0].cards[0]"]
         assert "warnings" not in result
-        css = self._search(config, query="80px")
-        assert [m["jq_path"] for m in css["matches"]] == [".views[0].cards[0]"]
 
     @pytest.mark.parametrize(
-        ("options", "misshapen_path"),
+        "options",
         [
-            (
-                {"state": [{"value": "on", "styles": {"card": [{"color": "red"}]}}]},
-                None,
-            ),
-            (
-                {"custom_fields": {"styles": {"card": [{"type": "markdown"}]}}},
-                ".views[0].cards[0].custom_fields.styles.card",
-            ),
+            {"styles": {"card": [{"height": "80px"}], "name": [{"color": "red"}]}},
+            {"state": [{"value": "on", "styles": {"card": [{"height": "80px"}]}}]},
+            {"custom_fields": {"styles": {"card": [{"height": "80px"}]}}},
+            {"card": [{"height": "80px"}]},
+            {"cards": {"height": "80px"}},
         ],
-        ids=["state-styles-are-css", "custom-field-named-styles-is-a-slot"],
+        ids=[
+            "styles-card",
+            "state-styles-card",
+            "custom-field-styles-card",
+            "bare-card-list",
+            "cards-mapping",
+        ],
     )
-    def test_only_button_card_styling_containers_skip_the_card_check(
-        self, options: dict[str, Any], misshapen_path: str | None
+    def test_card_keys_in_other_shapes_are_options_not_warnings(
+        self, options: dict[str, Any]
     ) -> None:
-        """A custom field named ``styles`` must not hide a broken card slot (#2729).
-
-        Only the card's own ``styles`` and its ``state[].styles`` hold CSS lists.
-        """
+        """A custom card's ``card``/``cards`` in another shape is its own option
+        (button-card ``styles.card`` CSS, #2729): no warning, text searchable."""
         card = {"type": "custom:button-card", "entity": "light.a", **options}
-        result = self._search({"views": [{"cards": [card]}]}, query="light.a")
-        if misshapen_path is None:
+        config = {"views": [{"cards": [card]}]}
+        for criteria in ({"query": "80px"}, {"entity_id": "light.a"}):
+            result = self._search(config, **criteria)
+            assert [m["jq_path"] for m in result["matches"]] == [".views[0].cards[0]"]
             assert "warnings" not in result
-        else:
-            [warning] = result["warnings"]
-            assert misshapen_path in warning

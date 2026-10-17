@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from .._vendor.fastmcp.exceptions import ToolError
 from .._version import is_running_in_addon
 from ..backup_manager import (
     _CAPTURE_TRANSIENT_ERRORS,
@@ -250,7 +251,35 @@ async def _restore_backup(
             ),
             status_code=409,
         )
+    except Exception as err:
+        # A write to Home Assistant failed: keep the error's own code, and the
+        # manager's outcome names the safety backup to revert with (#2632).
+        # The reply carries only the error's message, so the traceback is logged.
+        logger.exception("Restore of %s failed", name)
+        from ..tools.helpers import exception_to_structured_error
+
+        outcome = getattr(err, "restore_outcome", None)
+        response = _structured_tool_error(err)
+        if response is None:
+            response = exception_to_structured_error(
+                err, context={"data": outcome}, raise_error=False
+            )
+        else:
+            response.setdefault("data", outcome)
+        return JSONResponse(response, status_code=409)
     return JSONResponse({"success": True, "data": result})
+
+
+def _structured_tool_error(err: Exception) -> dict[str, Any] | None:
+    """The structured reply a ToolError carries (``COMPONENT_NOT_INSTALLED`` and
+    its fix, say); classifying it again would turn it into an unexpected error."""
+    if not isinstance(err, ToolError):
+        return None
+    try:
+        reply = json.loads(str(err))
+    except ValueError:
+        return None
+    return reply if isinstance(reply, dict) else None
 
 
 async def _delete_backup(

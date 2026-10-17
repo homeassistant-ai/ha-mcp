@@ -2077,33 +2077,33 @@ async def _edits_restore(
     except ToolError:
         raise
     except Exception as err:  # noqa: BLE001
-        # ``handler.restore`` is domain-specific and can surface
-        # HA-side rejections (schema-validation failures, 4xx/5xx
-        # responses, WS command errors). Without this catch those
-        # propagate as opaque INTERNAL_ERROR with no
-        # ``backup_name`` / ``domain`` context — the user is left
-        # to read the FastMCP traceback. Funnel through
-        # ``exception_to_structured_error`` so the structured
-        # response carries enough context to retry.
+        # ``handler.restore`` is domain-specific and can surface HA-side
+        # rejections (schema-validation failures, 4xx/5xx responses, WS command
+        # errors). Without this catch those propagate as opaque INTERNAL_ERROR
+        # with no ``backup_name`` / ``domain`` context. Funnel through
+        # ``exception_to_structured_error``, with the manager's outcome (the
+        # safety backup to revert with, warnings) as ``data``.
         exception_to_structured_error(
             err,
-            context={"backup_name": bname, "action": "restore"},
+            context={
+                "backup_name": bname,
+                "action": "restore",
+                "data": getattr(err, "restore_outcome", None),
+            },
             suggestions=[
-                "Verify the entity referenced by the backup still "
-                + "exists; restore re-POSTs to its current registry "
-                + "key",
-                "Compare the captured schema vs current HA — HA "
-                + "minor versions occasionally drop/rename fields",
-                "Inspect the snapshot YAML via "
-                + "ha_manage_backup(scope='edits', action='view', "
-                + "backup_name=...)",
+                "Verify the entity referenced by the backup still exists; "
+                + "restore re-POSTs to its current registry key",
+                "Compare the captured schema vs current HA — HA minor versions "
+                + "occasionally drop/rename fields",
+                "Inspect the snapshot YAML via ha_manage_backup(scope='edits', "
+                + "action='view', backup_name=...)",
             ],
         )
         return None  # unreachable: exception_to_structured_error always raises
     # The manager also serves Settings, which consumes handler warnings in place.
     # Copy its result before moving warnings to the MCP response envelope.
     data = dict(result)
-    warnings: list[str] = []
+    warnings: list[str] = list(data.pop("warnings", []))
     if isinstance(result.get("result"), dict):
         handler_result = dict(result["result"])
         warnings.extend(handler_result.pop("warnings", []))

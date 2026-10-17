@@ -6,7 +6,7 @@ Home Assistant serves; this module compacts it the way helper ``describe`` does.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn
 
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
@@ -36,6 +36,77 @@ def _flatten(schema: list[Any]) -> list[dict[str, Any]]:
         elif node.get("name"):
             fields.append(node)
     return fields
+
+
+def _raise_describe_error(result: dict[str, Any], card_type: str | None) -> NoReturn:
+    """Map the component's describe error to a tool error."""
+    error = result.get("error")
+    if error == "describe_timeout":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.TIMEOUT_OPERATION,
+                "Describing this card took longer than Home Assistant's command budget.",
+                suggestions=["Retry; a loaded index usually answers within a second"],
+                context={"action": "describe", "card_type": card_type},
+            )
+        )
+    if error == "definitions_loading":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Home Assistant is still indexing the installed frontend's card "
+                "definitions (the first describe after a Home Assistant start; a "
+                "slow board can take minutes). Retry shortly.",
+                suggestions=[
+                    "Retry in a minute; the index is kept until the next restart"
+                ],
+                context={"action": "describe", "card_type": card_type},
+            )
+        )
+    if error in ("custom_cards_loading", "custom_card_not_inspected"):
+        status = result.get("custom_status", {})
+        loading = error == "custom_cards_loading"
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Custom card inspection is still loading; retry shortly."
+                if loading
+                else "This custom card could not be inspected from dashboard resources.",
+                suggestions=["Retry after resource loading finishes"]
+                if loading
+                else [
+                    "Check the resource inspection status and type spelling",
+                    "Cards loaded through extra JavaScript may work in the browser without appearing in dashboard resources",
+                ],
+                context={
+                    "action": "describe",
+                    "card_type": card_type,
+                    "custom_status": status,
+                },
+            )
+        )
+    if error == "unknown_card_type":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"'{card_type}' is not a known card type.",
+                suggestions=[
+                    "Use one of: " + ", ".join(result.get("card_types", [])),
+                ],
+                context={"action": "describe", "card_type": card_type},
+            )
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "Home Assistant's card definitions are unavailable.",
+            details=str(error),
+            suggestions=[
+                "Use ha_get_skill_guide(file='references/dashboard-cards.md') for static card guidance"
+            ],
+            context={"action": "describe", "card_type": card_type},
+        )
+    )
 
 
 async def describe_card_response(client: Any, card_type: str | None) -> dict[str, Any]:
@@ -73,51 +144,7 @@ async def describe_card_response(client: Any, card_type: str | None) -> dict[str
     if not isinstance(result, dict):
         result = {}
     if result.get("success") is not True:
-        error = result.get("error")
-        if error in ("custom_cards_loading", "custom_card_not_inspected"):
-            status = result.get("custom_status", {})
-            loading = error == "custom_cards_loading"
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Custom card inspection is still loading; retry shortly."
-                    if loading
-                    else "This custom card could not be inspected from dashboard resources.",
-                    suggestions=["Retry after resource loading finishes"]
-                    if loading
-                    else [
-                        "Check the resource inspection status and type spelling",
-                        "Cards loaded through extra JavaScript may work in the browser without appearing in dashboard resources",
-                    ],
-                    context={
-                        "action": "describe",
-                        "card_type": card_type,
-                        "custom_status": status,
-                    },
-                )
-            )
-        if error == "unknown_card_type":
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"'{card_type}' is not a known card type.",
-                    suggestions=[
-                        "Use one of: " + ", ".join(result.get("card_types", [])),
-                    ],
-                    context={"action": "describe", "card_type": card_type},
-                )
-            )
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Home Assistant's card definitions are unavailable.",
-                details=str(error),
-                suggestions=[
-                    "Use ha_get_skill_guide(file='references/dashboard-cards.md') for static card guidance"
-                ],
-                context={"action": "describe", "card_type": card_type},
-            )
-        )
+        _raise_describe_error(result, card_type)
     if card_type is None:
         return {
             "success": True,

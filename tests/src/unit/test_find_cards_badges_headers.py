@@ -870,9 +870,9 @@ class TestNestedCardSearch:
         _find_cards_in_config(config, card_type="nonexistent", uncovered=uncovered)
         assert uncovered == []
 
-    # ---- Malformed-slot breadcrumb (issue #1599 review round 2, item 4) ----
+    # ---- Unread-entry breadcrumb (issue #1599 review round 2, item 4) ----
 
-    def test_malformed_card_slot_skipped_without_raise(self):
+    def test_non_dict_card_entry_skipped_without_raise(self):
         """A non-dict entry under `cards` is skipped (no match, no raise) and
         recorded as a search gap rather than silently dropped."""
         config = {
@@ -888,7 +888,7 @@ class TestNestedCardSearch:
         gaps = _SearchGaps()
         matches = _find_cards_matching(config, _SearchCriteria(card_type="tile"), gaps)
         assert len(matches) == 1
-        assert gaps.malformed == [".views[0].cards[0]"]
+        assert gaps.unread == [".views[0].cards[0]"]
 
     def test_non_string_custom_field_key_skipped_without_raise(self, caplog):
         """A non-string custom_fields key cannot form a path; it is skipped with a

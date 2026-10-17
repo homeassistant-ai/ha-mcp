@@ -29,9 +29,11 @@ class TestIntegrationManagement:
         list_result = await mcp_client.call_tool("ha_get_integration", {})
         data = assert_mcp_success(list_result, "List integrations")
 
-        # Find test integration
+        # Find test integration; ha-mcp's own entries are refused by design.
         test_entry = None
         for entry in data.get("entries", []):
+            if entry.get("domain") == "ha_mcp_tools":
+                continue
             if entry.get("supports_unload") and entry.get("state") == "loaded":
                 test_entry = entry
                 break

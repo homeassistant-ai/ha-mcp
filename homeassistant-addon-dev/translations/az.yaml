@@ -20,6 +20,16 @@ configuration:
       Assistant ehtiyat nüsxəsini təklif etməyin nə qədər güclü şəkildə bildirildiyi.
       O, yalnız bu ipucunu dəyişdirir; avtomatik redaktə ehtiyat nüsxələrinin öz parametrləri
       var.
+  custom_instructions:
+    name: Xüsusi server təlimatları
+    description: Qoşulan hər bir süni intellekt köməkçisinə MCP server təlimatlarının
+      bir hissəsi olaraq göndərilən mətn — məsələn, ev qeydlərinin harada saxlandığı
+      və onların nə vaxt oxunmalı və ya yenilənməli olduğu. Həmçinin bu alətlər dəstindən
+      istifadə edən Home Assistant söhbət agentlərinin (Assist) sorğusunun bir hissəsidir.
+      Onu bütün müştərilərinizə eyni vaxtda çatmalı olan təlimatlar üçün istifadə
+      edin; onu qısa və məxfi məlumatlardan azad saxlayın. Heç nə əlavə etməmək üçün
+      boş buraxın. Yenidən başladılmasını tələb edir; müştərilər yenidən qoşulduqda
+      dəyişikliyi görürlər.
   enable_beta_features:
     name: Beta funksiyaları aktivləşdir (əsas seçim)
     description: ⚠ TƏHLÜKƏ — bu alətlər Home Assistant qurulumunuza BƏRPAOLUNMAZ ZƏRƏR

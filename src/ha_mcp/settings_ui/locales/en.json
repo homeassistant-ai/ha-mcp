@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "Base URL of the screenshot engine. Leave blank for Supervisor auto-discovery. Applies immediately.",
     "advanced.enable_websocket.label": "Enable WebSocket",
     "advanced.enable_websocket.help": "WebSocket state monitoring. Disabling falls back to polling and degrades many tools.",
+    "advanced.custom_instructions.label": "Custom server instructions",
+    "advanced.custom_instructions.help": "Text sent to every AI assistant that connects, as part of the MCP server instructions — for example where household notes are kept and when to read or update them. Also part of the prompt of Home Assistant conversation agents (Assist) that use this toolset. Use it for guidance that should reach all your clients at once; keep it short and free of secrets. Leave empty to add nothing. Requires restart; clients see the change when they reconnect.",
     "advanced.enabled_tool_modules.label": "Enabled tool modules",
     "advanced.enabled_tool_modules.help": "Comma-separated module names, or 'all'.",
     "advanced.enable_dashboard_partial_tools.label": "Dashboard partial-update tools",

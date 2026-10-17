@@ -148,9 +148,16 @@ tests against them.
 6. **A test supplies its own world.** No reads from the real home directory
    or `~/.ha-mcp`, no network beyond the test's own containers, no answer
    taken from the wall clock, the local timezone or another test's
-   leftovers. Code that reads the clock takes `now` as a parameter, unless
-   the test harness already controls the clock (the JSDOM harness below
-   does). See **Config-dir isolation** below.
+   leftovers. Another test's leftovers include the registry entry of a
+   deleted zone or name-keyed storage helper (`input_*`, `counter`,
+   `timer`, `schedule`, `person`): Home Assistant keeps it for 30 days and
+   restores its entity_id (if still free), name, icon, area, labels and
+   disabled state when an item with the same storage id is created, and
+   that id is the slugified name. A test or fixture that creates one gives
+   the name a fresh suffix, such as `uuid.uuid4().hex[:8]`. Code that reads
+   the clock takes `now` as a parameter, unless the test harness already
+   controls the clock (the JSDOM harness below does).
+   See **Config-dir isolation** below.
    Installing a pinned dependency during job setup is not test network
    access. Do not commit third-party or generated files to satisfy this
    rule.

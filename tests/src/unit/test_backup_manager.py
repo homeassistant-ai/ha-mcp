@@ -264,14 +264,19 @@ class TestFetcherIdResolution:
     async def test_fetch_helper_resolves_renamed_via_registry(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # After an entity_id rename the object_id no longer equals the
-        # collection id; the fix falls back to the registry unique_id.
+        # The registry entry of the given entity_id holds the storage id; a
+        # renamed entity's object id no longer equals it.
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
             if msg.get("type") == "input_boolean/list":
                 return [{"id": "original_slug", "name": "X"}]
-            if msg.get("type") == "config/entity_registry/get":
-                assert msg.get("entity_id") == "input_boolean.renamed_slug"
-                return {"unique_id": "original_slug"}
+            if msg.get("type") == "config/entity_registry/list":
+                return [
+                    {
+                        "entity_id": "input_boolean.renamed_slug",
+                        "platform": "input_boolean",
+                        "unique_id": "original_slug",
+                    }
+                ]
             raise AssertionError(f"unexpected ws message: {msg}")
 
         monkeypatch.setattr(bm, "_ws_send", fake_ws)
@@ -281,27 +286,11 @@ class TestFetcherIdResolution:
         assert got is not None
         assert got["id"] == "original_slug"
 
-    async def test_fetch_helper_direct_match_skips_registry(
+    async def test_fetch_helper_propagates_a_failed_registry_read(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
-            if msg.get("type") == "input_boolean/list":
-                return [{"id": "my_bool", "name": "X"}]
-            raise AssertionError("registry fallback must not run on a direct hit")
-
-        monkeypatch.setattr(bm, "_ws_send", fake_ws)
-        got = await bm._fetch_helper(
-            _StubClient(), "input_boolean.my_bool", "input_boolean"
-        )
-        assert got is not None
-        assert got["id"] == "my_bool"
-
-    async def test_fetch_helper_propagates_non_notfound_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Rename-fallback registry lookup: a transport/5xx error must
-        # propagate (so maybe_snapshot logs a WARNING) rather than be
-        # swallowed as a not-found and silently skip the snapshot.
+        # A failed registry read must propagate (so maybe_snapshot logs a
+        # WARNING) rather than read as no entry and silently skip the snapshot.
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
             if msg.get("type") == "input_boolean/list":
                 return [{"id": "original_slug", "name": "X"}]
@@ -370,7 +359,7 @@ class TestFetcherIdResolution:
         seen: dict[str, Any] = {}
 
         async def fake_resolve(_client: Any, identifier: str) -> Any:
-            return {"url_path": "my-dash", "id": identifier}, None
+            return {"url_path": "my-dash", "id": identifier}, []
 
         async def fake_get_internal(_client: Any, url_path: str | None) -> Any:
             seen["url_path"] = url_path
@@ -378,8 +367,8 @@ class TestFetcherIdResolution:
 
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
-        got = await bm._fetch_dashboard(_StubClient(), "my_dash")
-        assert got == {"views": []}
+        got = await bm.fetch_dashboard(_StubClient(), "my_dash")
+        assert got == {"dashboard": None, "config": {"views": []}}
         # fetched via the canonical url_path, not the raw internal id
         assert seen["url_path"] == "my-dash"
 
@@ -393,23 +382,23 @@ class TestFetcherIdResolution:
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         async def fake_resolve(_client: Any, _identifier: str) -> Any:
-            return None, None  # no registry match -> fall through with raw id
+            return None, []  # no registry match -> fall through with raw id
 
         async def fake_get_internal(_client: Any, _url_path: str | None) -> Any:
             raise ToolError("Dashboard fetch failed: Unknown config specified: x")
 
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
-        assert await bm._fetch_dashboard(_StubClient(), "x_dash") is None
+        assert await bm.fetch_dashboard(_StubClient(), "x_dash") is None
 
     async def test_fetch_dashboard_without_stored_config_returns_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A metadata-only dashboard has nothing to snapshot before first save."""
+        """Without its settings row, an unsaved dashboard has nothing to snapshot."""
         import ha_mcp.tools.tools_config_dashboards as dash
 
         async def fake_resolve(_client: Any, identifier: str) -> Any:
-            return {"url_path": identifier, "id": "no_config"}, None
+            return {"url_path": identifier, "id": "no_config"}, []
 
         async def no_component_config(_client: Any, _url_path: str) -> None:
             return None
@@ -425,7 +414,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_component_dashboard_config", no_component_config)
 
-        assert await bm._fetch_dashboard(client, "no-config") is None
+        assert await bm.fetch_dashboard(client, "no-config") is None
         client.send_websocket_message.assert_awaited_once_with(
             {"type": "lovelace/config", "force": True, "url_path": "no-config"}
         )
@@ -439,7 +428,7 @@ class TestFetcherIdResolution:
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         async def fake_resolve(_client: Any, _identifier: str) -> Any:
-            return None, None
+            return None, []
 
         async def fake_get_internal(_client: Any, _url_path: str | None) -> Any:
             raise ToolError("Dashboard fetch failed: 500 Internal Server Error")
@@ -447,7 +436,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
         with pytest.raises(ToolError):
-            await bm._fetch_dashboard(_StubClient(), "x_dash")
+            await bm.fetch_dashboard(_StubClient(), "x_dash")
 
     async def test_fetch_calendar_event_matches_uid(self) -> None:
         # Hard guard for the calendar lane (the e2e is skippable): the
@@ -810,13 +799,19 @@ class TestFetcherIdResolution:
     async def test_fetch_helper_registry_without_unique_id_returns_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Rename fallback tail: registry entry exists but carries no
-        # resolvable unique_id (or it matches nothing) -> genuine not-found.
+        # A registry entry without a unique_id resolves to nothing; the
+        # object id is not tried as a storage id.
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
             if msg.get("type") == "input_boolean/list":
-                return [{"id": "original_slug", "name": "X"}]
-            if msg.get("type") == "config/entity_registry/get":
-                return {}  # no unique_id
+                return [{"id": "renamed_slug", "name": "X"}]
+            if msg.get("type") == "config/entity_registry/list":
+                return [
+                    {
+                        "entity_id": "input_boolean.renamed_slug",
+                        "platform": "input_boolean",
+                        "unique_id": None,
+                    }
+                ]
             raise AssertionError(f"unexpected ws message: {msg}")
 
         monkeypatch.setattr(bm, "_ws_send", fake_ws)

@@ -14,18 +14,19 @@ its tariff sub-entities, all bound to one ``config_entry_id``):
   would silently drop members — this proves the multi-valued scan is used).
 - The SIMPLE delete resolves one ``unique_id`` from ``_do_registry_lookup``'s
   ``entity_ids`` mode in EXACTLY one lookup with NO retry-loop sleep (the single
-  read plus the direct-id fallback replaces the retry loop that absorbed
-  registration lag) — ``asyncio.sleep`` is patched to fail the test if the
-  resolve ever sleeps.
+  read replaces the retry loop that absorbed registration lag) —
+  ``asyncio.sleep`` is patched to fail the test if the resolve ever sleeps.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import component_api, component_registry_lookup
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
@@ -115,6 +116,9 @@ class _ContractClient:
         if isinstance(msg_type, str) and msg_type.endswith("/delete"):
             self.delete_calls.append(msg)
             return {"success": True}
+        if isinstance(msg_type, str) and msg_type.endswith("/list"):
+            # No stored helper has the target as its id: the registry resolves it.
+            return {"success": True, "result": []}
         raise AssertionError(f"unexpected ws message {msg_type!r}")
 
 
@@ -201,7 +205,7 @@ async def test_simple_delete_resolves_in_one_lookup_no_sleep(monkeypatch) -> Non
         ) as sleep_mock,
     ):
         resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
@@ -222,24 +226,26 @@ async def test_simple_delete_resolves_in_one_lookup_no_sleep(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_simple_delete_missing_entity_via_real_component(monkeypatch) -> None:
+async def test_an_entity_the_component_misses_is_not_deleted_by_its_object_id(
+    monkeypatch,
+) -> None:
     """A SIMPLE target absent from the real registry resolves to no unique_id via
-    the real component (``missing`` list), then the direct-id fallback deletes it —
-    proving the ``entity_ids`` miss shape drives the fallback, not an error."""
+    the real component (``missing`` list), and the target is no stored id: the
+    miss shape drives the classification, and nothing is deleted by the
+    object id."""
     monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view(entity={}))
     ws = _real_component_ws(FakeHass())
     client = _ContractClient()
     tools = IntegrationTools(client)
 
-    with patch_ws(ws, component_registry_lookup):
-        resp = await tools.ha_remove_helpers_integrations(
-            target="my_button",
+    with patch_ws(ws, component_registry_lookup), pytest.raises(ToolError) as excinfo:
+        await tools.ha_remove_helpers_integrations(
+            target="input_button.my_button",
             helper_type="input_button",
             confirm=True,
             wait=False,
         )
 
-    # Component authoritatively reported the id as missing → direct-id fallback.
-    assert resp["success"] is True
-    assert resp["fallback_used"] == "direct_id"
-    assert client.delete_calls[0]["input_button_id"] == "my_button"
+    # It has a state, so it is reported as not registry-managed, not as missing.
+    assert json.loads(str(excinfo.value))["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert client.delete_calls == []

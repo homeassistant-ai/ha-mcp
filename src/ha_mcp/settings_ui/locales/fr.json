@@ -472,6 +472,8 @@
     "advanced.dashboard_screenshot_engine_url.help": "URL de base du moteur de capture d'écran. Laissez vide pour la découverte automatique par le Supervisor. S'applique immédiatement.",
     "advanced.enable_websocket.label": "Activer WebSocket",
     "advanced.enable_websocket.help": "Surveillance de l'état via WebSocket. La désactivation bascule vers l'interrogation (polling) et dégrade de nombreux outils.",
+    "advanced.custom_instructions.label": "Instructions personnalisées du serveur",
+    "advanced.custom_instructions.help": "Texte envoyé à chaque assistant IA qui se connecte, dans le cadre des instructions du serveur MCP — par exemple, l'emplacement des notes du foyer et le moment de les lire ou de les mettre à jour. Fait également partie du prompt des agents de conversation Home Assistant (Assist) qui utilisent cet ensemble d'outils. Utilisez-le pour fournir des directives destinées à tous vos clients en même temps ; restez concis et évitez d'y inclure des secrets. Laissez vide pour ne rien ajouter. Nécessite un redémarrage ; les clients voient le changement lorsqu'ils se reconnectent.",
     "advanced.enabled_tool_modules.label": "Modules d'outils activés",
     "advanced.enabled_tool_modules.help": "Noms de modules séparés par des virgules, ou 'all'.",
     "advanced.enable_dashboard_partial_tools.label": "Outils de mise à jour partielle du tableau de bord",
