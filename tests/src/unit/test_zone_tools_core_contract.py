@@ -422,19 +422,38 @@ class TestZoneWrites:
         assert result["updated_fields"] == ["radius"]
 
     @pytest.mark.parametrize(
-        ("icon", "shown"),
-        [(None, "mdi:briefcase"), ("", None)],
-        ids=["left-alone", "cleared"],
+        ("stored", "registry", "icon", "shown"),
+        [
+            (None, "mdi:briefcase", None, "mdi:briefcase"),
+            ("mdi:map", "mdi:briefcase", None, "mdi:briefcase"),
+            ("mdi:map", None, None, "mdi:map"),
+            (None, "mdi:briefcase", "", None),
+        ],
+        ids=["left-alone", "over-the-stored-icon", "stored-only", "cleared"],
     )
     async def test_an_update_reply_shows_the_icon_the_zone_entity_shows(
-        self, icon: str | None, shown: str | None
+        self,
+        stored: str | None,
+        registry: str | None,
+        icon: str | None,
+        shown: str | None,
     ) -> None:
-        """A new zone's icon is kept in the registry (#2643). An update that
-        leaves it alone must still report it, as ha_get_zone does, and one that
-        clears it must not bring it back."""
-        entry = {**OFFICE_ENTRY, "icon": "mdi:briefcase"}
+        """The zone entity shows its registry icon over the stored one, and
+        #2643 keeps a zone's icon there. An update that leaves the icon alone
+        reports the icon of this zone, as ha_get_zone does; one that clears it
+        does not bring it back."""
+        zone = {**OFFICE, "icon": stored} if stored else OFFICE
+        other = {"entity_id": "zone.gym", "platform": "zone", "unique_id": "gym"}
+        entries = [
+            {**other, "icon": "mdi:dumbbell"},
+            {**OFFICE_ENTRY, "icon": registry},
+        ]
         client = _client(
-            {"config/entity_registry/list": {"success": True, "result": [entry]}}
+            {
+                "zone/list": {"success": True, "result": [zone]},
+                "zone/update": {"success": True, "result": zone},
+                "config/entity_registry/list": {"success": True, "result": entries},
+            }
         )
 
         result = await ZoneTools(client).ha_set_zone(

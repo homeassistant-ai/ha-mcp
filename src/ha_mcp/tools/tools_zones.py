@@ -418,8 +418,8 @@ class ZoneTools:
         ``zone.<name>`` is the zone whose registry entry has that entity_id. A
         renamed entity can carry another zone's id as its name, so a bare id
         never names an entity, and a repeated removal deletes nothing.
-        The entity_id and icon are None for a stored zone without a registry
-        entry, and the icon also when its entry holds none. The
+        Both entity_id and icon are None for a stored zone without a registry
+        entry; the icon is also None when the entry sets none. The
         home zone and YAML zones are not in the storage; Core gives them no
         ``unique_id``, so they have no registry entry.
         """
@@ -634,9 +634,10 @@ class ZoneTools:
                     fields,
                 )
                 response = _zone_write_response(result, storage_id, "updated")
-                # The reply holds the stored zone and what this write set; the
-                # entity shows its registry icon over the stored one, as
-                # ha_get_zone reports it. A cleared icon ('') stays cleared.
+                # The reply holds the stored zone plus the registry fields this
+                # write set; the entity shows its registry icon over the stored
+                # one, as ha_get_zone reports it. An icon this write set or
+                # cleared ('') is already in the reply.
                 if icon is None and registry_icon:
                     response["zone_data"]["icon"] = registry_icon
                 response["updated_fields"] = updated

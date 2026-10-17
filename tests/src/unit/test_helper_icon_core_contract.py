@@ -1,6 +1,9 @@
-"""Where a storage helper's icon goes, against the answers Core sends.
+"""Where a storage helper's icon and other registry fields go, and what is
+reported when its entity is missing, against the answers Core sends.
 
-The fakes are shared with ``test_zone_tools_core_contract.py``.
+The fakes and the autouse ``_no_component`` fixture are imported from
+``test_zone_tools_core_contract.py``: every test runs through Core's WebSocket
+commands unless it patches the component calls itself.
 """
 
 from typing import Any
