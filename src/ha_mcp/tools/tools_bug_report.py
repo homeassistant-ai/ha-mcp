@@ -55,7 +55,7 @@ from .bug_report_templates import (
     _suggested_title,
 )
 from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION, parse_string_list_param
-from .component_api import get_component_caps, read_webhook_auth
+from .component_api import read_info, read_webhook_auth
 from .helpers import (
     log_tool_usage,
     raise_tool_error,
@@ -687,21 +687,20 @@ class BugReportTools:
     async def _detect_component_version(self) -> str | None:
         """Read the ha_mcp_tools custom component's version, best-effort.
 
-        Prefers the shared cached capability probe (``get_component_caps`` — one
-        ``ha_mcp_tools/info`` round-trip per client): a component new enough to
-        answer it (1.1.0+) reports its version there, so the report reuses that
-        cached probe instead of a bespoke round-trip. A component in the
-        0.11.0-1.1.0 band has services but no ``info`` command (caps is None),
-        so it falls back to the ``get_caller_token`` bootstrap service, whose
-        response also carries the manifest version. Returns None when the
-        component is not installed or the call fails — the report path must
-        never break on it.
+        Prefers a fresh ``ha_mcp_tools/info`` read (``read_info``): a component
+        new enough to answer it (1.1.0+) reports its version there, and the
+        cached capability snapshot would still hold the version that was
+        running when the client first probed, across a component update and an
+        HA restart. A component in the 0.11.0-1.1.0 band has services but no
+        ``info`` command, so it falls back to the ``get_caller_token``
+        bootstrap service, whose response also carries the manifest version.
+        Returns None when the component is not installed or the call fails —
+        the report path must never break on it.
         """
-        # get_component_caps never raises (it caches/returns None on every
-        # failure mode), so no guard is needed around it.
-        caps = await get_component_caps(self._client)
-        if caps is not None:
-            return caps.component_version or None
+        # read_info never raises (None on every failure), so no guard is needed.
+        info = await read_info(self._client)
+        if info is not None:
+            return str(info.get("component_version") or "") or None
         try:
             resp = await self._client.call_service(
                 "ha_mcp_tools", "get_caller_token", {}, return_response=True

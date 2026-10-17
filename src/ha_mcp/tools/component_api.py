@@ -19,8 +19,8 @@ or somewhere in between. This module negotiates that with a single cached
   surface entirely; caps are cached as ``None`` and every consumer falls back
   to its legacy path.
 
-An ``info`` field that can change while the client lives is read fresh by its
-own function instead (``read_webhook_auth``).
+An ``info`` field that can change while the client lives is read fresh
+instead (``read_info``).
 
 This mirrors the caller-token cache in ``tools_filesystem.py``: weak-keyed by
 client so multi-client / OAuth setups each negotiate independently and the
@@ -411,23 +411,34 @@ def invalidate_caps(client: Any) -> None:
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
 
 
-async def read_webhook_auth(client: Any) -> str | None:
-    """The server entry's webhook auth mode, read fresh from ``info`` (#2584).
+async def read_info(client: Any) -> dict[str, Any] | None:
+    """The component's ``info`` reply, read fresh rather than cached (#2584).
 
-    Not from ``get_component_caps``: that snapshot lives as long as the client,
-    while the mode is an entry option the user can change in the meantime. The
-    snapshot still gates the call: a component whose ``info`` it did not
-    accept is not asked: the failed call would be logged at ERROR, and the
-    report's log sections can quote that line. None without a server entry, on a
-    component too old to report the mode, or on any failure.
+    For fields that can change while the client lives: ``get_component_caps``
+    keeps its snapshot for the client's lifetime, which an HA restart does not
+    end, while a component update changes the version and an options change
+    the webhook auth mode. The snapshot still gates the call: a component
+    whose ``info`` it did not accept is not asked, because the failed call
+    would be logged at ERROR and the report's log sections can quote that
+    line. None in that case and on any failure.
     """
     if await get_component_caps(client) is None:
         return None
     try:
         response = await client.send_websocket_message({"type": INFO_COMMAND})
     except Exception as e:  # noqa: BLE001
-        logger.info("Webhook auth probe failed: %s", e)
+        logger.info("Fresh %s read failed: %s", INFO_COMMAND, e)
         return None
     result = response.get("result") if isinstance(response, dict) else None
-    auth = result.get("webhook_auth") if isinstance(result, dict) else None
+    return result if isinstance(result, dict) else None
+
+
+async def read_webhook_auth(client: Any) -> str | None:
+    """The server entry's webhook auth mode from a fresh ``info`` read.
+
+    None without a server entry, on a component too old to report the mode,
+    or when ``read_info`` returns None.
+    """
+    info = await read_info(client)
+    auth = info.get("webhook_auth") if info else None
     return auth if isinstance(auth, str) else None

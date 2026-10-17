@@ -70,11 +70,10 @@ class TestBugReportTool:
     @pytest.fixture(autouse=True)
     def _stub_component_caps(self):
         """Report assembly, not the component probes: stub the shared caps probe
-        to None, also where ``read_webhook_auth`` reads it, so no WS round-trip."""
-        stub = AsyncMock(return_value=None)
-        with (
-            patch("ha_mcp.tools.tools_bug_report.get_component_caps", stub),
-            patch("ha_mcp.tools.component_api.get_component_caps", stub),
+        to None where ``read_info`` reads it, so no probe makes a WS round-trip."""
+        with patch(
+            "ha_mcp.tools.component_api.get_component_caps",
+            AsyncMock(return_value=None),
         ):
             yield
 
@@ -1031,31 +1030,20 @@ class TestBugReportTool:
 
 
 class TestDetectComponentVersion:
-    """``_detect_component_version`` prefers the shared cached caps probe and
-    only falls back to the ``get_caller_token`` bootstrap for a component too
-    old for ``ha_mcp_tools/info`` (issue #1813 P5 item 1a)."""
-
-    @staticmethod
-    def _caps(version: str):
-        from ha_mcp.tools.component_api import ComponentCaps
-
-        return ComponentCaps(
-            schema_version=1,
-            component_version=version,
-            capabilities=frozenset({"search"}),
-            limits={},
-        )
+    """``_detect_component_version`` prefers a fresh ``info`` read and only
+    falls back to the ``get_caller_token`` bootstrap for a component too old
+    for ``ha_mcp_tools/info`` (issue #1813 P5 item 1a)."""
 
     @pytest.mark.asyncio
-    async def test_caps_hit_uses_caps_version_and_skips_service(self):
+    async def test_info_hit_uses_info_version_and_skips_service(self):
         from ha_mcp.tools.tools_bug_report import BugReportTools
 
         client = MagicMock()
         client.call_service = AsyncMock()
         tools = BugReportTools(client)
         with patch(
-            "ha_mcp.tools.tools_bug_report.get_component_caps",
-            AsyncMock(return_value=self._caps("1.3.0")),
+            "ha_mcp.tools.tools_bug_report.read_info",
+            AsyncMock(return_value={"component_version": "1.3.0"}),
         ):
             version = await tools._detect_component_version()
 
@@ -1063,7 +1051,7 @@ class TestDetectComponentVersion:
         client.call_service.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_caps_miss_falls_back_to_bootstrap_service(self):
+    async def test_info_miss_falls_back_to_bootstrap_service(self):
         from ha_mcp.tools.tools_bug_report import BugReportTools
 
         client = MagicMock()
@@ -1072,7 +1060,7 @@ class TestDetectComponentVersion:
         )
         tools = BugReportTools(client)
         with patch(
-            "ha_mcp.tools.tools_bug_report.get_component_caps",
+            "ha_mcp.tools.tools_bug_report.read_info",
             AsyncMock(return_value=None),
         ):
             version = await tools._detect_component_version()
@@ -1081,8 +1069,8 @@ class TestDetectComponentVersion:
         client.call_service.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_caps_hit_empty_version_returns_none_without_service(self):
-        """A caps-present component that reports no version string yields None
+    async def test_info_hit_empty_version_returns_none_without_service(self):
+        """A component whose ``info`` reports no version string yields None
         (guarded even though a real 1.1.0+ component always reports one)."""
         from ha_mcp.tools.tools_bug_report import BugReportTools
 
@@ -1090,8 +1078,8 @@ class TestDetectComponentVersion:
         client.call_service = AsyncMock()
         tools = BugReportTools(client)
         with patch(
-            "ha_mcp.tools.tools_bug_report.get_component_caps",
-            AsyncMock(return_value=self._caps("")),
+            "ha_mcp.tools.tools_bug_report.read_info",
+            AsyncMock(return_value={"component_version": ""}),
         ):
             version = await tools._detect_component_version()
 
