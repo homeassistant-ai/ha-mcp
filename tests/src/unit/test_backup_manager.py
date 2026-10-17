@@ -264,14 +264,19 @@ class TestFetcherIdResolution:
     async def test_fetch_helper_resolves_renamed_via_registry(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # After an entity_id rename the object_id no longer equals the
-        # collection id; the fix falls back to the registry unique_id.
+        # The registry entry of the given entity_id holds the storage id; a
+        # renamed entity's object id no longer equals it.
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
             if msg.get("type") == "input_boolean/list":
                 return [{"id": "original_slug", "name": "X"}]
-            if msg.get("type") == "config/entity_registry/get":
-                assert msg.get("entity_id") == "input_boolean.renamed_slug"
-                return {"unique_id": "original_slug"}
+            if msg.get("type") == "config/entity_registry/list":
+                return [
+                    {
+                        "entity_id": "input_boolean.renamed_slug",
+                        "platform": "input_boolean",
+                        "unique_id": "original_slug",
+                    }
+                ]
             raise AssertionError(f"unexpected ws message: {msg}")
 
         monkeypatch.setattr(bm, "_ws_send", fake_ws)
@@ -281,27 +286,11 @@ class TestFetcherIdResolution:
         assert got is not None
         assert got["id"] == "original_slug"
 
-    async def test_fetch_helper_direct_match_skips_registry(
+    async def test_fetch_helper_propagates_a_failed_registry_read(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
-            if msg.get("type") == "input_boolean/list":
-                return [{"id": "my_bool", "name": "X"}]
-            raise AssertionError("registry fallback must not run on a direct hit")
-
-        monkeypatch.setattr(bm, "_ws_send", fake_ws)
-        got = await bm._fetch_helper(
-            _StubClient(), "input_boolean.my_bool", "input_boolean"
-        )
-        assert got is not None
-        assert got["id"] == "my_bool"
-
-    async def test_fetch_helper_propagates_non_notfound_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Rename-fallback registry lookup: a transport/5xx error must
-        # propagate (so maybe_snapshot logs a WARNING) rather than be
-        # swallowed as a not-found and silently skip the snapshot.
+        # A failed registry read must propagate (so maybe_snapshot logs a
+        # WARNING) rather than read as no entry and silently skip the snapshot.
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
             if msg.get("type") == "input_boolean/list":
                 return [{"id": "original_slug", "name": "X"}]
@@ -810,13 +799,19 @@ class TestFetcherIdResolution:
     async def test_fetch_helper_registry_without_unique_id_returns_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Rename fallback tail: registry entry exists but carries no
-        # resolvable unique_id (or it matches nothing) -> genuine not-found.
+        # A registry entry without a unique_id resolves to nothing; the
+        # object id is not tried as a storage id.
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
             if msg.get("type") == "input_boolean/list":
-                return [{"id": "original_slug", "name": "X"}]
-            if msg.get("type") == "config/entity_registry/get":
-                return {}  # no unique_id
+                return [{"id": "renamed_slug", "name": "X"}]
+            if msg.get("type") == "config/entity_registry/list":
+                return [
+                    {
+                        "entity_id": "input_boolean.renamed_slug",
+                        "platform": "input_boolean",
+                        "unique_id": None,
+                    }
+                ]
             raise AssertionError(f"unexpected ws message: {msg}")
 
         monkeypatch.setattr(bm, "_ws_send", fake_ws)

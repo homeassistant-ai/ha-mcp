@@ -40,6 +40,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .component_helper_collections import removal_reply, stored_helper_target
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_backup import (
     flow_helper_backup_domain,
@@ -57,9 +58,8 @@ from .config_helpers.registry import _get_entities_for_config_entry
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES, StorageHelperType
 from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
 from .flow_helper_lookup import (
-    YAML_HELPER_REMOVAL,
-    YAML_HELPER_SUGGESTION,
     get_entry_id_for_flow_helper,
+    not_stored_reply,
     raise_flow_helper_lookup_error,
     raise_unregistered_entity_error,
     resolve_helper_entity,
@@ -2026,8 +2026,8 @@ class IntegrationTools:
             Field(
                 description=(
                     "What to remove. One of: "
-                    "(a) bare helper_id for SIMPLE helpers, "
-                    "e.g. 'my_button'; "
+                    "(a) bare helper_id for SIMPLE helpers: the helper's "
+                    "storage id, not the name of its entity, e.g. 'my_button'; "
                     "(b) full entity_id, "
                     "e.g. 'input_button.my_button' or 'sensor.my_meter'; "
                     "(c) config entry_id for any integration, with helper_type "
@@ -2094,7 +2094,8 @@ class IntegrationTools:
         ROUTING:
         - SIMPLE helper_type (input_button, input_boolean, input_select,
           input_number, input_text, input_datetime, counter, timer, schedule,
-          zone, person, tag) + bare helper_id or entity_id → websocket delete.
+          zone, person, tag) + bare helper_id (its storage id) or entity_id →
+          websocket delete.
         - FLOW helper_type (any helper flow Home Assistant lists: template, group,
           utility_meter, derivative, ...; custom helper integrations too)
           + full entity_id → resolve entity_id to
@@ -2112,10 +2113,10 @@ class IntegrationTools:
 
         A target that cannot be removed raises a structured error rather than
         returning silent success: ENTITY_NOT_FOUND when the entity_id is absent
-        from both the state machine and the entity registry (a bare helper_id
-        on a FLOW target also raises it — FLOW resolution needs a full
-        entity_id); RESOURCE_NOT_FOUND when it exists but is not storage- or
-        registry-managed (a YAML-configured helper, or an entity with a state
+        from both the state machine and the entity registry, or for a bare
+        helper_id no stored helper has (a bare helper_id on a FLOW target also
+        raises it — FLOW resolution needs a full entity_id); RESOURCE_NOT_FOUND
+        when it exists but is not storage- or registry-managed (a YAML-configured helper, or an entity with a state
         but no registry entry), for a config entry the backend reports as 404,
         or for a missing config subentry.
         Calling N times gives the same response. Transient connectivity failures
@@ -2595,22 +2596,22 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Delete a SIMPLE helper via the websocket {type}/delete API.
 
-        Uses a 3-retry registry lookup with exponential backoff to find the
-        helper's unique_id, then falls back to direct-id-delete and a
-        classification of why the registry has no usable record.
+        A bare id is a storage id (``stored_helper_target``), as
+        ``ha_config_set_helper`` and the backups resolve it, and an entity_id
+        goes by its registry entry: one read through the component, or the
+        3-retry lookup without it. A target still unresolved is classified by
+        why the registry has no usable record.
         """
-        # Convert to entity_id form
-        entity_id = (
-            target
-            if target.startswith(f"{helper_type}.")
-            else f"{helper_type}.{target}"
-        )
-        # Bare helper_id (without prefix) form for fallback strategies
-        helper_id = (
-            target.split(".", 1)[1] if target.startswith(f"{helper_type}.") else target
-        )
-
         try:
+            stored = await stored_helper_target(self._client, helper_type, target)
+            if stored is not None:
+                storage_id, entity, reason = stored
+                response = await self._delete_simple_via_unique_id(
+                    helper_type, storage_id, target, entity, wait_bool
+                )
+                return removal_reply(response, entity, reason)
+            # stored_helper_target refuses a bare id no stored helper has.
+            entity_id = target
             (
                 unique_id,
                 registry_result,
@@ -2620,10 +2621,8 @@ class IntegrationTools:
             if not unique_id:
                 return await self._delete_simple_helper_fallback(
                     helper_type,
-                    helper_id,
                     target,
                     entity_id,
-                    wait_bool,
                     registry_result,
                     component_used,
                 )
@@ -2657,8 +2656,9 @@ class IntegrationTools:
         registry-registration LAG between a helper's creation and its entity
         landing in the registry index (not a WS-timing race — the legacy read
         hits the same live registry over the same socket); the single read is
-        equally subject to that lag, but on this delete path a stale/missing
-        resolve degrades to the direct-id fallback rather than a wrong delete.
+        equally subject to that lag, but a bare id is resolved by its storage
+        id before this read, and a stale/missing resolve is classified, never
+        turned into a delete by a guessed id.
         On capability miss / component error the legacy retry loop runs
         unchanged. ``component_used`` records which path served the read so the
         exhausted-fallback detail can word the "3 attempts" text accurately.
@@ -2759,30 +2759,22 @@ class IntegrationTools:
     async def _delete_simple_helper_fallback(
         self,
         helper_type: HelperTypeLiteral,
-        helper_id: str,
         target: str,
         entity_id: str,
-        wait_bool: bool,
         registry_result: dict[str, Any] | None,
         component_used: bool,
     ) -> dict[str, Any]:
-        """Handle SIMPLE-helper deletion when the registry yielded no unique_id.
+        """Classify a SIMPLE-helper target that names no stored helper.
 
-        Tries a direct-id delete, then classifies the target: absent from
-        state and registry, or registered without a unique_id
-        (ENTITY_NOT_FOUND); present but not registry-managed
-        (RESOURCE_NOT_FOUND); or a failed registry read or real failure
-        (SERVICE_CALL_FAILED). Always returns a success response or raises a
-        structured error.
+        No stored id matched (``stored_helper_target``) and the registry
+        lookup yielded no unique_id; deleting by the object id would guess a
+        storage id that can belong to another helper's renamed entity. The
+        target is absent from state and registry, or registered without a
+        unique_id (ENTITY_NOT_FOUND); absent from state but still registered
+        (SERVICE_CALL_FAILED); present but not registry-managed
+        (RESOURCE_NOT_FOUND); or behind a failed registry read (its code).
+        Always raises a structured error.
         """
-        # Fallback strategy 1: direct-ID delete if unique_id not found
-        response = await self._try_direct_id_delete(
-            helper_type, helper_id, target, entity_id, wait_bool
-        )
-        if response is not None:
-            return response
-
-        # Fallback strategy 2: confirmed-absent classification.
         # Confirm via the registry too — a disabled entity is
         # state-absent but still registry-resident, so
         # state-absence alone is not enough to classify as
@@ -2808,8 +2800,7 @@ class IntegrationTools:
                     create_error_response(
                         ErrorCode.ENTITY_NOT_FOUND,
                         (
-                            f"Helper {target} not found (looked "
-                            f"up as {entity_id}). May indicate "
+                            f"Helper {entity_id} not found. May indicate "
                             "it was already removed, never "
                             "existed, or the identifier is a "
                             "typo. Verify with "
@@ -2833,9 +2824,8 @@ class IntegrationTools:
                     ErrorCode.SERVICE_CALL_FAILED,
                     (
                         f"Helper {target} could not be deleted: "
-                        "registry entry exists but unique_id was "
-                        "absent and the direct-id fallback "
-                        "delete failed."
+                        "its registry entry exists, but no "
+                        "unique_id to delete it by was read from it."
                     ),
                     suggestions=[
                         "Re-enable the entity via "
@@ -2888,53 +2878,6 @@ class IntegrationTools:
         )
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
-    async def _try_direct_id_delete(
-        self,
-        helper_type: HelperTypeLiteral,
-        helper_id: str,
-        target: str,
-        entity_id: str,
-        wait_bool: bool,
-    ) -> dict[str, Any] | None:
-        """Fallback: delete a SIMPLE helper by bare id when no unique_id resolved.
-
-        Returns the success response, or None when the direct-id delete did not
-        succeed (caller proceeds to confirmed-absent classification).
-        """
-        client = self._client
-        logger.info(
-            f"Could not find unique_id for {entity_id}, "
-            "trying direct deletion with helper_id"
-        )
-        delete_msg: dict[str, Any] = {
-            "type": f"{helper_type}/delete",
-            f"{helper_type}_id": helper_id,
-        }
-        logger.info(f"Sending fallback WebSocket delete: {delete_msg}")
-        result = await client.send_websocket_message(delete_msg)
-
-        if not result.get("success"):
-            return None
-
-        response: dict[str, Any] = {
-            "success": True,
-            "action": "delete",
-            "target": target,
-            "helper_type": helper_type,
-            "method": "websocket_delete",
-            "entry_id": None,
-            "entity_ids": [entity_id],
-            "require_restart": False,
-            "message": (
-                f"Successfully deleted {helper_type}: {target} "
-                f"using direct ID (entity: {entity_id})."
-            ),
-            "fallback_used": "direct_id",
-        }
-        if wait_bool:
-            await verify_entity_removed(client, entity_id, response)
-        return response
-
     async def _state_absent(self, entity_id: str) -> bool:
         """Return True when ``entity_id`` is absent from the state machine.
 
@@ -2984,10 +2927,11 @@ class IntegrationTools:
         helper_type: HelperTypeLiteral,
         unique_id: str,
         target: str,
-        entity_id: str,
+        entity_id: str | None,
         wait_bool: bool,
     ) -> dict[str, Any]:
-        """Delete a SIMPLE helper by its resolved registry unique_id."""
+        """Delete a SIMPLE helper by its storage id; ``entity_id`` is None when
+        the helper has no entity in the registry."""
         client = self._client
         delete_message: dict[str, Any] = {
             "type": f"{helper_type}/delete",
@@ -3005,7 +2949,7 @@ class IntegrationTools:
                 "helper_type": helper_type,
                 "method": "websocket_delete",
                 "entry_id": None,
-                "entity_ids": [entity_id],
+                "entity_ids": [entity_id] if entity_id else [],
                 "require_restart": False,
                 "unique_id": unique_id,
                 "message": (
@@ -3013,27 +2957,24 @@ class IntegrationTools:
                     f"(entity: {entity_id})."
                 ),
             }
-            if wait_bool:
+            if wait_bool and entity_id:
                 await verify_entity_removed(client, entity_id, response)
             return response
 
         # Core's storage collection holds only UI-created items; a YAML helper
         # has a registry entry with a unique_id but no stored item to delete.
         if ws_failure_code(result) is ErrorCode.RESOURCE_NOT_FOUND:
+            code, message, suggestion = not_stored_reply(helper_type, unique_id, target)
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    (
-                        f"Home Assistant has no stored {helper_type} "
-                        f"'{unique_id}': {target} is YAML-configured or was "
-                        f"already deleted. {YAML_HELPER_REMOVAL}"
-                    ),
+                    code,
+                    message,
                     context={
                         "target": target,
                         "entity_id": entity_id,
                         "unique_id": unique_id,
                     },
-                    suggestions=[YAML_HELPER_SUGGESTION],
+                    suggestions=[suggestion],
                 )
             )
 

@@ -116,6 +116,7 @@ class TestRemovalCheckAfterSuccessfulDelete:
         as in the sibling delete tools, not an error. An unexpected error is
         also logged with its traceback."""
         mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": []},  # input_button/list: not a stored id
             {"success": True, "result": {"unique_id": "uid-w3"}},
             {"success": True},
         ]
@@ -129,7 +130,7 @@ class TestRemovalCheckAfterSuccessfulDelete:
             caplog.at_level(logging.WARNING),
         ):
             result = await tools.ha_remove_helpers_integrations(
-                target="my_button",
+                target="input_button.my_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=True,
@@ -149,6 +150,7 @@ class TestRemovalCheckAfterSuccessfulDelete:
         """Cancelling the removal check cancels the call; it is not turned
         into a warning."""
         mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": []},  # input_button/list: not a stored id
             {"success": True, "result": {"unique_id": "uid-w3"}},
             {"success": True},
         ]
@@ -162,7 +164,7 @@ class TestRemovalCheckAfterSuccessfulDelete:
             pytest.raises(asyncio.CancelledError),
         ):
             await tools.ha_remove_helpers_integrations(
-                target="my_button",
+                target="input_button.my_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=True,

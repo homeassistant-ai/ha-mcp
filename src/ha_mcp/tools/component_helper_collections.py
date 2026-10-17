@@ -13,7 +13,11 @@ import time
 import weakref
 from typing import Any, NoReturn
 
-from ..client.rest_client import HomeAssistantCommandNotSent
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantCommandNotSent,
+    HomeAssistantError,
+)
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
@@ -22,6 +26,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .config_helpers.listing import listed_items
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -96,6 +101,35 @@ async def read_helper_item(
     if not result or result.get("success") is not True:
         return None
     return result
+
+
+async def read_stored_helper_item(
+    client: Any,
+    helper_type: str,
+    helper_id: str,
+    entity_id: str,
+    name: str | None = None,
+) -> dict[str, Any] | None:
+    """The stored item ``helper_id`` names, as ``stored_helper_target``
+    resolves it: a bare id is a storage id, and only ``<type>.<name>`` is read
+    as the entity_id in the registry.
+
+    A bare id the component does not find is not stored. A failed read returns
+    ``None`` (the legacy path resolves again) instead.
+    """
+    result = await _read(
+        client, WS_HELPER_ITEM, helper_type=helper_type, item_id=helper_id
+    )
+    if result is None:
+        return None
+    if result.get("success") is True:
+        return result
+    error = result.get("error")
+    if not (isinstance(error, dict) and error.get("code") == "not_found"):
+        return None
+    if not helper_id.startswith(f"{helper_type}."):
+        raise_not_stored(helper_type, helper_id, name)
+    return await read_helper_item(client, helper_type, entity_id=entity_id)
 
 
 def _raise_outcome_unknown(
@@ -197,45 +231,122 @@ def collection_payload(helper_type: str, message: dict[str, Any]) -> dict[str, A
 
 
 def native_result(
-    helper_type: str, result: dict[str, Any]
-) -> tuple[dict[str, Any], str, list[str]]:
-    """Split a component write into (helper data, entity_id, warnings)."""
+    result: dict[str, Any],
+) -> tuple[dict[str, Any], str | None, list[str]]:
+    """Split a component write into (helper data, entity_id, warnings).
+
+    The entity_id is the one the component read from the registry, None when
+    the helper has none: ``<type>.<id>`` can be another helper's entity.
+    """
     item = result.get("item") or {}
-    entity_id = result.get("entity_id") or f"{helper_type}.{item.get('id')}"
     data = {**item, **(result.get("registry_applied") or {})}
-    return data, entity_id, list(result.get("warnings") or [])
+    return data, result.get("entity_id"), list(result.get("warnings") or [])
 
 
-async def _tag_entities(client: Any) -> list[dict[str, Any]]:
+async def _platform_entities(client: Any, platform: str) -> list[dict[str, Any]]:
+    """The platform's registry entries; a failed read raises, never reads as none."""
     listed = await client.send_websocket_message(
         {"type": "config/entity_registry/list"}
     )
-    return [e for e in listed.get("result") or [] if e.get("platform") == "tag"]
+    if not listed.get("success"):
+        raise HomeAssistantAPIError(
+            f"entity registry read failed: {listed.get('error', 'Unknown error')}"
+        )
+    return [e for e in listed.get("result") or [] if e.get("platform") == platform]
 
 
-async def tag_entity_id(client: Any, tag_id: str | None) -> str | None:
-    """The entity of a tag: its entity_id follows the tag's name, not its ID."""
-    if not tag_id:
+async def registry_entity_id(
+    client: Any, platform: str, item_id: str | None
+) -> str | None:
+    """The entity_id of a stored item's entity: the registry entry on ``platform``
+    whose unique_id is the item's ID. A tag's, zone's or person's entity_id
+    follows its name, and a renamed entity keeps its unique_id, so only the
+    registry knows it."""
+    if not item_id:
         return None
     return next(
         (
             e.get("entity_id")
-            for e in await _tag_entities(client)
-            if e.get("unique_id") == tag_id
+            for e in await _platform_entities(client, platform)
+            if e.get("unique_id") == item_id
         ),
         None,
     )
 
 
-async def tag_item_id(client: Any, helper_id: str) -> str:
-    """A tag's ID from its entity_id, its ID, or ``tag.<id>``."""
-    if not helper_id.startswith("tag."):
-        return helper_id
-    return next(
-        (
-            e["unique_id"]
-            for e in await _tag_entities(client)
-            if e.get("entity_id") == helper_id and e.get("unique_id")
-        ),
-        helper_id.removeprefix("tag."),
+async def stored_helper_target(
+    client: Any, helper_type: str, target: str, name: str | None = None
+) -> tuple[str, str | None, str | None] | None:
+    """The stored helper whose storage id ``target`` is: that id, its entity_id
+    and why it has none; ``None`` leaves an entity_id (``<type>.<name>``) to
+    the entity registry lookup.
+
+    ``ha_config_set_helper`` and ``ha_remove_helpers_integrations`` resolve a
+    target as the backups' ``backup_helper_target.stored_target`` does: a bare
+    id is a storage id and never the name of an entity, since a renamed entity
+    can carry another helper's id as its name. A bare id no stored helper has
+    is an error, so a repeated removal deletes nothing. The write goes by the
+    storage id, so a failed registry read only leaves the entity unnamed. A
+    failed list read is an error rather than reading as no stored helper.
+    """
+    listed = await client.send_websocket_message({"type": f"{helper_type}/list"})
+    if not listed.get("success"):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to fetch {helper_type} config list: "
+                f"{listed.get('error', 'Unknown error')}",
+                context={"helper_type": helper_type, "target": target},
+            )
+        )
+    stored = listed_items(listed.get("result"))
+    if not any(str(item.get("id")) == target for item in stored):
+        if target.startswith(f"{helper_type}."):
+            return None
+        raise_not_stored(helper_type, target, name)
+    try:
+        entity = await registry_entity_id(client, helper_type, target)
+    except (HomeAssistantError, OSError, TimeoutError) as err:
+        return target, None, f"the entity registry could not be read ({err})"
+    reason = None if entity else f"the {helper_type} has no entity in the registry"
+    return target, entity, reason
+
+
+def raise_not_stored(
+    helper_type: str, target: str, name: str | None = None
+) -> NoReturn:
+    """A bare id names a stored item only, never an entity by its name."""
+    suggestions = [
+        f"Find its id or entity_id with "
+        f"ha_config_list_helpers(helper_type='{helper_type}')"
+    ]
+    if name:
+        suggestions.append(
+            f"If you meant to create a new helper named {name!r}, "
+            "omit helper_id (or pass action='create')"
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.ENTITY_NOT_FOUND,
+            f"No stored {helper_type} has the id '{target}', and it is no "
+            f"{helper_type} entity_id. An id without '{helper_type}.' is a "
+            "storage id; name a helper by its entity with the full entity_id.",
+            context={"helper_type": helper_type, "target": target},
+            suggestions=suggestions,
+        )
     )
+
+
+def removal_reply(
+    response: dict[str, Any], entity: str | None, reason: str | None
+) -> dict[str, Any]:
+    """A removal's reply without a guessed entity, saying why it has none."""
+    if entity is None:
+        response["message"] = (
+            f"Successfully deleted {response['helper_type']}: {response['target']}."
+        )
+        response.setdefault("warnings", []).append(
+            f"{response['helper_type']} {response['target']} was deleted, but "
+            f"{reason}, so its entity is not named and the removal was not waited on."
+        )
+    return response

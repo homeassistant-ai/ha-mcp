@@ -125,14 +125,12 @@ class TestEntityCleaner:
     async def _cleanup_helper(self, helper_type: str, entity_id: str) -> bool:
         """Clean up a helper entity."""
         try:
-            # Extract helper ID from entity ID
-            helper_id = entity_id.replace(f"{helper_type}.", "")
-
+            # The entity_id, not its name: a renamed helper's storage id differs.
             delete_result = await self.client.call_tool(
                 "ha_remove_helpers_integrations",
                 {
                     "helper_type": helper_type,
-                    "target": helper_id,
+                    "target": entity_id,
                     "confirm": True,
                 },
             )

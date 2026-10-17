@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp import backup_manager as bm
+from ha_mcp.client.rest_client import HomeAssistantCommandError
 
 _ITEMS: dict[str, Any] = {
     "zone": [{"id": "office", "name": "Office", "latitude": 1.0, "longitude": 2.0}],
@@ -47,6 +48,15 @@ def ws(monkeypatch: pytest.MonkeyPatch, registry: list[dict[str, Any]]) -> Async
     async def send(client: Any, message: dict[str, Any]) -> Any:
         if message["type"] == "config/entity_registry/list":
             return registry
+        if message["type"] == "config/entity_registry/get":
+            row = next(
+                (r for r in registry if r["entity_id"] == message["entity_id"]), None
+            )
+            if row is None:
+                raise HomeAssistantCommandError(
+                    "Command failed: not found", "not_found"
+                )
+            return row
         if message["type"] == "config/entity_registry/update":
             registry[0]["name"] = message["name"]
             return {}
@@ -79,7 +89,10 @@ def test_ha_config_set_helper_edits_have_a_backup_handler(helper_type: str) -> N
 @pytest.mark.parametrize("helper_type", ["zone", "person"])
 async def test_capture_reads_the_stored_item(ws: AsyncMock, helper_type: str) -> None:
     item = _stored(helper_type)
-    assert await bm._fetch_helper(None, item["id"], helper_type) == item
+    snapshot = await bm._fetch_helper(None, item["id"], helper_type)
+    # A zone's snapshot also records its registry icon (backup_zones.py).
+    snapshot.pop("registry_icon", None)
+    assert snapshot == item
 
 
 @pytest.mark.asyncio
@@ -109,7 +122,12 @@ async def test_tag_capture_records_the_registry_name_not_the_listed_default(
 ) -> None:
     registry[0]["name"] = registry_name
     snapshot = await bm._fetch_helper(None, "abc-1", "tag")
-    assert snapshot == {"id": "abc-1", "name": captured, "description": "door"}
+    assert snapshot == {
+        "id": "abc-1",
+        "name": captured,
+        "description": "door",
+        "registry_icon": None,
+    }
 
 
 @pytest.mark.asyncio
