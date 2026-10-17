@@ -134,6 +134,7 @@ Accepted natural-name exceptions are:
 - `ha_restart`, `ha_reload_core`, `ha_eval_template`
 - `ha_report_issue`
 - `ha_read_file`, `ha_write_file`, `ha_bulk_control`, `ha_search`
+- `ha_capture_events`
 
 When no verb fits, update this list rather than forcing an inaccurate name.
 This section is the single source of truth for tool naming.

@@ -1397,6 +1397,33 @@ class TestSubscribeCommand:
         assert second["event"]["action"] == "install"
 
     @pytest.mark.asyncio
+    async def test_bounded_queue_drops_oldest_and_counts_overflow(self):
+        """A bounded listener stays memory-safe during a burst and reports loss."""
+        client = self._prepare_client()
+
+        async def _resolve(message: dict) -> None:
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result({"id": message["id"], "type": "result", "success": True})
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+        sub_id, queue = await client.subscribe_command(
+            "subscribe_events", event_type="test_event", queue_maxsize=1
+        )
+
+        await client._handle_event_message(
+            {"id": sub_id, "type": "event", "event": {"data": {"n": 1}}},
+            sub_id,
+        )
+        await client._handle_event_message(
+            {"id": sub_id, "type": "event", "event": {"data": {"n": 2}}},
+            sub_id,
+        )
+
+        assert (await queue.get())["event"]["data"]["n"] == 2
+        assert queue.dropped_count == 1
+
+    @pytest.mark.asyncio
     async def test_event_arriving_before_ack_lands_in_queue(self):
         """The exact race the PR closes: event during the subscribe-ack window.
 
