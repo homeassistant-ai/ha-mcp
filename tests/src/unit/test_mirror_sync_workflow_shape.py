@@ -7,6 +7,7 @@ stamping script against a scratch copy of the component.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import shutil
@@ -192,6 +193,20 @@ class TestDevVersionScript:
         )
         assert script_version and action_version
         assert script_version.group(1) == action_version.group(1)
+
+    def test_server_pin_names_match_the_component(self) -> None:
+        # const.py must import nothing (tests load it standalone), so it
+        # repeats the distribution names server_pin.py matches on.
+        def load(name: str) -> Any:
+            spec = importlib.util.spec_from_file_location(
+                f"_parity_{name}", _COMPONENT / f"{name}.py"
+            )
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+        assert load("server_pin").SERVER_DISTS == load("const").KNOWN_SERVER_DISTS
 
     def test_the_pr_version_gate_uses_the_shared_pin_rule(self) -> None:
         # One rule for what a server pin is: the gate, the stamp script, the
