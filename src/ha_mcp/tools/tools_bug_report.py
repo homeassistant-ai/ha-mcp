@@ -55,7 +55,7 @@ from .bug_report_templates import (
     _suggested_title,
 )
 from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION, parse_string_list_param
-from .component_api import get_component_caps
+from .component_api import get_component_caps, read_webhook_auth
 from .helpers import (
     log_tool_usage,
     raise_tool_error,
@@ -751,7 +751,7 @@ class BugReportTools:
         & YAML part is covered by the services probe. Entries are classified by
         flow-assigned title, so e.g. an add-on install that also added a redundant
         server entry shows next to Installation Method. A recognized server entry
-        gets the webhook auth mode when the cached ``info`` probe reports one.
+        gets the webhook auth mode when a fresh ``info`` call reports one.
         Returns None when ``config_entries/get`` fails; the report must not break.
         """
         try:
@@ -768,8 +768,7 @@ class BugReportTools:
             return None
         server, unrecognized = _classify_component_entries(result)
         if server:
-            caps = await get_component_caps(self._client)
-            auth = caps.webhook_auth if caps else None
+            auth = await read_webhook_auth(self._client)
             return ", ".join(server) + (f", webhook auth: {auth}" if auth else "")
         if unrecognized:
             # A renamed entry cannot be classified by title — report it

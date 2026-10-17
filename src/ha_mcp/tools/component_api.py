@@ -114,11 +114,6 @@ class ComponentCaps:
     # the old implication still holds — only the tools entry registered
     # ``info`` there).
     tools_services: bool | None = None
-    # The in-process server entry's webhook auth mode (the component's
-    # ``WEBHOOK_AUTH_*`` values, or ``disabled`` when the webhook is off), shown
-    # by ``ha_report_issue`` (#2584). Additive ``info`` field; ``None`` without a
-    # server entry or on a component too old to report it.
-    webhook_auth: str | None = None
 
 
 # Weak-keyed by client so the negotiated caps self-evict when the client is
@@ -255,7 +250,6 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
         schema_version = 0
     raw_timezone = result.get("timezone")
     raw_tools_services = result.get("tools_services")
-    raw_webhook_auth = result.get("webhook_auth")
     return ComponentCaps(
         schema_version=schema_version,
         component_version=str(result.get("component_version", "")),
@@ -269,7 +263,6 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
         tools_services=raw_tools_services
         if isinstance(raw_tools_services, bool)
         else None,
-        webhook_auth=raw_webhook_auth if isinstance(raw_webhook_auth, str) else None,
     )
 
 
@@ -413,3 +406,20 @@ def invalidate_caps(client: Any) -> None:
     _CAPS_CACHE.pop(client, None)
     _NEGATIVE_CACHE_TS.pop(client, None)
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
+
+
+async def read_webhook_auth(client: Any) -> str | None:
+    """The server entry's webhook auth mode, read fresh from ``info`` (#2584).
+
+    Not from ``get_component_caps``: that snapshot lives as long as the client,
+    while the mode is an entry option the user can change in the meantime.
+    None on a component too old to report it, or on any failure.
+    """
+    try:
+        response = await client.send_websocket_message({"type": INFO_COMMAND})
+    except Exception as e:  # noqa: BLE001
+        logger.info("Webhook auth probe failed: %s", e)
+        return None
+    result = response.get("result") if isinstance(response, dict) else None
+    auth = result.get("webhook_auth") if isinstance(result, dict) else None
+    return auth if isinstance(auth, str) else None
