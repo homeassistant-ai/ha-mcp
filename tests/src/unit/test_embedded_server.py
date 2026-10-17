@@ -17,6 +17,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import urlparse
@@ -2206,7 +2207,9 @@ class TestTokenProvisioning:
 
 
 class TestRevokeCredentials:
-    async def test_revokes_without_updating_the_removed_entry(self, tmp_path):
+    async def test_revokes_without_updating_the_removed_entry(
+        self, tmp_path: Path
+    ) -> None:
         user = _user("u")
         rt = _rt("rt", user=user)
         mgr, hass, _entry = _manager(
