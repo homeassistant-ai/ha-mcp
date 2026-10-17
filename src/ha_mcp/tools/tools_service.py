@@ -49,6 +49,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .config_entry_flow import is_component_domain
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -805,14 +806,10 @@ class ServiceTools:
                 )
             )
         # ha_mcp_tools.* services are restricted to the ha-mcp server's dedicated
-        # wrappers (which inject the required caller token). Block ha_call_service
-        # from forwarding to that domain — it would otherwise be a bypass path
-        # around the dedicated tools. HA core's service registry lowercases the
-        # domain on fallback lookup (homeassistant/core.py
-        # ServiceRegistry.async_call), so normalise here to make sure a mixed-case
-        # `HA_MCP_TOOLS` can't slip past this exact-string check and still resolve
-        # downstream.
-        if domain.strip().lower() == "ha_mcp_tools":
+        # wrappers (which inject the required caller token); forwarding to that
+        # domain would bypass them. is_component_domain normalises case because
+        # HA core's service registry lowercases the domain on fallback lookup.
+        if is_component_domain(domain):
             raise_tool_error(
                 create_validation_error(
                     (

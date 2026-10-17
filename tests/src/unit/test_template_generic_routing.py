@@ -237,7 +237,9 @@ async def test_template_enable_disable_keeps_integration_backup(
     snapshot = mutation["snapshots"][0]
     assert snapshot["domain"] == "integration"
     assert snapshot["config"] == original
-    entry_backup.client.get_config_entry.assert_not_awaited()
+    # Only the own-entry guard reads the entry; the backup keeps the whole
+    # integration fragment without resolving a helper domain.
+    entry_backup.client.get_config_entry.assert_awaited_once_with("template-entry")
 
 
 @pytest.mark.parametrize("operation", ["options", "delete"])
@@ -289,9 +291,10 @@ async def test_generic_template_mutation_preserves_best_effort_capture_policy(
 
     assert result["success"] is True
     assert entry_backup.mutations == [{"snapshots": [], "locked": True}]
-    # The options walker itself reads the entry once, independently of backup.
+    # The mutation itself reads the entry once (the options walker, or the
+    # delete's own-entry guard), independently of backup.
     assert entry_backup.client.get_config_entry.await_count == (
-        int(operation == "options") + int(capture_state == "lookup_failed")
+        1 + int(capture_state == "lookup_failed")
     )
 
 

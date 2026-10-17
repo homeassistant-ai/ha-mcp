@@ -47,7 +47,11 @@ from .config_entry_backup import (
     resolve_config_entry_backup_domain,
     skip_unless_flow_helper,
 )
-from .config_entry_flow import create_config_entry, update_config_entry_options
+from .config_entry_flow import (
+    create_config_entry,
+    refuse_component_entry,
+    update_config_entry_options,
+)
 from .config_entry_flow_form import iter_schema_fields
 from .config_helpers.registry import _get_entities_for_config_entry
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES, StorageHelperType
@@ -69,6 +73,7 @@ from .helpers import (
     validate_identifier_not_empty,
     ws_failure_code,
 )
+from .integration_entry_state import set_entry_enabled, set_log_level
 from .integration_reconfigure import (
     ReconfigureRunner,
     reject_reconfigure_only_parameters,
@@ -1844,6 +1849,9 @@ class IntegrationTools:
         - Config subentries: use
           ha_config_set_helper(helper_type='config_subentry').
         - Removing an entry: use ha_remove_helpers_integrations.
+        - ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA
+          UI, or (server settings, developer mode on) ha_dev_manage_settings /
+          ha_dev_manage_server.
 
         Use ha_get_integration() to find entry IDs, and
         ha_get_integration(entry_id=..., include_schema=True) to inspect the
@@ -1876,7 +1884,8 @@ class IntegrationTools:
                     expected_mac=expected_mac,
                     expected_entity_ids=expected_entity_ids,
                 )
-                return await self._set_log_level(
+                return await set_log_level(
+                    self._client,
                     entry_id,
                     domain,
                     log_level,
@@ -1918,6 +1927,7 @@ class IntegrationTools:
                         "'local_calendar'",
                     ],
                 )
+                refuse_component_entry(domain, action="add an entry for")
                 return await create_config_entry(self._client, domain, config or {})
 
             if entry_id is None:
@@ -1944,7 +1954,7 @@ class IntegrationTools:
             )
 
             if enabled is not None:
-                return await self._set_entry_enabled(entry_id, enabled)
+                return await set_entry_enabled(self._client, entry_id, enabled)
 
             if config is not None:
                 # Options mode: drive the entry's options flow.
@@ -1991,103 +2001,6 @@ class IntegrationTools:
         if domain is not None:
             error_context["domain"] = domain
         return error_context
-
-    async def _set_log_level(
-        self,
-        entry_id: str | None,
-        domain: str | None,
-        log_level: str,
-        *,
-        other_modes: bool,
-    ) -> dict[str, Any]:
-        """Set an integration's log level through ``logger/integration_log_level``."""
-        if other_modes or (domain is None) == (entry_id is None):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "log_level takes exactly one of 'domain' or 'entry_id' and "
-                    "cannot be combined with config, enabled or reconfigure",
-                    suggestions=[
-                        "Example: ha_set_integration(domain='zha', log_level='DEBUG')",
-                    ],
-                    context={"entry_id": entry_id, "domain": domain},
-                )
-            )
-        if entry_id is not None:
-            entry = await self._client.get_config_entry(entry_id)
-            domain = entry.get("domain")
-        result = await self._client.send_websocket_message(
-            {
-                "type": "logger/integration_log_level",
-                "integration": domain,
-                # NOTSET is what the UI's Disable debug logging sends.
-                "level": "NOTSET" if log_level == "DEFAULT" else log_level,
-                "persistence": "once",
-            }
-        )
-        if not result.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ws_failure_code(result),
-                    f"Failed to set the log level for '{domain}': "
-                    f"{result.get('error') or 'unknown error'}",
-                    context={"domain": domain, "entry_id": entry_id},
-                )
-            )
-        return {
-            "success": True,
-            "action": "set_log_level",
-            "domain": domain,
-            "log_level": log_level,
-            "note": (
-                "Override cleared: the integration now logs at the inherited "
-                "default level; a level set for it in configuration.yaml returns "
-                "after the next restart."
-                if log_level == "DEFAULT"
-                else "Applies now and through the next Home Assistant restart."
-            ),
-        }
-
-    async def _set_entry_enabled(self, entry_id: str, enabled: bool) -> dict[str, Any]:
-        """Enable or disable a config entry via ``config_entries/disable``."""
-        message = {
-            "type": "config_entries/disable",
-            "entry_id": entry_id,
-            "disabled_by": None if enabled else "user",
-        }
-
-        result = await self._client.send_websocket_message(message)
-
-        if not result.get("success"):
-            error_msg = result.get("error", {})
-            if isinstance(error_msg, dict):
-                error_msg = error_msg.get("message", str(error_msg))
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to {'enable' if enabled else 'disable'} integration: {error_msg}",
-                    context={"entry_id": entry_id},
-                )
-            )
-
-        require_restart = (result.get("result") or {}).get("require_restart", False)
-
-        if require_restart:
-            note = "Home Assistant restart required for changes to take effect."
-        else:
-            note = (
-                "Integration has been loaded."
-                if enabled
-                else "Integration has been unloaded."
-            )
-
-        return {
-            "success": True,
-            "message": f"Integration {'enabled' if enabled else 'disabled'} successfully",
-            "entry_id": entry_id,
-            "require_restart": require_restart,
-            "note": note,
-        }
 
     @tool(
         name="ha_remove_helpers_integrations",
@@ -2174,6 +2087,9 @@ class IntegrationTools:
           config entry) — use `ha_remove_entity` instead.
         - YAML-configured helpers — they have no storage backend. Edit the
           YAML file and reload the relevant integration.
+        - ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA
+          UI, or (server settings, developer mode on) ha_dev_manage_settings /
+          ha_dev_manage_server.
 
         ROUTING:
         - SIMPLE helper_type (input_button, input_boolean, input_select,
@@ -2344,8 +2260,18 @@ class IntegrationTools:
 
     # === Path 3: Direct config entry delete (any integration) ===
     async def _delete_direct_entry(self, entry_id: str) -> dict[str, Any]:
-        """Delete a config entry directly via the REST delete API."""
+        """Delete a config entry directly via the REST delete API.
+
+        Looks the entry up first and refuses ha-mcp's own ``ha_mcp_tools``
+        entries before any DELETE is sent.
+        """
         try:
+            entry = await self._client.get_config_entry(entry_id)
+            refuse_component_entry(
+                entry.get("domain"),
+                action="delete a config entry of",
+                entry_id=entry_id,
+            )
             result = await self._client.delete_config_entry(entry_id)
             require_restart = result.get("require_restart", False)
             return {
@@ -2366,15 +2292,16 @@ class IntegrationTools:
         except ToolError:
             raise
         except HomeAssistantAPIError as e:
-            # HA returns 404 for missing config entries (see
-            # RestClient.delete_config_entry — the REST DELETE on a
-            # nonexistent entry surfaces as HomeAssistantAPIError with
-            # status_code=404). Surface as RESOURCE_NOT_FOUND so callers
-            # can distinguish absent target from real failures; the typo
-            # case (agent passed the wrong entry_id) is the failure mode
-            # that "absent → success" would silently mask. Non-404 API
-            # errors are real failures and bubble through
-            # exception_to_structured_error below.
+            # A missing entry surfaces as HomeAssistantAPIError with
+            # status_code=404 from the own-entry lookup
+            # (RestClient.get_config_entry), before any DELETE is sent, or
+            # from the DELETE itself when the entry vanished in between
+            # (RestClient.delete_config_entry). Surface it as
+            # RESOURCE_NOT_FOUND so callers can distinguish an absent target
+            # from a real failure; the typo case (agent passed the wrong
+            # entry_id) is the failure mode that "absent → success" would
+            # silently mask. Non-404 API errors are real failures and bubble
+            # through exception_to_structured_error below.
             if e.status_code == 404:
                 raise_tool_error(
                     create_error_response(

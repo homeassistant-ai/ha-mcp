@@ -9,6 +9,9 @@ against after.
 
 Every read here raises rather than producing a half-filled identity: an empty
 list means "the entry has none", never "we could not tell".
+
+The manual rollback metadata a reconfigure reports alongside that identity is
+built here too.
 """
 
 import logging
@@ -508,3 +511,35 @@ def _verify_reconfigure_identity_fields(
             expected=expected_identity,
             status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
         )
+
+
+def build_reconfigure_rollback_metadata(
+    entry_id: str,
+    domain: str,
+) -> dict[str, Any]:
+    """Describe the manual rollback path for an existing config entry.
+
+    The snapshot the auto-backup layer captures is Home Assistant's config
+    entry fragment (``config_entries/get`` over WebSocket, which serializes
+    ``ConfigEntry.as_json_fragment``). That fragment carries no ``data`` key,
+    so the entry's connection settings are not in it: the snapshot is audit
+    evidence, not an automatic endpoint rollback. An operator must repeat the
+    official reconfigure flow with the known previous values.
+    """
+    return {
+        "strategy": "official_reconfigure_flow",
+        "automatic": False,
+        "operator_action_required": True,
+        "manual_required": True,
+        "manual_reason": "previous_config_unavailable",
+        "entry_id": entry_id,
+        "domain": domain,
+        "previous_config": None,
+        "backup_scope": "edits",
+        "backup_restore_supported": False,
+        "backup_restore_note": (
+            "The generic integration snapshot is audit evidence only; its shared "
+            "restore handler does not restore connection settings. Use the official "
+            "reconfigure flow instead."
+        ),
+    }

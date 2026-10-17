@@ -43,7 +43,7 @@ class TestRemoveHelpersIntegrations:
     @pytest.fixture
     def mock_client(self):
         """Mock Home Assistant client with all methods used by the tool."""
-        client = MagicMock()
+        client = MagicMock(get_config_entry=AsyncMock(return_value={"domain": "hue"}))
         client.get_entity_state = AsyncMock(return_value={"state": "on"})
         client.send_websocket_message = AsyncMock()
         client.delete_config_entry = AsyncMock(return_value={"require_restart": False})
@@ -1805,7 +1805,7 @@ class TestSetIntegrationModes:
 
     @pytest.fixture
     def mock_client(self):
-        client = MagicMock()
+        client = MagicMock(get_config_entry=AsyncMock(return_value={"domain": "hue"}))
         client.send_websocket_message = AsyncMock(
             return_value={"success": True, "result": {"require_restart": False}}
         )
