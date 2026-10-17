@@ -229,7 +229,7 @@ class HistoryTools:
         end_time: Annotated[
             str | None,
             Field(
-                description="End time: same formats as start_time. Default: now",
+                description="End time: same formats as start_time. Omit it to end at the current time",
                 default=None,
             ),
         ] = None,

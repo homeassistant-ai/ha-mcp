@@ -172,7 +172,8 @@ class CalendarTools:
         start: Annotated[
             str | None,
             Field(
-                description="Start datetime in ISO format (default: now)", default=None
+                description="Start datetime in ISO format; omit it to start at the current time",
+                default=None,
             ),
         ] = None,
         end: Annotated[
