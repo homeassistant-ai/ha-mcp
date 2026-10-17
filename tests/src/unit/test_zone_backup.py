@@ -178,7 +178,7 @@ class TestZoneBackup:
             )
         )
 
-        _, storage_id = await tools._resolve_zone(zone_id)
+        _, storage_id, _ = await tools._resolve_zone(zone_id)
         snapshot = await _handler("zone").fetch(None, zone_id)
 
         assert storage_id == snapshot["id"] == changed
@@ -206,7 +206,7 @@ class TestZoneBackup:
             )
         )
 
-        entity_id, storage_id = await tools._resolve_zone("work")
+        entity_id, storage_id, _ = await tools._resolve_zone("work")
         snapshot = await _handler("zone").fetch(None, "work")
 
         assert storage_id == snapshot["id"] == "work"

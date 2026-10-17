@@ -409,15 +409,17 @@ class ZoneTools:
             )
         return state
 
-    async def _resolve_zone(self, zone_id: str) -> tuple[str | None, str]:
-        """The entity_id and storage zone_id of a stored zone, given either.
+    async def _resolve_zone(self, zone_id: str) -> tuple[str | None, str, str | None]:
+        """The entity_id, storage zone_id and registry icon of a stored zone,
+        given its entity_id or zone_id.
 
         Resolved as ``stored_target`` resolves it, and so as the zone backups
         do: a bare ``zone_id`` is a storage id from ``zone/list``, and
         ``zone.<name>`` is the zone whose registry entry has that entity_id. A
         renamed entity can carry another zone's id as its name, so a bare id
         never names an entity, and a repeated removal deletes nothing.
-        The entity_id is None for a stored zone without a registry entry. The
+        Both entity_id and icon are None for a stored zone without a registry
+        entry; the icon is also None when the entry sets none. The
         home zone and YAML zones are not in the storage; Core gives them no
         ``unique_id``, so they have no registry entry.
         """
@@ -443,7 +445,11 @@ class ZoneTools:
         stored = {str(zone.get("id")) for zone in listed.get("result") or []}
         storage_id, entity = stored_target("zone", zone_id, stored, entries)
         if storage_id in stored:
-            return entity, storage_id
+            icon = next(
+                (e.get("icon") for e in entries if e.get("unique_id") == storage_id),
+                None,
+            )
+            return entity, storage_id, icon
         entity_id = zone_id if zone_id.startswith("zone.") else f"zone.{zone_id}"
         # A registry entry links a stored zone, so only a state without one is
         # a YAML or the home zone.
@@ -609,7 +615,7 @@ class ZoneTools:
                             context={"zone_id": zone_id},
                         )
                     )
-                entity_id, storage_id = await self._resolve_zone(zone_id)
+                entity_id, storage_id, registry_icon = await self._resolve_zone(zone_id)
                 # The helper write path merges into the stored zone and keeps a
                 # new icon in the registry, where it stays clearable, unless the
                 # zone already stores one (#2643). It takes the storage id first.
@@ -628,6 +634,12 @@ class ZoneTools:
                     fields,
                 )
                 response = _zone_write_response(result, storage_id, "updated")
+                # The reply holds the stored zone plus the registry fields this
+                # write set; the entity shows its registry icon over the stored
+                # one, as ha_get_zone reports it. An icon this write set or
+                # cleared ('') is already in the reply.
+                if icon is None and registry_icon:
+                    response["zone_data"]["icon"] = registry_icon
                 response["updated_fields"] = updated
                 return response
 
@@ -712,7 +724,7 @@ class ZoneTools:
                 suggestions=["Use ha_get_zone() to find existing zone_ids"],
                 context={"operation": "remove_zone"},
             )
-            entity_id, storage_id = await self._resolve_zone(zone_id)
+            entity_id, storage_id, _ = await self._resolve_zone(zone_id)
             result = await self._client.send_websocket_message(
                 {"type": "zone/delete", "zone_id": storage_id}
             )
