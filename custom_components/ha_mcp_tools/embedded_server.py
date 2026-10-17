@@ -92,6 +92,7 @@ from .dependency_diagnostics import (
     root_import_failure,
 )
 from .pip_compat import pip_kwargs
+from .server_pin import server_pins
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -2556,13 +2557,8 @@ async def _async_paired_server_requirement(hass: HomeAssistant) -> str | None:
     Assistant installs before setting the integration up. A copy taken from
     master pins the last release; only a hand-edited manifest carries none.
     """
-    known = {canonicalize_name(name) for name in KNOWN_SERVER_DISTS}
     integration = await async_get_integration(hass, DOMAIN)
-    for requirement in integration.requirements:
-        with suppress(InvalidRequirement):
-            if canonicalize_name(Requirement(requirement).name) in known:
-                return str(requirement)
-    return None
+    return next(iter(server_pins(integration.requirements)), None)
 
 
 def _exact_pinned_version(spec: str) -> str | None:

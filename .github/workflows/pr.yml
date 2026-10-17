@@ -61,23 +61,27 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, re, sys, tomllib
+          sys.path.insert(0, "custom_components/ha_mcp_tools")
+          from server_pin import server_pins
           server = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
           manifest = json.load(open("custom_components/ha_mcp_tools/manifest.json"))
           const = open("custom_components/ha_mcp_tools/const.py").read()
+          pins = server_pins(manifest["requirements"])
           found = {
-              "manifest.json version": manifest["version"],
-              "manifest.json ha-mcp pin": next(
-                  (r.split("==", 1)[1] for r in manifest["requirements"]
-                   if r.startswith("ha-mcp==")), None),
+              "manifest.json version": (manifest["version"], server),
+              "manifest.json server pin": (
+                  pins[0] if len(pins) == 1 else pins, f"ha-mcp=={server}"),
               "const.py COMPONENT_VERSION": (
                   m.group(1) if (m := re.search(
-                      r'^COMPONENT_VERSION = "([^"]+)"', const, re.M)) else None),
+                      r'^COMPONENT_VERSION = "([^"]+)"', const, re.M)) else None,
+                  server),
           }
-          wrong = {k: v for k, v in found.items() if v != server}
-          for key, value in wrong.items():
-              print(f"::error::{key} is {value!r}, but pyproject.toml's version is "
-                    f"{server!r}. semantic-release stamps these at release time; "
-                    "restore them (docs/agents/custom-component.md#version-cycle).")
+          wrong = {k: v for k, v in found.items() if v[0] != v[1]}
+          for key, (value, expected) in wrong.items():
+              print(f"::error::{key} is {value!r}, but pyproject.toml's version "
+                    f"{server!r} needs {expected!r}. semantic-release stamps these "
+                    "at release time; restore them "
+                    "(docs/agents/custom-component.md#version-cycle).")
           sys.exit(1 if wrong else 0)
           PY
 

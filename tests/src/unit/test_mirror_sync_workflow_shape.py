@@ -193,6 +193,13 @@ class TestDevVersionScript:
         assert script_version and action_version
         assert script_version.group(1) == action_version.group(1)
 
+    def test_the_pr_version_gate_uses_the_shared_pin_rule(self) -> None:
+        # One rule for what a server pin is: the gate, the stamp script, the
+        # E2E seed and the component all read server_pin.py.
+        gate = (_WORKFLOWS / "pr.yml").read_text(encoding="utf-8")
+        assert "from server_pin import server_pins" in gate
+        assert "server_pin.py" in _STAMP.read_text(encoding="utf-8")
+
     @pytest.mark.parametrize("workflow", ["publish-dev.yml", "addon-publish-dev.yml"])
     def test_every_dev_surface_uses_the_script(self, workflow: str) -> None:
         assert "DEV_VERSION=$(scripts/dev_version.sh)" in (

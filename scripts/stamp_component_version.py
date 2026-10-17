@@ -25,23 +25,29 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
 
-SERVER_DISTS = ("ha-mcp", "ha-mcp-dev")
+# The component's own rule for what a server pin is (standard library only).
+_PIN_RULE = Path(__file__).resolve().parents[1] / (
+    "custom_components/ha_mcp_tools/server_pin.py"
+)
+_spec = importlib.util.spec_from_file_location("server_pin", _PIN_RULE)
+assert _spec is not None and _spec.loader is not None
+server_pin = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(server_pin)
+
+SERVER_DISTS = server_pin.SERVER_DISTS
 _PLAIN_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 _PIN_VERSION = re.compile(r"^\d+\.\d+\.\d+(\.dev\d+)?$")
-_REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _COMPONENT_VERSION = re.compile(r'^COMPONENT_VERSION = "[^"]*"$', re.MULTILINE)
 
 
 def _is_server_requirement(requirement: str) -> bool:
-    match = _REQUIREMENT_NAME.match(requirement)
-    if match is None:
-        return False
-    return match.group(1).lower().replace("_", "-") in SERVER_DISTS
+    return server_pin.server_dist(requirement) is not None
 
 
 def stamp(component_dir: Path, version: str, pin: str, dist: str = "ha-mcp") -> None:

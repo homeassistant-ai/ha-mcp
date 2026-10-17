@@ -15,6 +15,8 @@ block was folded in from the former standalone ``ha_mcp_server`` integration.
 
 import re
 
+from .server_pin import SERVER_DISTS
+
 DOMAIN = "ha_mcp_tools"
 
 # Component version: the server version this release shares, stamped together
@@ -288,9 +290,8 @@ RESERVED_DASHBOARD_URL_PATHS = frozenset(
 # import package (publish-dev.yml only renames the distribution), so only one
 # may be installed at a time — see EmbeddedServerManager's conflicting-dist
 # handling.
-DIST_NAME_STABLE = "ha-mcp"
-DIST_NAME_DEV = "ha-mcp-dev"
-KNOWN_SERVER_DISTS = (DIST_NAME_STABLE, DIST_NAME_DEV)
+KNOWN_SERVER_DISTS = SERVER_DISTS
+DIST_NAME_STABLE, DIST_NAME_DEV = SERVER_DISTS
 
 # The server requirement when the component manifest carries no ``ha-mcp``
 # pin, which only a hand-edited manifest lacks: semantic-release stamps every

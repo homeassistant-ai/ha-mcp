@@ -1,9 +1,9 @@
 """Seeding of the fresh Home Assistant config directory before the container boots."""
 
+import importlib.util
 import json
 import logging
 import os
-import re
 import shutil
 import sqlite3
 import tempfile
@@ -548,7 +548,18 @@ def _seed_yaml_package_scene(config_path: Path) -> None:
     )
 
 
-_SERVER_DISTRIBUTIONS = frozenset({"ha-mcp", "ha-mcp-dev"})
+# The component's own server-pin rule, loaded by path: importing the package
+# would pull in Home Assistant.
+_PIN_RULE_SPEC = importlib.util.spec_from_file_location(
+    "server_pin",
+    Path(__file__).resolve().parents[3]
+    / "custom_components"
+    / "ha_mcp_tools"
+    / "server_pin.py",
+)
+assert _PIN_RULE_SPEC is not None and _PIN_RULE_SPEC.loader is not None
+_server_pin = importlib.util.module_from_spec(_PIN_RULE_SPEC)
+_PIN_RULE_SPEC.loader.exec_module(_server_pin)
 
 
 def is_server_requirement(requirement: str) -> bool:
@@ -558,9 +569,7 @@ def is_server_requirement(requirement: str) -> bool:
     installing the pinned PyPI release first would put released code under
     test (pip then treats the same-version wheel as already satisfied).
     """
-    match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", requirement)
-    name = match.group(1).lower().replace("_", "-") if match else ""
-    return name in _SERVER_DISTRIBUTIONS
+    return _server_pin.server_dist(requirement) is not None
 
 
 def _collect_manifest_requirements(
