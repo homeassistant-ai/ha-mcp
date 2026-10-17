@@ -19,7 +19,7 @@ SERVER_ENTRY_TITLE = "HA-MCP Server"
 @pytest.mark.asyncio
 async def test_every_loaded_entry_downloads_the_component_summary(
     ha_client: HomeAssistantClient,
-):
+) -> None:
     entries = [
         e
         for e in await ha_client._request("GET", "/config/config_entries/entry")
