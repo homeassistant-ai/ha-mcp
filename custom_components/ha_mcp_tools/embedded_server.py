@@ -508,7 +508,8 @@ class EmbeddedServerManager:
         """Revoke the provisioned refresh token and remove the server's user.
 
         Called when the config entry is removed. Best-effort and idempotent:
-        missing ids / already-deleted objects are treated as success.
+        missing ids / already-deleted objects are treated as success. The entry
+        is already out of the registry, so its data is left as is.
         """
         rt_id = self._entry.data.get(DATA_REFRESH_TOKEN_ID)
         user_id = self._entry.data.get(DATA_SERVER_USER_ID)
@@ -522,14 +523,6 @@ class EmbeddedServerManager:
             user = await self._hass.auth.async_get_user(user_id)
             if user is not None:
                 await self._hass.auth.async_remove_user(user)
-
-        remaining = {
-            k: v
-            for k, v in self._entry.data.items()
-            if k not in (DATA_SERVER_USER_ID, DATA_REFRESH_TOKEN_ID, DATA_ACCESS_TOKEN)
-        }
-        if remaining != dict(self._entry.data):
-            self._hass.config_entries.async_update_entry(self._entry, data=remaining)
 
     # -- package install ---------------------------------------------------
 

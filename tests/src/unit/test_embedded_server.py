@@ -2206,10 +2206,10 @@ class TestTokenProvisioning:
 
 
 class TestRevokeCredentials:
-    async def test_removes_token_and_user_and_strips_entry_data(self, tmp_path):
+    async def test_revokes_without_updating_the_removed_entry(self, tmp_path):
         user = _user("u")
         rt = _rt("rt", user=user)
-        mgr, hass, entry = _manager(
+        mgr, hass, _entry = _manager(
             tmp_path,
             data={
                 DATA_SECRET_PATH: "/p",
@@ -2225,11 +2225,8 @@ class TestRevokeCredentials:
 
         hass.auth.async_remove_refresh_token.assert_called_once_with(rt)
         hass.auth.async_remove_user.assert_awaited_once_with(user)
-        # The three provisioning keys are stripped; the secret path is kept.
-        assert DATA_SERVER_USER_ID not in entry.data
-        assert DATA_REFRESH_TOKEN_ID not in entry.data
-        assert DATA_ACCESS_TOKEN not in entry.data
-        assert entry.data[DATA_SECRET_PATH] == "/p"
+        # HA removes the entry before this runs; updating it raises UnknownEntry.
+        hass.config_entries.async_update_entry.assert_not_called()
 
     async def test_idempotent_when_ids_missing(self, tmp_path):
         mgr, hass, _entry = _manager(tmp_path, data={DATA_SECRET_PATH: "/p"})
