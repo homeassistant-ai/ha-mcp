@@ -30,6 +30,7 @@ from haos_runtime import (
     SSH_ADDON_PASSWORD,
     SSH_ADDON_USER,
     SSHPASS_BIN,
+    _home_assistant_ws_command,
     _ssh_debug_host_port,
     wait_for_addon_mcp_ready,
 )
@@ -128,6 +129,18 @@ class Instance:
         self.backend = env["backend"]
         self.haos = self.backend.startswith("haos")
         self.base_url = env["base_url"]
+        if self.haos:
+            # The fixture's HAOS login token expires after about 30 minutes,
+            # and this instance outlives it by hours.
+            env["token"] = _home_assistant_ws_command(
+                self.base_url,
+                env["token"],
+                {
+                    "type": "auth/long_lived_access_token",
+                    "client_name": "dev-ha-env",
+                    "lifespan": 30,
+                },
+            )
         self.headers = {"Authorization": f"Bearer {env['token']}"}
         self.server: subprocess.Popen | None = None
 

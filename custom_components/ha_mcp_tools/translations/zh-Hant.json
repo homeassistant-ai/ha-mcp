@@ -106,10 +106,6 @@
       "title": "HA-MCP 伺服器更新正在等待元件更新",
       "description": "ha-mcp 伺服器 {latest} 可供使用，但該版本同時也更新了 HA-MCP 自訂元件（至 {shipped}；您目前執行的是 {running}）。為避免啟動執行中元件從未測試過的伺服器版本，自動伺服器更新將暫緩，直到元件更新為止。\n\n請透過 HACS 更新元件（開啟 HA-MCP 自訂元件項目，若尚未顯示更新則使用「更新資訊」），然後重新啟動 Home Assistant——伺服器更新隨後會自動安裝。若無論如何都要安裝伺服器更新，請按下 HA-MCP 伺服器更新實體上的「安裝」。"
     },
-    "legacy_hacs_source": {
-      "title": "從舊版儲存庫安裝的元件",
-      "description": "HACS 正在追蹤此元件的主要 ha-mcp 伺服器儲存庫，因此 HACS 在此顯示的是伺服器的版本號碼與發布說明，而非元件本身的版本（2.x）。更新會繼續運作，但標籤會維持錯誤狀態。若要修正：從 HACS 中移除此儲存庫（您的整合設定與設定項目會被保留），將 homeassistant-ai/ha-mcp-integration 新增為自訂儲存庫，從中重新安裝元件，然後重新啟動 Home Assistant。"
-    },
     "legacy_oauth_restart": {
       "title": "重新啟動 Home Assistant 以套用舊版 OAuth 設定",
       "fix_flow": {

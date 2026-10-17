@@ -134,6 +134,12 @@ def _format_client_host_for_template(diagnostic_info: dict[str, Any]) -> str:
     return "; ".join(parts) or HOST_NOT_DETECTED
 
 
+# URL userinfo, anchored on "://" rather than on the scheme: a match that began
+# at the scheme made every character of a long unbroken word a candidate start,
+# quadratic in its length (about a minute for a 200 kB base64 blob).
+_URL_USERINFO_RE = re.compile(r"(://)([^:/?#\s@]+):([^@/\s]+)@")
+
+
 def _sanitize_log_text(text: str) -> str:
     """Best-effort secret scrubber for log text.
 
@@ -181,11 +187,7 @@ def _sanitize_log_text(text: str) -> str:
         flags=re.IGNORECASE,
     )
     # URL userinfo: scheme://user:password@host -> scheme://user:[REDACTED]@host
-    text = re.sub(
-        r"([a-zA-Z][a-zA-Z0-9+.-]*://)([^:/?#\s@]+):([^@/\s]+)@",
-        r"\1\2:[REDACTED]@",
-        text,
-    )
+    text = _URL_USERINFO_RE.sub(r"\1\2:[REDACTED]@", text)
     # Long hex strings (API keys, tokens) - 32+ contiguous hex chars
     text = re.sub(
         r"(?<![a-fA-F0-9])[a-fA-F0-9]{32,}(?![a-fA-F0-9])",

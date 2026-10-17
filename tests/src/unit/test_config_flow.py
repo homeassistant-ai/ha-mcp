@@ -132,6 +132,7 @@ for _name in [
 sys.modules.pop("custom_components.ha_mcp_tools.config_flow", None)
 
 from custom_components.ha_mcp_tools import config_flow as cf  # noqa: E402
+from custom_components.ha_mcp_tools import config_flow_text as cft  # noqa: E402
 from custom_components.ha_mcp_tools import const  # noqa: E402
 
 
@@ -211,44 +212,6 @@ class TestToolsBranch:
         # The pre-rename default the setup migration retitles existing installs
         # away from (see _async_setup_tools_entry).
         assert const.TOOLS_ENTRY_LEGACY_TITLE == "HA MCP Tools"
-
-
-class TestServerBranch:
-    def test_server_step_shows_confirm_form(self):
-        flow = _make_flow()
-        form = asyncio.run(flow.async_step_server(None))
-        assert form["type"] == "form"
-        assert form["step_id"] == "server"
-
-    def test_server_step_creates_entry_with_entry_type(self):
-        flow = _make_flow()
-        entry = asyncio.run(flow.async_step_server({}))
-        assert entry["type"] == "entry"
-        assert entry["title"] == cf._SERVER_ENTRY_TITLE
-        assert entry["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER}
-        assert entry["options"] == {}
-
-    def test_server_uses_distinct_unique_id(self):
-        flow = _make_flow()
-        asyncio.run(flow.async_step_server(None))
-        flow.async_set_unique_id.assert_awaited_once_with(cf._SERVER_UNIQUE_ID)
-        flow._abort_if_unique_id_configured.assert_called_once()
-        # Distinct from the tools entry's unique id so both can coexist.
-        assert cf._SERVER_UNIQUE_ID != const.DOMAIN
-
-    def test_server_aborts_on_unsupported_home_assistant(self, monkeypatch):
-        monkeypatch.setattr(cf, "HA_VERSION", "2025.9.4")
-        flow = _make_flow()
-
-        result = asyncio.run(flow.async_step_server(None))
-
-        assert result["type"] == "abort"
-        assert result["reason"] == "unsupported_home_assistant"
-        assert result["description_placeholders"] == {
-            "installed": "2025.9.4",
-            "required": "2026.8.0",
-        }
-        flow.async_set_unique_id.assert_not_awaited()
 
 
 class TestOAuthCredsHint:
@@ -1211,7 +1174,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(
                 return_value=self._catalog(
@@ -1247,7 +1210,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint="Öffne das Panel.")),
         )
@@ -1276,7 +1239,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(side_effect=RuntimeError("boom")),
         )
@@ -1294,7 +1257,7 @@ class TestOptionsFormTranslations:
     def test_unreadable_language_skips_the_lookup(self, monkeypatch):
         """No language to ask for means English, not a lookup with a bad key."""
         seam = AsyncMock(return_value={})
-        monkeypatch.setattr(cf, "_fetch_common_translations", seam)
+        monkeypatch.setattr(cft, "_fetch_common_translations", seam)
         monkeypatch.setattr(
             cf,
             "async_get_integration",
@@ -1325,7 +1288,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(version_line="Komponente {nope} {")),
         )
@@ -1358,7 +1321,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(
                 return_value=self._catalog(
@@ -1379,7 +1342,7 @@ class TestOptionsFormTranslations:
     def test_the_seam_is_asked_for_the_configured_language(self, monkeypatch):
         """Every test above stays green if the call site hardcodes ``"en"``."""
         seam = AsyncMock(return_value={})
-        monkeypatch.setattr(cf, "_fetch_common_translations", seam)
+        monkeypatch.setattr(cft, "_fetch_common_translations", seam)
         monkeypatch.setattr(
             cf,
             "async_get_integration",
@@ -1405,7 +1368,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint="")),
         )
@@ -1430,7 +1393,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(
                 return_value={"component.other.common.panel_hint": "Öffne das Panel."}
@@ -1467,7 +1430,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
+            cft, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
         )
         flow = self._flow_with_language("de")
 
@@ -1496,7 +1459,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf, "_fetch_common_translations", AsyncMock(return_value={})
+            cft, "_fetch_common_translations", AsyncMock(return_value={})
         )
         flow = self._flow_with_language("de")
 
@@ -1524,7 +1487,7 @@ class TestOptionsFormTranslations:
         )
 
         with caplog.at_level(logging.WARNING):
-            result = asyncio.run(cf._fetch_common_translations(MagicMock(), "de"))
+            result = asyncio.run(cft._fetch_common_translations(MagicMock(), "de"))
 
         assert result == {}
         assert "expected a Mapping, got list" in caplog.text
@@ -1548,7 +1511,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint="打开“设置面板”")),
         )
@@ -1582,7 +1545,7 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         english = cf._COMMON_FALLBACKS["panel_hint"]
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint=english)),
         )
@@ -1610,7 +1573,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint="설정 패널을 여세요.")),
         )
@@ -1636,7 +1599,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(return_value=self._catalog(panel_hint="Öffne das “Panel”")),
         )
@@ -1661,7 +1624,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
+            cft, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
         )
         flow = self._flow_with_language("de")
         flow.hass.config_entries.async_entries = MagicMock(
@@ -1689,7 +1652,7 @@ class TestOptionsFormTranslations:
         )
         monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
         monkeypatch.setattr(
-            cf,
+            cft,
             "_fetch_common_translations",
             AsyncMock(
                 return_value=self._catalog(
