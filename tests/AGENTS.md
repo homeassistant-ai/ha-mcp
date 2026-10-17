@@ -85,7 +85,7 @@ It is orthogonal to the backend selectors, so each backend has its own shape:
 |---|---|
 | container (`E2E_BACKEND` unset) | **no component at all** — `_install_custom_component` is skipped for `ha_mcp_tools`, so neither files nor entry exist. A user who never installed the integration |
 | container `embedded` | **server entry only** — component files are copied with `seed_entry=False` (no tools entry) and the in-process server entry is seeded as usual |
-| HAOS `inaddon` | **no component** in effect — `remove_tools_entry_in_qcow2` drops the baked tools entry pre-boot; nothing else sets one up |
+| HAOS `inaddon` | **no component** in effect — `remove_tools_entry_in_qcow2` drops the baked tools entry pre-boot, and the baked server entry stays disabled until a test enables it (`haos_only/test_embedded_server_haos.py` does, on every HAOS lane but `embedded`) |
 | HAOS `embedded` | **server entry only** — same pre-boot removal, and the staged (disabled) server entry is deliberately kept |
 
 The staging lives in `_conftest_testcontainer._prepare_testcontainer_config` (container) and

@@ -26,7 +26,12 @@ async def test_every_loaded_entry_downloads_the_component_summary(
         if e["domain"] == DOMAIN
     ]
     loaded = [e for e in entries if e["state"] == "loaded"]
-    assert bool(loaded) == component_surface_available(), entries
+    # Only one way round: on a lane without the component's surface, a HAOS
+    # test may still enable the baked server entry earlier in the session.
+    if component_surface_available():
+        assert loaded, f"no loaded {DOMAIN} entry: {entries}"
+    if not loaded:
+        pytest.skip(f"no loaded {DOMAIN} entry on this lane")
     # The title comes from Home Assistant, the file's entry type from entry.data.
     has_server = any(e["title"] == SERVER_ENTRY_TITLE for e in entries)
 
