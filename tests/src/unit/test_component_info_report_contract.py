@@ -25,6 +25,9 @@ from .test_component_ws_search import FakeConfigEntry, FakeHass, wsapi
 
 DOMAIN = "ha_mcp_tools"
 SERVER_ROW = {"entry_id": "a1", "title": "HA-MCP Server", "state": "loaded"}
+UNKNOWN = HomeAssistantCommandError(
+    "Command failed: Unknown command.", "unknown_command"
+)
 
 
 def _report(
@@ -33,35 +36,50 @@ def _report(
     """``ha_report_issue``'s probes against a component serving ``hass``.
 
     ``edit_info`` changes the real ``info`` reply, standing in for another
-    component version.
+    component version. ``info`` is served on the component WebSocket, which
+    both the caps probe and the fresh read use; ``send_websocket_message``
+    answers only ``config_entries/get``.
     """
 
-    def _info() -> dict[str, Any]:
+    async def _info(command_type: str, **kwargs: Any) -> dict[str, Any]:
+        assert command_type == "ha_mcp_tools/info"
         result = wsapi._do_info(hass)
         if edit_info is not None:
             edit_info(result)
         return {"success": True, "result": result}
 
-    async def _probe(command_type: str, **kwargs: Any) -> dict[str, Any]:
-        assert command_type == "ha_mcp_tools/info"
-        return _info()
-
     async def _send(message: dict[str, Any]) -> dict[str, Any]:
-        if message["type"] == "config_entries/get":
-            return {"success": True, "result": [SERVER_ROW]}
-        assert message["type"] == "ha_mcp_tools/info"
-        return _info()
+        assert message["type"] == "config_entries/get"
+        return {"success": True, "result": [SERVER_ROW]}
 
     ws = AsyncMock()
-    ws.send_command = AsyncMock(side_effect=_probe)
+    ws.send_command = AsyncMock(side_effect=_info)
     client = MagicMock(base_url="http://ha.local:8123", token="tok")
     client.send_websocket_message = AsyncMock(side_effect=_send)
+    client.call_service = AsyncMock(side_effect=RuntimeError("no such service"))
     client.ws = ws
     return BugReportTools(client)
 
 
+def _then(report: BugReportTools, *replies: Any) -> None:
+    """Answer the first ``info`` call for real, then with ``replies`` in turn
+    (an exception is raised, anything else returned)."""
+    serve = report._client.ws.send_command.side_effect
+    queue = list(replies)
+
+    async def _send_command(command_type: str, **kwargs: Any) -> Any:
+        if report._client.ws.send_command.await_count == 1 or not queue:
+            return await serve(command_type, **kwargs)
+        reply = queue.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    report._client.ws.send_command.side_effect = _send_command
+
+
 def _served(report: BugReportTools) -> Any:
-    """Serve the caps probe from the same component as the fresh reads."""
+    """Serve the caps probe and the fresh reads from the same component."""
     return patch.object(
         component_api, "get_websocket_client", AsyncMock(return_value=report._client.ws)
     )
@@ -72,8 +90,20 @@ async def _line(report: BugReportTools) -> str | None:
         return await report._detect_server_entry_status()
 
 
+async def _version(report: BugReportTools) -> str | None:
+    with _served(report):
+        return await report._detect_component_version()
+
+
 def _server(options: dict[str, Any] | None = None) -> FakeConfigEntry:
     return FakeConfigEntry(DOMAIN, data={"entry_type": "server"}, options=options)
+
+
+def _versioned(running: dict[str, str]) -> BugReportTools:
+    return _report(
+        FakeHass(config_entries=[_server()]),
+        lambda r: r.update(component_version=running["version"]),
+    )
 
 
 @pytest.mark.asyncio
@@ -81,14 +111,53 @@ async def test_updated_component_version_reaches_the_next_report() -> None:
     """A component update keeps a long-lived server's client, and with it the
     caps snapshot; a later report must show the version now running."""
     running = {"version": "2.1.0"}
+    report = _versioned(running)
+    assert await _version(report) == "2.1.0"
+
+    running["version"] = "2.2.0"
+
+    assert await _version(report) == "2.2.0"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("socket closed"), {"success": True, "result": []}, "garbage"],
+    ids=["raises", "result-not-a-dict", "reply-not-a-dict"],
+)
+async def test_failed_fresh_read_reports_the_snapshot_version(failure: Any) -> None:
+    """The snapshot still shows the component is installed; a failed fresh
+    read must not turn that into "not detected"."""
+    report = _versioned({"version": "2.1.0"})
+    _then(report, failure)
+
+    assert await _version(report) == "2.1.0"
+    report._client.call_service.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_downgraded_component_reports_its_running_version() -> None:
+    """A component downgraded below ``info`` answers ``unknown_command``: the
+    stale snapshot is dropped, so the version comes from the bootstrap service
+    rather than from the component that was running before."""
+    report = _versioned({"version": "2.1.0"})
+    _then(report, UNKNOWN, UNKNOWN)
+    report._client.call_service.side_effect = None
+    report._client.call_service.return_value = {
+        "service_response": {"version": "1.0.5"}
+    }
+
+    assert await _version(report) == "1.0.5"
+
+
+@pytest.mark.asyncio
+async def test_component_without_a_version_field_reads_as_not_detected() -> None:
     report = _report(
-        FakeHass(config_entries=[_server()]),
-        lambda r: r.update(component_version=running["version"]),
+        FakeHass(config_entries=[_server()]), lambda r: r.pop("component_version")
     )
-    with _served(report):
-        assert await report._detect_component_version() == "2.1.0"
-        running["version"] = "2.2.0"
-        assert await report._detect_component_version() == "2.2.0"
+
+    assert await _version(report) is None
+    report._client.call_service.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -150,16 +219,12 @@ async def test_component_without_a_usable_mode_leaves_the_line_unchanged(
 @pytest.mark.asyncio
 async def test_component_without_info_is_not_asked_for_the_mode() -> None:
     """A component the caps probe found no ``info`` on is not sent the
-    command again: the failed call would be logged at ERROR, and the report
-    quotes that log."""
+    command a second time."""
     report = _report(FakeHass(config_entries=[_server()]))
-    report._client.ws.send_command.side_effect = HomeAssistantCommandError(
-        "Command failed: Unknown command.", "unknown_command"
-    )
+    report._client.ws.send_command.side_effect = UNKNOWN
 
     assert await _line(report) == "added (loaded)"
-    sent = [c.args[0]["type"] for c in report._client.send_websocket_message.mock_calls]
-    assert sent == ["config_entries/get"]
+    assert report._client.ws.send_command.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -167,8 +232,7 @@ async def test_failed_info_call_leaves_the_line_unchanged() -> None:
     """The entry status came from ``config_entries/get``; a failing ``info``
     call must not take it out of the report."""
     report = _report(FakeHass(config_entries=[_server()]))
-    rows = {"success": True, "result": [SERVER_ROW]}
-    report._client.send_websocket_message.side_effect = [rows, RuntimeError("boom")]
+    _then(report, RuntimeError("boom"))
 
     assert await _line(report) == "added (loaded)"
 

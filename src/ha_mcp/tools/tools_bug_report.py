@@ -55,7 +55,7 @@ from .bug_report_templates import (
     _suggested_title,
 )
 from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION, parse_string_list_param
-from .component_api import read_info, read_webhook_auth
+from .component_api import read_component_version, read_webhook_auth
 from .helpers import (
     log_tool_usage,
     raise_tool_error,
@@ -687,20 +687,20 @@ class BugReportTools:
     async def _detect_component_version(self) -> str | None:
         """Read the ha_mcp_tools custom component's version, best-effort.
 
-        Prefers a fresh ``ha_mcp_tools/info`` read (``read_info``): a component
-        new enough to answer it (1.1.0+) reports its version there, and the
-        cached capability snapshot would still hold the version that was
-        running when the client first probed, across a component update and an
-        HA restart. A component in the 0.11.0-1.1.0 band has services but no
-        ``info`` command, so it falls back to the ``get_caller_token``
+        Prefers a fresh ``ha_mcp_tools/info`` read (``read_component_version``):
+        the cached capability snapshot would still hold the version running when
+        the client first probed, which outlives a component update on a server
+        running outside HA; the snapshot only stands in when the fresh read
+        fails. A component without a usable ``info`` (the 0.11.0-1.1.0 band has
+        services but no such command) falls back to the ``get_caller_token``
         bootstrap service, whose response also carries the manifest version.
         Returns None when the component is not installed or the call fails —
         the report path must never break on it.
         """
-        # read_info never raises (None on every failure), so no guard is needed.
-        info = await read_info(self._client)
-        if info is not None:
-            return str(info.get("component_version") or "") or None
+        # read_component_version never raises (None on every failure).
+        version = await read_component_version(self._client)
+        if version is not None:
+            return version or None
         try:
             resp = await self._client.call_service(
                 "ha_mcp_tools", "get_caller_token", {}, return_response=True

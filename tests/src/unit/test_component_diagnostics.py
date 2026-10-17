@@ -278,6 +278,21 @@ async def test_override_that_starts_like_a_channel_spec_is_scrubbed(
 
 
 @pytest.mark.asyncio
+async def test_version_too_long_to_parse_does_not_break_the_download() -> None:
+    """A digit run past int()'s limit makes ``Version`` raise ValueError rather
+    than InvalidVersion; the override is then scrubbed like any other."""
+    override = "ha-mcp==1" + "0" * 5000
+    _fail_bring_up("package", f"Could not install the server ({override!r}): x")
+    entry = _server_entry({OPT_PIP_SPEC: override})
+
+    result = await _diagnostics(FakeHass([entry]))
+
+    assert result["server"]["startup_error"]["detail"] == (
+        "Could not install the server ('**REDACTED**'): x"
+    )
+
+
+@pytest.mark.asyncio
 async def test_override_is_scrubbed_in_its_quoted_form() -> None:
     """The install error quotes the spec with ``repr()``, which doubles a
     backslash, so the stored value no longer appears in the text as typed."""
