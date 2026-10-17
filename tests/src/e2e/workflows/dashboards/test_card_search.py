@@ -12,9 +12,11 @@ logger = logging.getLogger(__name__)
 
 URL_PATH = "test-card-search"
 ENTITY = "input_number.e2e_card_search_limit"
+CSS = "0 0 4px rgb(12, 34, 56)"
 
 # A self-made page card's groups[].cards[] (wrapped and bare cards), a
-# button-card custom_fields stack, a tabs[].card tab and a plain card.
+# button-card custom_fields stack, a tabs[].card tab, a plain card, and a
+# button-card whose styles.card is a CSS list rather than a card (#2729).
 CONFIG = {
     "views": [
         {
@@ -51,6 +53,11 @@ CONFIG = {
                     "tabs": [{"card": {"type": "tile", "entity": ENTITY}}],
                 },
                 {"type": "tile", "entity": ENTITY},
+                {
+                    "type": "custom:button-card",
+                    "name": "Styled",
+                    "styles": {"card": [{"box-shadow": CSS}, {"height": "80px"}]},
+                },
             ],
         }
     ]
@@ -104,6 +111,15 @@ class TestCardSearch:
                 "ha_config_get_dashboard", {"url_path": URL_PATH, "query": "edited"}
             )
             assert [m["jq_path"] for m in edited["matches"]] == [EXPECTED_PATHS[0]]
+
+            # button-card CSS is searchable text, not a card slot to repair.
+            css = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"query": "rgb(12, 34, 56)"}
+            )
+            styled = [m for m in css["matches"] if m["url_path"] == URL_PATH]
+            assert [m["jq_path"] for m in styled] == [".views[0].cards[4]"]
+            assert styled[0]["matched"] == [{"field": "box-shadow", "value": CSS}]
+            assert not any(f"{URL_PATH}:" in w for w in css.get("warnings", []))
         finally:
             await safe_call_tool(
                 mcp_client, "ha_config_delete_dashboard", {"url_path": URL_PATH}

@@ -338,7 +338,7 @@ class CardDefinitions:
                 if module_id is not None and module_id not in seen:
                     seen.add(module_id)
                     pending.append(
-                        self._engine("source", {"id": module_id}).get("value", "")
+                        self._js("source", {"id": module_id}).get("value", "")
                     )
         return False
 
@@ -357,6 +357,13 @@ class CardDefinitions:
             if not tag.endswith("-card-editor"):
                 self._card_types.add(tag[len("hui-") : -len("-card")])
 
+    def _js(self, op: str, payload: Any) -> Any:
+        # run_gc=True (quickjs-ng's default) calls Context.gc() after every call:
+        # Python's full gc.collect() and QuickJS's JS_RunGC(), under the GIL. Over
+        # Home Assistant's heap that stalls the event loop (#2744). QuickJS still
+        # runs JS_RunGC() itself when its allocations pass the GC threshold.
+        return self._engine(op, payload, run_gc=False)
+
     def _body(self, tag: str) -> str:
         """A module's source as the engine parsed it (exact, unlike a scan)."""
         module_id = self._tag_module.get(tag)
@@ -366,7 +373,7 @@ class CardDefinitions:
 
     def _module_body(self, module_id: str) -> str:
         if module_id not in self._bodies:
-            self._bodies[module_id] = self._engine("source", {"id": module_id}).get(
+            self._bodies[module_id] = self._js("source", {"id": module_id}).get(
                 "value", ""
             )
         return self._bodies[module_id]
@@ -432,7 +439,7 @@ class CardDefinitions:
         prelude: list[str] = []
         for _ in range(40):
             src = "".join(prelude) + "return (" + expr + ")"
-            out = self._engine(op, {"src": src, "bindings": bindings, "key": key})
+            out = self._js(op, {"src": src, "bindings": bindings, "key": key})
             error = out.get("error")
             if error is None:
                 return out["value"]
@@ -514,7 +521,7 @@ class CardDefinitions:
         }
         body = self._editor_body(card_type)
         types = (
-            self._engine("field_types", {"key": card_type}).get("value")
+            self._js("field_types", {"key": card_type}).get("value")
             if self._struct_ready(card_type)
             else None
         )
@@ -593,7 +600,7 @@ class CardDefinitions:
             warnings.extend(findings)
         if checked:
             payload = [{"key": t, "config": c} for _, t, c in checked]
-            results = self._engine("validate", {"cards": payload}).get("value") or []
+            results = self._js("validate", {"cards": payload}).get("value") or []
             for (path, card_type, _), failures in zip(checked, results, strict=False):
                 explained = (self._explain(card_type, f) for f in failures)
                 warnings.extend(
@@ -622,6 +629,7 @@ class CardDefinitions:
         for path, card in _cards(config, partial):
             card_type = card.get("type")
             if not isinstance(card_type, str):
+                # The frontend's createCardElement error for an untyped card.
                 if path not in partial:
                     warnings.append(f"{path}: no card type configured")
             elif card_type.startswith("custom:"):
@@ -752,6 +760,9 @@ def _walk_card(
     partial: bool = False,
     type_only: set[str] | None = None,
 ) -> None:
+    """Collect card positions by the search walk's discovery heuristic (common
+    container keys, not a frontend contract); a custom card's children are
+    only type-checked (``partial``)."""
     if not isinstance(card, dict) or depth > 50:
         return
     if not container or "type" in card:
@@ -769,7 +780,8 @@ def _walk_card(
             partial=nested_partial,
             type_only=type_only,
         )
-    # entity-filter's ``card`` holds options for its rows, not a card.
+    # entity-filter's ``card`` is skipped: the parent injects its ``entities``,
+    # so its editor struct cannot check it.
     if (
         card.get("type") == "conditional"
         or str(card.get("type", "")).startswith("custom:")
@@ -907,84 +919,3 @@ async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> li
     except Exception:
         _LOGGER.debug("Card validation failed", exc_info=True)
         return []
-
-
-async def _describe(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
-    definitions = await async_get_definitions(hass)
-    if definitions is None:
-        return {"result": {"success": False, "error": "unavailable"}}
-    card_type = msg.get("card_type") or None
-    custom = (
-        await async_get_custom_cards(hass, timeout=_CUSTOM_WAIT_SECONDS)
-        if card_type is None or card_type.startswith("custom:")
-        else None
-    )
-    card_types = definitions.card_types() + (custom.card_types() if custom else [])
-    status = custom_load_status(custom)
-    if card_type is None:
-        return {
-            "result": {
-                "success": True,
-                "card_types": card_types,
-                "custom_status": status,
-            }
-        }
-    if card_type.startswith("custom:"):
-        if status["state"] == "loading":
-            return {
-                "result": {
-                    "success": False,
-                    "error": "custom_cards_loading",
-                    "custom_status": status,
-                }
-            }
-        describe = custom.describe if custom else lambda _tag: None
-        described = await hass.async_add_executor_job(
-            describe, card_type[len("custom:") :]
-        )
-    else:
-        described = await hass.async_add_executor_job(definitions.describe, card_type)
-    if described is None:
-        if card_type.startswith("custom:"):
-            return {
-                "result": {
-                    "success": False,
-                    "error": "custom_card_not_inspected",
-                    "custom_status": status,
-                }
-            }
-        return {
-            "result": {
-                "success": False,
-                "error": "unknown_card_type",
-                "card_types": [c["type"] for c in card_types],
-            }
-        }
-    return {"result": {"success": True, **described}}
-
-
-def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
-    """``dashboard_cards``: the card type list, or one card type's form."""
-
-    async def prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
-        try:
-            async with asyncio.timeout(_CARD_WORK_SECONDS):
-                return await _describe(hass, msg)
-        except TimeoutError:
-            return {"result": {"success": False, "error": "unavailable"}}
-
-    def do(
-        hass: HomeAssistant, msg: dict[str, Any], *, result: dict[str, Any]
-    ) -> dict[str, Any]:
-        return result
-
-    return [
-        (
-            {
-                vol.Required("type"): WS_DASHBOARD_CARDS,
-                vol.Optional("card_type"): str,
-            },
-            do,
-            prep,
-        )
-    ]

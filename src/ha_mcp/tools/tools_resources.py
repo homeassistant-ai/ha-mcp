@@ -18,7 +18,7 @@ content now goes straight into a ``data:`` URI: same storage location
 import base64
 import logging
 import re
-from typing import Annotated, Any, Literal, NoReturn
+from typing import Annotated, Any, NoReturn
 from urllib.parse import urlsplit
 
 from pydantic import Field
@@ -34,6 +34,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
+    ws_failure_code,
 )
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
@@ -46,12 +47,13 @@ logger = logging.getLogger(__name__)
 # keep loading until their resources are converted.
 LEGACY_WORKER_BASE_URL = "https://ha-mcp-resources.rapid-math-bbad.workers.dev"
 
-# data: URI media types per inline resource_type ('js' is url-mode only).
-# CSS carries an explicit charset because stylesheets, unlike module scripts,
-# have no spec-mandated UTF-8 fallback.
-_RESOURCE_TYPE = Literal["module", "js", "css"]
-_INLINE_RESOURCE_TYPE = Literal["module", "css"]
-_DATA_URI_MIME: dict[_INLINE_RESOURCE_TYPE, str] = {
+# Core validates res_type against its RESOURCE_TYPES; a copy here would reject
+# a type Core adds before Core sees it, so the parameter is a plain string.
+_RESOURCE_TYPE = str
+# data: URI media types per inline resource_type ('js'/'html' are url-mode
+# only). CSS carries an explicit charset because stylesheets, unlike module
+# scripts, have no spec-mandated UTF-8 fallback.
+_DATA_URI_MIME: dict[str, str] = {
     "module": "text/javascript",
     "css": "text/css;charset=utf-8",
 }
@@ -89,6 +91,13 @@ _PREVIEW_LENGTH = 150
 # handing back a silently-truncated payload is how a resource gets
 # destroyed on write-back.
 _MAX_CONTENT_BUDGET = 512_000
+
+# Core registers lovelace/resources/{create,update,delete} only in storage
+# resource mode; in YAML mode they answer unknown_command.
+_YAML_MODE_MESSAGE = (
+    "Dashboard resources are YAML-managed on this instance (lovelace: "
+    "resources: in configuration.yaml), so they cannot be changed through the API"
+)
 
 # Emitted once per response (not per resource) when any listed resource
 # still lives on the legacy worker.
@@ -183,7 +192,7 @@ def _detect_ha_config_yaml(content: str) -> str | None:
     return None
 
 
-def _data_uri_for(content: str, resource_type: _INLINE_RESOURCE_TYPE) -> str:
+def _data_uri_for(content: str, resource_type: str) -> str:
     """Encode content as a base64 ``data:`` URI for the given resource type.
 
     Standard base64 (not URL-safe): browsers decode data: URIs with the
@@ -394,6 +403,8 @@ class ResourceTools:
         update/delete operations. For inline resources (created with
         ha_config_set_dashboard_resource(content=...)), shows a preview of the
         content instead of the full encoded URL to save tokens.
+        `resource_mode` is Core's lovelace resource mode; in 'yaml' mode
+        resources cannot be created, updated or deleted through the API.
 
         EXAMPLES:
         - Next page: ha_config_list_dashboard_resources(offset=100)
@@ -445,22 +456,20 @@ class ResourceTools:
                 )
             if any(r.get("_legacy_worker") for r in paginated):
                 response["migration_hint"] = _LEGACY_MIGRATION_HINT
+            resource_mode = await self._resource_mode()
+            if resource_mode:
+                response["resource_mode"] = resource_mode
+                if resource_mode == "yaml":
+                    response["note"] = _YAML_MODE_MESSAGE
             return response
         except ToolError:
             raise
         except Exception as e:
             logger.error(f"Error listing dashboard resources: {e}")
             exception_to_structured_error(
-                e,
-                context={"tool": "ha_config_list_dashboard_resources"},
-                suggestions=[
-                    "Ensure Home Assistant is running and accessible",
-                    "Check that you have admin permissions",
-                ],
+                e, context={"tool": "ha_config_list_dashboard_resources"}
             )
-            # ``exception_to_structured_error`` always raises (NoReturn); this
-            # explicit raise makes the function's exit unambiguous (no implicit
-            # ``return None`` fall-through) and is never reached at runtime.
+            # Unreachable (exception_to_structured_error is NoReturn).
             raise
 
     @tool(
@@ -486,11 +495,11 @@ class ResourceTools:
             Field(description="URL of the resource."),
         ] = None,
         resource_type: Annotated[
-            Literal["module", "js", "css"],
+            _RESOURCE_TYPE,
             Field(
-                description="Resource type: 'module' for ES6 modules (modern cards), 'js' for "
-                "legacy JavaScript (older custom cards), 'css' for stylesheets (themes,"
-                " global styles)"
+                description="Resource type, validated by Home Assistant: 'module' for ES6 "
+                "modules (modern cards), 'js' for legacy JavaScript (older custom cards), "
+                "'css' for stylesheets (themes, global styles), 'html' for HTML imports"
             ),
         ] = "module",
         resource_id: Annotated[
@@ -506,7 +515,7 @@ class ResourceTools:
         Provide exactly one of:
         - content: Inline JavaScript or CSS code (embedded in the resource URL
           as a data: URI — no file storage or external hosting involved).
-          Supports 'module' and 'css' types only (not 'js'); URLs are
+          Supports 'module' and 'css' types only; URLs are
           deterministic (same content = same URL); up to ~128KB. Content must be
           self-contained: a data: URI has no base URL, so relative imports inside
           a module and relative url() references inside CSS cannot resolve (use
@@ -518,7 +527,7 @@ class ResourceTools:
           no CSP.)
         - url: External resource URL — /local/... (files in /config/www/),
           /hacsfiles/... (HACS-installed cards) or https://... (CDN). Supports
-          all types: 'module', 'js', 'css'.
+          all types: 'module', 'js', 'css', 'html'.
 
         EXAMPLES:
         - Inline: ha_config_set_dashboard_resource(content="class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);", resource_type="module")
@@ -629,14 +638,14 @@ class ResourceTools:
                 )
             )
 
-        if resource_type == "js":
+        if resource_type not in _DATA_URI_MIME:
             raise_tool_error(
                 create_error_response(
                     code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message="Inline content does not support resource_type='js'",
+                    message=f"Inline content does not support resource_type={resource_type!r}",
                     suggestions=[
                         "Use resource_type='module' for ES6 JavaScript (recommended)",
-                        "Use url= mode with resource_type='js' for legacy files",
+                        "Use url= mode for a file of another resource type",
                     ],
                 )
             )
@@ -676,14 +685,9 @@ class ResourceTools:
                 resource_id, resource_url, resource_type
             )
 
-            error_msg = _check_ws_error(result)
-            if error_msg:
-                raise_tool_error(
-                    create_error_response(
-                        code=ErrorCode.SERVICE_CALL_FAILED,
-                        message=str(error_msg),
-                        context={"action": action},
-                    )
+            if _check_ws_error(result):
+                await self._raise_write_error(
+                    result, {"action": action, "resource_id": resource_id}
                 )
 
             new_resource_id = _extract_resource_id(result, resource_id)
@@ -712,14 +716,8 @@ class ResourceTools:
                     "tool": "ha_config_set_dashboard_resource",
                     "action": "update" if resource_id else "create",
                 },
-                suggestions=[
-                    "Ensure Home Assistant is running and accessible",
-                    "Check that you have admin permissions",
-                ],
             )
-            # ``exception_to_structured_error`` always raises (NoReturn); this
-            # explicit raise makes the function's exit unambiguous (no implicit
-            # ``return None`` fall-through) and is never reached at runtime.
+            # Unreachable (exception_to_structured_error is NoReturn).
             raise
 
     async def _reject_truncated_preview_resave(
@@ -818,27 +816,9 @@ class ResourceTools:
                 resource_id, url, resource_type
             )
 
-            error_msg = _check_ws_error(result)
-            if error_msg:
-                error_str = str(error_msg).lower()
-                if "already exists" in error_str or "duplicate" in error_str:
-                    raise_tool_error(
-                        create_error_response(
-                            code=ErrorCode.SERVICE_CALL_FAILED,
-                            message="Resource with this URL already exists",
-                            context={"action": action, "url": url},
-                            suggestions=[
-                                "Use ha_config_list_dashboard_resources() to find existing resource",
-                                "Provide resource_id to update the existing resource",
-                            ],
-                        )
-                    )
-                raise_tool_error(
-                    create_error_response(
-                        code=ErrorCode.SERVICE_CALL_FAILED,
-                        message=str(error_msg),
-                        context={"action": action, "url": url},
-                    )
+            if _check_ws_error(result):
+                await self._raise_write_error(
+                    result, {"action": action, "resource_id": resource_id, "url": url}
                 )
 
             new_resource_id = _extract_resource_id(result, resource_id)
@@ -868,16 +848,64 @@ class ResourceTools:
                     "action": "update" if resource_id else "create",
                     "url": url,
                 },
-                suggestions=[
-                    "Ensure Home Assistant is running and accessible",
-                    "Check that you have admin permissions",
-                    "Verify the URL is correctly formatted",
-                ],
             )
-            # ``exception_to_structured_error`` always raises (NoReturn); this
-            # explicit raise makes the function's exit unambiguous (no implicit
-            # ``return None`` fall-through) and is never reached at runtime.
+            # Unreachable (exception_to_structured_error is NoReturn).
             raise
+
+    async def _resource_mode(self) -> str | None:
+        """Core's lovelace ``resource_mode`` ('storage'/'yaml'), None if unreadable."""
+        try:
+            result = await self._client.send_websocket_message(
+                {"type": "lovelace/info"}
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Could not read lovelace/info: {e}")
+            return None
+        info = result.get("result") if isinstance(result, dict) else None
+        mode = info.get("resource_mode") if isinstance(info, dict) else None
+        return mode if isinstance(mode, str) else None
+
+    async def _raise_write_error(
+        self, result: Any, context: dict[str, Any]
+    ) -> NoReturn:
+        """Raise Core's rejection of a resource write, routed on Core's error code."""
+        error_msg = str(_check_ws_error(result))
+        code = result.get("error_code") if isinstance(result, dict) else None
+        resource_id = context.get("resource_id")
+        if code == "not_found" and resource_id:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"Dashboard resource '{resource_id}' not found",
+                    details=error_msg,
+                    context=context,
+                    suggestions=[
+                        "Use ha_config_list_dashboard_resources() to see available resources"
+                    ],
+                )
+            )
+        if code == "unknown_command" and await self._resource_mode() == "yaml":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    _YAML_MODE_MESSAGE,
+                    details=error_msg,
+                    context={**context, "resource_mode": "yaml"},
+                    suggestions=[
+                        "Edit lovelace: resources: in configuration.yaml, then run "
+                        "the lovelace.reload_resources action"
+                    ],
+                )
+            )
+        raise_tool_error(
+            create_error_response(
+                ws_failure_code(result)
+                if isinstance(result, dict)
+                else ErrorCode.SERVICE_CALL_FAILED,
+                error_msg,
+                context={**context, "ha_error_code": code} if code else context,
+            )
+        )
 
     async def _upsert_resource(
         self,
@@ -971,33 +999,9 @@ class ResourceTools:
                 }
             )
 
-            # Check for errors
-            error_msg = _check_ws_error(result)
-            if error_msg:
-                error_str = str(error_msg).lower()
-                if "not found" in error_str or "unable to find" in error_str:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            f"Dashboard resource '{resource_id}' not found",
-                            details=(
-                                f"Resource '{resource_id}' not found. "
-                                "Use ha_config_list_dashboard_resources() to see available resources."
-                            ),
-                            context={"action": "delete", "resource_id": resource_id},
-                        )
-                    )
-
-                raise_tool_error(
-                    create_error_response(
-                        code=ErrorCode.SERVICE_CALL_FAILED,
-                        message=f"Failed to delete dashboard resource: {error_msg}",
-                        context={"action": "delete", "resource_id": resource_id},
-                        suggestions=[
-                            "Verify resource ID using ha_config_list_dashboard_resources()",
-                            "Check that you have admin permissions",
-                        ],
-                    )
+            if _check_ws_error(result):
+                await self._raise_write_error(
+                    result, {"action": "delete", "resource_id": resource_id}
                 )
 
             logger.info(f"Dashboard resource deleted: id={resource_id}")
@@ -1013,16 +1017,9 @@ class ResourceTools:
         except Exception as e:
             logger.error(f"Error deleting dashboard resource: {e}")
             exception_to_structured_error(
-                e,
-                context={"action": "delete", "resource_id": resource_id},
-                suggestions=[
-                    "Verify resource ID using ha_config_list_dashboard_resources()",
-                    "Check that you have admin permissions",
-                ],
+                e, context={"action": "delete", "resource_id": resource_id}
             )
-            # ``exception_to_structured_error`` always raises (NoReturn); this
-            # explicit raise makes the function's exit unambiguous (no implicit
-            # ``return None`` fall-through) and is never reached at runtime.
+            # Unreachable (exception_to_structured_error is NoReturn).
             raise
 
 
@@ -1052,14 +1049,14 @@ def _summarize_resources(
     one-row response. Because the page's entries are retained, nothing is
     decoded twice.
     """
-    by_type_counts = {"module": 0, "js": 0, "css": 0}
+    by_type_counts: dict[str, int] = {}
     inline_count = 0
     decoded_by_index: dict[int, tuple[str, bool]] = {}
     for index, resource in enumerate(resources):
         res = resource if isinstance(resource, dict) else {}
-        res_type = res.get("type", "unknown")
-        if res_type in by_type_counts:
-            by_type_counts[res_type] += 1
+        res_type = res.get("type")
+        if isinstance(res_type, str):
+            by_type_counts[res_type] = by_type_counts.get(res_type, 0) + 1
         url = res.get("url", "")
         if isinstance(url, str):
             decoded = _decode_inline_content(url)

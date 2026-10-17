@@ -15,6 +15,7 @@ production-level functionality and compatibility.
 
 import base64
 import logging
+from typing import Any
 
 from ha_mcp.client import HomeAssistantClient
 
@@ -170,12 +171,22 @@ class TestDashboardResourceLifecycle:
             assert css_data["resource_type"] == "css"
             created_ids.append(css_data.get("resource_id"))
 
-            # Verify by_type categorization
+            # html is in Core's RESOURCE_TYPES too, so the tool must pass it on
+            html_data = await mcp.call_tool_success(
+                "ha_config_set_dashboard_resource",
+                {"url": "/local/test-import.html", "resource_type": "html"},
+            )
+            assert html_data["resource_type"] == "html"
+            created_ids.append(html_data.get("resource_id"))
+
+            # by_type counts the types Core actually returns, html included
             list_data = await mcp.call_tool_success(
                 "ha_config_list_dashboard_resources", {}
             )
-            assert "by_type" in list_data
-            logger.info(f"Resources by type: {list_data['by_type']}")
+            by_type = list_data["by_type"]
+            for res_type in ("module", "js", "css", "html"):
+                assert by_type.get(res_type, 0) >= 1, by_type
+            assert sum(by_type.values()) == list_data["total_count"]
 
         finally:
             # Cleanup created resources
@@ -243,25 +254,17 @@ class TestDashboardResourceLifecycle:
 class TestDashboardResourceValidation:
     """Test validation and error handling for dashboard resources."""
 
-    async def test_invalid_resource_type(self, mcp_client):
-        """Test that invalid resource type is rejected at schema level."""
-        logger.info("Starting invalid resource type test")
-        import pytest
+    async def test_invalid_resource_type(self, mcp_client: Any) -> None:
+        """Home Assistant rejects an unknown resource type; the tool relays it."""
+        mcp = MCPAssertions(mcp_client)
 
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
+        data = await mcp.call_tool_failure(
+            "ha_config_set_dashboard_resource",
+            {"url": "/local/test.js", "resource_type": "invalid"},
+            expected_error="must be one of",
+        )
 
-        # FastMCP validates Literal types at schema level, raising ToolError
-        with pytest.raises(ToolError) as exc_info:
-            await mcp_client.call_tool(
-                "ha_config_set_dashboard_resource",
-                {"url": "/local/test.js", "resource_type": "invalid"},
-            )
-
-        # Verify the error message mentions the valid options
-        error_msg = str(exc_info.value).lower()
-        assert "module" in error_msg or "js" in error_msg or "css" in error_msg
-
-        logger.info("Invalid resource type test completed successfully")
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
     async def test_delete_nonexistent_resource(self, mcp_client):
         """Test that deleting nonexistent resource returns RESOURCE_NOT_FOUND."""
@@ -277,6 +280,19 @@ class TestDashboardResourceValidation:
         assert delete_data["success"] is False
 
         logger.info("Delete nonexistent resource test completed successfully")
+
+    async def test_update_nonexistent_resource_reports_not_found(
+        self, mcp_client: Any
+    ) -> None:
+        """Core answers not_found for a missing id; the tool says so."""
+        mcp = MCPAssertions(mcp_client)
+
+        data = await mcp.call_tool_failure(
+            "ha_config_set_dashboard_resource",
+            {"url": "/local/test.js", "resource_id": "nonexistent-resource-id-12345"},
+            expected_error="not found",
+        )
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
 class TestDashboardResourceList:
@@ -295,16 +311,12 @@ class TestDashboardResourceList:
         assert list_data["action"] == "list"
         assert "resources" in list_data
         assert "count" in list_data
-        assert "by_type" in list_data
-
-        # Verify by_type structure
+        # by_type holds only the types Core returned, so it covers every row
         by_type = list_data["by_type"]
-        assert "module" in by_type
-        assert "js" in by_type
-        assert "css" in by_type
-
-        # All by_type values should be integers
         assert all(isinstance(v, int) for v in by_type.values())
+        assert sum(by_type.values()) == list_data["total_count"]
+        # The test instance keeps resources in storage mode (Core's lovelace/info)
+        assert list_data["resource_mode"] == "storage"
 
         logger.info("List resources structure test completed successfully")
 

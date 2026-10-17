@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,6 +23,7 @@ from ha_mcp.tools.component_api import ComponentCaps
 importlib.import_module(".test_component_ws_search", __package__)
 
 cd = importlib.import_module("custom_components.ha_mcp_tools.card_definitions")
+dcw = importlib.import_module("custom_components.ha_mcp_tools.dashboard_cards_ws")
 
 
 def _definitions(card_types: set[str], struct_keys: dict[str, Any]) -> Any:
@@ -305,6 +307,17 @@ async def test_describe_unknown_card_type_lists_the_real_ones(
 
 
 @pytest.mark.asyncio
+async def test_describe_while_the_index_builds_says_retry(component: AsyncMock) -> None:
+    component.send_command.return_value = {
+        "result": {"success": False, "error": "definitions_loading"}
+    }
+    with pytest.raises(ToolError) as err:
+        await describe_mod.describe_card_response(MagicMock(), "tile")
+    assert "still indexing" in str(err.value)
+    assert "SERVICE_CALL_FAILED" in str(err.value)
+
+
+@pytest.mark.asyncio
 async def test_describe_without_the_component_says_so(monkeypatch) -> None:
     monkeypatch.setattr(
         describe_mod, "get_component_caps", AsyncMock(return_value=_caps("search"))
@@ -524,6 +537,65 @@ async def test_card_validation_executor_cannot_hold_a_saved_write(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_describe_answers_while_the_index_is_still_building(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A first-use build that outlasts the command wait is reported, not timed out."""
+    import voluptuous as vol
+
+    monkeypatch.setattr(cd, "_CARD_WORK_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(cd, "_definitions", None)
+    monkeypatch.setattr(cd, "_build_failed_at", None)
+    building = asyncio.create_task(asyncio.Event().wait())
+    monkeypatch.setattr(cd, "_build_task", building)
+    prep = dcw.command_specs(vol)[0][2]
+    try:
+        result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
+        assert result["result"] == {"success": False, "error": "definitions_loading"}
+        assert not building.done()
+    finally:
+        building.cancel()
+    failed = asyncio.create_task(asyncio.sleep(0, result=None))  # a build that failed
+    settled, _pending = await asyncio.wait({building, failed})
+    assert settled == {building, failed}
+    monkeypatch.setattr(cd, "_build_task", failed)
+    monkeypatch.setattr(cd, "_build_failed_at", time.monotonic())
+    result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
+    assert result["result"] == {"success": False, "error": "unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_a_slow_describe_of_a_loaded_index_is_a_timeout_not_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import voluptuous as vol
+
+    monkeypatch.setattr(cd, "_CARD_WORK_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(cd, "_definitions", MagicMock())
+
+    async def slow(hass: Any, msg: dict[str, Any]) -> dict[str, Any]:
+        await asyncio.Event().wait()
+        return {}
+
+    monkeypatch.setattr(dcw, "_describe", slow)
+    prep = dcw.command_specs(vol)[0][2]
+    result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
+    assert result["result"] == {"success": False, "error": "describe_timeout"}
+
+
+@pytest.mark.asyncio
+async def test_describe_timeout_reaches_the_caller_as_a_timeout(
+    component: AsyncMock,
+) -> None:
+    component.send_command.return_value = {
+        "result": {"success": False, "error": "describe_timeout"}
+    }
+    with pytest.raises(ToolError) as err:
+        await describe_mod.describe_card_response(MagicMock(), "tile")
+    assert "TIMEOUT_OPERATION" in str(err.value)
+
+
+@pytest.mark.asyncio
 async def test_slow_custom_refresh_preserves_builtin_describe(monkeypatch) -> None:
     import voluptuous as vol
 
@@ -539,7 +611,7 @@ async def test_slow_custom_refresh_preserves_builtin_describe(monkeypatch) -> No
             await asyncio.Event().wait()
 
     monkeypatch.setattr(cd, "async_get_custom_cards", slow)
-    prep = cd.command_specs(vol)[0][2]
+    prep = dcw.command_specs(vol)[0][2]
     result = await asyncio.wait_for(prep(MagicMock(), {}), 0.5)
     assert result["result"]["success"] is True
     assert result["result"]["card_types"] == [{"type": "tile"}]
@@ -574,3 +646,16 @@ async def test_describe_drops_stale_capabilities_after_unknown_command(
     with pytest.raises(ToolError):
         await describe_mod.describe_card_response(client, "tile")
     assert client not in component_api._CAPS_CACHE
+
+
+def test_engine_calls_skip_quickjs_full_garbage_collection() -> None:
+    """quickjs-ng's run_gc default runs gc.collect() under the GIL per call (#2744)."""
+    definitions = object.__new__(cd.CardDefinitions)
+    definitions._engine = MagicMock(return_value={"value": "src"})
+    assert definitions._js("source", {"id": "1"}) == {"value": "src"}
+    definitions._engine.assert_called_once_with("source", {"id": "1"}, run_gc=False)
+
+    bundle = object.__new__(cc._Bundle)
+    bundle.engine = MagicMock(return_value={"value": True})
+    bundle._js("pump", None)
+    bundle.engine.assert_called_once_with("pump", None, run_gc=False)

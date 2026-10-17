@@ -248,15 +248,13 @@ class TestDashboardLifecycle:
         assert data["metadata_updated"] is True
         assert "resolved_from" not in data
 
-        # "nodash" (non-existent, no hyphen) SHOULD still be rejected
-        data = await safe_call_tool(
-            mcp_client,
+        # A new hyphenless url_path is rejected by Core's own create rule,
+        # whose message the tool relays.
+        await mcp.call_tool_failure(
             "ha_config_set_dashboard",
             {"url_path": "nodash", "title": "Invalid Dashboard"},
+            expected_error="Url path needs to contain a hyphen (-)",
         )
-        assert data["success"] is False
-        error_msg = extract_error_message(data)
-        assert "hyphen" in error_msg.lower()
 
         logger.info("Default dashboard hyphen validation test completed successfully")
 
@@ -366,6 +364,38 @@ class TestDashboardLifecycle:
 
         logger.info("Metadata update via set_dashboard test completed successfully")
 
+    async def test_empty_icon_clears_stored_dashboard_icon(
+        self, mcp_client: Any
+    ) -> None:
+        """icon='' removes a stored icon instead of being ignored."""
+        mcp = MCPAssertions(mcp_client)
+        url_path = "test-icon-clear"
+
+        await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {"url_path": url_path, "title": "Icon Clear", "icon": "mdi:home"},
+        )
+
+        async def stored_icon() -> Any:
+            list_data = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"list_only": True}
+            )
+            row = next(
+                d for d in list_data["dashboards"] if d.get("url_path") == url_path
+            )
+            return row.get("icon")
+
+        try:
+            assert await stored_icon() == "mdi:home"
+            await mcp.call_tool_success(
+                "ha_config_set_dashboard", {"url_path": url_path, "icon": ""}
+            )
+            assert await stored_icon() is None
+        finally:
+            await safe_call_tool(
+                mcp_client, "ha_config_delete_dashboard", {"url_path": url_path}
+            )
+
 
 class TestDashboardErrorHandling:
     """Test error handling and edge cases."""
@@ -462,7 +492,7 @@ class TestDashboardIdentifierResolution:
             )
 
     async def test_set_via_internal_id_pre_resolves(self, mcp_client):
-        """Set with the internal id (no hyphen) gets pre-resolved before validation."""
+        """Set with the internal id (no hyphen) updates the existing dashboard."""
         mcp = MCPAssertions(mcp_client)
 
         create_data = await mcp.call_tool_success(
@@ -478,13 +508,12 @@ class TestDashboardIdentifierResolution:
         internal_id = create_data["dashboard_id"]
         # Literal compare on the canonical id form — survives an HA-side
         # change of the slugify separator with a clearer failure message
-        # than ``"-" not in internal_id``. The pre-resolver must run before
-        # the hyphen-check on this id (it has no hyphen by construction).
+        # than ``"-" not in internal_id``. Without the pre-resolver this
+        # hyphenless id would reach Core as a new dashboard and be rejected.
         assert internal_id == "test_981_set_by_id"
 
         try:
-            # Update via internal id — pre-resolver replaces it with url_path
-            # so the hyphen validation passes.
+            # Update via internal id — pre-resolver replaces it with url_path.
             update_data = await mcp.call_tool_success(
                 "ha_config_set_dashboard",
                 {

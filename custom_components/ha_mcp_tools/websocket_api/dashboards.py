@@ -36,11 +36,10 @@ _DASHBOARD_ROW_KEYS = (
 # stays far below the client's 64 MiB message limit on real installs.
 _DASHBOARD_MATCH_CAP = 200
 
-# Keys that hold card configs at any depth inside a card: ``cards`` (a list),
-# ``card`` (one card), and the named ``custom_fields`` / ``states`` maps. Custom
-# cards file these under keys of their own (``groups[].cards[].card``), so the
-# search reads every node and only uses these keys to attribute a string to the
-# card it lives on.
+# Card slots, a discovery heuristic rather than an HA contract (each card
+# decides what its keys mean): the keys HA's own container cards and common
+# custom cards use, at any depth (``groups[].cards[].card``). The search reads
+# every node and only uses them to attribute a string to the card it lives on.
 _CARD_LIST_KEY = "cards"
 _CARD_KEY = "card"
 _NAMED_CARD_MAP_KEYS = frozenset({"custom_fields", "states"})
@@ -708,7 +707,7 @@ def _walk_card_entry(
 
 def _card_slot_items(key: Any, value: Any) -> list[tuple[str, str, Any]] | None:
     """``(path segment, leaf key, item)`` per card slot under ``key``, else ``None``."""
-    if key == _CARD_LIST_KEY and isinstance(value, list):
+    if key in (_CARD_LIST_KEY, _CARD_KEY) and isinstance(value, list):
         return [(f"[{i}]", key, item) for i, item in enumerate(value)]
     if key == _CARD_KEY:
         return [("", key, value)]

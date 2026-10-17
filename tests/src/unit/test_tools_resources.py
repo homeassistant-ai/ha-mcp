@@ -359,8 +359,7 @@ class TestHaConfigListDashboardResources:
 
         assert result["success"] is True
         assert result["count"] == 2
-        assert result["by_type"]["module"] == 1
-        assert result["by_type"]["css"] == 1
+        assert result["by_type"] == {"module": 1, "css": 1}
 
     @pytest.mark.asyncio
     async def test_list_inline_resources_decoded(self, list_tool, mock_client):
@@ -1251,10 +1250,11 @@ class TestHaConfigDeleteDashboardResource:
 
     @pytest.mark.asyncio
     async def test_delete_not_found_raises_tool_error(self, delete_tool, mock_client):
-        """Test that deleting non-existent resource raises ToolError with RESOURCE_NOT_FOUND."""
+        """Core's not_found code (not its message text) maps to RESOURCE_NOT_FOUND."""
         mock_client.send_websocket_message.return_value = {
             "success": False,
-            "error": {"message": "Resource not found"},
+            "error": "Command failed: some future wording",
+            "error_code": "not_found",
         }
 
         with pytest.raises(ToolError) as exc_info:

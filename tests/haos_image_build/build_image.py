@@ -36,8 +36,10 @@ from typing import Any
 
 if __package__:  # imported by the unit tests
     from .python_base import copy_addon_tree
+    from .supervisor_logs import log_supervisor_tail
 else:  # python3 tests/haos_image_build/build_image.py
     from python_base import copy_addon_tree
+    from supervisor_logs import log_supervisor_tail
 
 LOG = logging.getLogger("haos_image_build")
 
@@ -1049,20 +1051,7 @@ def _install_addon_with_retry(
     retrying so a dead connection doesn't doom the retry, rather than failing the
     whole ~25 min bake. A genuinely broken add-on fails again and propagates.
     """
-    # websockets lives only in the build venv (imported lazily elsewhere for the
-    # same reason), so fold its drop exception into the retry tuple lazily.
-    try:
-        from websockets.exceptions import WebSocketException
-
-        transient: tuple[type[BaseException], ...] = (
-            WSCommandError,
-            OSError,
-            TimeoutError,
-            WebSocketException,
-        )
-    except ImportError:
-        transient = (WSCommandError, OSError, TimeoutError)
-
+    transient = _SUPERVISOR_WAIT_TRANSIENT_ERRORS
     for attempt in range(1, attempts + 1):
         try:
             ws.supervisor_api(
@@ -1070,6 +1059,7 @@ def _install_addon_with_retry(
             )
             return
         except transient as e:
+            log_supervisor_tail(ws._base_url, ws._credentials.access_token)
             if attempt >= attempts:
                 raise
             LOG.warning(

@@ -359,7 +359,7 @@ class TestFetcherIdResolution:
         seen: dict[str, Any] = {}
 
         async def fake_resolve(_client: Any, identifier: str) -> Any:
-            return {"url_path": "my-dash", "id": identifier}, None
+            return {"url_path": "my-dash", "id": identifier}, []
 
         async def fake_get_internal(_client: Any, url_path: str | None) -> Any:
             seen["url_path"] = url_path
@@ -367,8 +367,8 @@ class TestFetcherIdResolution:
 
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
-        got = await bm._fetch_dashboard(_StubClient(), "my_dash")
-        assert got == {"views": []}
+        got = await bm.fetch_dashboard(_StubClient(), "my_dash")
+        assert got == {"dashboard": None, "config": {"views": []}}
         # fetched via the canonical url_path, not the raw internal id
         assert seen["url_path"] == "my-dash"
 
@@ -382,23 +382,23 @@ class TestFetcherIdResolution:
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         async def fake_resolve(_client: Any, _identifier: str) -> Any:
-            return None, None  # no registry match -> fall through with raw id
+            return None, []  # no registry match -> fall through with raw id
 
         async def fake_get_internal(_client: Any, _url_path: str | None) -> Any:
             raise ToolError("Dashboard fetch failed: Unknown config specified: x")
 
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
-        assert await bm._fetch_dashboard(_StubClient(), "x_dash") is None
+        assert await bm.fetch_dashboard(_StubClient(), "x_dash") is None
 
     async def test_fetch_dashboard_without_stored_config_returns_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A metadata-only dashboard has nothing to snapshot before first save."""
+        """Without its settings row, an unsaved dashboard has nothing to snapshot."""
         import ha_mcp.tools.tools_config_dashboards as dash
 
         async def fake_resolve(_client: Any, identifier: str) -> Any:
-            return {"url_path": identifier, "id": "no_config"}, None
+            return {"url_path": identifier, "id": "no_config"}, []
 
         async def no_component_config(_client: Any, _url_path: str) -> None:
             return None
@@ -414,7 +414,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_component_dashboard_config", no_component_config)
 
-        assert await bm._fetch_dashboard(client, "no-config") is None
+        assert await bm.fetch_dashboard(client, "no-config") is None
         client.send_websocket_message.assert_awaited_once_with(
             {"type": "lovelace/config", "force": True, "url_path": "no-config"}
         )
@@ -428,7 +428,7 @@ class TestFetcherIdResolution:
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         async def fake_resolve(_client: Any, _identifier: str) -> Any:
-            return None, None
+            return None, []
 
         async def fake_get_internal(_client: Any, _url_path: str | None) -> Any:
             raise ToolError("Dashboard fetch failed: 500 Internal Server Error")
@@ -436,7 +436,7 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
         with pytest.raises(ToolError):
-            await bm._fetch_dashboard(_StubClient(), "x_dash")
+            await bm.fetch_dashboard(_StubClient(), "x_dash")
 
     async def test_fetch_calendar_event_matches_uid(self) -> None:
         # Hard guard for the calendar lane (the e2e is skippable): the

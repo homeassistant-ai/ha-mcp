@@ -254,17 +254,17 @@ class _Bundle:
         self._context_call("set_time_limit", _CALL_SECONDS)
         for step, payload in (("eval", dom), ("boot", None)):
             self._limit_preparation()
-            error = self.engine(step, payload).get("error")
+            error = self._js(step, payload).get("error")
             if error:
                 raise ValueError(error)
         self._limit_preparation()
         if module:
             self._context_call("module", source)
-        elif error := self.engine("eval", source).get("error"):
+        elif error := self._js("eval", source).get("error"):
             raise ValueError(error)
         self._settle()
         self._limit_preparation()
-        listed = self.engine("cards", None)["value"]
+        listed = self._js("cards", None)["value"]
         self.tags: list[str] = listed["tags"]
         self.cards: list[dict[str, Any]] = listed["cards"]
         self._context_call("set_time_limit", _CALL_SECONDS)
@@ -279,7 +279,7 @@ class _Bundle:
         self._prepare_deadline = time.monotonic() + _EDITOR_SECONDS
         try:
             self._limit_preparation()
-            answer = self.engine("prepare", {"tag": tag})
+            answer = self._js("prepare", {"tag": tag})
             if error := answer.get("error"):
                 raise ValueError(error)
             if answer.get("value"):
@@ -308,6 +308,10 @@ class _Bundle:
         del self.engine._f
         del self.engine._context
 
+    def _js(self, *args: Any) -> Any:
+        # run_gc=False skips Context.gc() (gc.collect() and JS_RunGC() under the GIL) (#2744).
+        return self.engine(*args, run_gc=False)
+
     def _context_call(self, method: str, *args: Any) -> Any:
         # The tested quickjs-ng wrapper dispatches Function calls, but its context methods
         # run on the caller. Use the SAME executor that created its runtime.
@@ -328,7 +332,7 @@ class _Bundle:
             self._limit_preparation()
             if self._context_call("execute_pending_job"):
                 jobs += 1
-            elif not self.engine("pump", None).get("value"):
+            elif not self._js("pump", None).get("value"):
                 return
 
     @property
@@ -340,9 +344,7 @@ class _Bundle:
         if tag in self._unresponsive:
             return []
         try:
-            answer = self.engine(
-                "check", {"tag": tag, "config": config, "source": "card"}
-            )
+            answer = self._js("check", {"tag": tag, "config": config, "source": "card"})
         except Exception:
             _LOGGER.debug("Custom card %s did not answer", tag, exc_info=True)
             self._unresponsive.add(tag)
@@ -351,7 +353,7 @@ class _Bundle:
         if self._editor_ready(tag):
             try:
                 self._context_call("set_time_limit", _EDITOR_SECONDS)
-                answer = self.engine(
+                answer = self._js(
                     "check", {"tag": tag, "config": config, "source": "editor"}
                 )
                 seen = {problem["message"] for problem in problems}
@@ -373,9 +375,7 @@ class _Bundle:
         if not self._editor_ready(tag):
             return None
         try:
-            value = self.engine(
-                "form", {"tag": tag, "config": {"type": f"custom:{tag}"}}
-            )
+            value = self._js("form", {"tag": tag, "config": {"type": f"custom:{tag}"}})
         except Exception:  # noqa: BLE001
             self._editor_unavailable.add(tag)
             return None

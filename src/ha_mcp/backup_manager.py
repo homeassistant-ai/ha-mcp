@@ -66,6 +66,14 @@ import yaml  # type: ignore[import-untyped]
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
+from .backup_dashboards import (
+    _DASHBOARD_KIND,
+    dashboard_comparison,
+    dashboard_snapshot,
+    fetch_dashboard,
+    restore_dashboard,
+    valid_dashboard_capture,
+)
 from .backup_diff import (
     _TEXT_KIND,
     DiffResponse,
@@ -215,6 +223,17 @@ def _validate_snapshot_envelope(data: dict[str, Any]) -> None:
     for key in ("domain", "entity_id"):
         if not isinstance(data[key], str) or (key == "domain" and not data[key]):
             raise InvalidBackupSnapshotError(f"Snapshot has invalid {key}")
+    if data.get("kind") == _DASHBOARD_KIND and not valid_dashboard_capture(
+        data["config"]
+    ):
+        raise InvalidBackupSnapshotError("Snapshot has invalid config")
+
+
+def _handler_config(data: dict[str, Any]) -> Any:
+    """The config a domain handler restores from a snapshot."""
+    if data["domain"] == "dashboard":
+        return dashboard_snapshot(data)[0]
+    return data["config"]
 
 
 class _FlowHelperReadError(HomeAssistantError):
@@ -320,7 +339,8 @@ _MAX_SAME_SECOND = 100
 # Domains whose snapshot ``config`` is raw text (file/YAML content) rather
 # than a structured dict. They carry a ``kind: "text"`` marker in the
 # snapshot payload and diff via a unified text diff instead of JSON-Patch
-# (#1579 PR2). Everything else is the implicit ``"dict"`` kind.
+# (#1579 PR2). Dashboard snapshots carry ``kind: "dashboard_settings"``
+# (backup_dashboards); everything else is the implicit ``"dict"`` kind.
 #
 # ``yaml_file`` is a whole-file YAML-config snapshot: same fetch as ``file``
 # (read_file), but restored via edit_yaml_config(action="replace_file") because
@@ -1048,6 +1068,8 @@ class BackupManager:
         }
         if domain in _TEXT_DOMAINS:
             payload["kind"] = _TEXT_KIND
+        elif domain == "dashboard":
+            payload["kind"] = _DASHBOARD_KIND
         body = yaml.safe_dump(payload, default_flow_style=False, sort_keys=False)
         # mkstemp creates a unique 0600 inode before any configuration is written.
         fd, tmp_name = tempfile.mkstemp(
@@ -1491,7 +1513,7 @@ class BackupManager:
     ) -> dict[str, Any]:
         domain = data["domain"]
         entity_id = data["entity_id"]
-        config = data["config"]
+        config = _handler_config(data)
         handler = self.handler_for(domain)
         if handler is None:
             raise BackupRestoreError(
@@ -1634,6 +1656,15 @@ class BackupManager:
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
         current = await handler.fetch(self._client, data["entity_id"])
+        if domain == "dashboard":
+            _stored, legacy = dashboard_snapshot(data)
+            current = dashboard_comparison(current, legacy=legacy)
+        elif domain == "dashboard_resource" and current is None:
+            # A re-created resource carries a Core-generated id, which is not
+            # a difference the snapshot can restore.
+            live = await _dashboard_resource_like(self._client, data["config"])
+            if live is not None:
+                current = {**live, "id": data["config"].get("id")}
         if (
             isinstance(current, dict)
             and isinstance(data["config"], dict)
@@ -2046,86 +2077,6 @@ async def _restore_scene(client: Any, entity_id: str, config: Any) -> Any:
     return await client.upsert_scene_config(config, entity_id)
 
 
-# Dashboards — WS lovelace/config (fetch) and lovelace/config/save (restore).
-
-
-async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
-    """Fetch a dashboard config via the same helper the get tool uses.
-
-    The identifier is pre-resolved to its canonical url_path via the shared
-    ``_resolve_dashboard`` (component ``list`` when available), then the config is
-    read through the component ``get`` (one in-process frame) with a fall back to
-    the legacy ``lovelace/config`` read (``_get_dashboard_config_internal``, which
-    handles the WS envelope, force-cache-bypass, and structured error wrapping).
-    The component refuses YAML bodies, so those capture through legacy unchanged.
-    Imported lazily to avoid an import cycle.
-    """
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-    from .tools.tools_config_dashboards import (
-        _component_dashboard_config,
-        _get_dashboard_config_internal,
-        _resolve_dashboard,
-    )
-
-    # The set/delete tools accept BOTH the canonical hyphenated url_path
-    # AND HA's internal (underscored) dashboard id, eagerly resolving the
-    # latter before writing. ``_get_dashboard_config_internal`` does NOT
-    # lazy-resolve, so an internal-id identifier 404s with "Unknown config
-    # specified" and the pre-write snapshot is silently skipped. Pre-resolve
-    # to the canonical url_path so capture works for whichever form the
-    # caller passed (matching the form the write tool ultimately targets).
-    fetch_path = entity_id
-    try:
-        match, _ = await _resolve_dashboard(client, entity_id)
-        if match and match.get("url_path"):
-            fetch_path = match["url_path"]
-    except (HomeAssistantError, ToolError) as err:
-        # Resolver failure (transport/shape) — fall through with the
-        # original identifier; the canonical form is often already correct.
-        logger.debug(
-            "Auto-backup: dashboard resolve failed for %r: %s — using as-is",
-            entity_id,
-            err,
-        )
-
-    # Component fast path (freshness-safe in-memory read); None ⇒ legacy below,
-    # which also covers YAML dashboards and not-found (nothing to back up).
-    component_config = await _component_dashboard_config(client, fetch_path)
-    if component_config is not None:
-        return component_config
-
-    try:
-        config, _config_hash = await _get_dashboard_config_internal(client, fetch_path)
-    except ToolError as err:
-        # ToolError carries the structured failure payload, including HA's
-        # preserved ``config_not_found`` code; treat a missing/unknown
-        # dashboard as "nothing to back up" (also covers a brand-new dashboard
-        # on the create path). "Unknown config specified" is HA's message for
-        # an unresolved url_path.
-        msg = str(err).lower()
-        if "not_found" in msg or "config_not_found" in msg or "unknown config" in msg:
-            return None
-        raise
-    except HomeAssistantError as err:
-        msg = str(err).lower()
-        if "not_found" in msg or "config_not_found" in msg or "unknown config" in msg:
-            return None
-        raise
-    return config
-
-
-async def _restore_dashboard(client: Any, entity_id: str, config: Any) -> Any:
-    return await _ws_send(
-        client,
-        {
-            "type": "lovelace/config/save",
-            "url_path": entity_id,
-            "config": config,
-        },
-    )
-
-
 def _require_list(value: Any, endpoint: str) -> list[Any]:
     """Return ``value`` if it's a list, else raise.
 
@@ -2165,24 +2116,50 @@ def _require_dict(value: Any, endpoint: str) -> dict[str, Any]:
     return value
 
 
-# Dashboard resources — WS lovelace_resources commands.
+# Dashboard resources — WS lovelace/resources commands. Rows store the
+# resource type as ``type``; the create/update field is ``res_type``. A restore
+# of a deleted resource re-creates it under a new id, so a snapshot falls back
+# to the row that holds its url and type; Core does not keep urls unique, so a
+# row that only shares the url is another resource and is left alone.
+async def _dashboard_resources(client: Any) -> list[Any]:
+    return _require_list(
+        await _ws_send(client, {"type": "lovelace/resources"}), "lovelace/resources"
+    )
 
 
 async def _fetch_dashboard_resource(client: Any, entity_id: str) -> Any:
-    resources = _require_list(
-        await _ws_send(client, {"type": "lovelace/resources"}), "lovelace/resources"
+    resources = await _dashboard_resources(client)
+    return next((r for r in resources if str(r.get("id")) == entity_id), None)
+
+
+async def _dashboard_resource_like(client: Any, config: dict[str, Any]) -> Any:
+    """The live row with the snapshot's url and type, else ``None``."""
+    resources = await _dashboard_resources(client)
+    return next(
+        (
+            r
+            for r in resources
+            if r.get("url") == config["url"] and r.get("type") == config.get("type")
+        ),
+        None,
     )
-    for res in resources:
-        if str(res.get("id")) == entity_id:
-            return res
-    return None
 
 
 async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) -> Any:
-    payload = _strip_readonly(config, "id")
-    payload["resource_id"] = entity_id
-    payload["type"] = "lovelace/resources/update"
-    return await _ws_send(client, payload)
+    # Core imported old ``resources:`` entries without a type (RESOURCE_FIELDS).
+    payload = _strip_readonly(config, "id", "type")
+    if "type" in config:
+        payload["res_type"] = config["type"]
+    update = {"type": "lovelace/resources/update", "resource_id": entity_id}
+    try:
+        return await _ws_send(client, {**update, **payload})
+    except HomeAssistantCommandError as err:
+        if err.code != "not_found":  # not_found: deleted since the snapshot
+            raise
+    live = await _dashboard_resource_like(client, config)
+    if live is not None:  # an earlier restore re-created it
+        return live
+    return await _ws_send(client, {"type": "lovelace/resources/create", **payload})
 
 
 # Labels — config/label_registry/{list,update}
@@ -3925,7 +3902,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(DomainHandler("automation", _fetch_automation, _restore_automation))
     mgr.register(DomainHandler("script", _fetch_script, _restore_script))
     mgr.register(DomainHandler("scene", _fetch_scene, _restore_scene))
-    mgr.register(DomainHandler("dashboard", _fetch_dashboard, _restore_dashboard))
+    mgr.register(DomainHandler("dashboard", fetch_dashboard, restore_dashboard))
     mgr.register(
         DomainHandler(
             "dashboard_resource", _fetch_dashboard_resource, _restore_dashboard_resource

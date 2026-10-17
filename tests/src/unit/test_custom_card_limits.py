@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -69,7 +70,7 @@ def test_only_requested_editors_are_prepared_and_cached(monkeypatch) -> None:
     clock = [0.0]
     prepared = []
 
-    def call(op, payload):
+    def call(op: str, payload: Any, run_gc: bool = True) -> Any:
         if op == "cards":
             return {"value": {"tags": list(range(100)), "cards": []}}
         if op == "prepare":
