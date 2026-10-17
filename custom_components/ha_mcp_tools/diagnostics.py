@@ -26,7 +26,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers import issue_registry as ir
-from packaging.version import InvalidVersion, Version
+from packaging.version import Version
 
 from .const import (
     CONF_ENTRY_TYPE,
@@ -219,8 +219,9 @@ def _is_channel_spec(value: str) -> bool:
     ``last_pip_spec`` holds one of these when no override is set. It is not a
     secret, and keeping it leaves the package name and version in the error.
     Only the whole value counts: an override that merely starts with one
-    carries whatever was typed after it. The version must be a normalized
-    public one, as PyPI releases are; a local label (``+...``) takes any text.
+    carries whatever was typed after it. The version must be a public one, as
+    PyPI releases are: a local label (``+...``) can carry arbitrary
+    alphanumeric text, such as a token.
     """
     dist, pinned, version = value.strip().partition("==")
     if dist not in (DIST_NAME_STABLE, DIST_NAME_DEV):
@@ -229,6 +230,6 @@ def _is_channel_spec(value: str) -> bool:
         return True
     try:
         parsed = Version(version)
-    except InvalidVersion:
+    except ValueError:  # InvalidVersion, or a digit run past int()'s limit
         return False
-    return parsed.local is None and str(parsed) == version
+    return parsed.local is None
