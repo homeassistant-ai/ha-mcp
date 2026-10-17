@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from pytest import LogCaptureFixture
+
 from ._embedded_stubs import FakeSession, install, make_request
 
 # Install the HA / aiohttp stubs before importing the component (isort barrier).
@@ -48,7 +50,7 @@ async def test_relay_never_reuses_a_connection_the_server_has_closed(
     await mw.async_unregister_webhook(hass)
 
 
-async def test_a_full_pool_logs_no_secret_path(caplog) -> None:
+async def test_a_full_pool_logs_no_secret_path(caplog: LogCaptureFixture) -> None:
     """aiohttp's pool-acquire timeout names the target URL; its path is the
     secret path, so the 502 log line must carry only the error type."""
     err = mw.aiohttp.ClientError("Connection timeout to host http://127.0.0.1/p_s3cr3t")
