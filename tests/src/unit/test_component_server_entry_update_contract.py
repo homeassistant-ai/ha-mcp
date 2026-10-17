@@ -115,7 +115,7 @@ async def test_prep_schedules_merged_update_preserving_other_keys() -> None:
     assert result["scheduled"] is True
     assert result["entry_id"] == "srv1"
     assert result["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
-    assert result["previous"] == {"channel": "stable", "pip_spec": ""}
+    assert result["previous"] == {"pip_spec": ""}
     # Deferred-reload crux: NOT applied synchronously.
     assert hass.config_entries.update_calls == []
     assert len(hass.scheduled) == 1
@@ -170,7 +170,8 @@ async def test_prep_noop_returns_unchanged_without_scheduling() -> None:
     result = extra["result"]
     assert result["scheduled"] is False
     assert result["unchanged"] is True
-    assert result["previous"] == {"channel": "dev", "pip_spec": "ha-mcp==1.0.0"}
+    # The retired channel option is not reported back.
+    assert result["previous"] == {"pip_spec": "ha-mcp==1.0.0"}
     assert hass.scheduled == []
     assert hass.config_entries.update_calls == []
 

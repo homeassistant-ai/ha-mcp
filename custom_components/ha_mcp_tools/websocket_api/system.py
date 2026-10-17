@@ -15,7 +15,6 @@ from ..const import (
     DEFAULT_PIP_SPEC,
     DOMAIN,
     ENTRY_TYPE_SERVER,
-    OPT_CHANNEL,
     OPT_PIP_SPEC,
 )
 from .constants import (
@@ -318,18 +317,18 @@ def _do_server_entry(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, A
     """Locate the component's OWN server config entry and return its identity.
 
     Discriminates the server-type entry via :func:`_find_server_config_entry`
-    (the ``entry.data[CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER`` marker). ``channel`` /
-    ``pip_spec`` come from ``entry.options`` (``None`` when absent); ``entry_id`` is
-    ``None`` when no server entry exists.
+    (the ``entry.data[CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER`` marker). ``pip_spec``
+    comes from ``entry.options`` (``None`` when absent); ``entry_id`` is ``None``
+    when no server entry exists. The retired ``channel`` option is not reported:
+    an entry saved before paired releases may still carry it, but nothing reads it.
     """
     entry = _find_server_config_entry(hass)
     if entry is None:
-        return {"entry_id": None, "channel": None, "pip_spec": None}
+        return {"entry_id": None, "pip_spec": None}
     options = getattr(entry, "options", None)
     opts = options if isinstance(options, Mapping) else {}
     return {
         "entry_id": getattr(entry, "entry_id", None),
-        "channel": opts.get(OPT_CHANNEL),
         "pip_spec": opts.get(OPT_PIP_SPEC),
     }
 
@@ -452,10 +451,7 @@ async def _server_entry_update_prep(
     new_options = {**current, **delta}
 
     entry_id = getattr(entry, "entry_id", None)
-    previous = {
-        "channel": current.get(OPT_CHANNEL),
-        "pip_spec": current.get(OPT_PIP_SPEC),
-    }
+    previous = {"pip_spec": current.get(OPT_PIP_SPEC)}
 
     if new_options == current:
         return {
