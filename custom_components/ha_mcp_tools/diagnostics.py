@@ -103,7 +103,7 @@ _STARTUP_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED)
 # Credentials in a URL's userinfo, e.g. a pip index or tarball URL that never
 # reached the entry (pip echoes its index URLs in errors).
 _URL_USERINFO = re.compile(r"(://)[^/@\s'\"]+@")
-# A channel's distribution, bare or pinned to a version (_resolve_pip_spec).
+# A channel's distribution, bare or pinned to a version, as the server pins it.
 _CHANNEL_SPEC = re.compile(
     rf"(?:{re.escape(DIST_NAME_STABLE)}|{re.escape(DIST_NAME_DEV)})(?:==\d[\w.+!-]*)?"
 )
@@ -205,6 +205,9 @@ def _scrub(text: str, entry: ConfigEntry) -> str:
     stored = [entry.data.get(key) for key in _SECRET_DATA_KEYS]
     stored += [entry.options.get(key) for key in _SECRET_OPTION_KEYS]
     values = {s for v in stored if isinstance(v, str) for s in (v, v.strip())}
+    # The install error quotes the spec with repr(), which escapes backslashes
+    # and quotes, so the quoted form is replaced as well.
+    values |= {repr(v)[1:-1] for v in values}
     # Longest first, so a value that contains another is replaced whole.
     for value in sorted(
         (v for v in values if v and not _is_channel_spec(v)), key=len, reverse=True

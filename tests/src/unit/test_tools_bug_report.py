@@ -69,12 +69,12 @@ class TestBugReportTool:
 
     @pytest.fixture(autouse=True)
     def _stub_component_caps(self):
-        """These tests exercise report assembly, not the component-version
-        probe. Stub the shared caps probe to None so ``_detect_component_version``
-        takes its legacy best-effort path without a live WS round-trip."""
-        with patch(
-            "ha_mcp.tools.tools_bug_report.get_component_caps",
-            AsyncMock(return_value=None),
+        """Report assembly, not the component probes: stub the shared caps probe
+        to None, also where ``read_webhook_auth`` reads it, so no WS round-trip."""
+        stub = AsyncMock(return_value=None)
+        with (
+            patch("ha_mcp.tools.tools_bug_report.get_component_caps", stub),
+            patch("ha_mcp.tools.component_api.get_component_caps", stub),
         ):
             yield
 
