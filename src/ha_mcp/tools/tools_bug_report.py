@@ -55,7 +55,7 @@ from .bug_report_templates import (
     _suggested_title,
 )
 from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION, parse_string_list_param
-from .component_api import get_component_caps
+from .component_api import read_component_version, read_webhook_auth
 from .helpers import (
     log_tool_usage,
     raise_tool_error,
@@ -687,21 +687,20 @@ class BugReportTools:
     async def _detect_component_version(self) -> str | None:
         """Read the ha_mcp_tools custom component's version, best-effort.
 
-        Prefers the shared cached capability probe (``get_component_caps`` — one
-        ``ha_mcp_tools/info`` round-trip per client): a component new enough to
-        answer it (1.1.0+) reports its version there, so the report reuses that
-        cached probe instead of a bespoke round-trip. A component in the
-        0.11.0-1.1.0 band has services but no ``info`` command (caps is None),
-        so it falls back to the ``get_caller_token`` bootstrap service, whose
-        response also carries the manifest version. Returns None when the
-        component is not installed or the call fails — the report path must
-        never break on it.
+        Prefers a fresh ``ha_mcp_tools/info`` read (``read_component_version``):
+        the cached capability snapshot would still hold the version running when
+        the client first probed, which outlives a component update on a server
+        running outside HA; the snapshot only stands in when the fresh read
+        fails. A component without a usable ``info`` (the 0.11.0-1.1.0 band has
+        services but no such command) falls back to the ``get_caller_token``
+        bootstrap service, whose response also carries the manifest version.
+        Returns None when the component is not installed or the call fails —
+        the report path must never break on it.
         """
-        # get_component_caps never raises (it caches/returns None on every
-        # failure mode), so no guard is needed around it.
-        caps = await get_component_caps(self._client)
-        if caps is not None:
-            return caps.component_version or None
+        # read_component_version never raises (None on every failure).
+        version = await read_component_version(self._client)
+        if version is not None:
+            return version or None
         try:
             resp = await self._client.call_service(
                 "ha_mcp_tools", "get_caller_token", {}, return_response=True
@@ -747,14 +746,12 @@ class BugReportTools:
     async def _detect_server_entry_status(self) -> str | None:
         """Describe the in-process "HA-MCP Server" entry state, best-effort.
 
-        Both parts of the custom component ship under the single
-        ``ha_mcp_tools`` domain, so "the component is installed" says nothing
-        about WHICH part is set up. The File & YAML tools part is covered by
-        the services probe; this one classifies the domain's config entries by
-        their flow-assigned titles to show whether the in-process server entry
-        exists — e.g. an add-on install that erroneously also added it (a
-        second, redundant server) becomes visible next to Installation Method.
-        Returns None when the probe fails; the report must never break on it.
+        Both parts of the component share the ``ha_mcp_tools`` domain; the File
+        & YAML part is covered by the services probe. Entries are classified by
+        flow-assigned title, so e.g. an add-on install that also added a redundant
+        server entry shows next to Installation Method. A recognized server entry
+        gets the webhook auth mode when a fresh ``info`` call reports one.
+        Returns None when ``config_entries/get`` fails; the report must not break.
         """
         try:
             response = await self._client.send_websocket_message(
@@ -770,7 +767,8 @@ class BugReportTools:
             return None
         server, unrecognized = _classify_component_entries(result)
         if server:
-            return ", ".join(server)
+            auth = await read_webhook_auth(self._client)
+            return ", ".join(server) + (f", webhook auth: {auth}" if auth else "")
         if unrecognized:
             # A renamed entry cannot be classified by title — report it
             # rather than claiming the server entry is absent.
