@@ -6,11 +6,13 @@ variables every unit test starts with.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import sys
 import tempfile
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -282,3 +284,33 @@ def real_probatio():
         ]:
             del sys.modules[name]
         sys.modules.update(saved)
+
+
+@pytest.fixture
+def mock_client():
+    """HomeAssistantClient with stubbed internals — no real network.
+
+    Mirror every instance attribute the real ``__init__`` sets, so a
+    `getattr` fallback in production code isn't needed to paper over a
+    test-fixture omission (and so future `__init__` attribute additions
+    that this fixture forgets to mirror fail loudly here instead of
+    silently no-op-ing).
+    """
+    # Imported here rather than at module scope: conftest imports run before
+    # ``pytest_configure`` redirects the config directory, so importing ha_mcp
+    # during collection creates ~/.ha-mcp and the CI "no local state" gate
+    # fails.
+    from ha_mcp.client.rest_client import HomeAssistantClient
+
+    with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
+        client = HomeAssistantClient()
+        client.base_url = "http://test.local:8123"
+        client.token = "test-token"
+        client.timeout = 30
+        client.verify_ssl = True
+        client.httpx_client = MagicMock()
+        client._supervised_detected = None
+        client._is_admin = True
+        client._admin_route_refused = False
+        client._admin_route_lock = asyncio.Lock()
+        return client

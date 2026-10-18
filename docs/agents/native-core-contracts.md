@@ -4,6 +4,11 @@ Read this before changing tools that wrap Home Assistant APIs, whether they
 read or write. Core owns its request schemas, defaults, conversions and
 response fields. HA-MCP owns tool orchestration and safety policies.
 
+Native covers Core, the frontend, Supervisor and the hassio proxy alike. When a
+tool has more than one native path (Core REST vs WebSocket, Supervisor vs
+Core), a migration keeps every capability the current tool has and adds the
+native ones; it never trades one native capability for another.
+
 ## Choose the authoritative path
 
 Use native REST/WebSocket APIs first. Preserve native response fields and

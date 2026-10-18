@@ -237,8 +237,8 @@ class SupervisorLogSourcesMixin:
     ) -> dict[str, Any]:
         """Fetch HA system-service logs from Supervisor's per-service endpoint.
 
-        ``service`` ∈ ``SYSTEM_SERVICE_SLUGS`` (the eight Supervisor-managed
-        services: supervisor, host, core, dns, audio, cli, multicast, observer).
+        ``service`` ∈ ``SYSTEM_SERVICE_SLUGS`` (the six Supervisor-managed
+        services: supervisor, host, core, dns, audio, multicast).
         Caller (``ha_get_logs(source='system_service')``) validates against
         ``SYSTEM_SERVICE_SLUGS`` before dispatch. Routed through
         ``HomeAssistantClient._get_system_service_logs`` which gates on

@@ -56,6 +56,8 @@ def _call_kwargs(**overrides: Any) -> dict[str, Any]:
         "search": None,
         "hours_back": 1,
         "entity_id": None,
+        "device_id": None,
+        "context_id": None,
         "end_time": None,
         "offset": 0,
         "compact": True,

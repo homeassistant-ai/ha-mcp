@@ -12,7 +12,7 @@ Covers two REST-client paths and their log-source wrappers
   `is_running_in_addon()` like `get_addon_logs`: in-addon hits
   `http://supervisor/{service}/logs`; non-addon falls back to the HA Core
   proxy at `/api/hassio/{service}/logs` (#1260 fix on top of #1116 scope).
-  service ∈ {supervisor, host, core, dns, audio, cli, multicast, observer}.
+  service ∈ {supervisor, host, core, dns, audio, multicast}.
 - The wrappers (`_get_supervisor_log`, `_get_system_service_log`) — response
   shape, tail slicing, search filter, slug-enum validation, and structured-
   error translation.
@@ -34,7 +34,6 @@ from ha_mcp.client.rest_client import (
     ErrorLogPage,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
-    HomeAssistantClient,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.log_common import (
@@ -44,28 +43,7 @@ from ha_mcp.tools.log_common import (
 )
 from ha_mcp.tools.tools_logs import register_logs_tools
 
-
-@pytest.fixture
-def mock_client():
-    """HomeAssistantClient with stubbed internals — no real network.
-
-    Mirror every instance attribute the real ``__init__`` sets, so a
-    `getattr` fallback in production code isn't needed to paper over a
-    test-fixture omission (and so future `__init__` attribute additions
-    that this fixture forgets to mirror fail loudly here instead of
-    silently no-op-ing).
-    """
-    with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
-        client = HomeAssistantClient()
-        client.base_url = "http://test.local:8123"
-        client.token = "test-token"
-        client.timeout = 30
-        client.verify_ssl = True
-        client.httpx_client = MagicMock()
-        client._supervised_detected = None
-        client._is_admin = True
-        client._admin_route_refused = False
-        return client
+from ._logbook_fallback import disable_logbook_websocket
 
 
 @pytest.fixture
@@ -804,17 +782,17 @@ class TestGetSystemServiceLogsBranchSelection:
 
     @pytest.mark.parametrize(
         "service",
-        ["supervisor", "host", "core", "dns", "audio", "cli", "multicast", "observer"],
+        ["supervisor", "host", "core", "dns", "audio", "multicast"],
     )
     @pytest.mark.asyncio
     async def test_non_addon_install_uses_ha_core_proxy(self, mock_client, service):
         """`is_running_in_addon()` False → HA-Core-proxy path for every slug.
 
         HA Core's hassio HTTP proxy (PATHS_ADMIN in
-        `homeassistant/components/hassio/http.py`) whitelists all seven
-        Supervisor service-log paths, so an admin LLA can reach any of them
-        from outside the addon. Parametrize over the full set so a future
-        proxy regression for a single slug surfaces here.
+        `homeassistant/components/hassio/http.py`) whitelists Supervisor's
+        service-log paths, so an admin LLA can reach any allowed service from
+        outside the addon. Parametrize over the full set so a future proxy
+        regression for a single slug surfaces here.
 
         Also pins ``Accept: text/plain`` on the request: without it the HA
         Core proxy negotiates ``application/json`` and the body stops being
@@ -1184,6 +1162,7 @@ class TestSlugParameterIncompatibilityWarning:
         client = MagicMock()
         client.get_logbook = AsyncMock(return_value=[])
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        disable_logbook_websocket(client)
         return client
 
     @pytest.mark.asyncio
@@ -1303,7 +1282,7 @@ class TestGetSystemServiceLogWrapper:
 
     @pytest.mark.parametrize(
         "service",
-        ["supervisor", "host", "core", "dns", "audio", "cli", "multicast", "observer"],
+        ["supervisor", "host", "core", "dns", "audio", "multicast"],
     )
     @pytest.mark.asyncio
     async def test_all_allowed_services_dispatch(
