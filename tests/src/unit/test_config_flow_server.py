@@ -346,7 +346,7 @@ class TestAdminTokenReplacement:
             if m.schema == const.OPT_ADMIN_TOKEN_REPLACEMENT
         )
 
-    def test_the_login_fields_never_offer_a_saved_login(self):
+    def test_the_login_fields_never_offer_a_saved_login(self) -> None:
         # A browser would autofill the administrator's own saved login, which
         # must never go there; a filled login also switches the server's account.
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
