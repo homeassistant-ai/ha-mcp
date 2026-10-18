@@ -76,8 +76,15 @@ run current `ha-mcp` servers.
    Add Integration**, search for **HA-MCP Custom Component**, and — on the menu
    that appears — choose **HA-MCP Server**. The setup form asks for an
    **Administrator access token**: the server acts with that account's
-   permissions, so it must be an administrator's long-lived access token. To
-   create one, open your profile (your name at the bottom of the sidebar), select the **Security** tab, and under **Long-lived access tokens** select **Create token**. It also asks how MCP clients may reach
+   permissions, so it must be an administrator's long-lived access token. We
+   recommend an account just for the server: under **Settings → People → Add
+   person**, turn on **Allow login**, **Local access only** and
+   **Administrator**, then log in as it, open its profile (its name at the
+   bottom of the sidebar), select the **Security** tab, and under **Long-lived
+   access tokens** select **Create token**. A local-only account's token works
+   only from your local network, where the server runs, so a leaked copy is
+   useless elsewhere, and Home Assistant records the server's changes under
+   that account instead of yours. It also asks how MCP clients may reach
    the server: **Remote access through Home Assistant**
    (disabled by default; choose Home Assistant sign-in, legacy OAuth or the
    secret URL to let clients connect through a webhook) and **Network access**
