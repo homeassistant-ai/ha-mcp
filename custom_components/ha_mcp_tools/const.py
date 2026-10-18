@@ -360,9 +360,10 @@ OPT_ENABLE_STARTUP_NOTIFICATION = "enable_startup_notification"
 # When False, the admin-only "HA-MCP" sidebar settings panel is not registered;
 # the server's options stay reachable on the entry's Configure screen.
 OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
-# One-shot: an administrator's long-lived access token to switch the server
-# to (#2427). Validated by the options flow, moved into entry.data on the next
-# setup (embedded_entry._ensure_secrets) and cleared; never shown back.
+# One-shot Configure field: an administrator's long-lived access token to
+# switch the server to (#2427). The options flow validates it and writes it
+# straight into entry.data (_adopt_token); it is never stored in options or
+# shown back.
 OPT_ADMIN_TOKEN_REPLACEMENT = "admin_token_replacement"
 # The callback URLs the none-mode auto-approve /authorize may redirect to
 # (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an

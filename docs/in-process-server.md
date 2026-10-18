@@ -367,7 +367,10 @@ Entries created before this change keep the **HA-MCP Server** account and token
 an older release created, for as long as both work. If the token is missing,
 revoked or expired, or its account is no longer an active administrator, the
 server does not start and the repair **HA-MCP needs an administrator access
-token** asks for a new one. You can also switch tokens at any time with
+token** asks for a new one. These checks run when the server starts. A token
+revoked while the server runs makes its requests fail until the next start, and
+an account that loses administrator rights keeps serving with the reduced
+rights until then. You can also switch tokens at any time with
 **Replace the administrator access token** in the entry's options. Switching
 revokes the token an older release created; its **HA-MCP Server** account stays
 until you remove the entry, or until you delete it yourself under **Settings →
@@ -419,7 +422,8 @@ pins an older version of one of the server's dependencies: Home Assistant
 installs that version for it, and only checks the server's own version
 afterwards. If the repair names such an integration, update or remove it first.
 Then open the repair and select **Submit**: Home Assistant restarts and
-reinstalls the server package and its dependencies before the server starts.
+reinstalls the server package before the server starts, along with any
+dependency whose version no longer satisfies it.
 A restart is needed because the broken package stays loaded in Home Assistant
 until then.
 

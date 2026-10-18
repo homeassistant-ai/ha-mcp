@@ -476,7 +476,7 @@ def describe_dependency_failure(
     sentences += [_pinner_sentence(pinner) for pinner in pinners]
     if not sentences:
         return "No dependency conflict was detected."
-    sentences.append(_action_sentence(violations, pinners, failed=root_exc is not None))
+    sentences.append(_action_sentence(pinners, failed=root_exc is not None))
     return " ".join(sentences)
 
 
@@ -668,7 +668,6 @@ def _pinner_sentence(pinner: PinningIntegration) -> str:
 
 
 def _action_sentence(
-    violations: list[DependencyViolation],
     pinners: list[PinningIntegration],
     *,
     failed: bool,
@@ -695,7 +694,7 @@ def _action_sentence(
             return f"{removal} Then reinstall the server from {repair}."
         return (
             f"{removal} If the server then fails to start, {repair} reinstalls "
-            "it with its dependencies."
+            "it and any dependency whose version no longer satisfies it."
         )
     if failed:
         return (
@@ -704,5 +703,6 @@ def _action_sentence(
             "the failing import."
         )
     return (
-        f"If the server fails to start, {repair} reinstalls it with its dependencies."
+        f"If the server fails to start, {repair} reinstalls it and any "
+        "dependency whose version no longer satisfies it."
     )

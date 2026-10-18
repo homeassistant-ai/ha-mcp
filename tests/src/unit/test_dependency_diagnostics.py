@@ -702,7 +702,7 @@ class TestDescribeDependencyFailure:
             _XIAOZHI_NAME,
             _XIAOZHI_DOMAIN,
             # Removing the integration restores nothing: the server's repair
-            # reinstalls it with its dependencies.
+            # reinstalls it and the downgraded dependency.
             "Repairs",
         ):
             assert expected in message
