@@ -1912,9 +1912,9 @@ class TestRegistrationAndAdminGate:
             # Phase 3 batch write capability (D5a); same as above — prep +
             # admin-gate coverage lives in test_component_ws_phase2_async.py.
             wsapi.WS_BULK_CALL_SERVICE,
-            # Template error location (#2522); prep + admin-gate coverage lives in
-            # test_component_template_diagnose.py (this set only guards drift).
+            # Template errors (#2522); coverage in test_component_template_diagnose.py.
             wsapi.WS_TEMPLATE_DIAGNOSE,
+            wsapi.WS_LOGBOOK_EVENTS,  # test_component_ws_logbook.py
             *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py
             wsapi.core_contract.COMMAND,
             "ha_mcp_tools/statistics_units",

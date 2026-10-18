@@ -7,6 +7,7 @@ import re
 from homeassistant.generated.config_flows import FLOWS
 
 from .. import card_definitions, core_contract, helper_collections
+from . import logbook as _logbook
 
 __all__ = [
     "ALL_SEARCH_TYPES",
@@ -49,6 +50,7 @@ __all__ = [
     "WS_EXPOSURE",
     "WS_HELPERS_LIST",
     "WS_INFO",
+    "WS_LOGBOOK_EVENTS",
     "WS_OVERVIEW",
     "WS_REFERENCE_DATA",
     "WS_REGISTRIES",
@@ -85,6 +87,7 @@ WS_DASHBOARDS = f"{WS_API_PREFIX}/dashboards"
 WS_DASHBOARD_EDIT = f"{WS_API_PREFIX}/dashboard_edit"
 WS_SERVICES_LIST = f"{WS_API_PREFIX}/services_list"
 WS_REFERENCE_DATA = f"{WS_API_PREFIX}/reference_data"
+WS_LOGBOOK_EVENTS = f"{WS_API_PREFIX}/logbook_events"
 WS_SERVER_ENTRY = f"{WS_API_PREFIX}/server_entry"
 WS_SERVER_ENTRY_UPDATE = f"{WS_API_PREFIX}/server_entry_update"
 WS_CALL_SERVICE = f"{WS_API_PREFIX}/call_service"
@@ -149,6 +152,10 @@ CAPABILITIES: list[str] = [
     "dashboards_docs",
     "services_list",
     "reference_data",
+    # Core's own logbook processor run in-process (REST flags: ISO ``when``,
+    # entity names) with the entity/device/context filter set; the server's
+    # ``ha_get_logs`` logbook source prefers it and falls back to REST/WS.
+    *_logbook.CAPABILITIES,
     # A flag, not a standalone command: gates the optional ``visibility`` param
     # the server may pass to ``ha_mcp_tools/search`` so an old component that
     # would ignore the param is never sent it (param-sniffing is banned for

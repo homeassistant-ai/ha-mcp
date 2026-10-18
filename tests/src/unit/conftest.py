@@ -51,6 +51,20 @@ sys.modules.setdefault(
     ),
 )
 
+# Core's logbook/recorder helpers are imported at module scope by the
+# component's ``ha_mcp_tools/logbook_events`` command. Home Assistant is not a
+# unit-test dependency, so the modules must exist before ANY test module
+# imports the component surface (same reason as the flow registry above).
+for _ha_logbook_stub in (
+    "homeassistant.components.logbook",
+    "homeassistant.components.logbook.helpers",
+    "homeassistant.components.logbook.processor",
+    "homeassistant.components.recorder",
+    "homeassistant.util",
+    "homeassistant.util.dt",
+):
+    sys.modules.setdefault(_ha_logbook_stub, MagicMock())
+
 _ISOLATION_VARS = ("HA_MCP_CONFIG_DIR", "HA_MCP_DISABLE_SETTINGS_UI")
 _SESSION_DATA_DIR = ""
 _PREVIOUS_ENV: dict[str, str | None] = {}

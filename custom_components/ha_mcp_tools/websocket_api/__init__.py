@@ -110,6 +110,13 @@ the info handshake carries no capability entry:
   entity_ids: [...]}``. The ``services`` shape is the REST ``/api/services`` list
   ``build_service_index`` reads (bodies are empty dicts — the index only reads
   keys); ``entity_ids`` is every ``hass.states.async_all()`` id. Pure, no prep.
+* ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
+  ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
+  ``include_entity_name=True``) and the ``logbook/get_events`` filter set
+  (``entity_ids`` / ``device_ids`` / ``context_id``), so names, context fields
+  and row shape come from Core itself. The recorder read runs in the async
+  prep; the server's ``ha_get_logs`` logbook source prefers this command and
+  keeps ``/api/logbook`` + ``logbook/get_events`` as its fallbacks.
 * ``ha_mcp_tools/search`` (``search_visibility`` capability) — the search command
   additionally accepts a raw ``visibility`` config dict; when present it excludes
   the server's opt-in hidden entities before counts/pagination (the pure
@@ -284,7 +291,8 @@ code lives in the submodules:
 * ``constants`` and ``schemas``: the wire contract, capability list and request schemas.
 * ``registry``, ``secrets``, ``assist`` and ``flow_domains``: shared registry, secret-scrub, Assist exposure and flow-helper domain helpers.
 * ``search``, ``search_config``, ``search_score`` and ``visibility``: ``ha_mcp_tools/search``.
-* ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries`` and ``dashboards``: the read commands.
+* ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries``,
+  ``dashboards`` and ``logbook``: the read commands.
 * ``system``: ``info``, ``system_snapshot``, ``backup_prep``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
 * ``call_service`` and ``bulk``: the write commands.
 
@@ -314,6 +322,7 @@ from .dashboards import (
     _do_dashboard_edit,
     _do_dashboards,
 )
+from .logbook import _do_logbook_events, _logbook_events_prep
 from .lookups import (
     _blueprint_get_prep,
     _do_blueprint_get,
@@ -341,6 +350,7 @@ from .schemas import (
     _exposure_schema,
     _helpers_list_schema,
     _info_schema,
+    _logbook_events_schema,
     _overview_schema,
     _reference_data_schema,
     _registries_schema,
@@ -443,6 +453,10 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_dashboard_edit_schema(), _do_dashboard_edit, _dashboard_edit_prep),
         (_services_list_schema(), _do_services_list, _services_list_prep),
         (_reference_data_schema(), _do_reference_data, None),
+        # Core's own logbook query (EventProcessor with the REST flags) run in
+        # the live process: the recorder read lives in the async prep, the
+        # pure formatter only wraps the rows.
+        (_logbook_events_schema(), _do_logbook_events, _logbook_events_prep),
         (_server_entry_schema(), _do_server_entry, None),
         # The WRITE counterpart of server_entry: the deferred ``async_update_entry``
         # scheduling is inherently async, so it lives in ``_server_entry_update_prep``
