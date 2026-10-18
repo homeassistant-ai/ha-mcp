@@ -7,6 +7,7 @@ state change history and long-term statistics via ha_get_history.
 
 import logging
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -355,6 +356,63 @@ class TestGetHistory:
                 for key, value in native_row.items()
                 if key not in {"s", "a", "lu", "lc"}
             }
+
+    async def test_get_history_summary_totals_agree_with_recorder_rows(
+        self, mcp_client: Client, ha_client: HomeAssistantClient
+    ) -> None:
+        """Summary changes and durations match the rows Core records for the window."""
+        target = "input_number.e2e_pagination_seed"
+        missing = "input_number.e2e_summary_never_recorded"
+        end = datetime.now(UTC) - timedelta(minutes=1)
+
+        async def native_rows(start: datetime) -> list[dict[str, Any]]:
+            native = await ha_client.send_websocket_message(
+                {
+                    "type": "history/history_during_period",
+                    "entity_ids": [target],
+                    "start_time": start.isoformat(),
+                    "end_time": end.isoformat(),
+                    "minimal_response": True,
+                    "significant_changes_only": True,
+                    "no_attributes": True,
+                }
+            )
+            assert native["success"], native
+            return native["result"][target]
+
+        seeded = await native_rows(end - timedelta(days=1))
+        assert len(seeded) >= 10, "The recorder seed must provide history rows"
+        # Start between two seeded rows, so Core adds its window-start snapshot.
+        start = datetime.fromtimestamp((seeded[1]["lu"] + seeded[2]["lu"]) / 2, UTC)
+        rows = await native_rows(start)
+        assert rows[0]["lu"] == start.timestamp(), rows[0]
+        result = assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_get_history",
+                {
+                    "entity_ids": f"{target},{missing}",
+                    "start_time": start.isoformat(),
+                    "end_time": end.isoformat(),
+                    "summary": True,
+                    "limit": 1000,
+                },
+            )
+        )
+        totals = result["data"]["entities"][0]["summary"]
+        changes = [row for previous, row in pairwise(rows) if row["s"] != previous["s"]]
+        assert totals["changes"] == len(changes)
+        assert totals["distinct_states"] == len({row["s"] for row in rows})
+        last_change = datetime.fromisoformat(totals["last_change"])
+        assert last_change.timestamp() == pytest.approx(changes[-1]["lu"], abs=1e-6)
+        assert sum(
+            state["duration_s"] for state in totals["states"].values()
+        ) == pytest.approx((end - start).total_seconds(), abs=0.01)
+        assert result["data"]["entities"][1]["summary"]["distinct_states"] == 0
+        # Only the unrecorded entity is flagged; the seed has a window-start state.
+        assert len(result["warnings"]) == 1, result["warnings"]
+        assert "No recorded states" in result["warnings"][0]
+        assert missing in result["warnings"][0]
+        assert target not in result["warnings"][0]
 
 
 @pytest.mark.asyncio

@@ -32,7 +32,11 @@ from .helpers import (
     register_tool_methods,
     safe_progress,
 )
-from .history_response import format_history_response
+from .history_response import (
+    format_history_response,
+    summarize_states,
+    summary_warnings,
+)
 from .recorder_errors import raise_recorder_ws_failure as _raise_recorder_ws_failure
 from .response_helpers import (
     add_timezone_metadata,
@@ -40,6 +44,10 @@ from .response_helpers import (
     fetch_ha_timezone,
     project_fields,
     resolve_local_timezone,
+)
+from .statistics_calendar import (
+    _CALENDAR_STATISTICS_PERIODS,
+    _statistics_scan_window,
 )
 from .statistics_helpers import (
     _parse_statistic_types,
@@ -124,7 +132,6 @@ _MAX_HISTORY_ENTITY_HOURS = 240.0
 _MAX_STATISTICS_ENTITIES = 25
 _MAX_SHORT_TERM_STATISTICS_ROWS = 10_000
 _MAX_LONG_TERM_STATISTICS_ROWS = 20_000
-_CALENDAR_STATISTICS_PERIODS = frozenset({"day", "week", "month", "year"})
 _VALID_STATISTICS_PERIODS = frozenset(
     {"5minute", "hour", *_CALENDAR_STATISTICS_PERIODS}
 )
@@ -254,7 +261,8 @@ class HistoryTools:
             int | None,
             Field(
                 description='Max entries per entity. Default: 100. For source="history": state '
-                'changes. For source="statistics": aggregated rows. With multiple '
+                "rows; with summary=True, the states listed in summary.states, longest "
+                'first. For source="statistics": aggregated rows. With multiple '
                 "entity_ids, total rows returned can reach limit × len(entity_ids).",
                 default=None,
                 ge=1,
@@ -296,6 +304,23 @@ class HistoryTools:
                 ),
             ),
         ] = "desc",
+        summary: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Return per-entity totals instead of state rows: changes "
+                    "(switches to a different state; the state at the window start is "
+                    "not one, but without that state, e.g. with core_options "
+                    "{'include_start_time_state': false} or purged history, the first "
+                    "recorded state counts as one), first_change and last_change (null "
+                    "without changes), and per state its periods (separate spells) and "
+                    "duration_s (seconds, up to end_time or now, whichever is "
+                    "earlier). distinct_states counts every state, listed or not. "
+                    'Ignored when source="statistics".'
+                ),
+            ),
+        ] = False,
         fields: Annotated[
             str | list[str] | None,
             JSON_STRING_COERCION,
@@ -333,8 +358,10 @@ class HistoryTools:
 
         WHEN TO USE:
         Use source="history" (default) to troubleshoot why a value changed, check
-        event sequences, or analyze recent patterns. Use source="statistics" for
-        long-term trends and period averages.
+        event sequences, or analyze recent patterns. Use summary=True when the
+        question needs a count or a duration ("was it ever unavailable?") rather
+        than the rows. Use source="statistics" for long-term trends and period
+        averages.
 
         CAVEATS:
         History rows rename Core's compact keys once: s -> state, a -> attributes,
@@ -354,6 +381,7 @@ class HistoryTools:
         All data is fetched from HA before slicing; limit/offset are client-side.
         With multiple entity_ids, offset must be 0 — use a single entity_id for
         offset > 0. Use has_more and next_offset from the response to paginate.
+        With source="history", summary=True does not combine with offset > 0.
         Administrators can optionally enable recorder workload guardrails in
         Advanced settings. When enabled, oversized entity/time workloads are
         rejected before the recorder query is issued; narrow the time range or
@@ -364,6 +392,7 @@ class HistoryTools:
         EXAMPLES:
         - ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
         - Paginate oldest-first: ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100, order="asc")
+        - Time per state: ha_get_history(entity_ids="binary_sensor.door", start_time="7d", summary=True)
         - ha_get_history(source="statistics", entity_ids="sensor.living_room_temperature", start_time="6m", period="month", statistic_types=["mean", "min", "max"])
         """
         parsed_fields: list[str] | None = None
@@ -375,30 +404,18 @@ class HistoryTools:
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         try:
-            # Parse entity_ids
             entity_id_list = _parse_entity_ids(entity_ids)
+            _validate_offset(
+                offset,
+                entity_count=len(entity_id_list),
+                summary=summary and source == "history",
+            )
 
-            # Offset > 0 is only supported for single-entity requests.
-            # build_pagination_metadata applies per entity — limit=100 across
-            # 5 entities returns up to 500 rows with no top-level has_more signal.
-            _effective_offset = offset if offset is not None else 0
-            if _effective_offset > 0 and len(entity_id_list) > 1:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "offset > 0 requires a single entity_id",
-                        context={"offset": offset, "entity_count": len(entity_id_list)},
-                        suggestions=[
-                            "Use a single entity_id when offset > 0, or use offset=0 for multi-entity requests."
-                        ],
-                    )
-                )
-
-            # Source-dependent default hours
             default_hours = _DEFAULT_START_HOURS_BY_SOURCE[source]
-
-            # Parse time parameters
-            start_dt, end_dt = _parse_time_range(start_time, end_time, default_hours)
+            now = datetime.now(UTC)
+            start_dt, end_dt = _parse_time_range(
+                start_time, end_time, default_hours, now
+            )
             query_settings = get_global_settings()
             statistics_timezone = await _prepare_guardrail_query(
                 self._client,
@@ -469,6 +486,7 @@ class HistoryTools:
                     _MAX_HISTORY_LIMIT,
                     order=order,
                     core_options=core_options,
+                    summary_until=min(end_dt, now) if summary else None,
                 )
             if include_schema:
                 command = (
@@ -567,6 +585,37 @@ def _parse_entity_ids(entity_ids: str | list[str]) -> list[str]:
         )
 
     return entity_ids
+
+
+def _validate_offset(offset: int | None, *, entity_count: int, summary: bool) -> None:
+    """Reject offsets the response could not honour."""
+    if not offset:
+        return
+    # Summary first: dropping to one entity_id alone would still be rejected.
+    if summary:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "summary=True covers the whole window and does not take an offset",
+                context={"offset": offset},
+                suggestions=[
+                    "Omit offset, or set summary=False to page through state rows."
+                ],
+            )
+        )
+    # build_pagination_metadata applies per entity — limit=100 across
+    # 5 entities returns up to 500 rows with no top-level has_more signal.
+    if entity_count > 1:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "offset > 0 requires a single entity_id",
+                context={"offset": offset, "entity_count": entity_count},
+                suggestions=[
+                    "Use a single entity_id when offset > 0, or use offset=0 for multi-entity requests."
+                ],
+            )
+        )
 
 
 def _parse_time_range(
@@ -816,77 +865,6 @@ def _statistics_workload_violation(
     return context, suggestions
 
 
-def _statistics_scan_window(
-    start_dt: datetime,
-    end_dt: datetime,
-    period: str,
-    local_timezone: tzinfo,
-) -> tuple[datetime, datetime]:
-    """Estimate Core's scan expansion for HA-MCP workload limits (not API validation)."""
-    if period not in _CALENDAR_STATISTICS_PERIODS:
-        return start_dt, end_dt
-
-    local_start = start_dt.astimezone(local_timezone)
-    local_end = end_dt.astimezone(local_timezone)
-
-    if period == "day":
-        scan_start = local_start.replace(hour=0, minute=0, second=0, microsecond=0)
-        scan_end = local_end.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ) + timedelta(days=1)
-    elif period == "week":
-        scan_start = local_start.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ) - timedelta(days=local_start.weekday())
-        scan_end = (
-            local_end.replace(hour=0, minute=0, second=0, microsecond=0)
-            - timedelta(days=local_end.weekday())
-            + timedelta(days=7)
-        )
-    elif period == "month":
-        scan_start = local_start.replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
-        scan_end = _next_month_start(local_end)
-    else:
-        scan_start = local_start.replace(
-            month=1, day=1, hour=0, minute=0, second=0, microsecond=0
-        )
-        scan_end = local_end.replace(
-            year=local_end.year + 1,
-            month=1,
-            day=1,
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-
-    return scan_start.astimezone(UTC), scan_end.astimezone(UTC)
-
-
-def _next_month_start(value: datetime) -> datetime:
-    """Return local midnight on the first day of the following month."""
-    if value.month == 12:
-        return value.replace(
-            year=value.year + 1,
-            month=1,
-            day=1,
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-    return value.replace(
-        month=value.month + 1,
-        day=1,
-        hour=0,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-
-
 async def _fetch_history(
     client: Any,
     entity_id_list: list[str],
@@ -900,11 +878,14 @@ async def _fetch_history(
     max_limit: int,
     order: str = "desc",
     core_options: dict[str, Any] | None = None,
+    summary_until: datetime | None = None,
 ) -> dict[str, Any]:
     """Execute the history/history_during_period WebSocket call.
 
     *order* controls state-list ordering: ``"desc"`` (default) returns the
-    newest states first; ``"asc"`` returns the oldest first.
+    newest states first; ``"asc"`` returns the oldest first. With
+    *summary_until*, each entity carries ``summarize_states`` totals up to that
+    time instead of its rows.
 
     Returns the unwrapped history dict; the caller is responsible for projection
     and wrapping with ``add_timezone_metadata``.
@@ -940,10 +921,30 @@ async def _fetch_history(
         )
 
     result_data = response.get("result", {})
+    if summary_until is not None:
+        # ha_get_history passes min(end_time, the clock it read before this
+        # query). Core answers a future end_time up to its own clock, which can
+        # run past that reading. Like Core's end_time, summary_until is exclusive.
+        until_ts = summary_until.timestamp()
+        result_data = {
+            entity_id: [row for row in rows if row["lu"] < until_ts]
+            for entity_id, rows in result_data.items()
+        }
     entities_history = []
+    summaries: dict[str, dict[str, Any]] = {}
+    start_ts = start_dt.timestamp()
+    period = {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
 
     for entity_id in entity_id_list:
         entity_states = result_data.get(entity_id, [])
+        if summary_until is not None:
+            summary = summaries[entity_id] = summarize_states(
+                entity_states, start_ts, summary_until.timestamp(), effective_limit
+            )
+            entities_history.append(
+                {"entity_id": entity_id, "period": period, "summary": summary}
+            )
+            continue
         if order == "desc":
             entity_states = list(reversed(entity_states))
         paged_states = entity_states[
@@ -959,10 +960,7 @@ async def _fetch_history(
         entities_history.append(
             {
                 "entity_id": entity_id,
-                "period": {
-                    "start": start_dt.isoformat(),
-                    "end": end_dt.isoformat(),
-                },
+                "period": period,
                 "states": paged_states,
                 **pagination,
             }
@@ -972,18 +970,18 @@ async def _fetch_history(
         "success": True,
         "source": "history",
         "entities": entities_history,
-        "period": {
-            "start": start_dt.isoformat(),
-            "end": end_dt.isoformat(),
-        },
+        "period": period,
         "query_params": {
             "minimal_response": minimal_response,
             "significant_changes_only": significant_changes_only,
             "limit": effective_limit,
             "offset": effective_offset,
             "order": order,
+            "summary": summary_until is not None,
         },
     }
+    if summary_until is not None:  # ha_get_history drops an empty list
+        history_data["warnings"] = summary_warnings(result_data, summaries, start_ts)
 
     return history_data
 
