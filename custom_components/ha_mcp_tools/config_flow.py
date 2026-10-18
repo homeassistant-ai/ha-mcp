@@ -694,7 +694,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         ):
             cleaned[key] = str(cleaned.get(key, "") or "").strip()
         # The token never reaches the options; see _adopt_token.
-        cleaned[OPT_ADMIN_TOKEN_REPLACEMENT] = ""
+        cleaned.pop(OPT_ADMIN_TOKEN_REPLACEMENT, None)
         cleaned[OPT_EXTERNAL_URL] = cleaned[OPT_EXTERNAL_URL].rstrip("/")
         # server_url gets no _normalize-forced empty like the fields above; strip
         # it and drop it entirely when blank so a whitespace-only value can't be

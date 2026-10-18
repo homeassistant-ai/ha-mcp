@@ -312,7 +312,7 @@ class TestAdminTokenReplacement:
         result = asyncio.run(
             flow.async_step_init({const.OPT_ADMIN_TOKEN_REPLACEMENT: " good "})
         )
-        assert result["data"][const.OPT_ADMIN_TOKEN_REPLACEMENT] == ""
+        assert const.OPT_ADMIN_TOKEN_REPLACEMENT not in result["data"]
         update = flow.hass.config_entries.async_update_entry.call_args
         assert update.kwargs["data"] == {"webhook_id": "w", "admin_token": "good"}
 
@@ -340,7 +340,7 @@ class TestAdminTokenReplacement:
     def test_leaving_it_empty_keeps_the_current_token(self):
         flow = _make_options_flow()
         result = asyncio.run(flow.async_step_init({}))
-        assert result["data"][const.OPT_ADMIN_TOKEN_REPLACEMENT] == ""
+        assert const.OPT_ADMIN_TOKEN_REPLACEMENT not in result["data"]
 
 
 class TestOptionsFlowDispatch:

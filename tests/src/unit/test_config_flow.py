@@ -691,7 +691,6 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE: "",
             const.OPT_OAUTH_CLIENT_ID: "",
             const.OPT_OAUTH_CLIENT_SECRET: "",
-            const.OPT_ADMIN_TOKEN_REPLACEMENT: "",
             const.OPT_OAUTH_REDIRECT_ALLOWLIST: [],
         }
 
