@@ -47,6 +47,24 @@ LOGBOOK_EVENTS_COMMAND = "ha_mcp_tools/logbook_events"
 LOGBOOK_EVENTS_CAPABILITY = "logbook_events"
 
 
+def _wrapped_timeout(exc: BaseException) -> bool:
+    """True when ``exc`` is (or wraps) a WebSocket command timeout.
+
+    ``HomeAssistantClient.send_websocket_message`` funnels every no-answer
+    outcome — including ``HomeAssistantCommandTimeout`` — into
+    ``HomeAssistantConnectionError`` and re-raises the timeout as its cause
+    (``_NO_ANSWER_ERRORS`` in ``rest_client``), so a timeout must be detected
+    through the chain. The direct ``except HomeAssistantCommandTimeout``
+    branches stay for callers/mocks that raise it untranslated.
+    """
+    cur: BaseException | None = exc
+    while cur is not None:
+        if isinstance(cur, HomeAssistantCommandTimeout):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
 class LogbookLogSourceMixin:
     """``ha_get_logs(source='logbook')`` — component, REST and WS transports."""
 
@@ -258,7 +276,9 @@ class LogbookLogSourceMixin:
             response = await self._client.send_websocket_message(message)
         except HomeAssistantCommandTimeout:
             self._raise_logbook_timeout(command["start_time"], command["end_time"])
-        except HomeAssistantConnectionError:
+        except HomeAssistantConnectionError as exc:
+            if _wrapped_timeout(exc):
+                self._raise_logbook_timeout(command["start_time"], command["end_time"])
             return None
         except HomeAssistantCommandError as exc:
             if not is_unknown_command(exc):
@@ -287,7 +307,9 @@ class LogbookLogSourceMixin:
             response = await self._client.send_websocket_message(command)
         except HomeAssistantCommandTimeout:
             self._raise_logbook_timeout(command["start_time"], command["end_time"])
-        except HomeAssistantConnectionError:
+        except HomeAssistantConnectionError as exc:
+            if _wrapped_timeout(exc):
+                self._raise_logbook_timeout(command["start_time"], command["end_time"])
             self._raise_logbook_ws_required(command.get("device_ids"))
         except HomeAssistantCommandError as exc:
             if not is_unknown_command(exc):

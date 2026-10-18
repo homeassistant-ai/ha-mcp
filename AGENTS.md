@@ -114,7 +114,7 @@ Leave touched code better than you found it. Fix-in-place is the default, but th
 
 | Finding | Action |
 |---|---|
-| Small and clearly related—including missing or weak tests in the touched area and straightforward test-quality fixes | Fix in this pull request, preferably as a distinct commit. |
+| Small and clearly related—including missing or weak tests in the touched area and straightforward test-quality fixes | Fix in this pull request, preferably as one commit. |
 | Mid-sized or meaningfully expands the diff | Pause before pushing and ask whether to bundle it. |
 | Large, unrelated, or a different subsystem | Explain the scope change and ask; do not silently defer or expand. |
 
@@ -149,7 +149,7 @@ The minimal setup is `uv sync --group dev`; run stdio with `uv run ha-mcp` and H
 
 Lazy-discover tools from `tools_*.py`; put shared logic in service modules, verify writes and wait for completion. Before structural changes, read the [architecture map](docs/agents/development.md#architecture) and [style guide](.gemini/styleguide.md).
 
-For read/write tools, follow [native contracts](docs/agents/native-core-contracts.md) (Core, Supervisor, hassio); unmigrated tools get no piecemeal fixes — migrate the path instead. Preserve safety gates and label unavailable validation.
+For read/write tools, follow [native contracts](docs/agents/native-core-contracts.md) (Core, frontend, Supervisor, hassio); unmigrated tools get no piecemeal fixes; migrate the path instead. Preserve safety gates and label unavailable validation.
 
 ## Code Conventions
 

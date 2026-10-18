@@ -83,6 +83,25 @@ def _call_kwargs(**overrides):
     return base
 
 
+def _real_timeout_shape() -> HomeAssistantConnectionError:
+    """The shape the real client raises: a timeout wrapped as a no-answer error.
+
+    ``send_websocket_message`` funnels ``HomeAssistantCommandTimeout`` into
+    ``_NO_ANSWER_ERRORS`` and re-raises it as a ``HomeAssistantConnectionError``
+    with the timeout as the cause (``rest_client``), so tests must exercise
+    that chain rather than raising the timeout directly.
+    """
+    try:
+        raise HomeAssistantCommandTimeout("logbook query timed out")
+    except HomeAssistantCommandTimeout as timeout:
+        try:
+            raise HomeAssistantConnectionError(
+                "WebSocket transport failed"
+            ) from timeout
+        except HomeAssistantConnectionError as wrapped:
+            return wrapped
+
+
 class TestLogbookOrder:
     """source='logbook' — offset pagination over a reversible window."""
 
@@ -352,12 +371,37 @@ class TestLogbookTransports:
     async def test_timeout_surfaces_without_a_rest_fallback(
         self, component_caps
     ) -> None:
+        client = self._client(ws_error=_real_timeout_shape())
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook"))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "TIMEOUT_OPERATION"
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_direct_timeout_surfaces_without_a_rest_fallback(
+        self, component_caps
+    ) -> None:
+        # Defensive branch: a caller/mock raising the timeout untranslated.
         client = self._client(
             ws_error=HomeAssistantCommandTimeout("logbook query timed out")
         )
         tools = LogTools(client)
         with pytest.raises(ToolError) as exc_info:
             await tools.get_logs(**_call_kwargs(source="logbook"))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "TIMEOUT_OPERATION"
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_wrapped_timeout_on_the_device_path_surfaces(self) -> None:
+        # No component: a device_id request uses the WebSocket read, and a
+        # timed-out recorder query must not be reported as "no WebSocket".
+        client = self._client(ws_error=_real_timeout_shape())
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook", device_id="dev1"))
         payload = json.loads(str(exc_info.value))
         assert payload["error"]["code"] == "TIMEOUT_OPERATION"
         client.get_logbook.assert_not_awaited()

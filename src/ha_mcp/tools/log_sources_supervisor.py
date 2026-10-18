@@ -180,8 +180,10 @@ class SupervisorLogSourcesMixin:
         """Raise a structured error for a Supervisor per-service-logs failure.
 
         Branches on HTTP status: 403 (role/permission, addon vs. non-addon
-        remediation differs), 404 (service not exposed on this HA OS
-        version), else falls through to a generic Supervisor-error message.
+        remediation differs), 404 (service not exposed on this HA OS version;
+        the non-addon branch keeps a failed supervision probe distinct from a
+        confirmed unsupervised install), else falls through to a generic
+        Supervisor-error message.
         """
         status = getattr(e, "status_code", None)
         if status == 403:
@@ -209,20 +211,42 @@ class SupervisorLogSourcesMixin:
                 suggestions=suggestions,
             )
         if status == 404:
-            if await self._client._is_supervised_install():
+            allowed = f"Allowed services: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))}"
+            if is_running_in_addon():
+                # The request went straight to Supervisor, so a 404 is
+                # Supervisor's own answer: the service is not exposed.
                 suggestions = [
                     f"Service '{service}' not found at "
                     f"http://supervisor/{service}/logs — Supervisor may "
                     "not expose it on this HA OS version",
-                    f"Allowed services: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))}",
+                    allowed,
                 ]
             else:
-                suggestions = [
-                    "These log sources need a Supervisor-managed install "
-                    "(Home Assistant OS or Supervised); this instance is not "
-                    "managed by Supervisor",
-                    f"Allowed services: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))}",
-                ]
+                await self._client._is_supervised_install()
+                if self._client._supervised_detected is True:
+                    suggestions = [
+                        f"Service '{service}' not found at "
+                        f"http://supervisor/{service}/logs — Supervisor may "
+                        "not expose it on this HA OS version",
+                        allowed,
+                    ]
+                elif self._client._supervised_detected is False:
+                    suggestions = [
+                        "These log sources need a Supervisor-managed install "
+                        "(Home Assistant OS or Supervised); this instance is "
+                        "not managed by Supervisor",
+                        allowed,
+                    ]
+                else:
+                    # The probe could not confirm either way (transport
+                    # failure leaves the flag None); do not assert the
+                    # instance is unmanaged.
+                    suggestions = [
+                        "Supervisor management could not be confirmed (the "
+                        "probe failed): the instance may be unsupervised or "
+                        "this HA OS version may not expose the service",
+                        allowed,
+                    ]
             exception_to_structured_error(
                 e,
                 context={"source": "system_service", "slug": service},
