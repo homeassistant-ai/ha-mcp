@@ -304,7 +304,7 @@ class TestLogbookTransports:
     @pytest.mark.asyncio
     async def test_component_rows_pass_through_untouched(self, component_caps) -> None:
         rows = self._component_rows()
-        client = self._client(ws_payload={"success": True, "result": {"events": rows}})
+        client = self._client(ws_payload={"success": True, "result": rows})
         tools = LogTools(client)
         result = await tools.get_logs(**_call_kwargs(source="logbook"))
 
@@ -318,7 +318,7 @@ class TestLogbookTransports:
 
     @pytest.mark.asyncio
     async def test_component_receives_the_native_filters(self, component_caps) -> None:
-        client = self._client(ws_payload={"success": True, "result": {"events": []}})
+        client = self._client(ws_payload={"success": True, "result": []})
         tools = LogTools(client)
         await tools.get_logs(
             **_call_kwargs(

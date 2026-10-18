@@ -288,9 +288,10 @@ class LogbookLogSourceMixin:
             return None
 
         if isinstance(response, dict) and response.get("success"):
+            # The command's result is Core's own row list (its result message
+            # wraps ``EventProcessor.get_events()`` output directly).
             result = response.get("result")
-            events = result.get("events") if isinstance(result, dict) else None
-            return events if isinstance(events, list) else None
+            return result if isinstance(result, list) else None
 
         self._raise_logbook_rejection(response, LOGBOOK_EVENTS_COMMAND)
         if (
