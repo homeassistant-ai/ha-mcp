@@ -504,14 +504,17 @@ class TestLogbookTransports:
     async def test_omitted_and_explicit_end_time_cover_the_same_window(self) -> None:
         fixed_now = datetime(2026, 6, 16, 12, 0, tzinfo=UTC)
         client = self._client()
+        client.get_logbook = AsyncMock(return_value=self._component_rows())
         tools = LogTools(client)
 
         with patch("ha_mcp.tools.log_sources_logbook.datetime") as datetime_mock:
             datetime_mock.now.return_value = fixed_now
             datetime_mock.fromisoformat.side_effect = datetime.fromisoformat
-            await tools.get_logs(**_call_kwargs(source="logbook", hours_back=48))
+            omitted_result = await tools.get_logs(
+                **_call_kwargs(source="logbook", hours_back=48)
+            )
             omitted = client.get_logbook.await_args.kwargs
-            await tools.get_logs(
+            explicit_result = await tools.get_logs(
                 **_call_kwargs(
                     source="logbook",
                     hours_back=48,
@@ -520,7 +523,11 @@ class TestLogbookTransports:
             )
             explicit = client.get_logbook.await_args.kwargs
 
+        # Same forwarded bounds AND same returned window (#2767).
         assert omitted == explicit
+        assert omitted_result["data"]["entries"] == explicit_result["data"]["entries"]
+        assert omitted_result["data"]["total_entries"] == 2
+        assert explicit_result["data"]["total_entries"] == 2
 
     @pytest.mark.asyncio
     async def test_pagination_hint_keeps_pages_in_the_same_window(self) -> None:

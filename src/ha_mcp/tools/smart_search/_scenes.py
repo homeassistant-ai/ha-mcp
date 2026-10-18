@@ -4,9 +4,9 @@ import asyncio
 import logging
 from typing import Any
 
-from ...client.models import SceneResolution
 from ...client.rest_client import (
     HomeAssistantAPIError,
+    SceneResolution,
     SceneStorageConfigNotFoundError,
 )
 from ._config import (

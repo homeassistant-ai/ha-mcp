@@ -9,6 +9,7 @@ import os
 import ssl
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, NoReturn
 
 import httpx
@@ -17,7 +18,7 @@ from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
 from .admin_routes import is_admin_only_route
-from .models import ErrorLogPage, SceneResolution
+from .models import ErrorLogPage
 from .supervisor_client import make_supervisor_httpx_client
 
 
@@ -145,6 +146,26 @@ class HomeAssistantAPIError(HomeAssistantError):
         super().__init__(message)
         self.status_code = status_code
         self.response_data = response_data
+
+
+@dataclass(frozen=True)
+class SceneResolution:
+    """Outcome of resolving a scene identifier via the entity registry.
+
+    ``registry_hit`` records whether ``config/entity_registry/get`` returned a
+    usable ``unique_id`` - i.e. the entity actually EXISTS. It is the signal that
+    separates a genuinely-missing scene from one that exists but is not editable
+    through HA's scene config API (a Hue/vendor scene, or a raw-YAML scene): both
+    resolve fine yet 404 on ``config/scene/config/{id}``, because that endpoint is
+    backed only by the managed ``scenes.yaml`` (issue #1971). ``platform`` carries
+    the registry entry's integration domain (``"hue"``, ``"homeassistant"``, …)
+    for error-message enrichment only - it never drives the classification, since
+    a raw-YAML scene is ``platform="homeassistant"`` yet still 404s.
+    """
+
+    storage_key: str
+    registry_hit: bool
+    platform: str | None
 
 
 class SceneStorageConfigNotFoundError(HomeAssistantAPIError):
@@ -1301,9 +1322,7 @@ class HomeAssistantClient:
 
         relative_path = f"/{path}/logs"
         headers = {"Accept": "text/plain"}
-        # ``no_colors`` is a presence-triggered query flag in Supervisor
-        # (``if "no_colors" in request.query``): journald output carries ANSI
-        # escapes otherwise.
+        # Presence-triggered flag: journald output carries ANSI escapes otherwise.
         params: dict[str, Any] = {"no_colors": "true"}
         if lines is not None:
             params["lines"] = lines
