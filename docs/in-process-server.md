@@ -315,11 +315,13 @@ The in-process server offers three authentication postures, chosen with the
   nothing, but it sends the sign-in back only to a callback URL on the
   **Allowed OAuth callback URLs** list. The list starts with the published
   callbacks of claude.ai (and its announced claude.com address), Claude Code,
-  ChatGPT (`connector_platform_oauth_redirect`), Gemini Enterprise and Microsoft
-  Copilot Studio. For any other OAuth client, including ChatGPT apps that show a
-  per-app `chatgpt.com/connector/oauth/...` callback, add the callback URL its
-  sign-in uses, exactly as sent. An `http://` loopback callback (`127.0.0.1`, `[::1]` or `localhost`) also
-  matches on any port, because desktop clients pick a free port per sign-in. A
+  ChatGPT (`connector_platform_oauth_redirect`) and Gemini Enterprise. For any
+  other OAuth client, add the callback URL its sign-in uses, exactly as sent.
+  That includes ChatGPT apps that show a per-app `chatgpt.com/connector/oauth/...`
+  callback and Microsoft Copilot Studio, whose connectors each have their own
+  `global.consent.azure-apim.net/redirect/...` callback. An `http://` loopback
+  callback (`127.0.0.1`, `[::1]` or `localhost`) also matches on any port,
+  because desktop clients pick a free port per sign-in. A
   sign-in to an unlisted callback stops on a page that names the URL and where
   to add it; registering a client cannot add to the list. Clients that connect
   without an OAuth sign-in step need no entry. Before this list existed, any

@@ -150,6 +150,14 @@ async def test_a_body_that_both_resets_and_sets_is_refused(
     assert component == []
 
 
+async def _probe_fails_when_strict(client: Any, *, strict: bool = False) -> None:
+    # Like get_component_caps: a strict probe raises, a best-effort one returns None.
+    from ha_mcp.tools import component_api
+
+    if strict:
+        raise component_api.ComponentDiscoveryError("probe failed")
+
+
 async def test_a_failed_probe_is_a_reachability_error_on_save(
     embedded: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -157,11 +165,7 @@ async def test_a_failed_probe_is_a_reachability_error_on_save(
     # not "update the component", which is what a cached None would mean.
     from ha_mcp.tools import component_api
 
-    monkeypatch.setattr(
-        component_api,
-        "get_component_caps",
-        AsyncMock(side_effect=component_api.ComponentDiscoveryError("probe failed")),
-    )
+    monkeypatch.setattr(component_api, "get_component_caps", _probe_fails_when_strict)
     status, body = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
     assert status == 502
     assert "Could not reach" in body["error"]["message"]
@@ -173,11 +177,7 @@ async def test_a_failed_probe_is_a_reachability_error_on_read(
     # Same probe on the read: an up-to-date component must not be told to update.
     from ha_mcp.tools import component_api
 
-    monkeypatch.setattr(
-        component_api,
-        "get_component_caps",
-        AsyncMock(side_effect=component_api.ComponentDiscoveryError("probe failed")),
-    )
+    monkeypatch.setattr(component_api, "get_component_caps", _probe_fails_when_strict)
     status, body = await _call("get_oauth_callbacks", None)
     assert status == 200
     assert body["available"] is False
