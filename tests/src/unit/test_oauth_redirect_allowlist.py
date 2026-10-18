@@ -134,7 +134,20 @@ class TestEffectiveAllowlist:
         # Falling back to the default would widen a security setting silently.
         with caplog.at_level(logging.WARNING):
             assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: CLAUDE}) == []
-        assert "malformed OAuth callback allowlist" in caplog.text
+        assert "malformed OAuth callback allowlist (str)" in caplog.text
+
+    def test_a_malformed_list_is_logged_once_without_its_contents(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # /authorize reads the list on every anonymous request.
+        saved = {OPT_OAUTH_REDIRECT_ALLOWLIST: [CLAUDE, "http://localhost/cb#frag"]}
+        with caplog.at_level(logging.WARNING):
+            for _ in range(5):
+                assert effective_allowlist(saved) == []
+        lines = [r for r in caplog.records if "malformed" in r.getMessage()]
+        assert len(lines) == 1
+        assert "2 entries" in lines[0].getMessage()
+        assert CLAUDE not in caplog.text
 
     def test_a_list_with_an_unusable_entry_refuses_every_callback(self) -> None:
         # The writers never store this; a port-varied loopback request would
@@ -197,6 +210,9 @@ class TestNormalizeAllowlist:
 def _fresh_refusal_log(monkeypatch: pytest.MonkeyPatch) -> None:
     """Each test starts outside the refusal log's rate-limit interval."""
     from custom_components.ha_mcp_tools import oauth_autoapprove
+    from custom_components.ha_mcp_tools import oauth_redirect_allowlist as allow
+
+    monkeypatch.setattr(allow, "_warned_malformed", {"value": None})
 
     monkeypatch.setattr(
         oauth_autoapprove, "_refusal_log", {"last": float("-inf"), "suppressed": 0}

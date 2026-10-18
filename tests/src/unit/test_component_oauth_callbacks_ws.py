@@ -78,6 +78,14 @@ def test_an_unedited_entry_reports_the_default_list() -> None:
     assert result["customized"] is False
 
 
+def test_a_malformed_stored_value_still_offers_the_reset() -> None:
+    # A non-list refuses every callback; the panel's Restore default must show.
+    hass, _ = _hass({OPT_OAUTH_REDIRECT_ALLOWLIST: "https://x.example/cb"})
+    result = oauth_callbacks._do_oauth_callbacks(hass, {})
+    assert result["allowlist"] == []
+    assert result["customized"] is True
+
+
 def test_the_list_is_reported_as_inactive_outside_none_mode() -> None:
     hass, _ = _hass({"webhook_auth": "ha_auth"})
     assert oauth_callbacks._do_oauth_callbacks(hass, {})["applies"] is False

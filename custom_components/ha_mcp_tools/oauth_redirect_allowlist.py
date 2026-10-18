@@ -26,6 +26,9 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+# The malformed stored value last warned about; /authorize is anonymous, so a
+# malformed list is reported once, not once per request.
+_warned_malformed: dict[str, Any] = {"value": None}
 
 # RFC 8252 §7.3: native/CLI OAuth clients (e.g. GitHub Copilot CLI) receive the
 # authorization code on a loopback redirect, for which the spec explicitly
@@ -113,7 +116,15 @@ def effective_allowlist(options: Mapping[str, Any]) -> list[str]:
         # safer than honouring the rest (a stored "#fragment" loopback entry
         # would otherwise match a port-varied request) or widening to the
         # default.
-        _LOGGER.warning("Ignoring a malformed OAuth callback allowlist: %r", saved)
+        if saved != _warned_malformed["value"]:
+            _warned_malformed["value"] = saved
+            _LOGGER.warning(
+                "Ignoring a malformed OAuth callback allowlist (%s); every "
+                "callback is refused until the list is saved or reset",
+                f"{len(saved)} entries"
+                if isinstance(saved, list)
+                else type(saved).__name__,
+            )
         return []
     return list(saved)
 

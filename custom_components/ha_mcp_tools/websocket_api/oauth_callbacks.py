@@ -64,7 +64,8 @@ def _describe(entry: Any, options: Mapping[str, Any]) -> dict[str, Any]:
         "entry_id": getattr(entry, "entry_id", None),
         "allowlist": effective_allowlist(options),
         "default_allowlist": list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST),
-        "customized": isinstance(options.get(OPT_OAUTH_REDIRECT_ALLOWLIST), list),
+        # Any stored value, even a malformed one, so the panel offers a reset.
+        "customized": options.get(OPT_OAUTH_REDIRECT_ALLOWLIST) is not None,
         # The list only gates none mode; the panel says so when it is not live.
         "applies": bool(options.get(OPT_ENABLE_WEBHOOK, True))
         and options.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE) == WEBHOOK_AUTH_NONE,
