@@ -1,5 +1,6 @@
 """Unit tests for ha_get_history(summary=True) (issue #2754)."""
 
+import inspect
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.tools import tools_history
 from ha_mcp.tools.history_response import summarize_states
 from ha_mcp.tools.tools_history import HistoryTools
 
@@ -146,7 +148,10 @@ class TestSummaryThroughTool:
         assert list(totals["states"]) == ["on"]
         assert totals["distinct_states"] == 2
         assert result["data"]["query_params"]["summary"] is True
-        assert "warnings" not in result
+        # limit=1 adds a cut warning; the fully covered window adds no other.
+        assert not any(
+            "start at" in w or "No recorded" in w for w in result["warnings"]
+        )
 
     @pytest.mark.asyncio
     async def test_future_end_time_does_not_count_time_that_has_not_passed(
@@ -200,6 +205,35 @@ class TestSummaryThroughTool:
         )
 
     @pytest.mark.asyncio
+    async def test_states_cut_by_limit_are_flagged_in_warnings(self) -> None:
+        # The shortest states are cut first, so a brief "unavailable" can drop
+        # out. sensor.power also starts late: a cut is flagged regardless.
+        history = {
+            "sensor.power": _rows(
+                ("1", 10), ("2", 100), ("unavailable", 200), ("3", 201)
+            ),
+            "sensor.speed": _rows(("a", 0), ("b", 1), ("c", 2), ("d", 3), ("e", 4)),
+            "sensor.flat": _rows(("5", 0)),
+        }
+        tool = HistoryTools(_client(history)).ha_get_history
+
+        with _no_timezone_lookup():
+            result = await tool(
+                entity_ids="sensor.power,sensor.speed,sensor.flat",
+                start_time=_iso(0),
+                end_time=_iso(3600),
+                summary=True,
+                limit=3,
+            )
+
+        cut = [w for w in result["warnings"] if "sensor.speed" in w]
+        assert len(cut) == 1, result["warnings"]
+        assert "sensor.power: 1 of 4" in cut[0]
+        assert "sensor.speed: 2 of 5" in cut[0]
+        assert "sensor.flat" not in cut[0]
+        assert any("sensor.power" in w and "start at" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
     async def test_without_summary_the_rows_are_returned_unchanged(self) -> None:
         # Rows after `now` are dropped for a summary only.
         history = {"switch.pump": _rows(("on", 0), ("off", 700))}
@@ -225,6 +259,7 @@ class TestSummaryThroughTool:
 
     @pytest.mark.asyncio
     async def test_statistics_offset_still_works_when_summary_is_set(self) -> None:
+        signature = inspect.signature(tools_history._fetch_statistics)
         tool = HistoryTools(_client({})).ha_get_history
 
         with (
@@ -243,4 +278,5 @@ class TestSummaryThroughTool:
             )
 
         fetch_statistics.assert_awaited_once()
-        assert fetch_statistics.await_args.args[7] == 5  # the offset argument
+        call = fetch_statistics.await_args
+        assert signature.bind(*call.args, **call.kwargs).arguments["offset"] == 5

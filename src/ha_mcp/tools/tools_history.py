@@ -261,7 +261,8 @@ class HistoryTools:
             int | None,
             Field(
                 description='Max entries per entity. Default: 100. For source="history": state '
-                'rows. For source="statistics": aggregated rows. With multiple '
+                "rows; with summary=True, the states listed in summary.states, longest "
+                'first. For source="statistics": aggregated rows. With multiple '
                 "entity_ids, total rows returned can reach limit × len(entity_ids).",
                 default=None,
                 ge=1,
@@ -310,10 +311,12 @@ class HistoryTools:
                 description=(
                     "Return per-entity totals instead of state rows: changes "
                     "(switches to a different state; the state at the window start is "
-                    "not one), first_change and last_change (null without changes), and "
-                    "per state its periods (separate spells) and duration_s (seconds, "
-                    "up to end_time or now, whichever is earlier). limit caps the "
-                    "states listed, longest first; distinct_states counts them all. "
+                    "not one, but without that state, e.g. with core_options "
+                    "{'include_start_time_state': false} or purged history, the first "
+                    "recorded state counts as one), first_change and last_change (null "
+                    "without changes), and per state its periods (separate spells) and "
+                    "duration_s (seconds, up to end_time or now, whichever is "
+                    "earlier). distinct_states counts every state, listed or not. "
                     'Ignored when source="statistics".'
                 ),
             ),
@@ -401,7 +404,6 @@ class HistoryTools:
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         try:
-            # Parse entity_ids
             entity_id_list = _parse_entity_ids(entity_ids)
             _validate_offset(
                 offset,
@@ -409,10 +411,7 @@ class HistoryTools:
                 summary=summary and source == "history",
             )
 
-            # Source-dependent default hours
             default_hours = _DEFAULT_START_HOURS_BY_SOURCE[source]
-
-            # Parse time parameters
             now = datetime.now(UTC)
             start_dt, end_dt = _parse_time_range(
                 start_time, end_time, default_hours, now
@@ -592,6 +591,7 @@ def _validate_offset(offset: int | None, *, entity_count: int, summary: bool) ->
     """Reject offsets the response could not honour."""
     if not offset:
         return
+    # Summary first: dropping to one entity_id alone would still be rejected.
     if summary:
         raise_tool_error(
             create_error_response(
@@ -922,21 +922,23 @@ async def _fetch_history(
 
     result_data = response.get("result", {})
     if summary_until is not None:
-        # Core answers a future end_time up to its own clock, which can run
-        # past `now`. Like Core's end_time, summary_until is exclusive.
+        # ha_get_history passes min(end_time, the clock it read before this
+        # query). Core answers a future end_time up to its own clock, which can
+        # run past that reading. Like Core's end_time, summary_until is exclusive.
         until_ts = summary_until.timestamp()
         result_data = {
             entity_id: [row for row in rows if row["lu"] < until_ts]
             for entity_id, rows in result_data.items()
         }
     entities_history = []
+    summaries: dict[str, dict[str, Any]] = {}
     start_ts = start_dt.timestamp()
     period = {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
 
     for entity_id in entity_id_list:
         entity_states = result_data.get(entity_id, [])
         if summary_until is not None:
-            summary = summarize_states(
+            summary = summaries[entity_id] = summarize_states(
                 entity_states, start_ts, summary_until.timestamp(), effective_limit
             )
             entities_history.append(
@@ -979,9 +981,7 @@ async def _fetch_history(
         },
     }
     if summary_until is not None:  # ha_get_history drops an empty list
-        history_data["warnings"] = summary_warnings(
-            result_data, entity_id_list, start_ts
-        )
+        history_data["warnings"] = summary_warnings(result_data, summaries, start_ts)
 
     return history_data
 

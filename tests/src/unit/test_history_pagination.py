@@ -7,7 +7,7 @@ has_more, next_offset.
 
 import contextlib
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -185,18 +185,6 @@ class TestHistoryPagination:
 
         entity = result["data"]["entities"][0]
         assert PAGINATION_FIELDS.issubset(entity.keys())
-
-    @pytest.mark.asyncio
-    async def test_offset_greater_than_zero_multi_entity_raises_tool_error(
-        self, history_tool
-    ):
-        """Offset > 0 with multiple entities raises ToolError with VALIDATION_INVALID_PARAMETER."""
-        states = _make_history_states(5)
-        with self._patch_ws(states), pytest.raises(ToolError) as exc_info:
-            await history_tool(entity_ids=["sensor.test", "sensor.other"], offset=1)
-
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
 # ---------------------------------------------------------------------------
@@ -441,21 +429,16 @@ class TestMultiEntityOffsetGuard:
         self._mock_client = mock_client
         return HistoryTools(mock_client).ha_get_history
 
-    def _patch_ws(self):
-        self._mock_client.send_websocket_message = _make_ws_dispatcher(
-            history_result={}
-        )
-        return contextlib.nullcontext()
-
     @pytest.mark.asyncio
     async def test_multi_entity_offset_rejected(self, history_tool):
-        """offset > 0 with multiple entity_ids raises VALIDATION_INVALID_PARAMETER.
+        """offset > 0 with multiple entity_ids is rejected before any query.
 
         Option 1 guard: build_pagination_metadata applies per entity, so
         limit=100 across N entities returns up to 100*N rows with no top-level
         has_more signal — a footgun for LLM token budgets.
         """
-        with self._patch_ws(), pytest.raises(ToolError) as exc_info:
+        send = self._mock_client.send_websocket_message = AsyncMock()
+        with pytest.raises(ToolError) as exc_info:
             await history_tool(
                 entity_ids=["sensor.a", "sensor.b"],
                 offset=1,
@@ -465,6 +448,7 @@ class TestMultiEntityOffsetGuard:
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "single entity_id" in error["message"]
+        send.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_multi_entity_offset_zero_allowed(self, history_tool):

@@ -362,6 +362,7 @@ class TestGetHistory:
     ) -> None:
         """Summary changes and durations match the rows Core records for the window."""
         target = "input_number.e2e_pagination_seed"
+        missing = "input_number.e2e_summary_never_recorded"
         end = datetime.now(UTC) - timedelta(minutes=1)
 
         async def native_rows(start: datetime) -> list[dict[str, Any]]:
@@ -389,7 +390,7 @@ class TestGetHistory:
             await mcp_client.call_tool(
                 "ha_get_history",
                 {
-                    "entity_ids": target,
+                    "entity_ids": f"{target},{missing}",
                     "start_time": start.isoformat(),
                     "end_time": end.isoformat(),
                     "summary": True,
@@ -406,7 +407,12 @@ class TestGetHistory:
         assert sum(
             state["duration_s"] for state in totals["states"].values()
         ) == pytest.approx((end - start).total_seconds(), abs=0.01)
-        assert "warnings" not in result
+        assert result["data"]["entities"][1]["summary"]["distinct_states"] == 0
+        # Only the unrecorded entity is flagged; the seed has a window-start state.
+        assert len(result["warnings"]) == 1, result["warnings"]
+        assert "No recorded states" in result["warnings"][0]
+        assert missing in result["warnings"][0]
+        assert target not in result["warnings"][0]
 
 
 @pytest.mark.asyncio

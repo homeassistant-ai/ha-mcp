@@ -86,7 +86,8 @@ def summarize_states(
     end; rows after the window end must be dropped first. A row repeating the
     previous state (an attribute-only update, which Core may return) extends
     the current period instead of opening one. Core stamps its window-start
-    snapshot with the window start, so only a first row after it is a change.
+    snapshot with the window start, so the first row counts as a change only
+    when it is later than the window start.
     """
     totals: dict[str, dict[str, Any]] = {}
     change_times: list[float] = []
@@ -119,18 +120,21 @@ def summarize_states(
 
 def summary_warnings(
     result: dict[str, list[dict[str, Any]]],
-    entity_ids: list[str],
+    summaries: dict[str, dict[str, Any]],
     window_start_ts: float,
 ) -> list[str]:
-    """Name the entities whose totals cover less than the requested window."""
+    """Name the entities whose totals cover less than the requested window or list only some of their states."""
     missing: list[str] = []
     late: list[str] = []
-    for entity_id in entity_ids:
+    cut: list[str] = []
+    for entity_id, summary in summaries.items():
         states = result.get(entity_id)
         if not states:
             missing.append(entity_id)
         elif states[0]["lu"] > window_start_ts:
             late.append(entity_id)
+        if left_out := summary["distinct_states"] - len(summary["states"]):
+            cut.append(f"{entity_id}: {left_out} of {summary['distinct_states']}")
     warnings = []
     if missing:
         warnings.append(
@@ -142,6 +146,14 @@ def summary_warnings(
         warnings.append(
             f"Totals for {', '.join(late)} start at the first recorded state, "
             "after start_time: Core returned no earlier state (entity added "
-            "later, older history purged, or include_start_time_state=false)."
+            "later, older history purged, or core_options "
+            "{'include_start_time_state': false})."
+        )
+    if cut:
+        warnings.append(
+            "limit left the shortest states out of summary.states, per entity: "
+            f"{', '.join(cut)}. A brief state such as unavailable may be among "
+            "them; raise limit (max 1000) or shorten the time range to list every "
+            "state."
         )
     return warnings
