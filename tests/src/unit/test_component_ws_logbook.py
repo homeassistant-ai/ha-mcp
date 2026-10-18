@@ -62,6 +62,13 @@ def _ha_error() -> type[BaseException]:
     return sys.modules["homeassistant.exceptions"].HomeAssistantError
 
 
+def _hass(*, logbook: bool = True) -> MagicMock:
+    """A fake hass; the prep requires ``hass.data["logbook"]`` to be set up."""
+    hass = MagicMock()
+    hass.data = {"logbook": object()} if logbook else {}
+    return hass
+
+
 def _dt_module(now: datetime) -> ModuleType:
     """A minimal real ``homeassistant.util.dt`` with ``utcnow`` frozen to ``now``."""
     module = ModuleType("homeassistant.util.dt")
@@ -127,7 +134,7 @@ async def test_prep_runs_the_rest_shaped_processor_flags(
     prep_env: SimpleNamespace,
 ) -> None:
     result = await component_logbook._logbook_events_prep(
-        MagicMock(),
+        _hass(),
         _msg(entity_ids=["light.a"], device_ids=["dev1"]),
     )
 
@@ -173,7 +180,7 @@ def test_serializer_runs_the_query_and_encodes(
 async def test_invalid_start_time_raises(prep_env: SimpleNamespace) -> None:
     with pytest.raises(_ha_error(), match="Invalid start_time"):
         await component_logbook._logbook_events_prep(
-            MagicMock(), _msg(start_time="not-a-time")
+            _hass(), _msg(start_time="not-a-time")
         )
     prep_env.processor_cls.assert_not_called()
 
@@ -182,7 +189,7 @@ async def test_invalid_start_time_raises(prep_env: SimpleNamespace) -> None:
 async def test_invalid_end_time_raises(prep_env: SimpleNamespace) -> None:
     with pytest.raises(_ha_error(), match="Invalid end_time"):
         await component_logbook._logbook_events_prep(
-            MagicMock(), _msg(end_time="not-a-time")
+            _hass(), _msg(end_time="not-a-time")
         )
     prep_env.processor_cls.assert_not_called()
 
@@ -192,7 +199,7 @@ async def test_future_start_time_returns_empty_without_querying(
     prep_env: SimpleNamespace,
 ) -> None:
     result = await component_logbook._logbook_events_prep(
-        MagicMock(), _msg(start_time="2026-06-17T00:00:00+00:00")
+        _hass(), _msg(start_time="2026-06-17T00:00:00+00:00")
     )
     assert result == {"payload": b"EMPTY"}
     prep_env.processor_cls.assert_not_called()
@@ -206,7 +213,7 @@ async def test_filtered_away_entities_return_empty(
         component_logbook, "async_filter_entities", lambda hass, ids: []
     )
     result = await component_logbook._logbook_events_prep(
-        MagicMock(), _msg(entity_ids=["light.gone"])
+        _hass(), _msg(entity_ids=["light.gone"])
     )
     assert result == {"payload": b"EMPTY"}
     prep_env.processor_cls.assert_not_called()
@@ -218,7 +225,7 @@ async def test_context_cannot_combine_with_other_filters(
 ) -> None:
     with pytest.raises(_ha_error(), match="context_id cannot be combined"):
         await component_logbook._logbook_events_prep(
-            MagicMock(), _msg(entity_ids=["light.a"], context_id="ctx1")
+            _hass(), _msg(entity_ids=["light.a"], context_id="ctx1")
         )
     prep_env.processor_cls.assert_not_called()
 
@@ -228,10 +235,17 @@ async def test_omitted_end_time_defaults_to_now(prep_env: SimpleNamespace) -> No
     msg = _msg()
     del msg["end_time"]
 
-    await component_logbook._logbook_events_prep(MagicMock(), msg)
+    await component_logbook._logbook_events_prep(_hass(), msg)
 
     job_args = prep_env.recorder.async_add_executor_job.await_args.args
     assert job_args[3] == FIXED_NOW
+
+
+@pytest.mark.asyncio
+async def test_missing_logbook_integration_raises(prep_env: SimpleNamespace) -> None:
+    with pytest.raises(_ha_error(), match="logbook integration is not set up"):
+        await component_logbook._logbook_events_prep(_hass(logbook=False), _msg())
+    prep_env.processor_cls.assert_not_called()
 
 
 def test_pre_serialized_result_is_sent_as_bytes(

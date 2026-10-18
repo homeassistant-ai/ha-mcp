@@ -47,12 +47,14 @@ def _parse_time(value: str, label: str) -> datetime:
     parsed = dt_util.parse_datetime(value)
     if parsed is None:
         raise HomeAssistantError(f"Invalid {label}")
-    return dt_util.as_utc(parsed)
+    result: datetime = dt_util.as_utc(parsed)
+    return result
 
 
 def _empty_result(msg_id: int) -> bytes:
     """The pre-serialized empty result message (tiny; safe on the loop)."""
-    return json_bytes(messages.result_message(msg_id, []))
+    payload: bytes = json_bytes(messages.result_message(msg_id, []))
+    return payload
 
 
 def _serialize_logbook_result(
@@ -67,11 +69,12 @@ def _serialize_logbook_result(
     JSON encoding both run off the event loop, so a large window cannot stall
     Home Assistant while its response is built.
     """
-    return json_bytes(
+    payload: bytes = json_bytes(
         messages.result_message(
             msg_id, event_processor.get_events(start_time, end_time)
         )
     )
+    return payload
 
 
 async def _logbook_events_prep(
@@ -103,6 +106,18 @@ async def _logbook_events_prep(
 
     if start_time > dt_util.utcnow():
         return {"payload": _empty_result(msg["id"])}
+
+    if "logbook" not in hass.data:
+        # Core's processor reads its config from ``hass.data[DOMAIN]``; without
+        # the integration loaded the query cannot run (the REST/WS views are
+        # registered by logbook too). Surface a clear error instead of a
+        # KeyError; the server's command-error path reports it.
+        from homeassistant.exceptions import HomeAssistantError
+
+        raise HomeAssistantError(
+            "The logbook integration is not set up on this instance; enable it "
+            "to query logbook events."
+        )
 
     event_types = async_determine_event_types(hass, entity_ids, device_ids)
     event_processor = EventProcessor(

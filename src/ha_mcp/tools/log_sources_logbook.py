@@ -351,7 +351,7 @@ class LogbookLogSourceMixin:
         # proxy envelope such as a post-connect 403) must surface instead of
         # being reported as an empty logbook.
         reason = response.get("error") if isinstance(response, dict) else None
-        self._raise_logbook_ws_required(
+        return self._raise_logbook_ws_required(
             command.get("device_ids"),
             reason=str(reason) if reason else None,
         )
