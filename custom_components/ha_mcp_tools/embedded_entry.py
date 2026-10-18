@@ -16,7 +16,6 @@ ingress in :mod:`embedded_server` / :mod:`mcp_webhook`.
 from __future__ import annotations
 
 import asyncio
-import logging
 import secrets
 from collections.abc import Mapping
 from contextlib import suppress
@@ -49,8 +48,6 @@ from .const import (
     WEBHOOK_AUTH_NONE,
 )
 from .entry_device import async_register_entry_device
-
-_LOGGER = logging.getLogger(__name__)
 
 # NOTE: embedded_setup (and its embedded_server / mcp_webhook
 # chain), plus websocket_api, are imported lazily inside the entry lifecycle
