@@ -8,6 +8,7 @@ caps oversized ``system`` message strings.
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -192,6 +193,89 @@ class TestLogbookOrder:
         assert data["order"] == "newest"
         assert data["has_more"] is False
         assert data["total_entries"] == 1
+
+
+class TestLogbookWindowBound:
+    """The computed end bound must reach the client, not only the raw arg."""
+
+    @staticmethod
+    def _client() -> AsyncMock:
+        client = AsyncMock()
+        client.get_logbook = AsyncMock(return_value=[])
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.mark.asyncio
+    async def test_omitted_end_time_still_covers_the_requested_window(self) -> None:
+        client = self._client()
+        tools = LogTools(client)
+        fixed_now = datetime(2026, 6, 16, 12, 0, tzinfo=UTC)
+
+        with patch("ha_mcp.tools.log_sources.datetime") as datetime_mock:
+            datetime_mock.now.return_value = fixed_now
+            await tools.get_logs(**_call_kwargs(source="logbook", hours_back=48))
+
+        kwargs = client.get_logbook.await_args.kwargs
+        assert kwargs["end_time"] is not None, (
+            "an omitted end_time must still bound the fetch"
+        )
+        assert kwargs["end_time"] == fixed_now.isoformat()
+        start = datetime.fromisoformat(kwargs["start_time"])
+        end = datetime.fromisoformat(kwargs["end_time"])
+        assert end - start == timedelta(hours=48)
+
+    @pytest.mark.asyncio
+    async def test_explicit_end_time_still_honors_the_callers_window(self) -> None:
+        client = self._client()
+        tools = LogTools(client)
+        await tools.get_logs(
+            **_call_kwargs(
+                source="logbook", hours_back=48, end_time="2026-06-15T00:00:00Z"
+            )
+        )
+        kwargs = client.get_logbook.await_args.kwargs
+        start = datetime.fromisoformat(kwargs["start_time"])
+        end = datetime.fromisoformat(kwargs["end_time"])
+        assert end == datetime(2026, 6, 15, tzinfo=UTC)
+        assert end - start == timedelta(hours=48)
+
+    @pytest.mark.asyncio
+    async def test_omitted_and_explicit_end_time_cover_the_same_window(self) -> None:
+        client = self._client()
+        tools = LogTools(client)
+        fixed_now = datetime(2026, 6, 16, 12, 0, tzinfo=UTC)
+
+        with patch("ha_mcp.tools.log_sources.datetime") as datetime_mock:
+            datetime_mock.now.return_value = fixed_now
+            datetime_mock.fromisoformat.side_effect = datetime.fromisoformat
+            await tools.get_logs(**_call_kwargs(source="logbook", hours_back=48))
+            omitted = client.get_logbook.await_args.kwargs
+            await tools.get_logs(
+                **_call_kwargs(
+                    source="logbook",
+                    hours_back=48,
+                    end_time=fixed_now.isoformat(),
+                )
+            )
+            explicit = client.get_logbook.await_args.kwargs
+
+        assert omitted == explicit
+
+    @pytest.mark.asyncio
+    async def test_pagination_hint_keeps_pages_in_the_same_window(self) -> None:
+        entries = [{"when": "2026-06-16T10:00:00+00:00", "state": "on"}] * 3
+        client = AsyncMock()
+        client.get_logbook = AsyncMock(return_value=entries)
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        tools = LogTools(client)
+        fixed_now = datetime(2026, 6, 16, 12, 0, tzinfo=UTC)
+
+        with patch("ha_mcp.tools.log_sources.datetime") as datetime_mock:
+            datetime_mock.now.return_value = fixed_now
+            result = await tools.get_logs(**_call_kwargs(source="logbook", limit=2))
+
+        hint = result["data"]["pagination_hint"]
+        assert f"end_time='{fixed_now.isoformat()}'" in hint
 
 
 class TestSystemOrder:

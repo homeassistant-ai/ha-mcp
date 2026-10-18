@@ -276,8 +276,13 @@ class CoreLogSourcesMixin:
         start_timestamp = start_dt.isoformat()
 
         try:
+            # Always send the computed end bound: HA's /api/logbook/{start}
+            # view defaults an omitted end_time to start + 1 day, which
+            # silently truncates every hours_back > 24 request.
             response = await self._client.get_logbook(
-                entity_id=entity_id, start_time=start_timestamp, end_time=end_time
+                entity_id=entity_id,
+                start_time=start_timestamp,
+                end_time=end_dt.isoformat(),
             )
 
             response, filters_applied = self._filter_logbook_by_search(response, search)
@@ -312,13 +317,15 @@ class CoreLogSourcesMixin:
             if filters_applied:
                 logbook_data["filters_applied"] = filters_applied
             if has_more:
+                # Pin the computed bound so following the hint re-reads the
+                # same window instead of recomputing `now` per page.
                 logbook_data["pagination_hint"] = self._build_pagination_hint(
                     offset_int,
                     effective_limit,
                     total_entries,
                     paginated_entries,
                     hours_back_int,
-                    end_time,
+                    end_dt.isoformat(),
                     entity_id,
                     search,
                     compact,
