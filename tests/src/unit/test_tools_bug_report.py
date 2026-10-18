@@ -272,8 +272,10 @@ class TestBugReportTool:
 
     @pytest.mark.asyncio
     async def test_report_reads_info_once_for_version_and_mode(
-        self, ha_report_issue_func, mock_client
-    ):
+        self,
+        ha_report_issue_func: Callable[..., Awaitable[dict[str, Any]]],
+        mock_client: MagicMock,
+    ) -> None:
         """Version and auth mode come from one ``info`` answer, so they agree."""
         mock_client.get_config.return_value = {"version": "2024.12.0"}
         mock_client.get_states.return_value = []
@@ -1063,7 +1065,7 @@ class TestDetectComponentVersion:
     ``TestDeploymentAndVersionDiagnostics``."""
 
     @pytest.mark.asyncio
-    async def test_reported_version_needs_no_service_call(self):
+    async def test_reported_version_needs_no_service_call(self) -> None:
         from ha_mcp.tools.tools_bug_report import BugReportTools
 
         client = MagicMock()
@@ -1079,7 +1081,7 @@ class TestDetectComponentVersion:
         client.call_service.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_component_reporting_no_version_reads_as_not_detected(self):
+    async def test_component_reporting_no_version_reads_as_not_detected(self) -> None:
         """A component whose ``info`` reports no version string yields None
         (guarded even though a real 1.1.0+ component always reports one)."""
         from ha_mcp.tools.tools_bug_report import BugReportTools
