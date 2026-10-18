@@ -343,19 +343,20 @@ never carry it. New entries start with the
 webhook off, and a local-only option removes it entirely.
 
 The server reaches Home Assistant with an administrator's long-lived access
-token (#2427): one the administrator pastes, or one Home Assistant issues at
-setup from the login of an account the administrator chose and created, their
-own or one made for the server. The component never creates an account, and
-revokes a token it issued when the token is switched or the entry removed; the
-login skips that account's multi-factor step, but only an administrator can
-submit it. Entries created by older releases keep the
+token (#2427): one the administrator pastes, or one the component issues at
+setup from the login of a local-only account the administrator created for the
+server. The component never creates an account. It revokes a token it issued
+when the token is switched or the entry removed, and leaves a pasted token
+alone. The login skips that account's multi-factor step, but only an
+administrator can submit it. Entries created by older releases keep the
 account and token those releases provisioned while both remain valid; a
 missing, revoked or non-administrator credential stops the server and files a
 repair that asks for a replacement, rather than minting a new administrator.
 The token is stored in the config entry and handed to the server in memory
 (never through the Home Assistant process environment). Disabling the config
 entry stops the server; removing it deletes only an account an older release
-created, never the user's own account or token. As with
+created, never an account the user created, and revokes only a token the
+component issued, never a pasted one. As with
 standard mode, that token's Home Assistant permissions define what the server can
 do.
 

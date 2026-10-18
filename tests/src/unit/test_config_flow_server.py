@@ -346,6 +346,17 @@ class TestAdminTokenReplacement:
             if m.schema == const.OPT_ADMIN_TOKEN_REPLACEMENT
         )
 
+    def test_the_login_fields_never_offer_a_saved_login(self):
+        # A browser would autofill the administrator's own saved login, which
+        # must never go there; a filled login also switches the server's account.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        fields = {m.schema: v for m, v in form["data_schema"].schema.items()}
+        assert fields[cf.server_credentials.ADMIN_USERNAME].config.autocomplete == "off"
+        assert fields[cf.server_credentials.ADMIN_PASSWORD].config.autocomplete == (
+            "new-password"
+        )
+
     def test_the_stored_token_is_never_shown(self):
         flow = _make_options_flow(
             options={const.OPT_ADMIN_TOKEN_REPLACEMENT: "good"},

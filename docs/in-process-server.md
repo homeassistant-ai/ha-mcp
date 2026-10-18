@@ -76,18 +76,24 @@ run current `ha-mcp` servers.
 2. **Add the in-process server entry.** Go to **Settings → Devices & Services →
    Add Integration**, search for **HA-MCP Custom Component**, and — on the menu
    that appears — choose **HA-MCP Server**. The server acts with an
-   administrator account's permissions, so the form asks for one: enter the
-   user name and password of your own administrator account, or of one you
-   made for HA-MCP, and Home Assistant creates a long-lived access token for
-   it named **HA-MCP Server** (the password is not kept). Or paste a
-   long-lived access token instead. The safest choice is an account just for
-   the server, made under **Settings → People → Add person** with **Allow
-   login**, **Local access only** and **Administrator** on, the way you would
-   make one for an MQTT client. Its token works only from your local network,
-   where the server runs, so a leaked copy is useless elsewhere, and Home
-   Assistant records the server's changes under that account instead of yours.
-   Nobody has to log in as it. Entering an account's password here does not
-   ask for its multi-factor code; only an administrator can open this form.
+   administrator account's permissions, so the form asks for one of two
+   things:
+   - **An administrator access token.** Your own works: open your profile
+     (your name at the bottom of the sidebar), select the **Security** tab, and
+     under **Long-lived access tokens** select **Create token**. It also works
+     from outside your home network if it ever leaks, and Home Assistant
+     records the server's changes under your name.
+   - **The login of an account made just for HA-MCP** (safer). Create it under
+     **Settings → People → Add person** with **Allow login**, **Local access
+     only** and **Administrator** on, the way you would make one for an MQTT
+     client, then enter its user name and password. HA-MCP creates its token,
+     named **HA-MCP Server**, so nobody has to log in as it, and the password is
+     not kept. Its token works only from your local network, where the server
+     runs, and Home Assistant records the server's changes under that account.
+     Never enter your own login there: to use your own account, paste its
+     token. The login does not ask for the account's multi-factor code; only an
+     administrator can open this form.
+
    It also asks how MCP clients may reach
    the server: **Remote access through Home Assistant**
    (disabled by default; choose Home Assistant sign-in, legacy OAuth or the

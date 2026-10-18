@@ -178,9 +178,11 @@ def credential_fields(
 def credential_schema(
     vol: Any, token_field: str, values: Mapping[str, Any]
 ) -> dict[Any, Any]:
-    """Form fields: an administrator account's login, or a token instead.
+    """Form fields: a pasted token, or the login of an account made for HA-MCP.
 
     ``vol`` is the caller's voluptuous, the one its own schema is built with.
+    The login fields never autofill: a browser would offer the administrator's
+    own saved login, which does not belong there.
     """
     from homeassistant.helpers.selector import (
         TextSelector,
@@ -189,19 +191,19 @@ def credential_schema(
     )
 
     return {
+        vol.Optional(token_field): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        ),
         vol.Optional(
             ADMIN_USERNAME,
             description={"suggested_value": values.get(ADMIN_USERNAME)},
         ): TextSelector(
-            TextSelectorConfig(type=TextSelectorType.TEXT, autocomplete="username")
+            TextSelectorConfig(type=TextSelectorType.TEXT, autocomplete="off")
         ),
         vol.Optional(ADMIN_PASSWORD): TextSelector(
             TextSelectorConfig(
-                type=TextSelectorType.PASSWORD, autocomplete="current-password"
+                type=TextSelectorType.PASSWORD, autocomplete="new-password"
             )
-        ),
-        vol.Optional(token_field): TextSelector(
-            TextSelectorConfig(type=TextSelectorType.PASSWORD)
         ),
     }
 
