@@ -60,6 +60,8 @@ for _ha_logbook_stub in (
     "homeassistant.components.logbook.helpers",
     "homeassistant.components.logbook.processor",
     "homeassistant.components.recorder",
+    "homeassistant.components.websocket_api",
+    "homeassistant.helpers.json",
     "homeassistant.util",
     "homeassistant.util.dt",
 ):
