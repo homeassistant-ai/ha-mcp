@@ -626,6 +626,29 @@ class TestEnsurePairedPackage:
         saved = hass.config_entries.async_update_entry.call_args.kwargs["data"]
         assert DATA_REINSTALL_REQUESTED not in saved
 
+    async def test_a_failed_requested_reinstall_is_not_retried_every_start(
+        self, tmp_path, monkeypatch
+    ):
+        # The repair asks for one reinstall; a reinstall that fails must not
+        # run again on every later start.
+        _paired(monkeypatch, "ha-mcp==8.6.0")
+        env = _PkgEnv(monkeypatch, {DIST_NAME_STABLE: "8.6.0"})
+        env.install_ok = False
+        mgr, hass, _entry = _manager(
+            tmp_path,
+            data={
+                DATA_SECRET_PATH: "/p",
+                DATA_LAST_PIP_SPEC: "ha-mcp==8.6.0",
+                DATA_REINSTALL_REQUESTED: True,
+            },
+        )
+
+        with pytest.raises(es.EmbeddedServerError):
+            await _ensure(mgr)
+
+        saved = hass.config_entries.async_update_entry.call_args.kwargs["data"]
+        assert DATA_REINSTALL_REQUESTED not in saved
+
     async def test_a_requested_reinstall_waits_for_a_live_importer(
         self, tmp_path, monkeypatch
     ):

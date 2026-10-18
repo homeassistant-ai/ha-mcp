@@ -421,6 +421,8 @@ package could not be installed**. A common cause is another integration that
 pins an older version of one of the server's dependencies: Home Assistant
 installs that version for it, and only checks the server's own version
 afterwards. If the repair names such an integration, update or remove it first.
+If you set **ha-mcp package (advanced)**, check that value too: reinstalling a
+requirement that cannot be installed fails the same way.
 Then open the repair and select **Submit**: Home Assistant restarts and
 reinstalls the server package before the server starts, along with any
 dependency whose version no longer satisfies it.

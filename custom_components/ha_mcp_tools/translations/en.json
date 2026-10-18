@@ -120,7 +120,7 @@
                 "step": {
                     "confirm": {
                         "title": "Reinstall the HA-MCP server",
-                        "description": "The HA-MCP in-process server could not be installed or started:\n\n{detail}\n\nSubmit to restart Home Assistant; the server package is reinstalled before the server starts, along with any dependency whose version no longer satisfies it. If the message above names another integration that changed one of those packages, update or remove that integration first: otherwise Home Assistant puts its version back the next time it starts."
+                        "description": "The HA-MCP in-process server could not be installed or started:\n\n{detail}\n\nSubmit to restart Home Assistant; the server package is reinstalled before the server starts, along with any dependency whose version no longer satisfies it. If the message above names another integration that changed one of those packages, update or remove that integration first: otherwise Home Assistant puts its version back the next time it starts. If you set **ha-mcp package (advanced)** in the HA-MCP Server options, check that value first: reinstalling a package that cannot be installed fails the same way."
                     }
                 },
                 "abort": {

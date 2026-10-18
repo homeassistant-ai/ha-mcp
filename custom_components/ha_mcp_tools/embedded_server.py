@@ -808,16 +808,20 @@ class EmbeddedServerManager:
                 # the #1914 removal would only open a window with no server
                 # installed at all.
                 await self._async_remove_replaced_source(stored_spec, installed_version)
-            await self._async_force_install(reinstall=reinstall)
-            if reinstall_requested:
-                self._hass.config_entries.async_update_entry(
-                    self._entry,
-                    data={
-                        k: v
-                        for k, v in self._entry.data.items()
-                        if k != DATA_REINSTALL_REQUESTED
-                    },
-                )
+            try:
+                await self._async_force_install(reinstall=reinstall)
+            finally:
+                # One attempt per request: a reinstall that fails would
+                # otherwise run again on every start.
+                if reinstall_requested:
+                    self._hass.config_entries.async_update_entry(
+                        self._entry,
+                        data={
+                            k: v
+                            for k, v in self._entry.data.items()
+                            if k != DATA_REINSTALL_REQUESTED
+                        },
+                    )
 
         version: str | None = await self._hass.async_add_executor_job(
             _installed_ha_mcp_version, self._preferred_dist()
