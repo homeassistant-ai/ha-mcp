@@ -288,11 +288,10 @@ RESERVED_DASHBOARD_URL_PATHS = frozenset(
 # import package (publish-dev.yml only renames the distribution), so only one
 # may be installed at a time — see EmbeddedServerManager's conflicting-dist
 # handling.
-DIST_NAME_STABLE = "ha-mcp"
-DIST_NAME_DEV = "ha-mcp-dev"
 # server_pin.SERVER_DISTS repeats these: tests load this file standalone, so it
 # imports nothing. test_server_pin_names_match_the_component pins the two.
-KNOWN_SERVER_DISTS = (DIST_NAME_STABLE, DIST_NAME_DEV)
+DIST_NAME_STABLE = "ha-mcp"
+DIST_NAME_DEV = "ha-mcp-dev"
 
 # The server requirement when the component manifest carries no ``ha-mcp``
 # pin, which only a hand-edited manifest lacks: semantic-release stamps every
