@@ -38,6 +38,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DEFAULT_CHANNEL,
     DEFAULT_PIP_SPEC,
     DIST_NAME_DEV,
+    DIST_NAME_STABLE,
     DOMAIN,
     ENTRY_TYPE_SERVER,
     ISSUE_PACKAGE_FAILED,
@@ -97,7 +98,9 @@ class RecordingIssueRegistry:
     ) -> None:
         assert domain == DOMAIN
         self.issues[issue_id] = SimpleNamespace(
-            active=True, translation_placeholders=kwargs["translation_placeholders"]
+            active=True,
+            is_persistent=kwargs.get("is_persistent", False),
+            translation_placeholders=kwargs["translation_placeholders"],
         )
 
     def async_get_issue(self, domain: str, issue_id: str) -> Any:
@@ -176,6 +179,16 @@ def test_reads_every_issue_bring_up_files() -> None:
     assert set(diag._STARTUP_ISSUE_IDS) == set(esetup._ISSUE_BY_KIND.values())
 
 
+def test_unscrubbed_detail_stays_out_of_cores_issues_field(
+    registry: RecordingIssueRegistry,
+) -> None:
+    """Core's ``issues`` field carries the placeholders of a persistent issue,
+    which would put the unscrubbed detail beside the scrubbed copy."""
+    _fail_bring_up("package", "detail")
+
+    assert registry.issues[ISSUE_PACKAGE_FAILED].is_persistent is False
+
+
 @pytest.mark.asyncio
 async def test_no_secret_value_appears_in_the_file() -> None:
     """Every stored secret is set and echoed in the startup error; none of the
@@ -206,17 +219,28 @@ async def test_padded_override_is_scrubbed_in_its_stripped_form() -> None:
     assert "tok-abc" not in json.dumps(result)
 
 
+@pytest.mark.parametrize(
+    ("url", "scrubbed"),
+    [
+        (
+            "https://user:p@ss@w@pypi.example/simple",
+            "https://**REDACTED**@pypi.example/simple",
+        ),
+        ("https://user:p?ss@host/x.whl", "https://**REDACTED**@host/x.whl"),
+    ],
+    ids=["raw-at-in-password", "raw-question-mark-in-password"],
+)
 @pytest.mark.asyncio
-async def test_url_credentials_are_scrubbed_even_when_not_stored() -> None:
+async def test_url_credentials_are_scrubbed_even_when_not_stored(
+    url: str, scrubbed: str
+) -> None:
     """pip echoes index URLs from its own configuration, which never reach the
-    entry."""
-    _fail_bring_up("package", "index https://user:pw-xyz@pypi.example/simple failed")
+    entry. A raw ``@`` or ``?`` in the password must not leave part of it."""
+    _fail_bring_up("package", f"index {url} failed")
 
     result = await _diagnostics(FakeHass([_server_entry()]))
 
-    assert result["server"]["startup_error"]["detail"] == (
-        "index https://**REDACTED**@pypi.example/simple failed"
-    )
+    assert result["server"]["startup_error"]["detail"] == f"index {scrubbed} failed"
 
 
 @pytest.mark.asyncio
@@ -323,11 +347,8 @@ async def test_issue_restored_after_restart_is_not_reported(
 
 
 @pytest.mark.asyncio
-async def test_server_summary_reports_configured_options(
-    installed_version_calls: list[Any],
-) -> None:
-    """Each configured option reaches the file; the installed version is read
-    for the channel's own distribution first."""
+async def test_server_summary_reports_configured_options() -> None:
+    """Each configured option reaches the file."""
     options = {
         OPT_CHANNEL: "dev",
         OPT_AUTO_UPDATE: False,
@@ -351,7 +372,37 @@ async def test_server_summary_reports_configured_options(
         "webhook_auth": "ha_auth",
         "external_url_set": True,
     }
-    assert installed_version_calls == [DIST_NAME_DEV]
+
+
+@pytest.mark.parametrize(
+    ("channel", "pip_spec", "first"),
+    [
+        ("dev", DEFAULT_PIP_SPEC, DIST_NAME_DEV),
+        ("stable", "HA_MCP_Dev==8.7.0", DIST_NAME_DEV),
+        ("dev", "ha-mcp==8.6.0", DIST_NAME_STABLE),
+        ("dev", "https://host/pkg.tgz", DIST_NAME_STABLE),
+    ],
+    ids=[
+        "dev-default-spec",
+        "override-names-dev",
+        "override-names-stable",
+        "bare-url-on-dev",
+    ],
+)
+@pytest.mark.asyncio
+async def test_installed_version_reads_the_installing_distribution_first(
+    installed_version_calls: list[Any], channel: str, pip_spec: str, first: str
+) -> None:
+    """An override skips removing the other channel's distribution, so its
+    metadata can remain and must not mask the installed version. Read as
+    bring-up reads an override: stable first unless it names ``ha-mcp-dev``
+    (a tarball URL installs ``ha-mcp`` on every channel). The default spec is
+    no override."""
+    options = {OPT_CHANNEL: channel, OPT_PIP_SPEC: pip_spec}
+
+    await _diagnostics(FakeHass([_server_entry(options)]))
+
+    assert installed_version_calls == [first]
 
 
 @pytest.mark.parametrize("pip_spec", [None, "", DEFAULT_PIP_SPEC])

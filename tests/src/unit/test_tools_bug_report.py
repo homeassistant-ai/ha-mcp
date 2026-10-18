@@ -271,6 +271,31 @@ class TestBugReportTool:
         )
 
     @pytest.mark.asyncio
+    async def test_report_reads_info_once_for_version_and_mode(
+        self, ha_report_issue_func, mock_client
+    ):
+        """Version and auth mode come from one ``info`` answer, so they agree."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"entry_id": "a1", "title": "HA-MCP Server", "state": "loaded"}
+                ],
+            }
+        )
+        first = {"component_version": "2.2.0", "webhook_auth": "ha_auth"}
+        read_info = AsyncMock(side_effect=[first, {"component_version": "2.3.0"}])
+
+        with patch("ha_mcp.tools.tools_bug_report.read_info", read_info):
+            result = await ha_report_issue_func()
+
+        info = result["diagnostic_info"]
+        assert info["component_version"] == "2.2.0"
+        assert info["server_entry_status"] == "added (loaded), webhook auth: ha_auth"
+
+    @pytest.mark.asyncio
     async def test_server_entry_status_added(self, ha_report_issue_func, mock_client):
         """The report names the in-process server entry distinctly — so e.g.
         an add-on install that also (erroneously) added the "HA-MCP Server"
@@ -1048,7 +1073,7 @@ class TestDetectComponentVersion:
             "ha_mcp.tools.tools_bug_report.read_component_version",
             AsyncMock(return_value="1.3.0"),
         ):
-            version = await tools._detect_component_version()
+            version = await tools._detect_component_version(None)
 
         assert version == "1.3.0"
         client.call_service.assert_not_called()
@@ -1066,7 +1091,7 @@ class TestDetectComponentVersion:
             "ha_mcp.tools.tools_bug_report.read_component_version",
             AsyncMock(return_value=""),
         ):
-            version = await tools._detect_component_version()
+            version = await tools._detect_component_version(None)
 
         assert version is None
         client.call_service.assert_not_called()
@@ -1895,7 +1920,7 @@ class TestDeploymentAndVersionDiagnostics:
         client.call_service = AsyncMock(
             return_value={"service_response": {"version": "1.0.1"}}
         )
-        assert await BugReportTools(client)._detect_component_version() == "1.0.1"
+        assert await BugReportTools(client)._detect_component_version(None) == "1.0.1"
         client.call_service.assert_awaited_once_with(
             "ha_mcp_tools", "get_caller_token", {}, return_response=True
         )
@@ -1907,7 +1932,7 @@ class TestDeploymentAndVersionDiagnostics:
 
         client = MagicMock()
         client.call_service = AsyncMock(side_effect=Exception("service not found"))
-        assert await BugReportTools(client)._detect_component_version() is None
+        assert await BugReportTools(client)._detect_component_version(None) is None
 
 
 class TestVersionRenderingHonesty:

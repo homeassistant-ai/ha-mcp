@@ -10,6 +10,7 @@ Bridge pattern as in ``test_component_info_timezone_contract.py``.
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -87,16 +88,22 @@ def _served(report: BugReportTools) -> Any:
 
 async def _line(report: BugReportTools) -> str | None:
     with _served(report):
-        return await report._detect_server_entry_status()
+        info = await component_api.read_info(report._client)
+        return await report._detect_server_entry_status(info)
 
 
 async def _version(report: BugReportTools) -> str | None:
     with _served(report):
-        return await report._detect_component_version()
+        info = await component_api.read_info(report._client)
+        return await report._detect_component_version(info)
 
 
 def _server(options: dict[str, Any] | None = None) -> FakeConfigEntry:
     return FakeConfigEntry(DOMAIN, data={"entry_type": "server"}, options=options)
+
+
+# What bring-up stores once it has registered the webhook.
+REGISTERED = {DOMAIN: {"webhook": {"auth_mode": "none"}}}
 
 
 def _versioned(running: dict[str, str]) -> BugReportTools:
@@ -163,7 +170,9 @@ async def test_component_without_a_version_field_reads_as_not_detected() -> None
 @pytest.mark.asyncio
 async def test_configured_mode_reaches_the_report() -> None:
     tools = FakeConfigEntry(DOMAIN, data={"entry_type": "tools"})
-    hass = FakeHass(config_entries=[tools, _server({"webhook_auth": "ha_auth"})])
+    hass = FakeHass(
+        config_entries=[tools, _server({"webhook_auth": "ha_auth"})], data=REGISTERED
+    )
 
     assert await _line(_report(hass)) == "added (loaded), webhook auth: ha_auth"
 
@@ -173,7 +182,7 @@ async def test_changed_mode_reaches_the_next_report() -> None:
     """The mode is an entry option the user can change while a long-lived
     server keeps its client; a later report must not repeat the first answer."""
     server = _server({"webhook_auth": "ha_auth"})
-    report = _report(FakeHass(config_entries=[server]))
+    report = _report(FakeHass(config_entries=[server], data=REGISTERED))
     await _line(report)
 
     server.options = {"webhook_auth": "legacy"}
@@ -183,7 +192,7 @@ async def test_changed_mode_reaches_the_next_report() -> None:
 
 @pytest.mark.asyncio
 async def test_unset_option_reads_as_the_bring_up_default() -> None:
-    hass = FakeHass(config_entries=[_server()])
+    hass = FakeHass(config_entries=[_server()], data=REGISTERED)
 
     assert await _line(_report(hass)) == "added (loaded), webhook auth: none"
 
@@ -193,7 +202,7 @@ async def test_disabled_webhook_is_not_reported_as_open() -> None:
     """Local-only mode keeps the configured auth option, but no webhook exists;
     ``none`` would read as an unauthenticated public webhook."""
     options = {"webhook_auth": "none", "enable_webhook": False}
-    hass = FakeHass(config_entries=[_server(options)])
+    hass = FakeHass(config_entries=[_server(options)], data=REGISTERED)
 
     assert await _line(_report(hass)) == "added (loaded), webhook auth: disabled"
 
@@ -211,7 +220,9 @@ async def test_component_without_a_usable_mode_leaves_the_line_unchanged(
 ) -> None:
     """A component older than the field omits it; the report keeps the plain
     entry status rather than inventing a mode."""
-    hass = FakeHass(config_entries=[_server({"webhook_auth": "ha_auth"})])
+    hass = FakeHass(
+        config_entries=[_server({"webhook_auth": "ha_auth"})], data=REGISTERED
+    )
 
     assert await _line(_report(hass, edit_info)) == "added (loaded)"
 
@@ -220,7 +231,7 @@ async def test_component_without_a_usable_mode_leaves_the_line_unchanged(
 async def test_component_without_info_is_not_asked_for_the_mode() -> None:
     """A component the caps probe found no ``info`` on is not sent the
     command a second time."""
-    report = _report(FakeHass(config_entries=[_server()]))
+    report = _report(FakeHass(config_entries=[_server()], data=REGISTERED))
     report._client.ws.send_command.side_effect = UNKNOWN
 
     assert await _line(report) == "added (loaded)"
@@ -231,10 +242,24 @@ async def test_component_without_info_is_not_asked_for_the_mode() -> None:
 async def test_failed_info_call_leaves_the_line_unchanged() -> None:
     """The entry status came from ``config_entries/get``; a failing ``info``
     call must not take it out of the report."""
-    report = _report(FakeHass(config_entries=[_server()]))
+    report = _report(FakeHass(config_entries=[_server()], data=REGISTERED))
     _then(report, RuntimeError("boom"))
 
     assert await _line(report) == "added (loaded)"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [{}, {DOMAIN: {"manager": SimpleNamespace(is_running=True)}}],
+    ids=["nothing-registered", "server-up-webhook-not-yet"],
+)
+def test_no_webhook_registration_reports_no_mode(data: dict[str, Any]) -> None:
+    """Bring-up registers the webhook after the server has started, and a
+    failed bring-up leaves the entry loaded; the configured ``none`` would then
+    read as an open webhook."""
+    hass = FakeHass(config_entries=[_server({"webhook_auth": "none"})], data=data)
+
+    assert wsapi._do_info(hass)["webhook_auth"] is None
 
 
 def test_no_server_entry_reports_no_mode() -> None:

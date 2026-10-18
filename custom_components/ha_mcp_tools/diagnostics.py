@@ -13,11 +13,11 @@ The output is built from an explicit set of fields and never dumps
 ``entry.data`` / ``entry.options``: those hold the provisioned access token,
 OAuth credentials, signing keys and the secret webhook id and path, and a
 secret key added later must not leak by default. None of those values is
-emitted; the two options that can embed credentials (package override,
-external URL) appear only as "is it set" booleans. Both entry types return the
-same component-wide summary, so the tools entry's download still shows a
-server entry whose setup raised (HA offers the download only for a loaded
-entry).
+emitted; of the options that can embed credentials, the file reports two
+(package override, external URL), and only as "is it set" booleans. Both entry
+types return the same component-wide summary, so the tools entry's download
+still shows a server entry whose setup raised (HA offers the download only for
+a loaded entry).
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers import issue_registry as ir
+from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 from .const import (
@@ -102,8 +103,11 @@ _SECRET_OPTION_KEYS = (
 )
 _STARTUP_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED)
 # Credentials in a URL's userinfo, e.g. a pip index or tarball URL that never
-# reached the entry (pip echoes its index URLs in errors).
-_URL_USERINFO = re.compile(r"(://)[^/@\s'\"]+@")
+# reached the entry (pip echoes its index URLs in errors). Up to the last "@"
+# before the path, so a raw "@" in a password is covered. It does not stop at
+# "?" or "#": urlsplit would end the userinfo there, but stopping would leave
+# the rest of a password holding one, so an "@" in a query costs the host.
+_URL_USERINFO = re.compile(r"(://)[^/\s'\"]+@")
 
 
 async def async_get_config_entry_diagnostics(
@@ -146,24 +150,30 @@ async def _async_server_summary(
     """
     # Lazy import, the embedded chain's convention (embedded_entry.py): only a
     # server-entry install needs the embedded server module.
-    from .embedded_server import EmbeddedServerManager, _installed_ha_mcp_version
+    from .embedded_server import (
+        EmbeddedServerManager,
+        _installed_ha_mcp_version,
+        _override_dist_name,
+    )
 
     options = entry.options
     channel = str(options.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
     pip_spec = str(options.get(OPT_PIP_SPEC) or "").strip()
+    # Same test as EmbeddedServerManager: the default spec is no override.
+    override_set = bool(pip_spec) and pip_spec != DEFAULT_PIP_SPEC
+    override_dist = _override_dist_name(pip_spec) if override_set else None
     domain_data = hass.data.get(DOMAIN, {})
     manager = domain_data.get(DATA_MANAGER)
     bringup = domain_data.get(DATA_BRINGUP_TASK)
     return {
-        # Blocking dist-info read. The channel's distribution goes first, so
-        # metadata a channel switch left behind cannot mask the installed one.
+        # Blocking dist-info read, see _server_dist for which goes first.
         "installed_server_version": await hass.async_add_executor_job(
-            _installed_ha_mcp_version, dist_for_channel(channel)
+            _installed_ha_mcp_version,
+            _server_dist(channel, override_set, override_dist),
         ),
         "channel": channel,
         "auto_update": bool(options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)),
-        # Same test as EmbeddedServerManager: the default spec is no override.
-        "package_override_set": bool(pip_spec) and pip_spec != DEFAULT_PIP_SPEC,
+        "package_override_set": override_set,
         "running": isinstance(manager, EmbeddedServerManager) and manager.is_running,
         "bring_up_in_progress": bringup is not None and not bringup.done(),
         "startup_error": _startup_error(hass, entry),
@@ -171,6 +181,24 @@ async def _async_server_summary(
         "webhook_auth": str(options.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE)),
         "external_url_set": bool(str(options.get(OPT_EXTERNAL_URL) or "").strip()),
     }
+
+
+def _server_dist(channel: str, override_set: bool, override_dist: str | None) -> str:
+    """The distribution whose metadata is read first for the installed version.
+
+    Without an override, the channel's own, so metadata a channel switch left
+    behind cannot mask the installed one. An override skips removing the other
+    channel's distribution, so either one's metadata can remain beside the
+    installed one. It is then read as bring-up reads it after installing an
+    override, stable first, unless the override names ``ha-mcp-dev``: a
+    repository tarball URL names no distribution and installs ``ha-mcp`` on
+    every channel.
+    """
+    if not override_set:
+        return dist_for_channel(channel)
+    if override_dist is not None and canonicalize_name(override_dist) == DIST_NAME_DEV:
+        return DIST_NAME_DEV
+    return DIST_NAME_STABLE
 
 
 def _startup_error(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, str] | None:

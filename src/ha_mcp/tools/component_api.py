@@ -49,6 +49,8 @@ logger = logging.getLogger(__name__)
 # The WS command every 1.1.0+ component registers; probing it does double duty
 # (existence check + capability enumeration — see module docstring).
 INFO_COMMAND = "ha_mcp_tools/info"
+# The ``result`` of an ``info`` call, as ``read_info`` returns it.
+InfoResult = dict[str, Any]
 
 # HA's structured error code for a command no handler is registered for. Routing
 # keys off this (via the ``code`` attribute threaded onto
@@ -412,7 +414,7 @@ def invalidate_caps(client: Any) -> None:
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
 
 
-async def read_info(client: Any) -> dict[str, Any] | None:
+async def read_info(client: Any) -> InfoResult | None:
     """The ``result`` of a fresh ``ha_mcp_tools/info`` call (#2584).
 
     For callers that show a field which can change while the client lives:
@@ -444,27 +446,27 @@ async def read_info(client: Any) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
-async def read_component_version(client: Any) -> str | None:
-    """The component version for a report: fresh, else the snapshot's.
+async def read_component_version(client: Any, info: InfoResult | None) -> str | None:
+    """The component version for a report: from ``info``, else the snapshot's.
 
-    A failed fresh read falls back to the snapshot, which still shows the
-    component is installed (an ``unknown_command`` drops it, so the version
-    then comes from a fresh probe). ``""`` when the component reports no
+    ``info`` is a ``read_info`` result. When that read failed, the snapshot
+    still shows the component is installed. After an ``unknown_command``,
+    ``read_info`` has dropped the snapshot, so the re-probe normally finds no
+    ``info`` either and the result is None. ``""`` when the component reports no
     version; None only when there is no usable ``info``.
     """
-    info = await read_info(client)
     if info is not None:
         return str(info.get("component_version") or "")
     caps = await get_component_caps(client)
     return caps.component_version if caps is not None else None
 
 
-async def read_webhook_auth(client: Any) -> str | None:
-    """The server entry's webhook auth mode from a fresh ``info`` read.
+def webhook_auth(info: InfoResult | None) -> str | None:
+    """The server entry's webhook auth mode from a ``read_info`` result.
 
-    None without a server entry, on a component too old to report the mode or
-    reporting a non-string, or when ``read_info`` returns None.
+    Python None, not the ``"none"`` mode: without ``info``, or when its
+    ``webhook_auth`` is missing (an older component) or not a string. The
+    component sends None without a running in-process server.
     """
-    info = await read_info(client)
     auth = info.get("webhook_auth") if info else None
     return auth if isinstance(auth, str) else None

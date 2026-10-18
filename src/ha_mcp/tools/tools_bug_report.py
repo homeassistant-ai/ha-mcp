@@ -55,7 +55,7 @@ from .bug_report_templates import (
     _suggested_title,
 )
 from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION, parse_string_list_param
-from .component_api import read_component_version, read_webhook_auth
+from .component_api import InfoResult, read_component_version, read_info, webhook_auth
 from .helpers import (
     log_tool_usage,
     raise_tool_error,
@@ -684,12 +684,12 @@ class BugReportTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    async def _detect_component_version(self) -> str | None:
+    async def _detect_component_version(self, info: InfoResult | None) -> str | None:
         """Read the ha_mcp_tools custom component's version, best-effort.
 
-        Prefers a fresh ``ha_mcp_tools/info`` read (``read_component_version``):
-        the cached capability snapshot would still hold the version running when
-        the client first probed, which outlives a component update on a server
+        Prefers the report's fresh ``ha_mcp_tools/info`` read (``info``): the
+        cached capability snapshot would still hold the version running when the
+        client first probed, which outlives a component update on a server
         running outside HA; the snapshot only stands in when the fresh read
         fails. A component without a usable ``info`` (the 0.11.0-1.1.0 band has
         services but no such command) falls back to the ``get_caller_token``
@@ -697,8 +697,8 @@ class BugReportTools:
         Returns None when the component is not installed or the call fails —
         the report path must never break on it.
         """
-        # read_component_version never raises (None on every failure).
-        version = await read_component_version(self._client)
+        # None means no usable info.
+        version = await read_component_version(self._client, info)
         if version is not None:
             return version or None
         try:
@@ -743,14 +743,14 @@ class BugReportTools:
             return "set up, but the component is pre-0.5.0 (update via HACS)"
         return "set up (ha_mcp_tools services registered)"
 
-    async def _detect_server_entry_status(self) -> str | None:
+    async def _detect_server_entry_status(self, info: InfoResult | None) -> str | None:
         """Describe the in-process "HA-MCP Server" entry state, best-effort.
 
         Both parts of the component share the ``ha_mcp_tools`` domain; the File
         & YAML part is covered by the services probe. Entries are classified by
         flow-assigned title, so e.g. an add-on install that also added a redundant
         server entry shows next to Installation Method. A recognized server entry
-        gets the webhook auth mode when a fresh ``info`` call reports one.
+        gets the webhook auth mode when the report's ``info`` read has one.
         Returns None when ``config_entries/get`` fails; the report must not break.
         """
         try:
@@ -767,7 +767,7 @@ class BugReportTools:
             return None
         server, unrecognized = _classify_component_entries(result)
         if server:
-            auth = await read_webhook_auth(self._client)
+            auth = webhook_auth(info)
             return ", ".join(server) + (f", webhook auth: {auth}" if auth else "")
         if unrecognized:
             # A renamed entry cannot be classified by title — report it
@@ -1015,9 +1015,11 @@ class BugReportTools:
         )
         user_agent = _http_user_agent()
         installed_version = await asyncio.to_thread(_detect_installed_version)
-        component_version = await self._detect_component_version()
+        # One read_info call, so the version and the auth mode share an answer.
+        component_info = await read_info(self._client)
+        component_version = await self._detect_component_version(component_info)
         tools_entry_status = await self._detect_tools_entry_status()
-        server_entry_status = await self._detect_server_entry_status()
+        server_entry_status = await self._detect_server_entry_status(component_info)
 
         diagnostic_info: dict[str, Any] = {
             "ha_mcp_version": __version__,

@@ -2057,8 +2057,8 @@ def _installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
     Invalidates the import caches first so a just-completed pip install is seen.
     Checks both the stable (``ha-mcp``) and dev (``ha-mcp-dev``) distribution
     names, mirroring ``ha_mcp._version.get_version``. When ``preferred_dist`` is
-    provided, checks that channel first so stale metadata from a failed
-    best-effort conflicting uninstall cannot mask the package just installed.
+    provided, checks that distribution first so stale metadata (a failed or
+    skipped conflicting uninstall) cannot mask the package just installed.
     """
     _safe_invalidate_caches()
     # Metadata alone is not proof: a channel switch's best-effort uninstall

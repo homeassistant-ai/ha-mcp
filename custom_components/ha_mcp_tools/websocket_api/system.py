@@ -12,6 +12,7 @@ from .. import template_diagnose
 from ..const import (
     COMPONENT_VERSION,
     CONF_ENTRY_TYPE,
+    DATA_WEBHOOK,
     DEFAULT_PIP_SPEC,
     DOMAIN,
     ENTRY_TYPE_SERVER,
@@ -129,12 +130,18 @@ def _server_webhook_auth(hass: HomeAssistant | None) -> str | None:
     ``info``, because either entry type may answer it. Options are read as
     bring-up reads them. ``disabled`` when the webhook is turned off (local-only
     mode): no webhook request is authenticated then, and a reader of ``none``
-    would assume an open webhook.
+    would assume an open webhook. ``None`` as well while no webhook
+    registration exists (``DATA_WEBHOOK``, stored by bring-up once the server
+    has started and removed by teardown): the entry is disabled or unloaded,
+    or its bring-up has not got that far or failed, which leaves it loaded.
     """
     if hass is None:
         return None
     entry = _find_server_config_entry(hass)
     if entry is None:
+        return None
+    domain_data = _hass_data_get(hass, DOMAIN)
+    if not isinstance(domain_data, Mapping) or domain_data.get(DATA_WEBHOOK) is None:
         return None
     options = getattr(entry, "options", None)
     opts = options if isinstance(options, Mapping) else {}

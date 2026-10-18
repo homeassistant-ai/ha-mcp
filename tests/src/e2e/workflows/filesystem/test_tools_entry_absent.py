@@ -158,7 +158,8 @@ async def test_shared_capabilities_survive_per_topology(mcp_client):
     Pins acceptance criterion 3. On the server-entry lanes the component's
     ``ha_mcp_tools/info`` probe answers even with no tools entry (#2291), which
     is exactly what makes the gating meaningful rather than "the component is
-    simply gone"; ``ha_report_issue``'s diagnostics report that probe's result.
+    simply gone"; ``ha_report_issue`` reads the component version there from a
+    fresh ``info`` call.
     Where there is no component, the same shared surface must still be served
     by the legacy REST path.
     """
