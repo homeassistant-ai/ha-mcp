@@ -187,6 +187,33 @@ async def test_token_repair_starts_the_server_with_the_new_token(
     hass.config_entries.async_schedule_reload.assert_called_once_with("srv1")
 
 
+async def test_token_repair_takes_an_accounts_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from custom_components.ha_mcp_tools import server_credentials
+
+    entry = MagicMock(entry_id="srv1", data={"webhook_id": "w"})
+    hass = _token_hass(monkeypatch, problem=None, entry=entry)
+    monkeypatch.setattr(
+        server_credentials,
+        "async_credential_from_input",
+        AsyncMock(return_value=("issued-tok", "i1")),
+    )
+    flow = await _token_flow(hass)
+
+    result = await flow.async_step_token(
+        {"admin_username": "ha-mcp", "admin_password": "pw"}
+    )
+
+    assert result["type"] == "create_entry"
+    update = hass.config_entries.async_update_entry.call_args
+    assert update.kwargs["data"] == {
+        "webhook_id": "w",
+        "admin_token": "issued-tok",
+        "issued_token_id": "i1",
+    }
+
+
 async def test_token_repair_keeps_asking_until_the_token_works(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -248,7 +275,14 @@ def test_token_repair_catalog_explains_every_refusal(catalog_path: str) -> None:
     root = Path(__file__).parents[3]
     catalog = json.loads((root / catalog_path).read_text())
     step = catalog["issues"]["server_token_needed"]["fix_flow"]
-    for reason in ("invalid_token", "token_not_long_lived", "token_not_admin"):
+    for reason in (
+        "invalid_token",
+        "token_not_long_lived",
+        "token_not_admin",
+        "invalid_login",
+        "login_not_admin",
+        "credentials_needed",
+    ):
         assert step["error"][reason]
 
 

@@ -422,6 +422,9 @@ DATA_REFRESH_TOKEN_ID = "refresh_token_id"
 # The server runs with it; entries from older releases may instead carry the
 # provisioned DATA_SERVER_USER_ID / DATA_REFRESH_TOKEN_ID pair.
 DATA_ADMIN_TOKEN = "admin_token"
+# The refresh token behind DATA_ADMIN_TOKEN when the component issued it from
+# an account's login (#2427), so a switch or the entry's removal revokes it.
+DATA_ISSUED_TOKEN_ID = "issued_token_id"
 DATA_ACCESS_TOKEN = "access_token"
 # Last pip spec that was successfully installed. Lets a changed spec (a
 # pip-spec override) force an actual reinstall on the next start instead

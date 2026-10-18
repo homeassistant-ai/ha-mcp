@@ -644,11 +644,17 @@ class TestServerOptionsFlow:
         for key in text_fields:
             assert markers[key].description["suggested_value"] == saved[key]
 
-        # The administrator token is never pre-filled from anything saved.
+        # The administrator token and login are never pre-filled from anything saved.
         defaults = {
             key: m.default()
             for key, m in markers.items()
-            if key not in (*text_fields, const.OPT_ADMIN_TOKEN_REPLACEMENT)
+            if key
+            not in (
+                *text_fields,
+                const.OPT_ADMIN_TOKEN_REPLACEMENT,
+                cf.server_credentials.ADMIN_USERNAME,
+                cf.server_credentials.ADMIN_PASSWORD,
+            )
         }
         # regenerate_secrets is a one-shot action, never pre-filled True;
         # enable_webhook / enable_startup_notification / enable_sidebar_panel

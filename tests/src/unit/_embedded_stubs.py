@@ -498,7 +498,12 @@ def install() -> None:
 
     # Specific-shape modules the embedded chain imports. Not stubbed by any
     # other unit-test module, so a direct assignment is safe.
-    setmod("homeassistant.auth", const=None, models=None)
+    class InvalidAuth(Exception):
+        """Stand-in for the homeassistant auth provider's refused login."""
+
+    setmod("homeassistant.auth", const=None, models=None, providers=None)
+    setmod("homeassistant.auth.providers", homeassistant=None)
+    setmod("homeassistant.auth.providers.homeassistant", InvalidAuth=InvalidAuth)
     setmod("homeassistant.auth.const", GROUP_ID_ADMIN=GROUP_ID_ADMIN)
     setmod(
         "homeassistant.auth.models",

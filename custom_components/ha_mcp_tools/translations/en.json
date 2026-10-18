@@ -19,12 +19,16 @@
                 "data": {
                     "remote_access": "Remote access through Home Assistant",
                     "bind_host": "Network access",
-                    "admin_token": "Administrator access token"
+                    "admin_token": "Or: an administrator access token",
+                    "admin_username": "Administrator account: user name",
+                    "admin_password": "Password"
                 },
                 "data_description": {
                     "remote_access": "Lets MCP clients connect through a Home Assistant webhook, which works wherever Home Assistant is reachable (including Nabu Casa). Home Assistant sign-in: clients such as claude.ai log in with a Home Assistant administrator account. Legacy OAuth: a Client ID and Secret to paste into clients that need one. Secret URL: the webhook link itself is the only credential - anyone who has it can use every tool.",
                     "bind_host": "Who can connect to the server's own port directly. This machine only is the safe default. Local network lets other devices on your network connect with the secret direct-access URL shown on the Configure screen.",
-                    "admin_token": "A long-lived access token the server uses to reach Home Assistant. Recommended: under Settings → People → Add person, create an account for the server with Allow login, Local access only and Administrator turned on. Log in as it, open its profile (its name at the bottom of the sidebar), select the Security tab, and under Long-lived access tokens select Create token. Its token then works only from your local network, where the server runs, and Home Assistant records the server's changes under that account. Any administrator's token works: the server acts with its account's permissions."
+                    "admin_token": "Instead of a user name and password: paste a long-lived access token of an administrator account (its profile → Security → Long-lived access tokens → Create token).",
+                    "admin_username": "The server works with an administrator account's access. Enter the user name and password of your own administrator account, or of one you made for HA-MCP: Home Assistant creates a long-lived access token for it, named HA-MCP Server, and the password is not kept. Safest: make an account just for HA-MCP under Settings → People → Add person, with Allow login, Local access only and Administrator on. Its token then works only from your local network, where the server runs, and Home Assistant records the server's changes under that account.",
+                    "admin_password": "Used once, to create the token."
                 }
             }
         },
@@ -35,7 +39,10 @@
         "error": {
             "invalid_token": "Home Assistant does not recognise this token. Copy the whole token, or create a new one.",
             "token_not_long_lived": "This is a temporary sign-in token, which expires. Create a long-lived access token instead.",
-            "token_not_admin": "This token belongs to an account that is not an active administrator."
+            "token_not_admin": "This token belongs to an account that is not an active administrator.",
+            "invalid_login": "Home Assistant does not accept this user name and password.",
+            "login_not_admin": "This account is not an administrator.",
+            "credentials_needed": "Enter an administrator account's user name and password, or paste an access token."
         }
     },
     "options": {
@@ -46,7 +53,10 @@
             "too_many_oauth_callbacks": "List at most {max_callbacks} callbacks.",
             "invalid_token": "Home Assistant does not recognise this token. Copy the whole token, or create a new one.",
             "token_not_long_lived": "This is a temporary sign-in token, which expires. Create a long-lived access token instead.",
-            "token_not_admin": "This token belongs to an account that is not an active administrator."
+            "token_not_admin": "This token belongs to an account that is not an active administrator.",
+            "invalid_login": "Home Assistant does not accept this user name and password.",
+            "login_not_admin": "This account is not an administrator.",
+            "credentials_needed": "Enter an administrator account's user name and password, or paste an access token."
         },
         "step": {
             "tools_info": {
@@ -83,7 +93,9 @@
                     "enable_startup_notification": "Startup notification",
                     "enable_sidebar_panel": "Sidebar settings panel",
                     "oauth_redirect_allowlist": "Allowed OAuth callback URLs",
-                    "admin_token_replacement": "Replace the administrator access token (optional)"
+                    "admin_token_replacement": "Replace the administrator access token (optional)",
+                    "admin_username": "Switch to an account's login: user name (optional)",
+                    "admin_password": "Password"
                 },
                 "data_description": {
                     "server_port": "The port this server listens on. The ha-mcp app (add-on) uses 9583, so this defaults to 9584 to let both run side by side - if you don't run the app (add-on), any free port works.",
@@ -104,7 +116,9 @@
                     "enable_startup_notification": "Show a notification each time the server starts, pointing at the admin-only settings surfaces. Turn off to start silently - the connect URLs stay on this screen.",
                     "enable_sidebar_panel": "Show the HA-MCP settings panel in the sidebar (administrators only). Turn off to remove the sidebar entry - server options stay available on this screen.",
                     "oauth_redirect_allowlist": "Only used while Authentication mode is the secret webhook URL. When a client signs in with OAuth, HA-MCP returns the sign-in only to a callback URL on this list; any other is refused with a page explaining how to add it. Enter each callback exactly as the client sends it. An http:// loopback callback (127.0.0.1, [::1] or localhost) also matches on any port. Clients that connect with the webhook URL alone need no entry. Takes effect without a restart.",
-                    "admin_token_replacement": "Leave empty to keep the current token. To switch to another one, paste an administrator's long-lived access token; the server restarts with it. Recommended: under Settings → People → Add person, create an account for the server with Allow login, Local access only and Administrator turned on. Log in as it, open its profile (its name at the bottom of the sidebar), select the Security tab, and under Long-lived access tokens select Create token. Its token then works only from your local network, where the server runs, and Home Assistant records the server's changes under that account. Any administrator's token works: the server acts with its account's permissions."
+                    "admin_token_replacement": "Instead of a user name and password: paste a long-lived access token of an administrator account (its profile → Security → Long-lived access tokens → Create token).",
+                    "admin_username": "Leave empty to keep the current access. To switch, enter an administrator account's user name and password, or paste a token in the field below; the server restarts with it. Enter the user name and password of your own administrator account, or of one you made for HA-MCP: Home Assistant creates a long-lived access token for it, named HA-MCP Server, and the password is not kept. Safest: make an account just for HA-MCP under Settings → People → Add person, with Allow login, Local access only and Administrator on. Its token then works only from your local network, where the server runs, and Home Assistant records the server's changes under that account.",
+                    "admin_password": "Used once, to create the token."
                 }
             }
         }
@@ -150,16 +164,21 @@
                 "step": {
                     "token": {
                         "title": "Enter an administrator access token",
-                        "description": "The HA-MCP in-process server has no Home Assistant token it can use, so it is not running. The token may be missing, revoked or expired, or its account may no longer be an active administrator. Recommended: under Settings → People → Add person, create an account for the server with Allow login, Local access only and Administrator turned on. Log in as it, open its profile (its name at the bottom of the sidebar), select the Security tab, and under Long-lived access tokens select Create token. Its token then works only from your local network, where the server runs, and Home Assistant records the server's changes under that account. Any administrator's token works: the server acts with its account's permissions.",
+                        "description": "The HA-MCP in-process server has no Home Assistant token it can use, so it is not running. The token may be missing, revoked or expired, or its account may no longer be an active administrator. Enter an administrator account's user name and password, yours or one made for HA-MCP, and Home Assistant creates a new token for it; or paste a long-lived access token instead.",
                         "data": {
-                            "admin_token": "Administrator access token"
+                            "admin_token": "Or: an administrator access token",
+                            "admin_username": "Administrator account: user name",
+                            "admin_password": "Password"
                         }
                     }
                 },
                 "error": {
                     "invalid_token": "Home Assistant does not recognise this token. Copy the whole token, or create a new one.",
                     "token_not_long_lived": "This is a temporary sign-in token, which expires. Create a long-lived access token instead.",
-                    "token_not_admin": "This token belongs to an account that is not an active administrator."
+                    "token_not_admin": "This token belongs to an account that is not an active administrator.",
+                    "invalid_login": "Home Assistant does not accept this user name and password.",
+                    "login_not_admin": "This account is not an administrator.",
+                    "credentials_needed": "Enter an administrator account's user name and password, or paste an access token."
                 },
                 "abort": {
                     "entry_removed": "The HA-MCP Server entry no longer exists."

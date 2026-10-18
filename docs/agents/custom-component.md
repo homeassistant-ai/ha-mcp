@@ -135,9 +135,11 @@ When changing component-backed behavior:
 ## Embedded server security
 
 The in-process server accepts active human Home Assistant administrators and
-makes upstream calls with an administrator's long-lived access token entered at
-setup (`server_credentials.py`). The component never creates an account or
-token: entries from older releases keep their provisioned pair while it works,
+makes upstream calls with an administrator's long-lived access token
+(`server_credentials.py`): one the user pastes, or one issued at setup from the
+login of an account the user chose, which the component revokes on a switch or
+removal. The component never creates an account: entries from older releases
+keep their provisioned pair while it works,
 and a missing or refused credential files the fixable `server_token_needed`
 repair instead. The token is passed in memory, not through the Home Assistant
 process environment; disabling the entry stops the server. Removing the entry

@@ -8,11 +8,6 @@ import voluptuous as vol
 from homeassistant import data_entry_flow
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.selector import (
-    TextSelector,
-    TextSelectorConfig,
-    TextSelectorType,
-)
 
 from . import server_credentials
 from .const import (
@@ -87,26 +82,30 @@ class ServerTokenRepairFlow(RepairsFlow):
             # Say why the stored token stopped working before asking for another.
             errors[_ADMIN_TOKEN] = self._reason
         if user_input is not None:
-            token = str(user_input.get(_ADMIN_TOKEN, "")).strip()
-            problem = server_credentials.token_problem(self.hass, token)
-            if problem is None:
+            fields = server_credentials.credential_fields(user_input, _ADMIN_TOKEN)
+            try:
+                token, issued = await server_credentials.async_credential_from_input(
+                    self.hass, **fields
+                )
+            except server_credentials.CredentialRefused as err:
+                errors[server_credentials.error_field(fields, _ADMIN_TOKEN)] = (
+                    err.reason
+                )
+            else:
                 self.hass.config_entries.async_update_entry(
                     entry,
                     data=server_credentials.adopt_admin_token(
-                        self.hass, entry.data, token
+                        self.hass, entry.data, token, issued
                     ),
                 )
                 self.hass.config_entries.async_schedule_reload(entry.entry_id)
                 return self.async_create_entry(data={})
-            errors[_ADMIN_TOKEN] = problem
         return self.async_show_form(
             step_id="token",
             data_schema=vol.Schema(
-                {
-                    vol.Required(_ADMIN_TOKEN): TextSelector(
-                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
-                    )
-                }
+                server_credentials.credential_schema(
+                    vol, _ADMIN_TOKEN, user_input or {}
+                )
             ),
             errors=errors,
         )

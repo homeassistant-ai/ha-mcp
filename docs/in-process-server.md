@@ -37,8 +37,9 @@ Once the in-process server config entry exists, it:
    installs it as an integration requirement when it loads the component (the
    first start takes a little longer while it downloads — see
    [First start](#first-start-takes-a-little-longer) below).
-2. Connects to Home Assistant over loopback with the administrator access token
-   you enter during setup.
+2. Connects to Home Assistant over loopback with an administrator account's
+   long-lived access token, created from that account's login during setup or
+   pasted in.
 3. Runs the server on its own thread so a slow tool call can never stall Home
    Assistant's event loop.
 4. Registers a Home Assistant webhook that forwards MCP traffic to the server, so
@@ -74,17 +75,20 @@ run current `ha-mcp` servers.
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.
 2. **Add the in-process server entry.** Go to **Settings → Devices & Services →
    Add Integration**, search for **HA-MCP Custom Component**, and — on the menu
-   that appears — choose **HA-MCP Server**. The setup form asks for an
-   **Administrator access token**: the server acts with that account's
-   permissions, so it must be an administrator's long-lived access token. We
-   recommend an account just for the server: under **Settings → People → Add
-   person**, turn on **Allow login**, **Local access only** and
-   **Administrator**, then log in as it, open its profile (its name at the
-   bottom of the sidebar), select the **Security** tab, and under **Long-lived
-   access tokens** select **Create token**. A local-only account's token works
-   only from your local network, where the server runs, so a leaked copy is
-   useless elsewhere, and Home Assistant records the server's changes under
-   that account instead of yours. It also asks how MCP clients may reach
+   that appears — choose **HA-MCP Server**. The server acts with an
+   administrator account's permissions, so the form asks for one: enter the
+   user name and password of your own administrator account, or of one you
+   made for HA-MCP, and Home Assistant creates a long-lived access token for
+   it named **HA-MCP Server** (the password is not kept). Or paste a
+   long-lived access token instead. The safest choice is an account just for
+   the server, made under **Settings → People → Add person** with **Allow
+   login**, **Local access only** and **Administrator** on, the way you would
+   make one for an MQTT client. Its token works only from your local network,
+   where the server runs, so a leaked copy is useless elsewhere, and Home
+   Assistant records the server's changes under that account instead of yours.
+   Nobody has to log in as it. Entering an account's password here does not
+   ask for its multi-factor code; only an administrator can open this form.
+   It also asks how MCP clients may reach
    the server: **Remote access through Home Assistant**
    (disabled by default; choose Home Assistant sign-in, legacy OAuth or the
    secret URL to let clients connect through a webhook) and **Network access**
@@ -364,11 +368,12 @@ All three postures ride Home Assistant's own remote access (Nabu Casa / your
 reverse proxy) for TLS. If you expose the server to the internet, prefer
 `ha_auth`; keep the `none` URL — or a `legacy` Client Secret — strictly private.
 
-The server reaches Home Assistant with the administrator's long-lived access
-token entered at setup, stored in the config entry and handed to the server
-in memory (never through the Home Assistant process environment). As with every
+The server reaches Home Assistant with an administrator account's long-lived
+access token: created at setup from the login of an account you chose, or
+pasted in. It is stored in the config entry and handed to the server in memory
+(never through the Home Assistant process environment). As with every
 deployment, that token's Home Assistant permissions define what the server can
-do. The component never creates a Home Assistant account or token of its own.
+do. The component never creates a Home Assistant account of its own.
 
 Entries created before this change keep the **HA-MCP Server** account and token
 an older release created, for as long as both work. If the token is missing,
@@ -377,12 +382,14 @@ server does not start and the repair **HA-MCP needs an administrator access
 token** asks for a new one. These checks run when the server starts. A token
 revoked while the server runs makes its requests fail until the next start, and
 an account that loses administrator rights keeps serving with the reduced
-rights until then. You can also switch tokens at any time with
-**Replace the administrator access token** in the entry's options. Switching
-revokes the token an older release created; its **HA-MCP Server** account stays
-until you remove the entry, or until you delete it yourself under **Settings →
-People → Users**. Removing the entry deletes only an account an older release
-created; it never touches the account your token belongs to.
+rights until then. You can also switch at any time in the entry's options,
+with another account's user name and password or a pasted token. Switching
+revokes a token HA-MCP created, from a login or by an older release; a token
+you pasted stays in its account's profile. The **HA-MCP Server** account an
+older release created stays until you remove the entry, or until you delete it
+yourself under **Settings → People → Users**. Removing the entry deletes only an account an older release
+created; it never touches the account your token belongs to, though it revokes
+a token HA-MCP created from a login.
 
 See [SECURITY.md](../SECURITY.md) for the full threat model.
 

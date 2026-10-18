@@ -1,12 +1,14 @@
 """How the in-process server gets its Home Assistant credential (#2427).
 
-New setups use an administrator's long-lived access token. Existing installs
-keep the user and token an older component created, while they still work.
-Nothing creates an administrator or a refresh token on its own any more.
+New setups use an administrator's long-lived access token, pasted in or issued
+from the login of an account the user chose. Existing installs keep the user
+and token an older component created, while they still work. Nothing creates an
+administrator any more.
 """
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -24,6 +26,7 @@ from custom_components.ha_mcp_tools import server_credentials as sc  # noqa: E40
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_ACCESS_TOKEN,
     DATA_ADMIN_TOKEN,
+    DATA_ISSUED_TOKEN_ID,
     DATA_REFRESH_TOKEN_ID,
     DATA_SERVER_USER_ID,
 )
@@ -62,6 +65,90 @@ def _hass(
     hass.auth.async_create_user = AsyncMock()
     hass.auth.async_create_refresh_token = AsyncMock()
     return hass
+
+
+def _login_hass(
+    user: SimpleNamespace | None, *, valid: bool = True, names: tuple[str, ...] = ()
+) -> MagicMock:
+    """A Home Assistant whose own auth provider knows ``user``'s login."""
+    invalid = sys.modules["homeassistant.auth.providers.homeassistant"].InvalidAuth
+
+    async def validate(_username: str, _password: str) -> None:
+        if not valid:
+            raise invalid
+
+    provider = SimpleNamespace(
+        type="homeassistant",
+        async_validate_login=validate,
+        async_get_or_create_credentials=AsyncMock(return_value="credentials"),
+    )
+    if user is not None:
+        user.refresh_tokens = {
+            str(i): SimpleNamespace(client_name=n) for i, n in enumerate(names)
+        }
+    hass = _hass()
+    hass.auth.auth_providers = [provider]
+    hass.auth.async_get_user_by_credentials = AsyncMock(return_value=user)
+    hass.auth.async_create_refresh_token = AsyncMock(
+        return_value=SimpleNamespace(id="issued1")
+    )
+    return hass
+
+
+class TestCredentialFromInput:
+    async def test_a_login_issues_a_long_lived_token_for_that_account(self) -> None:
+        # Nobody has to log in as the account (#2427), a local-only one included.
+        account = _user("u7")
+        hass = _login_hass(account)
+
+        got = await sc.async_credential_from_input(
+            hass, username="ha-mcp", password="pw"
+        )
+
+        assert got == ("minted", "issued1")
+        call = hass.auth.async_create_refresh_token.await_args
+        assert call.args == (account,)
+        assert call.kwargs["token_type"] == LLAT
+        assert call.kwargs["client_name"] == "HA-MCP Server"
+
+    async def test_a_wrong_login_issues_nothing(self) -> None:
+        hass = _login_hass(_user(), valid=False)
+        with pytest.raises(sc.CredentialRefused) as err:
+            await sc.async_credential_from_input(hass, username="x", password="bad")
+        assert err.value.reason == "invalid_login"
+        hass.auth.async_create_refresh_token.assert_not_awaited()
+
+    async def test_a_login_without_administrator_rights_issues_nothing(self) -> None:
+        hass = _login_hass(_user(admin=False))
+        with pytest.raises(sc.CredentialRefused) as err:
+            await sc.async_credential_from_input(hass, username="x", password="pw")
+        assert err.value.reason == "login_not_admin"
+        hass.auth.async_create_refresh_token.assert_not_awaited()
+
+    async def test_a_second_issued_token_does_not_collide_with_the_first(
+        self,
+    ) -> None:
+        # Home Assistant refuses a second long-lived token with the same name.
+        hass = _login_hass(_user(), names=("HA-MCP Server",))
+        await sc.async_credential_from_input(hass, username="x", password="pw")
+        call = hass.auth.async_create_refresh_token.await_args
+        assert call.kwargs["client_name"] == "HA-MCP Server 2"
+
+    async def test_a_pasted_token_is_used_without_a_login(self) -> None:
+        hass = _login_hass(_user())
+        hass.auth.async_validate_access_token = MagicMock(return_value=_rt())
+
+        got = await sc.async_credential_from_input(
+            hass, token="tok", username="x", password="pw"
+        )
+
+        assert got == ("tok", None)
+        hass.auth.async_create_refresh_token.assert_not_awaited()
+
+    async def test_an_empty_submission_asks_for_a_credential(self) -> None:
+        with pytest.raises(sc.CredentialRefused) as err:
+            await sc.async_credential_from_input(_login_hass(_user()))
+        assert err.value.reason == "credentials_needed"
 
 
 class TestTokenProblem:
@@ -199,6 +286,18 @@ class TestAdoptToken:
         hass.auth.async_remove_refresh_token.assert_not_called()
         assert new == {DATA_ADMIN_TOKEN: "tok"}
 
+    def test_switching_revokes_a_token_issued_from_a_login(self) -> None:
+        # The component made it, so a switch must not leave it behind.
+        issued = _rt("i1")
+        hass = _hass(refresh_tokens={"i1": issued})
+
+        new = sc.adopt_admin_token(
+            hass, {DATA_ADMIN_TOKEN: "old", DATA_ISSUED_TOKEN_ID: "i1"}, "tok", "i2"
+        )
+
+        hass.auth.async_remove_refresh_token.assert_called_once_with(issued)
+        assert new == {DATA_ADMIN_TOKEN: "tok", DATA_ISSUED_TOKEN_ID: "i2"}
+
     def test_switching_never_removes_an_account(self) -> None:
         hass = _hass(refresh_tokens={"rt1": _rt()})
         sc.adopt_admin_token(
@@ -208,6 +307,17 @@ class TestAdoptToken:
 
 
 class TestReleaseOnRemove:
+    async def test_a_token_issued_from_a_login_is_revoked(self) -> None:
+        issued = _rt("i1")
+        hass = _hass(refresh_tokens={"i1": issued})
+
+        await sc.async_release_credentials(
+            hass, {DATA_ADMIN_TOKEN: "tok", DATA_ISSUED_TOKEN_ID: "i1"}
+        )
+
+        hass.auth.async_remove_refresh_token.assert_called_once_with(issued)
+        hass.auth.async_remove_user.assert_not_awaited()
+
     async def test_a_supplied_token_and_its_account_are_left_alone(self) -> None:
         hass = _hass()
         data = {DATA_ADMIN_TOKEN: "user-token", "webhook_id": "w"}

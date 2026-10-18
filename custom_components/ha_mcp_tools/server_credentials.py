@@ -1,10 +1,11 @@
 """The Home Assistant credential the in-process server runs with (#2427).
 
-New setups use a long-lived access token an administrator creates and pastes
-in. Installs from before that keep the local administrator and token an older
-release created, for as long as both still work. Nothing here creates an
-account or a token: a missing or revoked credential stops the server and the
-user is asked for a replacement token.
+New setups use an administrator's long-lived access token: one the user
+pastes in, or one issued here from the login of an account the user chose,
+theirs or one made for the server. Installs from before that keep the local
+administrator and token an older release created, for as long as both still
+work. Nothing here creates an account: a missing or revoked credential stops
+the server and the user is asked for a replacement.
 
 Accounts are never removed on the user's behalf, except the one an older
 release created itself, and only when its config entry is deleted.
@@ -12,11 +13,13 @@ release created itself, and only when its config entry is deleted.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from .const import (
     DATA_ACCESS_TOKEN,
     DATA_ADMIN_TOKEN,
+    DATA_ISSUED_TOKEN_ID,
     DATA_REFRESH_TOKEN_ID,
     DATA_SERVER_USER_ID,
 )
@@ -30,19 +33,39 @@ if TYPE_CHECKING:
 
 # Why a token cannot run the server: the setup / repair error translation keys.
 TokenProblem = Literal["invalid_token", "token_not_long_lived", "token_not_admin"]
+# Why a submitted token or login was refused: the form error translation keys.
+CredentialProblem = (
+    TokenProblem | Literal["invalid_login", "login_not_admin", "credentials_needed"]
+)
+
+# The login fields of the setup, Configure and token-repair forms; never stored.
+ADMIN_USERNAME = "admin_username"
+ADMIN_PASSWORD = "admin_password"
+
+_ISSUED_TOKEN_NAME = "HA-MCP Server"
+# The lifespan the profile page gives a token made there.
+_ISSUED_TOKEN_LIFESPAN = timedelta(days=3650)
 
 
-class CredentialNeeded(Exception):
+class _CredentialError(Exception):
+    """A credential problem; ``reason`` is its translation key."""
+
+    def __init__(self, reason: str) -> None:
+        """Keep the reason the credential was refused."""
+        super().__init__(reason)
+        self.reason = reason
+
+
+class CredentialRefused(_CredentialError):
+    """A submitted token or login cannot run the server (a CredentialProblem)."""
+
+
+class CredentialNeeded(_CredentialError):
     """The server has no usable credential.
 
     ``reason`` is a :data:`TokenProblem`, or ``"missing_token"`` when an older
     release's provisioned credential is gone.
     """
-
-    def __init__(self, reason: TokenProblem | Literal["missing_token"]) -> None:
-        """Keep the reason the credential was refused."""
-        super().__init__(reason)
-        self.reason = reason
 
 
 def token_problem(hass: HomeAssistant, token: str) -> TokenProblem | None:
@@ -91,8 +114,114 @@ async def async_server_access_token(hass: HomeAssistant, entry: Any) -> str:
     return str(hass.auth.async_create_access_token(refresh_token))
 
 
+async def async_credential_from_input(
+    hass: HomeAssistant, *, token: str = "", username: str = "", password: str = ""
+) -> tuple[str, str | None]:
+    """The token to run the server with, and its refresh-token id if issued here.
+
+    A pasted token wins. Otherwise the login of an administrator account, the
+    user's own or one made for the server, is checked against Home Assistant's
+    users and a long-lived token is issued for that account, so nobody has to
+    log in as it. A local-only account's token works: the server reaches Home
+    Assistant over loopback. Raises CredentialRefused.
+    """
+    if token:
+        if (problem := token_problem(hass, token)) is not None:
+            raise CredentialRefused(problem)
+        return token, None
+    if not (username and password):
+        raise CredentialRefused("credentials_needed")
+    from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+    from homeassistant.auth.providers.homeassistant import InvalidAuth
+
+    provider = next(
+        (p for p in hass.auth.auth_providers if p.type == "homeassistant"), None
+    )
+    if provider is None:
+        raise CredentialRefused("invalid_login")
+    try:
+        await provider.async_validate_login(username, password)
+    except InvalidAuth:
+        raise CredentialRefused("invalid_login") from None
+    credentials = await provider.async_get_or_create_credentials({"username": username})
+    user = await hass.auth.async_get_user_by_credentials(credentials)
+    if user is None or not user.is_active:
+        raise CredentialRefused("invalid_login")
+    if not user.is_admin:
+        raise CredentialRefused("login_not_admin")
+    # Home Assistant allows one long-lived token per name and account.
+    taken = {rt.client_name for rt in user.refresh_tokens.values()}
+    name, n = _ISSUED_TOKEN_NAME, 1
+    while name in taken:
+        n += 1
+        name = f"{_ISSUED_TOKEN_NAME} {n}"
+    refresh_token = await hass.auth.async_create_refresh_token(
+        user,
+        client_name=name,
+        token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN,
+        access_token_expiration=_ISSUED_TOKEN_LIFESPAN,
+    )
+    return hass.auth.async_create_access_token(refresh_token), refresh_token.id
+
+
+def credential_fields(
+    user_input: Mapping[str, Any], token_field: str
+) -> dict[str, str]:
+    """The token and login a form submitted, as keyword arguments."""
+    return {
+        "token": str(user_input.get(token_field) or "").strip(),
+        "username": str(user_input.get(ADMIN_USERNAME) or "").strip(),
+        "password": str(user_input.get(ADMIN_PASSWORD) or ""),
+    }
+
+
+def credential_schema(
+    vol: Any, token_field: str, values: Mapping[str, Any]
+) -> dict[Any, Any]:
+    """Form fields: an administrator account's login, or a token instead.
+
+    ``vol`` is the caller's voluptuous, the one its own schema is built with.
+    """
+    from homeassistant.helpers.selector import (
+        TextSelector,
+        TextSelectorConfig,
+        TextSelectorType,
+    )
+
+    return {
+        vol.Optional(
+            ADMIN_USERNAME,
+            description={"suggested_value": values.get(ADMIN_USERNAME)},
+        ): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.TEXT, autocomplete="username")
+        ),
+        vol.Optional(ADMIN_PASSWORD): TextSelector(
+            TextSelectorConfig(
+                type=TextSelectorType.PASSWORD, autocomplete="current-password"
+            )
+        ),
+        vol.Optional(token_field): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        ),
+    }
+
+
+def error_field(fields: Mapping[str, str], token_field: str) -> str:
+    """Where a refusal shows: on the token field for a token, else the form."""
+    return token_field if fields["token"] else "base"
+
+
+def _revoke(hass: HomeAssistant, rt_id: Any, keep: Any = None) -> None:
+    refresh_token = hass.auth.async_get_refresh_token(rt_id) if rt_id else None
+    if refresh_token is not None and (keep is None or keep.id != refresh_token.id):
+        hass.auth.async_remove_refresh_token(refresh_token)
+
+
 def adopt_admin_token(
-    hass: HomeAssistant, data: Mapping[str, Any], token: str
+    hass: HomeAssistant,
+    data: Mapping[str, Any],
+    token: str,
+    issued_id: str | None = None,
 ) -> dict[str, Any]:
     """Return ``data`` switched to ``token``.
 
@@ -102,25 +231,25 @@ def adopt_admin_token(
     still deletes it, unless ``token`` belongs to that very account: an
     administrator who took a token from it has made it their own, so its id is
     dropped here, while the token is known to be valid, rather than inferred at
-    removal time from a token that may be revoked by then.
+    removal time from a token that may be revoked by then. A token issued here
+    from a login is revoked on a switch too; ``issued_id`` marks the new token
+    when it was issued here.
     """
     # Identify the replacement before revoking anything: it may be backed by
     # the very refresh token an older release provisioned.
     supplied = hass.auth.async_validate_access_token(token)
     owner_id = supplied.user.id if supplied is not None else None
-    rt_id = data.get(DATA_REFRESH_TOKEN_ID)
-    refresh_token = hass.auth.async_get_refresh_token(rt_id) if rt_id else None
-    if refresh_token is not None and (
-        supplied is None or supplied.id != refresh_token.id
-    ):
-        hass.auth.async_remove_refresh_token(refresh_token)
+    _revoke(hass, data.get(DATA_REFRESH_TOKEN_ID), keep=supplied)
+    _revoke(hass, data.get(DATA_ISSUED_TOKEN_ID), keep=supplied)
     new = {
         k: v
         for k, v in data.items()
-        if k not in (DATA_REFRESH_TOKEN_ID, DATA_ACCESS_TOKEN)
+        if k not in (DATA_REFRESH_TOKEN_ID, DATA_ACCESS_TOKEN, DATA_ISSUED_TOKEN_ID)
         and not (k == DATA_SERVER_USER_ID and v == owner_id)
     }
     new[DATA_ADMIN_TOKEN] = token
+    if issued_id:
+        new[DATA_ISSUED_TOKEN_ID] = issued_id
     return new
 
 
@@ -136,13 +265,13 @@ async def async_release_credentials(
 ) -> None:
     """Drop the credential when the entry is deleted.
 
-    A supplied token belongs to the user, who revokes it in their profile.
-    Only the account an older release created for itself is removed, and not
-    even that one once the supplied token belongs to it.
+    A pasted token belongs to the user, who revokes it in their profile; one
+    issued here from a login is revoked. Only the account an older release
+    created for itself is removed, and not even that one once the supplied
+    token belongs to it.
     """
-    rt_id = data.get(DATA_REFRESH_TOKEN_ID)
-    if rt_id and (refresh_token := hass.auth.async_get_refresh_token(rt_id)):
-        hass.auth.async_remove_refresh_token(refresh_token)
+    _revoke(hass, data.get(DATA_REFRESH_TOKEN_ID))
+    _revoke(hass, data.get(DATA_ISSUED_TOKEN_ID))
     user_id = data.get(DATA_SERVER_USER_ID)
     if (
         user_id

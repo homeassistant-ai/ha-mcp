@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -38,7 +39,12 @@ class TestServerBranch:
         values = {
             marker.schema: marker.default()
             for marker in form["data_schema"].schema
-            if marker.schema != cf.SETUP_ADMIN_TOKEN
+            if marker.schema
+            not in (
+                cf.SETUP_ADMIN_TOKEN,
+                cf.server_credentials.ADMIN_USERNAME,
+                cf.server_credentials.ADMIN_PASSWORD,
+            )
         }
         return {**values, cf.SETUP_ADMIN_TOKEN: self.TOKEN}
 
@@ -122,6 +128,54 @@ class TestServerBranch:
 
         assert result["type"] == "form"
         assert result["errors"] == {cf.SETUP_ADMIN_TOKEN: "invalid_token"}
+
+    def test_an_accounts_login_sets_up_the_server_without_a_pasted_token(
+        self, monkeypatch
+    ):
+        # #2427: the token is issued for the account; its id is kept so a
+        # switch or the entry's removal revokes it.
+        issue = AsyncMock(return_value=("issued-tok", "i1"))
+        monkeypatch.setattr(cf.server_credentials, "async_credential_from_input", issue)
+        flow = _make_flow()
+        form = asyncio.run(flow.async_step_server(None))
+        values = {
+            **self._defaults(form),
+            cf.SETUP_ADMIN_TOKEN: "",
+            cf.server_credentials.ADMIN_USERNAME: " ha-mcp ",
+            cf.server_credentials.ADMIN_PASSWORD: "pw",
+        }
+
+        entry = asyncio.run(flow.async_step_server(values))
+
+        assert issue.await_args.kwargs == {
+            "token": "",
+            "username": "ha-mcp",
+            "password": "pw",
+        }
+        assert entry["data"][const.DATA_ADMIN_TOKEN] == "issued-tok"
+        assert entry["data"][const.DATA_ISSUED_TOKEN_ID] == "i1"
+        assert cf.server_credentials.ADMIN_PASSWORD not in entry["options"]
+
+    def test_a_refused_login_keeps_the_form_open(self, monkeypatch):
+        monkeypatch.setattr(
+            cf.server_credentials,
+            "async_credential_from_input",
+            AsyncMock(
+                side_effect=cf.server_credentials.CredentialRefused("invalid_login")
+            ),
+        )
+        flow = _make_flow()
+        form = asyncio.run(flow.async_step_server(None))
+        values = {
+            **self._defaults(form),
+            cf.SETUP_ADMIN_TOKEN: "",
+            cf.server_credentials.ADMIN_USERNAME: "ha-mcp",
+            cf.server_credentials.ADMIN_PASSWORD: "bad",
+        }
+
+        result = asyncio.run(flow.async_step_server(values))
+
+        assert result["errors"] == {"base": "invalid_login"}
 
     def test_an_abandoned_setup_does_not_block_a_new_one(self):
         # A setup dialog that never aborts (tab closed mid-setup) stays open
@@ -335,6 +389,32 @@ class TestAdminTokenReplacement:
         )
         assert result["errors"] == {
             const.OPT_ADMIN_TOKEN_REPLACEMENT: "token_not_admin"
+        }
+
+    def test_an_accounts_login_switches_the_server_and_is_never_stored(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            cf.server_credentials,
+            "async_credential_from_input",
+            AsyncMock(return_value=("issued-tok", "i1")),
+        )
+        flow = self._token_flow()
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    cf.server_credentials.ADMIN_USERNAME: "ha-mcp",
+                    cf.server_credentials.ADMIN_PASSWORD: "pw",
+                }
+            )
+        )
+        assert cf.server_credentials.ADMIN_USERNAME not in result["data"]
+        assert cf.server_credentials.ADMIN_PASSWORD not in result["data"]
+        update = flow.hass.config_entries.async_update_entry.call_args
+        assert update.kwargs["data"] == {
+            "webhook_id": "w",
+            "admin_token": "issued-tok",
+            "issued_token_id": "i1",
         }
 
     def test_leaving_it_empty_keeps_the_current_token(self):
