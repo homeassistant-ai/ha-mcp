@@ -30,7 +30,7 @@
   "src/ha_mcp/tools/tools_dev.py": 2398,
   "src/ha_mcp/tools/tools_entities.py": 2218,
   "src/ha_mcp/tools/tools_filesystem.py": 1085,
-  "src/ha_mcp/tools/tools_history.py": 1102,
+  "src/ha_mcp/tools/tools_history.py": 1100,
   "src/ha_mcp/tools/tools_integrations.py": 3004,
   "src/ha_mcp/tools/tools_registry.py": 1117,
   "src/ha_mcp/tools/tools_resources.py": 1177,
