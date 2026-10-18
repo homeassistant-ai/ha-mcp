@@ -16,7 +16,11 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.models import ErrorLogPage
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.log_sources import _SYSTEM_LOG_MESSAGE_CAP
 from ha_mcp.tools.tools_logs import LogTools
 
@@ -41,6 +45,22 @@ def _no_real_caps_probe():
         AsyncMock(side_effect=HomeAssistantConnectionError("no WS in unit tests")),
     ):
         yield
+
+
+@pytest.fixture
+def component_caps():
+    """Pretend the component advertises ``logbook_events``."""
+    caps = ComponentCaps(
+        schema_version=1,
+        component_version="2.2.3",
+        capabilities=frozenset({"logbook_events"}),
+        limits={},
+    )
+    with patch(
+        "ha_mcp.tools.log_sources_logbook.get_component_caps",
+        AsyncMock(return_value=caps),
+    ):
+        yield caps
 
 
 def _call_kwargs(**overrides):
@@ -202,30 +222,50 @@ class TestLogbookOrder:
         assert data["total_entries"] == 1
 
 
-class TestLogbookWebSocket:
-    """source='logbook' — Core WS logbook/get_events with a REST fallback."""
+class TestLogbookTransports:
+    """source='logbook' — component → REST → WS transport routing."""
 
     @staticmethod
     def _client(
         ws_result: Any = None,
+        ws_payload: Any = None,
         ws_error: Exception | None = None,
-        states: list[dict[str, Any]] | None = None,
     ) -> AsyncMock:
         client = AsyncMock()
         if ws_error is not None:
             client.send_websocket_message = AsyncMock(side_effect=ws_error)
+        elif ws_payload is not None:
+            client.send_websocket_message = AsyncMock(return_value=ws_payload)
         else:
             client.send_websocket_message = AsyncMock(
                 return_value={"success": True, "result": ws_result or []}
             )
-        client.get_states = AsyncMock(return_value=states or [])
         client.get_logbook = AsyncMock(return_value=[])
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         return client
 
     @staticmethod
+    def _component_rows() -> list[dict[str, Any]]:
+        """Native component/REST rows: ISO ``when``, names from Core."""
+        return [
+            {
+                "state": "on",
+                "entity_id": "light.kitchen",
+                "name": "Kitchen Light",
+                "when": "2026-06-16T00:00:00+00:00",
+            },
+            {
+                "name": "Movie night",
+                "message": "started",
+                "domain": "automation",
+                "entity_id": "automation.movie_night",
+                "when": "2026-06-16T00:01:00+00:00",
+            },
+        ]
+
+    @staticmethod
     def _ws_events() -> list[dict[str, Any]]:
-        """Raw WS shapes: epoch-second ``when``, no ``name`` on state rows."""
+        """Raw WS fallback shapes: epoch-second ``when``, no ``name``."""
         return [
             {
                 "state": "on",
@@ -243,62 +283,133 @@ class TestLogbookWebSocket:
         ]
 
     @pytest.mark.asyncio
-    async def test_ws_is_default_and_normalizes_events(self) -> None:
-        client = self._client(
-            ws_result=self._ws_events(),
-            states=[
-                {
-                    "entity_id": "light.kitchen",
-                    "attributes": {"friendly_name": "Kitchen Light"},
-                }
-            ],
-        )
+    async def test_component_rows_pass_through_untouched(self, component_caps) -> None:
+        rows = self._component_rows()
+        client = self._client(ws_payload={"success": True, "result": {"events": rows}})
         tools = LogTools(client)
         result = await tools.get_logs(**_call_kwargs(source="logbook"))
 
-        params = client.send_websocket_message.await_args.args[0]
-        assert params["type"] == "logbook/get_events"
-        assert params["start_time"] < params["end_time"]
-        assert "entity_ids" not in params
+        command = client.send_websocket_message.await_args.args[0]
+        assert command["type"] == "ha_mcp_tools/logbook_events"
+        assert command["start_time"] < command["end_time"]
+        client.get_logbook.assert_not_awaited()
+        by_entity = {e["entity_id"]: e for e in result["data"]["entries"]}
+        assert by_entity["light.kitchen"]["name"] == "Kitchen Light"
+        assert by_entity["light.kitchen"]["when"] == "2026-06-16T00:00:00+00:00"
 
+    @pytest.mark.asyncio
+    async def test_component_receives_the_native_filters(self, component_caps) -> None:
+        client = self._client(ws_payload={"success": True, "result": {"events": []}})
+        tools = LogTools(client)
+        await tools.get_logs(
+            **_call_kwargs(
+                source="logbook",
+                entity_id="light.a, light.b",
+                device_id="dev1",
+            )
+        )
+        command = client.send_websocket_message.await_args.args[0]
+        assert command["type"] == "ha_mcp_tools/logbook_events"
+        assert command["entity_ids"] == ["light.a", "light.b"]
+        assert command["device_ids"] == ["dev1"]
+
+    @pytest.mark.asyncio
+    async def test_component_unknown_command_falls_back_to_rest(
+        self, component_caps
+    ) -> None:
+        client = self._client(
+            ws_payload={
+                "success": False,
+                "error": "Command failed: Unknown command.",
+                "error_code": "unknown_command",
+            }
+        )
+        client.get_logbook = AsyncMock(return_value=self._component_rows())
+        tools = LogTools(client)
+        with patch("ha_mcp.tools.log_sources_logbook.invalidate_caps") as invalidate:
+            result = await tools.get_logs(**_call_kwargs(source="logbook"))
+        invalidate.assert_called_once()
+        assert result["data"]["total_entries"] == 2
+        client.get_logbook.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_component_rejection_is_authoritative(self, component_caps) -> None:
+        client = self._client(
+            ws_payload={
+                "success": False,
+                "error": "Invalid start_time",
+                "error_code": "invalid_start_time",
+            }
+        )
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook"))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_timeout_surfaces_without_a_rest_fallback(
+        self, component_caps
+    ) -> None:
+        client = self._client(
+            ws_error=HomeAssistantCommandTimeout("logbook query timed out")
+        )
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook"))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "TIMEOUT_OPERATION"
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_component_absent_uses_rest_with_names(self) -> None:
+        client = self._client()
+        client.get_logbook = AsyncMock(return_value=self._component_rows())
+        tools = LogTools(client)
+        result = await tools.get_logs(**_call_kwargs(source="logbook"))
+        client.send_websocket_message.assert_not_awaited()
+        by_entity = {e["entity_id"]: e for e in result["data"]["entries"]}
+        assert by_entity["light.kitchen"]["name"] == "Kitchen Light"
+
+    @pytest.mark.asyncio
+    async def test_device_filter_uses_websocket_when_component_is_absent(self) -> None:
+        client = self._client(ws_result=self._ws_events())
+        tools = LogTools(client)
+        result = await tools.get_logs(
+            **_call_kwargs(source="logbook", device_id="dev1")
+        )
+        command = client.send_websocket_message.await_args.args[0]
+        assert command["type"] == "logbook/get_events"
+        assert command["device_ids"] == ["dev1"]
+        client.get_logbook.assert_not_awaited()
         by_entity = {e["entity_id"]: e for e in result["data"]["entries"]}
         assert (
             by_entity["light.kitchen"]["when"]
             == datetime.fromtimestamp(1780000000.0, UTC).isoformat()
         )
-        assert by_entity["light.kitchen"]["name"] == "Kitchen Light"
-        assert by_entity["automation.movie_night"]["name"] == "Movie night"
-        assert (
-            by_entity["automation.movie_night"]["when"]
-            == datetime.fromtimestamp(1780000060.0, UTC).isoformat()
+        assert "name" not in by_entity["light.kitchen"]
+        assert any("carry no 'name'" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_context_filter_falls_back_to_rest(self) -> None:
+        client = self._client(ws_error=HomeAssistantConnectionError("no WS"))
+        tools = LogTools(client)
+        result = await tools.get_logs(
+            **_call_kwargs(source="logbook", context_id="ctx1")
         )
+        assert result["data"]["context_filter"] == "ctx1"
+        assert client.get_logbook.await_args.kwargs["context_id"] == "ctx1"
+
+    @pytest.mark.asyncio
+    async def test_device_filter_requires_the_websocket_path(self) -> None:
+        client = self._client(ws_error=HomeAssistantConnectionError("no WS"))
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook", device_id="dev1"))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "CONNECTION_FAILED"
         client.get_logbook.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_ws_entity_filter_is_sent_as_a_list(self) -> None:
-        client = self._client()
-        tools = LogTools(client)
-        await tools.get_logs(
-            **_call_kwargs(source="logbook", entity_id="light.a, light.b")
-        )
-        params = client.send_websocket_message.await_args.args[0]
-        assert params["entity_ids"] == ["light.a", "light.b"]
-
-    @pytest.mark.asyncio
-    async def test_device_filter_is_sent_natively(self) -> None:
-        client = self._client()
-        tools = LogTools(client)
-        await tools.get_logs(**_call_kwargs(source="logbook", device_id="dev1"))
-        params = client.send_websocket_message.await_args.args[0]
-        assert params["device_ids"] == ["dev1"]
-
-    @pytest.mark.asyncio
-    async def test_context_filter_is_sent_natively(self) -> None:
-        client = self._client()
-        tools = LogTools(client)
-        await tools.get_logs(**_call_kwargs(source="logbook", context_id="ctx1"))
-        params = client.send_websocket_message.await_args.args[0]
-        assert params["context_id"] == "ctx1"
 
     @pytest.mark.asyncio
     async def test_context_id_cannot_combine_with_other_filters(self) -> None:
@@ -315,114 +426,6 @@ class TestLogbookWebSocket:
             client.get_logbook.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_rest_fallback_on_connection_failure(self) -> None:
-        client = self._client(ws_error=HomeAssistantConnectionError("no WS"))
-        client.get_logbook = AsyncMock(
-            return_value=[
-                {
-                    "when": "2026-06-16T00:00:00+00:00",
-                    "entity_id": "light.kitchen",
-                    "state": "on",
-                    "name": "Kitchen Light",
-                }
-            ]
-        )
-        tools = LogTools(client)
-        result = await tools.get_logs(**_call_kwargs(source="logbook"))
-        assert result["data"]["total_entries"] == 1
-        client.get_logbook.assert_awaited()
-
-    @pytest.mark.asyncio
-    async def test_rest_fallback_on_unknown_command(self) -> None:
-        client = AsyncMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": "Command failed: Unknown command.",
-                "error_code": "unknown_command",
-            }
-        )
-        client.get_states = AsyncMock(return_value=[])
-        client.get_logbook = AsyncMock(return_value=[])
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        tools = LogTools(client)
-        await tools.get_logs(**_call_kwargs(source="logbook"))
-        client.get_logbook.assert_awaited()
-
-    @pytest.mark.asyncio
-    async def test_core_rejection_in_soft_envelope_is_authoritative(self) -> None:
-        client = AsyncMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": "Invalid start_time",
-                "error_code": "invalid_start_time",
-            }
-        )
-        client.get_states = AsyncMock(return_value=[])
-        client.get_logbook = AsyncMock(return_value=[])
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        tools = LogTools(client)
-        with pytest.raises(ToolError) as exc_info:
-            await tools.get_logs(**_call_kwargs(source="logbook"))
-        payload = json.loads(str(exc_info.value))
-        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
-        client.get_logbook.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_rest_fallback_on_soft_failure_envelope(self) -> None:
-        client = AsyncMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": {"code": "forbidden"}}
-        )
-        client.get_states = AsyncMock(return_value=[])
-        client.get_logbook = AsyncMock(return_value=[])
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        tools = LogTools(client)
-        await tools.get_logs(**_call_kwargs(source="logbook"))
-        client.get_logbook.assert_awaited()
-
-    @pytest.mark.asyncio
-    async def test_device_filter_requires_the_websocket_path(self) -> None:
-        client = self._client(ws_error=HomeAssistantConnectionError("no WS"))
-        tools = LogTools(client)
-        with pytest.raises(ToolError) as exc_info:
-            await tools.get_logs(**_call_kwargs(source="logbook", device_id="dev1"))
-        payload = json.loads(str(exc_info.value))
-        assert payload["error"]["code"] == "CONNECTION_FAILED"
-        client.get_logbook.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_context_filter_falls_back_to_rest(self) -> None:
-        client = self._client(ws_error=HomeAssistantConnectionError("no WS"))
-        tools = LogTools(client)
-        result = await tools.get_logs(
-            **_call_kwargs(source="logbook", context_id="ctx1")
-        )
-        assert result["data"]["context_filter"] == "ctx1"
-        assert client.get_logbook.await_args.kwargs["context_id"] == "ctx1"
-
-    @pytest.mark.asyncio
-    async def test_prettified_name_when_state_is_missing(self) -> None:
-        client = self._client(ws_result=self._ws_events())
-        tools = LogTools(client)
-        result = await tools.get_logs(**_call_kwargs(source="logbook"))
-        by_entity = {e["entity_id"]: e for e in result["data"]["entries"]}
-        assert by_entity["light.kitchen"]["name"] == "kitchen"
-
-    @pytest.mark.asyncio
-    async def test_name_lookup_failure_warns_and_prettifies(self) -> None:
-        client = self._client(ws_result=self._ws_events())
-        client.get_states = AsyncMock(
-            side_effect=HomeAssistantConnectionError("no states")
-        )
-        tools = LogTools(client)
-        result = await tools.get_logs(**_call_kwargs(source="logbook"))
-        assert any("Entity names could not be fetched" in w for w in result["warnings"])
-        by_entity = {e["entity_id"]: e for e in result["data"]["entries"]}
-        assert by_entity["light.kitchen"]["name"] == "kitchen"
-
-    @pytest.mark.asyncio
     async def test_omitted_end_time_still_covers_the_requested_window(self) -> None:
         client = self._client()
         tools = LogTools(client)
@@ -432,7 +435,7 @@ class TestLogbookWebSocket:
             datetime_mock.now.return_value = fixed_now
             await tools.get_logs(**_call_kwargs(source="logbook", hours_back=48))
 
-        params = client.send_websocket_message.await_args.args[0]
+        params = client.get_logbook.await_args.kwargs
         assert params["end_time"] == fixed_now.isoformat()
         start = datetime.fromisoformat(params["start_time"])
         end = datetime.fromisoformat(params["end_time"])
@@ -447,7 +450,7 @@ class TestLogbookWebSocket:
                 source="logbook", hours_back=48, end_time="2026-06-15T00:00:00Z"
             )
         )
-        params = client.send_websocket_message.await_args.args[0]
+        params = client.get_logbook.await_args.kwargs
         start = datetime.fromisoformat(params["start_time"])
         end = datetime.fromisoformat(params["end_time"])
         assert end == datetime(2026, 6, 15, tzinfo=UTC)
@@ -463,7 +466,7 @@ class TestLogbookWebSocket:
             datetime_mock.now.return_value = fixed_now
             datetime_mock.fromisoformat.side_effect = datetime.fromisoformat
             await tools.get_logs(**_call_kwargs(source="logbook", hours_back=48))
-            omitted = client.send_websocket_message.await_args.args[0]
+            omitted = client.get_logbook.await_args.kwargs
             await tools.get_logs(
                 **_call_kwargs(
                     source="logbook",
@@ -471,21 +474,21 @@ class TestLogbookWebSocket:
                     end_time=fixed_now.isoformat(),
                 )
             )
-            explicit = client.send_websocket_message.await_args.args[0]
+            explicit = client.get_logbook.await_args.kwargs
 
         assert omitted == explicit
 
     @pytest.mark.asyncio
     async def test_pagination_hint_keeps_pages_in_the_same_window(self) -> None:
-        events = [dict(self._ws_events()[0], when=1780000000.0 + i) for i in range(3)]
-        client = self._client(ws_result=events)
+        client = self._client()
+        client.get_logbook = AsyncMock(return_value=self._component_rows())
         tools = LogTools(client)
         fixed_now = datetime(2026, 6, 16, 12, 0, tzinfo=UTC)
 
         with patch("ha_mcp.tools.log_sources_logbook.datetime") as datetime_mock:
             datetime_mock.now.return_value = fixed_now
             datetime_mock.fromtimestamp.side_effect = datetime.fromtimestamp
-            result = await tools.get_logs(**_call_kwargs(source="logbook", limit=2))
+            result = await tools.get_logs(**_call_kwargs(source="logbook", limit=1))
 
         hint = result["data"]["pagination_hint"]
         assert f"end_time='{fixed_now.isoformat()}'" in hint

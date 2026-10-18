@@ -1,36 +1,54 @@
-"""Logbook source for ``ha_get_logs`` — Core WS with a REST fallback.
+"""Logbook source for ``ha_get_logs`` — component, REST and WS transports.
 
-Moved out of ``log_sources`` when the native WebSocket transport and
-name-normalization work pushed that module past the 1,000-line limit. The
-Supervisor-backed sources stay in ``log_sources_supervisor`` and the fault log
-in ``log_sources_fault``; the host class (``LogTools`` in ``tools_logs``)
-mixes this in alongside them.
+Moved out of ``log_sources`` when the transport work pushed that module past
+the 1,000-line limit. The Supervisor-backed sources stay in
+``log_sources_supervisor`` and the fault log in ``log_sources_fault``; the host
+class (``LogTools`` in ``tools_logs``) mixes this in alongside them.
+
+Transport order (best first), all fetching from Home Assistant's own code:
+
+1. ``ha_mcp_tools/logbook_events`` — Core's own ``EventProcessor`` run in the
+   live HA process through the component (see
+   ``docs/agents/native-core-contracts.md``), when the capability is
+   advertised. Rows carry Core's names and ISO ``when``.
+2. ``/api/logbook`` — Core's REST view, the component-absent fallback for
+   requests it can serve (no device filter).
+3. ``logbook/get_events`` — Core's WebSocket command, only for ``device_id``
+   requests without the component (the only transport with a device filter).
 """
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
-    HomeAssistantAPIError,
-    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
-from .component_api import is_unknown_command
+from .component_api import (
+    component_supports,
+    get_component_caps,
+    invalidate_caps,
+    is_unknown_command,
+)
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import _coerce_limit, _compact_logbook_entries
 from .response_helpers import add_timezone_metadata
 
 logger = logging.getLogger(__name__)
 
+# The component command serving Core's own logbook processor in-process, and
+# the capability that gates it.
+LOGBOOK_EVENTS_COMMAND = "ha_mcp_tools/logbook_events"
+LOGBOOK_EVENTS_CAPABILITY = "logbook_events"
+
 
 class LogbookLogSourceMixin:
-    """``ha_get_logs(source='logbook')`` — Core WS, REST as fallback."""
+    """``ha_get_logs(source='logbook')`` — component, REST and WS transports."""
 
     _client: Any
 
@@ -175,157 +193,180 @@ class LogbookLogSourceMixin:
         device_id: str | None,
         context_id: str | None,
     ) -> tuple[Any, str]:
-        """Fetch events over Core WS ``logbook/get_events``, REST as fallback.
+        """Fetch events over Home Assistant's own transports, best first.
 
-        The WS command is the native path: it takes entity/device/context
-        filters and defaults an omitted ``end_time`` to now. ``/api/logbook``
-        stays for WebSocket-disabled instances; it has no device filter, so a
-        ``device_id`` request is WebSocket-only, while ``context_id`` alone is
-        supported by both.
+        1. ``ha_mcp_tools/logbook_events`` — Core's own ``EventProcessor`` run
+           in the live Home Assistant process, when the component advertises
+           it. Rows already carry Core's names and ISO ``when``.
+        2. ``/api/logbook`` — Core's REST view; same processor flags, no
+           device filter.
+        3. ``logbook/get_events`` — Core's WebSocket command; the only
+           transport with a device filter, but its rows use epoch-second
+           ``when`` and carry no names.
 
         Returns ``(response, transport)``.
         """
-        ws_params: dict[str, Any] = {
+        command: dict[str, Any] = {
             "type": "logbook/get_events",
             "start_time": start_time,
             "end_time": end_time,
         }
         if entity_id:
-            ws_params["entity_ids"] = [
+            command["entity_ids"] = [
                 item.strip() for item in entity_id.split(",") if item.strip()
             ]
         if device_id:
-            ws_params["device_ids"] = [
+            command["device_ids"] = [
                 item.strip() for item in device_id.split(",") if item.strip()
             ]
         if context_id:
-            ws_params["context_id"] = context_id
+            command["context_id"] = context_id
 
-        response: Any = None
-        try:
-            response = await self._client.send_websocket_message(ws_params)
-        except HomeAssistantCommandTimeout:
-            # The client only drops its local future; Home Assistant keeps
-            # running the recorder query. Falling back would run the slowest
-            # query a second time, so the timeout surfaces instead.
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.TIMEOUT_OPERATION,
-                    "The logbook query timed out inside Home Assistant; it may "
-                    "still be running.",
-                    context={"start_time": start_time, "end_time": end_time},
-                    suggestions=[
-                        "Retry the request",
-                        "Reduce hours_back or filter by entity_id",
-                    ],
-                )
-            )
-        except HomeAssistantConnectionError:
-            response = None
-        except HomeAssistantCommandError as exc:
-            # Older Core without the command: fall back. Any other HA error
-            # (bad timestamps, unsupported combination) would fail on REST too.
-            if not is_unknown_command(exc):
-                raise
-            response = None
-
-        if isinstance(response, dict) and response.get("success"):
-            result = response.get("result")
-            return result if isinstance(result, list) else [], "websocket"
-
-        self._raise_logbook_rejection(response)
+        response = await self._fetch_logbook_component(command)
+        if response is not None:
+            return response, "component"
 
         if device_id:
             # REST has no device filter; only the WebSocket command can serve
             # this request.
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.CONNECTION_FAILED,
-                    "The device_id filter requires Home Assistant's WebSocket "
-                    "API, which is unavailable.",
-                    context={"device_id": device_id},
-                    suggestions=[
-                        "Check the Home Assistant WebSocket connection",
-                        "Filter by entity_id instead",
-                    ],
-                )
-            )
-        response = await self._client.get_logbook(
+            return await self._fetch_logbook_websocket(command), "websocket"
+
+        rest = await self._client.get_logbook(
             entity_id=entity_id,
             start_time=start_time,
             end_time=end_time,
             context_id=context_id,
         )
-        return response, "rest"
+        return rest, "rest"
 
-    def _raise_logbook_rejection(self, response: Any) -> None:
+    async def _fetch_logbook_component(
+        self, command: dict[str, Any]
+    ) -> list[Any] | None:
+        """Run the component's Core-processor command, or ``None`` to fall back.
+
+        ``None`` means the component is absent, downgraded (``unknown_command``
+        drops the cached capability) or the transport failed before Home
+        Assistant saw the request. Core's own rejections surface unchanged, and
+        a timeout surfaces instead of falling back — the recorder query is
+        still running inside Home Assistant.
+        """
+        caps = await get_component_caps(self._client)
+        if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
+            return None
+        message = {**command, "type": LOGBOOK_EVENTS_COMMAND}
+        try:
+            response = await self._client.send_websocket_message(message)
+        except HomeAssistantCommandTimeout:
+            self._raise_logbook_timeout(command["start_time"], command["end_time"])
+        except HomeAssistantConnectionError:
+            return None
+        except HomeAssistantCommandError as exc:
+            if not is_unknown_command(exc):
+                raise
+            # Older component without the command: stop routing to it.
+            invalidate_caps(self._client)
+            return None
+
+        if isinstance(response, dict) and response.get("success"):
+            result = response.get("result")
+            events = result.get("events") if isinstance(result, dict) else None
+            return events if isinstance(events, list) else None
+
+        self._raise_logbook_rejection(response, LOGBOOK_EVENTS_COMMAND)
+        if (
+            isinstance(response, dict)
+            and response.get("error_code") == "unknown_command"
+        ):
+            # Older component without the command: stop routing to it.
+            invalidate_caps(self._client)
+        return None
+
+    async def _fetch_logbook_websocket(self, command: dict[str, Any]) -> list[Any]:
+        """Core's ``logbook/get_events`` — the device-filter fallback."""
+        try:
+            response = await self._client.send_websocket_message(command)
+        except HomeAssistantCommandTimeout:
+            self._raise_logbook_timeout(command["start_time"], command["end_time"])
+        except HomeAssistantConnectionError:
+            self._raise_logbook_ws_required(command.get("device_ids"))
+        except HomeAssistantCommandError as exc:
+            if not is_unknown_command(exc):
+                raise
+            self._raise_logbook_ws_required(command.get("device_ids"))
+
+        if isinstance(response, dict) and response.get("success"):
+            result = response.get("result")
+            return result if isinstance(result, list) else []
+        self._raise_logbook_rejection(response, "logbook/get_events")
+        return []
+
+    def _raise_logbook_timeout(self, start_time: str, end_time: str) -> NoReturn:
+        """Surface a query timeout; never re-run it on a fallback transport.
+
+        The client only drops its local future; Home Assistant keeps running
+        the recorder query. Falling back would run the slowest query a second
+        time, so the timeout surfaces instead.
+        """
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.TIMEOUT_OPERATION,
+                "The logbook query timed out inside Home Assistant; it may "
+                "still be running.",
+                context={"start_time": start_time, "end_time": end_time},
+                suggestions=[
+                    "Retry the request",
+                    "Reduce hours_back or filter by entity_id",
+                ],
+            )
+        )
+
+    def _raise_logbook_ws_required(self, device_ids: Any) -> NoReturn:
+        """The device filter needs the WebSocket transport, which is down."""
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                "The device_id filter requires Home Assistant's WebSocket "
+                "API, which is unavailable.",
+                context={"device_ids": device_ids},
+                suggestions=[
+                    "Check the Home Assistant WebSocket connection",
+                    "Filter by entity_id instead",
+                ],
+            )
+        )
+
+    def _raise_logbook_rejection(self, response: Any, command: str) -> None:
         """Surface Core's own rejection unless it means "unknown command".
 
         ``send_websocket_message`` reports Home Assistant's own failures as a
         soft envelope carrying Core's code; only an unknown command (older
-        Core) or a code-less transport envelope (for example a proxy 403) may
-        fall back. Any other rejection is authoritative and reaches the
-        caller unchanged.
+        Core/component) or a code-less transport envelope (for example a proxy
+        403) may fall back. Any other rejection is authoritative and reaches
+        the caller unchanged.
         """
         error_code = response.get("error_code") if isinstance(response, dict) else None
         if error_code and error_code != "unknown_command":
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    str(response.get("error") or "logbook/get_events failed"),
+                    str(response.get("error") or f"{command} failed"),
                     context={"error_code": error_code},
                 )
             )
 
-    async def _logbook_state_entity_names(
-        self, entity_ids: set[str]
-    ) -> tuple[dict[str, str], list[str]]:
-        """Resolve state-row names from Core; WS events carry no ``name``.
-
-        Mirrors Core's ``EntityNameCache``: the live state's ``friendly_name``
-        when present; otherwise the caller falls back to a prettified object
-        id (as Core does). A failed lookup degrades to that fallback plus a
-        caller-visible warning.
-        """
-        if not entity_ids:
-            return {}, []
-        try:
-            states = await self._client.get_states()
-        except (
-            HomeAssistantAPIError,
-            HomeAssistantAuthError,
-            HomeAssistantConnectionError,
-            TimeoutError,
-            OSError,
-        ) as exc:
-            logger.debug("logbook entity-name lookup failed: %r", exc)
-            return {}, [
-                "Entity names could not be fetched from Home Assistant; state "
-                "rows show the object id instead of the friendly name."
-            ]
-        names: dict[str, str] = {}
-        for state in states:
-            if not isinstance(state, dict):
-                continue
-            entity = state.get("entity_id")
-            if not isinstance(entity, str) or entity not in entity_ids:
-                continue
-            attributes = state.get("attributes")
-            if isinstance(attributes, dict):
-                friendly_name = attributes.get("friendly_name")
-                if friendly_name:
-                    names[entity] = str(friendly_name)
-        return names, []
-
     @staticmethod
-    def _normalize_logbook_events(events: Any, names: dict[str, str]) -> Any:
-        """Normalize WS events onto the REST-shaped contract.
+    def _normalize_logbook_events(events: Any, transport: str) -> Any:
+        """Normalize the WebSocket fallback rows onto the REST-shaped contract.
 
         ``logbook/get_events`` returns ``when`` as epoch seconds and omits the
-        ``name`` field on state rows; the tool expects the REST shape (ISO
-        timestamp, name on state rows). REST responses pass through unchanged.
+        ``name`` field on state rows. The component command and REST both
+        return Core's REST shape (ISO ``when``, names from Core's own
+        ``EventProcessor``), so they pass through untouched; only the
+        WebSocket fallback is rewritten. Names are not reconstructed here:
+        without the component or REST the rows simply carry no ``name`` (the
+        caller warns).
         """
-        if not isinstance(events, list):
+        if transport != "websocket" or not isinstance(events, list):
             return events
         normalized: list[Any] = []
         for event in events:
@@ -336,29 +377,8 @@ class LogbookLogSourceMixin:
             when = row.get("when")
             if isinstance(when, (int, float)) and not isinstance(when, bool):
                 row["when"] = datetime.fromtimestamp(float(when), UTC).isoformat()
-            entity = row.get("entity_id")
-            if isinstance(entity, str) and "state" in row and not row.get("name"):
-                row["name"] = names.get(entity) or entity.split(".", 1)[-1].replace(
-                    "_", " "
-                )
             normalized.append(row)
         return normalized
-
-    async def _attach_logbook_names(
-        self, response: Any, transport: str
-    ) -> tuple[Any, list[str]]:
-        """Attach Core-resolved names to WS state rows; REST already has them."""
-        if transport != "websocket" or not isinstance(response, list):
-            return response, []
-        state_entities = {
-            row["entity_id"]
-            for row in response
-            if isinstance(row, dict)
-            and isinstance(row.get("entity_id"), str)
-            and "state" in row
-        }
-        names, warnings = await self._logbook_state_entity_names(state_entities)
-        return self._normalize_logbook_events(response, names), warnings
 
     async def _get_logbook(
         self,
@@ -427,9 +447,15 @@ class LogbookLogSourceMixin:
                 context_id=context_id,
             )
 
-            name_warnings: list[str] = []
-            response, name_warnings = await self._attach_logbook_names(
-                response, transport
+            response = self._normalize_logbook_events(response, transport)
+            transport_warnings = (
+                [
+                    "State rows from the WebSocket fallback carry no 'name'; "
+                    "the ha_mcp_tools component or the REST path supplies "
+                    "Core-resolved names."
+                ]
+                if transport == "websocket"
+                else []
             )
 
             response, filters_applied = self._filter_logbook_by_search(response, search)
@@ -482,10 +508,10 @@ class LogbookLogSourceMixin:
                 )
 
             wrapped = await add_timezone_metadata(self._client, logbook_data)
-            if name_warnings:
+            if transport_warnings:
                 # Top-level, alongside the other tool warnings: nesting these
                 # under ``data`` would hide them from the warning merger.
-                wrapped["warnings"] = name_warnings + wrapped.get("warnings", [])
+                wrapped["warnings"] = transport_warnings + wrapped.get("warnings", [])
             return wrapped
 
         except ToolError:

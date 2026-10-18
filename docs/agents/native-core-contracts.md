@@ -38,6 +38,16 @@ permission checks. The serializer adapter reveals the live alternatives in
 Core's opaque discriminated unions; it supplies no energy types or fields.
 Unknown serializer constructs remain explicitly incomplete.
 
+`websocket_api/logbook.py` is the same pattern for logbook. The component runs
+Core's own `EventProcessor` with the REST view's flags (`timestamp=False` for
+ISO `when`, `include_entity_name=True`) plus the `logbook/get_events` filter
+set, so names, context fields and the row shape come from Core instead of a
+copied `EntityNameCache`. The server prefers the bridge and keeps Core's REST
+(`/api/logbook`) and WebSocket (`logbook/get_events`) reads as the explicit
+component-absent fallbacks — a `device_id` request needs the WebSocket path
+there because REST has no device filter, and a bridge timeout surfaces rather
+than re-running the recorder query on another transport.
+
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
 Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative
