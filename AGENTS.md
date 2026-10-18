@@ -14,7 +14,7 @@ Canonical agent guidance for HA-MCP.
 
 This repository uses `worktree/` for isolated branches and `local/` for scratch data; both are gitignored. Source is under `src/ha_mcp/`, component code under `custom_components/ha_mcp_tools/`, tests under `tests/`, the website under `site/`, and Home Assistant app flavors under `homeassistant-addon*/`.
 
-Read the [development reference](docs/agents/development.md) for commands and architecture. Workflow helpers live in `.claude/skills/`; inspect a helper's own instructions when it is explicitly invoked rather than duplicating its inventory here.
+Read the [development reference](docs/agents/development.md) for commands and architecture. Workflow helpers live in `.claude/skills/`; inspect a helper's own instructions when invoked rather than duplicating its inventory here.
 
 ## Worktree Workflow
 
@@ -56,7 +56,7 @@ Keep this file short enough to load on every task:
 - Hard limit: 16,000 Unicode characters and 200 lines.
 - Keep only broadly applicable, high-value behavior in the root. Put coding conventions and subsystem procedures in their closest durable owner.
 - Retain a short section here for each major topic and state when and why to read its linked document.
-- Use ordinary Markdown links, not imports. A link must name the document's scope; avoid blind “see also” references.
+- Use ordinary Markdown links, not imports. A link must name the document's scope; avoid “see also” references.
 - Give each rule one canonical owner; link instead of copying its details.
 - Keep counts, inventories, workflow catalogs, incidents and tutorials beside their code or process, outside startup guidance.
 - Prefer short directives with concrete triggers. Explain rationale where a future editor might otherwise “simplify” a load-bearing rule.
@@ -119,8 +119,7 @@ Leave touched code better than you found it. Fix-in-place is the default, but th
 | Large, unrelated, or a different subsystem | Explain the scope change and ask; do not silently defer or expand. |
 
 About 200 changed lines is a should-I-ask heuristic, not a bundling cap. Work
-of any size may stay in the pull request when it is not grossly out of scope;
-estimate honestly and do not inflate the estimate to justify deferral.
+of any size may stay in the pull request when not grossly out of scope; estimate honestly and do not inflate to justify deferral.
 
 Never create a follow-up issue or pull request without explicit approval.
 Before proposing one, the work must not be achievable by mirroring a nearby
@@ -133,8 +132,7 @@ converted into backlog noise.
 
 Do not use “out of scope,” “non-blocking,” “post-merge follow-up,” “nice to
 have,” “pre-existing,” or similar phrasing to hide a legitimate current
-finding. This list is non-exhaustive: match the intent, and remember that
-pre-existing problems are the point of the Boy Scout rule. Scope is the
+finding. Match the intent; pre-existing problems are the point of the Boy Scout rule. Scope is the
 user's call: state the finding and ask explicitly, with the specific reason,
 before deferring or dropping it: “I think this is out of scope because [X].
 Fix here or defer?”
@@ -151,7 +149,7 @@ The minimal setup is `uv sync --group dev`; run stdio with `uv run ha-mcp` and H
 
 Lazy-discover tools from `tools_*.py`; put shared logic in service modules, verify writes and wait for completion. Before structural changes, read the [architecture map](docs/agents/development.md#architecture) and [style guide](.gemini/styleguide.md).
 
-For read/write tools, follow [native Core contracts](docs/agents/native-core-contracts.md); preserve safety gates and label unavailable validation.
+For read/write tools, follow [native contracts](docs/agents/native-core-contracts.md) (Core, Supervisor, hassio); unmigrated tools get no piecemeal fixes — migrate the path instead. Preserve safety gates and label unavailable validation.
 
 ## Code Conventions
 

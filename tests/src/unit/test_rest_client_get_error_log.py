@@ -265,7 +265,9 @@ async def test_get_error_log_addon_branch(client, supervisor_http):
     args, kwargs = supervisor_http.get.call_args
     assert args[0] == "/core/logs"
     assert kwargs["headers"]["Range"] == f"entries=:-349:{_WINDOW}"
-    assert kwargs["params"] is None, "a `lines` query param would win over Range"
+    assert kwargs["params"] == {"no_colors": "true"}, (
+        "a `lines` query param would win over Range"
+    )
     # Must NOT have touched the external-branch paths.
     client._request.assert_not_called()
     client._raw_request.assert_not_called()
@@ -309,6 +311,7 @@ async def test_get_error_log_supervised_external_branch(client):
         "GET",
         "/hassio/core/logs",
         headers={"Accept": "text/plain", "Range": f"entries=:-349:{_WINDOW}"},
+        params={"no_colors": "true"},
     )
     endpoint = client._raw_request.call_args.args[1]
     assert "lines=" not in endpoint

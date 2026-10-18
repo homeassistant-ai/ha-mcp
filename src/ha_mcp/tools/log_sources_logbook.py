@@ -179,9 +179,9 @@ class LogbookLogSourceMixin:
 
         The WS command is the native path: it takes entity/device/context
         filters and defaults an omitted ``end_time`` to now. ``/api/logbook``
-        stays for WebSocket-disabled instances; it has no device filter and
-        cannot combine a context with an entity/device, so ``device_id`` and
-        ``context_id`` requests are WebSocket-only.
+        stays for WebSocket-disabled instances; it has no device filter, so a
+        ``device_id`` request is WebSocket-only, while ``context_id`` alone is
+        supported by both.
 
         Returns ``(response, transport)``.
         """
@@ -204,7 +204,23 @@ class LogbookLogSourceMixin:
         response: Any = None
         try:
             response = await self._client.send_websocket_message(ws_params)
-        except (HomeAssistantConnectionError, HomeAssistantCommandTimeout):
+        except HomeAssistantCommandTimeout:
+            # The client only drops its local future; Home Assistant keeps
+            # running the recorder query. Falling back would run the slowest
+            # query a second time, so the timeout surfaces instead.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.TIMEOUT_OPERATION,
+                    "The logbook query timed out inside Home Assistant; it may "
+                    "still be running.",
+                    context={"start_time": start_time, "end_time": end_time},
+                    suggestions=[
+                        "Retry the request",
+                        "Reduce hours_back or filter by entity_id",
+                    ],
+                )
+            )
+        except HomeAssistantConnectionError:
             response = None
         except HomeAssistantCommandError as exc:
             # Older Core without the command: fall back. Any other HA error
@@ -217,36 +233,17 @@ class LogbookLogSourceMixin:
             result = response.get("result")
             return result if isinstance(result, list) else [], "websocket"
 
-        # ``send_websocket_message`` reports Home Assistant's own failures as a
-        # soft envelope carrying Core's code; only an unknown command (older
-        # Core) or a code-less transport envelope (for example a proxy 403) may
-        # fall back. Any other rejection is authoritative and reaches the
-        # caller unchanged.
-        error_code = response.get("error_code") if isinstance(response, dict) else None
-        if error_code and error_code != "unknown_command":
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    str(response.get("error") or "logbook/get_events failed"),
-                    context={"error_code": error_code},
-                )
-            )
+        self._raise_logbook_rejection(response)
 
-        if device_id or context_id:
-            filters = {
-                key: value
-                for key, value in (("device_id", device_id), ("context_id", context_id))
-                if value
-            }
-            subject = " and ".join(filters)
-            plural = "s" if len(filters) > 1 else ""
-            verb = "require" if len(filters) > 1 else "requires"
+        if device_id:
+            # REST has no device filter; only the WebSocket command can serve
+            # this request.
             raise_tool_error(
                 create_error_response(
                     ErrorCode.CONNECTION_FAILED,
-                    f"The {subject} filter{plural} {verb} Home Assistant's "
-                    "WebSocket API, which is unavailable.",
-                    context=filters,
+                    "The device_id filter requires Home Assistant's WebSocket "
+                    "API, which is unavailable.",
+                    context={"device_id": device_id},
                     suggestions=[
                         "Check the Home Assistant WebSocket connection",
                         "Filter by entity_id instead",
@@ -257,8 +254,28 @@ class LogbookLogSourceMixin:
             entity_id=entity_id,
             start_time=start_time,
             end_time=end_time,
+            context_id=context_id,
         )
         return response, "rest"
+
+    def _raise_logbook_rejection(self, response: Any) -> None:
+        """Surface Core's own rejection unless it means "unknown command".
+
+        ``send_websocket_message`` reports Home Assistant's own failures as a
+        soft envelope carrying Core's code; only an unknown command (older
+        Core) or a code-less transport envelope (for example a proxy 403) may
+        fall back. Any other rejection is authoritative and reaches the
+        caller unchanged.
+        """
+        error_code = response.get("error_code") if isinstance(response, dict) else None
+        if error_code and error_code != "unknown_command":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(response.get("error") or "logbook/get_events failed"),
+                    context={"error_code": error_code},
+                )
+            )
 
     async def _logbook_state_entity_names(
         self, entity_ids: set[str]

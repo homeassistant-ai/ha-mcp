@@ -174,7 +174,7 @@ class SupervisorLogSourcesMixin:
             raise  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
-    def _handle_system_service_api_error(
+    async def _handle_system_service_api_error(
         self, e: HomeAssistantAPIError, service: str
     ) -> NoReturn:
         """Raise a structured error for a Supervisor per-service-logs failure.
@@ -209,15 +209,24 @@ class SupervisorLogSourcesMixin:
                 suggestions=suggestions,
             )
         if status == 404:
-            exception_to_structured_error(
-                e,
-                context={"source": "system_service", "slug": service},
-                suggestions=[
+            if await self._client._is_supervised_install():
+                suggestions = [
                     f"Service '{service}' not found at "
                     f"http://supervisor/{service}/logs — Supervisor may "
                     "not expose it on this HA OS version",
                     f"Allowed services: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))}",
-                ],
+                ]
+            else:
+                suggestions = [
+                    "These log sources need a Supervisor-managed install "
+                    "(Home Assistant OS or Supervised); this instance is not "
+                    "managed by Supervisor",
+                    f"Allowed services: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))}",
+                ]
+            exception_to_structured_error(
+                e,
+                context={"source": "system_service", "slug": service},
+                suggestions=suggestions,
             )
         exception_to_structured_error(
             e,
@@ -309,7 +318,7 @@ class SupervisorLogSourcesMixin:
                 suggestions=_addon_auth_error_suggestions(),
             )
         except HomeAssistantAPIError as e:
-            self._handle_system_service_api_error(e, service)
+            await self._handle_system_service_api_error(e, service)
         except (
             HomeAssistantConnectionError,
             TimeoutError,

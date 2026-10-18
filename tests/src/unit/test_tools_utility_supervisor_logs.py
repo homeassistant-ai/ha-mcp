@@ -594,6 +594,7 @@ class TestGetErrorLogBranchSelection:
             "GET",
             "/hassio/core/logs",
             headers={"Accept": "text/plain", "Range": "entries=:-99:100"},
+            params={"no_colors": "true"},
         )
 
     @pytest.mark.asyncio
@@ -1554,10 +1555,10 @@ class TestJournaldWindowLinesParam:
         await mock_client.get_addon_logs("81f33d0f_ha_mcp", lines=2000)
 
         _args, kwargs = inner_client.get.call_args
-        assert kwargs["params"] == {"lines": 2000}
+        assert kwargs["params"] == {"no_colors": "true", "lines": 2000}
 
     @pytest.mark.asyncio
-    async def test_addon_direct_branch_omits_query_without_lines(
+    async def test_addon_direct_branch_omits_the_lines_query_without_lines(
         self, mock_client, addon_install, mock_async_client_class
     ):
         inner_client, _class = mock_async_client_class
@@ -1569,7 +1570,7 @@ class TestJournaldWindowLinesParam:
         await mock_client.get_addon_logs("81f33d0f_ha_mcp")
 
         _args, kwargs = inner_client.get.call_args
-        assert kwargs["params"] is None
+        assert kwargs["params"] == {"no_colors": "true"}
 
     @pytest.mark.asyncio
     async def test_offset_switches_the_window_to_a_range_header(
@@ -1592,7 +1593,7 @@ class TestJournaldWindowLinesParam:
         await mock_client._supervisor_logs_get("core", lines=50, offset=100)
 
         _args, kwargs = inner_client.get.call_args
-        assert kwargs["params"] is None
+        assert kwargs["params"] == {"no_colors": "true"}
         assert kwargs["headers"]["Range"] == "entries=:-149:50"
         assert kwargs["headers"]["Accept"] == "text/plain"
 
@@ -1608,7 +1609,7 @@ class TestJournaldWindowLinesParam:
         await mock_client.get_addon_logs("core_ssh", lines=2000)
 
         _args, kwargs = mock_client.httpx_client.request.call_args
-        assert kwargs["params"] == {"lines": 2000}
+        assert kwargs["params"] == {"no_colors": "true", "lines": 2000}
 
     @pytest.mark.asyncio
     async def test_system_service_proxy_branch_sends_lines_query(
@@ -1622,4 +1623,4 @@ class TestJournaldWindowLinesParam:
         await mock_client._get_system_service_logs("host", lines=1234)
 
         _args, kwargs = mock_client.httpx_client.request.call_args
-        assert kwargs["params"] == {"lines": 1234}
+        assert kwargs["params"] == {"no_colors": "true", "lines": 1234}

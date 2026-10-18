@@ -9,7 +9,6 @@ import os
 import ssl
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import Any, NoReturn
 
 import httpx
@@ -18,6 +17,7 @@ from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
 from .admin_routes import is_admin_only_route
+from .models import ErrorLogPage, SceneResolution
 from .supervisor_client import make_supervisor_httpx_client
 
 
@@ -145,39 +145,6 @@ class HomeAssistantAPIError(HomeAssistantError):
         super().__init__(message)
         self.status_code = status_code
         self.response_data = response_data
-
-
-@dataclass(frozen=True)
-class ErrorLogPage:
-    """One bounded window of the error log, plus whether older history exists.
-
-    ``has_more`` cannot be derived by the caller from ``text``: a journald
-    window that comes back full may or may not have anything behind it (see
-    ``_journald_error_log_page``), and only the fetching route knows which.
-    """
-
-    text: str
-    has_more: bool
-
-
-@dataclass(frozen=True)
-class SceneResolution:
-    """Outcome of resolving a scene identifier via the entity registry.
-
-    ``registry_hit`` records whether ``config/entity_registry/get`` returned a
-    usable ``unique_id`` - i.e. the entity actually EXISTS. It is the signal that
-    separates a genuinely-missing scene from one that exists but is not editable
-    through HA's scene config API (a Hue/vendor scene, or a raw-YAML scene): both
-    resolve fine yet 404 on ``config/scene/config/{id}``, because that endpoint is
-    backed only by the managed ``scenes.yaml`` (issue #1971). ``platform`` carries
-    the registry entry's integration domain (``"hue"``, ``"homeassistant"``, …)
-    for error-message enrichment only - it never drives the classification, since
-    a raw-YAML scene is ``platform="homeassistant"`` yet still 404s.
-    """
-
-    storage_key: str
-    registry_hit: bool
-    platform: str | None
 
 
 class SceneStorageConfigNotFoundError(HomeAssistantAPIError):
@@ -831,6 +798,7 @@ class HomeAssistantClient:
         entity_id: str | None = None,
         start_time: str | None = None,
         end_time: str | None = None,
+        context_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Get logbook entries.
@@ -839,12 +807,13 @@ class HomeAssistantClient:
             entity_id: Optional entity ID to filter
             start_time: Optional start time (ISO format) - used as URL path component
             end_time: Optional end time (ISO format) - used as query parameter
+            context_id: Optional context ID filter - used as query parameter
 
         Returns:
             Logbook entries
         """
         logger.debug(
-            f"Fetching logbook entries for entity: {entity_id}, start: {start_time}, end: {end_time}"
+            f"Fetching logbook entries for entity: {entity_id}, start: {start_time}, end: {end_time}, context: {context_id}"
         )
 
         # Build endpoint - start_time goes in URL path if provided
@@ -859,6 +828,8 @@ class HomeAssistantClient:
             params["entity"] = entity_id
         if end_time:
             params["end_time"] = end_time
+        if context_id:
+            params["context_id"] = context_id
 
         result = await self._request("GET", endpoint, params=params)
         if isinstance(result, list):
@@ -958,6 +929,7 @@ class HomeAssistantClient:
                 "Accept": "text/plain",
                 "Range": self._journald_range_header(lines, offset),
             },
+            params={"no_colors": "true"},
         )
         return response.text
 
@@ -1235,7 +1207,10 @@ class HomeAssistantClient:
                     "GET",
                     f"/hassio/{path}/logs",
                     headers={"Accept": "text/plain"},
-                    params={"lines": lines} if lines is not None else None,
+                    params={
+                        "no_colors": "true",
+                        **({"lines": lines} if lines is not None else {}),
+                    },
                 )
         except TimeoutError as e:
             raise HomeAssistantConnectionError(
@@ -1326,13 +1301,18 @@ class HomeAssistantClient:
 
         relative_path = f"/{path}/logs"
         headers = {"Accept": "text/plain"}
-        params = {"lines": lines} if lines is not None else None
+        # ``no_colors`` is a presence-triggered query flag in Supervisor
+        # (``if "no_colors" in request.query``): journald output carries ANSI
+        # escapes otherwise.
+        params: dict[str, Any] = {"no_colors": "true"}
+        if lines is not None:
+            params["lines"] = lines
         if offset is not None:
             # An offset window with no size asked for falls back to the
             # smallest one the Range syntax can express.
             size = lines if lines is not None else MIN_LOG_WINDOW_LINES
             headers["Range"] = self._journald_range_header(size, offset)
-            params = None
+            params.pop("lines", None)
         logger.debug(
             "Fetching %s%s via Supervisor direct (%s)",
             get_supervisor_base_url(),

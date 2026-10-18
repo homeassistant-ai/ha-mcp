@@ -15,10 +15,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    ErrorLogPage,
-    HomeAssistantConnectionError,
-)
+from ha_mcp.client.models import ErrorLogPage
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.log_sources import _SYSTEM_LOG_MESSAGE_CAP
 from ha_mcp.tools.tools_logs import LogTools
 
@@ -395,15 +393,14 @@ class TestLogbookWebSocket:
         client.get_logbook.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_context_filter_requires_the_websocket_path(self) -> None:
+    async def test_context_filter_falls_back_to_rest(self) -> None:
         client = self._client(ws_error=HomeAssistantConnectionError("no WS"))
         tools = LogTools(client)
-        with pytest.raises(ToolError) as exc_info:
-            await tools.get_logs(**_call_kwargs(source="logbook", context_id="ctx1"))
-        payload = json.loads(str(exc_info.value))
-        assert payload["error"]["code"] == "CONNECTION_FAILED"
-        assert "context_id" in payload["error"]["message"]
-        client.get_logbook.assert_not_awaited()
+        result = await tools.get_logs(
+            **_call_kwargs(source="logbook", context_id="ctx1")
+        )
+        assert result["data"]["context_filter"] == "ctx1"
+        assert client.get_logbook.await_args.kwargs["context_id"] == "ctx1"
 
     @pytest.mark.asyncio
     async def test_prettified_name_when_state_is_missing(self) -> None:
@@ -492,6 +489,27 @@ class TestLogbookWebSocket:
 
         hint = result["data"]["pagination_hint"]
         assert f"end_time='{fixed_now.isoformat()}'" in hint
+
+
+class TestLogbookRestClient:
+    """The REST fallback forwards every supported logbook filter."""
+
+    @pytest.mark.asyncio
+    async def test_get_logbook_sends_the_context_query_param(self) -> None:
+        from ha_mcp.client.rest_client import HomeAssistantClient
+
+        client = AsyncMock()
+        client._request = AsyncMock(return_value=[])
+        await HomeAssistantClient.get_logbook(
+            client,
+            entity_id="light.kitchen",
+            start_time="2026-06-16T00:00:00+00:00",
+            end_time="2026-06-16T12:00:00+00:00",
+            context_id="ctx1",
+        )
+        kwargs = client._request.await_args.kwargs
+        assert kwargs["params"]["context_id"] == "ctx1"
+        assert kwargs["params"]["entity"] == "light.kitchen"
 
 
 class TestSystemOrder:

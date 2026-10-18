@@ -281,7 +281,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "Logbook only: only events sharing this context - 'what "
                     "caused this'. Cannot be combined with entity_id or "
-                    "device_id; requires the WebSocket path."
+                    "device_id; works on both transports when used alone."
                 )
             ),
         ] = None,
