@@ -455,6 +455,59 @@ class TestLogbookTransports:
         assert payload["error"]["code"] == "CONNECTION_FAILED"
         client.get_logbook.assert_not_awaited()
 
+    @pytest.mark.parametrize(
+        "envelope",
+        [
+            {"success": False, "error": {"code": "forbidden"}},
+            {"success": False, "error_code": "unknown_command"},
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_device_soft_failure_envelope_is_not_an_empty_success(
+        self, envelope: dict[str, Any]
+    ) -> None:
+        # No REST fallback exists for a device filter: a tolerated soft
+        # failure must surface, not read as "no entries".
+        client = self._client(ws_payload=envelope)
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook", device_id="dev1"))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "CONNECTION_FAILED"
+        assert "device_id" in payload["error"]["message"]
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_blank_entity_filter_is_rejected(self) -> None:
+        client = self._client()
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook", entity_id=", "))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        client.send_websocket_message.assert_not_awaited()
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_blank_device_filter_is_rejected(self) -> None:
+        client = self._client()
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook", device_id=" , "))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        client.send_websocket_message.assert_not_awaited()
+        client.get_logbook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rest_fallback_uses_normalized_entity_ids(self) -> None:
+        client = self._client()
+        tools = LogTools(client)
+        await tools.get_logs(
+            **_call_kwargs(source="logbook", entity_id="light.a, light.b")
+        )
+        assert client.get_logbook.await_args.kwargs["entity_id"] == "light.a,light.b"
+
     @pytest.mark.asyncio
     async def test_context_id_cannot_combine_with_other_filters(self) -> None:
         for extra in ({"entity_id": "light.a"}, {"device_id": "dev1"}):

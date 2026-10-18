@@ -202,6 +202,13 @@ class LogbookLogSourceMixin:
             "Add a specific 'entity_id' filter to narrow down results",
         ]
 
+    @staticmethod
+    def _split_logbook_filter(value: str | None) -> list[str]:
+        """Split a comma-separated native filter, dropping blank items."""
+        if not value:
+            return []
+        return [item.strip() for item in value.split(",") if item.strip()]
+
     async def _fetch_logbook_events(
         self,
         *,
@@ -222,21 +229,39 @@ class LogbookLogSourceMixin:
            transport with a device filter, but its rows use epoch-second
            ``when`` and carry no names.
 
+        Filters are normalized once here so every transport sees the same
+        items: a CSV of blanks (``", "``) is invalid input, never an
+        unrestricted query.
+
         Returns ``(response, transport)``.
         """
+        entity_ids = self._split_logbook_filter(entity_id)
+        device_ids = self._split_logbook_filter(device_id)
+        for label, raw, ids in (
+            ("entity_id", entity_id, entity_ids),
+            ("device_id", device_id, device_ids),
+        ):
+            if raw and not ids:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"'{label}' contains no {label.split('_')[0]} IDs",
+                        context={label: raw},
+                        suggestions=[
+                            "Pass comma-separated IDs, e.g. 'light.kitchen,light.hall'"
+                        ],
+                    )
+                )
+
         command: dict[str, Any] = {
             "type": "logbook/get_events",
             "start_time": start_time,
             "end_time": end_time,
         }
-        if entity_id:
-            command["entity_ids"] = [
-                item.strip() for item in entity_id.split(",") if item.strip()
-            ]
-        if device_id:
-            command["device_ids"] = [
-                item.strip() for item in device_id.split(",") if item.strip()
-            ]
+        if entity_ids:
+            command["entity_ids"] = entity_ids
+        if device_ids:
+            command["device_ids"] = device_ids
         if context_id:
             command["context_id"] = context_id
 
@@ -244,13 +269,13 @@ class LogbookLogSourceMixin:
         if response is not None:
             return response, "component"
 
-        if device_id:
+        if device_ids:
             # REST has no device filter; only the WebSocket command can serve
             # this request.
             return await self._fetch_logbook_websocket(command), "websocket"
 
         rest = await self._client.get_logbook(
-            entity_id=entity_id,
+            entity_id=",".join(entity_ids) if entity_ids else None,
             start_time=start_time,
             end_time=end_time,
             context_id=context_id,
@@ -321,7 +346,15 @@ class LogbookLogSourceMixin:
             result = response.get("result")
             return result if isinstance(result, list) else []
         self._raise_logbook_rejection(response, "logbook/get_events")
-        return []
+        # No REST device fallback exists after this point, so a tolerated
+        # soft failure (``unknown_command`` on an old Core, or a code-less
+        # proxy envelope such as a post-connect 403) must surface instead of
+        # being reported as an empty logbook.
+        reason = response.get("error") if isinstance(response, dict) else None
+        self._raise_logbook_ws_required(
+            command.get("device_ids"),
+            reason=str(reason) if reason else None,
+        )
 
     def _raise_logbook_timeout(self, start_time: str, end_time: str) -> NoReturn:
         """Surface a query timeout; never re-run it on a fallback transport.
@@ -343,13 +376,20 @@ class LogbookLogSourceMixin:
             )
         )
 
-    def _raise_logbook_ws_required(self, device_ids: Any) -> NoReturn:
+    def _raise_logbook_ws_required(
+        self, device_ids: Any, *, reason: str | None = None
+    ) -> NoReturn:
         """The device filter needs the WebSocket transport, which is down."""
+        message = (
+            "The device_id filter requires Home Assistant's WebSocket API, "
+            "which is unavailable."
+        )
+        if reason:
+            message = f"{message} Last error: {reason}"
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,
-                "The device_id filter requires Home Assistant's WebSocket "
-                "API, which is unavailable.",
+                message,
                 context={"device_ids": device_ids},
                 suggestions=[
                     "Check the Home Assistant WebSocket connection",
