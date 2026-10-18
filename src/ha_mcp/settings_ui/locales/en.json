@@ -336,7 +336,7 @@
     "oauth_callbacks.inactive": "Not in use right now: the list applies only while remote access is on and Authentication mode is the secret webhook URL.",
     "oauth_callbacks.save": "Save callbacks",
     "oauth_callbacks.reset": "Restore default",
-    "oauth_callbacks.invalid": "Not saved. These are not usable callback URLs: {urls}. Use https://, or http:// on 127.0.0.1, [::1] or localhost, without a #fragment.",
+    "oauth_callbacks.invalid": "Not saved. These are not usable callback URLs: {urls}. Use https://, or http:// on 127.0.0.1, [::1] or localhost, without a user name, password or #fragment.",
     "oauth_callbacks.saved": "Saved. Applies to the next sign-in.",
     "oauth_callbacks.load_failed": "Could not load the callback list (HTTP {status}). Reload the page to try again.",
     "oauth_callbacks.load_error": "Could not load the callback list: the request failed. Reload the page to try again.",

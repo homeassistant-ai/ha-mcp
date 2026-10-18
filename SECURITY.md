@@ -229,7 +229,7 @@ choice keep the webhook on in `none` mode with LAN binding.
   administrator-editable allowlist (#2427): exact matching, plus the RFC 8252
   §7.3 any-port rule for a listed `http` loopback callback. Anything else gets
   a 400 page and no redirect, so the Home Assistant origin is not an open
-  redirector. The list ships with claude.ai's callback. It is stored on the
+  redirector. The list ships with the common clients' published callbacks. It is stored on the
   server entry and edited on its Configure screen or in the admin-only
   sidebar panel; dynamic client registration cannot add to it.
 - **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth

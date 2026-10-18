@@ -47,6 +47,7 @@ from __future__ import annotations
 import html
 import logging
 import secrets
+import time
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode, urlparse
@@ -76,6 +77,30 @@ if TYPE_CHECKING:
     from multidict import MultiDict
 
 _LOGGER = logging.getLogger(__name__)
+
+# The none-mode /authorize view is anonymous, so its refusal log is bounded in
+# time: one line per interval, naming the latest callback and how many more
+# were refused since the last line. A per-callback limit would not bound it,
+# because the caller picks the callback.
+_REFUSAL_LOG_INTERVAL = 60.0
+_refusal_log: dict[str, float] = {"last": float("-inf"), "suppressed": 0}
+
+
+def _log_refused_callback(redirect_uri: str) -> None:
+    now = time.monotonic()
+    if now - _refusal_log["last"] < _REFUSAL_LOG_INTERVAL:
+        _refusal_log["suppressed"] += 1
+        return
+    suppressed = int(_refusal_log["suppressed"])
+    _refusal_log.update(last=now, suppressed=0)
+    # repr: the callback is attacker-supplied, and an encoded newline or
+    # terminal sequence in it must not forge log lines.
+    _LOGGER.warning(
+        "Refused a none-mode sign-in to callback %s: it is not on the OAuth "
+        "callback list (Configure or the HA-MCP panel)%s",
+        repr(redirect_uri[:200]),
+        f"; {suppressed} more refused since the last such line" if suppressed else "",
+    )
 
 
 # cfg (hass.data[DOMAIN][DATA_WEBHOOK]) key holding the live AutoApproveProvider.
@@ -142,7 +167,6 @@ add this exact address under <b>Settings &rarr; Devices &amp; Services &rarr;
 HA-MCP Custom Component &rarr; HA-MCP Server &rarr; Configure &rarr; Allowed
 OAuth callback URLs</b>, or in the <b>HA-MCP</b> sidebar panel under <b>Server Settings</b>.
 Then start connecting again.</p>
-<p>Clients that connect with the webhook URL alone do not need an entry.</p>
 </body></html>
 """
 
@@ -288,13 +312,7 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         if err is not None:
             return err
         if not provider.allows_redirect(redirect_uri):
-            # repr: the callback is attacker-supplied, and an encoded newline
-            # or terminal sequence in it must not forge log lines.
-            _LOGGER.warning(
-                "Refused a none-mode sign-in to callback %s: it is not on the "
-                "OAuth callback list (Configure or the HA-MCP panel)",
-                repr(redirect_uri[:200]),
-            )
+            _log_refused_callback(redirect_uri)
             return _unlisted_callback_response(redirect_uri)
 
         # RFC 9207: every authorization response — success or error — names the

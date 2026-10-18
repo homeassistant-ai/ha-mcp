@@ -28,7 +28,6 @@ from ..oauth_redirect_allowlist import (
     stored_allowlist,
 )
 from .constants import (
-    MAX_OAUTH_CALLBACK_LENGTH,
     MAX_OAUTH_CALLBACKS,
     WS_OAUTH_CALLBACKS,
     WS_OAUTH_CALLBACKS_UPDATE,
@@ -44,10 +43,8 @@ def _oauth_callbacks_update_schema() -> dict[Any, Any]:
     # ``reset`` restores the shipped default by removing the saved list.
     return {
         vol.Required("type"): WS_OAUTH_CALLBACKS_UPDATE,
-        vol.Exclusive("allowlist", "change"): vol.All(
-            [vol.All(str, vol.Length(max=MAX_OAUTH_CALLBACK_LENGTH))],
-            vol.Length(max=MAX_OAUTH_CALLBACKS),
-        ),
+        # Bounded after normalizing, like Configure (_oauth_callbacks_update_prep).
+        vol.Exclusive("allowlist", "change"): [str],
         vol.Exclusive("reset", "change"): True,
     }
 
@@ -108,6 +105,10 @@ async def _oauth_callbacks_update_prep(
                     "invalid": invalid,
                 }
             }
+        if len(entries) > MAX_OAUTH_CALLBACKS:
+            from homeassistant.exceptions import HomeAssistantError
+
+            raise HomeAssistantError(f"List at most {MAX_OAUTH_CALLBACKS} callbacks.")
         if (stored := stored_allowlist(options, entries)) is not None:
             options[OPT_OAUTH_REDIRECT_ALLOWLIST] = stored
     else:

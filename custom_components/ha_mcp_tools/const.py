@@ -364,8 +364,20 @@ OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
 # (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
 # empty one, replaces it. Read per request, so a change needs no reload.
 OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
+# The common OAuth clients' published callbacks. ChatGPT apps created since
+# its per-app callbacks (chatgpt.com/connector/oauth/<id>) need their own entry.
 DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
     "https://claude.ai/api/mcp/auth_callback",
+    # Anthropic's announced future callback domain.
+    "https://claude.com/api/mcp/auth_callback",
+    # Claude Code (any port, per the loopback rule).
+    "http://localhost/callback",
+    "http://127.0.0.1/callback",
+    "https://chatgpt.com/connector_platform_oauth_redirect",
+    # Gemini Enterprise.
+    "https://vertexaisearch.cloud.google.com/oauth-redirect",
+    # Microsoft Copilot Studio.
+    "https://global.consent.azure-apim.net/redirect",
 )
 # Bounds every writer of the list applies (Configure, the panel's WS command).
 MAX_OAUTH_CALLBACKS = 50

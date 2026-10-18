@@ -119,6 +119,23 @@ async def test_an_over_long_callback_saves_nothing_and_is_named() -> None:
     assert entry.options == {}
 
 
+async def test_the_list_is_counted_after_normalizing_like_configure() -> None:
+    # 51 lines with one duplicate are 50 callbacks, which Configure saves too.
+    hass, entry = _hass()
+    lines = [f"https://ex{i}.example/cb" for i in range(MAX_OAUTH_CALLBACKS)]
+    result = await _update(hass, allowlist=[*lines, lines[0]])
+    assert result["saved"] is True
+    assert entry.options[OPT_OAUTH_REDIRECT_ALLOWLIST] == lines
+
+
+async def test_more_callbacks_than_the_cap_save_nothing() -> None:
+    hass, entry = _hass()
+    lines = [f"https://ex{i}.example/cb" for i in range(MAX_OAUTH_CALLBACKS + 1)]
+    with pytest.raises(Exception, match=f"at most {MAX_OAUTH_CALLBACKS} callbacks"):
+        await _update(hass, allowlist=lines)
+    assert entry.options == {}
+
+
 async def test_reset_restores_the_default_list() -> None:
     hass, entry = _hass({OPT_OAUTH_REDIRECT_ALLOWLIST: []})
     result = await _update(hass, reset=True)
@@ -150,10 +167,9 @@ class TestUpdateFrame:
         "frame",
         [
             {"allowlist": [CALLBACK], "reset": True},
-            {"allowlist": [CALLBACK] * (MAX_OAUTH_CALLBACKS + 1)},
-            {"allowlist": ["https://x/" + "a" * MAX_OAUTH_CALLBACK_LENGTH]},
+            {"allowlist": [CALLBACK, 3]},
         ],
-        ids=["both_changes", "too_many", "too_long"],
+        ids=["both_changes", "not_strings"],
     )
     def test_an_out_of_bounds_frame_is_refused(
         self, schema: Any, frame: dict[str, Any]
@@ -187,5 +203,3 @@ def test_the_settings_panel_speaks_the_component_contract() -> None:
     assert panel.WS_OAUTH_CALLBACKS == wsapi.WS_OAUTH_CALLBACKS
     assert panel.WS_OAUTH_CALLBACKS_UPDATE == wsapi.WS_OAUTH_CALLBACKS_UPDATE
     assert panel.CAPABILITY in wsapi.CAPABILITIES
-    assert panel._MAX_CALLBACKS == MAX_OAUTH_CALLBACKS
-    assert panel._MAX_CALLBACK_LENGTH == MAX_OAUTH_CALLBACK_LENGTH

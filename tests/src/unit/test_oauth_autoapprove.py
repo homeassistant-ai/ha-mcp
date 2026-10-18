@@ -4,7 +4,7 @@ Covers ``custom_components/ha_mcp_tools/oauth_autoapprove.py``: the invisible
 ``/authorize`` (issues a PKCE code + 302, no UI) and ``/token`` (public-client
 PKCE exchange, cosmetic opaque token) views, the ``AutoApproveProvider`` code
 lifecycle, and — most importantly — the open-redirect gate layered on top of
-:func:`oauth_legacy._is_valid_redirect_uri` (only callbacks on the
+:func:`oauth_redirect_allowlist.is_redirect_allowed` (only callbacks on the
 administrator's allowlist are redirected to; anything else is refused in place).
 
 Home Assistant / aiohttp are stubbed via ``_embedded_stubs``. ``yarl`` (an

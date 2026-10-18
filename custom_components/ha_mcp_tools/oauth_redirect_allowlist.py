@@ -68,10 +68,6 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
         return False
     if not parsed.hostname:
         return False
-    if parsed.username is not None or parsed.password is not None:
-        # A callback carrying credentials is never legitimate; an exact
-        # allowlist match must not be able to let one through.
-        return False
     if not _AUTHORITY_CHARS_RE.fullmatch(parsed.netloc):
         # Same contract as the .port access above: urlparse and yarl split
         # authorities differently (a backslash before '@', a zero-width
@@ -87,6 +83,19 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
         return False
     # Fragments are not allowed in OAuth redirect URIs (RFC 6749 §3.1.2).
     return not parsed.fragment
+
+
+def _is_listable(redirect_uri: str) -> bool:
+    """The spec floor plus no userinfo: what the none-mode callback list accepts.
+
+    A callback carrying credentials is never legitimate, and an exact match
+    must not be able to let one through. Kept out of the shared floor so the
+    legacy, ha_auth and DCR modes keep accepting what they always did.
+    """
+    if not _is_valid_redirect_uri(redirect_uri):
+        return False
+    parsed = urlparse(redirect_uri)
+    return parsed.username is None and parsed.password is None
 
 
 def effective_allowlist(options: Mapping[str, Any]) -> list[str]:
@@ -129,8 +138,8 @@ def normalize_allowlist(values: Iterable[Any]) -> tuple[list[str], list[str]]:
     """Return ``(entries, invalid)``: trimmed, de-duplicated, in input order.
 
     An entry is invalid when no authorization request could use it: it fails
-    the same spec floor as ``/authorize`` (:func:`_is_valid_redirect_uri`), or
-    it is longer than ``MAX_OAUTH_CALLBACK_LENGTH``.
+    the same check as ``/authorize`` (:func:`_is_listable`), or it is longer
+    than ``MAX_OAUTH_CALLBACK_LENGTH``.
     """
     entries: list[str] = []
     invalid: list[str] = []
@@ -138,7 +147,7 @@ def normalize_allowlist(values: Iterable[Any]) -> tuple[list[str], list[str]]:
         text = str(value).strip()
         if not text or text in entries or text in invalid:
             continue
-        valid = len(text) <= MAX_OAUTH_CALLBACK_LENGTH and _is_valid_redirect_uri(text)
+        valid = len(text) <= MAX_OAUTH_CALLBACK_LENGTH and _is_listable(text)
         (entries if valid else invalid).append(text)
     return entries, invalid
 
@@ -156,7 +165,7 @@ def _loopback_key(uri: str) -> tuple[str, str, str] | None:
 
 def is_redirect_allowed(redirect_uri: str, allowlist: Iterable[str]) -> bool:
     """True when ``redirect_uri`` may receive a none-mode authorization code."""
-    if not _is_valid_redirect_uri(redirect_uri):
+    if not _is_listable(redirect_uri):
         return False
     listed = list(allowlist)
     if redirect_uri in listed:

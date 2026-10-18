@@ -137,7 +137,7 @@ async function saveOAuthCallbacks(change) {
     let msg;
     if (invalid.length) {
       msg = t('oauth_callbacks.invalid', {urls: invalid.join(', ')},
-        `Not saved. These are not usable callback URLs: ${invalid.join(', ')}. Use https://, or http:// on 127.0.0.1, [::1] or localhost, without a #fragment.`);
+        `Not saved. These are not usable callback URLs: ${invalid.join(', ')}. Use https://, or http:// on 127.0.0.1, [::1] or localhost, without a user name, password or #fragment.`);
     } else {
       msg = (data && data.error && data.error.message) || t('errors.save_failed', {}, 'Save failed');
     }

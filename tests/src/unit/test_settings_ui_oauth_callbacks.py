@@ -39,11 +39,7 @@ def component(monkeypatch: pytest.MonkeyPatch) -> Calls:
     """Record the component commands the handlers send; answer like the component."""
     calls: Calls = []
 
-    async def command(
-        server: Any, name: str, *, strict: bool = False, **fields: Any
-    ) -> dict[str, Any]:
-        # A save must probe strictly; a read may use the cached capabilities.
-        assert strict == (name == oc.WS_OAUTH_CALLBACKS_UPDATE)
+    async def command(server: Any, name: str, **fields: Any) -> dict[str, Any]:
         calls.append((name, fields))
         if fields.get("allowlist") == ["http://not-loopback/cb"]:
             return {**STATE, "saved": False, "invalid": fields["allowlist"]}
@@ -123,8 +119,6 @@ async def test_unusable_callbacks_are_named_back(
     [
         {"allowlist": "x"},
         {"allowlist": [1]},
-        {"allowlist": ["x"] * 51},
-        {"allowlist": ["https://example.com/" + "a" * 2048]},
         [],
     ],
 )
@@ -134,6 +128,16 @@ async def test_a_malformed_save_is_refused_before_the_component(
     status, _ = await _call("save_oauth_callbacks", body)
     assert status == 400
     assert component == []
+
+
+async def test_the_list_is_bounded_by_the_component_not_the_panel(
+    embedded: None, component: Calls
+) -> None:
+    # The component counts after trimming and de-duplicating, as Configure does.
+    lines = [f"https://ex{i}.example/cb" for i in range(50)]
+    status, _ = await _call("save_oauth_callbacks", {"allowlist": [*lines, lines[0]]})
+    assert status == 200
+    assert component[-1][1]["allowlist"] == [*lines, lines[0]]
 
 
 async def test_a_body_that_both_resets_and_sets_is_refused(
@@ -161,6 +165,23 @@ async def test_a_failed_probe_is_a_reachability_error_on_save(
     status, body = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
     assert status == 502
     assert "Could not reach" in body["error"]["message"]
+
+
+async def test_a_failed_probe_is_a_reachability_error_on_read(
+    embedded: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same probe on the read: an up-to-date component must not be told to update.
+    from ha_mcp.tools import component_api
+
+    monkeypatch.setattr(
+        component_api,
+        "get_component_caps",
+        AsyncMock(side_effect=component_api.ComponentDiscoveryError("probe failed")),
+    )
+    status, body = await _call("get_oauth_callbacks", None)
+    assert status == 200
+    assert body["available"] is False
+    assert "Could not reach" in body["reason"]
 
 
 async def test_a_save_outside_the_embedded_server_is_refused(

@@ -28,9 +28,6 @@ logger = logging.getLogger(__name__)
 WS_OAUTH_CALLBACKS = "ha_mcp_tools/oauth_callbacks"
 WS_OAUTH_CALLBACKS_UPDATE = "ha_mcp_tools/oauth_callbacks_update"
 CAPABILITY = "oauth_callbacks"
-# The component's MAX_OAUTH_CALLBACKS / MAX_OAUTH_CALLBACK_LENGTH (pinned by a test).
-_MAX_CALLBACKS = 50
-_MAX_CALLBACK_LENGTH = 2048
 # Transport failures reaching the component; a command it ran and refused is
 # a HomeAssistantCommandError, answered separately.
 _REACH_ERRORS = (HomeAssistantError, OSError, TimeoutError)
@@ -41,17 +38,13 @@ class _Unavailable(Exception):
 
 
 async def _component_command(
-    server: HomeAssistantSmartMCPServer,
-    command: str,
-    *,
-    strict: bool = False,
-    **fields: Any,
+    server: HomeAssistantSmartMCPServer, command: str, **fields: Any
 ) -> dict[str, Any]:
     """Run one allowlist command on the component and return its result.
 
-    ``strict`` is for the write: a capability probe that failed because Home
-    Assistant was unreachable must surface as a reachability error to retry,
-    not as a component that lacks the commands.
+    The capability probe is strict: one that failed because Home Assistant was
+    unreachable surfaces as a reachability error to retry, not as a component
+    that lacks the commands.
     """
     from ..client.websocket_client import get_websocket_client
     from ..tools.component_api import (
@@ -62,7 +55,7 @@ async def _component_command(
 
     client = server.client
     try:
-        caps = await get_component_caps(client, strict=strict)
+        caps = await get_component_caps(client, strict=True)
     except ComponentDiscoveryError as exc:
         raise HomeAssistantError(str(exc)) from exc
     if not component_supports(caps, CAPABILITY):
@@ -116,14 +109,9 @@ def _parse_change(body: Any) -> dict[str, Any] | None:
     if body.get("reset") is True:
         return {"reset": True}
     allowlist = body.get("allowlist")
-    if (
-        isinstance(allowlist, list)
-        and len(allowlist) <= _MAX_CALLBACKS
-        and all(
-            isinstance(item, str) and len(item) <= _MAX_CALLBACK_LENGTH
-            for item in allowlist
-        )
-    ):
+    # Counted and length-checked by the component after normalizing, the same
+    # order Configure uses, so both writers accept the same lists.
+    if isinstance(allowlist, list) and all(isinstance(i, str) for i in allowlist):
         return {"allowlist": allowlist}
     return None
 
@@ -150,15 +138,12 @@ async def _save_oauth_callbacks(
         return JSONResponse(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Send 'allowlist' as a list of at most {_MAX_CALLBACKS} URLs of "
-                f"at most {_MAX_CALLBACK_LENGTH} characters each, or 'reset': true.",
+                "Send 'allowlist' as a list of URLs, or 'reset': true.",
             ),
             status_code=400,
         )
     try:
-        result = await _component_command(
-            server, WS_OAUTH_CALLBACKS_UPDATE, strict=True, **change
-        )
+        result = await _component_command(server, WS_OAUTH_CALLBACKS_UPDATE, **change)
     except _Unavailable as exc:
         return JSONResponse(
             create_error_response(ErrorCode.SERVICE_CALL_FAILED, str(exc)),
@@ -187,7 +172,7 @@ async def _save_oauth_callbacks(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "Nothing was saved. Each callback must be an https:// URL, "
                     "or an http:// URL on 127.0.0.1, [::1] or localhost, without "
-                    "a #fragment.",
+                    "a user name, password or #fragment.",
                 ),
                 "invalid": result.get("invalid", []),
             },

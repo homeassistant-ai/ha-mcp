@@ -223,7 +223,7 @@ Configure there just reports that.)
 | **Custom webhook secret (optional)** | empty | Replaces the random webhook secret in `/api/webhook/<secret>`. The URL is the credential - use a long, hard-to-guess value. |
 | **Custom direct-access path (optional)** | empty | Replaces the random `/private_...` path on the server port. Same rule: the path is the credential. |
 | **Regenerate connect secrets now** | off | One-time action: mints fresh random values for both secrets, immediately invalidating the old connect URLs (and clearing the two overrides). |
-| **Allowed OAuth callback URL** | claude.ai's callback | In `none` mode, the only callback URLs an OAuth sign-in is sent back to. Also editable in the **HA-MCP** sidebar panel under **Server Settings → Remote access**. See [Security](#security). |
+| **Allowed OAuth callback URLs** | the common clients' callbacks (below) | In `none` mode, the only callback URLs an OAuth sign-in is sent back to. Also editable in the **HA-MCP** sidebar panel under **Server Settings → Remote access**. See [Security](#security). |
 
 ### Server updates
 
@@ -278,8 +278,8 @@ to keep receiving development builds.
 the callback allowlist applies to existing installations too. A client whose
 callback is not listed cannot complete its next sign-in. Under **Settings →
 Devices & services → HA-MCP Server → Configure**, add its exact callback URL to
-**Allowed OAuth callback URL**. Claude's callback is included by default;
-other clients may need an entry. Connections that use only the webhook URL and
+**Allowed OAuth callback URLs**. The common clients' callbacks are included by
+default; other clients may need an entry. Connections that use only the webhook URL and
 clients using Home Assistant or legacy OAuth authentication are unaffected by
 this allowlist change. See [Security](#security) for loopback callback matching.
 
@@ -313,15 +313,18 @@ The in-process server offers three authentication postures, chosen with the
   Some connectors (claude.ai among them) insist on an OAuth sign-in even here.
   The server approves it without a login, because the token it issues grants
   nothing, but it sends the sign-in back only to a callback URL on the
-  **Allowed OAuth callback URL** list. The list starts with claude.ai's callback;
-  for any other OAuth client, add the callback URL its sign-in uses, exactly as
-  sent. An `http://` loopback callback (`127.0.0.1`, `[::1]` or `localhost`) also
+  **Allowed OAuth callback URLs** list. The list starts with the published
+  callbacks of claude.ai (and its announced claude.com address), Claude Code,
+  ChatGPT (`connector_platform_oauth_redirect`), Gemini Enterprise and Microsoft
+  Copilot Studio. For any other OAuth client, including ChatGPT apps that show a
+  per-app `chatgpt.com/connector/oauth/...` callback, add the callback URL its
+  sign-in uses, exactly as sent. An `http://` loopback callback (`127.0.0.1`, `[::1]` or `localhost`) also
   matches on any port, because desktop clients pick a free port per sign-in. A
   sign-in to an unlisted callback stops on a page that names the URL and where
   to add it; registering a client cannot add to the list. Clients that connect
-  with the webhook URL alone need no entry. Before this list existed, any
-  callback was accepted, so a non-claude.ai OAuth client that worked before
-  needs its callback added after upgrading.
+  without an OAuth sign-in step need no entry. Before this list existed, any
+  callback was accepted, so an OAuth client outside the default list that worked
+  before needs its callback added after upgrading.
 - **`ha_auth`: clients sign in with your Home Assistant account.** Home Assistant
   Core acts as the OAuth authorization server. MCP clients that support OAuth
   (for example claude.ai and ChatGPT) discover the sign-in endpoints

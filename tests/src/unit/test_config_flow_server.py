@@ -158,6 +158,29 @@ class TestOAuthCallbackAllowlistOption:
         )
         assert const.OPT_OAUTH_REDIRECT_ALLOWLIST not in result["data"]
 
+    def test_a_configure_save_that_changes_only_the_list_needs_no_reload(self):
+        # The frontend resubmits every field; with only the list changed, the
+        # update listener must see no reload-relevant difference (#2427).
+        import custom_components.ha_mcp_tools.embedded_entry as entry_mod
+
+        first = asyncio.run(
+            _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"}).async_step_init(
+                {const.OPT_OAUTH_REDIRECT_ALLOWLIST: [self.CALLBACK]}
+            )
+        )["data"]
+        second = asyncio.run(
+            _make_options_flow(
+                options=first, data={const.DATA_WEBHOOK_ID: "mcp_abc"}
+            ).async_step_init(
+                {
+                    **first,
+                    const.OPT_OAUTH_REDIRECT_ALLOWLIST: ["https://other.example/cb"],
+                }
+            )
+        )["data"]
+        assert second != first
+        assert entry_mod._reload_relevant(second) == entry_mod._reload_relevant(first)
+
     def test_removing_every_callback_sticks(self):
         # Home Assistant's frontend omits an emptied optional field.
         flow = _make_options_flow(

@@ -21,6 +21,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
 from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (  # noqa: E402
+    _is_valid_redirect_uri,
     effective_allowlist,
     is_redirect_allowed,
     normalize_allowlist,
@@ -94,6 +95,25 @@ class TestIsRedirectAllowed:
         assert not is_redirect_allowed(
             "https://claude.ai:8443/api/mcp/auth_callback", [CLAUDE]
         )
+
+    def test_a_listed_callback_with_userinfo_is_refused(self) -> None:
+        listed = "https://user@claude.ai/api/mcp/auth_callback"
+        assert not is_redirect_allowed(listed, [listed])
+
+    def test_the_shared_floor_still_accepts_userinfo_for_other_modes(self) -> None:
+        # Legacy, ha_auth and DCR use the floor and keep their behaviour; only
+        # the none-mode list refuses userinfo.
+        assert _is_valid_redirect_uri("https://user@claude.ai/api/mcp/auth_callback")
+
+    def test_the_default_list_is_all_listable(self) -> None:
+        default = list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
+        assert normalize_allowlist(default) == (default, [])
+
+    def test_claude_code_on_any_port_matches_the_default(self) -> None:
+        for host in ("localhost", "127.0.0.1"):
+            assert is_redirect_allowed(
+                f"http://{host}:54321/callback", DEFAULT_OAUTH_REDIRECT_ALLOWLIST
+            )
 
     def test_a_malformed_callback_is_refused_even_when_listed(self) -> None:
         listed = f"{CLAUDE}#frag"
@@ -171,6 +191,46 @@ class TestNormalizeAllowlist:
 # ---------------------------------------------------------------------------
 # Through the none-mode /authorize view
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _fresh_refusal_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each test starts outside the refusal log's rate-limit interval."""
+    from custom_components.ha_mcp_tools import oauth_autoapprove
+
+    monkeypatch.setattr(
+        oauth_autoapprove, "_refusal_log", {"last": float("-inf"), "suppressed": 0}
+    )
+
+
+async def test_none_mode_refusal_log_is_rate_limited(
+    unified_view_client_factory: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The view is anonymous: a burst of refusals writes one line, then a count."""
+    from custom_components.ha_mcp_tools import oauth_autoapprove
+
+    client = await unified_view_client_factory(mode="none")
+    with caplog.at_level(logging.WARNING):
+        for n in range(5):
+            await client.get(
+                "/api/ha_mcp_tools/oauth/authorize"
+                + AUTH_QS
+                + f"&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fcb{n}",
+                allow_redirects=False,
+            )
+        oauth_autoapprove._refusal_log["last"] -= (
+            oauth_autoapprove._REFUSAL_LOG_INTERVAL
+        )
+        await client.get(
+            "/api/ha_mcp_tools/oauth/authorize"
+            + AUTH_QS
+            + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Flast",
+            allow_redirects=False,
+        )
+    lines = [r for r in caplog.records if "not on the OAuth callback list" in r.message]
+    assert len(lines) == 2
+    assert "4 more refused since the last such line" in lines[1].message
+    assert "chatgpt.example/last" in lines[1].message
 
 
 async def test_none_mode_refuses_an_unlisted_callback_without_redirecting(
