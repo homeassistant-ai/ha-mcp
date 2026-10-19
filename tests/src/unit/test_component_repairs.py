@@ -280,7 +280,6 @@ def test_token_repair_catalog_explains_every_refusal(catalog_path: str) -> None:
         "token_not_long_lived",
         "token_not_admin",
         "invalid_login",
-        "login_not_admin",
         "credentials_needed",
     ):
         assert step["error"][reason]

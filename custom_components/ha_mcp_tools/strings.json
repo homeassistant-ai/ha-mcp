@@ -40,8 +40,7 @@
             "invalid_token": "Home Assistant does not recognise this token. Copy the whole token, or create a new one.",
             "token_not_long_lived": "This is a temporary sign-in token, which expires. Create a long-lived access token instead.",
             "token_not_admin": "This token belongs to an account that is not an active administrator.",
-            "invalid_login": "Home Assistant does not accept this user name and password.",
-            "login_not_admin": "This account is not an administrator.",
+            "invalid_login": "Enter the user name and password of a local-only administrator account made for HA-MCP.",
             "credentials_needed": "Enter an administrator account's user name and password, or paste an access token."
         }
     },
@@ -54,8 +53,7 @@
             "invalid_token": "Home Assistant does not recognise this token. Copy the whole token, or create a new one.",
             "token_not_long_lived": "This is a temporary sign-in token, which expires. Create a long-lived access token instead.",
             "token_not_admin": "This token belongs to an account that is not an active administrator.",
-            "invalid_login": "Home Assistant does not accept this user name and password.",
-            "login_not_admin": "This account is not an administrator.",
+            "invalid_login": "Enter the user name and password of a local-only administrator account made for HA-MCP.",
             "credentials_needed": "Enter an administrator account's user name and password, or paste an access token."
         },
         "step": {
@@ -176,8 +174,7 @@
                     "invalid_token": "Home Assistant does not recognise this token. Copy the whole token, or create a new one.",
                     "token_not_long_lived": "This is a temporary sign-in token, which expires. Create a long-lived access token instead.",
                     "token_not_admin": "This token belongs to an account that is not an active administrator.",
-                    "invalid_login": "Home Assistant does not accept this user name and password.",
-                    "login_not_admin": "This account is not an administrator.",
+                    "invalid_login": "Enter the user name and password of a local-only administrator account made for HA-MCP.",
                     "credentials_needed": "Enter an administrator account's user name and password, or paste an access token."
                 },
                 "abort": {

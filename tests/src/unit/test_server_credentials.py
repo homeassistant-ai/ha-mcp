@@ -68,7 +68,11 @@ def _hass(
 
 
 def _login_hass(
-    user: SimpleNamespace | None, *, valid: bool = True, names: tuple[str, ...] = ()
+    user: SimpleNamespace | None,
+    *,
+    valid: bool = True,
+    names: tuple[str, ...] = (),
+    local_only: bool = True,
 ) -> MagicMock:
     """A Home Assistant whose own auth provider knows ``user``'s login."""
     invalid = sys.modules["homeassistant.auth.providers.homeassistant"].InvalidAuth
@@ -79,10 +83,11 @@ def _login_hass(
 
     provider = SimpleNamespace(
         type="homeassistant",
-        async_validate_login=validate,
+        async_validate_login=AsyncMock(side_effect=validate),
         async_get_or_create_credentials=AsyncMock(return_value="credentials"),
     )
     if user is not None:
+        user.local_only = local_only
         user.refresh_tokens = {
             str(i): SimpleNamespace(client_name=n) for i, n in enumerate(names)
         }
@@ -118,11 +123,22 @@ class TestCredentialFromInput:
         assert err.value.reason == "invalid_login"
         hass.auth.async_create_refresh_token.assert_not_awaited()
 
-    async def test_a_login_without_administrator_rights_issues_nothing(self) -> None:
-        hass = _login_hass(_user(admin=False))
+    @pytest.mark.parametrize(
+        ("admin", "local_only"),
+        [(False, True), (True, False)],
+        ids=["not_an_administrator", "not_local_only"],
+    )
+    async def test_only_a_local_only_administrator_login_is_tried(
+        self, admin: bool, local_only: bool
+    ) -> None:
+        # The forms are for an account made for HA-MCP; any other account,
+        # the user's own included, is refused before its password is checked,
+        # with the same error, so they never test another account's password.
+        hass = _login_hass(_user(admin=admin), local_only=local_only)
         with pytest.raises(sc.CredentialRefused) as err:
             await sc.async_credential_from_input(hass, username="x", password="pw")
-        assert err.value.reason == "login_not_admin"
+        assert err.value.reason == "invalid_login"
+        hass.auth.auth_providers[0].async_validate_login.assert_not_awaited()
         hass.auth.async_create_refresh_token.assert_not_awaited()
 
     async def test_a_second_issued_token_does_not_collide_with_the_first(

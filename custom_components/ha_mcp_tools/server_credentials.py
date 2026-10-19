@@ -1,8 +1,8 @@
 """The Home Assistant credential the in-process server runs with (#2427).
 
 New setups use an administrator's long-lived access token: one the user
-pastes in, or one issued here from the login of an account the user chose,
-theirs or one made for the server. Installs from before that keep the local
+pastes in, or one issued here from the login of a local-only administrator
+account the user made for the server. Installs from before that keep the local
 administrator and token an older release created, for as long as both still
 work. Nothing here creates an account: a missing or revoked credential stops
 the server and the user is asked for a replacement.
@@ -34,9 +34,7 @@ if TYPE_CHECKING:
 # Why a token cannot run the server: the setup / repair error translation keys.
 TokenProblem = Literal["invalid_token", "token_not_long_lived", "token_not_admin"]
 # Why a submitted token or login was refused: the form error translation keys.
-CredentialProblem = (
-    TokenProblem | Literal["invalid_login", "login_not_admin", "credentials_needed"]
-)
+CredentialProblem = TokenProblem | Literal["invalid_login", "credentials_needed"]
 
 # The login fields of the setup, Configure and token-repair forms; never stored.
 ADMIN_USERNAME = "admin_username"
@@ -119,11 +117,11 @@ async def async_credential_from_input(
 ) -> tuple[str, str | None]:
     """The token to run the server with, and its refresh-token id if issued here.
 
-    A pasted token wins. Otherwise the login of an administrator account, the
-    user's own or one made for the server, is checked against Home Assistant's
-    users and a long-lived token is issued for that account, so nobody has to
-    log in as it. A local-only account's token works: the server reaches Home
-    Assistant over loopback. Raises CredentialRefused.
+    A pasted token wins. Otherwise the login must belong to a local-only
+    administrator account, the kind the forms ask the user to make for the
+    server; Home Assistant checks its password and a long-lived token is issued
+    for it, so nobody has to log in as it. Its token works because the server
+    reaches Home Assistant over loopback. Raises CredentialRefused.
     """
     if token:
         if (problem := token_problem(hass, token)) is not None:
@@ -139,16 +137,17 @@ async def async_credential_from_input(
     )
     if provider is None:
         raise CredentialRefused("invalid_login")
+    credentials = await provider.async_get_or_create_credentials({"username": username})
+    user = await hass.auth.async_get_user_by_credentials(credentials)
+    # Any other account is refused before its password is checked, with the
+    # same error, so these forms never test another account's password and
+    # never issue a token that works from outside the local network.
+    if user is None or not (user.is_active and user.is_admin and user.local_only):
+        raise CredentialRefused("invalid_login")
     try:
         await provider.async_validate_login(username, password)
     except InvalidAuth:
         raise CredentialRefused("invalid_login") from None
-    credentials = await provider.async_get_or_create_credentials({"username": username})
-    user = await hass.auth.async_get_user_by_credentials(credentials)
-    if user is None or not user.is_active:
-        raise CredentialRefused("invalid_login")
-    if not user.is_admin:
-        raise CredentialRefused("login_not_admin")
     # Home Assistant allows one long-lived token per name and account.
     taken = {rt.client_name for rt in user.refresh_tokens.values()}
     name, n = _ISSUED_TOKEN_NAME, 1
