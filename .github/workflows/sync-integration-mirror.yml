@@ -335,6 +335,7 @@ jobs:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
           VER: ${{ steps.release.outputs.version }}
           TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           # Captures instead of `| grep -q .`: without pipefail a FAILED
           # ls-remote looks identical to "tag absent"; a bare assignment under
@@ -358,18 +359,13 @@ jobs:
               echo "v${VER} is already released as stable - skipping dev tag"
               exit 0
             fi
-            {
-              echo "## HA-MCP Custom Component ${VER} (development pre-release)"
-              echo
-              echo "Snapshot of the custom component and its ha-mcp server from" \
-                "${GITHUB_REPOSITORY}@${{ github.event.workflow_run.head_sha || github.sha }}," \
-                "ahead of the ${VER} stable release. Installs" \
-                "${{ steps.release.outputs.dist }}==${{ steps.release.outputs.pin }}."
-              echo
-              echo "You receive these builds because the HACS **Pre-release**" \
-                "switch is enabled for this repository; turn it off to return" \
-                "to stable releases."
-            } > /tmp/mirror_notes.md
+            # One line per pull request merged since the previous dev build.
+            python3 scripts/build_mirror_release_notes.py \
+              --dev-pin "${{ steps.release.outputs.pin }}" \
+              --dist "${{ steps.release.outputs.dist }}" \
+              --source "$SOURCE_SHA" \
+              --source-label "${GITHUB_REPOSITORY}@${SOURCE_SHA}" \
+              --out /tmp/mirror_notes.md
           fi
           echo "--- release notes for ${TAG} ---"
           cat /tmp/mirror_notes.md

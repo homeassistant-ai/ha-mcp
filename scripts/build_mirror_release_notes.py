@@ -3,11 +3,13 @@
 The mirror's release-on-tag workflow turns each pushed tag into a GitHub
 release, but the deploy key that pushes the tag cannot call the GitHub API
 to set a rich release body -- so the body has to travel inside the annotated
-tag message itself. This script produces that message for a stable release:
+tag message itself. This script produces that message. For a stable release
 the component and the ha-mcp server it installs share one version (#2427), so
 the notes name that server and summarize what changed in the custom component
 (custom_components/ha_mcp_tools/) since the previous stable release, so HACS
-shows real release notes instead of a generic stub.
+shows real release notes instead of a generic stub. For a development
+pre-release (``--dev-pin``) they list the changes since the previous dev build,
+one line per merged pull request.
 """
 
 from __future__ import annotations
@@ -22,6 +24,8 @@ from pathlib import Path
 # ".devN" (e.g. v7.10.0.dev778) and the floating "stable" tag isn't a
 # vX.Y.Z tag at all -- both must be excluded from stable-tag selection.
 _STABLE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+# Publish Dev Channel tags each build it uploads, e.g. v9.0.0.dev3100.
+_DEV_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)\.dev(\d+)$")
 
 # Commit subjects that touch custom_components/ha_mcp_tools/ only
 # incidentally, via merge/publish mechanics -- not real component changes,
@@ -65,6 +69,21 @@ def select_stable_tags(
     return (stable[index - 1] if index else None), stable[index]
 
 
+def _dev_version_key(tag: str) -> tuple[int, int, int, int]:
+    """Numeric sort key for a dev tag, e.g. 'v9.0.0.dev3100' -> (9, 0, 0, 3100)."""
+    match = _DEV_TAG_RE.match(tag)
+    assert match, f"not a dev tag: {tag}"
+    major, minor, patch, dev = match.groups()
+    return (int(major), int(minor), int(patch), int(dev))
+
+
+def previous_dev_tag(tags: list[str], pin: str) -> str | None:
+    """The newest dev build tag older than the build for ``pin`` (e.g. '9.0.0.dev3100')."""
+    current = _dev_version_key(f"v{pin}")
+    older = [t for t in tags if _DEV_TAG_RE.match(t) and _dev_version_key(t) < current]
+    return max(older, key=_dev_version_key, default=None)
+
+
 def _filter_noise_subjects(subjects: list[str]) -> list[str]:
     """Drop commit subjects that are automation noise, not component changes."""
     # semantic-release commits each stable version as its bare number while
@@ -74,6 +93,7 @@ def _filter_noise_subjects(subjects: list[str]) -> list[str]:
         for s in subjects
         if not s.startswith(_NOISE_SUBJECT_PREFIXES)
         and not _STABLE_TAG_RE.fullmatch(f"v{s}")
+        and "[skip ci]" not in s
     ]
 
 
@@ -122,6 +142,38 @@ def format_release_notes(
     return "\n".join(lines) + "\n"
 
 
+def format_dev_release_notes(
+    pin: str, dist: str, source: str, subjects: list[str]
+) -> str:
+    """Render a development pre-release's tag message as markdown.
+
+    `subjects` are the commit subjects since the previous dev build; on master
+    each is a squash-merged pull request's title and number.
+    """
+    subjects = _filter_noise_subjects(subjects)
+    version = pin.split(".dev", 1)[0]
+    lines = [
+        f"## HA-MCP Custom Component {version} (development pre-release)",
+        "",
+        (
+            f"Snapshot of the custom component and its ha-mcp server from {source}, "
+            f"ahead of the {version} stable release. Installs {dist}=={pin}."
+        ),
+        "",
+        (
+            "You receive these builds because the HACS **Pre-release** switch is "
+            "enabled for this repository; turn it off to return to stable releases."
+        ),
+        "",
+    ]
+    if subjects:
+        lines.append("Changes since the previous pre-release:")
+        lines.extend(f"- {subject}" for subject in subjects)
+    else:
+        lines.append("No changes since the previous pre-release.")
+    return "\n".join(lines) + "\n"
+
+
 def _run_git(args: list[str], repo_dir: Path) -> str:
     """Run a git command in repo_dir, returning stripped stdout.
 
@@ -160,6 +212,16 @@ def collect_component_subjects(
     return output.splitlines() if output else []
 
 
+def collect_dev_subjects(pin: str, source: str, repo_dir: Path) -> list[str]:
+    """Commit subjects in (previous dev build, source]; none without a previous one."""
+    output = _run_git(["tag", "-l", "v*.dev*"], repo_dir)
+    previous = previous_dev_tag(output.splitlines() if output else [], pin)
+    if previous is None:
+        return []
+    output = _run_git(["log", "--format=%s", f"{previous}..{source}"], repo_dir)
+    return output.splitlines() if output else []
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -173,6 +235,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Stable release being published (defaults to the newest stable tag)",
     )
     parser.add_argument(
+        "--dev-pin",
+        help="Write a development pre-release's notes for this build (e.g. 9.0.0.dev3100)",
+    )
+    parser.add_argument(
+        "--dist", default="ha-mcp-dev", help="Distribution the build installs"
+    )
+    parser.add_argument(
+        "--source",
+        default="HEAD",
+        help="Commit the pre-release snapshots (a sha or ref in --repo-dir)",
+    )
+    parser.add_argument(
+        "--source-label",
+        help="How the notes name the snapshotted commit (defaults to --source)",
+    )
+    parser.add_argument(
         "--repo-dir",
         type=Path,
         default=Path.cwd(),
@@ -183,6 +261,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.dev_pin:
+        try:
+            subjects = collect_dev_subjects(args.dev_pin, args.source, args.repo_dir)
+        except (RuntimeError, AssertionError) as e:
+            print(f"build_mirror_release_notes: {e}", file=sys.stderr)
+            return 1
+        notes = format_dev_release_notes(
+            args.dev_pin, args.dist, args.source_label or args.source, subjects
+        )
+        args.out.write_text(notes, encoding="utf-8")
+        return 0
     try:
         prev_tag, curr_tag = discover_stable_tags(args.repo_dir, args.tag)
         subjects = collect_component_subjects(prev_tag, curr_tag, args.repo_dir)
