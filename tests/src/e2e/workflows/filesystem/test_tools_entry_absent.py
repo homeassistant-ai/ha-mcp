@@ -158,7 +158,8 @@ async def test_shared_capabilities_survive_per_topology(mcp_client):
     Pins acceptance criterion 3. On the server-entry lanes the component's
     ``ha_mcp_tools/info`` probe answers even with no tools entry (#2291), which
     is exactly what makes the gating meaningful rather than "the component is
-    simply gone"; ``ha_report_issue``'s diagnostics report that probe's result.
+    simply gone"; ``ha_report_issue`` reads the component version there from a
+    fresh ``info`` call.
     Where there is no component, the same shared surface must still be served
     by the legacy REST path.
     """
@@ -178,7 +179,7 @@ async def test_shared_capabilities_survive_per_topology(mcp_client):
             # The WS surface answers, so the version probe resolves — proof the
             # server entry registers ``ha_mcp_tools/info`` on its own (#2291).
             assert info.get("component_version"), (
-                f"the server entry should still answer the caps probe: {info}"
+                f"the server entry should still answer ha_mcp_tools/info: {info}"
             )
             # And a shared component-backed capability still serves normally.
             await mcp.call_tool_success(
@@ -192,7 +193,7 @@ async def test_shared_capabilities_survive_per_topology(mcp_client):
 
         # No component at all — the shared surface falls back to legacy REST.
         assert info.get("component_version") is None, (
-            f"no component is installed on this lane, yet caps reported one: {info}"
+            f"no component is installed on this lane, yet the report found one: {info}"
         )
         await mcp.call_tool_success("ha_search", {"domain_filter": "light", "limit": 5})
     logger.info("No component: shared tools still served by the legacy REST path")

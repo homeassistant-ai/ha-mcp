@@ -222,6 +222,7 @@ async def test_report_output_contains_ignored_disable_warning(
         "_detect_server_entry_status",
     ):
         monkeypatch.setattr(report, name, AsyncMock(return_value=None))
+    monkeypatch.setattr(tools_bug_report, "read_info", AsyncMock(return_value=None))
     result = await report.ha_report_issue(report_type=report_type)
     diagnostics = result["diagnostic_info"]
     if not config_available:

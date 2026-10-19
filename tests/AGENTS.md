@@ -29,6 +29,7 @@ before adding a gate:
 | `not_on_embedded` / `not_on_haos_embedded` | everywhere except that lane, for tests the lane's own session backend already covers |
 | `requires_tools_entry` | every lane EXCEPT the no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`), where the File & YAML Tools entry is absent (#2292) |
 | `no_tools_only` | the no-tools lanes only — the mirror of `requires_tools_entry` |
+| `requires_component_surface` | every lane that starts with an active component config entry (`src/e2e/utilities/topology.py::component_surface_available`) — skips the two no-tools lanes without an active server entry (plain container, HAOS inaddon, where it is absent or disabled) |
 
 Pick the marker by what the test *needs*, not by where it happens to pass:
 `external_only` is about needing an in-process server you can reconfigure,
@@ -85,7 +86,7 @@ It is orthogonal to the backend selectors, so each backend has its own shape:
 |---|---|
 | container (`E2E_BACKEND` unset) | **no component at all** — `_install_custom_component` is skipped for `ha_mcp_tools`, so neither files nor entry exist. A user who never installed the integration |
 | container `embedded` | **server entry only** — component files are copied with `seed_entry=False` (no tools entry) and the in-process server entry is seeded as usual |
-| HAOS `inaddon` | **no component** in effect — `remove_tools_entry_in_qcow2` drops the baked tools entry pre-boot; nothing else sets one up |
+| HAOS `inaddon` | **no component** in effect — `remove_tools_entry_in_qcow2` drops the baked tools entry pre-boot, and the baked server entry stays disabled until a test enables it (`haos_only/test_embedded_server_haos.py` does, on every HAOS lane but `embedded`) |
 | HAOS `embedded` | **server entry only** — same pre-boot removal, and the staged (disabled) server entry is deliberately kept |
 
 The staging lives in `_conftest_testcontainer._prepare_testcontainer_config` (container) and
