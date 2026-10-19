@@ -90,7 +90,7 @@ from .server_credentials import (
     async_server_access_token,
 )
 from .server_pin import server_dist, server_pins
-from .spec_dist import spec_dist_name, version_dist
+from .spec_dist import provides_server, spec_dist_name, version_dist
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -708,7 +708,21 @@ class EmbeddedServerManager:
         """Use the externally managed package or ensure a managed install."""
         if self._hass.config.skip_pip:
             return await self._async_externally_managed_package_version()
-        return await self._async_ensure_managed_package(defer_mutations=defer_mutations)
+        version = await self._async_ensure_managed_package(
+            defer_mutations=defer_mutations
+        )
+        dist = version_dist(self._pip_spec)  # not installed yet when deferred
+        if await self._hass.async_add_executor_job(
+            lambda: _dist_installed(dist) and not provides_server(dist)
+        ):
+            _LOGGER.warning(
+                "The server requirement %r installs no ha_mcp package of its "
+                "own, so ha-mcp %s from another distribution serves; correct "
+                "the package override if that is not intended.",
+                self._pip_spec,
+                version,
+            )
+        return version
 
     async def _async_ensure_managed_package(
         self, *, defer_mutations: bool = False
@@ -2052,10 +2066,10 @@ def _installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
     """Return the installed server version, or None (blocking).
 
     Invalidates the import caches first so a just-completed pip install is seen.
-    Reads ``preferred_dist`` first when given, whatever its name, then
+    Reads ``preferred_dist`` first when it provides the server (any name), then
     ``ha-mcp`` and ``ha-mcp-dev``, so stale metadata (a failed or skipped
-    conflicting uninstall, or the manifest pin beside an override under
-    another name) cannot mask the package just installed.
+    conflicting uninstall, or the manifest pin beside an override under another
+    name) cannot mask the package just installed.
     """
     _safe_invalidate_caches()
     # Metadata alone is not proof: the best-effort removal of the other
@@ -2065,6 +2079,8 @@ def _installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
     # trusting any version.
     if importlib.util.find_spec("ha_mcp") is None:
         return None
+    if preferred_dist and not provides_server(preferred_dist):
+        preferred_dist = None
     dist_names = (preferred_dist, DIST_NAME_STABLE, DIST_NAME_DEV)
     for dist_name in dict.fromkeys(filter(None, dist_names)):
         with suppress(importlib.metadata.PackageNotFoundError):
@@ -2105,12 +2121,13 @@ def _running_ha_mcp_version(preferred_dist: str) -> str | None:
     """Return the imported worker version, resolving cross-dist ambiguity.
 
     ``ha_mcp.__version__`` reads only ``ha-mcp`` and ``ha-mcp-dev`` metadata,
-    so when it matches one of those beside ``preferred_dist`` it came from
-    leftover metadata, and ``preferred_dist``'s version is the imported one.
+    so when it matches one of those beside a ``preferred_dist`` that provides
+    the server, it came from leftover metadata, and ``preferred_dist``'s
+    version is the imported one.
     """
     imported_version = getattr(sys.modules.get("ha_mcp"), "__version__", None)
     preferred_version = _installed_dist_version(preferred_dist)
-    if preferred_version is None:
+    if preferred_version is None or not provides_server(preferred_dist):
         return imported_version
 
     other_dists = (d for d in (DIST_NAME_STABLE, DIST_NAME_DEV) if d != preferred_dist)

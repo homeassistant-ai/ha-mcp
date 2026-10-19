@@ -17,7 +17,7 @@ import os
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -47,6 +47,31 @@ OTHER_SPEC = f"{OTHER_DIST} @ file:///pkg.whl"
 PIN_VERSION = "8.7.0"
 OVERRIDE_VERSION = "9.0.0"
 pin_dists = pytest.mark.parametrize("pin_dist", [DIST_NAME_STABLE, DIST_NAME_DEV])
+SERVER_FILES = [importlib.metadata.PackagePath("ha_mcp/__init__.py")]
+
+
+def _dist(
+    files: list[importlib.metadata.PackagePath] | None = None,
+    top_level: str | None = None,
+) -> SimpleNamespace:
+    """An installed distribution's file list and ``top_level.txt``."""
+    return SimpleNamespace(
+        files=files,
+        read_text=lambda name: top_level if name == "top_level.txt" else None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def dists(monkeypatch: pytest.MonkeyPatch) -> dict[str, SimpleNamespace]:
+    """Fake installed distributions; the override ships the server."""
+    fakes = {OTHER_DIST: _dist(SERVER_FILES)}
+    real = importlib.metadata.distribution
+
+    def distribution(name: str) -> object:
+        return fakes[name] if name in fakes else real(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", distribution)
+    return fakes
 
 
 def _metadata(versions: dict[str, str]) -> Callable[[str | None], str]:
@@ -92,6 +117,87 @@ def test_installed_version_is_not_masked_by_leftover_metadata(
     }
     monkeypatch.setattr(importlib.metadata, "version", _metadata(versions))
     assert es._installed_ha_mcp_version(preferred) == expected
+
+
+@pytest.mark.parametrize(
+    "dist",
+    [
+        _dist([importlib.metadata.PackagePath("ha_mcp_client/__init__.py")]),
+        _dist(None),
+        _dist(SERVER_FILES, top_level="acme\n"),
+        None,
+    ],
+    ids=["other-package", "no-record", "declares-another-package", "not-installed"],
+)
+def test_override_without_ha_mcp_is_not_read_as_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+    dists: dict[str, SimpleNamespace],
+    dist: SimpleNamespace | None,
+) -> None:
+    # An override that is not the server, or not installed, ships no ha_mcp; the
+    # manifest pin keeps serving, so its version is the installed and running one.
+    versions = {DIST_NAME_STABLE: PIN_VERSION, OTHER_DIST: OVERRIDE_VERSION}
+    if dist is None:
+        del dists[OTHER_DIST], versions[OTHER_DIST]
+    else:
+        dists[OTHER_DIST] = dist
+    monkeypatch.setattr(es.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(importlib.metadata, "version", _metadata(versions))
+    fake = ModuleType("ha_mcp")
+    fake.__version__ = PIN_VERSION
+    monkeypatch.setitem(sys.modules, "ha_mcp", fake)
+
+    assert es._installed_ha_mcp_version(OTHER_DIST) == PIN_VERSION
+    assert es._running_ha_mcp_version(OTHER_DIST) == PIN_VERSION
+
+
+def test_override_declaring_ha_mcp_is_read_without_its_files(
+    monkeypatch: pytest.MonkeyPatch, dists: dict[str, SimpleNamespace]
+) -> None:
+    # An editable install lists no package files; its top_level.txt names ha_mcp.
+    dists[OTHER_DIST] = _dist(None, top_level="ha_mcp\n")
+    monkeypatch.setattr(es.importlib.util, "find_spec", lambda name: object())
+    versions = {DIST_NAME_STABLE: PIN_VERSION, OTHER_DIST: OVERRIDE_VERSION}
+    monkeypatch.setattr(importlib.metadata, "version", _metadata(versions))
+
+    assert es._installed_ha_mcp_version(OTHER_DIST) == OVERRIDE_VERSION
+
+
+@pytest.mark.parametrize(
+    ("installed", "warns"),
+    [(_dist(SERVER_FILES), False), (_dist(None), True), (None, False)],
+    ids=["ships-the-server", "ships-no-server", "not-installed"],
+)
+async def test_bring_up_warns_when_the_override_installs_no_server(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    dists: dict[str, SimpleNamespace],
+    installed: SimpleNamespace | None,
+    warns: bool,
+) -> None:
+    if installed is None:
+        del dists[OTHER_DIST]
+    else:
+        dists[OTHER_DIST] = installed
+    mgr, _hass, _entry = _manager(
+        tmp_path,
+        options={OPT_PIP_SPEC: OTHER_SPEC},
+        data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: OTHER_SPEC},
+    )
+    monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=True))
+    monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+    monkeypatch.setattr(
+        es, "_installed_ha_mcp_version", lambda preferred_dist=None: PIN_VERSION
+    )
+    monkeypatch.setattr(es, "_installed_dist_version", lambda name: None)
+    monkeypatch.setattr(es, "_dist_installed", lambda name: name in dists)
+    monkeypatch.setattr(es, "_uninstall_distribution", MagicMock(return_value=False))
+
+    with caplog.at_level("WARNING"):
+        await mgr._async_ensure_package()
+
+    assert ("installs no ha_mcp package" in caplog.text) is warns
 
 
 @pin_dists
