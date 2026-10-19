@@ -42,6 +42,8 @@ The recommended way to run ha-mcp is the **HA-MCP Custom Component**. It install
 
 **Quick start:**
 
+> The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
+
 1. Install the **HA-MCP Custom Component** from HACS — click the badge above, or in HACS open **Integrations → ⋮ → Custom repositories**, add `https://github.com/homeassistant-ai/ha-mcp` (category: **Integration**), then **Download**.
    Already installed from the earlier `homeassistant-ai/ha-mcp-integration` repository? It keeps receiving the same releases; nothing to change.
 2. **Restart Home Assistant.**

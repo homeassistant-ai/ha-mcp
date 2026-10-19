@@ -67,6 +67,8 @@ run current `ha-mcp` servers.
 
 ## Setup
 
+The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
+
 1. **Install the component.** Install **HA-MCP Custom Component** from HACS
    (custom repository `homeassistant-ai/ha-mcp`; an install from the earlier
    `homeassistant-ai/ha-mcp-integration` mirror keeps receiving the same

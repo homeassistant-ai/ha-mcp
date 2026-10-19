@@ -358,7 +358,7 @@ def test_the_dev_release_tags_the_component_stamped_for_its_build() -> None:
     )
     assert "stamp_component_version.py" in stamp
     assert "--dist ha-mcp-dev" in stamp
-    assert 'git tag "$TAG" HEAD' in create
+    assert 'git tag -f "$TAG" HEAD' in create
     assert "--verify-tag" in create
 
 
