@@ -11,10 +11,15 @@ import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Iterator
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from ha_mcp.tools.component_api import ComponentCaps
 
 # Core's generated flow registry, which the component imports at module level
 # for its flow-helper set. Home Assistant is not a unit-test dependency, and the
@@ -69,7 +74,7 @@ for _ha_logbook_stub in (
 
 
 @pytest.fixture
-def logbook_component_caps():
+def logbook_component_caps() -> Iterator[ComponentCaps]:
     """Pretend the component advertises ``logbook_events`` (transport tests)."""
     from ha_mcp.tools.component_api import ComponentCaps
 
