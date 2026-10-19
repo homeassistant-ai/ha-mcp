@@ -28,12 +28,14 @@ COMPACT_LOGBOOK_FIELDS = {
 }
 
 
-# Supervisor-managed system services exposed via /<slug>/logs. Set mirrors
-# HA Core's hassio HTTP proxy ``PATHS_ADMIN`` whitelist in
-# ``homeassistant/components/hassio/http.py``. See #1116 (original 7-service
-# scope) and #1260 (cli added — proxy supported it the whole time).
+# Supervisor-managed system services exposed via /<slug>/logs. The set is
+# Supervisor's own route list (its ``_register_advanced_logs`` call sites),
+# not HA Core's hassio proxy allowlist: the proxy accepts /cli and /observer
+# but Supervisor serves no log route for either, so they always 404. See
+# #1116 (original seven-service scope, observer included) and #1260 (cli added
+# off the proxy list).
 SYSTEM_SERVICE_SLUGS = frozenset(
-    {"supervisor", "host", "core", "dns", "audio", "cli", "multicast", "observer"}
+    {"supervisor", "host", "core", "dns", "audio", "multicast"}
 )
 
 DEFAULT_LIMIT = 50
@@ -106,6 +108,8 @@ def _collect_log_warnings(
     source: str,
     level: str | None,
     entity_id: str | None,
+    device_id: str | None,
+    context_id: str | None,
     end_time: str | None,
     slug: str | None,
     order: Literal["newest", "oldest"],
@@ -117,10 +121,17 @@ def _collect_log_warnings(
             "Parameter 'order' does not apply to source='logger' "
             "(entries are sorted by integration name); ignored"
         )
-    if source != "logbook" and any(p is not None for p in [entity_id, end_time]):
+    if source != "logbook" and any(
+        p is not None for p in [entity_id, device_id, context_id, end_time]
+    ):
         ignored = [
             p
-            for p, v in [("entity_id", entity_id), ("end_time", end_time)]
+            for p, v in [
+                ("entity_id", entity_id),
+                ("device_id", device_id),
+                ("context_id", context_id),
+                ("end_time", end_time),
+            ]
             if v is not None
         ]
         warnings.append(

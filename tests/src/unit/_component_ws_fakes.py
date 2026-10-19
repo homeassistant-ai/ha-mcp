@@ -12,7 +12,8 @@ working.
 handler registered through it exercises the ``@require_admin`` /
 ``@async_response`` stack instead of bypassing it. ``_FakeConnection`` mirrors
 the parts of core's ``ActiveConnection`` the component touches: ``user``,
-``context()`` and ``send_result()``.
+``context()``, ``send_result()`` and ``send_message()`` (the pre-serialized
+result seam).
 
 Nothing here may import ``homeassistant`` — ``test_component_ws_phase2_async``
 imports this module before the ``homeassistant.*`` MagicMock stubs are installed.
@@ -53,6 +54,7 @@ class _FakeConnection:
     ) -> None:
         self.user = _FakeUser(is_admin, user_id) if has_user else None
         self.results: dict[Any, Any] = {}
+        self.messages: list[Any] = []
 
     def context(self, msg: dict[str, Any]) -> _FakeContext:
         """Mirror ``ActiveConnection.context``, which returns ``Context(user_id=user.id)``."""
@@ -60,6 +62,10 @@ class _FakeConnection:
 
     def send_result(self, msg_id: Any, result: Any) -> None:
         self.results[msg_id] = result
+
+    def send_message(self, message: Any) -> None:
+        """Mirror ``ActiveConnection.send_message`` (pre-serialized bytes seam)."""
+        self.messages.append(message)
 
 
 class _FakeWSApi:

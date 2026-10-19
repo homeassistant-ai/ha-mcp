@@ -4,6 +4,17 @@ Read this before changing tools that wrap Home Assistant APIs, whether they
 read or write. Core owns its request schemas, defaults, conversions and
 response fields. HA-MCP owns tool orchestration and safety policies.
 
+Native covers Core, the frontend, Supervisor and the hassio proxy alike. When a
+tool has more than one native path (Core REST vs WebSocket, Supervisor vs
+Core), a migration keeps every capability the current tool has and adds the
+native ones; it never trades one native capability for another.
+
+A tool not yet migrated under #2632 gets no piecemeal changes to its non-native
+paths, and that includes bug fixes. The whole tool is redone when it is
+migrated, so those changes would be thrown away when it is reworked. Fix a bug
+in such a tool by migrating the affected path to the native approach this
+document describes, not by patching it so it keeps working the old way.
+
 ## Choose the authoritative path
 
 Use native REST/WebSocket APIs first. Preserve native response fields and
@@ -32,6 +43,16 @@ handler during validation. Actual operations retain their native endpoints and
 permission checks. The serializer adapter reveals the live alternatives in
 Core's opaque discriminated unions; it supplies no energy types or fields.
 Unknown serializer constructs remain explicitly incomplete.
+
+`websocket_api/logbook.py` is the same pattern for logbook. The component runs
+Core's own `EventProcessor` with the REST view's flags (`timestamp=False` for
+ISO `when`, `include_entity_name=True`) plus the `logbook/get_events` filter
+set, so names, context fields and the row shape come from Core instead of a
+copied `EntityNameCache`. The server prefers the bridge and keeps Core's REST
+(`/api/logbook`) and WebSocket (`logbook/get_events`) reads as the explicit
+component-absent fallbacks — a `device_id` request needs the WebSocket path
+there because REST has no device filter, and a bridge timeout surfaces rather
+than re-running the recorder query on another transport.
 
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses

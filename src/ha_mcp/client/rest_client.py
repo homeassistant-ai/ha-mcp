@@ -18,6 +18,7 @@ from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
 from .admin_routes import is_admin_only_route
+from .models import ErrorLogPage
 from .supervisor_client import make_supervisor_httpx_client
 
 
@@ -145,19 +146,6 @@ class HomeAssistantAPIError(HomeAssistantError):
         super().__init__(message)
         self.status_code = status_code
         self.response_data = response_data
-
-
-@dataclass(frozen=True)
-class ErrorLogPage:
-    """One bounded window of the error log, plus whether older history exists.
-
-    ``has_more`` cannot be derived by the caller from ``text``: a journald
-    window that comes back full may or may not have anything behind it (see
-    ``_journald_error_log_page``), and only the fetching route knows which.
-    """
-
-    text: str
-    has_more: bool
 
 
 @dataclass(frozen=True)
@@ -831,6 +819,7 @@ class HomeAssistantClient:
         entity_id: str | None = None,
         start_time: str | None = None,
         end_time: str | None = None,
+        context_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Get logbook entries.
@@ -839,12 +828,13 @@ class HomeAssistantClient:
             entity_id: Optional entity ID to filter
             start_time: Optional start time (ISO format) - used as URL path component
             end_time: Optional end time (ISO format) - used as query parameter
+            context_id: Optional context ID filter - used as query parameter
 
         Returns:
             Logbook entries
         """
         logger.debug(
-            f"Fetching logbook entries for entity: {entity_id}, start: {start_time}, end: {end_time}"
+            f"Fetching logbook entries for entity: {entity_id}, start: {start_time}, end: {end_time}, context: {context_id}"
         )
 
         # Build endpoint - start_time goes in URL path if provided
@@ -859,6 +849,8 @@ class HomeAssistantClient:
             params["entity"] = entity_id
         if end_time:
             params["end_time"] = end_time
+        if context_id:
+            params["context_id"] = context_id
 
         result = await self._request("GET", endpoint, params=params)
         if isinstance(result, list):
@@ -958,6 +950,7 @@ class HomeAssistantClient:
                 "Accept": "text/plain",
                 "Range": self._journald_range_header(lines, offset),
             },
+            params={"no_colors": "true"},
         )
         return response.text
 
@@ -1235,7 +1228,10 @@ class HomeAssistantClient:
                     "GET",
                     f"/hassio/{path}/logs",
                     headers={"Accept": "text/plain"},
-                    params={"lines": lines} if lines is not None else None,
+                    params={
+                        "no_colors": "true",
+                        **({"lines": lines} if lines is not None else {}),
+                    },
                 )
         except TimeoutError as e:
             raise HomeAssistantConnectionError(
@@ -1278,7 +1274,7 @@ class HomeAssistantClient:
 
         - ``"addons/<slug>"`` for app (add-on) container logs
         - ``"<service>"`` (where service ∈ {supervisor, host, core, dns, audio,
-          cli, multicast, observer}) for system-service logs
+          multicast}) for system-service logs
 
         ``lines`` maps to the endpoint's ``?lines=`` journald-window query
         param; omitted → Supervisor's 100-line default window. Adding
@@ -1326,13 +1322,16 @@ class HomeAssistantClient:
 
         relative_path = f"/{path}/logs"
         headers = {"Accept": "text/plain"}
-        params = {"lines": lines} if lines is not None else None
+        # Presence-triggered flag: journald output carries ANSI escapes otherwise.
+        params: dict[str, Any] = {"no_colors": "true"}
+        if lines is not None:
+            params["lines"] = lines
         if offset is not None:
             # An offset window with no size asked for falls back to the
             # smallest one the Range syntax can express.
             size = lines if lines is not None else MIN_LOG_WINDOW_LINES
             headers["Range"] = self._journald_range_header(size, offset)
-            params = None
+            params.pop("lines", None)
         logger.debug(
             "Fetching %s%s via Supervisor direct (%s)",
             get_supervisor_base_url(),
@@ -1419,11 +1418,11 @@ class HomeAssistantClient:
     ) -> str:
         """Fetch HA system-service logs.
 
-        ``service`` must be one of the eight Supervisor-managed services:
-        ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``cli``,
-        ``multicast``, ``observer``. Caller is responsible for validating
-        ``service``; this helper performs no validation, and unsupported paths
-        are rejected by the selected direct-Supervisor or Core-proxy route.
+        ``service`` must be one of the six Supervisor-managed services:
+        ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``multicast``.
+        Caller is responsible for validating ``service``; this helper performs
+        no validation, and unsupported paths are rejected by the selected
+        direct-Supervisor or Core-proxy route.
 
         Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
         inside the app (add-on) container goes directly to Supervisor at
@@ -1433,10 +1432,9 @@ class HomeAssistantClient:
         without Supervisor, pip pointing at a normal HA URL),
         falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.
 
-        All eight service slugs are whitelisted in HA Core's hassio proxy
-        (``homeassistant/components/hassio/http.py`` — ``PATHS_ADMIN``), so
-        an admin LLA is sufficient to reach any of them from outside the
-        app.
+        HA Core's hassio proxy accepts ``/cli`` and ``/observer`` too, but
+        Supervisor serves no log route for either, so those always 404; the
+        six slugs here are the ones with a real ``/<slug>/logs`` route.
         """
         if is_running_in_addon():
             return await self._supervisor_logs_get(service, lines=lines)

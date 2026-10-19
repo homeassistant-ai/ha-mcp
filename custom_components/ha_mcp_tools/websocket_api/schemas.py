@@ -29,6 +29,7 @@ from .constants import (
     WS_EXPOSURE,
     WS_HELPERS_LIST,
     WS_INFO,
+    WS_LOGBOOK_EVENTS,
     WS_OVERVIEW,
     WS_REFERENCE_DATA,
     WS_REGISTRIES,
@@ -352,6 +353,22 @@ def _bulk_call_service_schema() -> dict[Any, Any]:
         vol.Optional("timeout", default=CALL_SERVICE_DEFAULT_TIMEOUT): vol.All(
             vol.Any(int, float), vol.Range(min=0, max=CALL_SERVICE_MAX_TIMEOUT)
         ),
+    }
+
+
+def _logbook_events_schema() -> dict[Any, Any]:
+    # Core's own entity-id validator (the REST logbook view's ``cv.entity_ids``
+    # equivalent): a malformed id is rejected as ``invalid_format`` with a
+    # message instead of raising inside Core's processor.
+    from homeassistant.helpers import config_validation as cv
+
+    return {
+        vol.Required("type"): WS_LOGBOOK_EVENTS,
+        vol.Required("start_time"): str,
+        vol.Optional("end_time"): str,
+        vol.Optional("entity_ids"): [cv.entity_id],
+        vol.Optional("device_ids"): [str],
+        vol.Optional("context_id"): str,
     }
 
 

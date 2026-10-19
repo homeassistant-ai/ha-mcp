@@ -12,7 +12,7 @@ Covers two REST-client paths and their log-source wrappers
   `is_running_in_addon()` like `get_addon_logs`: in-addon hits
   `http://supervisor/{service}/logs`; non-addon falls back to the HA Core
   proxy at `/api/hassio/{service}/logs` (#1260 fix on top of #1116 scope).
-  service ∈ {supervisor, host, core, dns, audio, cli, multicast, observer}.
+  service ∈ {supervisor, host, core, dns, audio, multicast}.
 - The wrappers (`_get_supervisor_log`, `_get_system_service_log`) — response
   shape, tail slicing, search filter, slug-enum validation, and structured-
   error translation.
@@ -44,28 +44,7 @@ from ha_mcp.tools.log_common import (
 )
 from ha_mcp.tools.tools_logs import register_logs_tools
 
-
-@pytest.fixture
-def mock_client():
-    """HomeAssistantClient with stubbed internals — no real network.
-
-    Mirror every instance attribute the real ``__init__`` sets, so a
-    `getattr` fallback in production code isn't needed to paper over a
-    test-fixture omission (and so future `__init__` attribute additions
-    that this fixture forgets to mirror fail loudly here instead of
-    silently no-op-ing).
-    """
-    with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
-        client = HomeAssistantClient()
-        client.base_url = "http://test.local:8123"
-        client.token = "test-token"
-        client.timeout = 30
-        client.verify_ssl = True
-        client.httpx_client = MagicMock()
-        client._supervised_detected = None
-        client._is_admin = True
-        client._admin_route_refused = False
-        return client
+from ._logbook_fallback import disable_logbook_websocket
 
 
 @pytest.fixture
@@ -616,6 +595,7 @@ class TestGetErrorLogBranchSelection:
             "GET",
             "/hassio/core/logs",
             headers={"Accept": "text/plain", "Range": "entries=:-99:100"},
+            params={"no_colors": "true"},
         )
 
     @pytest.mark.asyncio
@@ -804,17 +784,17 @@ class TestGetSystemServiceLogsBranchSelection:
 
     @pytest.mark.parametrize(
         "service",
-        ["supervisor", "host", "core", "dns", "audio", "cli", "multicast", "observer"],
+        ["supervisor", "host", "core", "dns", "audio", "multicast"],
     )
     @pytest.mark.asyncio
     async def test_non_addon_install_uses_ha_core_proxy(self, mock_client, service):
         """`is_running_in_addon()` False → HA-Core-proxy path for every slug.
 
         HA Core's hassio HTTP proxy (PATHS_ADMIN in
-        `homeassistant/components/hassio/http.py`) whitelists all seven
-        Supervisor service-log paths, so an admin LLA can reach any of them
-        from outside the addon. Parametrize over the full set so a future
-        proxy regression for a single slug surfaces here.
+        `homeassistant/components/hassio/http.py`) whitelists Supervisor's
+        service-log paths, so an admin LLA can reach any allowed service from
+        outside the addon. Parametrize over the full set so a future proxy
+        regression for a single slug surfaces here.
 
         Also pins ``Accept: text/plain`` on the request: without it the HA
         Core proxy negotiates ``application/json`` and the body stops being
@@ -1184,6 +1164,7 @@ class TestSlugParameterIncompatibilityWarning:
         client = MagicMock()
         client.get_logbook = AsyncMock(return_value=[])
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        disable_logbook_websocket(client)
         return client
 
     @pytest.mark.asyncio
@@ -1303,7 +1284,7 @@ class TestGetSystemServiceLogWrapper:
 
     @pytest.mark.parametrize(
         "service",
-        ["supervisor", "host", "core", "dns", "audio", "cli", "multicast", "observer"],
+        ["supervisor", "host", "core", "dns", "audio", "multicast"],
     )
     @pytest.mark.asyncio
     async def test_all_allowed_services_dispatch(
@@ -1575,12 +1556,15 @@ class TestJournaldWindowLinesParam:
         await mock_client.get_addon_logs("81f33d0f_ha_mcp", lines=2000)
 
         _args, kwargs = inner_client.get.call_args
-        assert kwargs["params"] == {"lines": 2000}
+        assert kwargs["params"] == {"no_colors": "true", "lines": 2000}
 
     @pytest.mark.asyncio
-    async def test_addon_direct_branch_omits_query_without_lines(
-        self, mock_client, addon_install, mock_async_client_class
-    ):
+    async def test_addon_direct_branch_omits_the_lines_query_without_lines(
+        self,
+        mock_client: HomeAssistantClient,
+        addon_install: None,
+        mock_async_client_class: tuple[MagicMock, MagicMock],
+    ) -> None:
         inner_client, _class = mock_async_client_class
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -1590,7 +1574,7 @@ class TestJournaldWindowLinesParam:
         await mock_client.get_addon_logs("81f33d0f_ha_mcp")
 
         _args, kwargs = inner_client.get.call_args
-        assert kwargs["params"] is None
+        assert kwargs["params"] == {"no_colors": "true"}
 
     @pytest.mark.asyncio
     async def test_offset_switches_the_window_to_a_range_header(
@@ -1613,7 +1597,7 @@ class TestJournaldWindowLinesParam:
         await mock_client._supervisor_logs_get("core", lines=50, offset=100)
 
         _args, kwargs = inner_client.get.call_args
-        assert kwargs["params"] is None
+        assert kwargs["params"] == {"no_colors": "true"}
         assert kwargs["headers"]["Range"] == "entries=:-149:50"
         assert kwargs["headers"]["Accept"] == "text/plain"
 
@@ -1629,7 +1613,7 @@ class TestJournaldWindowLinesParam:
         await mock_client.get_addon_logs("core_ssh", lines=2000)
 
         _args, kwargs = mock_client.httpx_client.request.call_args
-        assert kwargs["params"] == {"lines": 2000}
+        assert kwargs["params"] == {"no_colors": "true", "lines": 2000}
 
     @pytest.mark.asyncio
     async def test_system_service_proxy_branch_sends_lines_query(
@@ -1643,4 +1627,4 @@ class TestJournaldWindowLinesParam:
         await mock_client._get_system_service_logs("host", lines=1234)
 
         _args, kwargs = mock_client.httpx_client.request.call_args
-        assert kwargs["params"] == {"lines": 1234}
+        assert kwargs["params"] == {"no_colors": "true", "lines": 1234}

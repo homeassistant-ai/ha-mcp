@@ -1,6 +1,6 @@
 """Supervisor-backed log sources served by ``ha_get_logs``.
 
-App (add-on) container logs and the eight Supervisor-managed system services.
+App (add-on) container logs and the six Supervisor-managed system services.
 Separate from ``log_sources`` because these two reach Home Assistant through
 Supervisor rather than Core, and carry the whole token/role error vocabulary
 that follows from it. Mixed into ``LogTools`` (``tools_logs``).
@@ -174,14 +174,16 @@ class SupervisorLogSourcesMixin:
             raise  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
-    def _handle_system_service_api_error(
+    async def _handle_system_service_api_error(
         self, e: HomeAssistantAPIError, service: str
     ) -> NoReturn:
         """Raise a structured error for a Supervisor per-service-logs failure.
 
         Branches on HTTP status: 403 (role/permission, addon vs. non-addon
-        remediation differs), 404 (service not exposed on this HA OS
-        version), else falls through to a generic Supervisor-error message.
+        remediation differs), 404 (service not exposed on this HA OS version;
+        the non-addon branch keeps a failed supervision probe distinct from a
+        confirmed unsupervised install), else falls through to a generic
+        Supervisor-error message.
         """
         status = getattr(e, "status_code", None)
         if status == 403:
@@ -209,15 +211,46 @@ class SupervisorLogSourcesMixin:
                 suggestions=suggestions,
             )
         if status == 404:
-            exception_to_structured_error(
-                e,
-                context={"source": "system_service", "slug": service},
-                suggestions=[
+            allowed = f"Allowed services: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))}"
+            if is_running_in_addon():
+                # The request went straight to Supervisor, so a 404 is
+                # Supervisor's own answer: the service is not exposed.
+                suggestions = [
                     f"Service '{service}' not found at "
                     f"http://supervisor/{service}/logs — Supervisor may "
                     "not expose it on this HA OS version",
-                    f"Allowed services: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))}",
-                ],
+                    allowed,
+                ]
+            else:
+                await self._client._is_supervised_install()
+                if self._client._supervised_detected is True:
+                    suggestions = [
+                        f"Service '{service}' not found at "
+                        f"http://supervisor/{service}/logs — Supervisor may "
+                        "not expose it on this HA OS version",
+                        allowed,
+                    ]
+                elif self._client._supervised_detected is False:
+                    suggestions = [
+                        "These log sources need a Supervisor-managed install "
+                        "(Home Assistant OS or Supervised); this instance is "
+                        "not managed by Supervisor",
+                        allowed,
+                    ]
+                else:
+                    # The probe could not confirm either way (transport
+                    # failure leaves the flag None); do not assert the
+                    # instance is unmanaged.
+                    suggestions = [
+                        "Supervisor management could not be confirmed (the "
+                        "probe failed): the instance may be unsupervised or "
+                        "this HA OS version may not expose the service",
+                        allowed,
+                    ]
+            exception_to_structured_error(
+                e,
+                context={"source": "system_service", "slug": service},
+                suggestions=suggestions,
             )
         exception_to_structured_error(
             e,
@@ -237,8 +270,8 @@ class SupervisorLogSourcesMixin:
     ) -> dict[str, Any]:
         """Fetch HA system-service logs from Supervisor's per-service endpoint.
 
-        ``service`` ∈ ``SYSTEM_SERVICE_SLUGS`` (the eight Supervisor-managed
-        services: supervisor, host, core, dns, audio, cli, multicast, observer).
+        ``service`` ∈ ``SYSTEM_SERVICE_SLUGS`` (the six Supervisor-managed
+        services: supervisor, host, core, dns, audio, multicast).
         Caller (``ha_get_logs(source='system_service')``) validates against
         ``SYSTEM_SERVICE_SLUGS`` before dispatch. Routed through
         ``HomeAssistantClient._get_system_service_logs`` which gates on
@@ -309,7 +342,7 @@ class SupervisorLogSourcesMixin:
                 suggestions=_addon_auth_error_suggestions(),
             )
         except HomeAssistantAPIError as e:
-            self._handle_system_service_api_error(e, service)
+            await self._handle_system_service_api_error(e, service)
         except (
             HomeAssistantConnectionError,
             TimeoutError,
