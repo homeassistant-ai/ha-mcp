@@ -34,6 +34,7 @@ from ha_mcp.client.rest_client import (
     ErrorLogPage,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantClient,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.log_common import (
@@ -1559,8 +1560,11 @@ class TestJournaldWindowLinesParam:
 
     @pytest.mark.asyncio
     async def test_addon_direct_branch_omits_the_lines_query_without_lines(
-        self, mock_client, addon_install, mock_async_client_class
-    ):
+        self,
+        mock_client: HomeAssistantClient,
+        addon_install: None,
+        mock_async_client_class: tuple[MagicMock, MagicMock],
+    ) -> None:
         inner_client, _class = mock_async_client_class
         mock_response = MagicMock()
         mock_response.status_code = 200
