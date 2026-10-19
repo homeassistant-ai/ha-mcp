@@ -341,10 +341,15 @@ def test_the_dev_release_tags_the_component_stamped_for_its_build() -> None:
     # HACS installs a pre-release from the commit its tag names (#2763), so that
     # commit must pin the ha-mcp-dev build the release installs, not master's
     # stable pin.
-    steps = _workflow(_WORKFLOW_DIR / "publish-dev.yml")["jobs"]["create-prerelease"][
-        "steps"
-    ]
+    job = _workflow(_WORKFLOW_DIR / "publish-dev.yml")["jobs"]["create-prerelease"]
+    steps = job["steps"]
     names = [step.get("name") for step in steps]
+    # Only master's build, and only once PyPI serves the pinned version.
+    assert "publish-pypi-dev" in job["needs"]
+    assert job["if"] == "github.ref == 'refs/heads/master'"
+    assert names.index("Wait for the build on PyPI") < names.index(
+        "Stamp the component for this build"
+    )
     stamp = steps[names.index("Stamp the component for this build")]["run"]
     create = steps[names.index("Create pre-release")]["run"]
 

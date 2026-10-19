@@ -172,7 +172,11 @@ jobs:
 
   create-prerelease:
     name: Create GitHub pre-release
-    needs: prepare
+    # HACS installs this tag, and Home Assistant then installs its pin from
+    # PyPI: only master's build is the dev pre-release (a branch dispatch
+    # computes master's number), and only once PyPI serves it.
+    needs: [prepare, publish-pypi-dev]
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -188,6 +192,20 @@ jobs:
       # commit must carry the component stamped with this build's version and
       # its ha-mcp-dev pin (#2763). The stamp goes on a commit of its own that
       # only the tag references; master is untouched.
+      - name: Wait for the build on PyPI
+        env:
+          VERSION: ${{ needs.prepare.outputs.dev_version }}
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null "https://pypi.org/pypi/ha-mcp-dev/${VERSION}/json"; then
+              echo "PyPI serves ha-mcp-dev ${VERSION}"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::PyPI never served ha-mcp-dev ${VERSION}; not tagging a component that pins it."
+          exit 1
+
       - name: Stamp the component for this build
         env:
           VERSION: ${{ needs.prepare.outputs.dev_version }}
