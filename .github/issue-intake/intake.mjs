@@ -514,6 +514,8 @@ const answerHeading = (...labels) =>
 const answerHeadingLine = answerHeading(noReportHeading, reportFieldLabel);
 const reasonHeadingLine = answerHeading(noReportHeading);
 const fenceLine = /^ {0,3}(`{3,}|~{3,})/;
+// A closing fence has nothing but whitespace after it, so ```yaml stays inside.
+const closingFenceLine = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const headingLine = /^ {0,3}#{1,6}(?: |$)/;
 // Every section under an answer heading, each ending at the next heading
 // outside a code fence: logs and config pasted there carry "# " lines.
@@ -521,10 +523,13 @@ export function answerSections(text, answerLine = answerHeadingLine) {
   const sections = [];
   let current = null;
   let fence = null;
-  for (const line of (text || "").split(/\r?\n/)) {
+  // A comment can span lines, and a heading inside it is not on the page.
+  const visible = (text || "").replace(/<!--[\s\S]*?-->/g, "");
+  for (const line of visible.split(/\r?\n/)) {
     const marker = fenceLine.exec(line)?.[1];
     if (fence) {
-      if (marker?.[0] === fence[0] && marker.length >= fence.length)
+      const close = closingFenceLine.exec(line)?.[1];
+      if (close?.[0] === fence[0] && close.length >= fence.length)
         fence = null;
     } else if (marker) {
       fence = marker;
@@ -538,18 +543,11 @@ export function answerSections(text, answerLine = answerHeadingLine) {
   return sections.map((lines) => lines.join("\n"));
 }
 // GitHub's issue forms write "_No response_" for an optional field left
-// empty, and a blank issue's template comments are not an answer.
+// empty; a blank issue's template comments are already gone.
 const answered = (section) =>
-  section
-    .split(/<!--[\s\S]*?-->/)
-    .join(" ")
-    .replace(/_No response_/g, "")
-    .trim() !== "";
+  section.replace(/_No response_/g, "").trim() !== "";
 // What the report gate accepts instead of a report.
 export const hasAnswer = (text) => answerSections(text).some(answered);
-// A reason why there is no report. Unlike the gate, the report request is not
-// answered by the forms' report field alone: the forms pair an "N/A" there
-// with this reason in the next field, and a partial paste lacks the report.
 // The reporter's own words: the issue body and their comments.
 export const reporterTexts = ({ issue, comments }) => [
   issue.body || "",
@@ -557,8 +555,11 @@ export const reporterTexts = ({ issue, comments }) => [
     .filter((c) => c.user?.login === issue.user.login)
     .map((c) => c.body || ""),
 ];
-export const hasReason = (text) =>
-  answerSections(text, reasonHeadingLine).some(answered);
+// A reason why there is no report. Unlike the gate, the report request is not
+// answered by the forms' report field alone: the forms pair an "N/A" there
+// with this reason in the next field, and a partial paste lacks the report.
+export const reasonSections = (text) => answerSections(text, reasonHeadingLine);
+export const hasReason = (text) => reasonSections(text).some(answered);
 const reportTypeLabels = {
   "[BUG]": ["bug"],
   "[AGENT]": ["agent-behavior"],

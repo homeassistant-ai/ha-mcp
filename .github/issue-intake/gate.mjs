@@ -15,6 +15,8 @@ import {
   isHuman,
   latestEvent,
   noReportHeading,
+  reasonSections,
+  reportFieldLabel,
   reportHeading,
   reporterTexts,
   roleFor,
@@ -115,8 +117,10 @@ export function expireAction(snapshot, now) {
 function gateHint(texts) {
   if (texts.some((t) => reportHeading.test(t)))
     return "It has the report's heading but not the rest of the report, such as its `ha-mcp Version` line. Paste the whole report, from the Auto-Generated heading to its end, as raw Markdown.";
-  if (texts.some((t) => answerSections(t).length))
+  if (texts.some((t) => reasonSections(t).length))
     return `The \`### ${noReportHeading}\` section is empty.`;
+  if (texts.some((t) => answerSections(t).length))
+    return `The \`### ${reportFieldLabel}\` section is empty.`;
   return "";
 }
 

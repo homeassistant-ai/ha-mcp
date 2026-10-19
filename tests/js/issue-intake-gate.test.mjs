@@ -90,8 +90,11 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n${reason("```\n# uvx ha-mcp\n```")}`), null],
     // What an issue form writes for an empty optional field.
     [(s) => (s.issue.body += `\n\n${reason("_No response_")}`), "label"],
-    // A blank issue's template comment is not the reporter's answer.
+    // A blank issue's template comment is not the reporter's answer, nor is a
+    // heading inside a comment or a code block the page shows as code.
     [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here -->")}`), "label"],
+    [(s) => (s.issue.body += `\n\n<!--\n${reason("Explain why here")}\n-->`), "label"],
+    [(s) => (s.issue.body += `\n\n\`\`\`\nlog\n\`\`\`yaml\n${reason("in the log")}\n\`\`\``), "label"],
     [(s) => (s.issue.body += ` The ${reportMarker} heading is missing.`), "label"],
     // The heading over a summary, or a paste cut off before the environment.
     [(s) => (s.issue.body = `## 🚨 ${reportMarker}\n\nThe call hangs.`), "label"],
@@ -263,6 +266,19 @@ test("a warning says when a report heading came without the rest of the report",
   const api = new FakeGitHub(s);
   await gate(api, "test/repo", 1, bot, opened, true);
   assert.match(api.writes[0].data.body, /heading but not the rest/);
+});
+
+test("a warning names the answer section that came empty", async () => {
+  for (const [heading, expected] of [
+    [noReportHeading, noReportHeading],
+    [reportFieldLabel, reportFieldLabel],
+  ]) {
+    const s = snapshot();
+    s.issue.body = section(heading, "_No response_");
+    const api = new FakeGitHub(s);
+    await gate(api, "test/repo", 1, bot, opened, true);
+    assert.ok(api.writes[0].data.body.includes(`\`### ${expected}\` section is empty`));
+  }
 });
 
 test("the check steps decide without writing", async () => {
