@@ -291,6 +291,17 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
                     err.reason
                 )
             else:
+                try:
+                    # Another setup may have finished while the login was
+                    # checked; a token issued for this one would then be left
+                    # with no entry to revoke it.
+                    self._abort_if_unique_id_configured()
+                except Exception:
+                    if issued:
+                        await server_credentials.async_release_credentials(
+                            self.hass, {DATA_ISSUED_TOKEN_ID: issued}
+                        )
+                    raise
                 remote = user_input.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED)
                 enabled = remote != REMOTE_ACCESS_DISABLED
                 data = {CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER, DATA_ADMIN_TOKEN: token}

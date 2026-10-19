@@ -156,6 +156,34 @@ class TestServerBranch:
         assert entry["data"][const.DATA_ISSUED_TOKEN_ID] == "i1"
         assert cf.server_credentials.ADMIN_PASSWORD not in entry["options"]
 
+    def test_a_setup_that_lost_the_race_revokes_the_token_it_issued(
+        self, monkeypatch
+    ) -> None:
+        # Two setups with two accounts: the other one created the entry while
+        # this one's login was checked, so its issued token has no entry.
+        class _AlreadyConfigured(Exception):
+            pass
+
+        monkeypatch.setattr(
+            cf.server_credentials,
+            "async_credential_from_input",
+            AsyncMock(return_value=("issued-tok", "i1")),
+        )
+        release = AsyncMock()
+        monkeypatch.setattr(cf.server_credentials, "async_release_credentials", release)
+        flow = _make_flow()
+        flow._abort_if_unique_id_configured.side_effect = [None, _AlreadyConfigured()]
+        values = {
+            cf.server_credentials.ADMIN_USERNAME: "ha-mcp",
+            cf.server_credentials.ADMIN_PASSWORD: "pw",
+        }
+
+        with pytest.raises(_AlreadyConfigured):
+            asyncio.run(flow.async_step_server(values))
+
+        release.assert_awaited_once_with(flow.hass, {const.DATA_ISSUED_TOKEN_ID: "i1"})
+        flow.async_create_entry.assert_not_called()
+
     def test_a_refused_login_keeps_the_form_open(self, monkeypatch):
         monkeypatch.setattr(
             cf.server_credentials,
