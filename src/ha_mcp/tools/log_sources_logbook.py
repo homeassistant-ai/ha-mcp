@@ -195,17 +195,17 @@ class LogbookLogSourceMixin:
             return [
                 "Home Assistant rejected the request as invalid",
                 "Check that 'entity_id' uses 'domain.object_id' form, "
-                "e.g. 'light.kitchen'",
+                + "e.g. 'light.kitchen'",
                 "Use ha_get_logs(source='error_log') to check Home Assistant logs",
             ]
         if status == 500:
             return [
                 "A 500 can mean invalid input: check that 'entity_id' uses "
-                "'domain.object_id' form (e.g. 'light.kitchen')",
+                + "'domain.object_id' form (e.g. 'light.kitchen')",
                 "If the filters are valid, the query may be too large: reduce "
-                "'hours_back' or narrow the filters",
+                + "'hours_back' or narrow the filters",
                 "Use ha_get_logs(source='error_log') to check Home Assistant "
-                "logs for the traceback",
+                + "logs for the traceback",
             ]
         return [
             "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
