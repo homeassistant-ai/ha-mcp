@@ -89,6 +89,7 @@ from .const import (
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_LLM_API_EXPOSURE,
+    OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
@@ -630,6 +631,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 ): TextSelector(
                     TextSelectorConfig(type=TextSelectorType.URL, multiple=True)
                 ),
+                vol.Optional(
+                    OPT_OAUTH_ALLOW_ANY_CALLBACK,
+                    default=bool(form_values.get(OPT_OAUTH_ALLOW_ANY_CALLBACK, False)),
+                ): bool,
             }
         )
         # The sidebar-panel sentence in the description is only truthful while

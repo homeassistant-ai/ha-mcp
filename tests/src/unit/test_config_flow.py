@@ -656,20 +656,19 @@ class TestServerOptionsFlow:
                 cf.server_credentials.ADMIN_PASSWORD,
             )
         }
-        # regenerate_secrets is a one-shot action, never pre-filled True;
-        # enable_webhook / enable_startup_notification / enable_sidebar_panel
-        # default on when unsaved. Pop off the schema (not inside assert, which
-        # `python -O` would strip) before comparing the remainder.
-        regenerate_default = defaults.pop(const.OPT_REGENERATE_SECRETS)
-        assert regenerate_default is False
-        oauth_regenerate_default = defaults.pop(const.OPT_OAUTH_REGENERATE)
-        assert oauth_regenerate_default is False
-        webhook_default = defaults.pop(const.OPT_ENABLE_WEBHOOK)
-        assert webhook_default is True
-        notification_default = defaults.pop(const.OPT_ENABLE_STARTUP_NOTIFICATION)
-        assert notification_default is True
-        panel_default = defaults.pop(const.OPT_ENABLE_SIDEBAR_PANEL)
-        assert panel_default is True
+        # One-shot actions are never pre-filled True; the enable_* toggles
+        # default on and the callback list stays on when unsaved. Pop them off
+        # (not inside assert, which `python -O` would strip) before comparing.
+        expected = {
+            const.OPT_REGENERATE_SECRETS: False,
+            const.OPT_OAUTH_REGENERATE: False,
+            const.OPT_ENABLE_WEBHOOK: True,
+            const.OPT_ENABLE_STARTUP_NOTIFICATION: True,
+            const.OPT_ENABLE_SIDEBAR_PANEL: True,
+            const.OPT_OAUTH_ALLOW_ANY_CALLBACK: False,
+        }
+        popped = {key: defaults.pop(key) for key in expected}
+        assert popped == expected
         assert defaults == {k: v for k, v in saved.items() if k not in text_fields}
 
     def test_init_submit_round_trips_input_into_entry(self):

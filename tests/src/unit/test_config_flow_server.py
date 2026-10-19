@@ -346,6 +346,21 @@ class TestOAuthCallbackAllowlistOption:
         assert second != first
         assert entry_mod._reload_relevant(second) == entry_mod._reload_relevant(first)
 
+    def test_the_allow_any_switch_saves_without_a_reload(self) -> None:
+        # Read per request like the list, so turning it on needs no reload.
+        import custom_components.ha_mcp_tools.embedded_entry as entry_mod
+
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        first = asyncio.run(flow.async_step_init({}))["data"]
+        flow = _make_options_flow(
+            options=first, data={const.DATA_WEBHOOK_ID: "mcp_abc"}
+        )
+        second = asyncio.run(
+            flow.async_step_init({**first, const.OPT_OAUTH_ALLOW_ANY_CALLBACK: True})
+        )["data"]
+        assert second[const.OPT_OAUTH_ALLOW_ANY_CALLBACK] is True
+        assert entry_mod._reload_relevant(second) == entry_mod._reload_relevant(first)
+
     def test_removing_every_callback_sticks(self):
         # Home Assistant's frontend omits an emptied optional field.
         flow = _make_options_flow(

@@ -34,6 +34,7 @@ from .const import (
     DOMAIN,
     OPT_ENABLE_SIDEBAR_PANEL,
     OPT_ENABLE_WEBHOOK,
+    OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
@@ -176,7 +177,7 @@ async def async_remove_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     await async_revoke_credentials_on_remove(hass, entry)
 
 
-_LIVE_OPTIONS = frozenset({OPT_OAUTH_REDIRECT_ALLOWLIST})
+_LIVE_OPTIONS = frozenset({OPT_OAUTH_REDIRECT_ALLOWLIST, OPT_OAUTH_ALLOW_ANY_CALLBACK})
 
 
 def _reload_relevant(options: Mapping[str, Any] | None) -> dict[str, Any] | None:

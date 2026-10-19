@@ -245,6 +245,7 @@ Configure there just reports that.)
 | **Custom direct-access path (optional)** | empty | Replaces the random `/private_...` path on the server port. Same rule: the path is the credential. |
 | **Regenerate connect secrets now** | off | One-time action: mints fresh random values for both secrets, immediately invalidating the old connect URLs (and clearing the two overrides). |
 | **Allowed OAuth callback URLs** | the common clients' callbacks (below) | In `none` mode, the only callback URLs an OAuth sign-in is sent back to. Also editable in the **HA-MCP** sidebar panel under **Server Settings → Remote access**. See [Security](#security). |
+| **Allow any OAuth callback URL** | off | In `none` mode, accept any well-formed callback instead of only the **Allowed OAuth callback URLs**. See [Security](#security). |
 
 ### Server updates
 
@@ -347,7 +348,12 @@ The in-process server offers three authentication postures, chosen with the
   to add it; registering a client cannot add to the list. Clients that connect
   without an OAuth sign-in step need no entry. Before this list existed, any
   callback was accepted, so an OAuth client outside the default list that worked
-  before needs its callback added after upgrading.
+  before needs its callback added after upgrading. If you would rather not
+  manage the list, turn on **Allow any OAuth callback URL** in Configure: any
+  `https://` callback, or `http://` on a loopback host, is then accepted. The
+  cost is that your Home Assistant address forwards a crafted sign-in link to
+  any website it names, which a phishing link can use to look like it comes
+  from your Home Assistant.
 - **`ha_auth`: clients sign in with your Home Assistant account.** Home Assistant
   Core acts as the OAuth authorization server. MCP clients that support OAuth
   (for example claude.ai and ChatGPT) discover the sign-in endpoints

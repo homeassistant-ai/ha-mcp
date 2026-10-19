@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from ..const import (
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_ENABLE_WEBHOOK,
+    OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_WEBHOOK_AUTH,
     WEBHOOK_AUTH_NONE,
@@ -66,6 +67,8 @@ def _describe(entry: Any, options: Mapping[str, Any]) -> dict[str, Any]:
         "default_allowlist": list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST),
         # Any stored value, even a malformed one, so the panel offers a reset.
         "customized": options.get(OPT_OAUTH_REDIRECT_ALLOWLIST) is not None,
+        # Configure's switch that turns the list off; the panel says so.
+        "allow_any": bool(options.get(OPT_OAUTH_ALLOW_ANY_CALLBACK)),
         # The list only gates none mode; the panel says so when it is not live.
         "applies": bool(options.get(OPT_ENABLE_WEBHOOK, True))
         and options.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE) == WEBHOOK_AUTH_NONE,

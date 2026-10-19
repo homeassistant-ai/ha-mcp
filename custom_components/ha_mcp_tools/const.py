@@ -369,6 +369,9 @@ OPT_ADMIN_TOKEN_REPLACEMENT = "admin_token_replacement"
 # (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
 # empty one, replaces it. Read per request, so a change needs no reload.
 OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
+# When True, the none-mode /authorize accepts any well-formed callback instead
+# of only the allowlist: the administrator's choice to turn the list off.
+OPT_OAUTH_ALLOW_ANY_CALLBACK = "oauth_allow_any_callback"
 # The common OAuth clients' published callbacks. Clients whose callback is
 # unique per app or connector need their own entry: ChatGPT apps on
 # chatgpt.com/connector/oauth/<id>, and Copilot Studio's per-connector

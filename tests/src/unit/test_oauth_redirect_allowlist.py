@@ -394,3 +394,45 @@ async def test_the_registered_provider_follows_the_entry_allowlist(
     entry.options = {OPT_OAUTH_REDIRECT_ALLOWLIST: [callback]}
 
     assert provider.allows_redirect(callback)
+
+
+class TestAllowAnyCallback:
+    """Configure's switch that turns the none-mode list off."""
+
+    @pytest.mark.parametrize(
+        "callback",
+        ["https://any-client.example/cb", "http://127.0.0.1:5000/callback"],
+    )
+    def test_any_well_formed_callback_is_accepted(self, callback: str) -> None:
+        from custom_components.ha_mcp_tools.oauth_autoapprove import (
+            AutoApproveProvider,
+        )
+
+        provider = AutoApproveProvider(list, lambda: True)
+        assert provider.allows_redirect(callback)
+
+    @pytest.mark.parametrize(
+        "callback",
+        [
+            "http://evil.example/cb",
+            "https://user@evil.example/cb",
+            "https://evil.example/cb#frag",
+            "javascript:alert(1)",
+        ],
+    )
+    def test_a_malformed_callback_is_still_refused(self, callback: str) -> None:
+        from custom_components.ha_mcp_tools.oauth_autoapprove import (
+            AutoApproveProvider,
+        )
+
+        provider = AutoApproveProvider(list, lambda: True)
+        assert not provider.allows_redirect(callback)
+
+    def test_the_list_applies_while_the_switch_is_off(self) -> None:
+        from custom_components.ha_mcp_tools.oauth_autoapprove import (
+            AutoApproveProvider,
+        )
+
+        provider = AutoApproveProvider(lambda: [CLAUDE], lambda: False)
+        assert provider.allows_redirect(CLAUDE)
+        assert not provider.allows_redirect("https://any-client.example/cb")

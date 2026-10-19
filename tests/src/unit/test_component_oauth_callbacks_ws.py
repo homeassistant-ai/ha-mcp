@@ -76,6 +76,13 @@ def test_an_unedited_entry_reports_the_default_list() -> None:
     result = oauth_callbacks._do_oauth_callbacks(hass, {})
     assert result["allowlist"] == list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
     assert result["customized"] is False
+    assert result["allow_any"] is False
+
+
+def test_the_read_reports_a_turned_off_list() -> None:
+    # The panel says the list is not used while Configure's switch is on.
+    hass, _ = _hass({"oauth_allow_any_callback": True})
+    assert oauth_callbacks._do_oauth_callbacks(hass, {})["allow_any"] is True
 
 
 def test_a_malformed_stored_value_still_offers_the_reset() -> None:
