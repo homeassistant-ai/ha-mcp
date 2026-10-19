@@ -337,6 +337,26 @@ def test_dev_release_tag_cleanup_uses_authenticated_github_api() -> None:
     assert "git push origin --delete" not in create_run + cleanup_run
 
 
+def test_the_dev_release_tags_the_component_stamped_for_its_build() -> None:
+    # HACS installs a pre-release from the commit its tag names (#2763), so that
+    # commit must pin the ha-mcp-dev build the release installs, not master's
+    # stable pin.
+    steps = _workflow(_WORKFLOW_DIR / "publish-dev.yml")["jobs"]["create-prerelease"][
+        "steps"
+    ]
+    names = [step.get("name") for step in steps]
+    stamp = steps[names.index("Stamp the component for this build")]["run"]
+    create = steps[names.index("Create pre-release")]["run"]
+
+    assert names.index("Stamp the component for this build") < names.index(
+        "Create pre-release"
+    )
+    assert "stamp_component_version.py" in stamp
+    assert "--dist ha-mcp-dev" in stamp
+    assert 'git tag "$TAG" HEAD' in create
+    assert "--verify-tag" in create
+
+
 def test_renovate_can_write_the_status_check_it_publishes() -> None:
     """Renovate must not abort its whole run right after writing a branch.
 
