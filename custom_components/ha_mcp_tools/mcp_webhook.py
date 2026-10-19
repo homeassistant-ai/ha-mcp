@@ -703,7 +703,9 @@ async def _async_handle_webhook(
             resp_headers["Content-Type"] = content_type
             return await buffered_response(cloudhook, upstream_resp, resp_headers)
     except aiohttp.ClientError as err:
-        _LOGGER.error("MCP webhook: upstream request failed: %s", err)
+        # Type only: a connect timeout or a bad response renders the target
+        # URL, and its path is the secret path.
+        _LOGGER.error("MCP webhook: upstream request failed: %s", type(err).__name__)
         return web.Response(status=502, text="MCP server unavailable")
     except Exception as err:
         _LOGGER.exception("MCP webhook: unexpected error: %s", err)

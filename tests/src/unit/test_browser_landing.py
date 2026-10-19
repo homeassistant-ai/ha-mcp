@@ -217,9 +217,12 @@ async def test_get_405_logs_annotated_note(mcp_app, caplog):
             resp = await client.get("/mcp")
 
     assert resp.status_code == 405
-    assert any(
-        "NORMAL for most non-SSE connections" in r.getMessage() for r in caplog.records
-    )
+    landing = [
+        r.getMessage() for r in caplog.records if r.name == "ha_mcp.browser_landing"
+    ]
+    assert any("NORMAL for most non-SSE connections" in m for m in landing)
+    # The path is the secret path on the in-process server and the app.
+    assert not any("/mcp" in m for m in landing)
 
 
 def test_filter_drops_favicon_with_query_and_slash():

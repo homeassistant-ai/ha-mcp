@@ -1,6 +1,7 @@
 """Unit tests for the ha_report_issue rendering helpers (bug_report_templates)."""
 
 from ha_mcp.tools.bug_report_templates import (
+    _URL_USERINFO_RE,
     _format_client_host_for_template,
     _format_client_info_for_template,
     _format_config_toggles_for_template,
@@ -85,11 +86,26 @@ class TestSanitizeLogText:
             assert secret not in result, f"{secret!r} leaked in {result!r}"
             assert "[REDACTED]" in result
 
+    def test_the_userinfo_rule_cannot_start_matching_inside_plain_text(self) -> None:
+        # A base64 blob or minified payload in a log message once took the
+        # userinfo rule time quadratic in its length, so ha_report_issue
+        # appeared to hang: the rule began matching at the scheme, so every
+        # character of the word was a candidate start. Anchored on "://" it
+        # can only start at the separator, which plain text never contains.
+        url = "https://admin:supersecret@ha.local/api"
+        assert _URL_USERINFO_RE.match(url) is None
+        assert _URL_USERINFO_RE.search(url).start() == len("https")
+        assert _URL_USERINFO_RE.search("a" * 200_000) is None
+
+    def test_redacts_userinfo_after_a_scheme_glued_to_other_text(self) -> None:
+        result = _sanitize_log_text("url=1https://admin:supersecret@ha.local/api")
+        assert "supersecret" not in result
+
     def test_redacts_legacy_oauth_client_secret_log_line(self):
-        # The in-process component logs the legacy OAuth Client Secret at INFO,
-        # so it reaches home-assistant.log (readable by a trusted MCP client via
-        # ha_get_logs — by design). A shared bug report must still scrub it; the
-        # generic "secret:" key=value rule covers the logged line.
+        # Older component versions logged the legacy OAuth Client Secret at
+        # INFO, and those lines can still sit in home-assistant.log. A shared
+        # bug report must scrub them; the generic "secret:" key=value rule
+        # covers the logged line.
         result = _sanitize_log_text("  OAuth Client Secret: s3cr3tV4lue_Zz-99aa")
         assert "s3cr3tV4lue" not in result
         assert "[REDACTED]" in result

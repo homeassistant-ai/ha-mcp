@@ -106,10 +106,6 @@
       "title": "HA-MCP server yeniləməsi komponentin yenilənməsini gözləyir",
       "description": "ha-mcp serverinin {latest} versiyası mövcuddur, lakin həmin buraxılışda HA-MCP fərdi komponenti də yenilənib ({shipped} versiyasına; sizdə {running} versiyası işləyir). Hazırda işləyən komponentin heç vaxt sınaqdan keçirilmədiyi server versiyasının başladılmaması üçün komponent yenilənənədək avtomatik server yeniləməsi dayandırılıb.\n\nKomponenti HACS vasitəsilə yeniləyin (HA-MCP fərdi komponentinin qeydini açın və hələ yeniləmə görünmürsə, 'Məlumatları yenilə' seçimindən istifadə edin), sonra Home Assistant-ı yenidən başladın - bundan sonra server yeniləməsi avtomatik quraşdırılır. Server yeniləməsini hər halda quraşdırmaq üçün HA-MCP server yeniləmə obyektində Quraşdır düyməsinə basın."
     },
-    "legacy_hacs_source": {
-      "title": "Komponent köhnə repozitoriyadan quraşdırılıb",
-      "description": "HACS bu komponent üçün əsas ha-mcp server repozitoriyasını izləyir, buna görə burada komponentin öz versiya nömrələri və buraxılış qeydləri (2.x) əvəzinə serverin versiya nömrələrini və buraxılış qeydlərini göstərir. Yeniləmələr işləməyə davam edir, lakin bu şəkildə yanlış etiketlənir. Düzəltmək üçün bu repozitoriyanı HACS-dən çıxarın (inteqrasiya parametrləriniz və konfiqurasiya qeydləriniz saxlanılır), homeassistant-ai/ha-mcp-integration ünvanını fərdi repozitoriya kimi əlavə edin, komponenti oradan yenidən quraşdırın və Home Assistant-ı yenidən başladın."
-    },
     "legacy_oauth_restart": {
       "title": "Köhnə OAuth parametrlərini tətbiq etmək üçün Home Assistant-ı yenidən başlat",
       "fix_flow": {

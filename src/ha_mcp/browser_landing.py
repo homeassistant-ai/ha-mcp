@@ -125,8 +125,8 @@ def register_browser_landing(mcp_instance: CustomRouteServer, path: str) -> bool
         # Any GET here is a non-MCP caller (browser, health check, proxy, or a
         # connector's SSE-style pre-flight) hitting this POST-only Streamable HTTP
         # endpoint, which answers 405 by design. Log one annotated line so the 405
-        # reads as expected.
-        logger.info("GET %s -> 405 (NORMAL for most non-SSE connections)", path)
+        # reads as expected. The path is left out: it is the secret path.
+        logger.info("GET -> 405 (NORMAL for most non-SSE connections)")
         return PlainTextResponse(
             LANDING_MESSAGE,
             status_code=405,
