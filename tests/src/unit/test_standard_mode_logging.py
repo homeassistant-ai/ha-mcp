@@ -6,7 +6,7 @@ root handler already installed — and ``logging.basicConfig`` is a no-op (level
 *and* handler) once the root logger has one. The standard-mode entry points
 (``ha-mcp-web`` via ``_setup_standard_mode``, stdio via ``main``) were therefore
 leaving the root logger at WARNING with no console handler, dropping every INFO
-line — including the annotated ``GET <path> -> 405 (NORMAL for most non-SSE
+line — including the annotated ``GET -> 405 (NORMAL for most non-SSE
 connections)`` line that ``browser_landing`` emits in place of the raw uvicorn
 access line ``ProbeAccessLogFilter`` drops.
 
@@ -28,8 +28,8 @@ from ha_mcp import __main__ as ha_main
 from ha_mcp.utils import usage_logger
 
 # Exactly what browser_landing._browser_landing logs for a by-design probe 405.
-_LANDING_LOG_ARGS = ("GET %s -> 405 (NORMAL for most non-SSE connections)", "/mcp")
-_LANDING_LOG_TEXT = "GET /mcp -> 405 (NORMAL for most non-SSE connections)"
+_LANDING_LOG_ARGS = ("GET -> 405 (NORMAL for most non-SSE connections)",)
+_LANDING_LOG_TEXT = _LANDING_LOG_ARGS[0]
 
 
 @contextmanager

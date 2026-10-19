@@ -358,7 +358,11 @@ class _ProxyView(HomeAssistantView):
             ) as upstream:
                 return await _relay_response(request, upstream)
         except aiohttp.ClientError as err:
-            _LOGGER.error("HA-MCP settings proxy: upstream request failed: %s", err)
+            # Type only: the error can render the target URL (the secret path).
+            _LOGGER.error(
+                "HA-MCP settings proxy: upstream request failed: %s",
+                type(err).__name__,
+            )
             return web.Response(status=502, text="MCP settings server unavailable")
         except Exception as err:
             _LOGGER.exception("HA-MCP settings proxy: unexpected error: %s", err)
@@ -690,7 +694,8 @@ async function showApp() {{
     if (!timer) {{
       showMessage(
         "The in-process MCP server is starting or is not running yet. " +
-          "This view will refresh automatically."
+          "This view will refresh automatically. If it does not start, " +
+          "Settings - System - Repairs says what it needs."
       );
     }}
     setTimeout(mint, RETRY_MS);

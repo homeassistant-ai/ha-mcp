@@ -45,8 +45,7 @@ from ._component_ws_fakes import (
 )
 
 # Force the REAL voluptuous into sys.modules (sibling unit modules stub it with
-# a MagicMock at import time). Captured for the schema / registration tests,
-# which need a working validator and functional decorators.
+# a MagicMock at import time); the schema/registration tests need a real one.
 sys.modules.pop("voluptuous", None)
 import voluptuous as _REAL_VOL  # noqa: E402
 
@@ -862,9 +861,8 @@ class TestInfo:
     def test_manifest_version_parity(self):
         """A bump that touches manifest.json but not COMPONENT_VERSION (or the
         reverse) makes ``ha_mcp_tools/info`` report a version HACS did not
-        install. A version lower than the base branch's or behind the
-        released stable is the Component Version Gate's job in pr.yml; WHEN
-        to bump is docs/agents/custom-component.md's version-cycle rule.
+        install. That both equal the server version is the Component Version
+        Gate's job in pr.yml (docs/agents/custom-component.md, Version cycle).
         """
         manifest = json.loads(
             (
@@ -1902,19 +1900,17 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_SERVICES_LIST,
             wsapi.WS_REFERENCE_DATA,
             wsapi.WS_SERVER_ENTRY,
-            # Phase 3 server-entry WRITE capability; its prep + admin-gate coverage
-            # lives in test_component_server_entry_update_contract.py (this set only
-            # guards drift).
+            # This set only guards drift. Prep + admin-gate coverage lives in
+            # test_component_server_entry_update_contract.py,
+            # test_component_ws_phase2_async.py, test_component_template_diagnose.py,
+            # _oauth_callbacks_ws.py and test_component_ws_logbook.py.
             wsapi.WS_SERVER_ENTRY_UPDATE,
-            # Phase 3 write capability; its prep + admin-gate coverage lives in
-            # test_component_ws_phase2_async.py (this set only guards drift).
             wsapi.WS_CALL_SERVICE,
-            # Phase 3 batch write capability (D5a); same as above — prep +
-            # admin-gate coverage lives in test_component_ws_phase2_async.py.
             wsapi.WS_BULK_CALL_SERVICE,
-            # Template errors (#2522); coverage in test_component_template_diagnose.py.
             wsapi.WS_TEMPLATE_DIAGNOSE,
-            wsapi.WS_LOGBOOK_EVENTS,  # test_component_ws_logbook.py
+            wsapi.WS_LOGBOOK_EVENTS,
+            wsapi.WS_OAUTH_CALLBACKS,
+            wsapi.WS_OAUTH_CALLBACKS_UPDATE,
             *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py
             wsapi.core_contract.COMMAND,
             "ha_mcp_tools/statistics_units",

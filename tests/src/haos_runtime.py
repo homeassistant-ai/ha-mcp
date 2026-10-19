@@ -954,19 +954,18 @@ def _build_embedded_server_wheel(dest_dir: Path) -> Path:
 
 
 def _set_embedded_server_pip_spec(
-    config_entries_doc: dict[str, Any], pip_spec: str
+    config_entries_doc: dict[str, Any], pip_spec: str, admin_token: str
 ) -> bool:
-    """Point the baked server entry's ``options.pip_spec`` at ``pip_spec``.
+    """Point the baked server entry at ``pip_spec`` and its token (#2427).
 
     Mutates ``config_entries_doc`` (a parsed ``.storage/core.config_entries``)
-    in place. Matches by entry_id, not domain: the domain (ha_mcp_tools) is
-    shared with the tools services entry, so only the entry_id uniquely
-    identifies the in-process server entry. Returns True if it was found and
-    patched, False if the document has none (doc left untouched).
+    in place, matching by entry_id because the tools entry shares the domain.
+    Returns True if it was found and patched, False if the document has none.
     """
     for entry in config_entries_doc.get("data", {}).get("entries", []):
         if entry.get("entry_id") == HA_MCP_SERVER_ENTRY_ID:
             entry.setdefault("options", {})["pip_spec"] = pip_spec
+            entry.setdefault("data", {})["admin_token"] = admin_token
             return True
     return False
 
@@ -1011,7 +1010,7 @@ def read_embedded_staging_status() -> dict[str, Any] | None:
         return None
 
 
-def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
+def stage_embedded_server_wheel_in_qcow2(image_path: Path, admin_token: str) -> None:
     """Deliver the checkout's ha-mcp wheel into the qcow2 for the embedded E2E.
 
     Builds a ``--no-deps`` ha-mcp wheel from the working tree, copies it into the
@@ -1084,7 +1083,7 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
             local = workdir / "core.config_entries"
             doc = json.loads(local.read_text(encoding="utf-8"))
             pip_spec = f"ha-mcp @ file:///config/{wheel.name}"
-            if not _set_embedded_server_pip_spec(doc, pip_spec):
+            if not _set_embedded_server_pip_spec(doc, pip_spec, admin_token):
                 detail = (
                     "no in-process server config entry in the image — the bake may "
                     "not have seeded it (check build_image.bake_test_state)"
@@ -1275,7 +1274,7 @@ def stage_home_assistant_tls_in_qcow2(image_path: Path) -> Path:
 
 def stage_embedded_server_feature_flags_in_qcow2(
     image_path: Path,
-    feature_flags: dict[str, bool],
+    feature_flags: dict[str, bool | str],
     *,
     filename: str = "feature_flags.json",
 ) -> None:

@@ -72,12 +72,8 @@ from .oauth_dcr import (
     client_redirect_uris,
     normalized_origin,
 )
-from .oauth_legacy import (
-    _b64url_decode,
-    _b64url_encode,
-    _is_loopback_host,
-    _is_valid_redirect_uri,
-)
+from .oauth_legacy import _b64url_decode, _b64url_encode
+from .oauth_redirect_allowlist import _is_loopback_host, _is_valid_redirect_uri
 
 _LOGGER = logging.getLogger(__name__)
 

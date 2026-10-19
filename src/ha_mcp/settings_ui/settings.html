@@ -243,6 +243,14 @@
        need a restart to take effect (see the banner above). -->
   <div id="featuresBody"></div>
 
+  <!-- The embedded server's OAuth callback allowlist (#2427). Hidden unless the
+       server runs inside the HA-MCP integration; it saves with its own button
+       and applies to the next sign-in without a restart. -->
+  <div id="oauthCallbacksSection" hidden>
+    <h2 class="adv-section-title" data-i18n="server.sections.remote_access">Remote access</h2>
+    <div id="oauthCallbacksBody" class="adv-section"></div>
+  </div>
+
   <!-- Advanced settings sections. The "Connection
        (display only)" section was removed per user feedback — it
        just listed the read-only HOMEASSISTANT_URL / TOKEN /

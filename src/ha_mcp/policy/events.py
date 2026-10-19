@@ -218,8 +218,8 @@ async def emit_approval_requested(
     approval signal needs the silence explained.
 
     ``POST /api/events/<type>`` works identically for every installation
-    method — the embedded component provisions the server a loopback URL
-    and an admin token, so there is no component-only path here.
+    method — the embedded component hands the server a loopback URL and an
+    administrator's token, so there is no component-only path here.
     """
     try:
         with anyio.move_on_after(EMIT_TIMEOUT_SECONDS) as scope:

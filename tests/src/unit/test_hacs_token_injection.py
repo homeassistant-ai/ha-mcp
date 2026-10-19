@@ -102,21 +102,32 @@ def test_pip_spec_patches_only_the_server_entry():
             {"entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID, "options": {}},
         ]
     )
-    assert haos_runtime._set_embedded_server_pip_spec(doc, "file:///w.whl") is True
+    assert (
+        haos_runtime._set_embedded_server_pip_spec(doc, "file:///w.whl", "tok") is True
+    )
     entries = doc["data"]["entries"]
     assert entries[1]["options"]["pip_spec"] == "file:///w.whl"
     assert "pip_spec" not in entries[0]["options"]
 
 
+def test_the_staged_server_entry_gets_an_administrator_token():
+    # #2427: the component no longer creates its own administrator.
+    doc = _entries_doc([{"entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID}])
+    haos_runtime._set_embedded_server_pip_spec(doc, "file:///w.whl", "tok")
+    assert doc["data"]["entries"][0]["data"]["admin_token"] == "tok"
+
+
 def test_pip_spec_creates_options_when_absent():
     doc = _entries_doc([{"entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID}])
-    assert haos_runtime._set_embedded_server_pip_spec(doc, "ha-mcp==9.9.9") is True
+    assert (
+        haos_runtime._set_embedded_server_pip_spec(doc, "ha-mcp==9.9.9", "tok") is True
+    )
     assert doc["data"]["entries"][0]["options"]["pip_spec"] == "ha-mcp==9.9.9"
 
 
 def test_pip_spec_returns_false_and_leaves_doc_untouched_when_missing():
     doc = _entries_doc([{"entry_id": "other", "options": {"pip_spec": "keep"}}])
-    assert haos_runtime._set_embedded_server_pip_spec(doc, "x") is False
+    assert haos_runtime._set_embedded_server_pip_spec(doc, "x", "tok") is False
     assert doc["data"]["entries"][0]["options"]["pip_spec"] == "keep"
 
 

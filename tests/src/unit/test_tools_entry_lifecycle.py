@@ -34,7 +34,6 @@ test, so the whole lifecycle runs with no HA install and no I/O.
 from __future__ import annotations
 
 import ast
-import importlib
 import inspect
 import sys
 import textwrap
@@ -49,14 +48,6 @@ from ._embedded_stubs import install
 install()
 
 import custom_components.ha_mcp_tools as comp  # noqa: E402
-
-# Imported eagerly so ``async_setup_entry``'s lazy
-# ``from .install_source_check import ...`` resolves from sys.modules whatever a
-# peer test module has since done to the ``homeassistant.*`` stubs. An explicit
-# import_module call, not an import statement: the module is wanted purely for
-# its sys.modules side effect, and the call form says so (a bare import here
-# reads as unused to linters that ignore noqa, e.g. CodeQL).
-importlib.import_module("custom_components.ha_mcp_tools.install_source_check")
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CONF_ENTRY_TYPE,
     DOMAIN,
@@ -146,12 +137,7 @@ def tools_env(monkeypatch, store_backing):
     register_commands = MagicMock(name="async_register_commands")
     monkeypatch.setattr(comp, "Store", _FakeStore)
     monkeypatch.setattr(comp, "async_register_commands", register_commands)
-    monkeypatch.setattr(comp, "dr", MagicMock(name="device_registry"))
-    monkeypatch.setattr(
-        comp,
-        "async_get_integration",
-        AsyncMock(return_value=SimpleNamespace(version="2.1.0")),
-    )
+    monkeypatch.setattr(comp, "async_register_entry_device", AsyncMock())
     return SimpleNamespace(
         register_commands=register_commands,
         storage=store_backing,

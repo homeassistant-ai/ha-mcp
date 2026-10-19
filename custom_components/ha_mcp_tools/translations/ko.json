@@ -45,8 +45,6 @@
         "title": "HA-MCP 서버",
         "description": "HA-MCP 서버를 구성합니다. {panel_hint}여기서 변경한 내용은 저장할 때 적용됩니다.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
         "data": {
-          "channel": "릴리스 채널",
-          "auto_update": "서버 자동 업데이트",
           "server_port": "MCP 서버 수신 포트",
           "bind_host": "네트워크 접근 범위",
           "webhook_auth": "인증 방식",
@@ -66,8 +64,6 @@
           "enable_sidebar_panel": "사이드바 설정 패널"
         },
         "data_description": {
-          "channel": "안정 채널은 최신 정식 릴리스를, 개발 채널은 최신 개발 빌드를 설치합니다. 자동 업데이트가 켜져 있으면 다시 불러오기나 재시작 때, 그리고 주기적인 확인을 통해 선택한 채널의 최신 빌드가 설치됩니다. 아래의 개발자용 패키지 재정의가 우선하며, 그 경우 자동 업데이트는 꺼집니다.",
-          "auto_update": "켜면 선택한 채널의 최신 릴리스가 자동으로 설치됩니다. 다시 불러오기나 재시작 때, 그리고 주기적인 확인을 통해 설치됩니다. 끄면 다시 켤 때까지 현재 설치된 버전이 유지됩니다. 이 설정은 ha-mcp 서버 패키지에만 적용되며, HA-MCP 사용자 지정 구성요소 자체의 업데이트는 계속 HACS를 통해 이루어집니다.",
           "server_port": "이 서버가 수신할 포트입니다. ha-mcp 앱(애드온)이 9583을 사용하므로 둘을 함께 실행할 수 있도록 기본값은 9584입니다. 앱(애드온)을 실행하지 않는다면 비어 있는 아무 포트나 사용할 수 있습니다.",
           "bind_host": "MCP 서버 포트에 직접 접속할 수 있는 대상을 정합니다. 기본값은 앱(애드온)과 동일하게 로컬 네트워크에서 접근할 수 있으며, 비밀 경로가 자격 증명 역할을 합니다. 루프백을 고르면 Home Assistant가 실행 중인 머신에서만 접속할 수 있습니다. 웹훅 URL과 사이드바 패널은 어느 쪽이든 동작합니다.",
           "webhook_auth": "MCP 클라이언트가 웹훅 URL에서 자신을 증명하는 방식입니다. 비밀 URL 방식에서는 링크 자체가 유일한 자격 증명입니다. OAuth를 사용하는 클라이언트에서는 OAuth가 동작하지만 모든 로그인이 자동으로 승인되므로, 로그인도 클라이언트 ID나 시크릿도 필요 없습니다. Home Assistant 로그인 방식에서는 claude.ai 같은 클라이언트가 Home Assistant 관리자 계정으로 로그인합니다(OAuth). 레거시 OAuth 방식에서는 이 통합 구성요소가 자체 로그인 서비스를 실행하고, 클라이언트에 붙여 넣을 클라이언트 ID와 시크릿을 발급합니다. 이 방식을 완전히 켜거나 끄려면 Home Assistant를 다시 시작해야 할 수 있습니다.",
@@ -95,20 +91,11 @@
       "description": "Home Assistant 안에서 HA-MCP 프로세스 내 서버를 시작하지 못했습니다:\n\n{detail}\n\nHome Assistant 로그를 확인한 뒤 통합 구성요소를 다시 불러와(또는 근본 원인을 해결한 뒤 다시 불러와) 재시도하세요."
     },
     "server_package_install_failed": {
-      "title": "HA-MCP 프로세스 내 서버 패키지를 설치하지 못했습니다",
-      "description": "프로세스 내 서버용 ha-mcp 패키지 설치에 실패했습니다:\n\n{detail}\n\n위에 설명된 호환성 또는 설치 문제를 해결한 뒤 통합 구성요소를 다시 불러와 재시도하세요."
+      "title": "HA-MCP 프로세스 내 서버 패키지를 설치하지 못했습니다"
     },
     "component_outdated": {
       "title": "HACS에서 HA-MCP 사용자 지정 구성요소를 업데이트하세요",
       "description": "설치된 ha-mcp 서버는 HA-MCP 사용자 지정 구성요소 {required} 이상을 요구하지만 현재 {installed}을(를) 사용 중입니다. HACS에서 구성요소를 업데이트한 뒤(HA-MCP 사용자 지정 구성요소 항목을 열고 업데이트가 아직 보이지 않으면 '정보 업데이트'를 사용하세요) Home Assistant를 다시 시작하세요. 그동안에도 서버는 계속 동작하지만, 구성요소를 업데이트하기 전까지 일부 최신 기능이 동작하지 않을 수 있습니다."
-    },
-    "server_update_held": {
-      "title": "HA-MCP 서버 업데이트가 구성요소 업데이트를 기다리는 중입니다",
-      "description": "ha-mcp 서버 {latest}을(를) 사용할 수 있지만, 해당 릴리스는 HA-MCP 사용자 지정 구성요소도 함께 업데이트했습니다(구성요소 {shipped} 기준, 현재 {running} 사용 중). 현재 구성요소로 한 번도 검증되지 않은 서버 버전이 시작되는 것을 막기 위해, 구성요소가 업데이트될 때까지 서버 자동 업데이트를 보류합니다.\n\nHACS에서 구성요소를 업데이트한 뒤(HA-MCP 사용자 지정 구성요소 항목을 열고 업데이트가 아직 보이지 않으면 '정보 업데이트'를 사용하세요) Home Assistant를 다시 시작하면 서버 업데이트가 자동으로 설치됩니다. 그래도 서버 업데이트를 지금 설치하려면 HA-MCP 서버 업데이트 엔티티에서 설치를 누르세요."
-    },
-    "legacy_hacs_source": {
-      "title": "구성요소가 이전 저장소에서 설치되었습니다",
-      "description": "HACS가 이 구성요소에 대해 ha-mcp 서버 본체 저장소를 추적하고 있어, 구성요소 자체의 버전(2.x)이 아니라 서버의 버전 번호와 릴리스 노트가 표시됩니다. 업데이트는 계속 동작하지만 표기는 계속 어긋납니다. 해결하려면 HACS에서 이 저장소를 제거하고(통합 구성요소 설정과 설정 항목은 유지됩니다), homeassistant-ai/ha-mcp-integration을 사용자 지정 저장소로 추가한 뒤 거기에서 구성요소를 다시 설치하고 Home Assistant를 다시 시작하세요."
     },
     "legacy_oauth_restart": {
       "title": "레거시 OAuth 설정을 적용하려면 Home Assistant를 다시 시작하세요",
@@ -123,12 +110,6 @@
     }
   },
   "selector": {
-    "server_channel": {
-      "options": {
-        "stable": "안정(권장)",
-        "dev": "개발(최신 빌드)"
-      }
-    },
     "server_webhook_auth": {
       "options": {
         "none": "비밀 웹훅 URL(기본값)",
@@ -141,13 +122,6 @@
         "tool_search": "도구 검색(간결, 기본값)",
         "full": "전체 카탈로그",
         "both": "둘 다(에이전트별로 선택)"
-      }
-    }
-  },
-  "entity": {
-    "update": {
-      "server_update": {
-        "name": "업데이트"
       }
     }
   },

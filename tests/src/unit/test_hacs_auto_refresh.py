@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -136,27 +137,6 @@ class TestNudgeDue:
         assert hacs_auto_refresh._nudge_due("1.0.0", None, marker) is False
 
 
-def test_candidate_names_match_the_component_constants():
-    # CANDIDATE_REPO_FULL_NAMES duplicates the component's constants (the
-    # server package cannot import the component at runtime); this pins the
-    # two sources together so a rename cannot silently strand the server
-    # refresh on stale repository names. The component package pulls
-    # homeassistant on import, so stub it first (same as test_hacs_nudge).
-    from ._embedded_stubs import install
-
-    install()
-
-    from custom_components.ha_mcp_tools.const import (
-        HACS_LEGACY_REPO_FULL_NAME,
-        HACS_MIRROR_REPO_FULL_NAME,
-    )
-
-    assert hacs_auto_refresh.CANDIDATE_REPO_FULL_NAMES == (
-        HACS_MIRROR_REPO_FULL_NAME,
-        HACS_LEGACY_REPO_FULL_NAME,
-    )
-
-
 class TestMarkerFile:
     def test_roundtrip(self, data_dir):
         marker = {"server_version": "1.0.0", "latest": "1.1.0", "hacs": "present"}
@@ -198,9 +178,8 @@ class TestMarkerFile:
 
 
 class TestMaybeRefreshHacsAfterUpdate:
-    async def test_embedded_server_is_a_no_op(self, data_dir):
-        # The component's own hacs_nudge covers the embedded server; running
-        # both would double HACS's GitHub fetches.
+    async def test_embedded_server_is_a_no_op(self, data_dir: Path) -> None:
+        # The component manages the embedded server's updates.
         with (
             _server(_ws(), info=_info(), embedded=True) as mocks,
             patch("ha_mcp.hacs_auto_refresh._read_marker") as read_marker,

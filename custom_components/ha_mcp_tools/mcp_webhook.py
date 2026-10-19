@@ -74,6 +74,7 @@ from .oauth_legacy import (
     build_unbound_legacy_provider,
     clear_scoped_legacy_credentials,
 )
+from .oauth_redirect_allowlist import effective_allowlist
 from .readonly_webhook import (
     readonly_url,
     register_readonly_webhook,
@@ -97,7 +98,7 @@ _WEBHOOK_NAME = "HA-MCP in-process server"
 
 # Hop-by-hop / sensitive request headers never forwarded upstream (identical set
 # to mcp_proxy). ``authorization`` is stripped because the server authenticates
-# to HA with its own provisioned token, not the caller's bearer.
+# to HA with its own administrator token, not the caller's bearer.
 _STRIPPED_REQUEST_HEADERS = frozenset(
     {
         "host",
@@ -249,7 +250,7 @@ class ResourceServer:
         if result is None:
             return False
         # ADMIN-ONLY: the server performs every Home Assistant operation with
-        # its own provisioned ADMIN token, so accepting any valid login would
+        # its own ADMIN token, so accepting any valid login would
         # grant every household member admin-equivalent control. Require an
         # active, human, administrator account (mirrors the settings panel).
         user = getattr(result, "user", None)
@@ -703,7 +704,9 @@ async def _async_handle_webhook(
             resp_headers["Content-Type"] = content_type
             return await buffered_response(cloudhook, upstream_resp, resp_headers)
     except aiohttp.ClientError as err:
-        _LOGGER.error("MCP webhook: upstream request failed: %s", err)
+        # Type only: a connect timeout or a bad response renders the target
+        # URL, and its path is the secret path.
+        _LOGGER.error("MCP webhook: upstream request failed: %s", type(err).__name__)
         return web.Response(status=502, text="MCP server unavailable")
     except Exception as err:
         _LOGGER.exception("MCP webhook: unexpected error: %s", err)
@@ -779,7 +782,10 @@ def _bind_legacy_surface(
 
 
 def _bind_none_surface(
-    hass: HomeAssistant, cfg: dict[str, Any], dcr_signing_key: str | None
+    hass: HomeAssistant,
+    cfg: dict[str, Any],
+    dcr_signing_key: str | None,
+    entry: ConfigEntry,
 ) -> None:
     """Bind the none-mode auto-approve surface — FAILS OPEN.
 
@@ -802,7 +808,11 @@ def _bind_none_surface(
         # advertised /register 404s while /authorize auto-approves.
         if dcr_signing_key:
             cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
-        cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
+        # Read the entry's options per request: an allowlist edit applies to
+        # the next sign-in without re-registering (#2427).
+        cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider(
+            lambda: effective_allowlist(entry.options)
+        )
     except Exception:
         _LOGGER.exception(
             "MCP webhook: failed to set up none-mode auto-approve "
@@ -914,7 +924,7 @@ async def async_register_webhook(
             else:
                 # WEBHOOK_AUTH_NONE (the only remaining mode — unknown modes
                 # already raised above).
-                _bind_none_surface(hass, cfg, dcr_signing_key)
+                _bind_none_surface(hass, cfg, dcr_signing_key, entry)
         except Exception:
             # Never leave a live endpoint (or a leaked session) behind a failed
             # auth-setup path. suppress: the ORIGINAL error must be what

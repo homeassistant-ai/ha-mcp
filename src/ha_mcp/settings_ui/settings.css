@@ -493,6 +493,8 @@
     font-size: 0.7rem; font-family: 'Roboto Mono', 'Courier New', monospace;
   }
   .feature-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px; font-style: italic; }
+  /* setStatusAlert marks a failed save role=alert; show it as an error too. */
+  .feature-help[role="alert"] { color: var(--danger-text); }
   .feature-control { flex-shrink: 0; display: flex; align-items: center; }
   .feature-control input[type="number"] {
     width: 64px; padding: 4px 8px;
@@ -539,14 +541,19 @@
   .feature-row.codemode-sub::before,
   .feature-row.yaml-packages-sub::before { left: 36px; }
 
-  .yaml-keys-editor { flex-direction: column; align-items: stretch; }
-  .yaml-keys-editor .feature-control { width: 100%; }
-  .yaml-keys-editor textarea {
+  .list-editor { flex-direction: column; align-items: stretch; }
+  .list-editor .feature-control { width: 100%; flex-direction: column; align-items: stretch; }
+  .list-editor textarea {
     box-sizing: border-box; width: 100%; min-height: 6rem; resize: vertical;
     padding: 8px; color: var(--text);
     font: inherit; font-size: 0.875rem;
   }
-  .yaml-keys-editor textarea:disabled { cursor: not-allowed; }
+  .list-editor textarea:disabled { cursor: not-allowed; }
+  .list-editor-actions {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px;
+  }
+  .list-editor-actions button { white-space: nowrap; }
+  .list-editor-actions .a11y-reset { height: 40px; }
 
   /* ── ADVANCED SETTINGS ───────────────────────────────────────────────── */
   .adv-section-title {
@@ -921,7 +928,7 @@
   .adv-control input[type="number"],
   .adv-control select,
   .feature-control input[type="number"],
-  .yaml-keys-editor textarea,
+  .list-editor textarea,
   .backup-field-control input[type="number"],
   .backup-filters input,
   .policy-predicate-form input,
@@ -939,7 +946,7 @@
   .adv-control input[type="number"]:hover,
   .adv-control select:hover,
   .feature-control input[type="number"]:hover,
-  .yaml-keys-editor textarea:not(:disabled):hover,
+  .list-editor textarea:not(:disabled):hover,
   .backup-field-control input[type="number"]:hover,
   .backup-filters input:hover,
   .policy-predicate-form input:hover,
@@ -953,7 +960,7 @@
   .adv-control input[type="number"]:focus,
   .adv-control select:focus,
   .feature-control input[type="number"]:focus,
-  .yaml-keys-editor textarea:focus,
+  .list-editor textarea:focus,
   .backup-field-control input[type="number"]:focus,
   .backup-filters input:focus,
   .policy-predicate-form input:focus,

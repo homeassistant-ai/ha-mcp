@@ -4,6 +4,8 @@ These tests verify that error codes, error responses, and helper functions
 work correctly to provide informative, structured error messages.
 """
 
+import pytest
+
 from ha_mcp.errors import (
     DEFAULT_SUGGESTIONS,
     ErrorCode,
@@ -219,6 +221,22 @@ class TestCreateAuthError:
         assert "Supervisor" in joined
         assert "home-assistant.log" in joined
         assert "long-lived access token" not in joined
+
+    def test_invalid_token_suggestions_embedded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The in-process server's token lives in the HA-MCP Server entry (#2427):
+        point at Configure and the repair, not at a HOMEASSISTANT_TOKEN. HAOS's
+        Core container carries SUPERVISOR_TOKEN too, so embedded must win."""
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-supervisor-token")
+        response = create_auth_error("Invalid token")
+
+        joined = " ".join(response["error"].get("suggestions", []))
+        assert "HA-MCP Server" in joined
+        assert "Replace the administrator access token" in joined
+        assert "HOMEASSISTANT_TOKEN" not in joined
+        assert "Supervisor" not in joined
 
     def test_expired_token_unaffected_by_addon(self, monkeypatch):
         """Expired errors keep their own defaults even on the add-on — the

@@ -439,3 +439,36 @@ class TestClassifiedGuidanceSurvivesCallerSuggestions:
             ValueError("bad input"), raise_error=False, suggestions=["Caller hint"]
         )
         assert result["error"]["suggestions"] == ["Caller hint"]
+
+
+class TestEmbeddedAuthHints:
+    """A refused token on the in-process server is fixed in the HA-MCP Server
+    entry; a tool's own hints must not crowd that out (#2427)."""
+
+    TOOL_HINTS = ("Verify entity 'sun.sun' exists in Home Assistant",)
+
+    def _suggestions(self) -> list[str]:
+        from ha_mcp.client.rest_client import HomeAssistantAuthError
+
+        response = exception_to_structured_error(
+            HomeAssistantAuthError("Invalid authentication token"),
+            raise_error=False,
+            suggestions=list(self.TOOL_HINTS),
+        )
+        return response["error"]["suggestions"]
+
+    def test_the_token_fix_comes_before_the_tool_hints(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        suggestions = self._suggestions()
+        assert "HA-MCP Server" in suggestions[0]
+        assert suggestions[-1] == self.TOOL_HINTS[0]
+
+    def test_other_deployments_keep_classified_and_tool_hints(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+        suggestions = self._suggestions()
+        assert suggestions[-1] == self.TOOL_HINTS[0]
+        assert len(suggestions) > len(self.TOOL_HINTS)

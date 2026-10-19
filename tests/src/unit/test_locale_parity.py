@@ -720,16 +720,9 @@ def test_derived_catalogs_match_the_canonical_store() -> None:
 # alone. Membership is pinned because the grouping is by English text — a key
 # whose English moves on one side only silently *leaves* the check, which is
 # exactly the drift it exists to catch.
-AUTHORED_SHARED_PLACES = {
-    "src/ha_mcp/settings_ui/locales": (
-        "messages.advanced.extra_yaml_write_keys.label",
-        "messages.footer.deployment.unknown",
-    ),
-    "custom_components/ha_mcp_tools/translations": (
-        "common.version_unknown",
-        "options.step.tools_info.data.extra_yaml_keys",
-    ),
-}
+AUTHORED_SHARED_PLACES: dict[str, list[str]] = json.loads(
+    Path(__file__).with_name("locale_shared_places.json").read_text(encoding="utf-8")
+)
 
 
 @cache
