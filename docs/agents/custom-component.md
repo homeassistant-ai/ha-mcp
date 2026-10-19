@@ -14,13 +14,19 @@ Never edit them by hand: semantic-release stamps all four in each release
 commit (`version_variables` in `pyproject.toml`), and the PR **Component
 Version Gate** fails a pull request that moves any of them.
 
-Releases follow from that:
+HACS installs the component from this repository; the
+`homeassistant-ai/ha-mcp-integration` mirror stays for installs made from it and
+receives the same releases (#2763). Releases follow from that:
 
-- **Stable:** after **SemVer Release**, the mirror sync snapshots the release
-  tag's component and tags the mirror `vX.Y.Z` once PyPI serves
-  `ha-mcp==X.Y.Z`. A server-only release is therefore also a component
-  release.
-- **Development:** after **Publish Dev Channel**, the mirror sync stamps the
+- **Stable:** the SemVer Release commit carries the stamp, so this
+  repository's `vX.Y.Z` release is the component release. After it, the mirror
+  sync snapshots the release tag's component and tags the mirror `vX.Y.Z`
+  once PyPI serves `ha-mcp==X.Y.Z`. A server-only release is therefore also a
+  component release.
+- **Development:** **Publish Dev Channel** stamps the component with the next
+  release number and its `ha-mcp-dev` build on a commit only its
+  `v<next>.dev<N>` pre-release tag references, so master keeps its stable
+  pin. After it, the mirror sync stamps the
   snapshot of the commit it built with the next release number (what
   semantic-release would cut) and pins the exact build it uploaded,
   `ha-mcp-dev==<next>.dev<N>` (the version `scripts/dev_version.sh` gave
