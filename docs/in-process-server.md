@@ -205,7 +205,8 @@ uses **9583**, so an existing app install does not conflict.
 ## Options
 
 Open **Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure** to change these. Saving the options reloads the server so
-the changes take effect. (The **HA-MCP File & YAML Tools** entry has no options — a
+the changes take effect; a change to the OAuth callback list alone applies to the
+next sign-in without a reload. (The **HA-MCP File & YAML Tools** entry has no options — a
 Configure there just reports that.)
 
 | Option | Default | What it does |
@@ -222,6 +223,7 @@ Configure there just reports that.)
 | **Custom webhook secret (optional)** | empty | Replaces the random webhook secret in `/api/webhook/<secret>`. The URL is the credential - use a long, hard-to-guess value. |
 | **Custom direct-access path (optional)** | empty | Replaces the random `/private_...` path on the server port. Same rule: the path is the credential. |
 | **Regenerate connect secrets now** | off | One-time action: mints fresh random values for both secrets, immediately invalidating the old connect URLs (and clearing the two overrides). |
+| **Allowed OAuth callback URLs** | the common clients' callbacks (below) | In `none` mode, the only callback URLs an OAuth sign-in is sent back to. Also editable in the **HA-MCP** sidebar panel under **Server Settings → Remote access**. See [Security](#security). |
 
 ### Server updates
 
@@ -272,6 +274,15 @@ from the registry on the first start). A 2.x install on the `dev` channel moves
 to the stable server with this release; turn on the HACS **Pre-release** switch
 to keep receiving development builds.
 
+**Existing OAuth clients may need configuration:** in secret-URL (`none`) mode,
+the callback allowlist applies to existing installations too. A client whose
+callback is not listed cannot complete its next sign-in. Under **Settings →
+Devices & services → HA-MCP Server → Configure**, add its exact callback URL to
+**Allowed OAuth callback URLs**. The common clients' callbacks are included by
+default; other clients may need an entry. Connections that use only the webhook URL and
+clients using Home Assistant or legacy OAuth authentication are unaffected by
+this allowlist change. See [Security](#security) for loopback callback matching.
+
 ### Local-only mode
 
 Turn **Remote access via webhook** off to keep the server unreachable through
@@ -297,6 +308,25 @@ The in-process server offers three authentication postures, chosen with the
   server — exactly like the Webhook Proxy app's default. When exposed through
   Nabu Casa (or another HTTPS reverse proxy) the URL travels over TLS. Treat the
   URL like a password: don't share it or paste it where it could be logged.
+  Entries created before setup asked for an authentication mode run in this mode.
+
+  Some connectors (claude.ai among them) insist on an OAuth sign-in even here.
+  The server approves it without a login, because the token it issues grants
+  nothing, but it sends the sign-in back only to a callback URL on the
+  **Allowed OAuth callback URLs** list. The list starts with the published
+  callbacks of claude.ai (and its announced claude.com address), Claude Code,
+  ChatGPT (`connector_platform_oauth_redirect`) and Gemini Enterprise. For any
+  other OAuth client, add the callback URL its sign-in uses, exactly as sent.
+  That includes ChatGPT apps that show a per-app `chatgpt.com/connector/oauth/...`
+  callback and Microsoft Copilot Studio, whose connectors each have their own
+  `global.consent.azure-apim.net/redirect/...` callback. An `http://` loopback
+  callback (`127.0.0.1`, `[::1]` or `localhost`) also matches on any port,
+  because desktop clients pick a free port per sign-in. A
+  sign-in to an unlisted callback stops on a page that names the URL and where
+  to add it; registering a client cannot add to the list. Clients that connect
+  without an OAuth sign-in step need no entry. Before this list existed, any
+  callback was accepted, so an OAuth client outside the default list that worked
+  before needs its callback added after upgrading.
 - **`ha_auth`: clients sign in with your Home Assistant account.** Home Assistant
   Core acts as the OAuth authorization server. MCP clients that support OAuth
   (for example claude.ai and ChatGPT) discover the sign-in endpoints

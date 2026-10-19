@@ -483,7 +483,7 @@ function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
     const row = document.createElement('div');
     row.className = 'feature-row ' + cssClass + (lockedByGate ? ' dimmed' : '');
     const multiline = f.field === 'extra_yaml_write_keys';
-    if (multiline) row.classList.add('yaml-keys-editor');
+    if (multiline) row.classList.add('list-editor');
 
     const info = document.createElement('div');
     info.className = 'feature-info';

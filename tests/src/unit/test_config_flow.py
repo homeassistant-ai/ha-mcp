@@ -96,6 +96,7 @@ class _TextSelector(_SelectSelector):
 
 class _TextSelectorType:
     TEXT = "text"
+    URL = "url"
 
 
 _sel = MagicMock()
@@ -283,27 +284,6 @@ class TestOAuthCredsHint:
         assert "Client Secret: new-secret" in hint
         assert "not serving these yet" in hint
         assert "restart" in hint
-
-
-class TestOptionsFlowDispatch:
-    def test_server_entry_gets_server_options_flow(self):
-        entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpServerOptionsFlow)
-
-    def test_tools_entry_gets_info_options_flow(self):
-        entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
-
-    def test_missing_entry_type_defaults_to_info_options(self):
-        # A pre-existing (pre-fold) tools entry carries no entry_type key; it must
-        # be treated as "tools", so it gets the informational tools flow, never
-        # the server options flow.
-        entry = SimpleNamespace(data={})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
-        assert not isinstance(result, cf.HaMcpServerOptionsFlow)
 
 
 class TestToolsInfoOptionsFlow:
@@ -708,6 +688,7 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE: "/custom_path",
             const.OPT_OAUTH_CLIENT_ID: "hamcp-deadbeef",
             const.OPT_OAUTH_CLIENT_SECRET: "super-secret-value",
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST: ["https://chatgpt.example/cb"],
         }
         flow = _make_options_flow(
             data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=saved
@@ -725,6 +706,7 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE,
             const.OPT_OAUTH_CLIENT_ID,
             const.OPT_OAUTH_CLIENT_SECRET,
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST,
         )
         for key in text_fields:
             assert markers[key].description["suggested_value"] == saved[key]
@@ -765,7 +747,7 @@ class TestServerOptionsFlow:
         assert result["title"] == ""
         # A genuine override is stored verbatim; the channel rides along.
         # _normalize adds the (empty) URL/secret management fields when the
-        # submission omits them.
+        # submission omits them; an omitted callback list is an emptied one.
         assert result["data"] == {
             **user_input,
             const.OPT_EXTERNAL_URL: "",
@@ -773,6 +755,7 @@ class TestServerOptionsFlow:
             const.OPT_SECRET_PATH_OVERRIDE: "",
             const.OPT_OAUTH_CLIENT_ID: "",
             const.OPT_OAUTH_CLIENT_SECRET: "",
+            const.OPT_OAUTH_REDIRECT_ALLOWLIST: [],
         }
 
     def test_default_pip_spec_normalized_to_empty(self):

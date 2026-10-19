@@ -206,7 +206,11 @@ class TestDevVersionScript:
             spec.loader.exec_module(module)
             return module
 
-        assert load("server_pin").SERVER_DISTS == load("const").KNOWN_SERVER_DISTS
+        const = load("const")
+        assert load("server_pin").SERVER_DISTS == (
+            const.DIST_NAME_STABLE,
+            const.DIST_NAME_DEV,
+        )
 
     def test_the_pr_version_gate_uses_the_shared_pin_rule(self) -> None:
         # One rule for what a server pin is: the gate, the stamp script, the

@@ -288,11 +288,10 @@ RESERVED_DASHBOARD_URL_PATHS = frozenset(
 # import package (publish-dev.yml only renames the distribution), so only one
 # may be installed at a time — see EmbeddedServerManager's conflicting-dist
 # handling.
-DIST_NAME_STABLE = "ha-mcp"
-DIST_NAME_DEV = "ha-mcp-dev"
 # server_pin.SERVER_DISTS repeats these: tests load this file standalone, so it
 # imports nothing. test_server_pin_names_match_the_component pins the two.
-KNOWN_SERVER_DISTS = (DIST_NAME_STABLE, DIST_NAME_DEV)
+DIST_NAME_STABLE = "ha-mcp"
+DIST_NAME_DEV = "ha-mcp-dev"
 
 # The server requirement when the component manifest carries no ``ha-mcp``
 # pin, which only a hand-edited manifest lacks: semantic-release stamps every
@@ -308,7 +307,8 @@ CHANNEL_DEV = "dev"
 
 # Options-flow keys (stored in entry.options).
 # Retired: entries saved before the paired-release change may still carry
-# ``channel`` and ``auto_update``; nothing reads them.
+# ``channel`` and ``auto_update``. Nothing acts on them; only the server_entry
+# / server_entry_update WS commands still echo ``channel`` for older servers.
 OPT_CHANNEL = "channel"
 OPT_SERVER_PORT = "server_port"
 OPT_BIND_HOST = "bind_host"
@@ -360,6 +360,28 @@ OPT_ENABLE_STARTUP_NOTIFICATION = "enable_startup_notification"
 # When False, the admin-only "HA-MCP" sidebar settings panel is not registered;
 # the server's options stay reachable on the entry's Configure screen.
 OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
+# The callback URLs the none-mode auto-approve /authorize may redirect to
+# (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
+# empty one, replaces it. Read per request, so a change needs no reload.
+OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
+# The common OAuth clients' published callbacks. Clients whose callback is
+# unique per app or connector need their own entry: ChatGPT apps on
+# chatgpt.com/connector/oauth/<id>, and Copilot Studio's per-connector
+# global.consent.azure-apim.net/redirect/<connector> URL.
+DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
+    "https://claude.ai/api/mcp/auth_callback",
+    # Anthropic's announced future callback domain.
+    "https://claude.com/api/mcp/auth_callback",
+    # Claude Code (any port, per the loopback rule).
+    "http://localhost/callback",
+    "http://127.0.0.1/callback",
+    "https://chatgpt.com/connector_platform_oauth_redirect",
+    # Gemini Enterprise.
+    "https://vertexaisearch.cloud.google.com/oauth-redirect",
+)
+# Bounds every writer of the list applies (Configure, the panel's WS command).
+MAX_OAUTH_CALLBACKS = 50
+MAX_OAUTH_CALLBACK_LENGTH = 2048
 
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"
@@ -387,8 +409,8 @@ DATA_DCR_SIGNING_KEY = "dcr_signing_key"
 DATA_SERVER_USER_ID = "server_user_id"
 DATA_REFRESH_TOKEN_ID = "refresh_token_id"
 DATA_ACCESS_TOKEN = "access_token"
-# Last pip spec that was successfully installed. Lets a changed spec (the
-# pre-release test channel) force an actual reinstall on the next start instead
+# Last pip spec that was successfully installed. Lets a changed spec (a
+# pip-spec override) force an actual reinstall on the next start instead
 # of hitting the requirements manager's is-installed shortcut.
 DATA_LAST_PIP_SPEC = "last_pip_spec"
 # hass.data[DOMAIN] sub-keys for the server runtime. Distinct from the tools
@@ -419,8 +441,9 @@ WEBHOOK_AUTH_LEGACY = "legacy"
 # Default bind host + port. 9584 (not the add-on's 9583) so this in-process
 # server and an add-on install can coexist on the same box.
 DEFAULT_SERVER_PORT = 9584
-# The fallback for entries that never saved a bind host, which keeps them on
-# the LAN as before. New entries save loopback unless setup picks the LAN.
+# Fallback for entries created before setup asked for network access: they
+# kept the add-on's LAN-reachable port. New entries save loopback explicitly
+# (#2427).
 DEFAULT_BIND_HOST = "0.0.0.0"
 BIND_HOST_ALL = "0.0.0.0"
 BIND_HOST_LOOPBACK = "127.0.0.1"
