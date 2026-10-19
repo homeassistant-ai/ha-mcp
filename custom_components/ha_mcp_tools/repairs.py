@@ -112,7 +112,7 @@ class ServerTokenRepairFlow(RepairsFlow):
 
 
 class ServerPackageRepairFlow(RepairsFlow):
-    """Reinstall the in-process server and its dependencies (#2427).
+    """Reinstall the in-process server, and any outdated dependency (#2427).
 
     Home Assistant installs the pinned server once and only checks its version
     afterwards, so a dependency another integration downgraded stays broken

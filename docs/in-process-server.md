@@ -379,16 +379,16 @@ access token: created at setup from the login of an account you chose, or
 pasted in. It is stored in the config entry and handed to the server in memory
 (never through the Home Assistant process environment). As with every
 deployment, that token's Home Assistant permissions define what the server can
-do. The component never creates a Home Assistant account of its own.
+do. The component never creates a Home Assistant account of its own. The token
+is checked each time the server starts: a token revoked while the server runs
+makes its requests fail until the next start, and an account that loses
+administrator rights keeps serving with the reduced rights until then.
 
 Entries created before this change keep the **HA-MCP Server** account and token
 an older release created, for as long as both work. If the token is missing,
 revoked or expired, or its account is no longer an active administrator, the
 server does not start and the repair **HA-MCP needs an administrator access
-token** asks for a new one. These checks run when the server starts. A token
-revoked while the server runs makes its requests fail until the next start, and
-an account that loses administrator rights keeps serving with the reduced
-rights until then. You can also switch at any time in the entry's options,
+token** asks for a new one. You can also switch at any time in the entry's options,
 with another account's user name and password or a pasted token. Switching
 revokes a token HA-MCP created, from a login or by an older release; a token
 you pasted stays in its account's profile. The **HA-MCP Server** account an
