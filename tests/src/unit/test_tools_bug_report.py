@@ -26,7 +26,7 @@ from ha_mcp.tools.tools_bug_report import (
 @pytest.fixture(autouse=True)
 def _installed_version_matches_running():
     """Report tests supply the installed version instead of reading the
-    developer's package metadata; tests of a mismatch patch their own."""
+    developer's package metadata; test_server_version.py covers a mismatch."""
     with patch("ha_mcp.tools.server_version.get_version", return_value=__version__):
         yield
 

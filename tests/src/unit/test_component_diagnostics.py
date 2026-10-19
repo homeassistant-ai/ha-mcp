@@ -162,7 +162,7 @@ def installed_version_calls(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 
 @pytest.fixture(autouse=True)
 def paired_spec(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
-    """The manifest pin bring-up installs without an override; set ``[0]``."""
+    """The manifest pin the effective spec falls back to; set ``[0]``."""
     pin: list[str | None] = ["ha-mcp==8.7.0"]
 
     async def _paired(hass: Any) -> str | None:
@@ -402,7 +402,8 @@ async def test_installed_version_reads_the_installing_distribution_first(
 ) -> None:
     """Read as bring-up reads it (#2765): the distribution the effective spec
     installs goes first, so metadata another one left behind cannot mask it.
-    The default spec is no override; a tarball URL installs ``ha-mcp``."""
+    The default spec is no override; without a manifest pin ``ha-mcp`` is read
+    first."""
     paired_spec[0] = pin
 
     await _diagnostics(FakeHass([_server_entry({OPT_PIP_SPEC: pip_spec})]))

@@ -154,22 +154,18 @@ async def _async_server_summary(
     options = entry.options
     pip_spec = str(options.get(OPT_PIP_SPEC) or "").strip()
     # Same test as EmbeddedServerManager: the default spec is no override.
-    override_set = bool(pip_spec) and pip_spec != DEFAULT_PIP_SPEC
-    # The spec bring-up installs, resolved as _resolve_pip_spec resolves it.
-    spec = (
-        pip_spec
-        if override_set
-        else await _async_paired_server_requirement(hass) or DEFAULT_PIP_SPEC
-    )
+    override = pip_spec if pip_spec != DEFAULT_PIP_SPEC else ""
+    # The effective spec, as EmbeddedServerManager._resolve_pip_spec resolves it.
+    spec = override or await _async_paired_server_requirement(hass) or DEFAULT_PIP_SPEC
     domain_data = hass.data.get(DOMAIN, {})
     manager = domain_data.get(DATA_MANAGER)
     bringup = domain_data.get(DATA_BRINGUP_TASK)
     return {
-        # Blocking dist-info read, the distribution bring-up reads first.
+        # Blocking dist-info read; the spec's distribution first, as bring-up.
         "installed_server_version": await hass.async_add_executor_job(
             _installed_ha_mcp_version, version_dist(spec)
         ),
-        "package_override_set": override_set,
+        "package_override_set": bool(override),
         "running": isinstance(manager, EmbeddedServerManager) and manager.is_running,
         "bring_up_in_progress": bringup is not None and not bringup.done(),
         "startup_error": _startup_error(hass, entry),
@@ -225,12 +221,13 @@ def _scrub(text: str, entry: ConfigEntry) -> str:
 def _is_server_pin(value: str) -> bool:
     """True for a plain server pin (``ha-mcp``, ``ha-mcp-dev==1.2``).
 
-    ``last_pip_spec`` holds one of these when no override is set: the pin
-    from the component's manifest. It is not a secret, and keeping it leaves
-    the package name and version in the error. Only the whole value counts:
-    an override that merely starts with one carries whatever was typed after
-    it. The version must be a public one, as PyPI releases are: a local label
-    (``+...``) can carry arbitrary alphanumeric text, such as a token.
+    ``last_pip_spec`` holds one of these when no override is set: the
+    component's manifest pin, or bare ``ha-mcp`` without one. It is not a
+    secret, and keeping it leaves the package name and version in the error.
+    Only the whole value counts: an override that merely starts with one
+    carries whatever was typed after it. The version must be a public one, as
+    PyPI releases are: a local label (``+...``) can carry arbitrary
+    alphanumeric text, such as a token.
     """
     dist, pinned, version = value.strip().partition("==")
     if dist not in (DIST_NAME_STABLE, DIST_NAME_DEV):

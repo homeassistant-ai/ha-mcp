@@ -2,8 +2,7 @@
 
 The in-process server reads the installed version from that distribution's
 metadata first, so metadata another server distribution left behind cannot mask
-it (#2765): bring-up, the post-start staleness check and the diagnostics
-download all read through :func:`version_dist`.
+it.
 """
 
 from __future__ import annotations
@@ -20,7 +19,8 @@ def spec_dist_name(spec: str) -> str | None:
     """Return the normalized distribution ``spec`` installs, or None.
 
     The requirement's name, or for a bare wheel URL the one its file name
-    starts with (PEP 427); None for any other bare URL.
+    starts with (PEP 427); None for anything else that is no requirement,
+    such as a bare tarball URL.
     """
     try:
         name = Requirement(spec).name

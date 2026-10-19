@@ -2,7 +2,7 @@
 
 An override can leave another server distribution's metadata beside the one it
 installed: ``ha-mcp`` beside an ``ha-mcp-dev`` override when the conflicting
-uninstall fails, and always the manifest pin's ``ha-mcp`` beside an override
+uninstall fails, and always the manifest pin's distribution beside an override
 under another name, which skips that uninstall. Bring-up, the post-start
 staleness check and the worker's recorded version must all read the
 distribution the spec installs. The ``ha-mcp-dev`` cases are covered in
@@ -39,9 +39,25 @@ from .test_embedded_server import _manager, _stub_ha_mcp_surface  # noqa: E402
 
 OTHER_DIST = "acme-ha-mcp"
 OTHER_SPEC = f"{OTHER_DIST} @ file:///pkg.whl"
-# The manifest pin's ha-mcp stays installed; ha_mcp.__version__ reads only
-# ha-mcp and ha-mcp-dev metadata, so it reports this one.
-VERSIONS = {DIST_NAME_STABLE: "8.7.0", OTHER_DIST: "9.0.0"}
+# The manifest pin stays installed beside the override: ha-mcp, or ha-mcp-dev
+# for a pre-release component. ha_mcp.__version__ reads only those two, so it
+# reports the pin's version.
+PIN_VERSION = "8.7.0"
+OVERRIDE_VERSION = "9.0.0"
+pin_dists = pytest.mark.parametrize("pin_dist", [DIST_NAME_STABLE, DIST_NAME_DEV])
+
+
+def _metadata(versions):
+    """``importlib.metadata.version`` over ``versions``; others are absent."""
+
+    def version(name):
+        if not name:  # as the real one: a name is required
+            raise ValueError("A distribution name is required.")
+        if name not in versions:
+            raise importlib.metadata.PackageNotFoundError(name)
+        return versions[name]
+
+    return version
 
 
 @pytest.mark.parametrize(
@@ -49,45 +65,61 @@ VERSIONS = {DIST_NAME_STABLE: "8.7.0", OTHER_DIST: "9.0.0"}
     [
         ("HA_MCP_Dev==8.7.0.dev3", DIST_NAME_DEV),
         (OTHER_SPEC, OTHER_DIST),
-        ("file:///config/acme_ha_mcp-1.0-py3-none-any.whl", OTHER_DIST),
+        ("file:///config/acme_ha_mcp-1.0-py3-none-any.whl#sha256=ab", OTHER_DIST),
         # A repository tarball names no distribution and installs ha-mcp.
         ("https://example/t.tgz", DIST_NAME_STABLE),
     ],
 )
-def test_version_read_targets_the_distribution_the_spec_installs(spec, dist):
+def test_version_is_read_from_what_the_spec_installs(spec, dist):
     assert version_dist(spec) == dist
 
 
-def test_installed_version_reads_another_named_distribution_first(monkeypatch):
+@pytest.mark.parametrize(
+    ("preferred", "expected"),
+    [(OTHER_DIST, OVERRIDE_VERSION), (None, PIN_VERSION)],
+    ids=["override-masked-by-the-pin", "no-preference-reads-stable-first"],
+)
+def test_installed_version_is_not_masked_by_leftover_metadata(
+    monkeypatch, preferred, expected
+):
     monkeypatch.setattr(es.importlib.util, "find_spec", lambda name: object())
-    monkeypatch.setattr(importlib.metadata, "version", VERSIONS.get)
-    assert es._installed_ha_mcp_version(OTHER_DIST) == VERSIONS[OTHER_DIST]
+    versions = {
+        DIST_NAME_STABLE: PIN_VERSION,
+        DIST_NAME_DEV: "8.7.0.dev1",
+        OTHER_DIST: OVERRIDE_VERSION,
+    }
+    monkeypatch.setattr(importlib.metadata, "version", _metadata(versions))
+    assert es._installed_ha_mcp_version(preferred) == expected
 
 
-async def test_bring_up_and_worker_versions_agree(tmp_path, monkeypatch):
+@pin_dists
+async def test_bring_up_and_worker_versions_agree(tmp_path, monkeypatch, pin_dist):
     mgr, _hass, _entry = _manager(
         tmp_path,
         options={OPT_PIP_SPEC: OTHER_SPEC},
         data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: OTHER_SPEC},
     )
+    versions = {pin_dist: PIN_VERSION, OTHER_DIST: OVERRIDE_VERSION}
 
     def installed_version(preferred_dist=None):
-        return VERSIONS.get(preferred_dist or DIST_NAME_STABLE)
+        return versions.get(preferred_dist or DIST_NAME_STABLE) or versions.get(
+            pin_dist
+        )
 
     monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=True))
     monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
     monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
-    monkeypatch.setattr(es, "_installed_dist_version", VERSIONS.get)
+    monkeypatch.setattr(es, "_installed_dist_version", versions.get)
     monkeypatch.setattr(es, "_dist_installed", lambda name: False)
     monkeypatch.setattr(es, "_uninstall_distribution", MagicMock(return_value=False))
     fake = ModuleType("ha_mcp")
-    fake.__version__ = VERSIONS[DIST_NAME_STABLE]
+    fake.__version__ = PIN_VERSION
     monkeypatch.setitem(sys.modules, "ha_mcp", fake)
 
     ready_version = await mgr._async_ensure_package()
 
     # Read before the minimum-version check, which then checks this version.
-    assert ready_version == VERSIONS[OTHER_DIST]
+    assert ready_version == OVERRIDE_VERSION
     assert es._running_ha_mcp_version(OTHER_DIST) == ready_version
 
 
@@ -102,11 +134,15 @@ async def test_no_false_restart_warning_for_the_override(tmp_path, monkeypatch, 
     # The real purge would drop every live ha_mcp module in this process.
     monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
     monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
-    installed = MagicMock(return_value=VERSIONS[OTHER_DIST])
-    monkeypatch.setattr(es, "_installed_ha_mcp_version", installed)
+    versions = {DIST_NAME_STABLE: PIN_VERSION, OTHER_DIST: OVERRIDE_VERSION}
+    monkeypatch.setattr(
+        es,
+        "_installed_ha_mcp_version",
+        lambda preferred_dist=None: versions[preferred_dist or DIST_NAME_STABLE],
+    )
 
     def _ready_with_current_worker():
-        mgr._running_version = VERSIONS[OTHER_DIST]
+        mgr._running_version = OVERRIDE_VERSION
 
     monkeypatch.setattr(
         mgr,
@@ -119,7 +155,6 @@ async def test_no_false_restart_warning_for_the_override(tmp_path, monkeypatch, 
     if mgr._thread is not None:
         mgr._thread.join(timeout=2)
 
-    installed.assert_called_once_with(OTHER_DIST)
     assert "restart Home Assistant" not in caplog.text
 
 
@@ -135,8 +170,9 @@ def _isolate_env():
             os.environ[key] = value
 
 
+@pin_dists
 @pytest.mark.usefixtures("_isolate_env")
-def test_worker_records_the_override_version(tmp_path, monkeypatch):
+def test_worker_records_the_override_version(tmp_path, monkeypatch, pin_dist):
     mgr, _hass, _entry = _manager(
         tmp_path,
         options={OPT_PIP_SPEC: OTHER_SPEC, OPT_SERVER_URL: "http://ha.local:8123"},
@@ -150,10 +186,11 @@ def test_worker_records_the_override_version(tmp_path, monkeypatch):
             raise _StopServe
 
     _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
-    sys.modules["ha_mcp"].__version__ = VERSIONS[DIST_NAME_STABLE]
-    monkeypatch.setattr(es, "_installed_dist_version", VERSIONS.get)
+    sys.modules["ha_mcp"].__version__ = PIN_VERSION
+    versions = {pin_dist: PIN_VERSION, OTHER_DIST: OVERRIDE_VERSION}
+    monkeypatch.setattr(es, "_installed_dist_version", versions.get)
 
     mgr._thread_main("tok")
 
-    assert mgr._running_version == VERSIONS[OTHER_DIST]
+    assert mgr._running_version == OVERRIDE_VERSION
     assert isinstance(mgr._thread_exc, _StopServe)

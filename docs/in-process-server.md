@@ -472,12 +472,12 @@ content); the tarball override is only meant for quick pre-release testing.
 working MCP session. Without one, open the **HA-MCP Custom Component**
 integration page, open the **⋮** menu of either entry and choose **Download
 diagnostics** (the item appears only while the entry is loaded), then attach the
-file to your issue. It lists the component and server versions, each entry's
-state, whether the server is running, the last startup error, and the webhook
-auth mode. Secrets such as the webhook
-ID, the access token or OAuth credentials are left out, and any that appear in
-the startup error are replaced with `**REDACTED**`. For the package override and
-the external URL, the file only says whether they are set.
+file to your issue. It lists the component version and the installed server
+version, each entry's state, whether the server is running, the last startup
+error, and the webhook auth mode. Secrets such as the webhook ID, the access
+token or OAuth credentials are left out, and any that appear in the startup
+error are replaced with `**REDACTED**`. For the package override and the
+external URL, the file only says whether they are set.
 
 **Where the logs are.** The in-process server logs into the normal Home Assistant
 log (**Settings → System → Logs**, or `home-assistant.log`). Its working data

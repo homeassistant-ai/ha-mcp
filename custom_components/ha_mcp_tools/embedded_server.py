@@ -530,7 +530,11 @@ class EmbeddedServerManager:
         return None if name is None else server_dist(name)
 
     def _preferred_dist(self) -> str:
-        """The known server distribution the spec installs, else stable."""
+        """The known server distribution the spec installs, else stable.
+
+        For the paths that weigh ``ha-mcp`` against ``ha-mcp-dev``; version
+        reads use :func:`version_dist`, which keeps any other name.
+        """
         return self._target_dist() or DIST_NAME_STABLE
 
     def _conflicting_dist_name(self) -> str | None:
@@ -1290,9 +1294,9 @@ class EmbeddedServerManager:
         """
         if self._pip_spec_override:
             named = _override_dist_name(self._pip_spec)
-            if named is None and _spec_names_no_distribution(self._pip_spec):
+            if named is None:
                 # A bare URL names nothing: prefer stable (a repository
-                # tarball installs as ha-mcp on every channel) but accept
+                # tarball installs as ha-mcp) but accept
                 # whichever known distribution actually has metadata — a
                 # dev wheel URL installs ha-mcp-dev, and auditing the
                 # absent stable would report a phantom missing root on
@@ -1305,8 +1309,7 @@ class EmbeddedServerManager:
                     ),
                     DIST_NAME_STABLE,
                 )
-            if named is not None:
-                return named
+            return named
         preferred = self._preferred_dist()
         if _dist_installed(preferred):
             return preferred
@@ -1476,10 +1479,10 @@ class EmbeddedServerManager:
         self._note_startup_phase("importing the server package")
         import ha_mcp.config as _hamcp_config
 
-        # Record which code generation this worker imported. Prefer the
-        # distribution this install targets when both distributions have metadata because
-        # ha_mcp.__version__ itself checks stable first and stale stable
-        # metadata can otherwise make a fresh dev worker look outdated.
+        # Record which code generation this worker imported, reading the
+        # spec's own distribution first: ha_mcp.__version__ knows only ha-mcp
+        # and ha-mcp-dev metadata, so a leftover of either could otherwise be
+        # reported for a different install (see _running_ha_mcp_version).
         self._running_version = _running_ha_mcp_version(version_dist(self._pip_spec))
         # The cache in sys.modules now holds this generation — remembered
         # process-wide so the next start can skip the purge when the install
@@ -2046,21 +2049,20 @@ def _purge_ha_mcp_modules() -> None:
 
 
 def _installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
-    """Return the installed ha-mcp distribution version, or None (blocking).
+    """Return the installed server version, or None (blocking).
 
     Invalidates the import caches first so a just-completed pip install is seen.
-    Checks both the stable (``ha-mcp``) and dev (``ha-mcp-dev``) distribution
-    names, mirroring ``ha_mcp._version.get_version``. When ``preferred_dist`` is
-    provided, checks that distribution first, whatever its name, so stale
-    metadata (a failed or skipped conflicting uninstall, or the manifest pin
-    beside an override under another name) cannot mask the package just
-    installed.
+    Reads ``preferred_dist`` first when given, whatever its name, then
+    ``ha-mcp`` and ``ha-mcp-dev``, so stale metadata (a failed or skipped
+    conflicting uninstall, or the manifest pin beside an override under
+    another name) cannot mask the package just installed.
     """
     _safe_invalidate_caches()
-    # Metadata alone is not proof: a channel switch's best-effort uninstall
-    # can leave ORPHANED .dist-info whose files are gone (the shared ha_mcp/
-    # tree belongs to whichever dist installed last). Require the import
-    # machinery to actually resolve the package before trusting any version.
+    # Metadata alone is not proof: the best-effort removal of the other
+    # server distribution can leave ORPHANED .dist-info whose files are gone
+    # (the shared ha_mcp/ tree belongs to whichever dist installed last).
+    # Require the import machinery to actually resolve the package before
+    # trusting any version.
     if importlib.util.find_spec("ha_mcp") is None:
         return None
     dist_names = (preferred_dist, DIST_NAME_STABLE, DIST_NAME_DEV)
@@ -2087,8 +2089,9 @@ def _installed_dist_version(dist_name: str) -> str | None:
     """Return the installed version of a SPECIFIC distribution, or None (blocking).
 
     Invalidates the import caches first so a just-completed (un)install is seen.
-    Unlike :func:`_installed_ha_mcp_version` (which reports whichever of the two
-    server distributions is present) this pins the given distribution name, so
+    Unlike :func:`_installed_ha_mcp_version` (which falls back from the
+    preferred distribution to either server distribution) this reads only the
+    given distribution name, so
     the target's version is never read from the other distribution's metadata.
     """
     _safe_invalidate_caches()
@@ -2326,7 +2329,7 @@ def _override_dist_name(spec: str) -> str | None:
     """Distribution name a pip-spec override installs, or None for a bare URL.
 
     Unlike :meth:`EmbeddedServerManager._replaced_dist_name` — which maps
-    onto the two known channel distributions for the replaced-source
+    onto the two known server distributions for the replaced-source
     checks — the audit needs the LITERAL name: an override may install an
     arbitrary distribution (``acme-ha-mcp @ file:///pkg.whl``), and that
     distribution's graph is the one the worker imports (CodeRabbit on
@@ -2336,22 +2339,6 @@ def _override_dist_name(spec: str) -> str | None:
         return Requirement(spec).name
     except InvalidRequirement:
         return None
-
-
-def _spec_names_no_distribution(spec: str) -> bool:
-    """True when ``spec`` does not parse as a PEP 508 requirement at all.
-
-    A bare URL (or any unparseable spec) names no distribution of its own;
-    the same conservative shape test :func:`_scoped_install_flags` routes
-    on. A ``name @ url`` form parses and is therefore False here — its name
-    is already what :meth:`EmbeddedServerManager._replaced_dist_name`
-    reports.
-    """
-    try:
-        Requirement(spec)
-    except InvalidRequirement:
-        return True
-    return False
 
 
 def _spec_is_url_requirement(spec: str) -> bool:
