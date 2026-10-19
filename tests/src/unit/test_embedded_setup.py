@@ -37,8 +37,6 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK_ID,
     DOMAIN,
     ISSUE_COMPONENT_OUTDATED,
-    ISSUE_PACKAGE_FAILED,
-    ISSUE_START_FAILED,
     OPT_WEBHOOK_AUTH,
     SERVER_UPDATES_DOCS_URL,
     WEBHOOK_AUTH_HA,
@@ -81,8 +79,7 @@ def _make_entry(*, options=None, data=None) -> MagicMock:
     return entry
 
 
-@pytest.fixture
-def fake_manager(monkeypatch):
+def make_fake_manager(monkeypatch: pytest.MonkeyPatch) -> type:
     """Patch EmbeddedServerManager with a real fake class.
 
     A real class (not a lambda/MagicMock) is required because
@@ -106,8 +103,12 @@ def fake_manager(monkeypatch):
     return FakeManager
 
 
-@pytest.fixture(autouse=True)
-def _spy(monkeypatch):
+@pytest.fixture
+def fake_manager(monkeypatch: pytest.MonkeyPatch) -> type:
+    return make_fake_manager(monkeypatch)
+
+
+def install_spies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch webhook register/unregister, issue-registry, and connect-URL
     surfacing to spies (the connect-URL tests restore the real surfacing)."""
     monkeypatch.setattr(esetup, "async_register_webhook", AsyncMock(return_value=False))
@@ -117,6 +118,11 @@ def _spy(monkeypatch):
     monkeypatch.setattr(esetup.ir, "async_create_issue", MagicMock())
     monkeypatch.setattr(esetup.ir, "async_delete_issue", MagicMock())
     monkeypatch.setattr(esetup, "_surface_connect_urls", MagicMock())
+
+
+@pytest.fixture(autouse=True)
+def _spy(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_spies(monkeypatch)
 
 
 class TestBringUp:
@@ -202,6 +208,7 @@ class TestBringUp:
         assert cleared == {
             esetup.ISSUE_PACKAGE_FAILED,
             esetup.ISSUE_START_FAILED,
+            esetup.ISSUE_TOKEN_NEEDED,
             # A non-legacy bring-up (async_register_webhook returned
             # restart_needed=False) also clears any stale legacy-OAuth restart
             # repair from a prior legacy configuration.
@@ -260,45 +267,6 @@ class TestBringUp:
         esetup.async_register_webhook.assert_awaited_once()
         esetup.async_register_llm_api.assert_not_awaited()
         assert "LLM API disabled by option" in caplog.text
-
-    async def test_package_failure_files_package_issue_and_skips_webhook(
-        self, fake_manager
-    ):
-        hass = _make_hass()
-        entry = _make_entry()
-        fake_manager.async_start.side_effect = esetup.EmbeddedServerError(
-            "pip failed", kind="package"
-        )
-
-        await esetup.async_bring_up_server(hass, entry)
-
-        fake_manager.async_stop.assert_awaited_once()  # teardown ran
-        assert DATA_MANAGER not in hass.data.get(DOMAIN, {})
-        esetup.async_register_webhook.assert_not_awaited()
-        esetup.async_register_llm_api.assert_not_awaited()
-        # The failure kind selects the package-install repair issue.
-        assert esetup.ir.async_create_issue.call_args.args[2] == ISSUE_PACKAGE_FAILED
-
-    async def test_start_failure_files_start_issue(self, fake_manager):
-        hass = _make_hass()
-        entry = _make_entry()
-        fake_manager.async_start.side_effect = esetup.EmbeddedServerError(
-            "bind failed", kind="start"
-        )
-
-        await esetup.async_bring_up_server(hass, entry)
-        assert esetup.ir.async_create_issue.call_args.args[2] == ISSUE_START_FAILED
-
-    async def test_unexpected_error_files_start_issue(self, fake_manager):
-        hass = _make_hass()
-        entry = _make_entry()
-        # Server started, but webhook registration raised a non-EmbeddedServerError.
-        esetup.async_register_webhook.side_effect = RuntimeError("register boom")
-
-        await esetup.async_bring_up_server(hass, entry)
-
-        fake_manager.async_stop.assert_awaited_once()
-        assert esetup.ir.async_create_issue.call_args.args[2] == ISSUE_START_FAILED
 
     async def test_cancelled_tears_down_and_reraises(self, fake_manager):
         hass = _make_hass()

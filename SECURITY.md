@@ -236,7 +236,7 @@ choice keep the webhook on in `none` mode with LAN binding.
   authorization server: the entry serves the discovery documents and
   validates inbound Bearer tokens against Home Assistant's own auth, so access
   is gated by a Home Assistant login — and restricted to **administrator**
-  users. The server acts with its own provisioned admin token (the caller's
+  users. The server acts with its own administrator token (the caller's
   bearer is never forwarded), so accepting any valid login would grant every
   household member admin-equivalent control; non-admin, inactive, and
   system-generated users are rejected. This is distinct from the beta OAuth mode
@@ -283,8 +283,8 @@ choice keep the webhook on in `none` mode with LAN binding.
   signing key — all persisted in the config entry. Its security properties:
   - **The client secret is the boundary.** Anyone holding the `client_id` +
     `client_secret` can complete the flow and mint tokens; there is no
-    per-user identity. Access is **admin-equivalent** — the same provisioned
-    admin token backs it as the other modes. Keep the secret secret.
+    per-user identity. Access is **admin-equivalent** — the same server
+    administrator token backs it as the other modes. Keep the secret secret.
   - **Self-issued Bearer tokens**, HMAC-signed and stateless, carrying
     `{kind, iat, exp, jti, cid}` — **no** Home Assistant LLAT (unlike the beta
     OAuth mode in "OAuth Bearer token design" above; that section's
@@ -342,10 +342,21 @@ administrator-only Configure screen of the entry; the log and notifications
 never carry it. New entries start with the
 webhook off, and a local-only option removes it entirely.
 
-The server reaches Home Assistant with a dedicated admin token the component
-provisions and stores in the config entry. The token is handed to the server
-in-memory (never through the Home Assistant process environment); removing the
-entry revokes it, and disabling the config entry stops the server. As with
+The server reaches Home Assistant with an administrator's long-lived access
+token (#2427): one the administrator pastes, or one the component issues at
+setup from the login of a local-only account the administrator created for the
+server. The component never creates an account. It revokes a token it issued
+when the token is switched or the entry removed, and leaves a pasted token
+alone. The login skips that account's multi-factor step, but only an
+administrator can submit it. Entries created by older releases keep the
+account and token those releases provisioned while both remain valid; a
+missing, revoked or non-administrator credential stops the server and files a
+repair that asks for a replacement, rather than minting a new administrator.
+The token is stored in the config entry and handed to the server in memory
+(never through the Home Assistant process environment). Disabling the config
+entry stops the server; removing it deletes only an account an older release
+created, never an account the user created, and revokes only a token the
+component issued, never a pasted one. As with
 standard mode, that token's Home Assistant permissions define what the server can
 do.
 

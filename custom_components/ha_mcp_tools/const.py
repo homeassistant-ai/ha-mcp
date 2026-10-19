@@ -360,6 +360,11 @@ OPT_ENABLE_STARTUP_NOTIFICATION = "enable_startup_notification"
 # When False, the admin-only "HA-MCP" sidebar settings panel is not registered;
 # the server's options stay reachable on the entry's Configure screen.
 OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
+# One-shot Configure field: an administrator's long-lived access token to
+# switch the server to (#2427). The options flow validates it and writes it
+# straight into entry.data (_adopt_token); it is never stored in options or
+# shown back.
+OPT_ADMIN_TOKEN_REPLACEMENT = "admin_token_replacement"
 # The callback URLs the none-mode auto-approve /authorize may redirect to
 # (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
 # empty one, replaces it. Read per request, so a change needs no reload.
@@ -386,6 +391,11 @@ MAX_OAUTH_CALLBACK_LENGTH = 2048
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"
 DATA_SECRET_PATH = "secret_path"
+# Set by the package repair's fix flow: the next start reinstalls the server
+# package even though its version is satisfied, before anything imports it. A
+# dependency another integration downgraded only resolves again on a
+# reinstall, and the broken module stays loaded until Home Assistant restarts.
+DATA_REINSTALL_REQUESTED = "reinstall_requested"
 # Legacy OAuth mode credentials, minted by embedded_entry._ensure_secrets and
 # consumed by oauth_legacy.LegacyOAuthProvider. DATA_OAUTH_SIGNING_KEY is a hex
 # string (entry.data must be JSON-serializable, so raw bytes aren't stored
@@ -408,6 +418,13 @@ DATA_OAUTH_SIGNING_KEY = "oauth_signing_key"
 DATA_DCR_SIGNING_KEY = "dcr_signing_key"
 DATA_SERVER_USER_ID = "server_user_id"
 DATA_REFRESH_TOKEN_ID = "refresh_token_id"
+# A long-lived access token of an administrator, supplied by the user (#2427).
+# The server runs with it; entries from older releases may instead carry the
+# provisioned DATA_SERVER_USER_ID / DATA_REFRESH_TOKEN_ID pair.
+DATA_ADMIN_TOKEN = "admin_token"
+# The refresh token behind DATA_ADMIN_TOKEN when the component issued it from
+# an account's login (#2427), so a switch or the entry's removal revokes it.
+DATA_ISSUED_TOKEN_ID = "issued_token_id"
 DATA_ACCESS_TOKEN = "access_token"
 # Last pip spec that was successfully installed. Lets a changed spec (a
 # pip-spec override) force an actual reinstall on the next start instead
@@ -457,14 +474,6 @@ DEFAULT_LOOPBACK_URL = "http://127.0.0.1:8123"
 # migration from the former ".ha_mcp_server").
 SERVER_CONFIG_SUBDIR = ".ha_mcp"
 
-# Client name recorded on the provisioned long-lived access token, and the name
-# of the local admin user the server logs in as. Stable so a reused token is
-# recognizable in Settings -> People -> <user> -> tokens. "HA-MCP" phrasing (not
-# "Home Assistant MCP Server") to avoid confusion with HA's official MCP Server
-# integration.
-SERVER_TOKEN_CLIENT_NAME = "HA-MCP Server"
-SERVER_USER_NAME = "HA-MCP Server"
-
 # RFC 8414 / RFC 9728 discovery documents for ha_auth mode are served under this
 # namespace (mirrors the webhook-proxy add-on's /api/mcp_proxy/oauth base).
 OAUTH_BASE = "/api/ha_mcp_tools/oauth"
@@ -491,6 +500,9 @@ LLM_API_DOCS_URL = (
 # Repair-issue ids surfaced when server bring-up fails.
 ISSUE_PACKAGE_FAILED = "server_package_install_failed"
 ISSUE_START_FAILED = "server_start_failed"
+# Fixable repair issue: the server has no usable Home Assistant credential
+# (#2427). Its fix flow asks for an administrator's long-lived access token.
+ISSUE_TOKEN_NEEDED = "server_token_needed"
 # Repair issue surfaced when the installed ha-mcp server requires a newer
 # custom component than the one running. Each component release pins the
 # server it was built with, so this only fires for a pip-spec override that

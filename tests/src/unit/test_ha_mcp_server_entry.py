@@ -65,11 +65,8 @@ def _make_entry(*, options=None, data=None) -> MagicMock:
     entry.data = {} if data is None else dict(data)
 
     def _create_background_task(hass, coro, name):
-        # issue #1760: async_setup_server_entry now ALSO schedules the
-        # coordinator's initial version refresh as a real coroutine here (a
-        # second call, alongside the bring-up). This suite doesn't exercise
-        # coordinator behavior, so just close it to avoid an unawaited-
-        # coroutine warning rather than actually running it.
+        # Close any real coroutine handed in rather than running it, so a
+        # scheduled task cannot leave an unawaited-coroutine warning.
         if asyncio.iscoroutine(coro):
             coro.close()
         return "BRINGUP_TASK"

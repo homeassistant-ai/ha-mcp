@@ -91,8 +91,7 @@
       "description": "無法在 Home Assistant 內啟動 HA-MCP 處理程序內伺服器：\n\n{detail}\n\n請檢查 Home Assistant 記錄檔，然後重新載入整合（或修正根本問題並重新載入）以重試。"
     },
     "server_package_install_failed": {
-      "title": "無法安裝 HA-MCP 處理程序內伺服器套件",
-      "description": "安裝用於處理程序內伺服器的 ha-mcp 套件失敗：\n\n{detail}\n\n請解決上述描述的相容性或安裝問題，然後重新載入整合以重試。"
+      "title": "無法安裝 HA-MCP 處理程序內伺服器套件"
     },
     "component_outdated": {
       "title": "透過 HACS 更新 HA-MCP 自訂元件",

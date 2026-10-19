@@ -37,8 +37,9 @@ Once the in-process server config entry exists, it:
    installs it as an integration requirement when it loads the component (the
    first start takes a little longer while it downloads — see
    [First start](#first-start-takes-a-little-longer) below).
-2. Provisions a dedicated Home Assistant admin token the server uses to reach
-   Home Assistant over loopback.
+2. Connects to Home Assistant over loopback with an administrator account's
+   long-lived access token, created from that account's login during setup or
+   pasted in.
 3. Runs the server on its own thread so a slow tool call can never stall Home
    Assistant's event loop.
 4. Registers a Home Assistant webhook that forwards MCP traffic to the server, so
@@ -74,8 +75,27 @@ run current `ha-mcp` servers.
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.
 2. **Add the in-process server entry.** Go to **Settings → Devices & Services →
    Add Integration**, search for **HA-MCP Custom Component**, and — on the menu
-   that appears — choose **HA-MCP Server**. The setup form asks how MCP
-   clients may reach the server: **Remote access through Home Assistant**
+   that appears — choose **HA-MCP Server**. The server acts with an
+   administrator account's permissions, so the form asks for one of two
+   things:
+   - **An administrator access token.** Your own works: open your profile
+     (your name at the bottom of the sidebar), select the **Security** tab, and
+     under **Long-lived access tokens** select **Create token**. It also works
+     from outside your home network if it ever leaks, and Home Assistant
+     records the server's changes under your name.
+   - **The login of an account made just for HA-MCP** (safer). Create it under
+     **Settings → People → Add person** with **Allow login**, **Local access
+     only** and **Administrator** on, the way you would make one for an MQTT
+     client, then enter its user name and password. HA-MCP creates its token,
+     named **HA-MCP Server**, so nobody has to log in as it, and the password is
+     not kept. Its token works only from your local network, where the server
+     runs, and Home Assistant records the server's changes under that account.
+     Never enter your own login there: to use your own account, paste its
+     token. The login does not ask for the account's multi-factor code; only an
+     administrator can open this form.
+
+   It also asks how MCP clients may reach
+   the server: **Remote access through Home Assistant**
    (disabled by default; choose Home Assistant sign-in, legacy OAuth or the
    secret URL to let clients connect through a webhook) and **Network access**
    (this machine only by default; choose local network to let devices on your
@@ -95,8 +115,8 @@ run current `ha-mcp` servers.
 
 To pause the server, **disable** its config entry (**Settings → Devices &
 Services → HA-MCP Custom Component → HA-MCP Server → ⋮ → Disable**);
-re-enable it to start it again. Removing the entry stops the server and revokes
-the provisioned token.
+re-enable it to start it again. Removing the entry stops the server; the token
+you entered stays valid until you delete it from your profile.
 
 ## Connect URLs
 
@@ -296,7 +316,7 @@ If a connect URL may have leaked, open the entry's options and check
 **Regenerate connect secrets now**, then save - both the webhook secret and the
 direct-access path are re-minted on the spot and every old URL stops working.
 Update your MCP clients with the new URL from the Configure screen. (Removing and
-re-adding the entry also rotates everything, including the internal token.)
+re-adding the entry also rotates the webhook secret and direct-access path.)
 
 ## Security
 
@@ -333,7 +353,7 @@ The in-process server offers three authentication postures, chosen with the
   automatically and authenticate the user against Home Assistant; requests
   without a valid Home Assistant token are rejected. Only **administrator**
   accounts are accepted: the server performs its Home Assistant operations with
-  its own provisioned admin token, so a non-admin login is refused rather than
+  its own administrator token, so a non-admin login is refused rather than
   silently granted admin-equivalent control. There is no separate password or
   credential to manage — it is your existing Home Assistant admin login.
 - **`legacy`: a self-hosted OAuth server with a static Client ID + Secret.** For
@@ -354,11 +374,28 @@ All three postures ride Home Assistant's own remote access (Nabu Casa / your
 reverse proxy) for TLS. If you expose the server to the internet, prefer
 `ha_auth`; keep the `none` URL — or a `legacy` Client Secret — strictly private.
 
-The server reaches Home Assistant with a dedicated admin token the component
-provisions and stores in the config entry; that token is handed to the server
-in-memory (never through the Home Assistant process environment). Removing the
-entry revokes it. As with every deployment, that token's Home Assistant
-permissions define what the server can do.
+The server reaches Home Assistant with an administrator account's long-lived
+access token: created at setup from the login of an account you chose, or
+pasted in. It is stored in the config entry and handed to the server in memory
+(never through the Home Assistant process environment). As with every
+deployment, that token's Home Assistant permissions define what the server can
+do. The component never creates a Home Assistant account of its own.
+
+Entries created before this change keep the **HA-MCP Server** account and token
+an older release created, for as long as both work. If the token is missing,
+revoked or expired, or its account is no longer an active administrator, the
+server does not start and the repair **HA-MCP needs an administrator access
+token** asks for a new one. These checks run when the server starts. A token
+revoked while the server runs makes its requests fail until the next start, and
+an account that loses administrator rights keeps serving with the reduced
+rights until then. You can also switch at any time in the entry's options,
+with another account's user name and password or a pasted token. Switching
+revokes a token HA-MCP created, from a login or by an older release; a token
+you pasted stays in its account's profile. The **HA-MCP Server** account an
+older release created stays until you remove the entry, or until you delete it
+yourself under **Settings → People → Users**. Removing the entry deletes only an account an older release
+created; it never touches the account your token belongs to, though it revokes
+a token HA-MCP created from a login.
 
 See [SECURITY.md](../SECURITY.md) for the full threat model.
 
@@ -392,14 +429,25 @@ because the package is already installed.
 ## Troubleshooting
 
 **The server won't start.** If the server fails to come up — for example because
-the port is already in use, or token provisioning fails — a repair issue titled
+the port is already in use — a repair issue titled
 **The HA-MCP in-process server failed to start** appears under **Settings →
-Repairs**, carrying the specific reason. If a build set in **ha-mcp package
-(advanced)** can't be installed, the repair issue is titled **The HA-MCP
-in-process server package could not be installed** instead. Fix the cause —
-check the Home Assistant log and your network connectivity for an install
-failure, or set a different **Server port** for a port conflict — then reload
-the entry (save the options, or use **⋮ → Reload**) to retry.
+Repairs**, carrying the specific reason. Fix the cause — set a different
+**Server port** for a port conflict, for example — then reload the entry (save
+the options, or use **⋮ → Reload**) to retry.
+
+**The server package is broken.** If the server cannot be installed or its
+code cannot be imported, the repair is titled **The HA-MCP in-process server
+package could not be installed**. A common cause is another integration that
+pins an older version of one of the server's dependencies: Home Assistant
+installs that version for it, and only checks the server's own version
+afterwards. If the repair names such an integration, update or remove it first.
+If you set **ha-mcp package (advanced)**, check that value too: reinstalling a
+requirement that cannot be installed fails the same way.
+Then open the repair and select **Submit**: Home Assistant restarts and
+reinstalls the server package before the server starts, along with any
+dependency whose version no longer satisfies it.
+A restart is needed because the broken package stays loaded in Home Assistant
+until then.
 
 **The integration does not load at all.** Home Assistant installs the server
 build each component release pins before it loads the integration. If that

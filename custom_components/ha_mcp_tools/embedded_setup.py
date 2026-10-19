@@ -1,7 +1,7 @@
 """Bring the in-process ha-mcp server up and down for the config entry (#1527).
 
-Orchestration between :mod:`embedded_server` (the server thread + token
-provisioning) and :mod:`mcp_webhook` (the ingress webhook): the bring-up sequence,
+Orchestration between :mod:`embedded_server` (the server thread + its token)
+and :mod:`mcp_webhook` (the ingress webhook): the bring-up sequence,
 repair issues on failure, connect-URL surfacing, and teardown. Kept out of
 ``__init__.py`` so the entry-point wiring stays thin and this logic is
 independently testable.
@@ -43,6 +43,7 @@ from .const import (
     ISSUE_LEGACY_OAUTH_RESTART,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
+    ISSUE_TOKEN_NEEDED,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
     OPT_ENABLE_SIDEBAR_PANEL,
@@ -66,7 +67,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 _NOTIFICATION_ID = "ha_mcp_tools_server_connect"
-_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED)
+_ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED, ISSUE_TOKEN_NEEDED)
 
 
 async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -165,25 +166,36 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         await async_teardown_server(hass)
         raise
     except EmbeddedServerError as err:
-        _LOGGER.error("HA-MCP in-process server failed to start: %s", err)
+        if err.kind == "token":
+            _LOGGER.error(
+                "HA-MCP in-process server has no usable Home Assistant token "
+                "(%s). Enter an administrator's long-lived access token under "
+                "Settings - System - Repairs",
+                err,
+            )
+        else:
+            _LOGGER.error("HA-MCP in-process server failed to start: %s", err)
         # suppress: filing the repair issue must be UNCONDITIONAL (review
         # finding) - a raising teardown would otherwise leave the entry
         # looking healthy with the failure visible only in the log.
         with suppress(Exception):
             await async_teardown_server(hass)
-        _create_issue(hass, err.kind, str(err))
+        if err.kind == "token":
+            _create_token_issue(hass, entry, str(err))
+        else:
+            _create_issue(hass, entry, err.kind, str(err))
     except Exception as err:
         _LOGGER.exception("HA-MCP in-process server: bring-up failed")
         with suppress(Exception):
             await async_teardown_server(hass)
-        _create_issue(hass, "start", str(err))
+        _create_issue(hass, entry, "start", str(err))
 
 
 async def async_teardown_server(hass: HomeAssistant) -> None:
     """Unregister the LLM API + webhook and stop the server thread (reload-safe,
     idempotent).
 
-    Does NOT revoke the provisioned token — a reload must keep it. The ha_auth
+    Does NOT release credentials — a reload must keep them. The ha_auth
     discovery views stay bound (aiohttp can't unregister them until HA restarts);
     they 404 while the entry is not live.
     """
@@ -197,7 +209,7 @@ async def async_teardown_server(hass: HomeAssistant) -> None:
 async def async_revoke_credentials_on_remove(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """Revoke the provisioned credentials when the config entry is removed."""
+    """Release the credentials an older release provisioned when the entry is removed."""
     await EmbeddedServerManager(hass, entry).async_revoke_credentials()
     _clear_issues(hass)
     ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)
@@ -479,13 +491,27 @@ _ISSUE_BY_KIND = {
 }
 
 
-def _create_issue(hass: HomeAssistant, kind: str, detail: str) -> None:
+def _create_issue(
+    hass: HomeAssistant, entry: ConfigEntry, kind: str, detail: str
+) -> None:
     """File the repair issue matching the failure ``kind`` (package / start).
 
     Exhaustive lookup on purpose: an unknown kind is a coding error and must
     raise here rather than silently filing the wrong user-facing repair issue.
+    A package failure is fixable: its fix flow reinstalls the server.
     """
     issue_id = _ISSUE_BY_KIND[kind]
+    if kind == "package":
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=True,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=issue_id,
+            data={"entry_id": entry.entry_id, "detail": detail},
+        )
+        return
     ir.async_create_issue(
         hass,
         DOMAIN,
@@ -494,6 +520,23 @@ def _create_issue(hass: HomeAssistant, kind: str, detail: str) -> None:
         severity=ir.IssueSeverity.ERROR,
         translation_key=issue_id,
         translation_placeholders={"detail": detail},
+    )
+
+
+def _create_token_issue(hass: HomeAssistant, entry: ConfigEntry, reason: str) -> None:
+    """Ask for a replacement administrator token; its fix flow takes one.
+
+    ``reason`` (a ``CredentialNeeded`` reason) lets the fix flow say why the
+    stored token was refused.
+    """
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        ISSUE_TOKEN_NEEDED,
+        is_fixable=True,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key=ISSUE_TOKEN_NEEDED,
+        data={"entry_id": entry.entry_id, "reason": reason},
     )
 
 
