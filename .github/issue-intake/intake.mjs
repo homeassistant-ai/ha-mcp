@@ -503,6 +503,55 @@ export const hasReport = (text) => {
 // under this heading why it has none. The issue forms render their fallback
 // field under the same heading.
 export const noReportHeading = "Why there is no ha_report_issue report";
+// The issue forms' required report field. Anything typed there, "N/A"
+// included, answers the report gate.
+export const reportFieldLabel = "📋 ha_report_issue Report";
+const answerHeading = (...labels) =>
+  new RegExp(
+    `^ {0,3}#{2,4} +(?:${labels.map(escapeRegExp).join("|")})[ \\t]*$`,
+    "iu",
+  );
+const answerHeadingLine = answerHeading(noReportHeading, reportFieldLabel);
+const reasonHeadingLine = answerHeading(noReportHeading);
+const fenceLine = /^ {0,3}(`{3,}|~{3,})/;
+const headingLine = /^ {0,3}#{1,6}(?: |$)/;
+// Every section under an answer heading, each ending at the next heading
+// outside a code fence: logs and config pasted there carry "# " lines.
+export function answerSections(text, answerLine = answerHeadingLine) {
+  const sections = [];
+  let current = null;
+  let fence = null;
+  for (const line of (text || "").split(/\r?\n/)) {
+    const marker = fenceLine.exec(line)?.[1];
+    if (fence) {
+      if (marker?.[0] === fence[0] && marker.length >= fence.length)
+        fence = null;
+    } else if (marker) {
+      fence = marker;
+    } else if (headingLine.test(line)) {
+      current = answerLine.test(line) ? [] : null;
+      if (current) sections.push(current);
+      continue;
+    }
+    current?.push(line);
+  }
+  return sections.map((lines) => lines.join("\n"));
+}
+// GitHub's issue forms write "_No response_" for an optional field left
+// empty, and a blank issue's template comments are not an answer.
+const answered = (section) =>
+  section
+    .split(/<!--[\s\S]*?-->/)
+    .join(" ")
+    .replace(/_No response_/g, "")
+    .trim() !== "";
+// What the report gate accepts instead of a report.
+export const hasAnswer = (text) => answerSections(text).some(answered);
+// A reason why there is no report. Unlike the gate, the report request is not
+// answered by the forms' report field alone: "N/A" there comes with this
+// reason, and a partial paste still lacks the report.
+export const hasReason = (text) =>
+  answerSections(text, reasonHeadingLine).some(answered);
 const reportTypeLabels = {
   "[BUG]": ["bug"],
   "[AGENT]": ["agent-behavior"],
@@ -533,14 +582,15 @@ export function reportLabels(snapshot) {
 }
 
 // Whether to ask for an ha_report_issue report: a bug-like issue whose body and
-// human replies carry none. It never affects needs-info.
+// human replies carry neither a report nor a reason why there is none. It never
+// affects needs-info.
 export function wantsReport(snapshot, result) {
   const { issue, comments } = snapshot;
   const texts = [
     issue.body || "",
     ...comments.filter((c) => isHuman(c.user)).map((c) => c.body || ""),
   ];
-  if (texts.some(hasReport)) return false;
+  if (texts.some((t) => hasReport(t) || hasReason(t))) return false;
   const title = issue.title.trim().toUpperCase();
   const labels = issue.labels.map((l) => l.name);
   if (

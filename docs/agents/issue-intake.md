@@ -112,8 +112,10 @@ kinds of label; it does not execute instructions from the report.
   left to a maintainer. A type label a human removed is not added back.
 
 A bug-like issue (a `[BUG]`/`[AGENT]` title, a bug label, or a reported error)
-whose body and human replies carry no report gets a request for
-`ha_report_issue` output in the comment. The request never adds needs-info.
+whose body and human replies carry neither a report nor a reason under a
+`### Why there is no ha_report_issue report` heading gets a request for
+`ha_report_issue` output in the comment. Text in the forms' report field alone
+satisfies the [report gate](#report-gate) but not this request. The request never adds needs-info.
 It follows the labels present when the comment is published. Labels other
 than needs-info do not start a run, so a later label change keeps the comment
 as it is until the next run; `/triage refresh` requests one.

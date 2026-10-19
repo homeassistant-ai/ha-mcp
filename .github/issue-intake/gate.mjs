@@ -8,8 +8,9 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   GitHub,
+  answerSections,
   collect,
-  escapeRegExp,
+  hasAnswer,
   hasReport,
   isHuman,
   latestEvent,
@@ -23,46 +24,6 @@ export const gateMarker = "<!-- ha-mcp-report-gate -->";
 // the requirement for that issue.
 export const gateLabel = "missing bug report output";
 export const gateGraceHours = 24;
-// The issue forms' required report field. Anything typed there, "N/A"
-// included, counts as an answer.
-export const reportFieldLabel = "📋 ha_report_issue Report";
-const answerHeadingLine = new RegExp(
-  `^ {0,3}#{2,4} +(?:${escapeRegExp(noReportHeading)}|${escapeRegExp(reportFieldLabel)})[ \\t]*$`,
-  "iu",
-);
-const fenceLine = /^ {0,3}(`{3,}|~{3,})/;
-const headingLine = /^ {0,3}#{1,6}(?: |$)/;
-// Every section under an answer heading, each ending at the next heading
-// outside a code fence: logs and config pasted there carry "# " lines.
-function answerSections(text) {
-  const sections = [];
-  let current = null;
-  let fence = null;
-  for (const line of (text || "").split(/\r?\n/)) {
-    const marker = fenceLine.exec(line)?.[1];
-    if (fence) {
-      if (marker?.[0] === fence[0] && marker.length >= fence.length)
-        fence = null;
-    } else if (marker) {
-      fence = marker;
-    } else if (headingLine.test(line)) {
-      current = answerHeadingLine.test(line) ? [] : null;
-      if (current) sections.push(current);
-      continue;
-    }
-    current?.push(line);
-  }
-  return sections.map((lines) => lines.join("\n"));
-}
-// GitHub's issue forms write "_No response_" for an optional field left
-// empty, and a blank issue's template comments are not an answer.
-const answered = (section) =>
-  section
-    .split(/<!--[\s\S]*?-->/)
-    .join(" ")
-    .replace(/_No response_/g, "")
-    .trim() !== "";
-const hasAnswer = (text) => answerSections(text).some(answered);
 const gateExemptRoles = ["write", "maintain", "admin"];
 
 // The reporter's own words: the issue body and their comments.

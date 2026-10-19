@@ -19,6 +19,8 @@ import {
   render,
   validateResult,
   marker,
+  noReportHeading,
+  reportFieldLabel,
   reportMarker,
   reportVersionLine,
 } from "../../.github/issue-intake/intake.mjs";
@@ -666,7 +668,13 @@ test("a bug report without ha_report_issue output is asked for one, without need
   // Naming the heading in prose is not a report.
   const mention = structuredClone(plain);
   mention.issue.body += ` The ${reportMarker} heading is missing from my paste.`;
-  for (const s of [plain, mention]) {
+  // A form's optional reason field left empty is no reason, and the report
+  // field alone ("N/A", or a partial paste) answers the gate, not the request.
+  const emptyReason = structuredClone(plain);
+  emptyReason.issue.body += `\n\n### ${noReportHeading}\n\n_No response_`;
+  const fieldOnly = structuredClone(plain);
+  fieldOnly.issue.body += `\n\n### ${reportFieldLabel}\n\nN/A`;
+  for (const s of [plain, mention, emptyReason, fieldOnly]) {
     const r = result();
     r.missing_fields = [];
     const api = new FakeGitHub(s);
@@ -690,17 +698,20 @@ test("a label a maintainer adds while the model runs decides the report request"
   assert.doesNotMatch(api.data.comments[0].body, /Diagnostic report/);
 });
 
-test("no report request when one is present or the issue is not a bug", () => {
+test("no report request when one is present, explained away, or the issue is not a bug", () => {
   const withReport = reportSnapshot("[BUG] Dashboard call hangs");
   const replied = snapshot();
   replied.issue.title = "[BUG] Dashboard call hangs";
   replied.comments.push(
     comment(2, "reporter", `## 🚨 ${reportMarker}\n...\n${reportVersionLine} 8.6.0`),
   );
+  const explained = snapshot();
+  explained.issue.title = "[BUG] Dashboard call hangs";
+  explained.issue.body += `\n\n### ${noReportHeading}\n\nFound by reading the code.`;
   const feature = snapshot();
   feature.issue.title = "[FEATURE] Faster dashboards";
   const unclear = snapshot();
-  for (const s of [withReport, replied, feature, unclear])
+  for (const s of [withReport, replied, explained, feature, unclear])
     assert.doesNotMatch(render(result(), prepare(s, bot)), /Diagnostic report/);
 });
 
