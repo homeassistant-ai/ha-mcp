@@ -22,7 +22,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
-from .._version import get_version, is_dev_version, is_embedded, is_running_in_addon
+from .._version import is_embedded, is_running_in_addon
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantCommandError,
@@ -47,6 +47,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .server_version import running_version_report
 from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
@@ -1885,7 +1886,7 @@ class DevTools:
     async def _server_info(self) -> dict[str, Any]:
         from ..utils.data_paths import get_data_dir
 
-        version = await asyncio.to_thread(get_version)
+        versions, warnings = await asyncio.to_thread(running_version_report)
         if is_embedded():
             mode = "embedded"
         elif is_running_in_addon():
@@ -1893,13 +1894,11 @@ class DevTools:
         else:
             mode = "standalone"
         data: dict[str, Any] = {
-            "server_version": version,
-            "is_dev_build": is_dev_version(version),
+            **versions,
             "deployment_mode": mode,
             "python_version": sys.version.split()[0],
             "data_dir": str(get_data_dir()),
         }
-        warnings: list[str] = []
         try:
             ha_config = await self._client.get_config()
             data["ha_version"] = ha_config.get("version")

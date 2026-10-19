@@ -26,7 +26,7 @@ from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.server.dependencies import get_http_headers
 from ha_mcp._vendor.fastmcp.tools import tool
 
-from .._version import get_version, is_embedded, is_running_in_addon
+from .._version import is_embedded, is_running_in_addon
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import Settings, get_global_settings
 from ..errors import create_validation_error
@@ -62,6 +62,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .response_helpers import project_fields
+from .server_version import detect_installed_version, version_mismatch
 from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
@@ -195,23 +196,6 @@ def _detect_installation_method() -> str:
 
     # 6. Default - unknown
     return "unknown"
-
-
-def _detect_installed_version() -> str | None:
-    """Return the ha-mcp version installed ON DISK right now.
-
-    ``__version__`` is frozen when the process first imports ha_mcp, so after
-    an in-place update the running process keeps reporting the old version
-    while the disk already carries the new one. Reporting both (plus
-    ``version_mismatch``) turns a "which server am I talking to" hunt into a
-    single tool call.
-    """
-    try:
-        importlib.invalidate_caches()
-        return get_version()
-    except Exception as e:  # noqa: BLE001
-        logger.info("Installed-version probe failed: %s", e)
-        return None
 
 
 def _instance_identity() -> dict[str, Any]:
@@ -1014,7 +998,7 @@ class BugReportTools:
             else {}
         )
         user_agent = _http_user_agent()
-        installed_version = await asyncio.to_thread(_detect_installed_version)
+        installed_version = await asyncio.to_thread(detect_installed_version)
         # One read_info call, so the version and the auth mode share an answer.
         component_info = await read_info(self._client)
         component_version = await self._detect_component_version(component_info)
@@ -1024,9 +1008,7 @@ class BugReportTools:
         diagnostic_info: dict[str, Any] = {
             "ha_mcp_version": __version__,
             "installed_version": installed_version,
-            "version_mismatch": bool(
-                installed_version and installed_version != __version__
-            ),
+            "version_mismatch": version_mismatch(installed_version),
             "component_version": component_version,
             "tools_entry_status": tools_entry_status,
             "server_entry_status": server_entry_status,
