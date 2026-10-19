@@ -244,9 +244,10 @@ jobs:
           gh release delete "$TAG" --yes 2>/dev/null || true
           gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" 2>/dev/null || true
 
-          # -f: a re-run already holds this tag from the checkout's fetch.
+          # Forced both ways: a re-run holds this tag from the checkout's
+          # fetch, and the remote one stays if its deletion above failed.
           git tag -f "$TAG" HEAD
-          git push --quiet "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
+          git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
           gh release create "$TAG" \
             --verify-tag \
             --title "Dev Build $VERSION" \
