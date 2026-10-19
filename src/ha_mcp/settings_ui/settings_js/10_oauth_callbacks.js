@@ -54,7 +54,7 @@ function renderOAuthCallbacks() {
     (d.available && !d.applies
       ? `<div class="feature-locked-note">${escapeHtml(t('oauth_callbacks.inactive', {}, 'Not in use right now: the list applies only while remote access is on and Authentication mode is the secret webhook URL.'))}</div>`
       : '') +
-    (d.available && d.allow_any
+    (d.available && d.applies && d.allow_any
       ? `<div class="feature-locked-note">${escapeHtml(t('oauth_callbacks.allow_any', {}, 'Turned off: Allow any OAuth callback URL is on in Configure, so any https:// or loopback callback is accepted and this list is not used.'))}</div>`
       : '');
 
