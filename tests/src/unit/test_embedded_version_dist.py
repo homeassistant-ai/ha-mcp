@@ -15,6 +15,8 @@ from __future__ import annotations
 import importlib.metadata
 import os
 import sys
+from collections.abc import Callable, Iterator
+from pathlib import Path
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock
 
@@ -47,10 +49,10 @@ OVERRIDE_VERSION = "9.0.0"
 pin_dists = pytest.mark.parametrize("pin_dist", [DIST_NAME_STABLE, DIST_NAME_DEV])
 
 
-def _metadata(versions):
+def _metadata(versions: dict[str, str]) -> Callable[[str | None], str]:
     """``importlib.metadata.version`` over ``versions``; others are absent."""
 
-    def version(name):
+    def version(name: str | None) -> str:
         if not name:  # as the real one: a name is required
             raise ValueError("A distribution name is required.")
         if name not in versions:
@@ -70,7 +72,7 @@ def _metadata(versions):
         ("https://example/t.tgz", DIST_NAME_STABLE),
     ],
 )
-def test_version_is_read_from_what_the_spec_installs(spec, dist):
+def test_version_is_read_from_what_the_spec_installs(spec: str, dist: str) -> None:
     assert version_dist(spec) == dist
 
 
@@ -80,8 +82,8 @@ def test_version_is_read_from_what_the_spec_installs(spec, dist):
     ids=["override-masked-by-the-pin", "no-preference-reads-stable-first"],
 )
 def test_installed_version_is_not_masked_by_leftover_metadata(
-    monkeypatch, preferred, expected
-):
+    monkeypatch: pytest.MonkeyPatch, preferred: str | None, expected: str
+) -> None:
     monkeypatch.setattr(es.importlib.util, "find_spec", lambda name: object())
     versions = {
         DIST_NAME_STABLE: PIN_VERSION,
@@ -93,7 +95,9 @@ def test_installed_version_is_not_masked_by_leftover_metadata(
 
 
 @pin_dists
-async def test_bring_up_and_worker_versions_agree(tmp_path, monkeypatch, pin_dist):
+async def test_bring_up_and_worker_versions_agree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pin_dist: str
+) -> None:
     mgr, _hass, _entry = _manager(
         tmp_path,
         options={OPT_PIP_SPEC: OTHER_SPEC},
@@ -101,7 +105,7 @@ async def test_bring_up_and_worker_versions_agree(tmp_path, monkeypatch, pin_dis
     )
     versions = {pin_dist: PIN_VERSION, OTHER_DIST: OVERRIDE_VERSION}
 
-    def installed_version(preferred_dist=None):
+    def installed_version(preferred_dist: str | None = None) -> str | None:
         return versions.get(preferred_dist or DIST_NAME_STABLE) or versions.get(
             pin_dist
         )
@@ -123,7 +127,9 @@ async def test_bring_up_and_worker_versions_agree(tmp_path, monkeypatch, pin_dis
     assert es._running_ha_mcp_version(OTHER_DIST) == ready_version
 
 
-async def test_no_false_restart_warning_for_the_override(tmp_path, monkeypatch, caplog):
+async def test_no_false_restart_warning_for_the_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     monkeypatch.setattr(
         es, "_async_paired_server_requirement", AsyncMock(return_value="ha-mcp==8.7.0")
     )
@@ -141,7 +147,7 @@ async def test_no_false_restart_warning_for_the_override(tmp_path, monkeypatch, 
         lambda preferred_dist=None: versions[preferred_dist or DIST_NAME_STABLE],
     )
 
-    def _ready_with_current_worker():
+    def _ready_with_current_worker() -> None:
         mgr._running_version = OVERRIDE_VERSION
 
     monkeypatch.setattr(
@@ -159,7 +165,7 @@ async def test_no_false_restart_warning_for_the_override(tmp_path, monkeypatch, 
 
 
 @pytest.fixture
-def _isolate_env():
+def _isolate_env() -> Iterator[None]:
     # _thread_main stages these into os.environ; restore them afterwards.
     keys = ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
     saved = {k: os.environ.pop(k, None) for k in keys}
@@ -172,7 +178,9 @@ def _isolate_env():
 
 @pin_dists
 @pytest.mark.usefixtures("_isolate_env")
-def test_worker_records_the_override_version(tmp_path, monkeypatch, pin_dist):
+def test_worker_records_the_override_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pin_dist: str
+) -> None:
     mgr, _hass, _entry = _manager(
         tmp_path,
         options={OPT_PIP_SPEC: OTHER_SPEC, OPT_SERVER_URL: "http://ha.local:8123"},
@@ -182,7 +190,7 @@ def test_worker_records_the_override_version(tmp_path, monkeypatch, pin_dist):
         pass
 
     class _FakeMcp:
-        def http_app(self, path, stateless_http):
+        def http_app(self, path: str, stateless_http: bool) -> None:
             raise _StopServe
 
     _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())

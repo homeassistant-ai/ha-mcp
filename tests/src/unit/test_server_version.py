@@ -7,6 +7,7 @@ while the old code kept serving.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -24,7 +25,9 @@ from .test_tools_bug_report import (  # noqa: F401
 from .test_tools_dev import _mock_client
 
 
-async def _info(monkeypatch, *, installed, embedded=False):
+async def _info(
+    monkeypatch: pytest.MonkeyPatch, *, installed: str | None, embedded: bool = False
+) -> dict[str, Any]:
     monkeypatch.setattr(server_version, "__version__", "8.7.0")
     monkeypatch.setattr(server_version, "detect_installed_version", lambda: installed)
     monkeypatch.setattr(server_version, "is_embedded", lambda: embedded)
@@ -35,8 +38,8 @@ async def _info(monkeypatch, *, installed, embedded=False):
     ("embedded", "restart"), [(True, "Home Assistant"), (False, "the server")]
 )
 async def test_info_reports_the_running_version_after_an_unloaded_reinstall(
-    monkeypatch, embedded, restart
-):
+    monkeypatch: pytest.MonkeyPatch, embedded: bool, restart: str
+) -> None:
     result = await _info(monkeypatch, installed="8.7.0.dev3077", embedded=embedded)
 
     data = result["data"]
@@ -49,14 +52,18 @@ async def test_info_reports_the_running_version_after_an_unloaded_reinstall(
     assert f"restart {restart}" in warning
 
 
-async def test_info_quiet_when_the_running_version_is_installed(monkeypatch):
+async def test_info_quiet_when_the_running_version_is_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     result = await _info(monkeypatch, installed="8.7.0")
 
     assert result["data"]["version_mismatch"] is False
     assert "warnings" not in result
 
 
-async def test_info_says_when_it_could_not_compare(monkeypatch):
+async def test_info_says_when_it_could_not_compare(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A failed probe must neither fail ``info`` nor read as "versions match"."""
 
     def _broken() -> str:
@@ -71,7 +78,9 @@ async def test_info_says_when_it_could_not_compare(monkeypatch):
     assert "not compared" in warning
 
 
-def test_probe_still_reads_when_the_cache_refresh_breaks(monkeypatch):
+def test_probe_still_reads_when_the_cache_refresh_breaks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Python 3.14 with an editable homeassistant install (the official
     container image) raises KeyError from invalidate_caches (#1891)."""
 
@@ -84,7 +93,9 @@ def test_probe_still_reads_when_the_cache_refresh_breaks(monkeypatch):
     assert server_version.detect_installed_version() == "8.7.0.dev3077"
 
 
-def test_unreadable_metadata_is_no_installed_version(monkeypatch):
+def test_unreadable_metadata_is_no_installed_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """get_version's "unknown" is a failed read, not a version to restart into."""
     monkeypatch.setattr(server_version, "get_version", lambda: "unknown")
 
@@ -92,9 +103,9 @@ def test_unreadable_metadata_is_no_installed_version(monkeypatch):
 
 
 async def test_report_flags_a_reinstall_the_process_has_not_loaded(
-    monkeypatch,
-    mock_mcp,  # noqa: F811
-):
+    monkeypatch: pytest.MonkeyPatch,
+    mock_mcp: Any,  # noqa: F811
+) -> None:
     monkeypatch.setattr(server_version, "__version__", "8.7.0")
     monkeypatch.setattr(server_version, "get_version", lambda: "8.7.0.dev3077")
     client = MagicMock()
