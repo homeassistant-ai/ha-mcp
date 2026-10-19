@@ -67,8 +67,8 @@ dependencies = [
     # before raising these floors; standalone lock updates can move independently.
     "httpx[socks]>=0.28.1,<0.29",
     "pydantic[email]>=2.13.4,<3",
-    "python-dotenv==1.2.4",
-    "truststore==0.10.4",
+    "python-dotenv>=1.2.4,<2",
+    "truststore>=0.10.4,<0.11",
     # websockets is deliberately ABSENT from this list: ha-mcp ships its own
     # private copy (src/ha_mcp/_vendor/websockets, pinned in the vendor
     # requirements.txt and synced by scripts/vendor_websockets.py) and never
@@ -430,6 +430,14 @@ hamcp-test-env = { path = "tests/test-env", editable = true }
 # Semantic versioning configuration
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
+# The HACS component shares the server's version and pins the server build it
+# ships with, so each release commit stamps all three below as well as
+# project.version (#2427).
+version_variables = [
+    "custom_components/ha_mcp_tools/manifest.json:version",
+    "custom_components/ha_mcp_tools/manifest.json:ha-mcp",
+    "custom_components/ha_mcp_tools/const.py:COMPONENT_VERSION",
+]
 build_command = """
 pip install uv && uv lock
 git add uv.lock

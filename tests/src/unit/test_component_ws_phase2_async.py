@@ -1766,11 +1766,8 @@ class TestServerEntry:
         )
         h = FakeHass(config_entries=[tools, server])
         res = wsapi._do_server_entry(h, {})
-        assert res == {
-            "entry_id": "srv1",
-            "channel": "dev",
-            "pip_spec": "ha-mcp==1.0",
-        }
+        # The retired channel option a 2.x entry may still carry is not reported.
+        assert res == {"entry_id": "srv1", "pip_spec": "ha-mcp==1.0"}
 
     def test_reads_only_marker_key_no_data_leak(self):
         server = FakeConfigEntry(
@@ -1780,10 +1777,9 @@ class TestServerEntry:
             entry_id="srv1",
         )
         res = wsapi._do_server_entry(FakeHass(config_entries=[server]), {})
-        # Only the three declared keys; no entry.data value leaks into the payload.
-        assert set(res) == {"entry_id", "channel", "pip_spec"}
+        # Only the declared keys; no entry.data value leaks into the payload.
+        assert set(res) == {"entry_id", "pip_spec"}
         assert "TOKEN" not in res.values()
-        assert res["channel"] is None
         assert res["pip_spec"] is None
 
     def test_no_server_entry(self):
@@ -1791,7 +1787,7 @@ class TestServerEntry:
             domain="ha_mcp_tools", data={"entry_type": "tools"}, entry_id="tools1"
         )
         res = wsapi._do_server_entry(FakeHass(config_entries=[tools]), {})
-        assert res == {"entry_id": None, "channel": None, "pip_spec": None}
+        assert res == {"entry_id": None, "pip_spec": None}
 
     def test_ignores_other_domain_server_entries(self):
         other = FakeConfigEntry(

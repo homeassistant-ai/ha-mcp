@@ -1,5 +1,6 @@
 """Seeding of the fresh Home Assistant config directory before the container boots."""
 
+import importlib.util
 import json
 import logging
 import os
@@ -547,7 +548,33 @@ def _seed_yaml_package_scene(config_path: Path) -> None:
     )
 
 
-def _collect_manifest_requirements(config_path: Path) -> list[str]:
+# The component's own server-pin rule, loaded by path: importing the package
+# would pull in Home Assistant.
+_PIN_RULE_SPEC = importlib.util.spec_from_file_location(
+    "server_pin",
+    Path(__file__).resolve().parents[3]
+    / "custom_components"
+    / "ha_mcp_tools"
+    / "server_pin.py",
+)
+assert _PIN_RULE_SPEC is not None and _PIN_RULE_SPEC.loader is not None
+_server_pin = importlib.util.module_from_spec(_PIN_RULE_SPEC)
+_PIN_RULE_SPEC.loader.exec_module(_server_pin)
+
+
+def is_server_requirement(requirement: str) -> bool:
+    """True for the ha-mcp server pin the component manifest carries (#2427).
+
+    On the embedded lanes the checkout's own wheel supplies the server, so
+    installing the pinned PyPI release first would put released code under
+    test (pip then treats the same-version wheel as already satisfied).
+    """
+    return _server_pin.server_dist(requirement) is not None
+
+
+def _collect_manifest_requirements(
+    config_path: Path, *, skip_server: bool = False
+) -> list[str]:
     """Aggregate ``requirements`` from every installed custom-component manifest.
 
     Returns a de-duplicated ordered list of pip-installable requirement
@@ -576,6 +603,9 @@ def _collect_manifest_requirements(config_path: Path) -> list[str]:
             )
             continue
         for req in manifest_data.get("requirements", []):
-            if isinstance(req, str) and req not in reqs:
-                reqs.append(req)
+            if not isinstance(req, str) or req in reqs:
+                continue
+            if skip_server and is_server_requirement(req):
+                continue
+            reqs.append(req)
     return reqs
