@@ -68,8 +68,9 @@ run current `ha-mcp` servers.
 ## Setup
 
 1. **Install the component.** Install **HA-MCP Custom Component** from HACS
-   (repository `homeassistant-ai/ha-mcp-integration`, the component's HACS
-   distribution mirror), or, without
+   (custom repository `homeassistant-ai/ha-mcp`; an install from the earlier
+   `homeassistant-ai/ha-mcp-integration` mirror keeps receiving the same
+   releases, so it needs no change), or, without
    HACS, copy the `custom_components/ha_mcp_tools` directory from this repository
    into your Home Assistant `config/custom_components/` directory (so you end up
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.

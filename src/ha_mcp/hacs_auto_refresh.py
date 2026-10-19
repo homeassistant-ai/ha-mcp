@@ -42,8 +42,9 @@ from .utils.data_paths import get_data_dir
 
 logger = logging.getLogger(__name__)
 
-# The repository full_names HACS may track the ha_mcp_tools component under —
-# the dedicated mirror first, the legacy main-repo path second.
+# The repository full_names HACS may track the ha_mcp_tools component under:
+# the main repository (the documented one) and the mirror that earlier installs
+# came from, which keeps receiving the same releases.
 CANDIDATE_REPO_FULL_NAMES = (
     "homeassistant-ai/ha-mcp-integration",
     "homeassistant-ai/ha-mcp",

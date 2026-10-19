@@ -711,7 +711,7 @@ class TestHaListFilesTool:
             error_data = json.loads(str(exc_info.value))
             assert error_data["error"]["code"] == "COMPONENT_NOT_INSTALLED"
             suggestions = " ".join(error_data["error"]["suggestions"])
-            assert "homeassistant-ai/ha-mcp-integration" in suggestions
+            assert 'repository="homeassistant-ai/ha-mcp"' in suggestions
             assert "HA-MCP File & YAML Tools" in suggestions
             assert "ha_install_mcp_tools" not in suggestions
 

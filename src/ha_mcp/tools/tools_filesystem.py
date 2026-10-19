@@ -211,10 +211,10 @@ def _raise_tools_entry_not_set_up() -> NoReturn:
                 + "this ha-mcp server does not need)",
                 "If the HA-MCP integration is not listed there, install it "
                 + 'first: ha_manage_hacs(action="add_repository", '
-                + 'repository="homeassistant-ai/ha-mcp-integration", '
+                + 'repository="homeassistant-ai/ha-mcp", '
                 + 'category="integration"), then ha_manage_hacs('
                 + 'action="download", '
-                + 'repository_id="homeassistant-ai/ha-mcp-integration"), '
+                + 'repository_id="homeassistant-ai/ha-mcp"), '
                 + "then restart Home Assistant (ha_restart)",
                 "Then retry the operation",
             ],
