@@ -1,6 +1,6 @@
 {
   "011ba78e1028": [
-    "custom_components/ha_mcp_tools/oauth_legacy.py::_is_valid_redirect_uri",
+    "custom_components/ha_mcp_tools/oauth_redirect_allowlist.py::_is_valid_redirect_uri",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_is_valid_redirect_uri"
   ],
   "03dd3e0ea116": [
@@ -110,14 +110,6 @@
     "tests/src/unit/test_tools_get_states.py::TestAttributeKeysTypoGuardSingleEntity.ha_get_state",
     "tests/src/unit/test_tools_get_states.py::TestHaGetStateAttributeKeysWarningBulk.get_states_tool",
     "tests/src/unit/test_tools_get_states.py::TestHaGetStateFieldsValidation.ha_get_state"
-  ],
-  "22e2fb5e3c46": [
-    "tests/src/unit/test_coordinator.py::_FakeResp.raise_for_status",
-    "tests/src/unit/test_update.py::_FakeResp.raise_for_status"
-  ],
-  "246e0f0bcdc2": [
-    "tests/src/unit/test_coordinator.py::_FakeResp",
-    "tests/src/unit/test_update.py::_FakeResp"
   ],
   "249c00bc1fd6": [
     "tests/src/unit/test_error_code_consistency_1297.py::_register_registry_tools_and_capture",
@@ -894,10 +886,6 @@
     "custom_components/ha_mcp_tools/oauth_legacy.py::LegacyOAuthProvider.authenticate_client",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::OAuthProvider.authenticate_client"
   ],
-  "d6b8711892b7": [
-    "tests/src/unit/test_coordinator.py::_FakeResp.__init__",
-    "tests/src/unit/test_update.py::_FakeResp.__init__"
-  ],
   "d8d77a6c1ecf": [
     "tests/src/unit/visibility/test_overview_filter.py::_OverviewClient",
     "tests/src/unit/visibility/test_warnings_surface.py::_OverviewClient"
@@ -1016,16 +1004,12 @@
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_autoapprove.py::_json_error"
   ],
   "f001bc10d799": [
-    "custom_components/ha_mcp_tools/oauth_legacy.py::_is_loopback_host",
+    "custom_components/ha_mcp_tools/oauth_redirect_allowlist.py::_is_loopback_host",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_is_loopback_host"
   ],
   "f61432dcad9a": [
     "tests/src/unit/test_ha_dev_manage_server_component_routing.py::UpdateClient.abort_options_flow",
     "tests/src/unit/test_ha_dev_server_entry_component_routing.py::RoutingClient.abort_options_flow"
-  ],
-  "f78cd7058419": [
-    "tests/src/unit/test_hacs_nudge.py::_make_hass",
-    "tests/src/unit/test_oauth_autoapprove.py::_make_hass"
   ],
   "f7fb67a64cd9": [
     "tests/addon/test_webhook_proxy.py::_FakeClientTimeout",
