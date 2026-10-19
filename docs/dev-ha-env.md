@@ -5,9 +5,11 @@ runner and exposes it, plus your branch's ha-mcp server, through temporary
 Cloudflare tunnels. Use it to drive a branch against a real HA without Docker
 and without touching your own instance. It boots HA with the E2E suite's own
 bring-up and config (user `mcp` / `mcp`, token `TEST_TOKEN` in
-`tests/test_constants.py`). It is separate from the test suite: nothing in CI
-runs it, and its runner script (`.github/dev-ha-env/hold.py`) is copied into
-the tracked branch's E2E directory only for the run.
+`tests/test_constants.py`). The E2E seed gives `mcp` a French interface; after
+logging in, change it under your profile (your name at the bottom of the
+sidebar) → **General** → **Language**. It is separate from the test suite:
+nothing in CI runs it, and its runner script (`.github/dev-ha-env/hold.py`) is
+copied into the tracked branch's E2E directory only for the run.
 
 | `platform` | `server` | What runs |
 |---|---|---|
