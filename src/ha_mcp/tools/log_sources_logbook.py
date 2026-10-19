@@ -182,20 +182,30 @@ class LogbookLogSourceMixin:
         return paginated_entries, total_entries, has_more
 
     @staticmethod
-    def _logbook_error_suggestions(error_str: str) -> list[str]:
+    def _logbook_error_suggestions(error: Exception) -> list[str]:
         """Build remediation suggestions for a logbook fetch failure.
 
-        Adds server-crash-specific guidance when the error indicates a 500
-        (heavy query causing HA to fail) on top of the general tips.
+        Keyed off the HTTP status the client attached (when any). A 500 from
+        Core is ambiguous: the REST view raises for a malformed ``entity_id``
+        and an oversized query can also fail, so the guidance names both
+        instead of asserting the query was too large.
         """
-        if "500" in error_str:
+        status = getattr(error, "status_code", None)
+        if status in (400, 422):
             return [
-                "The query returned too many results causing a server error (500).",
-                "This often happens with very active entities or long time periods.",
-                "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
-                "Add a specific 'entity_id' filter to narrow down results",
-                "If debugging an automation, filter by that automation's entity_id",
-                "Use ha_report_issue to check Home Assistant logs for crash details",
+                "Home Assistant rejected the request as invalid",
+                "Check that 'entity_id' uses 'domain.object_id' form, "
+                "e.g. 'light.kitchen'",
+                "Use ha_get_logs(source='error_log') to check Home Assistant logs",
+            ]
+        if status == 500:
+            return [
+                "A 500 can mean invalid input: check that 'entity_id' uses "
+                "'domain.object_id' form (e.g. 'light.kitchen')",
+                "If the filters are valid, the query may be too large: reduce "
+                "'hours_back' or narrow the filters",
+                "Use ha_get_logs(source='error_log') to check Home Assistant "
+                "logs for the traceback",
             ]
         return [
             "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
@@ -408,6 +418,21 @@ class LogbookLogSourceMixin:
         the caller unchanged.
         """
         error_code = response.get("error_code") if isinstance(response, dict) else None
+        if error_code == "invalid_format":
+            # The bridge schema runs Core's own entity-id validator, so a
+            # malformed request comes back as HA's format error instead of a
+            # handler traceback.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(response.get("error") or "Invalid logbook request"),
+                    context={"error_code": error_code},
+                    suggestions=[
+                        "Check that 'entity_id' uses 'domain.object_id' form, "
+                        "e.g. 'light.kitchen'"
+                    ],
+                )
+            )
         if error_code and error_code != "unknown_command":
             raise_tool_error(
                 create_error_response(
@@ -511,13 +536,20 @@ class LogbookLogSourceMixin:
             )
 
             response = self._normalize_logbook_events(response, transport)
+            missing_names = (
+                transport == "websocket"
+                and isinstance(response, list)
+                and any(
+                    isinstance(row, dict) and "state" in row and not row.get("name")
+                    for row in response
+                )
+            )
             transport_warnings = (
                 [
                     "State rows from the WebSocket fallback carry no 'name'; "
-                    "the ha_mcp_tools component or the REST path supplies "
-                    "Core-resolved names."
+                    "the ha_mcp_tools component supplies Core-resolved names."
                 ]
-                if transport == "websocket"
+                if missing_names
                 else []
             )
 
@@ -585,6 +617,6 @@ class LogbookLogSourceMixin:
                 context={
                     "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
                 },
-                suggestions=self._logbook_error_suggestions(str(e)),
+                suggestions=self._logbook_error_suggestions(e),
             )
             raise  # unreachable: exception_to_structured_error always raises

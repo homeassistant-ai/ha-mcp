@@ -32,8 +32,8 @@ COMPACT_LOGBOOK_FIELDS = {
 # Supervisor's own route list (its ``_register_advanced_logs`` call sites),
 # not HA Core's hassio proxy allowlist: the proxy accepts /cli and /observer
 # but Supervisor serves no log route for either, so they always 404. See
-# #1116 (original 7-service scope) and #1260 (cli/observer briefly added off
-# the proxy list).
+# #1116 (original seven-service scope, observer included) and #1260 (cli added
+# off the proxy list).
 SYSTEM_SERVICE_SLUGS = frozenset(
     {"supervisor", "host", "core", "dns", "audio", "multicast"}
 )

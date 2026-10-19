@@ -1274,7 +1274,7 @@ class HomeAssistantClient:
 
         - ``"addons/<slug>"`` for app (add-on) container logs
         - ``"<service>"`` (where service ∈ {supervisor, host, core, dns, audio,
-          cli, multicast, observer}) for system-service logs
+          multicast}) for system-service logs
 
         ``lines`` maps to the endpoint's ``?lines=`` journald-window query
         param; omitted → Supervisor's 100-line default window. Adding
@@ -1418,11 +1418,11 @@ class HomeAssistantClient:
     ) -> str:
         """Fetch HA system-service logs.
 
-        ``service`` must be one of the eight Supervisor-managed services:
-        ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``cli``,
-        ``multicast``, ``observer``. Caller is responsible for validating
-        ``service``; this helper performs no validation, and unsupported paths
-        are rejected by the selected direct-Supervisor or Core-proxy route.
+        ``service`` must be one of the six Supervisor-managed services:
+        ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``multicast``.
+        Caller is responsible for validating ``service``; this helper performs
+        no validation, and unsupported paths are rejected by the selected
+        direct-Supervisor or Core-proxy route.
 
         Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
         inside the app (add-on) container goes directly to Supervisor at
@@ -1432,10 +1432,9 @@ class HomeAssistantClient:
         without Supervisor, pip pointing at a normal HA URL),
         falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.
 
-        All eight service slugs are whitelisted in HA Core's hassio proxy
-        (``homeassistant/components/hassio/http.py`` — ``PATHS_ADMIN``), so
-        an admin LLA is sufficient to reach any of them from outside the
-        app.
+        HA Core's hassio proxy accepts ``/cli`` and ``/observer`` too, but
+        Supervisor serves no log route for either, so those always 404; the
+        six slugs here are the ones with a real ``/<slug>/logs`` route.
         """
         if is_running_in_addon():
             return await self._supervisor_logs_get(service, lines=lines)

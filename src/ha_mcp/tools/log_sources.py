@@ -1,10 +1,11 @@
 """Log sources served by ``ha_get_logs`` from Home Assistant itself.
 
-Logbook, ``system_log``, the raw/structured error log, and the per-integration
-logger levels. Mixed into ``LogTools`` (``tools_logs``) rather than standing
-alone: every fetcher here is a thin shell around one client call, and the
-dispatch, validation and tool registration they share live with the host class.
-The Supervisor-backed sources are in ``log_sources_supervisor``.
+``system_log``, the raw/structured error log, and the per-integration logger
+levels. The logbook lives in ``log_sources_logbook``; the Supervisor-backed
+sources are in ``log_sources_supervisor``. Mixed into ``LogTools``
+(``tools_logs``) rather than standing alone: every fetcher here is a thin shell
+around one client call, and the dispatch, validation and tool registration they
+share live with the host class.
 
 Split out of ``tools_utility`` under `.gemini/styleguide.md` § Tool
 Consolidation and Module Size.

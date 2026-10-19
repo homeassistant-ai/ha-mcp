@@ -1,6 +1,6 @@
 """Supervisor-backed log sources served by ``ha_get_logs``.
 
-App (add-on) container logs and the eight Supervisor-managed system services.
+App (add-on) container logs and the six Supervisor-managed system services.
 Separate from ``log_sources`` because these two reach Home Assistant through
 Supervisor rather than Core, and carry the whole token/role error vocabulary
 that follows from it. Mixed into ``LogTools`` (``tools_logs``).

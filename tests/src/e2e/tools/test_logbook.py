@@ -106,6 +106,29 @@ async def test_logbook_minimum_limit(mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_logbook_invalid_entity_id_is_actionable(mcp_client):
+    """A malformed entity_id must not be reported as an oversized query.
+
+    Component path: Core's entity-id validator rejects it as a format error.
+    REST fallback: Core returns a 500, so the suggestions must name the input
+    shape (and the error-log tool), not claim "too many results".
+    """
+    logger.info("Testing malformed entity_id guidance")
+
+    async with MCPAssertions(mcp_client) as mcp:
+        failure = await mcp.call_tool_failure(
+            "ha_get_logs", {"hours_back": 1, "entity_id": "kitchen_light"}
+        )
+
+    text = json.dumps(failure).lower()
+    assert "too many results" not in text, f"misleading suggestions: {failure!r}"
+    assert "entity" in text, f"no entity guidance: {failure!r}"
+    assert "domain.object_id" in text or "invalid entity id" in text, (
+        f"no actionable entity-id guidance: {failure!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_logbook_pagination_with_offset(mcp_client):
     """Test logbook pagination using offset."""
     logger.info("Testing logbook pagination with offset")

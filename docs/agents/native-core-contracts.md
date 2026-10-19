@@ -9,6 +9,12 @@ tool has more than one native path (Core REST vs WebSocket, Supervisor vs
 Core), a migration keeps every capability the current tool has and adds the
 native ones; it never trades one native capability for another.
 
+A tool not yet migrated under #2632 gets no piecemeal changes to its non-native
+paths, and that includes bug fixes. The whole tool is redone when it is
+migrated, so those changes would be thrown away when it is reworked. Fix a bug
+in such a tool by migrating the affected path to the native approach this
+document describes, not by patching it so it keeps working the old way.
+
 ## Choose the authoritative path
 
 Use native REST/WebSocket APIs first. Preserve native response fields and
