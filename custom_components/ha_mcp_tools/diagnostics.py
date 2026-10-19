@@ -26,7 +26,6 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers import issue_registry as ir
-from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 from .const import (
@@ -43,8 +42,6 @@ from .const import (
     DATA_SECRET_PATH,
     DATA_SERVER_USER_ID,
     DATA_WEBHOOK_ID,
-    DEFAULT_AUTO_UPDATE,
-    DEFAULT_CHANNEL,
     DEFAULT_PIP_SPEC,
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
@@ -53,8 +50,6 @@ from .const import (
     ENTRY_TYPE_TOOLS,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
-    OPT_AUTO_UPDATE,
-    OPT_CHANNEL,
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_OAUTH_CLIENT_ID,
@@ -65,8 +60,8 @@ from .const import (
     OPT_WEBHOOK_AUTH,
     OPT_WEBHOOK_ID_OVERRIDE,
     WEBHOOK_AUTH_NONE,
-    dist_for_channel,
 )
+from .spec_dist import version_dist
 from .websocket_api.registry import _enum_value
 
 if TYPE_CHECKING:
@@ -75,8 +70,8 @@ if TYPE_CHECKING:
 
 _REDACTED = "**REDACTED**"
 
-# Keys whose values must never appear in the file (a plain channel spec
-# excepted, see _is_channel_spec). The startup error detail is free text built
+# Keys whose values must never appear in the file (a plain server pin
+# excepted, see _is_server_pin). The startup error detail is free text built
 # from an exception message (a pip failure echoes the package spec, a
 # connection failure the URL), so these values are also scrubbed from that
 # text.
@@ -143,7 +138,7 @@ def _entry_type(entry: ConfigEntry) -> str:
 async def _async_server_summary(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict[str, Any]:
-    """Version, update, bring-up and webhook facts for the server entry.
+    """Version, bring-up and webhook facts for the server entry.
 
     Option defaults are read exactly as bring-up reads them, so the file shows
     what the server was started with.
@@ -152,27 +147,28 @@ async def _async_server_summary(
     # server-entry install needs the embedded server module.
     from .embedded_server import (
         EmbeddedServerManager,
+        _async_paired_server_requirement,
         _installed_ha_mcp_version,
-        _override_dist_name,
     )
 
     options = entry.options
-    channel = str(options.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
     pip_spec = str(options.get(OPT_PIP_SPEC) or "").strip()
     # Same test as EmbeddedServerManager: the default spec is no override.
     override_set = bool(pip_spec) and pip_spec != DEFAULT_PIP_SPEC
-    override_dist = _override_dist_name(pip_spec) if override_set else None
+    # The spec bring-up installs, resolved as _resolve_pip_spec resolves it.
+    spec = (
+        pip_spec
+        if override_set
+        else await _async_paired_server_requirement(hass) or DEFAULT_PIP_SPEC
+    )
     domain_data = hass.data.get(DOMAIN, {})
     manager = domain_data.get(DATA_MANAGER)
     bringup = domain_data.get(DATA_BRINGUP_TASK)
     return {
-        # Blocking dist-info read, see _server_dist for which goes first.
+        # Blocking dist-info read, the distribution bring-up reads first.
         "installed_server_version": await hass.async_add_executor_job(
-            _installed_ha_mcp_version,
-            _server_dist(channel, override_set, override_dist),
+            _installed_ha_mcp_version, version_dist(spec)
         ),
-        "channel": channel,
-        "auto_update": bool(options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)),
         "package_override_set": override_set,
         "running": isinstance(manager, EmbeddedServerManager) and manager.is_running,
         "bring_up_in_progress": bringup is not None and not bringup.done(),
@@ -183,40 +179,25 @@ async def _async_server_summary(
     }
 
 
-def _server_dist(channel: str, override_set: bool, override_dist: str | None) -> str:
-    """The distribution whose metadata is read first for the installed version.
-
-    Without an override, the channel's own, so metadata a channel switch left
-    behind cannot mask the installed one. An override skips removing the other
-    channel's distribution, so either one's metadata can remain beside the
-    installed one. It is then read as bring-up reads it after installing an
-    override, stable first, unless the override names ``ha-mcp-dev``: a
-    repository tarball URL names no distribution and installs ``ha-mcp`` on
-    every channel.
-    """
-    if not override_set:
-        return dist_for_channel(channel)
-    if override_dist is not None and canonicalize_name(override_dist) == DIST_NAME_DEV:
-        return DIST_NAME_DEV
-    return DIST_NAME_STABLE
-
-
 def _startup_error(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, str] | None:
     """The failed bring-up's repair issue and its scrubbed detail, if any.
 
-    Bring-up tears the manager down on failure, so the repair issue's ``detail``
-    placeholder is the only copy of the error outside the log. HA's own
-    ``issues`` field omits placeholders for non-persistent issues, so it is read
-    here. Bring-up clears both issues at its start, so a hit belongs to the
-    latest attempt. After a restart Core restores a non-persistent issue as
-    inactive and without placeholders; that one is skipped.
+    Bring-up tears the manager down on failure, so the repair issue's
+    ``detail`` is the only copy of the error outside the log: in the issue's
+    ``data`` for a package failure, whose fix flow reads it, and in its
+    translation placeholders for a start failure. HA's own ``issues`` field
+    omits both for non-persistent issues, so they are read here. Bring-up
+    clears both issues at its start, so a hit belongs to the latest attempt.
+    After a restart Core restores a non-persistent issue as inactive and
+    without either; that one is skipped.
     """
     registry = ir.async_get(hass)
     for issue_id in _STARTUP_ISSUE_IDS:
         issue = registry.async_get_issue(DOMAIN, issue_id)
         if issue is None or not issue.active:
             continue
-        detail = (issue.translation_placeholders or {}).get("detail", "")
+        fields = issue.data or issue.translation_placeholders or {}
+        detail = fields.get("detail", "")
         return {"issue_id": issue_id, "detail": _scrub(str(detail), entry)}
     return None
 
@@ -235,21 +216,21 @@ def _scrub(text: str, entry: ConfigEntry) -> str:
     values |= {repr(v)[1:-1] for v in values}
     # Longest first, so a value that contains another is replaced whole.
     for value in sorted(
-        (v for v in values if v and not _is_channel_spec(v)), key=len, reverse=True
+        (v for v in values if v and not _is_server_pin(v)), key=len, reverse=True
     ):
         text = text.replace(value, _REDACTED)
     return _URL_USERINFO.sub(rf"\1{_REDACTED}@", text)
 
 
-def _is_channel_spec(value: str) -> bool:
-    """True for a plain channel spec (``ha-mcp``, ``ha-mcp-dev==1.2``).
+def _is_server_pin(value: str) -> bool:
+    """True for a plain server pin (``ha-mcp``, ``ha-mcp-dev==1.2``).
 
-    ``last_pip_spec`` holds one of these when no override is set. It is not a
-    secret, and keeping it leaves the package name and version in the error.
-    Only the whole value counts: an override that merely starts with one
-    carries whatever was typed after it. The version must be a public one, as
-    PyPI releases are: a local label (``+...``) can carry arbitrary
-    alphanumeric text, such as a token.
+    ``last_pip_spec`` holds one of these when no override is set: the pin
+    from the component's manifest. It is not a secret, and keeping it leaves
+    the package name and version in the error. Only the whole value counts:
+    an override that merely starts with one carries whatever was typed after
+    it. The version must be a public one, as PyPI releases are: a local label
+    (``+...``) can carry arbitrary alphanumeric text, such as a token.
     """
     dist, pinned, version = value.strip().partition("==")
     if dist not in (DIST_NAME_STABLE, DIST_NAME_DEV):

@@ -34,8 +34,6 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_SECRET_PATH,
     DATA_SERVER_USER_ID,
     DATA_WEBHOOK_ID,
-    DEFAULT_AUTO_UPDATE,
-    DEFAULT_CHANNEL,
     DEFAULT_PIP_SPEC,
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
@@ -43,8 +41,6 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     ENTRY_TYPE_SERVER,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
-    OPT_AUTO_UPDATE,
-    OPT_CHANNEL,
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_OAUTH_CLIENT_ID,
@@ -100,7 +96,8 @@ class RecordingIssueRegistry:
         self.issues[issue_id] = SimpleNamespace(
             active=True,
             is_persistent=kwargs.get("is_persistent", False),
-            translation_placeholders=kwargs["translation_placeholders"],
+            data=kwargs.get("data"),
+            translation_placeholders=kwargs.get("translation_placeholders"),
         )
 
     def async_get_issue(self, domain: str, issue_id: str) -> Any:
@@ -163,9 +160,22 @@ def installed_version_calls(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     return calls
 
 
+@pytest.fixture(autouse=True)
+def paired_spec(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+    """The manifest pin bring-up installs without an override; set ``[0]``."""
+    pin: list[str | None] = ["ha-mcp==8.7.0"]
+
+    async def _paired(hass: Any) -> str | None:
+        return pin[0]
+
+    monkeypatch.setattr(eserver, "_async_paired_server_requirement", _paired)
+    return pin
+
+
 def _fail_bring_up(kind: str, detail: str) -> None:
     """File the repair issue exactly as a failed bring-up does."""
-    esetup._create_issue(None, kind, detail)  # type: ignore[arg-type]
+    entry = SimpleNamespace(entry_id="server-entry")
+    esetup._create_issue(None, entry, kind, detail)  # type: ignore[arg-type]
 
 
 async def _diagnostics(hass: FakeHass) -> dict[str, Any]:
@@ -182,11 +192,13 @@ def test_reads_every_issue_bring_up_files() -> None:
 def test_unscrubbed_detail_stays_out_of_cores_issues_field(
     registry: RecordingIssueRegistry,
 ) -> None:
-    """Core's ``issues`` field carries the placeholders of a persistent issue,
-    which would put the unscrubbed detail beside the scrubbed copy."""
-    _fail_bring_up("package", "detail")
+    """Core's ``issues`` field carries the data and placeholders of a
+    persistent issue, which would put the unscrubbed detail beside the
+    scrubbed copy."""
+    for kind in ("package", "start"):
+        _fail_bring_up(kind, "detail")
 
-    assert registry.issues[ISSUE_PACKAGE_FAILED].is_persistent is False
+    assert not any(issue.is_persistent for issue in registry.issues.values())
 
 
 @pytest.mark.asyncio
@@ -266,8 +278,8 @@ async def test_secret_containing_another_is_replaced_whole() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("spec", ["ha-mcp", "ha-mcp-dev==8.7.0"])
-async def test_plain_channel_spec_is_not_scrubbed(spec: str) -> None:
-    """``last_pip_spec`` holds a plain channel spec (bare or ``==``-pinned) when
+async def test_plain_server_pin_is_not_scrubbed(spec: str) -> None:
+    """``last_pip_spec`` holds a plain server pin (bare or ``==``-pinned) when
     no override is set; it is not a secret, so the error keeps it."""
     _fail_bring_up("package", f"Could not install {spec}")
     entry = _server_entry(data={DATA_LAST_PIP_SPEC: spec})
@@ -286,10 +298,10 @@ async def test_plain_channel_spec_is_not_scrubbed(spec: str) -> None:
     ],
     ids=["trailing-option", "local-version-label"],
 )
-async def test_override_that_starts_like_a_channel_spec_is_scrubbed(
+async def test_override_that_starts_like_a_server_pin_is_scrubbed(
     override: str,
 ) -> None:
-    """Only a whole channel spec with a public version is kept: an override
+    """Only a whole server pin with a public version is kept: an override
     that merely starts with one carries whatever was typed after it (a local
     version label takes any text), and the install error quotes the spec
     whole."""
@@ -335,10 +347,10 @@ async def test_override_is_scrubbed_in_its_quoted_form() -> None:
 async def test_issue_restored_after_restart_is_not_reported(
     registry: RecordingIssueRegistry,
 ) -> None:
-    """Core restores a non-persistent issue inactive and without placeholders;
-    it describes no current attempt."""
+    """Core restores a non-persistent issue inactive and without data or
+    placeholders; it describes no current attempt."""
     registry.issues[ISSUE_START_FAILED] = SimpleNamespace(
-        active=False, translation_placeholders=None
+        active=False, data=None, translation_placeholders=None
     )
 
     result = await _diagnostics(FakeHass([_server_entry()]))
@@ -350,8 +362,6 @@ async def test_issue_restored_after_restart_is_not_reported(
 async def test_server_summary_reports_configured_options() -> None:
     """Each configured option reaches the file."""
     options = {
-        OPT_CHANNEL: "dev",
-        OPT_AUTO_UPDATE: False,
         OPT_PIP_SPEC: "ha-mcp==8.6.0",
         OPT_WEBHOOK_AUTH: "ha_auth",
         OPT_ENABLE_WEBHOOK: False,
@@ -362,8 +372,6 @@ async def test_server_summary_reports_configured_options() -> None:
 
     assert result["server"] == {
         "installed_server_version": "8.7.0",
-        "channel": "dev",
-        "auto_update": False,
         "package_override_set": True,
         "running": False,
         "bring_up_in_progress": False,
@@ -375,32 +383,29 @@ async def test_server_summary_reports_configured_options() -> None:
 
 
 @pytest.mark.parametrize(
-    ("channel", "pip_spec", "first"),
+    ("pin", "pip_spec", "first"),
     [
-        ("dev", DEFAULT_PIP_SPEC, DIST_NAME_DEV),
-        ("stable", "HA_MCP_Dev==8.7.0", DIST_NAME_DEV),
-        ("dev", "ha-mcp==8.6.0", DIST_NAME_STABLE),
-        ("dev", "https://host/pkg.tgz", DIST_NAME_STABLE),
+        ("ha-mcp-dev==8.8.0.dev1", DEFAULT_PIP_SPEC, DIST_NAME_DEV),
+        ("ha-mcp-dev==8.8.0.dev1", "", DIST_NAME_DEV),
+        (None, "", DIST_NAME_STABLE),
+        ("ha-mcp==8.7.0", "HA_MCP_Dev==8.7.0", DIST_NAME_DEV),
     ],
-    ids=[
-        "dev-default-spec",
-        "override-names-dev",
-        "override-names-stable",
-        "bare-url-on-dev",
-    ],
+    ids=["default-spec-is-no-override", "pin", "no-pin", "override-wins"],
 )
 @pytest.mark.asyncio
 async def test_installed_version_reads_the_installing_distribution_first(
-    installed_version_calls: list[Any], channel: str, pip_spec: str, first: str
+    installed_version_calls: list[Any],
+    paired_spec: list[str | None],
+    pin: str | None,
+    pip_spec: str,
+    first: str,
 ) -> None:
-    """An override skips removing the other channel's distribution, so its
-    metadata can remain and must not mask the installed version. Read as
-    bring-up reads an override: stable first unless it names ``ha-mcp-dev``
-    (a tarball URL installs ``ha-mcp`` on every channel). The default spec is
-    no override."""
-    options = {OPT_CHANNEL: channel, OPT_PIP_SPEC: pip_spec}
+    """Read as bring-up reads it (#2765): the distribution the effective spec
+    installs goes first, so metadata another one left behind cannot mask it.
+    The default spec is no override; a tarball URL installs ``ha-mcp``."""
+    paired_spec[0] = pin
 
-    await _diagnostics(FakeHass([_server_entry(options)]))
+    await _diagnostics(FakeHass([_server_entry({OPT_PIP_SPEC: pip_spec})]))
 
     assert installed_version_calls == [first]
 
@@ -414,8 +419,6 @@ async def test_server_summary_defaults_for_unset_options(pip_spec: Any) -> None:
 
     server = (await _diagnostics(FakeHass([_server_entry(options)])))["server"]
 
-    assert server["channel"] == DEFAULT_CHANNEL
-    assert server["auto_update"] is DEFAULT_AUTO_UPDATE
     assert server["package_override_set"] is False
     assert server["webhook_enabled"] is True
     assert server["webhook_auth"] == WEBHOOK_AUTH_NONE

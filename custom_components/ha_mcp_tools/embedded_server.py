@@ -90,6 +90,7 @@ from .server_credentials import (
     async_server_access_token,
 )
 from .server_pin import server_dist, server_pins
+from .spec_dist import spec_dist_name, version_dist
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -443,7 +444,7 @@ class EmbeddedServerManager:
         # code silently.
         if self._running_version:
             installed = await self._hass.async_add_executor_job(
-                _installed_ha_mcp_version, self._preferred_dist()
+                _installed_ha_mcp_version, version_dist(self._pip_spec)
             )
             if installed and installed != self._running_version:
                 _LOGGER.warning(
@@ -525,18 +526,11 @@ class EmbeddedServerManager:
         ``ha-mcp-dev``, read from the file name for a bare wheel URL; None for
         another distribution or a bare URL whose name is unknown here.
         """
-        try:
-            name = Requirement(self._pip_spec).name
-        except InvalidRequirement:
-            # A wheel's file name starts with its distribution (PEP 427).
-            filename = urlparse(self._pip_spec.strip()).path.rsplit("/", 1)[-1]
-            if not filename.endswith(".whl"):
-                return None
-            name = filename.split("-", 1)[0]
-        return server_dist(name)
+        name = spec_dist_name(self._pip_spec)
+        return None if name is None else server_dist(name)
 
     def _preferred_dist(self) -> str:
-        """Distribution to read the running version from (target, else stable)."""
+        """The known server distribution the spec installs, else stable."""
         return self._target_dist() or DIST_NAME_STABLE
 
     def _conflicting_dist_name(self) -> str | None:
@@ -754,7 +748,7 @@ class EmbeddedServerManager:
         stored_spec = self._entry.data.get(DATA_LAST_PIP_SPEC)
         target_dist = self._target_dist()
         installed_version = await self._hass.async_add_executor_job(
-            _installed_ha_mcp_version, self._preferred_dist()
+            _installed_ha_mcp_version, version_dist(self._pip_spec)
         )
         target_version = (
             await self._hass.async_add_executor_job(
@@ -824,7 +818,7 @@ class EmbeddedServerManager:
                     )
 
         version: str | None = await self._hass.async_add_executor_job(
-            _installed_ha_mcp_version, self._preferred_dist()
+            _installed_ha_mcp_version, version_dist(self._pip_spec)
         )
         if version is None:
             raise EmbeddedServerError(
@@ -1486,7 +1480,7 @@ class EmbeddedServerManager:
         # distribution this install targets when both distributions have metadata because
         # ha_mcp.__version__ itself checks stable first and stale stable
         # metadata can otherwise make a fresh dev worker look outdated.
-        self._running_version = _running_ha_mcp_version(self._preferred_dist())
+        self._running_version = _running_ha_mcp_version(version_dist(self._pip_spec))
         # The cache in sys.modules now holds this generation — remembered
         # process-wide so the next start can skip the purge when the install
         # has not changed (issue #1904).
@@ -2057,8 +2051,10 @@ def _installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
     Invalidates the import caches first so a just-completed pip install is seen.
     Checks both the stable (``ha-mcp``) and dev (``ha-mcp-dev``) distribution
     names, mirroring ``ha_mcp._version.get_version``. When ``preferred_dist`` is
-    provided, checks that distribution first so stale metadata (a failed or
-    skipped conflicting uninstall) cannot mask the package just installed.
+    provided, checks that distribution first, whatever its name, so stale
+    metadata (a failed or skipped conflicting uninstall, or the manifest pin
+    beside an override under another name) cannot mask the package just
+    installed.
     """
     _safe_invalidate_caches()
     # Metadata alone is not proof: a channel switch's best-effort uninstall
@@ -2067,12 +2063,8 @@ def _installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
     # machinery to actually resolve the package before trusting any version.
     if importlib.util.find_spec("ha_mcp") is None:
         return None
-    dist_names = (
-        (DIST_NAME_DEV, DIST_NAME_STABLE)
-        if preferred_dist == DIST_NAME_DEV
-        else (DIST_NAME_STABLE, DIST_NAME_DEV)
-    )
-    for dist_name in dist_names:
+    dist_names = (preferred_dist, DIST_NAME_STABLE, DIST_NAME_DEV)
+    for dist_name in dict.fromkeys(filter(None, dist_names)):
         with suppress(importlib.metadata.PackageNotFoundError):
             return importlib.metadata.version(dist_name)
     return None
@@ -2107,17 +2099,19 @@ def _installed_dist_version(dist_name: str) -> str | None:
 
 
 def _running_ha_mcp_version(preferred_dist: str) -> str | None:
-    """Return the imported worker version, resolving cross-dist ambiguity."""
+    """Return the imported worker version, resolving cross-dist ambiguity.
+
+    ``ha_mcp.__version__`` reads only ``ha-mcp`` and ``ha-mcp-dev`` metadata,
+    so when it matches one of those beside ``preferred_dist`` it came from
+    leftover metadata, and ``preferred_dist``'s version is the imported one.
+    """
     imported_version = getattr(sys.modules.get("ha_mcp"), "__version__", None)
     preferred_version = _installed_dist_version(preferred_dist)
     if preferred_version is None:
         return imported_version
 
-    conflicting_dist = (
-        DIST_NAME_STABLE if preferred_dist == DIST_NAME_DEV else DIST_NAME_DEV
-    )
-    conflicting_version = _installed_dist_version(conflicting_dist)
-    if imported_version == conflicting_version:
+    other_dists = (d for d in (DIST_NAME_STABLE, DIST_NAME_DEV) if d != preferred_dist)
+    if imported_version in {_installed_dist_version(d) for d in other_dists}:
         return preferred_version
     return imported_version
 
