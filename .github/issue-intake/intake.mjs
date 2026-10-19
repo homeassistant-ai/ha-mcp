@@ -499,9 +499,9 @@ export const hasReport = (text) => {
   const body = text || "";
   return reportHeading.test(body) && reportVersion.test(body);
 };
-// The report gate: an issue must carry an ha_report_issue report, or explain
-// under this heading why it has none. The issue forms render their fallback
-// field under the same heading.
+// The report gate: an issue must carry an ha_report_issue report, explain
+// under this heading why it has none, or fill the forms' report field below.
+// The issue forms render their fallback field under the same heading.
 export const noReportHeading = "Why there is no ha_report_issue report";
 // The issue forms' required report field. Anything typed there, "N/A"
 // included, answers the report gate.
@@ -548,8 +548,15 @@ const answered = (section) =>
 // What the report gate accepts instead of a report.
 export const hasAnswer = (text) => answerSections(text).some(answered);
 // A reason why there is no report. Unlike the gate, the report request is not
-// answered by the forms' report field alone: "N/A" there comes with this
-// reason, and a partial paste still lacks the report.
+// answered by the forms' report field alone: the forms pair an "N/A" there
+// with this reason in the next field, and a partial paste lacks the report.
+// The reporter's own words: the issue body and their comments.
+export const reporterTexts = ({ issue, comments }) => [
+  issue.body || "",
+  ...comments
+    .filter((c) => c.user?.login === issue.user.login)
+    .map((c) => c.body || ""),
+];
 export const hasReason = (text) =>
   answerSections(text, reasonHeadingLine).some(answered);
 const reportTypeLabels = {
@@ -582,15 +589,17 @@ export function reportLabels(snapshot) {
 }
 
 // Whether to ask for an ha_report_issue report: a bug-like issue whose body and
-// human replies carry neither a report nor a reason why there is none. It never
-// affects needs-info.
+// human replies carry no report and whose reporter gave no reason why there is
+// none. As for the gate, only the reporter can give that reason: a maintainer
+// quoting the heading to ask for one gives none. It never affects needs-info.
 export function wantsReport(snapshot, result) {
   const { issue, comments } = snapshot;
   const texts = [
     issue.body || "",
     ...comments.filter((c) => isHuman(c.user)).map((c) => c.body || ""),
   ];
-  if (texts.some((t) => hasReport(t) || hasReason(t))) return false;
+  if (texts.some(hasReport) || reporterTexts(snapshot).some(hasReason))
+    return false;
   const title = issue.title.trim().toUpperCase();
   const labels = issue.labels.map((l) => l.name);
   if (

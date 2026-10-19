@@ -16,6 +16,7 @@ import {
   latestEvent,
   noReportHeading,
   reportHeading,
+  reporterTexts,
   roleFor,
 } from "./intake.mjs";
 
@@ -26,13 +27,6 @@ export const gateLabel = "missing bug report output";
 export const gateGraceHours = 24;
 const gateExemptRoles = ["write", "maintain", "admin"];
 
-// The reporter's own words: the issue body and their comments.
-const reporterTexts = ({ issue, comments }) => [
-  issue.body || "",
-  ...comments
-    .filter((c) => c.user?.login === issue.user.login)
-    .map((c) => c.body || ""),
-];
 // Feature requests and documentation issues are not gated. An issue that
 // becomes one after it was labeled loses the label instead of closing.
 const exemptKind = (issue) =>

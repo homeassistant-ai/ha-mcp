@@ -668,18 +668,24 @@ test("a bug report without ha_report_issue output is asked for one, without need
   // Naming the heading in prose is not a report.
   const mention = structuredClone(plain);
   mention.issue.body += ` The ${reportMarker} heading is missing from my paste.`;
-  // A form's optional reason field left empty is no reason, and the report
-  // field alone ("N/A", or a partial paste) answers the gate, not the request.
+  // A form's optional reason field left empty is no reason, and "N/A" in the
+  // report field alone answers the gate, not the request.
   const emptyReason = structuredClone(plain);
   emptyReason.issue.body += `\n\n### ${noReportHeading}\n\n_No response_`;
   const fieldOnly = structuredClone(plain);
   fieldOnly.issue.body += `\n\n### ${reportFieldLabel}\n\nN/A`;
-  for (const s of [plain, mention, emptyReason, fieldOnly]) {
+  // Only the reporter can give the reason: a maintainer quoting the heading
+  // to ask for one gives none.
+  const quoted = structuredClone(plain);
+  quoted.comments.push(
+    comment(2, "maintainer", `Please add:\n\n### ${noReportHeading}\n\n<your reason>`),
+  );
+  for (const s of [plain, mention, emptyReason, fieldOnly, quoted]) {
     const r = result();
     r.missing_fields = [];
     const api = new FakeGitHub(s);
     await publish(api, prepare(s, bot), r, bot);
-    assert.match(api.data.comments[0].body, /### Diagnostic report/);
+    assert.match(api.data.comments.at(-1).body, /### Diagnostic report/);
     assert.deepEqual(labelWrites(api), []);
   }
 });
@@ -708,10 +714,16 @@ test("no report request when one is present, explained away, or the issue is not
   const explained = snapshot();
   explained.issue.title = "[BUG] Dashboard call hangs";
   explained.issue.body += `\n\n### ${noReportHeading}\n\nFound by reading the code.`;
+  // The usual answer to the request: a reply, its heading typed by hand.
+  const explainedLater = snapshot();
+  explainedLater.issue.title = "[BUG] Dashboard call hangs";
+  explainedLater.comments.push(
+    comment(2, "reporter", `### ${noReportHeading.toLowerCase()}\n\nFound by reading the code.`),
+  );
   const feature = snapshot();
   feature.issue.title = "[FEATURE] Faster dashboards";
   const unclear = snapshot();
-  for (const s of [withReport, replied, explained, feature, unclear])
+  for (const s of [withReport, replied, explained, explainedLater, feature, unclear])
     assert.doesNotMatch(render(result(), prepare(s, bot)), /Diagnostic report/);
 });
 

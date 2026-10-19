@@ -84,6 +84,7 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body = `\`\`\`\`markdown\n${report}\n\`\`\`\``), null],
     [(s) => s.comments.push(comment(1, "reporter", report)), null],
     [(s) => (s.issue.body += `\n\n${reason("N/A")}`), null],
+    [(s) => (s.issue.body += `\n\n${section(noReportHeading.toLowerCase(), "N/A")}`), null],
     [(s) => (s.issue.body += `\n\n${section(reportFieldLabel, "N/A")}`), null],
     // Pasted config opens the reason; its comment line is not a heading.
     [(s) => (s.issue.body += `\n\n${reason("```\n# uvx ha-mcp\n```")}`), null],
