@@ -8,59 +8,19 @@ caps oversized ``system`` message strings.
 """
 
 import json
-from collections.abc import Iterator
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.models import ErrorLogPage
-from ha_mcp.client.rest_client import (
-    HomeAssistantConnectionError,
-)
-from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.log_sources import _SYSTEM_LOG_MESSAGE_CAP
 from ha_mcp.tools.tools_logs import LogTools
 
 from ._logbook_fallback import call_kwargs as _call_kwargs
 from ._logbook_fallback import disable_logbook_websocket
-
-
-@pytest.fixture(autouse=True)
-def _no_real_caps_probe() -> Iterator[None]:
-    """Keep the ``ha_mcp_tools/info`` caps probe from opening a real socket.
-
-    The mock clients here carry a real-looking ``base_url``/``token`` but never
-    patch ``get_websocket_client``, so ``get_component_caps`` (invoked by the
-    logbook path's ``add_timezone_metadata`` for every completed
-    ``ha_get_logs`` call) would otherwise attempt a real WS connection and pay
-    its full failure latency per test. Forcing a
-    ``HomeAssistantConnectionError`` reproduces the "component absent" outcome
-    these tests already assume, without the real connection attempt (mirrors
-    ``test_tools_history.py``'s fixture of the same name).
-    """
-    with patch(
-        "ha_mcp.tools.component_api.get_websocket_client",
-        AsyncMock(side_effect=HomeAssistantConnectionError("no WS in unit tests")),
-    ):
-        yield
-
-
-@pytest.fixture
-def component_caps() -> Iterator[ComponentCaps]:
-    """Pretend the component advertises ``logbook_events``."""
-    caps = ComponentCaps(
-        schema_version=1,
-        component_version="2.2.3",
-        capabilities=frozenset({"logbook_events"}),
-        limits={},
-    )
-    with patch(
-        "ha_mcp.tools.log_sources_logbook.get_component_caps",
-        AsyncMock(return_value=caps),
-    ):
-        yield caps
+from .test_tools_history import _no_real_caps_probe  # noqa: F401
 
 
 class TestLogbookOrder:

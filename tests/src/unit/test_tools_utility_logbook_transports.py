@@ -9,7 +9,6 @@ module-size ratchet.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -22,46 +21,10 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.tools_logs import LogTools
 
 from ._logbook_fallback import call_kwargs as _call_kwargs
-
-
-@pytest.fixture(autouse=True)
-def _no_real_caps_probe() -> Iterator[None]:
-    """Keep the ``ha_mcp_tools/info`` caps probe from opening a real socket.
-
-    The mock clients here carry a real-looking ``base_url``/``token`` but never
-    patch ``get_websocket_client``, so ``get_component_caps`` (invoked by the
-    logbook path's ``add_timezone_metadata`` for every completed
-    ``ha_get_logs`` call) would otherwise attempt a real WS connection and pay
-    its full failure latency per test. Forcing a
-    ``HomeAssistantConnectionError`` reproduces the "component absent" outcome
-    these tests already assume, without the real connection attempt (mirrors
-    ``test_tools_history.py``'s fixture of the same name).
-    """
-    with patch(
-        "ha_mcp.tools.component_api.get_websocket_client",
-        AsyncMock(side_effect=HomeAssistantConnectionError("no WS in unit tests")),
-    ):
-        yield
-
-
-@pytest.fixture
-def component_caps() -> Iterator[ComponentCaps]:
-    """Pretend the component advertises ``logbook_events``."""
-    caps = ComponentCaps(
-        schema_version=1,
-        component_version="2.2.3",
-        capabilities=frozenset({"logbook_events"}),
-        limits={},
-    )
-    with patch(
-        "ha_mcp.tools.log_sources_logbook.get_component_caps",
-        AsyncMock(return_value=caps),
-    ):
-        yield caps
+from .test_tools_history import _no_real_caps_probe  # noqa: F401
 
 
 def _real_timeout_shape() -> HomeAssistantConnectionError:
@@ -144,7 +107,9 @@ class TestLogbookTransports:
         ]
 
     @pytest.mark.asyncio
-    async def test_component_rows_pass_through_untouched(self, component_caps) -> None:
+    async def test_component_rows_pass_through_untouched(
+        self, logbook_component_caps
+    ) -> None:
         rows = self._component_rows()
         client = self._client(ws_payload={"success": True, "result": rows})
         tools = LogTools(client)
@@ -159,7 +124,9 @@ class TestLogbookTransports:
         assert by_entity["light.kitchen"]["when"] == "2026-06-16T00:00:00+00:00"
 
     @pytest.mark.asyncio
-    async def test_component_receives_the_native_filters(self, component_caps) -> None:
+    async def test_component_receives_the_native_filters(
+        self, logbook_component_caps
+    ) -> None:
         client = self._client(ws_payload={"success": True, "result": []})
         tools = LogTools(client)
         await tools.get_logs(
@@ -176,7 +143,7 @@ class TestLogbookTransports:
 
     @pytest.mark.asyncio
     async def test_component_unknown_command_falls_back_to_rest(
-        self, component_caps
+        self, logbook_component_caps
     ) -> None:
         client = self._client(
             ws_payload={
@@ -194,7 +161,9 @@ class TestLogbookTransports:
         client.get_logbook.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_component_rejection_is_authoritative(self, component_caps) -> None:
+    async def test_component_rejection_is_authoritative(
+        self, logbook_component_caps
+    ) -> None:
         client = self._client(
             ws_payload={
                 "success": False,
@@ -211,7 +180,7 @@ class TestLogbookTransports:
 
     @pytest.mark.asyncio
     async def test_component_invalid_format_maps_to_validation_error(
-        self, component_caps
+        self, logbook_component_caps
     ) -> None:
         client = self._client(
             ws_payload={
@@ -232,7 +201,7 @@ class TestLogbookTransports:
 
     @pytest.mark.asyncio
     async def test_timeout_surfaces_without_a_rest_fallback(
-        self, component_caps
+        self, logbook_component_caps
     ) -> None:
         client = self._client(ws_error=_real_timeout_shape())
         tools = LogTools(client)
@@ -244,7 +213,7 @@ class TestLogbookTransports:
 
     @pytest.mark.asyncio
     async def test_direct_timeout_surfaces_without_a_rest_fallback(
-        self, component_caps
+        self, logbook_component_caps
     ) -> None:
         # Defensive branch: a caller/mock raising the timeout untranslated.
         client = self._client(

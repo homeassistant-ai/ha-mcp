@@ -12,7 +12,7 @@ import shutil
 import sys
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -66,6 +66,25 @@ for _ha_logbook_stub in (
     "homeassistant.util.dt",
 ):
     sys.modules.setdefault(_ha_logbook_stub, MagicMock())
+
+
+@pytest.fixture
+def logbook_component_caps():
+    """Pretend the component advertises ``logbook_events`` (transport tests)."""
+    from ha_mcp.tools.component_api import ComponentCaps
+
+    caps = ComponentCaps(
+        schema_version=1,
+        component_version="2.2.3",
+        capabilities=frozenset({"logbook_events"}),
+        limits={},
+    )
+    with patch(
+        "ha_mcp.tools.log_sources_logbook.get_component_caps",
+        AsyncMock(return_value=caps),
+    ):
+        yield caps
+
 
 _ISOLATION_VARS = ("HA_MCP_CONFIG_DIR", "HA_MCP_DISABLE_SETTINGS_UI")
 _SESSION_DATA_DIR = ""

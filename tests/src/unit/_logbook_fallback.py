@@ -1,4 +1,4 @@
-"""Shared helpers that pin the logbook transport paths in unit tests."""
+"""Shared helpers and fixtures for the logbook transport unit tests."""
 
 from typing import Any
 from unittest.mock import AsyncMock
