@@ -8,6 +8,7 @@ caps oversized ``system`` message strings.
 """
 
 import json
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -27,7 +28,7 @@ from ._logbook_fallback import disable_logbook_websocket
 
 
 @pytest.fixture(autouse=True)
-def _no_real_caps_probe():
+def _no_real_caps_probe() -> Iterator[None]:
     """Keep the ``ha_mcp_tools/info`` caps probe from opening a real socket.
 
     The mock clients here carry a real-looking ``base_url``/``token`` but never
@@ -47,7 +48,7 @@ def _no_real_caps_probe():
 
 
 @pytest.fixture
-def component_caps():
+def component_caps() -> Iterator[ComponentCaps]:
     """Pretend the component advertises ``logbook_events``."""
     caps = ComponentCaps(
         schema_version=1,

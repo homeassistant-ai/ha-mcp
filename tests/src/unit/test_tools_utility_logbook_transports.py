@@ -9,6 +9,7 @@ module-size ratchet.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -28,7 +29,7 @@ from ._logbook_fallback import call_kwargs as _call_kwargs
 
 
 @pytest.fixture(autouse=True)
-def _no_real_caps_probe():
+def _no_real_caps_probe() -> Iterator[None]:
     """Keep the ``ha_mcp_tools/info`` caps probe from opening a real socket.
 
     The mock clients here carry a real-looking ``base_url``/``token`` but never
@@ -48,7 +49,7 @@ def _no_real_caps_probe():
 
 
 @pytest.fixture
-def component_caps():
+def component_caps() -> Iterator[ComponentCaps]:
     """Pretend the component advertises ``logbook_events``."""
     caps = ComponentCaps(
         schema_version=1,

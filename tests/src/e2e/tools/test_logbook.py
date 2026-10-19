@@ -7,6 +7,7 @@ import logging
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.error_log_parsing import _DEFAULT_TOP_N
 
@@ -106,7 +107,7 @@ async def test_logbook_minimum_limit(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_logbook_invalid_entity_id_is_actionable(mcp_client):
+async def test_logbook_invalid_entity_id_is_actionable(mcp_client: Client):
     """A malformed entity_id must not be reported as an oversized query.
 
     Component path: Core's entity-id validator rejects it as a format error.
