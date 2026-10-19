@@ -101,10 +101,6 @@
     "tests/src/unit/test_list_services_fields_projection.py::TestHaListServicesFieldsProjection.list_services_tool",
     "tests/src/unit/test_list_services_fields_projection.py::TestHaListServicesServiceFieldsProjection.list_services_tool"
   ],
-  "20a20a98df7b": [
-    "tests/src/unit/test_tools_history.py::_no_real_caps_probe",
-    "tests/src/unit/test_tools_utility_log_order.py::_no_real_caps_probe"
-  ],
   "20c68d8161e7": [
     "tests/src/unit/test_tools_get_states.py::TestAttributeKeysTypoGuardBulk.get_states_tool",
     "tests/src/unit/test_tools_get_states.py::TestAttributeKeysTypoGuardSingleEntity.ha_get_state",
@@ -521,8 +517,7 @@
   ],
   "858e86732903": [
     "tests/src/unit/test_rest_client_get_error_log.py::client",
-    "tests/src/unit/test_rest_client_retry.py::client",
-    "tests/src/unit/test_tools_utility_supervisor_logs.py::mock_client"
+    "tests/src/unit/test_rest_client_retry.py::client"
   ],
   "860ff0b9cd5e": [
     "custom_components/ha_mcp_tools/oauth_legacy.py::_oauth_route_fingerprint",
