@@ -552,16 +552,31 @@ def serve(
             await stop.wait()
 
     Alternatively, await it and call :meth:`~Server.serve_forever` to serve
-    requests, then cancel it or call :meth:`~Server.close` to stop the server::
+    requests, then cancel it to stop the server::
 
         server = await serve(handler, host, port)
         await server.serve_forever()
 
-    The following pattern is functional but redundant: by the time the context
+    Combining these two patterns works, but is unnecessary: when the context
     manager exits, :meth:`~Server.serve_forever` has already closed the server::
 
-        async with serve(handler, host, port) as server:
-            await server.serve_forever()
+        async with serve(handler, host, port) as server:  # don't do this!
+            await server.serve_forever()                  # it's redundant
+
+    You can also stop the server gracefully by calling its
+    :meth:`~Server.close` method::
+
+        server = await serve(handler, host, port)
+        try:
+            await stop.wait()
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    By default, closing the server closes connections with code 1001 (going
+    away). You can keep connections alive and wait for clients to disconnect::
+
+        server.close(close_connections=False)
 
     Args:
         handler: Connection handler. It receives the WebSocket connection,
@@ -668,8 +683,7 @@ def serve(
         if kwargs.pop("unix", False):
             return await loop.create_unix_server(protocol_factory, **kwargs)
         else:
-            # mypy cannot tell that kwargs must provide sock when port is None.
-            return await loop.create_server(protocol_factory, host, port, **kwargs)  # type: ignore[arg-type]
+            return await loop.create_server(protocol_factory, host, port, **kwargs)
 
     def protocol_factory() -> ServerConnection:
         """
@@ -744,12 +758,10 @@ def serve(
             server.all_connections.add(connection)
             connection.start_keepalive()
             try:
-                await handler(connection)
+                async with connection:
+                    await handler(connection)
             except Exception:
                 connection.logger.error("connection handler failed", exc_info=True)
-                await connection.close(CloseCode.INTERNAL_ERROR)
-            else:
-                await connection.close()
             finally:
                 server.all_connections.discard(connection)
 

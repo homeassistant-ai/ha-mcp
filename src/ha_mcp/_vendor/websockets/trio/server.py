@@ -439,7 +439,7 @@ async def serve(
             async with server:
                 await stop.wait()
 
-    Alternatively, to stop the server gracefully, call its
+    Alternatively, you can stop the server gracefully by calling its
     :meth:`~Server.aclose` method::
 
         with trio.open_nursery() as nursery:
@@ -448,6 +448,11 @@ async def serve(
                 await stop.wait()
             finally:
                 await server.aclose()
+
+    By default, closing the server closes connections with code 1001 (going
+    away). You can keep connections alive and wait for clients to disconnect::
+
+        await server.aclose(close_connections=False)
 
     Args:
         handler: Connection handler. It receives the WebSocket connection,
@@ -639,12 +644,10 @@ async def serve(
                 server.all_connections.add(connection)
                 connection.start_keepalive()
                 try:
-                    await handler(connection)
+                    async with connection:
+                        await handler(connection)
                 except Exception:
                     connection.logger.error("connection handler failed", exc_info=True)
-                    await connection.aclose(CloseCode.INTERNAL_ERROR)
-                else:
-                    await connection.aclose()
                 finally:
                     server.all_connections.discard(connection)
 
