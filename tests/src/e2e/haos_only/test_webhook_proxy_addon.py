@@ -215,7 +215,7 @@ async def webhook_proxy_started(mcp_client: Any) -> Any:
         f"Webhook-proxy did not log ``/api/webhook/<id>`` within "
         f"{_STATE_POLL_TIMEOUT}s of start. Either start.py failed to "
         f"reach _register_webhook or it crashed before emitting the "
-        f"line. Check /tmp/haos-diagnostics/webhook-proxy-addon.log on "
+        f"line. Check /tmp/haos-diagnostics/<worker>/webhook-proxy-addon.log on "
         f"the runner."
     )
     try:
