@@ -19,8 +19,6 @@ import {
   render,
   validateResult,
   marker,
-  noReportHeading,
-  reportFieldLabel,
   reportMarker,
   reportVersionLine,
 } from "../../.github/issue-intake/intake.mjs";
@@ -609,11 +607,6 @@ test("real close workflow ages needs-info regardless of who applied it", async (
   }
 });
 
-function bugSnapshot() {
-  const s = snapshot();
-  s.issue.title = "[BUG] Dashboard call hangs";
-  return s;
-}
 function reportSnapshot(title) {
   const s = snapshot();
   s.issue.title = title;
@@ -642,8 +635,10 @@ test("a filed ha_report_issue report gets the type label its form would have add
 });
 
 test("type labels are not added without the report heading, or back after a human removed them", async () => {
-  const plain = bugSnapshot();
-  const mention = bugSnapshot();
+  const plain = snapshot();
+  plain.issue.title = "[BUG] Dashboard call hangs";
+  const mention = snapshot();
+  mention.issue.title = "[BUG] Dashboard call hangs";
   mention.issue.body += ` The ${reportMarker} heading is missing from my paste.`;
   const removed = reportSnapshot("[BUG] Dashboard call hangs");
   removed.events.push({
@@ -667,31 +662,17 @@ test("type labels are not added without the report heading, or back after a huma
 });
 
 test("a bug report without ha_report_issue output is asked for one, without needs-info", async () => {
-  const plain = bugSnapshot();
+  const plain = snapshot();
+  plain.issue.title = "[BUG] Dashboard call hangs";
   // Naming the heading in prose is not a report.
   const mention = structuredClone(plain);
   mention.issue.body += ` The ${reportMarker} heading is missing from my paste.`;
-  // A form's optional reason field left empty is no reason, and "N/A" in the
-  // report field alone answers the gate, not the request.
-  const emptyReason = structuredClone(plain);
-  emptyReason.issue.body += `\n\n### ${noReportHeading}\n\n_No response_`;
-  const fieldOnly = structuredClone(plain);
-  fieldOnly.issue.body += `\n\n### ${reportFieldLabel}\n\nN/A`;
-  // Only the reporter can give the reason: a maintainer quoting the heading
-  // to ask for one gives none.
-  const quoted = structuredClone(plain);
-  quoted.comments.push(
-    comment(2, "maintainer", `Please add:\n\n### ${noReportHeading}\n\n<your reason>`),
-  );
-  // A reason heading inside a comment is not on the page.
-  const commented = structuredClone(plain);
-  commented.issue.body += `\n\n<!--\n### ${noReportHeading}\n\nFound by reading the code.\n-->`;
-  for (const s of [plain, mention, emptyReason, fieldOnly, quoted, commented]) {
+  for (const s of [plain, mention]) {
     const r = result();
     r.missing_fields = [];
     const api = new FakeGitHub(s);
     await publish(api, prepare(s, bot), r, bot);
-    assert.match(api.data.comments.at(-1).body, /### Diagnostic report/);
+    assert.match(api.data.comments[0].body, /### Diagnostic report/);
     assert.deepEqual(labelWrites(api), []);
   }
 });
@@ -699,7 +680,8 @@ test("a bug report without ha_report_issue output is asked for one, without need
 test("a label a maintainer adds while the model runs decides the report request", async () => {
   // Label changes do not alter the fingerprint, so a comment rendered from
   // the pre-inference snapshot would still ask a feature request for a report.
-  const s = bugSnapshot();
+  const s = snapshot();
+  s.issue.title = "[BUG] Dashboard call hangs";
   const prepared = prepare(s, bot);
   const r = result();
   r.missing_fields = [];
@@ -709,40 +691,18 @@ test("a label a maintainer adds while the model runs decides the report request"
   assert.doesNotMatch(api.data.comments[0].body, /Diagnostic report/);
 });
 
-test("no report request when one is present, explained away, or the issue is not a bug", () => {
+test("no report request when one is present or the issue is not a bug", () => {
   const withReport = reportSnapshot("[BUG] Dashboard call hangs");
-  const replied = bugSnapshot();
+  const replied = snapshot();
+  replied.issue.title = "[BUG] Dashboard call hangs";
   replied.comments.push(
     comment(2, "reporter", `## 🚨 ${reportMarker}\n...\n${reportVersionLine} 8.6.0`),
   );
-  const explained = bugSnapshot();
-  explained.issue.body += `\n\n### ${noReportHeading}\n\nFound by reading the code.`;
-  // The usual answer to the request: a reply, its heading typed by hand.
-  const explainedLater = bugSnapshot();
-  explainedLater.comments.push(
-    comment(2, "reporter", `### ${noReportHeading.toLowerCase()}\n\nFound by reading the code.`),
-  );
-  const explainedAtx = bugSnapshot();
-  explainedAtx.issue.body += `\n\n### ${noReportHeading} ###\n\nFound by reading the code.`;
   const feature = snapshot();
   feature.issue.title = "[FEATURE] Faster dashboards";
   const unclear = snapshot();
-  for (const s of [withReport, replied, explained, explainedLater, explainedAtx, feature, unclear])
+  for (const s of [withReport, replied, feature, unclear])
     assert.doesNotMatch(render(result(), prepare(s, bot)), /Diagnostic report/);
-});
-
-test("without an issue user, the body still gives the reason and a reply does not", () => {
-  const explained = bugSnapshot();
-  explained.issue.user = null;
-  explained.issue.body += `\n\n### ${noReportHeading}\n\nFound by reading the code.`;
-  // Without a reporter login, no reply can be told to be the reporter's.
-  const replied = bugSnapshot();
-  replied.issue.user = null;
-  replied.comments.push(
-    comment(2, "nobody", `### ${noReportHeading}\n\nFound by reading the code.`, { user: null }),
-  );
-  assert.doesNotMatch(render(result(), prepare(explained, bot)), /Diagnostic report/);
-  assert.match(render(result(), prepare(replied, bot)), /Diagnostic report/);
 });
 
 test("an untitled report with a stated error is asked for the tool output", () => {

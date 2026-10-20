@@ -18,10 +18,10 @@ import {
   gateLabel,
   gateMarker,
   main,
+  reportFieldLabel,
 } from "../../.github/issue-intake/gate.mjs";
 import {
   noReportHeading,
-  reportFieldLabel,
   reportMarker,
   reportVersionLine,
 } from "../../.github/issue-intake/intake.mjs";

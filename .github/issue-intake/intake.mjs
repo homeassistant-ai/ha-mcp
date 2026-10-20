@@ -502,79 +502,10 @@ export const hasReport = (text) => {
   const body = text || "";
   return reportHeading.test(body) && reportVersion.test(body);
 };
-// The report gate: an issue must carry an ha_report_issue report, explain
-// under this heading why it has none, or fill the forms' report field below.
-// The issue forms render their fallback field under the same heading.
+// The report gate: an issue must carry an ha_report_issue report, or explain
+// under this heading why it has none. The issue forms render their fallback
+// field under the same heading.
 export const noReportHeading = "Why there is no ha_report_issue report";
-// The issue forms' required report field. Anything typed there, "N/A"
-// included, answers the report gate.
-export const reportFieldLabel = "📋 ha_report_issue Report";
-// ATX headings allow tabs after the opening hashes and a closing run of hashes.
-const answerHeading = (...labels) =>
-  new RegExp(
-    `^ {0,3}#{2,4}[ \\t]+(?:${labels.map(escapeRegExp).join("|")})(?:[ \\t]+#+)?[ \\t]*$`,
-    "iu",
-  );
-const answerHeadingLine = answerHeading(noReportHeading, reportFieldLabel);
-const reasonHeadingLine = answerHeading(noReportHeading);
-// A backtick fence's info string has no backtick, so ```x``` is inline code.
-const fenceLine = /^ {0,3}(`{3,}(?!.*`)|~{3,})/;
-// A closing fence has nothing but whitespace after it, so ```yaml stays inside.
-const closingFenceLine = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
-const headingLine = /^ {0,3}#{1,6}(?:[ \t]|$)/;
-// A comment opening a line hides the lines up to the one holding "-->", as an
-// HTML block does; one opened after text on its line is text and hides no
-// heading.
-const commentLine = /^ {0,3}<!--/;
-// Every section under an answer heading, each ending at the next heading
-// outside a code fence or comment: pasted logs and config carry "# " lines.
-export function answerSections(text, answerLine = answerHeadingLine) {
-  const sections = [];
-  let current = null;
-  let fence = null;
-  let comment = false;
-  for (const line of (text || "").split(/\r?\n/)) {
-    const marker = fenceLine.exec(line)?.[1];
-    if (fence) {
-      const close = closingFenceLine.exec(line)?.[1];
-      if (close?.[0] === fence[0] && close.length >= fence.length)
-        fence = null;
-    } else if (comment || commentLine.test(line)) {
-      comment = !line.includes("-->");
-    } else if (marker) {
-      fence = marker;
-    } else if (headingLine.test(line)) {
-      current = answerLine.test(line) ? [] : null;
-      if (current) sections.push(current);
-      continue;
-    }
-    current?.push(line);
-  }
-  return sections.map((lines) => lines.join("\n"));
-}
-// GitHub's issue forms write "_No response_" for an optional field left
-// empty, and a blank issue's template comments are not an answer.
-const answered = (section) =>
-  section
-    .split(/<!--[\s\S]*?-->/)
-    .join(" ")
-    .replace(/_No response_/g, "")
-    .trim() !== "";
-// What the report gate accepts instead of a report.
-export const hasAnswer = (text) => answerSections(text).some(answered);
-// The reporter's own words: the issue body and their comments. Without an
-// issue user there is no login, so no reply can be told to be theirs.
-export const reporterTexts = ({ issue, comments }) => [
-  issue.body || "",
-  ...comments
-    .filter((c) => issue.user && c.user?.login === issue.user.login)
-    .map((c) => c.body || ""),
-];
-// A reason why there is no report. Unlike the gate, the report request is not
-// answered by the forms' report field alone: the forms pair an "N/A" there
-// with this reason in the next field, and a partial paste lacks the report.
-export const reasonSections = (text) => answerSections(text, reasonHeadingLine);
-export const hasReason = (text) => reasonSections(text).some(answered);
 const reportTypeLabels = {
   "[BUG]": ["bug"],
   "[AGENT]": ["agent-behavior"],
@@ -605,17 +536,14 @@ export function reportLabels(snapshot) {
 }
 
 // Whether to ask for an ha_report_issue report: a bug-like issue whose body and
-// human replies carry no report and whose reporter gave no reason why there is
-// none. As for the gate, only the reporter can give that reason: a maintainer
-// quoting the heading to ask for one gives none. It never affects needs-info.
+// human replies carry none. It never affects needs-info.
 export function wantsReport(snapshot, result) {
   const { issue, comments } = snapshot;
   const texts = [
     issue.body || "",
     ...comments.filter((c) => isHuman(c.user)).map((c) => c.body || ""),
   ];
-  if (texts.some(hasReport) || reporterTexts(snapshot).some(hasReason))
-    return false;
+  if (texts.some(hasReport)) return false;
   const title = issue.title.trim().toUpperCase();
   const labels = issue.labels.map((l) => l.name);
   if (

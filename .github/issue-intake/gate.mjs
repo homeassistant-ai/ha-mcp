@@ -8,18 +8,14 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   GitHub,
-  answerSections,
   authorLogin,
   collect,
-  hasAnswer,
+  escapeRegExp,
   hasReport,
   isHuman,
   latestEvent,
   noReportHeading,
-  reasonSections,
-  reportFieldLabel,
   reportHeading,
-  reporterTexts,
   roleFor,
 } from "./intake.mjs";
 
@@ -28,8 +24,72 @@ export const gateMarker = "<!-- ha-mcp-report-gate -->";
 // the requirement for that issue.
 export const gateLabel = "missing bug report output";
 export const gateGraceHours = 24;
+// The issue forms' required report field. Anything typed there, "N/A"
+// included, counts as an answer.
+export const reportFieldLabel = "📋 ha_report_issue Report";
+// ATX headings allow tabs after the opening hashes and a closing run of hashes.
+const answerHeading = (...labels) =>
+  new RegExp(
+    `^ {0,3}#{2,4}[ \\t]+(?:${labels.map(escapeRegExp).join("|")})(?:[ \\t]+#+)?[ \\t]*$`,
+    "iu",
+  );
+const answerHeadingLine = answerHeading(noReportHeading, reportFieldLabel);
+const reasonHeadingLine = answerHeading(noReportHeading);
+// A backtick fence's info string has no backtick, so ```x``` is inline code.
+const fenceLine = /^ {0,3}(`{3,}(?!.*`)|~{3,})/;
+// A closing fence has nothing but whitespace after it, so ```yaml stays inside.
+const closingFenceLine = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+const headingLine = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+// A comment opening a line hides the lines up to the one holding "-->", as an
+// HTML block does; one opened after text on its line is text and hides no
+// heading.
+const commentLine = /^ {0,3}<!--/;
+// Every section under an answer heading, each ending at the next heading
+// outside a code fence or comment: pasted logs and config carry "# " lines.
+function answerSections(text, answerLine = answerHeadingLine) {
+  const sections = [];
+  let current = null;
+  let fence = null;
+  let comment = false;
+  for (const line of (text || "").split(/\r?\n/)) {
+    const marker = fenceLine.exec(line)?.[1];
+    if (fence) {
+      const close = closingFenceLine.exec(line)?.[1];
+      if (close?.[0] === fence[0] && close.length >= fence.length)
+        fence = null;
+    } else if (comment || commentLine.test(line)) {
+      comment = !line.includes("-->");
+    } else if (marker) {
+      fence = marker;
+    } else if (headingLine.test(line)) {
+      current = answerLine.test(line) ? [] : null;
+      if (current) sections.push(current);
+      continue;
+    }
+    current?.push(line);
+  }
+  return sections.map((lines) => lines.join("\n"));
+}
+const reasonSections = (text) => answerSections(text, reasonHeadingLine);
+// GitHub's issue forms write "_No response_" for an optional field left
+// empty, and a blank issue's template comments are not an answer.
+const answered = (section) =>
+  section
+    .split(/<!--[\s\S]*?-->/)
+    .join(" ")
+    .replace(/_No response_/g, "")
+    .trim() !== "";
+const hasAnswer = (text) => answerSections(text).some(answered);
 const gateExemptRoles = ["write", "maintain", "admin"];
 
+// The reporter's own words: the issue body and their comments. Without an
+// issue user there is no login, so no reply can be told to be theirs.
+const reporterTexts = ({ issue, comments }) => [
+  issue.body || "",
+  ...comments
+    .filter((c) => issue.user && c.user?.login === issue.user.login)
+    .map((c) => c.body || ""),
+];
 // Feature requests and documentation issues are not gated. An issue that
 // becomes one after it was labeled loses the label instead of closing.
 const exemptKind = (issue) =>
