@@ -86,8 +86,15 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n${reason("N/A")}`), null],
     [(s) => (s.issue.body += `\n\n${section(noReportHeading.toLowerCase(), "N/A")}`), null],
     [(s) => (s.issue.body += `\n\n${section(reportFieldLabel, "N/A")}`), null],
+    // Other ATX forms GitHub renders as the same heading.
+    [(s) => (s.issue.body += `\n\n### ${noReportHeading} ###\n\nN/A`), null],
+    [(s) => (s.issue.body += `\n\n###\t${noReportHeading}\n\nN/A`), null],
+    [(s) => (s.issue.body += `\n\n### ${noReportHeading}\t###\n\nN/A`), null],
+    [(s) => (s.issue.body += `\n\n### ${noReportHeading}\t\n\nN/A`), null],
     // Pasted config opens the reason; its comment line is not a heading.
     [(s) => (s.issue.body += `\n\n${reason("```\n# uvx ha-mcp\n```")}`), null],
+    // Nor is an issue reference opening the reason.
+    [(s) => (s.issue.body += `\n\n${reason("#2788 has the same trace, found by reading the code.")}`), null],
     // Template comments around a reason leave it in place, and a "<!--" the page
     // shows as text hides nothing after it.
     [(s) => (s.issue.body += `\n\n<!-- What went wrong? -->\nThe call hangs.\n\n${reason("ha-mcp does not start.")}\n\n<!-- Any other relevant information: -->`), null],
@@ -102,6 +109,10 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n<!-->\n${reason("N/A")}\n\n<!-- template -->`), null],
     // What an issue form writes for an empty optional field.
     [(s) => (s.issue.body += `\n\n${reason("_No response_")}`), "label"],
+    // A heading with a tab after its hashes, or an empty one, ends the reason
+    // section too.
+    [(s) => (s.issue.body += `\n\n### ${noReportHeading}\n\n_No response_\n\n###\tAdditional context\n\nnone`), "label"],
+    [(s) => (s.issue.body += `\n\n### ${noReportHeading}\n\n_No response_\n\n###\n\nmore`), "label"],
     // A blank issue's template comment is not the reporter's answer, nor is a
     // heading inside a code block the page shows as code.
     [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here -->")}`), "label"],
@@ -109,6 +120,9 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n${reason("<!-- a --><!-- b -->")}`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("<!-- e.g. Settings > Integrations -->")}`), "label"],
     [(s) => (s.issue.body += `\n\n\`\`\`\nlog\n\`\`\`yaml\n${reason("in the log")}\n\`\`\``), "label"],
+    // Text after the label, a "#" included, makes it another heading.
+    [(s) => (s.issue.body += `\n\n### ${noReportHeading}#\n\nN/A`), "label"],
+    [(s) => (s.issue.body += `\n\n### ${noReportHeading} (reading the code)\n\nN/A`), "label"],
     [(s) => (s.issue.body += ` The ${reportMarker} heading is missing.`), "label"],
     // The heading over a summary, or a paste cut off before the environment.
     [(s) => (s.issue.body = `## 🚨 ${reportMarker}\n\nThe call hangs.`), "label"],

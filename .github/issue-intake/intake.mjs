@@ -509,9 +509,10 @@ export const noReportHeading = "Why there is no ha_report_issue report";
 // The issue forms' required report field. Anything typed there, "N/A"
 // included, answers the report gate.
 export const reportFieldLabel = "📋 ha_report_issue Report";
+// ATX headings allow tabs after the opening hashes and a closing run of hashes.
 const answerHeading = (...labels) =>
   new RegExp(
-    `^ {0,3}#{2,4} +(?:${labels.map(escapeRegExp).join("|")})[ \\t]*$`,
+    `^ {0,3}#{2,4}[ \\t]+(?:${labels.map(escapeRegExp).join("|")})(?:[ \\t]+#+)?[ \\t]*$`,
     "iu",
   );
 const answerHeadingLine = answerHeading(noReportHeading, reportFieldLabel);
@@ -519,7 +520,7 @@ const reasonHeadingLine = answerHeading(noReportHeading);
 const fenceLine = /^ {0,3}(`{3,}|~{3,})/;
 // A closing fence has nothing but whitespace after it, so ```yaml stays inside.
 const closingFenceLine = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
-const headingLine = /^ {0,3}#{1,6}(?: |$)/;
+const headingLine = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 // Every section under an answer heading, each ending at the next heading
 // outside a code fence: logs and config pasted there carry "# " lines.
 export function answerSections(text, answerLine = answerHeadingLine) {
