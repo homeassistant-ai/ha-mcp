@@ -9,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   GitHub,
   answerSections,
+  authorLogin,
   collect,
   hasAnswer,
   hasReport,
@@ -179,7 +180,8 @@ async function gateSnapshot(api, repository, number) {
 
 async function applyGate(api, repository, number, bot, snapshot, action) {
   const base = `repos/${repository}/issues`;
-  const login = snapshot.issue.user.login;
+  // The sweep also reaches an issue without a user, which gateAction() skips.
+  const login = authorLogin(snapshot.issue);
   const body = gateComment(action, login, gateHint(reporterTexts(snapshot)));
   const post = () =>
     api.request(`${base}/${number}/comments`, {

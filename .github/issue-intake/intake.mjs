@@ -224,6 +224,9 @@ export class GitHub {
 }
 
 export const isHuman = (user) => user?.type === "User" && user.login !== "ghhamcp";
+// The API allows an issue without a user; its author is then named "ghost",
+// the login GitHub gives a deleted account.
+export const authorLogin = (issue) => issue.user?.login ?? "ghost";
 const isMaintainer = (role) => ["maintain", "admin"].includes(role);
 const timestamp = (item) => item.updated_at ?? item.created_at;
 export const latestEvent = (events, predicate) =>
@@ -260,7 +263,7 @@ export function makeContext(snapshot) {
         source_id: "body",
         text: `${issue.title}\n\n${issue.body || ""}`,
         url: issue.html_url,
-        author: issue.user?.login ?? "ghost",
+        author: authorLogin(issue),
         maintainer: !!issue.user && isMaintainer(roles[issue.user.login]),
       },
       ...comments
@@ -550,11 +553,12 @@ const answered = (section) =>
     .trim() !== "";
 // What the report gate accepts instead of a report.
 export const hasAnswer = (text) => answerSections(text).some(answered);
-// The reporter's own words: the issue body and their comments.
+// The reporter's own words: the issue body and their comments. Without an
+// issue user there is no login, so no reply can be told to be theirs.
 export const reporterTexts = ({ issue, comments }) => [
   issue.body || "",
   ...comments
-    .filter((c) => c.user?.login === issue.user.login)
+    .filter((c) => issue.user && c.user?.login === issue.user.login)
     .map((c) => c.body || ""),
 ];
 // A reason why there is no report. Unlike the gate, the report request is not

@@ -274,6 +274,15 @@ test("the sweep's close posts a new notice and closes as not planned", async () 
   assert.match(api.writes[0].data.body, /@reporter, this issue was closed automatically/);
 });
 
+test("the sweep closes a labeled issue that has no user", async () => {
+  const s = labeled();
+  s.issue.user = null;
+  const api = new FakeGitHub(s);
+  const acted = await expire(api, "test/repo", bot, Date.parse("2026-09-21T00:00:00Z"), true);
+  assert.deepEqual(acted, ["1:close"]);
+  assert.match(api.writes[0].data.body, /@ghost, this issue was closed automatically/);
+});
+
 test("a warning says when a report heading came without the rest of the report", async () => {
   const s = snapshot();
   s.issue.body = `## 🚨 ${reportMarker}\n\nThe call hangs.`;
