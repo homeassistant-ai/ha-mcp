@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
 
 from .const import DIST_NAME_DEV, DIST_NAME_STABLE
 
@@ -19,17 +20,26 @@ from .const import DIST_NAME_DEV, DIST_NAME_STABLE
 def spec_dist_name(spec: str) -> str | None:
     """Return the normalized distribution ``spec`` installs, or None.
 
-    The requirement's name, or for a bare wheel URL the one its file name
-    starts with (PEP 427); None for anything else that is no requirement,
-    such as a bare tarball URL.
+    The requirement's name, or for a bare wheel or sdist URL the one its file
+    name starts with (PEP 427, PEP 625); None for anything else that is no
+    requirement, such as a repository archive URL (``.../archive/.../head.tar.gz``).
     """
     try:
         name = Requirement(spec).name
     except InvalidRequirement:
-        filename = urlparse(spec.strip()).path.rsplit("/", 1)[-1]
-        if not filename.endswith(".whl"):
+        path = urlparse(spec.strip()).path
+        filename = path.rsplit("/", 1)[-1]
+        if filename.endswith(".whl"):
+            name = filename.split("-", 1)[0]
+        elif filename.endswith(".tar.gz") and "/archive/" not in path:
+            # An sdist names {name}-{version}; a repository archive names a ref.
+            name, _, version = filename.removesuffix(".tar.gz").partition("-")
+            try:
+                Version(version)
+            except InvalidVersion:
+                return None
+        else:
             return None
-        name = filename.split("-", 1)[0]
     return canonicalize_name(name)
 
 

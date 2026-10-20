@@ -573,3 +573,29 @@ class TestOAuthCredsHint:
         assert "Client Secret: new-secret" in hint
         assert "not serving these yet" in hint
         assert "restart" in hint
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({}, "ha-mcp-dev==9.0.0.dev3"),
+        ({const.OPT_PIP_SPEC: "acme-ha-mcp==1.0"}, "acme-ha-mcp==1.0"),
+    ],
+    ids=["pre-release-pin", "override"],
+)
+def test_the_version_line_reads_what_the_server_runs(monkeypatch, options, expected):
+    # #2787: the form reads the version as bring-up does, so an ha-mcp left
+    # beside the pre-release pin or an override cannot mask it.
+    from unittest.mock import MagicMock
+
+    flow = _make_options_flow(options=options, data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+    flow.hass = MagicMock()
+    flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
+    integration = SimpleNamespace(requirements=["ha-mcp-dev==9.0.0.dev3"], version="9")
+    monkeypatch.setattr(
+        cf, "async_get_integration", AsyncMock(return_value=integration)
+    )
+    read: list[str] = []
+    monkeypatch.setattr(cf, "_installed_server_version", read.append)
+    asyncio.run(flow.async_step_init(None))
+    assert read == [expected]

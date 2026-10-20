@@ -406,9 +406,9 @@ class TestServerOptionsFlow:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="0.14.0")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="0.14.0")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.9.0")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.9.0")
 
         form = asyncio.run(flow.async_step_init(None))
         versions = form["description_placeholders"]["versions"]
@@ -431,7 +431,7 @@ class TestServerOptionsFlow:
             cf, "async_get_integration", AsyncMock(side_effect=RuntimeError("boom"))
         )
 
-        def _raise():
+        def _raise(_spec):
             raise RuntimeError("metadata boom")
 
         monkeypatch.setattr(cf, "_installed_server_version", _raise)
@@ -449,7 +449,7 @@ class TestServerOptionsFlow:
         # Before the server package is installed, the server half reads
         # "not installed yet" rather than a bogus version.
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: None)
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: None)
         form = asyncio.run(flow.async_step_init(None))
         versions = form["description_placeholders"]["versions"]
         # No hass on the flow ⇒ component "unknown"; server not installed yet.
@@ -475,9 +475,9 @@ class TestServerOptionsFlow:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
 
         form = asyncio.run(flow.async_step_init(None))
         versions = form["description_placeholders"]["versions"]
@@ -495,9 +495,9 @@ class TestServerOptionsFlow:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         for tools_data in (
             {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS},
             {},  # legacy pre-#1527 entry
@@ -524,9 +524,9 @@ class TestServerOptionsFlow:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         flow.hass = self._hass_with_entries(
             [
@@ -548,9 +548,9 @@ class TestServerOptionsFlow:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         flow.hass = self._hass_with_entries(
             [
@@ -580,9 +580,9 @@ class TestServerOptionsFlow:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
 
         form = asyncio.run(flow.async_step_init(None))  # must not raise
         versions = form["description_placeholders"]["versions"]
@@ -1074,9 +1074,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
@@ -1110,9 +1110,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
@@ -1139,9 +1139,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
@@ -1165,9 +1165,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         flow = self._flow_with_language(object())
 
         placeholders = asyncio.run(flow.async_step_init(None))[
@@ -1188,9 +1188,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
@@ -1221,9 +1221,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
@@ -1250,9 +1250,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         flow = self._flow_with_language("de")
 
         asyncio.run(flow.async_step_init(None))
@@ -1268,9 +1268,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
@@ -1293,9 +1293,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
@@ -1330,9 +1330,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version=None)),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version=None)),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
         )
@@ -1359,9 +1359,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft, "_fetch_common_translations", AsyncMock(return_value={})
         )
@@ -1411,9 +1411,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
@@ -1444,9 +1444,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         english = cf._COMMON_FALLBACKS["panel_hint"]
         monkeypatch.setattr(
             cft,
@@ -1473,9 +1473,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
@@ -1499,9 +1499,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
@@ -1524,9 +1524,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
         )
@@ -1552,9 +1552,9 @@ class TestOptionsFormTranslations:
         monkeypatch.setattr(
             cf,
             "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
+            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
         )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.14.1")
+        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
         monkeypatch.setattr(
             cft,
             "_fetch_common_translations",
