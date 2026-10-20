@@ -24,3 +24,6 @@ jobs:
         run: uv sync --all-extras --dev
       - name: Run existing dependency guard without changing it
         run: uv run pytest tests/src/unit/test_vendored_fastmcp.py::test_pyproject_covers_each_vendored_runtime_requirement --maxfail=0 --tb=short -v
+      - name: Prove cached search regression before the fix
+        if: success() || failure()
+        run: uv run pytest tests/src/unit/test_search_pinned_results.py::test_cached_search_uses_current_tool_schema --maxfail=0 --tb=short -v
