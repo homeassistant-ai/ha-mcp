@@ -517,7 +517,8 @@ const answerHeading = (...labels) =>
   );
 const answerHeadingLine = answerHeading(noReportHeading, reportFieldLabel);
 const reasonHeadingLine = answerHeading(noReportHeading);
-const fenceLine = /^ {0,3}(`{3,}|~{3,})/;
+// A backtick fence's info string has no backtick, so ```x``` is inline code.
+const fenceLine = /^ {0,3}(`{3,}(?!.*`)|~{3,})/;
 // A closing fence has nothing but whitespace after it, so ```yaml stays inside.
 const closingFenceLine = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const headingLine = /^ {0,3}#{1,6}(?:[ \t]|$)/;

@@ -93,6 +93,8 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n### ${noReportHeading}\t\n\nN/A`), null],
     // Pasted config opens the reason; its comment line is not a heading.
     [(s) => (s.issue.body += `\n\n${reason("```\n# uvx ha-mcp\n```")}`), null],
+    // A line opening with inline code is no fence that could hide the reason.
+    [(s) => (s.issue.body += `\n\n\`\`\`ha_get_state\`\`\` returns 500.\n\n${reason("N/A")}`), null],
     // Nor is an issue reference opening the reason.
     [(s) => (s.issue.body += `\n\n${reason("#2788 has the same trace, found by reading the code.")}`), null],
     // Template comments around a reason leave it in place, and a "<!--" the page
