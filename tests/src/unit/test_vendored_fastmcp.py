@@ -186,19 +186,39 @@ def _ceiling(requirement: Requirement) -> Version | None:
 
 
 @pytest.mark.parametrize("spec", vendor_fastmcp.PACKAGES, ids=lambda s: s.package)
-def test_pyproject_covers_each_vendored_runtime_requirement(spec):
+@pytest.mark.parametrize("python_version", ["3.13", "3.14"])
+@pytest.mark.parametrize("sys_platform", ["linux", "darwin", "win32"])
+def test_pyproject_covers_each_vendored_runtime_requirement(
+    spec, python_version, sys_platform
+):
     """Every requirement the vendored wheels declare is a direct dependency.
 
     Checked against the requirement list the sync records from each wheel, so
     a bump that adds a dependency or raises a floor fails here rather than
     only inside Home Assistant, where Core's constraints can hold an older
-    version back.
+    version back. Check each supported Python and desktop/server platform,
+    including requirements that do not apply on the runner's own platform.
     """
+    environment = {
+        "python_version": python_version,
+        "python_full_version": f"{python_version}.0",
+        "sys_platform": sys_platform,
+        "platform_system": {
+            "linux": "Linux",
+            "darwin": "Darwin",
+            "win32": "Windows",
+        }[sys_platform],
+        "os_name": "nt" if sys_platform == "win32" else "posix",
+    }
     declared: dict[str, list[Requirement]] = {}
     for requirement in _declared():
+        if requirement.marker and not requirement.marker.evaluate(environment):
+            continue
         declared.setdefault(canonicalize_name(requirement.name), []).append(requirement)
     problems = []
     for needed in _vendored_requirements(spec.package):
+        if needed.marker and not needed.marker.evaluate(environment):
+            continue
         name = canonicalize_name(needed.name)
         if name in _VENDORED_DISTRIBUTIONS or name in _NOT_DECLARED:
             continue

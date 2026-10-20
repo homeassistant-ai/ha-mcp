@@ -632,7 +632,10 @@ class CategorizedSearchTransform(BM25SearchTransform):
         indices = self._index.query(query, self._max_results + pinned_count)
         slots = self._max_results
         results: list[Tool] = []
-        for rank, tool in enumerate(self._indexed_tools[i] for i in indices):
+        tools_by_name = {tool.name: tool for tool in tools}
+        for rank, tool in enumerate(
+            tools_by_name[self._indexed_names[i]] for i in indices
+        ):
             if tool.name in self._always_visible:
                 if rank < self._max_results:
                     results.append(tool)
