@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+import uuid
 
 import pytest
 
@@ -38,7 +39,10 @@ class TestAssistPipeline:
         assert isinstance(data["pipelines"], list)
         assert data["count"] == len(data["pipelines"])
 
-    async def test_set_preferred_assist_pipeline_idempotent_roundtrip(self, mcp_client):
+    @pytest.mark.parametrize("use_preferred_alias", [False, True])
+    async def test_set_preferred_assist_pipeline_idempotent_roundtrip(
+        self, mcp_client, use_preferred_alias
+    ):
         """Setting the current preferred pipeline again is an idempotent write."""
         logger.info("Testing preferred Assist pipeline idempotent roundtrip...")
 
@@ -54,13 +58,19 @@ class TestAssistPipeline:
 
         set_result = await mcp_client.call_tool(
             "ha_manage_pipeline",
-            {"action": "set_preferred", "pipeline_id": preferred},
+            {
+                "action": "set_preferred",
+                "pipeline_id": "preferred" if use_preferred_alias else preferred,
+            },
         )
         set_data = assert_mcp_success(set_result, "set preferred Assist pipeline")
 
         assert set_data["pipeline_id"] == preferred
 
-    async def test_set_assist_pipeline_idempotent_update(self, mcp_client):
+    @pytest.mark.parametrize("use_preferred_alias", [False, True])
+    async def test_set_assist_pipeline_idempotent_update(
+        self, mcp_client, use_preferred_alias
+    ):
         """Updating the preferred pipeline with its current name succeeds."""
         logger.info("Testing Assist pipeline idempotent update...")
 
@@ -74,24 +84,61 @@ class TestAssistPipeline:
         if not preferred:
             pytest.skip("No preferred Assist pipeline configured")
 
-        pipeline_data = await safe_call_tool(
-            mcp_client,
-            "ha_manage_pipeline",
-            {"action": "get", "pipeline_id": preferred},
-        )
-        if pipeline_data.get("success") is not True:
-            pytest.skip(f"Preferred Assist pipeline unavailable: {pipeline_data}")
+        reference = "preferred" if use_preferred_alias else preferred
+        async with MCPAssertions(mcp_client) as mcp:
+            pipeline_data = await mcp.call_tool_success(
+                "ha_manage_pipeline", {"action": "get", "pipeline_id": reference}
+            )
+        assert pipeline_data["pipeline_id"] == preferred
 
         pipeline = pipeline_data["pipeline"]
         set_result = await mcp_client.call_tool(
             "ha_manage_pipeline",
-            {"action": "update", "pipeline_id": preferred, "name": pipeline["name"]},
+            {"action": "update", "pipeline_id": reference, "name": pipeline["name"]},
         )
         set_data = assert_mcp_success(set_result, "set Assist pipeline")
 
         assert set_data["operation"] == "updated"
         assert set_data["pipeline_id"] == preferred
         assert set_data["pipeline"]["name"] == pipeline["name"]
+
+    async def test_create_clones_the_preferred_pipeline_alias(
+        self, mcp_client, ha_client
+    ):
+        """The documented clone alias reads the preferred pipeline's real settings."""
+        async with MCPAssertions(mcp_client) as mcp:
+            source = await mcp.call_tool_success(
+                "ha_manage_pipeline", {"action": "get", "pipeline_id": "preferred"}
+            )
+            pipeline = source["pipeline"]
+            created = await mcp.call_tool_success(
+                "ha_manage_pipeline",
+                {
+                    "action": "create",
+                    "base_pipeline_id": "preferred",
+                    "name": f"Preferred clone {uuid.uuid4().hex[:8]}",
+                    "conversation_engine": pipeline["conversation_engine"],
+                },
+            )
+            try:
+                clone = await mcp.call_tool_success(
+                    "ha_manage_pipeline",
+                    {"action": "get", "pipeline_id": created["pipeline_id"]},
+                )
+                assert clone["pipeline_id"] != source["pipeline_id"]
+                assert clone["pipeline"]["language"] == pipeline["language"]
+                assert clone["pipeline"]["tts_voice"] == pipeline["tts_voice"]
+                current = await mcp.call_tool_success(
+                    "ha_manage_pipeline", {"action": "list"}
+                )
+                assert current["preferred_pipeline"] == source["pipeline_id"]
+            finally:
+                await ha_client.send_websocket_message(
+                    {
+                        "type": "assist_pipeline/pipeline/delete",
+                        "pipeline_id": created["pipeline_id"],
+                    }
+                )
 
     async def test_process_reports_an_unmatched_sentence(self, mcp_client):
         """A sentence Assist cannot match answers with an error response type.
@@ -118,8 +165,9 @@ class TestAssistPipeline:
         assert data["error_code"] == "no_intent_match"
         assert data["service_calls"] == {"success": [], "failed": []}
 
+    @pytest.mark.parametrize("use_preferred_alias", [False, True])
     async def test_process_resolves_an_agent_id_home_assistant_accepts(
-        self, mcp_client
+        self, mcp_client, use_preferred_alias
     ):
         """pipeline_id resolves an agent id the conversation endpoint accepts.
 
@@ -147,7 +195,7 @@ class TestAssistPipeline:
                 {
                     "action": "process",
                     "sentence": "zzqx wibble frobnicate the quux",
-                    "pipeline_id": preferred,
+                    "pipeline_id": "preferred" if use_preferred_alias else preferred,
                 },
             )
 
