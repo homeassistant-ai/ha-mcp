@@ -50,6 +50,36 @@ async def _search(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("reverse_catalog", [False, True])
+async def test_cached_search_uses_current_tool_schema(reverse_catalog: bool) -> None:
+    """A schema-only update must reach search even when ranking is cached."""
+    original = _tool("ha_lookup", "look up an entity")
+    original.parameters = {
+        "type": "object",
+        "properties": {"entity_id": {"type": "string"}},
+    }
+    other = _tool("ha_unrelated", "unrelated operation")
+    transform = CategorizedSearchTransform()
+    await transform._search([original, other], "look up an entity")
+
+    updated = original.model_copy(
+        update={
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_id": {"type": "array", "items": {"type": "string"}}
+                },
+            }
+        }
+    )
+    catalog = [other, updated] if reverse_catalog else [updated, other]
+    results = await transform._search(catalog, "look up an entity")
+
+    assert results[0].name == "ha_lookup"
+    assert results[0].parameters["properties"]["entity_id"]["type"] == "array"
+
+
+@pytest.mark.anyio
 async def test_pinned_tool_that_matches_is_returned_as_a_stub_without_its_schema() -> (
     None
 ):
