@@ -192,6 +192,8 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     """Handle the config flow for the HA-MCP custom component (both entry types)."""
 
     VERSION = 1
+    # 2: the update that cleared saved package overrides (entry_migration).
+    MINOR_VERSION = 2
 
     @staticmethod
     @callback

@@ -273,7 +273,8 @@ restarts the server in place, with no Home Assistant restart. Clear the field to
 return to the server this component release installed. Home Assistant puts the
 paired server back each time it starts, so with an override set, every Home
 Assistant restart installs the override again afterwards (this needs network
-access at startup).
+access at startup). Updating to version 9.0.0 clears an override saved before
+it, once, so the update runs the server it pins.
 
 `ha-mcp` and `ha-mcp-dev` share the same import package. When the pin or an
 override installs one of them while the other is present, the other is
