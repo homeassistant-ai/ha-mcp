@@ -417,6 +417,7 @@ class TestAllowAnyCallback:
             "http://evil.example/cb",
             "https://user@evil.example/cb",
             "https://evil.example/cb#frag",
+            "https://evil.example/cb#",
             "javascript:alert(1)",
         ],
     )
