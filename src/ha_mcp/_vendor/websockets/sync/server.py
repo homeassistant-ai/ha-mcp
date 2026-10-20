@@ -314,16 +314,20 @@ class Server:
 
         try:
             try:
+                # Capture the socket name to prevent a race condition in case
+                # the socket is closed between registering it with the poller
+                # and logging the "server listening on ..." message.
+                socket_name = get_socket_name(self.socket)
                 poller.register(self.socket, selectors.EVENT_READ)
             except (OSError, ValueError):  # pragma: no cover
-                # shutdown() was called before poller.register().
+                # shutdown() ran before get_socket_name() or poller.register().
                 # This may result in:
                 # * OSError: [Errno 9] Bad file descriptor
-                #   (only observed on free-threaded Python)
+                #   (only seen on free-threaded Python for poller.register())
                 # * ValueError: Invalid file descriptor: -1
                 return
 
-            self.logger.info("server listening on %s", get_socket_name(self.socket))
+            self.logger.info("server listening on %s", socket_name)
 
             while True:
                 poller.select()
@@ -540,8 +544,15 @@ def serve(
         with serve(handler, ...) as server:
             server.serve_forever()
 
-        To stop the server gracefully, call its :meth:`~Server.shutdown` method
-        from another thread.
+    You can stop the server gracefully by calling its :meth:`~Server.shutdown`
+    method from another thread::
+
+        server.shutdown()
+
+    By default, closing the server closes connections with code 1001 (going
+    away). You can keep connections alive and wait for clients to disconnect::
+
+        server.shutdown(close_connections=False)
 
     Args:
         handler: Connection handler. It receives the WebSocket connection,
@@ -766,12 +777,10 @@ def serve(
                 server.all_connections.add(connection)
             connection.start_keepalive()
             try:
-                handler(connection)
+                with connection:
+                    handler(connection)
             except Exception:
                 connection.logger.error("connection handler failed", exc_info=True)
-                connection.close(CloseCode.INTERNAL_ERROR)
-            else:
-                connection.close()
             finally:
                 with server.lock:
                     server.all_connections.discard(connection)
