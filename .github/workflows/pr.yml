@@ -5,7 +5,7 @@ permissions:
   contents: read
 jobs:
   dependency-proof:
-    name: Unchanged dependency guard (Python ${{ matrix.python }})
+    name: Compatibility checks (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -22,8 +22,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install dependencies on runner
         run: uv sync --all-extras --dev
-      - name: Run existing dependency guard without changing it
+      - name: Check dependency contract after the fix
         run: uv run pytest tests/src/unit/test_vendored_fastmcp.py::test_pyproject_covers_each_vendored_runtime_requirement --maxfail=0 --tb=short -v
-      - name: Prove cached search regression before the fix
+      - name: Check categorized search after the fix
         if: success() || failure()
-        run: uv run pytest tests/src/unit/test_search_pinned_results.py::test_cached_search_uses_current_tool_schema --maxfail=0 --tb=short -v
+        run: uv run pytest tests/src/unit/test_search_pinned_results.py tests/src/unit/test_search_compact_results.py tests/src/unit/test_component_search_schema.py tests/src/unit/test_categorized_search.py --maxfail=0 --tb=short -v
