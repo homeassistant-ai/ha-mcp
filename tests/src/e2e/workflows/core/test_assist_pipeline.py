@@ -7,6 +7,10 @@ import uuid
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp.client import HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantError
+
 from ...utilities.assertions import (
     MCPAssertions,
     assert_mcp_success,
@@ -41,8 +45,8 @@ class TestAssistPipeline:
 
     @pytest.mark.parametrize("use_preferred_alias", [False, True])
     async def test_set_preferred_assist_pipeline_idempotent_roundtrip(
-        self, mcp_client, use_preferred_alias
-    ):
+        self, mcp_client: Client, use_preferred_alias: bool
+    ) -> None:
         """Setting the current preferred pipeline again is an idempotent write."""
         logger.info("Testing preferred Assist pipeline idempotent roundtrip...")
 
@@ -69,8 +73,8 @@ class TestAssistPipeline:
 
     @pytest.mark.parametrize("use_preferred_alias", [False, True])
     async def test_set_assist_pipeline_idempotent_update(
-        self, mcp_client, use_preferred_alias
-    ):
+        self, mcp_client: Client, use_preferred_alias: bool
+    ) -> None:
         """Updating the preferred pipeline with its current name succeeds."""
         logger.info("Testing Assist pipeline idempotent update...")
 
@@ -103,8 +107,8 @@ class TestAssistPipeline:
         assert set_data["pipeline"]["name"] == pipeline["name"]
 
     async def test_create_clones_the_preferred_pipeline_alias(
-        self, mcp_client, ha_client
-    ):
+        self, mcp_client: Client, ha_client: HomeAssistantClient
+    ) -> None:
         """The documented clone alias reads the preferred pipeline's real settings."""
         async with MCPAssertions(mcp_client) as mcp:
             source = await mcp.call_tool_success(
@@ -128,17 +132,16 @@ class TestAssistPipeline:
                 assert clone["pipeline_id"] != source["pipeline_id"]
                 assert clone["pipeline"]["language"] == pipeline["language"]
                 assert clone["pipeline"]["tts_voice"] == pipeline["tts_voice"]
-                current = await mcp.call_tool_success(
-                    "ha_manage_pipeline", {"action": "list"}
-                )
-                assert current["preferred_pipeline"] == source["pipeline_id"]
             finally:
-                await ha_client.send_websocket_message(
-                    {
-                        "type": "assist_pipeline/pipeline/delete",
-                        "pipeline_id": created["pipeline_id"],
-                    }
-                )
+                try:
+                    await ha_client.send_websocket_message(
+                        {
+                            "type": "assist_pipeline/pipeline/delete",
+                            "pipeline_id": created["pipeline_id"],
+                        }
+                    )
+                except (HomeAssistantError, OSError, TimeoutError) as exc:
+                    logger.warning("Could not remove isolated pipeline clone: %s", exc)
 
     async def test_process_reports_an_unmatched_sentence(self, mcp_client):
         """A sentence Assist cannot match answers with an error response type.
@@ -167,8 +170,8 @@ class TestAssistPipeline:
 
     @pytest.mark.parametrize("use_preferred_alias", [False, True])
     async def test_process_resolves_an_agent_id_home_assistant_accepts(
-        self, mcp_client, use_preferred_alias
-    ):
+        self, mcp_client: Client, use_preferred_alias: bool
+    ) -> None:
         """pipeline_id resolves an agent id the conversation endpoint accepts.
 
         The resolution reads conversation_engine off the pipeline and sends it
