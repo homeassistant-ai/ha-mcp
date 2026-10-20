@@ -91,8 +91,12 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n###\t${noReportHeading}\n\nN/A`), null],
     [(s) => (s.issue.body += `\n\n### ${noReportHeading}\t###\n\nN/A`), null],
     [(s) => (s.issue.body += `\n\n### ${noReportHeading}\t\n\nN/A`), null],
+    [(s) => (s.issue.body += `\n\n### ${noReportHeading} #\n\nN/A`), null],
     // Pasted config opens the reason; its comment line is not a heading.
     [(s) => (s.issue.body += `\n\n${reason("```\n# uvx ha-mcp\n```")}`), null],
+    // A closing fence may be indented or end in a tab.
+    [(s) => (s.issue.body += `\n\n\`\`\`\nlog\n  \`\`\`\n\n${reason("N/A")}`), null],
+    [(s) => (s.issue.body += `\n\n\`\`\`\nlog\n\`\`\`\t\n\n${reason("N/A")}`), null],
     // A line opening with inline code is no fence that could hide the reason.
     [(s) => (s.issue.body += `\n\n\`\`\`ha_get_state\`\`\` returns 500.\n\n${reason("N/A")}`), null],
     // Nor is an issue reference opening the reason.
@@ -122,9 +126,15 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n${reason("<!-- a --><!-- b -->")}`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("<!-- e.g. Settings > Integrations -->")}`), "label"],
     [(s) => (s.issue.body += `\n\n\`\`\`\nlog\n\`\`\`yaml\n${reason("in the log")}\n\`\`\``), "label"],
+    // A shorter or other-kind fence line closes no fence, and a tilde fence's
+    // info string may hold backticks.
+    [(s) => (s.issue.body += `\n\n\`\`\`\`\n\`\`\`\n${reason("in the log")}\n\`\`\`\``), "label"],
+    [(s) => (s.issue.body += `\n\n\`\`\`\n~~~\n${reason("in the log")}\n\`\`\``), "label"],
+    [(s) => (s.issue.body += `\n\n~~~ \`x\`\n${reason("in the log")}\n~~~`), "label"],
     // Text after the label, a "#" included, makes it another heading.
     [(s) => (s.issue.body += `\n\n### ${noReportHeading}#\n\nN/A`), "label"],
     [(s) => (s.issue.body += `\n\n### ${noReportHeading} (reading the code)\n\nN/A`), "label"],
+    [(s) => (s.issue.body += `\n\n### ${noReportHeading} ## more\n\nN/A`), "label"],
     [(s) => (s.issue.body += ` The ${reportMarker} heading is missing.`), "label"],
     // The heading over a summary, or a paste cut off before the environment.
     [(s) => (s.issue.body = `## 🚨 ${reportMarker}\n\nThe call hangs.`), "label"],
@@ -310,6 +320,7 @@ test("a warning says when a report heading came without the rest of the report",
 test("a warning names the answer section that came empty", async () => {
   for (const [heading, expected] of [
     [noReportHeading, noReportHeading],
+    [`${noReportHeading} ###`, noReportHeading],
     [reportFieldLabel, reportFieldLabel],
   ]) {
     const s = snapshot();

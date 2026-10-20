@@ -283,6 +283,7 @@ test("deleted issue authors retain their report without maintainer authority", (
   const context = makeContext(s);
   assert.equal(context.sources[0].author, "ghost");
   assert.equal(context.sources[0].maintainer, false);
+  assert.equal(makeContext(snapshot()).sources[0].author, "reporter");
 });
 
 test("bare model URLs are not autolinks but source citations remain usable", () => {
@@ -718,10 +719,12 @@ test("no report request when one is present, explained away, or the issue is not
   explainedLater.comments.push(
     comment(2, "reporter", `### ${noReportHeading.toLowerCase()}\n\nFound by reading the code.`),
   );
+  const explainedAtx = bugSnapshot();
+  explainedAtx.issue.body += `\n\n### ${noReportHeading} ###\n\nFound by reading the code.`;
   const feature = snapshot();
   feature.issue.title = "[FEATURE] Faster dashboards";
   const unclear = snapshot();
-  for (const s of [withReport, replied, explained, explainedLater, feature, unclear])
+  for (const s of [withReport, replied, explained, explainedLater, explainedAtx, feature, unclear])
     assert.doesNotMatch(render(result(), prepare(s, bot)), /Diagnostic report/);
 });
 
