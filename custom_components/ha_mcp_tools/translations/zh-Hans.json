@@ -15,18 +15,46 @@
       },
       "server": {
         "title": "HA-MCP 服务器",
-        "description": "这会在 Home Assistant 内部运行完整的 ha-mcp 服务器，并通过 Home Assistant Webhook 将其远程公开（可通过 Nabu Casa 或任何反向代理访问）。这是一个独立的服务器，可完全替代 app (add-on)、Docker、uvx/PyPI 和 stdio 安装方式——请勿将其与其他 ha-mcp 服务器同时运行。选择**提交**以启动它；您随后可以在集成选项中更改端口、绑定和身份验证。"
+        "description": "这会在 Home Assistant 内部运行完整的 ha-mcp 服务器。它是一个独立的服务器，完全替代了 app (add-on)、Docker、uvx/PyPI 以及 stdio 安装方式——请不要将其与另一个 ha-mcp 服务器同时运行。\n\n默认情况下，此 Home Assistant 机器外部的任何内容都无法访问它：侧边栏面板和 Home Assistant 自身的对话代理可以工作，但在您选择下方的远程访问模式或本地网络访问之前，其他设备上的 MCP 客户端无法连接。您稍后可以在集成选项中更改这两项。",
+        "data": {
+          "remote_access": "通过 Home Assistant 进行远程访问",
+          "bind_host": "网络访问",
+          "admin_token": "管理员访问令牌",
+          "admin_username": "或者：为 HA-MCP 创建的仅本地账户的用户名",
+          "admin_password": "该账户的密码"
+        },
+        "data_description": {
+          "remote_access": "允许 MCP 客户端通过 Home Assistant webhook 进行连接，这在 Home Assistant 可访问的任何地方（包括 Nabu Casa）均可工作。Home Assistant 登录：诸如 claude.ai 等客户端使用 Home Assistant 管理员账户登录。旧版 OAuth：用于粘贴到需要它的客户端中的客户端 ID 和密钥。秘密 URL：webhook 链接本身就是唯一的凭据——任何拥有它的人都可以使用所有工具。",
+          "bind_host": "谁可以直接连接到服务器自身的端口。仅此机器是安全的默认设置。本地网络允许您网络上的其他设备使用“配置”屏幕上显示的机密直接访问 URL 进行连接。",
+          "admin_token": "管理员账户的长期访问令牌。您自己的令牌也可以：打开您的个人资料（侧边栏底部的您的名字），选择“安全性”选项卡，并在“长期访问令牌”下选择“创建令牌”。如果您的令牌发生泄漏，它也可以从您的家庭网络之外工作，并且 Home Assistant 会以您的名义记录服务器的更改。更安全的方式是：创建一个专为 HA-MCP 制作的账户，并开启“仅本地访问”（参见下方的字段）。",
+          "admin_username": "仅适用于您专门为 HA-MCP 创建的账户，位于“设置”→“人员”→“添加人员”，并启用“允许登录”、“仅本地访问”和“管理员”。切勿在此处输入您自己的登录信息：若要使用您自己的账户，请在上方粘贴其令牌。HA-MCP 会创建此账户的令牌（名为 HA-MCP Server），因此无需以其身份登录，且密码不会被保存。其令牌仅在运行服务器的本地网络中有效，并且 Home Assistant 会以此账户名义记录服务器的更改。",
+          "admin_password": "仅使用一次，用于创建令牌。切勿使用您自己的密码。"
+        }
       }
     },
     "abort": {
       "already_configured": "此条目已配置。",
       "unsupported_home_assistant": "进程内的 HA-MCP Server 需要 Home Assistant {required} 或更高版本，但此实例运行的是 {installed}。您仍然可以将此组件的 HA-MCP File & YAML Tools 条目与作为 app (add-on) 或 Docker 容器运行的外部 ha-mcp 服务器配合使用。"
+    },
+    "error": {
+      "invalid_token": "Home Assistant 无法识别此令牌。请复制整个令牌，或创建一个新令牌。",
+      "token_not_long_lived": "这是一个会过期的临时登录令牌。请改为创建长期访问令牌。",
+      "token_not_admin": "此令牌属于一个非活动管理员的账户。",
+      "invalid_login": "请输入为 HA-MCP 创建的仅本地管理员账户的用户名和密码。",
+      "credentials_needed": "请输入管理员账户的用户名和密码，或者粘贴访问令牌。"
     }
   },
   "options": {
     "error": {
       "invalid_connect_path": "不能包含 #、?、% 或空格。",
-      "invalid_webhook_id": "Webhook ID 不能包含斜杠 (/)。"
+      "invalid_webhook_id": "Webhook ID 不能包含斜杠 (/)。",
+      "invalid_oauth_callback": "每个回调必须是 https:// URL，或者是位于 127.0.0.1、[::1] 或 localhost 上的 http:// URL，且不能包含用户名、密码或 #fragment，长度最多为 2048 个字符。修复方法：{invalid_callbacks}",
+      "too_many_oauth_callbacks": "最多列出 {max_callbacks} 个回调。",
+      "invalid_token": "Home Assistant 无法识别此令牌。请复制整个令牌，或创建一个新令牌。",
+      "token_not_long_lived": "这是一个会过期的临时登录令牌。请改为创建长期访问令牌。",
+      "token_not_admin": "此令牌属于一个非活动管理员的账户。",
+      "invalid_login": "请输入为 HA-MCP 创建的仅本地管理员账户的用户名和密码。",
+      "credentials_needed": "请输入管理员账户的用户名和密码，或者粘贴访问令牌。"
     },
     "step": {
       "tools_info": {
@@ -61,16 +89,20 @@
           "enable_llm_api": "对话智能体 LLM API",
           "llm_api_exposure": "对话智能体工具暴露方式",
           "enable_startup_notification": "启动通知",
-          "enable_sidebar_panel": "侧边栏设置面板"
+          "enable_sidebar_panel": "侧边栏设置面板",
+          "oauth_redirect_allowlist": "允许的 OAuth 回调 URL",
+          "admin_token_replacement": "替换管理员访问令牌（可选）",
+          "admin_username": "或切换到为 HA-MCP 创建的仅本地账户：用户名（可选）",
+          "admin_password": "该账户的密码"
         },
         "data_description": {
           "server_port": "此服务器监听的端口。ha-mcp app (add-on) 使用 9583，因此默认设置为 9584 以允许两者并存——如果您不运行该 app (add-on)，任何空闲端口均可。",
-          "bind_host": "谁可以直接连接到 MCP 服务器端口。默认值与 app (add-on) 匹配：可在本地网络上访问，以机密路径作为凭据。选择 loopback 仅允许来自 Home Assistant 本机本身的连接——无论哪种方式，Webhook URL 和侧边栏面板都可以正常工作。",
-          "webhook_auth": "MCP 客户端如何在 Webhook URL 处验证身份。使用秘密 URL 时，链接本身就是唯一的凭据——OAuth 仍会为使用它的客户端运行，但每次登录都会自动批准：无需登录，也无需客户端 ID 或密钥。使用 Home Assistant 登录时，claude.ai 等客户端会使用 Home Assistant 管理员账户登录 (OAuth)。使用旧版 OAuth 时，此集成会运行自己的登录服务，并颁发客户端 ID 和密钥以粘贴到需要它们的客户端中——可能需要重启 Home Assistant 才能完全启用或禁用它。",
+          "bind_host": "谁可以直接连接到 MCP 服务器端口。“本地网络”使其可以从您的本地网络访问，并将秘密路径作为凭据，就像 app (add-on) 一样。“仅此机器”仅允许来自 Home Assistant 机器本身的连接——无论哪种方式，webhook URL 和侧边栏面板都可以正常工作。",
+          "webhook_auth": "MCP 客户端如何在 webhook URL 处证明其身份。对于秘密 URL，链接本身就是唯一的凭据——OAuth 仍然对使用它的客户端运行，并且返回到允许的回调 URL（见下文）的登录会自动批准：无需登录，也无需客户端 ID 或密钥。对于 Home Assistant 登录，诸如 claude.ai 等客户端使用 Home Assistant 管理员账户（OAuth）登录。对于旧版 OAuth，此集成运行自己的登录服务并颁发客户端 ID 和密钥，以粘贴到需要它们的客户端中——可能需要重启 Home Assistant 才能完全启用或禁用它。",
           "oauth_client_id_override": "替换自动生成的旧版 OAuth Client ID。留空则保留当前值。仅在身份验证模式设为旧版 OAuth 时使用。",
           "oauth_client_secret_override": "替换自动生成的旧版 OAuth Client Secret。留空则保留当前值。仅在身份验证模式设为旧版 OAuth 时使用。",
           "oauth_regenerate": "一次性操作：为旧版 OAuth 模式生成新的 Client ID 和 Secret。它只有在修复提示所要求的 Home Assistant 重启之后才会生效——在您重启之前，原有的 Client ID 和 Secret 仍然有效，新的尚未启用。同时会清空上面两个覆盖字段。",
-          "pip_spec": "请留空。仅用于测试特定的 ha-mcp 构建（例如固定到某个预发行版）；它会覆盖发布通道，并在清空之前禁用自动更新。",
+          "pip_spec": "留空以运行此组件版本安装的 ha-mcp 服务器。仅用于测试特定的 ha-mcp 构建（版本锁定、pull-request 的 tarball 或 wheel URL）；通过重新加载服务器应用，无需重启 Home Assistant。清除它以返回到配对的服务器。",
           "server_url": "进程内服务器用于访问您的 Home Assistant 的 URL（通常就是此实例本身）。留空则根据此实例的端口和 SSL 设置推导；仅在服务器需要走其他路由时才设置。",
           "external_url": "作为主要连接 URL 显示——当 Home Assistant 位于您自己的域名或反向代理之后时使用。请输入包含协议在内的完整基础地址。它必须直接指向 Home Assistant——在浏览器中打开它应能到达您的 HA 登录页面——并且不能包含 :8123 之类的端口（任何端口都不行），否则远程 MCP 客户端将无法访问。留空则自动使用 Nabu Casa / 本地地址。",
           "webhook_id_override": "替换连接 URL（/api/webhook/...）中随机生成的 Webhook 密钥。该 URL 就是凭据——请使用足够长、难以猜测的值。留空则保留当前值。",
@@ -79,8 +111,12 @@
           "enable_webhook": "关闭以进入仅本地模式：完全不注册 Home Assistant Webhook，因此任何一方——包括 Nabu Casa——都无法通过 Home Assistant 访问服务器。服务器端口直连和侧边栏面板仍可继续使用。",
           "enable_llm_api": "向 Home Assistant 对话智能体（OpenAI、Google、Ollama 等）提供完整工具集：启用后，智能体可在“控制 Home Assistant”下选择“HA-MCP Server”，并在 Assist 聊天和语音中使用这些工具。启用只是让它可供选择——在您为某个智能体选中它之前，不会暴露任何内容。使用指南：{llm_api_docs_url}",
           "llm_api_exposure": "提供给对话智能体的工具集形态。工具搜索（默认）可让智能体的上下文保持精简：一个包含固定工具以及搜索/执行元工具的紧凑 API。完整目录会直接列出每个已暴露的工具——更适合大上下文模型。两者会将二者并列注册，让每个智能体在“控制 Home Assistant”下各自选择。按工具的暴露设置在 HA-MCP 设置面板中管理；详情：{llm_api_docs_url}",
-          "enable_startup_notification": "每次服务器启动时显示通知，指向仅管理员可见的设置界面。关闭则静默启动——连接 URL 仍会出现在 Home Assistant 日志中。",
-          "enable_sidebar_panel": "在侧边栏中显示 HA-MCP 设置面板（仅管理员）。关闭则移除侧边栏条目——服务器选项仍可在此界面中使用。"
+          "enable_startup_notification": "每次服务器启动时显示通知，指向仅限管理员的设置界面。关闭以静默启动——连接 URL 仍保留在此屏幕上。",
+          "enable_sidebar_panel": "在侧边栏中显示 HA-MCP 设置面板（仅管理员）。关闭则移除侧边栏条目——服务器选项仍可在此界面中使用。",
+          "oauth_redirect_allowlist": "仅在验证模式为秘密 webhook URL 时使用。当客户端通过 OAuth 登录时，HA-MCP 仅将登录返回到此列表上的回调 URL；任何其他 URL 都将被拒绝，并显示一个解释如何添加它的页面。请准确按照客户端发送的方式输入每个回调。http:// 回环回调（127.0.0.1、[::1] 或 localhost）也匹配任何端口。仅通过 webhook URL 连接的客户端无需条目。无需重启即可生效。",
+          "admin_token_replacement": "留空以保留当前访问权限；切换时服务器会重启。管理员账户的长期访问令牌。您自己的令牌也可以：打开您的个人资料（侧边栏底部的您的名字），选择“安全性”选项卡，并在“长期访问令牌”下选择“创建令牌”。如果您的令牌发生泄漏，它也可以从您的家庭网络之外工作，并且 Home Assistant 会以您的名义记录服务器的更改。更安全的方式是：创建一个专为 HA-MCP 制作的账户，并开启“仅本地访问”（参见下方的字段）。",
+          "admin_username": "仅用于您专门为 HA-MCP 创建的账户，可在 “设置” → “人员” → “添加人员” 中设置，并开启“允许登录”、“仅限本地访问”和“管理员”。切勿在此输入您自己的登录名：若要使用您自己的账户，请改为在上方粘贴其令牌。HA-MCP 会创建此账户的令牌（名为 HA-MCP Server），因此无需以该账户身份登录，且密码不会被保存。该令牌仅在服务器运行的本地网络中有效，并且 Home Assistant 会在此账户下记录服务器的更改。",
+          "admin_password": "仅使用一次，用于创建令牌。切勿使用您自己的密码。"
         }
       }
     }
@@ -91,7 +127,19 @@
       "description": "无法在 Home Assistant 内部启动 HA-MCP 进程内服务器：\n\n{detail}\n\n请检查 Home Assistant 日志，然后重新加载该集成（或先修复根本问题再重新加载）以重试。"
     },
     "server_package_install_failed": {
-      "title": "无法安装 HA-MCP 进程内服务器软件包"
+      "title": "无法安装 HA-MCP 进程内服务器软件包",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "重新安装 HA-MCP server",
+            "description": "无法安装或启动 HA-MCP 进程内服务器：\n\n{detail}\n\n提交以重启 Home Assistant；服务器包将在服务器启动前重新安装，同时还会重新安装任何版本不再满足要求的依赖项。如果上方的信息提到了更改了其中某个包的其他集成，请先更新或移除该集成：否则 Home Assistant 会在下次启动时恢复其版本。如果您在 HA-MCP Server 选项中设置了 **ha-mcp package (advanced)**，请先检查该值：重新安装无法安装的包会导致相同的失败结果。"
+          }
+        },
+        "abort": {
+          "entry_removed": "HA-MCP Server 条目已不存在。",
+          "externally_managed": "Home Assistant 启动时带有 skip_pip 参数，因此它不会安装 Python 包。请使用您系统的包管理器重新安装 ha-mcp 包，然后重新加载集成。"
+        }
+      }
     },
     "component_outdated": {
       "title": "请通过 HACS 更新 HA-MCP 自定义组件",
@@ -107,12 +155,46 @@
           }
         }
       }
+    },
+    "server_token_needed": {
+      "title": "HA-MCP 需要管理员访问令牌",
+      "fix_flow": {
+        "step": {
+          "token": {
+            "title": "输入管理员访问令牌",
+            "description": "HA-MCP 进程内服务器没有可用的 Home Assistant 令牌，因此无法运行。令牌可能缺失、已被撤销或已过期，或者其账户可能不再是活动管理员。请粘贴新的长期访问令牌，或者输入您专为 HA-MCP 创建的仅本地账户的登录名（切勿使用您自己的登录名），以便 HA-MCP 创建其令牌。",
+            "data": {
+              "admin_token": "管理员访问令牌",
+              "admin_username": "或者：为 HA-MCP 创建的仅本地账户的用户名",
+              "admin_password": "该账户的密码"
+            }
+          }
+        },
+        "error": {
+          "invalid_token": "Home Assistant 无法识别此令牌。请复制完整的令牌，或创建一个新令牌。",
+          "token_not_long_lived": "这是一个会过期的临时登录令牌。请改为创建长期访问令牌。",
+          "token_not_admin": "此令牌属于一个非活动管理员的账户。",
+          "invalid_login": "请输入为 HA-MCP 创建的仅本地管理员账户的用户名和密码。",
+          "credentials_needed": "请输入管理员账户的用户名和密码，或粘贴访问令牌。"
+        },
+        "abort": {
+          "entry_removed": "HA-MCP Server 条目已不存在。"
+        }
+      }
     }
   },
   "selector": {
+    "server_remote_access": {
+      "options": {
+        "disabled": "已禁用（默认）",
+        "ha_auth": "Home Assistant 登录",
+        "legacy": "旧版 OAuth（客户端 ID 和密钥）",
+        "none": "机密 URL（无需登录）"
+      }
+    },
     "server_webhook_auth": {
       "options": {
-        "none": "密钥 Webhook URL（默认）",
+        "none": "机密 Webhook URL",
         "ha_auth": "使用 Home Assistant 登录（OAuth）",
         "legacy": "旧版 OAuth（此集成颁发客户端 ID/密钥供粘贴）"
       }
@@ -130,7 +212,7 @@
     "connect_local_lan": "本地/局域网（当网络访问为“Local network”时）：{url}",
     "connect_remote_url": "远程连接 URL：{url}",
     "connect_urls_label": "连接 URL：",
-    "connect_urls_pending": "服务器启动后，连接 URL 将显示在此处（以及 Home Assistant 日志中）。",
+    "connect_urls_pending": "服务器启动后，连接 URL 将显示在此处。",
     "connect_webhook_disabled": "通过 Webhook 远程访问已关闭（仅本地模式）。",
     "oauth_creds_pending": "服务器启动后，Client ID 和 Client Secret 将显示在此处。",
     "oauth_not_serving": "旧版 OAuth 尚未启用这些凭据——请在 Home Assistant 提示时重启以激活它们。",
@@ -139,7 +221,9 @@
     "tools_module_installed": "Beta/高级文件与 YAML 工具模块（可选）：已安装",
     "tools_module_not_installed": "Beta/高级文件与 YAML 工具模块（可选）：未安装——请在此集成页面上点击“添加条目”并选择“HA-MCP File & YAML Tools”",
     "tools_module_not_loaded": "Beta/高级文件与 YAML 工具模块（可选）：已安装但未加载——请在此集成页面上启用或重新加载“HA-MCP File & YAML Tools”条目",
-    "version_line": "组件 {component_version} - 服务器 ha-mcp {server_version}（{channel} 通道）",
+    "version_line": "组件 {component_version} - 服务器 ha-mcp {server_version} ({source})",
+    "server_source_paired": "随此组件版本一起安装",
+    "server_source_override": "pip 依赖覆盖",
     "version_not_installed": "尚未安装",
     "version_unknown": "未知"
   }

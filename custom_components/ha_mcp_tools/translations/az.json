@@ -15,18 +15,46 @@
       },
       "server": {
         "title": "HA-MCP Server",
-        "description": "Tam ha-mcp serverini Home Assistant daxilində işlədir və Home Assistant webhook-u vasitəsilə ona uzaqdan giriş imkanı verir (Nabu Casa və ya istənilən əks proksi vasitəsilə əlçatandır). Bu, müstəqil serverdir və tətbiq (əlavə), Docker, uvx/PyPI və stdio quraşdırma üsullarını tam əvəz edir - onu başqa ha-mcp serveri ilə eyni vaxtda işlətməyin. Başlatmaq üçün **Göndər** düyməsini seçin; portu, şəbəkə ünvanına bağlanmanı və doğrulamanı daha sonra inteqrasiya parametrlərində dəyişə bilərsiniz."
+        "description": "Bu, tam ha-mcp serverini Home Assistant daxilində işlədir. Bu, müstəqil serverdir və tətbiq (əlavə), Docker, uvx/PyPI və stdio quraşdırma üsullarının tam əvəzidir — onu başqa ha-mcp serveri ilə birlikdə işlətməyin.\n\nVarsayılan olaraq bu Home Assistant maşınından kənarda heç nə ona qoşula bilməz: yan panel və Home Assistant-ın öz söhbət agentləri işləyir, lakin siz aşağıda uzaqdan giriş rejimini və ya yerli şəbəkə girişini seçməyənə qədər digər cihazlardakı MCP müştəriləri qoşula bilməz. Hər ikisini daha sonra inteqrasiya seçimlərində dəyişə bilərsiniz.",
+        "data": {
+          "remote_access": "Home Assistant vasitəsilə uzaqdan giriş",
+          "bind_host": "Şəbəkə girişi",
+          "admin_token": "İnzibatçı giriş tokeni",
+          "admin_username": "Və ya: HA-MCP üçün yaradılmış yalnız yerli hesabın istifadəçi adı",
+          "admin_password": "Həmin hesabın şifrəsi"
+        },
+        "data_description": {
+          "remote_access": "MCP müştərilərinə Home Assistant veb-hoku vasitəsilə qoşulmağa imkan verir. Bu, Home Assistant-ın əlçatan olduğu hər yerdə (Nabu Casa daxil olmaqla) işləyir. Home Assistant girişi: claude.ai kimi müştərilər Home Assistant inzibatçı hesabı ilə daxil olurlar. Köhnə OAuth: təkzibedilməz ehtiyacı olan müştərilərə yapışdırmaq üçün Müştəri İdentifikatoru və Məxfi Açar (Client ID və Secret). Məxfi URL: veb-hok bağlantısının özü yeganə etimadnamədir — ona sahib olan hər kəs hər alətdən istifadə edə bilər.",
+          "bind_host": "Serverin öz portuna birbaşa kimlər qoşula bilər. Təhlükəsiz standart seçim yalnız bu maşındır. Yerli şəbəkə şəbəkənizdəki digər cihazlara Quraşdırma ekranında göstərilən məxfi birbaşa giriş URL-i ilə qoşulmağa imkan verir.",
+          "admin_token": "İnzibatçı hesabının uzunmüddətli giriş tokeni. Özünüzünkü də işləyir: profilinizi açın (yan panelin aşağı hissəsindəki adınız), Təhlükəsizlik sekmesini seçin və Uzunmüddətli giriş tokenləri altında Token yarat seçiminə toxunun. Sizin öz tokeniniz hər hansı sızma baş verərsə ev şəbəkənizdən kənarda da işləyir və Home Assistant serverin dəyişikliklərini sizin adınızdan qeydə alır. Daha təhlükəsiz yol: Yalnız yerli giriş seçimi aktiv edilmiş şəkildə yalnız HA-MCP üçün yaradılmış hesab (aşağıdakı sahələrə baxın).",
+          "admin_username": "Yalnız Parametrlər → İnsanlar → Giriş icazəsi, Yalnız yerli giriş və İnzibatçı seçimləri aktiv olmaqla HA-MCP üçün yaratdığınız hesab üçündür. Bura heç vaxt öz giriş məlumatlarınızı daxil etməyin: öz hesabınızdan istifadə etmək üçün yuxarıda onun tokenini yapışdırın. HA-MCP bu hesabın tokenini (HA-MCP Server adlanır) yaradır ki, heç kim onun kimi daxil olmaq məcburiyyətində qalmasın və şifrə saxlanılmır. Onun tokeni yalnız serverin işlədiyi yerli şəbəkənizdən işləyir və Home Assistant serverin dəyişikliklərini bu hesabın adı ilə qeyd edir.",
+          "admin_password": "Token yaratmaq üçün bir dəfə istifadə olunur. Heç vaxt öz şifrəniz deyil."
+        }
       }
     },
     "abort": {
       "already_configured": "Bu qeyd artıq quraşdırılıb.",
       "unsupported_home_assistant": "Proses daxilində işləyən HA-MCP Server üçün Home Assistant versiyası {required} və ya daha yeni olmalıdır, lakin bu quraşdırmada {installed} versiyası işləyir. Bu komponentin HA-MCP File & YAML Tools qeydindən tətbiq (əlavə) və ya Docker konteyneri kimi işləyən xarici ha-mcp serveri ilə yenə də istifadə edə bilərsiniz."
+    },
+    "error": {
+      "invalid_token": "Home Assistant bu tokeni tanımır. Tokeni tamamilə kopyalayın və ya yeni token yaradın.",
+      "token_not_long_lived": "Bu, müddəti bitən müvəqqəti giriş tokenidir. Bunun əvəzinə uzunmüddətli giriş tokeni yaradın.",
+      "token_not_admin": "Bu token aktiv inzibatçı olmayan hesaba məxsusdur.",
+      "invalid_login": "HA-MCP üçün yaradılmış yalnız yerli inzibatçı hesabının istifadəçi adını və şifrəsini daxil edin.",
+      "credentials_needed": "İnzibatçı hesabının istifadəçi adını və şifrəsini daxil edin və ya giriş tokenini yapışdırın."
     }
   },
   "options": {
     "error": {
       "invalid_connect_path": "#, ?, %, və ya boşluq simvolları ola bilməz.",
-      "invalid_webhook_id": "Webhook ID-ləri əyri xətt (/) ehtiva etməməlidir."
+      "invalid_webhook_id": "Webhook ID-ləri əyri xətt (/) ehtiva etməməlidir.",
+      "invalid_oauth_callback": "Hər bir geriçağırış (callback) https:// URL-i, yaxud istifadəçi adı, şifrə və ya #fraqment olmadan 127.0.0.1, [::1] və ya localhost üzrə http:// URL-i olmalı və ən çoxu 2048 simvol uzunluğunda olmalıdır. Düzəliş: {invalid_callbacks}",
+      "too_many_oauth_callbacks": "Ən çoxu {max_callbacks} geriçağırış siyahıya alın.",
+      "invalid_token": "Home Assistant bu tokeni tanımır. Tokeni tamamilə kopyalayın və ya yeni token yaradın.",
+      "token_not_long_lived": "Bu, müddəti bitən müvəqqəti giriş tokenidir. Bunun əvəzinə uzunmüddətli giriş tokeni yaradın.",
+      "token_not_admin": "Bu token aktiv inzibatçı olmayan hesaba məxsusdur.",
+      "invalid_login": "HA-MCP üçün yaradılmış yalnız yerli inzibatçı hesabının istifadəçi adını və şifrəsini daxil edin.",
+      "credentials_needed": "İnzibatçı hesabının istifadəçi adını və şifrəsini daxil edin və ya giriş tokenini yapışdırın."
     },
     "step": {
       "tools_info": {
@@ -61,16 +89,20 @@
           "enable_llm_api": "Söhbət agenti üçün LLM API",
           "llm_api_exposure": "Söhbət agentinə təqdim olunan alətlər",
           "enable_startup_notification": "Başlanğıc bildirişi",
-          "enable_sidebar_panel": "Yan paneldəki parametrlər paneli"
+          "enable_sidebar_panel": "Yan paneldəki parametrlər paneli",
+          "oauth_redirect_allowlist": "İcazə verilən OAuth geriyə çağırış (callback) URL-ləri",
+          "admin_token_replacement": "İnzibatçı giriş tokenini əvəz edin (isteğe bağlı)",
+          "admin_username": "Və ya HA-MCP üçün yaradılmış yalnız yerli hesaba keçin: istifadəçi adı (isteğe bağlı)",
+          "admin_password": "Həmin hesabın şifrəsi"
         },
         "data_description": {
           "server_port": "Bu serverin dinlədiyi port. ha-mcp tətbiqi (əlavə) 9583 portundan istifadə edir, buna görə hər ikisinin eyni vaxtda işləməsi üçün burada standart port 9584 seçilib - tətbiqi (əlavə) işlətmirsinizsə, istənilən boş port uyğundur.",
-          "bind_host": "MCP serverinin portu ilə birbaşa kimin əlaqə yarada biləcəyini müəyyən edir. Standart seçim tətbiqlə (əlavə) eynidir: serverə lokal şəbəkənizdən giriş mümkündür və gizli yol giriş məlumatı kimi istifadə olunur. Yalnız Home Assistant işləyən kompüterin özündən əlaqələrə icazə vermək üçün yalnız bu kompüterə giriş seçimini seçin - webhook URL-i və yan panel hər iki halda işləyir.",
-          "webhook_auth": "MCP müştərilərinin webhook URL-ində özlərini necə doğruladığını müəyyən edir. Gizli URL istifadə edildikdə keçidin özü yeganə giriş məlumatıdır - OAuth ondan istifadə edən müştərilər üçün yenə də işləyir, lakin hər giriş avtomatik təsdiqlənir: hesaba daxil olmaq, müştəri ID-si və ya gizli açar tələb olunmur. Home Assistant ilə giriş seçildikdə claude.ai kimi müştərilər Home Assistant administrator hesabı ilə daxil olur (OAuth). Köhnə OAuth istifadə edildikdə bu inteqrasiya öz giriş xidmətini işlədir və tələb edən müştərilərə yapışdırmaq üçün müştəri ID-si və gizli açar verir - onu tam aktivləşdirmək və ya söndürmək üçün Home Assistant-ı yenidən başlatmaq lazım ola bilər.",
+          "bind_host": "MCP server portuna birbaşa kimlər qoşula bilər. Yerli şəbəkə, tətbiq (əlavə) kimi etimadnamə olaraq məxfi yol ilə yerli şəbəkənizdən ona qoşulmağı mümkün edir. Yalnız bu maşın yalnız Home Assistant maşınının özündən bağlantılara icazə verir — veb-hok URL-i və yan panel hər iki halda işləyir.",
+          "webhook_auth": "MCP müştərilərinin veb-hok URL-ində özlərini necə doğrulaması. Məxfi URL ilə əlaqənin özü yeganə etimadnamədir — OAuth ondan istifadə edən müştərilər üçün hələ də işləyir və icazə verilən geriçağırış URL-inə (aşağıya baxın) qayıdan giriş avtomatik olaraq təsdiqlənir: giriş, Müştəri İdentifikatoru və ya Məxfi Açar tələb olunmur. Home Assistant girişi ilə claude.ai kimi müştərilər Home Assistant inzibatçı hesabı (OAuth) ilə daxil olurlar. Köhnə OAuth ilə bu inteqrasiya öz giriş xidmətini işə salır və tələb edən müştərilərə yapışdırmaq üçün Müştəri İdentifikatoru və Məxfi Açar təqdim edir — onu tamamilə aktivləşdirmək və ya söndürmək üçün Home Assistant-ı yenidən başlatmaq lazım ola bilər.",
           "oauth_client_id_override": "Köhnə OAuth üçün avtomatik yaradılmış müştəri ID-sini əvəz edir. Mövcud ID-ni saxlamaq üçün boş buraxın. Yalnız doğrulama rejimi köhnə OAuth olduqda istifadə olunur.",
           "oauth_client_secret_override": "Köhnə OAuth üçün avtomatik yaradılmış müştəri gizli açarını əvəz edir. Mövcud açarı saxlamaq üçün boş buraxın. Yalnız doğrulama rejimi köhnə OAuth olduqda istifadə olunur.",
           "oauth_regenerate": "Birdəfəlik əməliyyat: köhnə OAuth rejimi üçün yeni müştəri ID-si və gizli açar yaradır. Yalnız düzəliş bildirişinin tələb etdiyi kimi Home Assistant yenidən başladıldıqdan sonra qüvvəyə minir - siz yenidən başladanadək əvvəlki müştəri ID-si və gizli açar işləməyə davam edir, yeniləri isə işləmir. Həmçinin yuxarıdakı iki əvəzləmə sahəsini təmizləyir.",
-          "pip_spec": "Boş buraxın. Yalnız müəyyən ha-mcp yığımını sınamaq üçündür (məsələn, buraxılışdan əvvəlki konkret versiyanı seçmək üçün); buraxılış kanalını əvəz edir və sahə təmizlənənədək avtomatik yeniləmələri söndürür.",
+          "pip_spec": "Bu komponent buraxılışının quraşdırdığı ha-mcp serverini işə salmaq üçün boş buraxın. Yalnız müəyyən ha-mcp qurulumunu (versiya pini, pull-request tarball-ı və ya wheel URL-i) sınaqdan keçirmək üçündür; Home Assistant-ı yenidən başlatmadan serveri yenidən yükləməklə tətbiq olunur. Cütləşdirilmiş serverə qayıtmaq üçün onu təmizləyin.",
           "server_url": "Proses daxilindəki serverin sizin Home Assistant quraşdırmanızla əlaqə yaratmaq üçün istifadə etdiyi URL (adətən bu quraşdırmanın özü). Onu bu quraşdırmanın port və SSL parametrlərindən müəyyən etmək üçün boş buraxın; yalnız serverə fərqli marşrut lazım olduqda dəyər daxil edin.",
           "external_url": "Əsas əlaqə URL-i kimi göstərilir - Home Assistant sizin domeniniz və ya əks proksi arxasında olduqda bundan istifadə edin. Protokol sxemi daxil olmaqla tam əsas ünvanı daxil edin. Ünvan birbaşa Home Assistant-a yönəlməlidir - brauzerdə açıldıqda HA giriş səhifəniz görünməlidir - və :8123 kimi port (və ya hər hansı digər port) göstərilməməlidir, əks halda uzaqdakı MCP müştəriləri onunla əlaqə yarada bilməyəcək. Nabu Casa / lokal ünvanın avtomatik istifadə olunması üçün boş buraxın.",
           "webhook_id_override": "Əlaqə URL-indəki (/api/webhook/...) təsadüfi webhook gizli açarını əvəz edir. URL giriş məlumatıdır - uzun və təxmin edilməsi çətin olan dəyərdən istifadə edin. Mövcud dəyəri saxlamaq üçün boş buraxın.",
@@ -79,8 +111,12 @@
           "enable_webhook": "Yalnız lokal giriş rejimi üçün söndürün: Home Assistant webhook-u ümumiyyətlə qeydiyyata alınmır, buna görə heç nə - Nabu Casa daxil olmaqla - Home Assistant vasitəsilə serverə giriş əldə edə bilmir. Serverin birbaşa giriş portu və yan panel işləməyə davam edir.",
           "enable_llm_api": "Bütün alətləri Home Assistant səsli və mətnli söhbət agentlərinə (OpenAI, Google, Ollama, ...) təqdim edin: aktiv olduqda agentlər Home Assistant-ı idarə et bölməsində 'HA-MCP Server' seçib Assist söhbətindən və səslə alətləri idarə edə bilər. Aktivləşdirmə yalnız seçmək imkanı yaradır - agent üçün onu seçənədək heç bir alət təqdim olunmur. İstifadə təlimatı: {llm_api_docs_url}",
           "llm_api_exposure": "Söhbət agentlərinə təqdim olunan alətlər toplusunun forması. Alət axtarışı (standart) agentin kontekstini kiçik saxlayır: sancaqlanmış alətlər və axtarış/icra meta-alətləri olan yığcam API. Tam kataloq təqdim olunan hər bir aləti birbaşa siyahıya alır - böyük kontekstli modellər üçün daha uyğundur. Hər ikisi seçimi ikisini də yanaşı qeydiyyata alır ki, hər agent Home Assistant-ı idarə et bölməsində öz seçimini edə bilsin. Hər alətin təqdim olunması HA-MCP parametrlər panelində idarə olunur; təfərrüatlar: {llm_api_docs_url}",
-          "enable_startup_notification": "Server hər dəfə başladıqda yalnız administratorlar üçün əlçatan olan parametrlər səhifələrinə yönəldən bildiriş göstərin. Bildirişsiz başlatmaq üçün söndürün - əlaqə URL-ləri yenə də Home Assistant jurnalında görünür.",
-          "enable_sidebar_panel": "HA-MCP parametrlər panelini yan paneldə göstərin (yalnız administratorlar üçün). Yan paneldəki qeydi çıxarmaq üçün söndürün - server parametrləri bu ekranda əlçatan qalır."
+          "enable_startup_notification": "Yalnız inzibatçı üçün olan ayar səthlərinə işarə edərək, server hər dəfə işə düşəndə bildiriş göstərin. Səssiz başlatmaq üçün söndürün — qoşulma URL-ləri bu ekranda qalır.",
+          "enable_sidebar_panel": "HA-MCP parametrlər panelini yan paneldə göstərin (yalnız administratorlar üçün). Yan paneldəki qeydi çıxarmaq üçün söndürün - server parametrləri bu ekranda əlçatan qalır.",
+          "oauth_redirect_allowlist": "Yalnız Doğrulama rejimi məxfi veb-hok URL-i olduqda istifadə olunur. Müştəri OAuth ilə daxis olduqda, HA-MCP girişi yalnız bu siyahıdakı geriçağırış URL-inə qaytarır; digər hər hansı biri onun necə əlavə edilməsini izah edən səhifə ilə rədd edilir. Hər bir geriçağırışı tam olaraq müştərinin göndərdiyi kimi daxil edin. http:// loopback geriçağırışı (127.0.0.1, [::1] və ya localhost) həmçinin istənilən portda uyğun gəlir. Yalnız veb-hok URL-i ilə qoşulan müştərilər üçün heç bir giriş tələb olunmur. Yenidən başlatmadan qüvvəyə minir.",
+          "admin_token_replacement": "Cari girişi saxlamaq üçün boş buraxın; keçid etdiyiniz zaman server yenidən başlayır. İnzibatçı hesabının uzunmüddətli giriş tokeni. Özünüzünkü də işləyir: profilinizi açın (yan panelin aşağı hissəsindəki adınız), Təhlükəsizlik sekmesini seçin və Uzunmüddətli giriş tokenləri altında Token yarat seçiminə toxunun. Sizin öz tokeniniz hər hansı sızma baş verərsə ev şəbəkənizdən kənarda da işləyir və Home Assistant serverin dəyişikliklərini sizin adınızdan qeydə alır. Daha təhlükəsiz yol: Yalnız yerli giriş seçimi aktiv edilmiş şəkildə yalnız HA-MCP üçün yaradılmış hesab (aşağıdakı sahələrə baxın).",
+          "admin_username": "Yalnızca HA-MCP üçün yaratdığınız hesab üçündür, Ayarlar → İnsanlar → Girişə icazə ver, Yalnız yerli giriş və Administrator aktiv edilmiş şəkildə Yeni şəxs əlavə edin bölməsində. Heç vaxt öz giriş məlumatlarınızı burada daxil etməyin: öz hesabınızdan istifadə etmək üçün bunun əvəzinə yuxarıdakı onun tokenini yapışdırın. HA-MCP bu hesabın tokenini yaradır (HA-MCP Server adlanır), beləliklə heç kimin bu hesabla daxil olmasına ehtiyac qalmır və şifrə saxlanılmır. Onun tokeni yalnız serverin işlədiyi yerli şəbəkənizdən işləyir və Home Assistant serverin dəyişikliklərini bu hesab altında qeyd edir.",
+          "admin_password": "Token yaratmaq üçün bir dəfə istifadə olunur. Heç vaxt öz şifrəniz deyil."
         }
       }
     }
@@ -91,7 +127,19 @@
       "description": "Proses daxilindəki HA-MCP serverini Home Assistant daxilində başlatmaq mümkün olmadı:\n\n{detail}\n\nHome Assistant jurnallarını yoxlayın, sonra yenidən cəhd etmək üçün inteqrasiyanı yenidən yükləyin (və ya əsas problemi aradan qaldırıb yenidən yükləyin)."
     },
     "server_package_install_failed": {
-      "title": "Proses daxilindəki HA-MCP server paketini quraşdırmaq mümkün olmadı"
+      "title": "Proses daxilindəki HA-MCP server paketini quraşdırmaq mümkün olmadı",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "HA-MCP serverini yenidən quraşdırın",
+            "description": "HA-MCP proses daxilindəki serverini quraşdırmaq və ya işə salmaq mümkün olmadı:\n\n{detail}\n\nHome Assistant-ı yenidən başlatmaq üçün təqdim edin; server paketi işə düşməzdən əvvəl, versiyası artıq ona uyğun gəlməyən hər hansı Asılılıq ilə birlikdə yenidən quraşdırılır. Yuxarıdakı mesaj həmin paketlərdən birini dəyişdirən başqa bir inteqrasiyanın adını çəkirsə, əvvəlcə həmin inteqrasiyanı yeniləyin və ya silin: əks halda Home Assistant növbəti dəfə işə düşəndə onun versiyasını geri qaytaracaq. Əgər HA-MCP Server seçimlərində **ha-mcp package (advanced)** təyin etmisinizsə, əvvəlcə həmin dəyəri yoxlayın: quraşdırıla bilməyən paketin yenidən quraşdırılması eyni şəkildə uğursuz olur."
+          }
+        },
+        "abort": {
+          "entry_removed": "HA-MCP Server qeydi artıq mövcud deyil.",
+          "externally_managed": "Home Assistant skip_pip ilə işə salınıb, ona görə də o, Python paketlərini quraşdırmır. Sisteminizin paket meneceri ilə ha-mcp paketini yenidən quraşdırın, sonra inteqrasiyanı yenidən yükləyin."
+        }
+      }
     },
     "component_outdated": {
       "title": "HA-MCP fərdi komponentini HACS vasitəsilə yenilə",
@@ -107,12 +155,46 @@
           }
         }
       }
+    },
+    "server_token_needed": {
+      "title": "HA-MCP-yə administrator giriş tokeni lazımdır",
+      "fix_flow": {
+        "step": {
+          "token": {
+            "title": "Administrator giriş tokenini daxil edin",
+            "description": "HA-MCP proses daxilindəki serverinin istifadə edə biləcəyi Home Assistant tokeni yoxdur, ona görə də o işləmir. Token çatışmaya bilər, ləğv edilib və ya müddəti bitib, yaxud onun hesabı artıq aktiv administrator olmaya bilər. Yeni uzunmüddətli giriş tokenini yapışdırın və ya yalnız HA-MCP üçün yaratdığınız yalnız yerli hesabın giriş məlumatlarını daxil edin (heç vaxt öz giriş məlumatlarınızı deyil) və HA-MCP onun tokenini yaratsın.",
+            "data": {
+              "admin_token": "Administrator giriş tokeni",
+              "admin_username": "Və ya: HA-MCP üçün yaradılmış yalnız yerli hesabın istifadəçi adı",
+              "admin_password": "Həmin hesabın şifrəsi"
+            }
+          }
+        },
+        "error": {
+          "invalid_token": "Home Assistant bu tokeni tanıfr. Bütün tokeni kopyalayın və ya yeni birini yaradın.",
+          "token_not_long_lived": "Bu, müddəti bitən müvəqqəti daxilolma tokenidir. Bunun əvəzinə uzunmüddətli giriş tokeni yaradın.",
+          "token_not_admin": "Bu token aktiv administrator olmayan hesaba məxsusdur.",
+          "invalid_login": "HA-MCP üçün yaradılmış yalnız yerli administrator hesabının istifadəçi adı və şifrəsini daxil edin.",
+          "credentials_needed": "Administrator hesabının istifadəçi adı və şifrəsini daxil edin və ya giriş tokenini yapışdırın."
+        },
+        "abort": {
+          "entry_removed": "HA-MCP Server qeydi artıq mövcud deyil."
+        }
+      }
     }
   },
   "selector": {
+    "server_remote_access": {
+      "options": {
+        "disabled": "Deaktiv edilib (standart)",
+        "ha_auth": "Home Assistant-a daxil olma",
+        "legacy": "Köhnə OAuth (Müştəri ID və Məxfi Açar)",
+        "none": "Məxfi URL (daxil olmadan)"
+      }
+    },
     "server_webhook_auth": {
       "options": {
-        "none": "Gizli webhook URL-i (standart)",
+        "none": "Məxfi veb-qarmaq URL-i",
         "ha_auth": "Home Assistant ilə daxil ol (OAuth)",
         "legacy": "Köhnə OAuth (bu inteqrasiya yapışdırmaq üçün müştəri ID-si/gizli açar verir)"
       }
@@ -130,7 +212,7 @@
     "connect_local_lan": "Lokal/LAN (Şəbəkə üzərindən giriş seçimi \"Local network\" olduqda): {url}",
     "connect_remote_url": "Uzaqdan əlaqə URL-i: {url}",
     "connect_urls_label": "Əlaqə URL-ləri:",
-    "connect_urls_pending": "Server başladıqdan sonra əlaqə URL-ləri burada (və Home Assistant jurnalında) görünür.",
+    "connect_urls_pending": "Server işə düşdükdən sonra qoşulma URL-ləri burada görünəcək.",
     "connect_webhook_disabled": "Webhook vasitəsilə uzaqdan giriş deaktivdir (yalnız lokal giriş rejimi).",
     "oauth_creds_pending": "Server başladıqdan sonra müştəri ID-si və müştəri gizli açarı burada görünür.",
     "oauth_not_serving": "Köhnə OAuth bunları hələ istifadəyə vermir — aktivləşdirmək üçün tələb olunduqda Home Assistant-ı yenidən başladın.",
@@ -139,7 +221,9 @@
     "tools_module_installed": "Beta/qabaqcıl fayl və YAML alətləri modulu (istəyə bağlı): Quraşdırılıb",
     "tools_module_not_installed": "Beta/qabaqcıl fayl və YAML alətləri modulu (istəyə bağlı): Quraşdırılmayıb — əlavə etmək üçün bu inteqrasiyanın səhifəsində \"Add entry\" düyməsinə basın və \"HA-MCP File & YAML Tools\" seçin",
     "tools_module_not_loaded": "Beta/qabaqcıl fayl və YAML alətləri modulu (istəyə bağlı): Quraşdırılıb, lakin yüklənməyib — bu inteqrasiyanın səhifəsində \"HA-MCP File & YAML Tools\" qeydini aktivləşdirin və ya yenidən yükləyin",
-    "version_line": "Komponent {component_version} - ha-mcp serveri {server_version} ({channel} kanalı)",
+    "version_line": "Komponent {component_version} - Server ha-mcp {server_version} ({source})",
+    "server_source_paired": "bu komponent buraxılışı ilə quraşdırılıb",
+    "server_source_override": "pip tələbi ləğvetməsi",
     "version_not_installed": "hələ quraşdırılmayıb",
     "version_unknown": "naməlum"
   }

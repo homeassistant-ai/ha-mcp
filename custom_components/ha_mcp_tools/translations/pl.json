@@ -15,18 +15,46 @@
       },
       "server": {
         "title": "Serwer HA-MCP",
-        "description": "Uruchamia to pełny serwer ha-mcp wewnątrz Home Assistanta i udostępnia go zdalnie za pomocą webhooka Home Assistanta (dostępnego przez Nabu Casa lub dowolne proxy odwrotne). Jest to samodzielny serwer i kompletny zamiennik metod instalacji takich jak aplikacja (dodatek), Docker, uvx/PyPI oraz stdio – nie uruchamiaj go obok innego serwera ha-mcp. Wybierz **Wyślij**, aby go uruchomić; port, powiązanie i uwierzytelnianie możesz zmienić później w opcjach integracji."
+        "description": "Uruchamia to pełny serwer ha-mcp wewnątrz Home Assistanta. Jest to samodzielny serwer i kompletny zamiennik metod instalacji za pomocą aplikacji (dodatku), Dockera, uvx/PyPI oraz stdio – nie uruchamiaj go obok innego serwera ha-mcp.\n\nDomyślnie nic poza tą maszyną z Home Assistantem nie może się z nim połączyć: panel boczny oraz własne agenty konwersacyjne Home Assistanta działają, ale klienci MCP na innych urządzeniach nie mogą się połączyć, dopóki poniżej nie wybierzesz trybu dostępu zdalnego lub dostępu do sieci lokalnej. Możesz zmienić oba te ustawienia później w opcjach integracji.",
+        "data": {
+          "remote_access": "Dostęp zdalny przez Home Assistant",
+          "bind_host": "Dostęp sieciowy",
+          "admin_token": "Token dostępu administratora",
+          "admin_username": "Lub: nazwa użytkownika konta wyłącznie lokalnego utworzonego dla HA-MCP",
+          "admin_password": "Hasło tego konta"
+        },
+        "data_description": {
+          "remote_access": "Pozwala klientom MCP łączyć się przez webhook Home Assistanta, co działa wszędzie tam, gdzie Home Assistant jest dostępny (w tym Nabu Casa). Logowanie przez Home Assistant: klienci tacy jak claude.ai logują się przy użyciu konta administratora Home Assistanta. Legacy OAuth: identyfikator klienta (Client ID) i sekret do wklejenia w klientach, które tego wymagają. Sekretny URL: sam link webhooka jest jedynym poświadczeniem – każdy, kto go ma, może korzystać z każdego narzędzia.",
+          "bind_host": "Kto może łączyć się bezpośrednio z portem serwera. Bezpiecznym domyślnym ustawieniem jest tylko ta maszyna. Sieć lokalna pozwala innym urządzeniom w Twojej sieci łączyć się za pomocą sekretnego URL-a bezpośredniego dostępu widocznego na ekranie konfiguracji.",
+          "admin_token": "Długoterminowy token dostępu konta administratora. Twój własny też zadziała: otwórz swój profil (Twoje imię i nazwisko na dole paska bocznego), wybierz kartę Bezpieczeństwo, a w sekcji Długoterminowe tokeny dostępu wybierz Utwórz token. Twój własny token działa również spoza sieci domowej, jeśli kiedykolwiek wycieknie, a Home Assistant rejestruje zmiany dokonywane przez serwer pod Twoim imieniem. Bezpieczniejsza opcja: konto utworzone specjalnie dla HA-MCP z włączonym tylko dostępem lokalnym (zobacz pola poniżej).",
+          "admin_username": "Tylko dla konta utworzonego specjalnie dla HA-MCP w Ustawienia → Użytkownicy → Dodaj użytkownika z włączonymi opcjami Zezwalaj na logowanie, Tylko dostęp lokalny oraz Administrator. Nigdy nie wpisuj tutaj swojego własnego loginu: aby użyć własnego konta, wklej powyżej jego token. HA-MCP tworzy token tego konta (o nazwie HA-MCP Server), więc nikt nie musi się na nie logować, a hasło nie jest przechowywane. Jego token działa tylko z Twojej sieci lokalnej, w której działa serwer, a Home Assistant rejestruje zmiany serwera pod tym kontem.",
+          "admin_password": "Używane jednorazowo do utworzenia tokena. Nigdy Twoje własne hasło."
+        }
       }
     },
     "abort": {
       "already_configured": "Ten wpis jest już skonfigurowany.",
       "unsupported_home_assistant": "Wbudowany HA-MCP Server wymaga Home Assistanta w wersji {required} lub nowszej, ale ta instancja uruchomiona jest w wersji {installed}. Nadal możesz używać wpisu HA-MCP File & YAML Tools tego komponentu z zewnętrznym serwerem ha-mcp działającym jako aplikacja (dodatek) lub kontener Docker."
+    },
+    "error": {
+      "invalid_token": "Home Assistant nie rozpoznaje tego tokena. Skopiuj cały token lub utwórz nowy.",
+      "token_not_long_lived": "To jest tymczasowy token logowania, który wygasa. Zamiast tego utwórz długoterminowy token dostępu.",
+      "token_not_admin": "Ten token należy do konta, które nie jest aktywnym administratorem.",
+      "invalid_login": "Wprowadź nazwę użytkownika i hasło konta administratora przeznaczonego wyłącznie do użytku lokalnego, utworzonego dla HA-MCP.",
+      "credentials_needed": "Wprowadź nazwę użytkownika i hasło konta administratora lub wklej token dostępu."
     }
   },
   "options": {
     "error": {
       "invalid_connect_path": "Nie może zawierać znaków #, ?, % ani białych znaków.",
-      "invalid_webhook_id": "Identyfikatory webhooków nie mogą zawierać ukośnika (/)."
+      "invalid_webhook_id": "Identyfikatory webhooków nie mogą zawierać ukośnika (/).",
+      "invalid_oauth_callback": "Każde wywołanie zwrotne musi być adresem URL https:// lub adresem URL http:// na adresach 127.0.0.1, [::1] lub localhost, bez nazwy użytkownika, hasła ani fragmentu #fragment, i mieć długość co najwyżej 2048 znaków. Napraw: {invalid_callbacks}",
+      "too_many_oauth_callbacks": "Wymień co najwyżej {max_callbacks} wywołań zwrotnych.",
+      "invalid_token": "Home Assistant nie rozpoznaje tego tokena. Skopiuj cały token lub utwórz nowy.",
+      "token_not_long_lived": "To jest tymczasowy token logowania, który wygasa. Zamiast tego utwórz długoterminowy token dostępu.",
+      "token_not_admin": "Ten token należy do konta, które nie jest aktywnym administratorem.",
+      "invalid_login": "Wprowadź nazwę użytkownika i hasło konta administratora przeznaczonego wyłącznie do użytku lokalnego, utworzonego dla HA-MCP.",
+      "credentials_needed": "Wprowadź nazwę użytkownika i hasło konta administratora lub wklej token dostępu."
     },
     "step": {
       "tools_info": {
@@ -61,16 +89,20 @@
           "enable_llm_api": "API LLM agenta konwersacyjnego",
           "llm_api_exposure": "Udostępnianie narzędzi agenta konwersacyjnego",
           "enable_startup_notification": "Powiadomienie o uruchomieniu",
-          "enable_sidebar_panel": "Panel ustawień paska bocznego"
+          "enable_sidebar_panel": "Panel ustawień paska bocznego",
+          "oauth_redirect_allowlist": "Dozwolone adresy URL zwrotne OAuth",
+          "admin_token_replacement": "Zastąp token dostępu administratora (opcjonalnie)",
+          "admin_username": "Lub przełącz na konto wyłącznie lokalne utworzone dla HA-MCP: nazwa użytkownika (opcjonalnie)",
+          "admin_password": "Hasło tego konta"
         },
         "data_description": {
           "server_port": "Port, na którym nasłuchuje ten serwer. Aplikacja (dodatek) ha-mcp używa portu 9583, więc domyślnie ustawiono 9584, aby umożliwić działanie obu obok siebie – jeśli nie używasz aplikacji (dodatku), odpowiedni będzie dowolny wolny port.",
-          "bind_host": "Określa, kto może łączyć się bezpośrednio z portem serwera MCP. Wartość domyślna odpowiada aplikacji (dodatkowi): osiągalny w Twojej sieci lokalnej, przy czym tajna ścieżka służy jako poświadczenie. Wybierz loopback, aby zezwolić na połączenia wyłącznie z samej maszyny Home Assistanta – adres URL webhooka oraz panel na pasku bocznym działają w obu przypadkach.",
-          "webhook_auth": "Jak klienci MCP uwierzytelniają się pod adresem URL webhooka. Z tajnym adresem URL, sam link jest jedynym poświadczeniem – OAuth nadal działa dla klientów, którzy go używają, ale każde logowanie jest zatwierdzane automatycznie: nie jest potrzebne logowanie ani Client ID czy Secret. Przy logowaniu przez Home Assistant, klienci tacy jak claude.ai logują się za pomocą konta administratora Home Assistant (OAuth). Przy Legacy OAuth, ta integracja uruchamia własną usługę logowania i wydaje Client ID oraz Secret do wklejenia do klientów, którzy tego wymagają – może być potrzebny restart Home Assistanta, aby w pełni włączyć lub wyłączyć tę funkcję.",
+          "bind_host": "Kto może łączyć się bezpośrednio z portem serwera MCP. Sieć lokalna sprawia, że jest on dostępny z sieci lokalnej, przy czym sekretna ścieżka służy jako poświadczenie, podobnie jak w aplikacji (dodatku). Tylko ta maszyna zezwala na połączenia wyłącznie z samej maszyny Home Assistanta – URL webhooka i panel boczny działają w obu przypadkach.",
+          "webhook_auth": "W jaki sposób klienci MCP uwierzytelniają się pod adresem URL webhooka. W przypadku sekretnego adresu URL sam link jest jedynym poświadczeniem – OAuth nadal działa dla klientów, którzy go używają, a logowanie powracające do dozwolonego adresu URL wywołania zwrotnego (zobacz poniżej) jest zatwierdzane automatycznie: bez logowania, identyfikatora klienta i sekretu. Przy logowaniu przez Home Assistant klienci tacy jak claude.ai logują się przy użyciu konta administratora Home Assistanta (OAuth). W przypadku Legacy OAuth ta integracja uruchamia własną usługę logowania i wydaje identyfikator klienta (Client ID) oraz sekret do wklejenia w klientach, które tego wymagają – ponowne uruchomienie Home Assistanta może być konieczne, aby w pełni je włączyć lub wyłączyć.",
           "oauth_client_id_override": "Zastępuje automatycznie wygenerowany Client ID legacy OAuth. Pozostaw puste, aby zachować obecny. Używane tylko, gdy tryb uwierzytelniania jest ustawiony na legacy OAuth.",
           "oauth_client_secret_override": "Zastępuje automatycznie wygenerowany Client Secret legacy OAuth. Pozostaw puste, aby zachować obecny. Używane tylko, gdy tryb uwierzytelniania jest ustawiony na legacy OAuth.",
           "oauth_regenerate": "Jednorazowa akcja: generuje nowe Client ID i Secret dla trybu legacy OAuth. Wchodzi w życie dopiero po restarcie Home Assistanta, o który prosi monit naprawy – dopóki nie zrestartujesz, poprzednie Client ID i Secret nadal działają, a nowe nie. Czyści również dwa powyższe pola nadpisania.",
-          "pip_spec": "Pozostaw puste. Tylko do testowania konkretnej kompilacji ha-mcp (na przykład przypiętej wersji przedpremierowej); nadpisuje kanał wydania i wyłącza automatyczne aktualizacje, dopóki nie zostanie wyczyszczone.",
+          "pip_spec": "Pozostaw puste, aby uruchomić serwer ha-mcp zainstalowany przez tę wersję komponentu. Tylko do testowania konkretnej kompilacji ha-mcp (przypiętej wersji, archiwum tarball żądania pull lub adresu URL koła wheel); stosowane przez ponowne załadowanie serwera bez restartowania Home Assistanta. Wyczyść, aby powrócić do sparowanego serwera.",
           "server_url": "URL, którego serwer działający w procesie używa do dotarcia do Twojego Home Assistanta (zazwyczaj tej samej instancji). Pozostaw puste, aby wyprowadzić go z portu i ustawień SSL tej instancji; ustaw wartość tylko wtedy, gdy serwer potrzebuje innej trasy.",
           "external_url": "Wyświetlany jako główny URL połączenia — użyj go, gdy Home Assistant znajduje się za Twoją własną domeną lub odwrotnym proxy. Wprowadź pełny adres bazowy, włączając schemat. Musi wskazywać bezpośrednio na Home Assistant – otwarcie go w przeglądarce powinno prowadzić do strony logowania HA – i nie może zawierać portu, takiego jak :8123 (ani żadnego innego portu), w przeciwnym razie zdalne klienty MCP nie będą mogły się z nim połączyć. Pozostaw puste, aby automatycznie użyć Nabu Casa / adresu lokalnego.",
           "webhook_id_override": "Zastępuje losowy sekret webhooka w URL-u połączenia (/api/webhook/...). URL jest poświadczeniem – użyj długiej, trudnej do odgadnięcia wartości. Pozostaw puste, aby zachować obecny.",
@@ -79,8 +111,12 @@
           "enable_webhook": "Wyłącz dla trybu tylko lokalnego: webhook Home Assistant nie jest w ogóle rejestrowany, więc nic – w tym Nabu Casa – nie może dotrzeć do serwera przez Home Assistant. Bezpośredni port serwera i panel boczny nadal działają.",
           "enable_llm_api": "Oferuj pełny zestaw narzędzi agentom konwersacyjnym Home Assistant (OpenAI, Google, Ollama, ...): gdy włączone, agenci mogą wybrać „HA-MCP Server” w sekcji „Steruj Home Assistant” i używać narzędzi z czatu i głosu Assist. Włączenie tylko sprawia, że jest ono dostępne do wyboru – nic nie jest ujawniane, dopóki nie wybierzesz go dla agenta. Przewodnik użytkowania: {llm_api_docs_url}",
           "llm_api_exposure": "Kształt zestawu narzędzi oferowanego agentom konwersacyjnym. Wyszukiwanie narzędzi (domyślne) utrzymuje mały kontekst agenta: kompaktowe API z przypiętymi narzędziami plus meta-narzędzia do wyszukiwania/wykonywania. Pełny katalog wyświetla każde ujawnione narzędzie bezpośrednio – lepsze dla modeli o dużym kontekście. Oba rejestrują się obok siebie, więc każdy agent wybiera własne w sekcji „Steruj Home Assistant”. Ujawnianie poszczególnych narzędzi jest zarządzane w panelu ustawień HA-MCP; szczegóły: {llm_api_docs_url}",
-          "enable_startup_notification": "Pokazuj powiadomienie za każdym razem, gdy serwer się uruchamia, wskazujące na powierzchnie ustawień tylko dla administratorów. Wyłącz, aby uruchamiać cicho – URL-e połączenia nadal pojawiają się w logu Home Assistant.",
-          "enable_sidebar_panel": "Pokaż panel ustawień HA-MCP na pasku bocznym (tylko dla administratorów). Wyłącz, aby usunąć wpis z paska bocznego – opcje serwera pozostają dostępne na tym ekranie."
+          "enable_startup_notification": "Wyświetl powiadomienie przy każdym uruchomieniu serwera, wskazując na interfejsy ustawień dostępne tylko dla administratora. Wyłącz, aby uruchamiać się po cichu – adresy URL połączeń pozostają na tym ekranie.",
+          "enable_sidebar_panel": "Pokaż panel ustawień HA-MCP na pasku bocznym (tylko dla administratorów). Wyłącz, aby usunąć wpis z paska bocznego – opcje serwera pozostają dostępne na tym ekranie.",
+          "oauth_redirect_allowlist": "Używane tylko wtedy, gdy trybem uwierzytelniania jest sekretny URL webhooka. Gdy klient loguje się przez OAuth, HA-MCP zwraca logowanie tylko na adres URL wywołania zwrotnego z tej listy; każdy inny jest odrzucany ze stroną wyjaśniającą, jak go dodać. Wprowadź każde wywołanie zwrotne dokładnie tak, jak przesyła je klient. Wywołanie zwrotne pętli zwrotnej http:// (127.0.0.1, [::1] lub localhost) dopasowuje również dowolny port. Klienci łączą się sami za pomocą samego URL-a webhooka i nie potrzebują wpisu. Wchodzi w życie bez ponownego uruchamiania.",
+          "admin_token_replacement": "Pozostaw puste, aby zachować bieżący dostęp; serwer uruchomi się ponownie po przełączeniu. Długoterminowy token dostępu konta administratora. Twój własny też zadziała: otwórz swój profil (Twoje imię i nazwisko na dole paska bocznego), wybierz kartę Bezpieczeństwo, a w sekcji Długoterminowe tokeny dostępu wybierz Utwórz token. Twój własny token działa również spoza sieci domowej, jeśli kiedykolwiek wycieknie, a Home Assistant rejestruje zmiany dokonywane przez serwer pod Twoim imieniem. Bezpieczniejsza opcja: konto utworzone specjalnie dla HA-MCP z włączonym tylko dostępem lokalnym (zobacz pola poniżej).",
+          "admin_username": "Tylko dla konta utworzonego specjalnie dla HA-MCP, w Ustawienia → Osoby → Dodaj osobę z włączonymi opcjami Zezwalaj na logowanie, Tylko dostęp lokalny oraz Administrator. Nigdy nie wpisuj tutaj swojego loginu: aby użyć własnego konta, wklej powyżej jego token. HA-MCP tworzy token tego konta (o nazwie HA-MCP Server), więc nikt nie musi się na nie logować, a hasło nie jest przechowywane. Jego token działa tylko w sieci lokalnej, w której uruchomiony jest serwer, a Home Assistant rejestruje zmiany dokonywane przez serwer na tym koncie.",
+          "admin_password": "Używane raz, do utworzenia tokena. Nigdy Twoje własne hasło."
         }
       }
     }
@@ -91,7 +127,19 @@
       "description": "Serwer HA-MCP w procesie nie mógł zostać uruchomiony wewnątrz Home Assistant:\n\n{detail}\n\nSprawdź logi Home Assistant, a następnie przeładuj integrację (lub napraw podstawowy problem i przeładuj), aby spróbować ponownie."
     },
     "server_package_install_failed": {
-      "title": "Pakiet serwera HA-MCP w procesie nie mógł zostać zainstalowany"
+      "title": "Pakiet serwera HA-MCP w procesie nie mógł zostać zainstalowany",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Zainstaluj ponownie serwer HA-MCP",
+            "description": "Nie udało się zainstalować lub uruchomić serwera działającego w procesie HA-MCP:\n\n{detail}\n\nZatwierdź, aby uruchomić ponownie Home Assistanta; pakiet serwera zostanie zainstalowany ponownie przed uruchomieniem serwera, wraz z każdą zależnością, której wersja już go nie spełnia. Jeśli w opcjach serwera HA-MCP ustawiono opcję **ha-mcp package (advanced)**, sprawdź najpierw tę wartość: ponowna instalacja pakietu, którego nie można zainstalować, kończy się takim samym błędem."
+          }
+        },
+        "abort": {
+          "entry_removed": "Wpis serwera HA-MCP już nie istnieje.",
+          "externally_managed": "Home Assistant został uruchomiony z parametrem skip_pip, więc nie instaluje pakietów języka Python. Zainstaluj ponownie pakiet ha-mcp za pomocą menedżera pakietów swojego systemu, a następnie wczytaj ponownie integrację."
+        }
+      }
     },
     "component_outdated": {
       "title": "Zaktualizuj niestandardowy komponent HA-MCP przez HACS",
@@ -107,12 +155,46 @@
           }
         }
       }
+    },
+    "server_token_needed": {
+      "title": "HA-MCP wymaga tokena dostępu administratora",
+      "fix_flow": {
+        "step": {
+          "token": {
+            "title": "Wprowadź token dostępu administratora",
+            "description": "Serwer działający w procesie HA-MCP nie ma tokena Home Assistanta, którego mógłby użyć, więc nie działa. Token może brakować, zostać unieważniony lub wygasnąć, bądź konto powiązane z nim może nie być już aktywnym administratorem. Wklej nowy długoterminowy token dostępu lub wprowadź login konta przeznaczonego wyłącznie do użytku lokalnego, utworzonego specjalnie dla HA-MCP (nigdy własnego loginu), a HA-MCP utworzy jego token.",
+            "data": {
+              "admin_token": "Token dostępu administratora",
+              "admin_username": "Lub: nazwa użytkownika konta przeznaczonego wyłącznie do użytku lokalnego utworzonego dla HA-MCP",
+              "admin_password": "Hasło tego konta"
+            }
+          }
+        },
+        "error": {
+          "invalid_token": "Home Assistant nie rozpoznaje tego tokena. Skopiuj cały token lub utwórz nowy.",
+          "token_not_long_lived": "Jest to tymczasowy token logowania, który wygasa. Zamiast tego utwórz długoterminowy token dostępu.",
+          "token_not_admin": "Ten token należy do konta, które nie jest aktywnym administratorem.",
+          "invalid_login": "Wprowadź nazwę użytkownika i hasło lokalnego konta administratora utworzonego dla HA-MCP.",
+          "credentials_needed": "Wprowadź nazwę użytkownika i hasło konta administratora lub wklej token dostępu."
+        },
+        "abort": {
+          "entry_removed": "Wpis serwera HA-MCP już nie istnieje."
+        }
+      }
     }
   },
   "selector": {
+    "server_remote_access": {
+      "options": {
+        "disabled": "Wyłączone (domyślnie)",
+        "ha_auth": "Logowanie do Home Assistanta",
+        "legacy": "Starsza wersja OAuth (identyfikator klienta i sekret)",
+        "none": "Tajny adres URL (bez logowania)"
+      }
+    },
     "server_webhook_auth": {
       "options": {
-        "none": "Tajny URL webhooka (domyślny)",
+        "none": "Tajny adres URL webhooka",
         "ha_auth": "Zaloguj się za pomocą Home Assistant (OAuth)",
         "legacy": "Legacy OAuth (ta integracja wydaje Client ID/Secret do wklejenia)"
       }
@@ -130,7 +212,7 @@
     "connect_local_lan": "Lokalnie/LAN (gdy dostęp do sieci to \"Local network\"): {url}",
     "connect_remote_url": "Zdalny URL połączenia: {url}",
     "connect_urls_label": "URL(e) połączenia:",
-    "connect_urls_pending": "URL-e połączenia pojawią się tutaj (i w logu Home Assistant) po uruchomieniu serwera.",
+    "connect_urls_pending": "Adresy URL połączenia pojawią się tutaj po uruchomieniu serwera.",
     "connect_webhook_disabled": "Zdalny dostęp przez webhook jest wyłączony (tryb tylko lokalny).",
     "oauth_creds_pending": "Client ID i Client Secret pojawią się tutaj po uruchomieniu serwera.",
     "oauth_not_serving": "Legacy OAuth jeszcze ich nie udostępnia — uruchom ponownie Home Assistanta, gdy pojawi się taka prośba, aby je aktywować.",
@@ -139,7 +221,9 @@
     "tools_module_installed": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Zainstalowany",
     "tools_module_not_installed": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Niezainstalowany — naciśnij „Dodaj wpis” na stronie tej integracji i wybierz „HA-MCP File & YAML Tools”, aby go dodać",
     "tools_module_not_loaded": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Zainstalowany, ale niezaładowany — włącz lub przeładuj wpis „HA-MCP File & YAML Tools” na stronie tej integracji",
-    "version_line": "Komponent {component_version} - Serwer ha-mcp {server_version} (kanał {channel})",
+    "version_line": "Komponent {component_version} - Serwer ha-mcp {server_version} ({source})",
+    "server_source_paired": "zainstalowane z tym wydaniem komponentu",
+    "server_source_override": "zastąpienie wymagania pip",
     "version_not_installed": "jeszcze niezainstalowany",
     "version_unknown": "nieznany"
   }

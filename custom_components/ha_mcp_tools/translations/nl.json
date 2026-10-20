@@ -15,18 +15,46 @@
       },
       "server": {
         "title": "HA-MCP Server",
-        "description": "Hiermee draait de volledige ha-mcp server binnen Home Assistant en wordt deze op afstand beschikbaar gesteld via een Home Assistant webhook (bereikbaar via Nabu Casa of een omgekeerde proxy / reverse proxy). Het is een standalone server en een volledige vervanging voor de app (add-on)-, Docker-, uvx/PyPI- en stdio-installatiemethoden - draai deze niet tegelijkertijd met een andere ha-mcp server. Selecteer **Verzenden** om te starten; je kunt de poort, binding en authenticatie achteraf wijzigen in de integratie-opties."
+        "description": "Dit voert de volledige ha-mcp server uit binnen Home Assistant. Het is een stand-alone server en een volledige vervanging voor de app (add-on), Docker, uvx/PyPI en stdio installatiemethoden - voer deze niet uit naast een andere ha-mcp server.\n\nStandaard kan niets buiten deze Home Assistant machine deze bereiken: het zijbalkpaneel en de eigen conversatie-agenten van Home Assistant werken, maar MCP-clients op andere apparaten kunnen geen verbinding maken totdat je hieronder een externe toegangsmodus of lokaal netwerktoegang kiest. Je kunt beide later wijzigen in de integratie-opties.",
+        "data": {
+          "remote_access": "Externe toegang via Home Assistant",
+          "bind_host": "Netwerktoegang",
+          "admin_token": "Beheerderstoegangstoken",
+          "admin_username": "Of: gebruikersnaam van een lokaal account dat is gemaakt voor HA-MCP",
+          "admin_password": "Het wachtwoord van dat account"
+        },
+        "data_description": {
+          "remote_access": "Hiermee kunnen MCP-clients verbinding maken via een Home Assistant webhook, die werkt waar Home Assistant ook bereikbaar is (inclusief Nabu Casa). Home Assistant aanmelding: clients zoals claude.ai loggen in met een Home Assistant-beheerdersaccount. Legacy OAuth: een Client ID en Secret om te plakken in clients die er een nodig hebben. Secret URL: de webhook-link zelf is de enige inloggegevens - iedereen die deze heeft, kan elk hulpprogramma gebruiken.",
+          "bind_host": "Wie rechtstreeks verbinding kan maken met de eigen poort van de server. Alleen deze machine is de veilige standaardwaarde. Lokaal netwerk zorgt ervoor dat andere apparaten op je netwerk verbinding kunnen maken met de geheime URL voor directe toegang die wordt weergegeven op het configuratiescherm.",
+          "admin_token": "Een langdurig toegangstoken van een beheerdersaccount. Je eigen token werkt: open je profiel (je naam onderaan de zijbalk), selecteer het tabblad Beveiliging en selecteer Token maken onder Langdurige toegangstokens. Je eigen token werkt ook van buiten je thuisnetwerk als het ooit lekt, en Home Assistant legt de wijzigingen van de server vast onder je naam. Veiliger: een account dat speciaal is gemaakt voor HA-MCP, met Alleen lokale toegang ingeschakeld (zie de velden hieronder).",
+          "admin_username": "Alleen voor een account dat je specifiek hebt aangemaakt voor HA-MCP, onder Instellingen → Personen → Persoon toevoegen met Inloggen toestaan, Alleen lokale toegang en Beheerder ingeschakeld. Voer hier nooit je eigen login in: om je eigen account te gebruiken, plak je in plaats daarvan het token hierboven. HA-MCP maakt het token van dit account aan (genaamd HA-MCP Server), zodat niemand erop hoeft in te loggen en het wachtwoord niet wordt bewaard. Het token werkt alleen vanuit je lokale netwerk waar de server draait, en Home Assistant legt de wijzigingen van de server vast onder dit account.",
+          "admin_password": "Eenmalig gebruikt om het token aan te maken. Nooit je eigen wachtwoord."
+        }
       }
     },
     "abort": {
       "already_configured": "Deze ingang is al ingesteld.",
       "unsupported_home_assistant": "De in-process HA-MCP Server vereist Home Assistant {required} of nieuwer, maar deze instantie draait {installed}. Je kunt nog steeds de HA-MCP File & YAML Tools-invoer van dit component gebruiken met een externe ha-mcp-server die als app (add-on) of Docker-container draait."
+    },
+    "error": {
+      "invalid_token": "Home Assistant herkent dit token niet. Kopieer het hele token of maak een nieuwe aan.",
+      "token_not_long_lived": "Dit is een tijdelijk aanmeldingstoken dat verloopt. Maak in plaats daarvan een langdurig toegangstoken aan.",
+      "token_not_admin": "Dit token behoort tot een account dat geen actieve beheerder is.",
+      "invalid_login": "Voer de gebruikersnaam en het wachtwoord in van een lokaal beheerdersaccount dat is gemaakt voor HA-MCP.",
+      "credentials_needed": "Voer de gebruikersnaam en het wachtwoord van een beheerdersaccount in of plak een toegangstoken."
     }
   },
   "options": {
     "error": {
       "invalid_connect_path": "Mag geen #, ?, %, of witruimte bevatten.",
-      "invalid_webhook_id": "Webhook-ID's mogen geen slash (/) bevatten."
+      "invalid_webhook_id": "Webhook-ID's mogen geen slash (/) bevatten.",
+      "invalid_oauth_callback": "Elke callback moet een https:// URL zijn, of een http:// URL op 127.0.0.1, [::1] of localhost, zonder gebruikersnaam, wachtwoord of #fragment, en maximaal 2048 tekens lang. Oplossing: {invalid_callbacks}",
+      "too_many_oauth_callbacks": "Geef maximaal {max_callbacks} callbacks op.",
+      "invalid_token": "Home Assistant herkent dit token niet. Kopieer het hele token of maak een nieuwe aan.",
+      "token_not_long_lived": "Dit is een tijdelijk aanmeldingstoken dat verloopt. Maak in plaats daarvan een langdurig toegangstoken aan.",
+      "token_not_admin": "Dit token behoort tot een account dat geen actieve beheerder is.",
+      "invalid_login": "Voer de gebruikersnaam en het wachtwoord in van een lokaal beheerdersaccount dat is gemaakt voor HA-MCP.",
+      "credentials_needed": "Voer de gebruikersnaam en het wachtwoord van een beheerdersaccount in of plak een toegangstoken."
     },
     "step": {
       "tools_info": {
@@ -61,16 +89,20 @@
           "enable_llm_api": "Conversatie-agent LLM API",
           "llm_api_exposure": "Blootstelling van conversatie-agent hulpmiddelen",
           "enable_startup_notification": "Opstartmelding",
-          "enable_sidebar_panel": "Zijbalk instellingenpaneel"
+          "enable_sidebar_panel": "Zijbalk instellingenpaneel",
+          "oauth_redirect_allowlist": "Toegestane OAuth-terugbel-URL's",
+          "admin_token_replacement": "Vervang het beheerderstoegangstoken (optioneel)",
+          "admin_username": "Of schakel over naar een lokaal account gemaakt voor HA-MCP: gebruikersnaam (optioneel)",
+          "admin_password": "Het wachtwoord van dat account"
         },
         "data_description": {
           "server_port": "De poort waarop deze server luistert. De ha-mcp app (add-on) gebruikt 9583, dus de standaardwaarde is 9584 zodat beide naast elkaar kunnen draaien - als je de app (add-on) niet gebruikt, werkt elke vrije poort.",
-          "bind_host": "Wie er rechtstreeks verbinding kan maken met de MCP-serverpoort. De standaardwaarde komt overeen met de app (add-on): bereikbaar op je lokale netwerk, met het geheime pad als inloggegeven. Kies loopback om alleen verbindingen toe te staan vanaf de Home Assistant-machine zelf - de webhook-URL en het zijbalkpaneel werken in beide gevallen.",
-          "webhook_auth": "Hoe MCP-clients zich bewijzen bij de webhook-URL. Met de geheime URL is de link zelf de enige referentie - OAuth draait nog steeds voor clients die het gebruiken, maar elke aanmelding wordt automatisch goedgekeurd: geen login en geen Client ID of Secret nodig. Met Home Assistant-aanmelding loggen clients zoals claude.ai in met een Home Assistant-beheerdersaccount (OAuth). Met legacy OAuth draait deze integratie zijn eigen aanmeldingsservice en geeft een Client ID en Secret uit om te plakken in clients die er een nodig hebben - een herstart van Home Assistant kan nodig zijn om het volledig in of uit te schakelen.",
+          "bind_host": "Wie rechtstreeks verbinding kan maken met de MCP-serverpoort. Lokaal netwerk maakt deze bereikbaar vanaf je lokale netwerk, met het geheime pad als inloggegevens, net als de app (add-on). Alleen deze machine staat alleen verbindingen toe vanaf de Home Assistant-machine zelf - de webhook-URL en het zijbalkpaneel werken in beide gevallen.",
+          "webhook_auth": "Hoe MCP-clients zichzelf verifiëren bij de webhook-URL. Bij de geheime URL is de link zelf de enige inloggegevens - OAuth werkt nog steeds voor clients die het gebruiken, en een aanmelding die terugkeert naar een toegestane callback-URL (zie hieronder) wordt automatisch goedgekeurd: geen login en geen Client ID of Secret nodig. Met Home Assistant-aanmelding loggen clients zoals claude.ai in met een Home Assistant-beheerdersaccount (OAuth). Met legacy OAuth voert deze integratie haar eigen aanmeldingsservice uit en geeft deze een Client ID en Secret uit om te plakken in clients die er een vereisen - een herstart van Home Assistant kan nodig zijn om deze volledig in of uit te schakelen.",
           "oauth_client_id_override": "Vervangt de automatisch gegenereerde legacy OAuth Client ID. Laat leeg om de huidige te behouden. Alleen gebruikt wanneer Authenticatiemodus is ingesteld op legacy OAuth.",
           "oauth_client_secret_override": "Vervangt de automatisch gegenereerde legacy OAuth Client Secret. Laat leeg om de huidige te behouden. Alleen gebruikt wanneer Authenticatiemodus is ingesteld op legacy OAuth.",
           "oauth_regenerate": "Eenmalige actie: genereert een nieuwe Client ID en Secret voor legacy OAuth-modus. Het wordt pas van kracht na de Home Assistant herstart waar de reparatieprompt om vraagt - totdat je herstart, blijven de vorige Client ID en Secret werken en de nieuwe niet. Maakt ook de twee overschrijvingsvelden hierboven leeg.",
-          "pip_spec": "Laat leeg. Alleen voor het testen van een specifieke ha-mcp build (bijvoorbeeld een pre-release pin); overschrijft het releasekanaal en schakelt automatische updates uit totdat het leeg is gemaakt.",
+          "pip_spec": "Laat leeg om de ha-mcp-server uit te voeren die deze componentrelease heeft geïnstalleerd. Alleen voor het testen van een specifieke ha-mcp-build (een versiepining, een pull-request tarball of een wheel-URL); wordt toegepast door de server te herladen, zonder Home Assistant te herstarten. Wis dit om terug te keren naar de gekoppelde server.",
           "server_url": "De URL die de in-process server gebruikt om je Home Assistant te bereiken (meestal deze instantie zelf). Laat leeg om het af te leiden van de poort- en SSL-instellingen van deze instantie; stel alleen een waarde in wanneer de server een andere route nodig heeft.",
           "external_url": "Weergegeven als de primaire verbindings-URL - gebruik dit wanneer Home Assistant achter je eigen domein of reverse proxy zit. Voer het volledige basisadres in, inclusief het schema. Het moet direct naar Home Assistant wijzen - het openen in een browser zou je HA-inlogpagina moeten bereiken - en mag geen poort bevatten zoals :8123 (of enige andere poort), anders kunnen externe MCP-clients het niet bereiken. Laat leeg om Nabu Casa / het lokale adres automatisch te gebruiken.",
           "webhook_id_override": "Vervangt het willekeurige webhook-geheim in de verbindings-URL (/api/webhook/...). De URL is de referentie - gebruik een lange, moeilijk te raden waarde. Laat leeg om de huidige te behouden.",
@@ -79,8 +111,12 @@
           "enable_webhook": "Schakel uit voor de lokale-modus: de Home Assistant-webhook wordt helemaal niet geregistreerd, dus niets - inclusief Nabu Casa - kan de server via Home Assistant bereiken. De directe serverpoort en het zijbalkpaneel blijven werken.",
           "enable_llm_api": "Bied de volledige toolset aan Home Assistant conversatie-agents (OpenAI, Google, Ollama, ...): wanneer ingeschakeld, kunnen agents 'HA-MCP Server' selecteren onder Home Assistant bedienen en de tools aansturen vanuit Assist chat en spraak. Inschakelen maakt het alleen selecteerbaar - niets wordt blootgesteld totdat je het kiest op een agent. Gebruikershandleiding: {llm_api_docs_url}",
           "llm_api_exposure": "Vorm van de toolset die wordt aangeboden aan conversatie-agents. Tool zoeken (standaard) houdt de context van de agent klein: een compacte API met vastgezette tools plus zoek-/uitvoer meta-tools. Volledige catalogus toont elke blootgestelde tool direct - beter voor modellen met een grote context. Beide registreert de twee naast elkaar, zodat elke agent zijn eigen kiest onder Home Assistant bedienen. Blootstelling per tool wordt beheerd in het HA-MCP instellingenpaneel; details: {llm_api_docs_url}",
-          "enable_startup_notification": "Toon een melding elke keer dat de server start, verwijzend naar de instellingenpagina's die alleen voor beheerders zijn. Schakel uit om stil te starten - de verbindings-URL's verschijnen nog steeds in het Home Assistant-logboek.",
-          "enable_sidebar_panel": "Toon het HA-MCP instellingenpaneel in de zijbalk (alleen beheerders). Schakel uit om de zijbalkvermelding te verwijderen - serveropties blijven beschikbaar op dit scherm."
+          "enable_startup_notification": "Toon een melding telkens wanneer de server start, die verwijst naar de instellingenpagina's die alleen voor beheerders zijn. Schakel uit om stil te starten - de verbindings-URL's blijven op dit scherm staan.",
+          "enable_sidebar_panel": "Toon het HA-MCP instellingenpaneel in de zijbalk (alleen beheerders). Schakel uit om de zijbalkvermelding te verwijderen - serveropties blijven beschikbaar op dit scherm.",
+          "oauth_redirect_allowlist": "Alleen gebruikt wanneer de authenticatiemodus de geheime webhook-URL is. Wanneer een client zich aanmeldt met OAuth, stuurt HA-MCP de aanmelding alleen terug naar een callback-URL op deze lijst; elke andere wordt geweigerd met een pagina die uitlegt hoe je deze kunt toevoegen. Voer elke callback precies in zoals de client deze verzendt. Een http:// loopback-callback (127.0.0.1, [::1] of localhost) komt ook overeen op elke poort. Clients die alleen verbinding maken met de webhook-URL hebben geen invoer nodig. Wordt van kracht zonder herstart.",
+          "admin_token_replacement": "Laat leeg om de huidige toegang te behouden; de server wordt opnieuw opgestart wanneer je wisselt. Een langdurig toegangstoken van een beheerdersaccount. Je eigen token werkt: open je profiel (je naam onderaan de zijbalk), selecteer het tabblad Beveiliging en selecteer Token maken onder Langdurige toegangstokens. Je eigen token werkt ook van buiten je thuisnetwerk als het ooit lekt, en Home Assistant legt de wijzigingen van de server vast onder je naam. Veiliger: een account dat speciaal is gemaakt voor HA-MCP, met Alleen lokale toegang ingeschakeld (zie de velden hieronder).",
+          "admin_username": "Alleen voor een account dat je speciaal hebt aangemaakt voor HA-MCP, onder Instellingen → Personen → Persoon toevoegen met Inloggen toestaan, Alleen lokaal en Beheerder aan. Voer hier nooit je eigen inloggegevens in: om je eigen account te gebruiken, plak je de bijbehorende token hierboven. HA-MCP maakt de token van dit account aan (genaamd HA-MCP Server), zodat niemand hiermee hoeft in te loggen, en het wachtwoord wordt niet bewaard. De token werkt alleen vanaf je lokale netwerk waar de server draait, en Home Assistant registreert de wijzigingen van de server onder dit account.",
+          "admin_password": "Wordt eenmalig gebruikt om de token aan te maken. Nooit je eigen wachtwoord."
         }
       }
     }
@@ -91,7 +127,19 @@
       "description": "De HA-MCP in-process server kon niet worden gestart binnen Home Assistant:\n\n{detail}\n\nControleer de Home Assistant-logboeken en herlaad vervolgens de integratie (of los het onderliggende probleem op en herlaad) om opnieuw te proberen."
     },
     "server_package_install_failed": {
-      "title": "Het HA-MCP in-process serverpakket kon niet worden geïnstalleerd"
+      "title": "Het HA-MCP in-process serverpakket kon niet worden geïnstalleerd",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "De HA-MCP-server opnieuw installeren",
+            "description": "De in-process HA-MCP-server kon niet worden geïnstalleerd of gestart:\n\n{detail}\n\nBevestig om Home Assistant opnieuw te starten; het serverpakket wordt opnieuw geïnstalleerd voordat de server start, samen met eventuele afhankelijkheden waarvan de versie niet meer voldoet. Als de bovenstaande melding een andere integratie noemt die een van deze pakketten heeft gewijzigd, werk die integratie dan eerst bij of verwijder deze: anders zet Home Assistant de bijbehorende versie bij de volgende start weer terug. Als je **ha-mcp package (advanced)** hebt ingesteld in de HA-MCP Server-opties, controleer dan eerst die waarde: het opnieuw installeren van een pakket dat niet kan worden geïnstalleerd mislukt op dezelfde manier."
+          }
+        },
+        "abort": {
+          "entry_removed": "Het HA-MCP Server-item bestaat niet meer.",
+          "externally_managed": "Home Assistant is gestart met skip_pip, waardoor er geen Python-pakketten worden geïnstalleerd. Installeer het ha-mcp-pakket opnieuw met de pakketbeheerder van je systeem en laad de integratie daarna opnieuw."
+        }
+      }
     },
     "component_outdated": {
       "title": "Update de HA-MCP Custom Component via HACS",
@@ -107,12 +155,46 @@
           }
         }
       }
+    },
+    "server_token_needed": {
+      "title": "HA-MCP heeft een beheerdertoegangstoken nodig",
+      "fix_flow": {
+        "step": {
+          "token": {
+            "title": "Voer een beheerdertoegangstoken in",
+            "description": "De in-process HA-MCP-server heeft geen Home Assistant-token die het kan gebruiken en draait daarom niet. De token ontbreekt mogelijk, is ingetrokken of verlopen, of het bijbehorende account is mogelijk geen actieve beheerder meer. Plak een nieuwe langdurige toegangstoken of voer de inloggegevens in van een lokaal account dat je speciaal voor HA-MCP hebt aangemaakt (nooit je eigen inloggegevens) en HA-MCP maakt de token aan.",
+            "data": {
+              "admin_token": "Beheerdertoegangstoken",
+              "admin_username": "Of: gebruikersnaam van een lokaal account dat is gemaakt voor HA-MCP",
+              "admin_password": "Het wachtwoord van dat account"
+            }
+          }
+        },
+        "error": {
+          "invalid_token": "Home Assistant herkent deze token niet. Kopieer de hele token of maak een nieuwe aan.",
+          "token_not_long_lived": "Dit is een tijdelijke inlogtoken die verloopt. Maak in plaats daarvan een langdurige toegangstoken aan.",
+          "token_not_admin": "Deze token behoort toe aan een account dat geen actieve beheerder is.",
+          "invalid_login": "Voer de gebruikersnaam en het wachtwoord in van een lokaal beheerderaccount dat is gemaakt voor HA-MCP.",
+          "credentials_needed": "Voer de gebruikersnaam en het wachtwoord van een beheerderaccount in of plak een toegangstoken."
+        },
+        "abort": {
+          "entry_removed": "Het HA-MCP Server-item bestaat niet meer."
+        }
+      }
     }
   },
   "selector": {
+    "server_remote_access": {
+      "options": {
+        "disabled": "Uitgeschakeld (standaard)",
+        "ha_auth": "Home Assistant-inlog",
+        "legacy": "Legacy OAuth (Client-ID en -geheim)",
+        "none": "Geheime URL (geen inlog)"
+      }
+    },
     "server_webhook_auth": {
       "options": {
-        "none": "Geheime webhook-URL (standaard)",
+        "none": "Geheime webhook-URL",
         "ha_auth": "Aanmelden met Home Assistant (OAuth)",
         "legacy": "Legacy OAuth (deze integratie geeft een Client ID/Secret uit om te plakken)"
       }
@@ -130,7 +212,7 @@
     "connect_local_lan": "Lokaal/LAN (wanneer Netwerktoegang \"Local network\" is): {url}",
     "connect_remote_url": "Verbindings-URL op afstand: {url}",
     "connect_urls_label": "Verbindings-URL('s):",
-    "connect_urls_pending": "De verbindings-URL's verschijnen hier (en in het Home Assistant-logboek) zodra de server is gestart.",
+    "connect_urls_pending": "De verbindings-URL's verschijnen hier zodra de server is gestart.",
     "connect_webhook_disabled": "Toegang op afstand via webhook is uitgeschakeld (alleen-lokale modus).",
     "oauth_creds_pending": "De Client ID en Client Secret verschijnen hier zodra de server is gestart.",
     "oauth_not_serving": "Legacy OAuth levert deze nog niet — start Home Assistant opnieuw op wanneer je daarom wordt gevraagd, om ze te activeren.",
@@ -139,7 +221,9 @@
     "tools_module_installed": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Geïnstalleerd",
     "tools_module_not_installed": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Niet geïnstalleerd — druk op \"Item toevoegen\" op de pagina van deze integratie en kies \"HA-MCP File & YAML Tools\" om deze toe te voegen",
     "tools_module_not_loaded": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Geïnstalleerd maar niet geladen — schakel het \"HA-MCP File & YAML Tools\" item op de pagina van deze integratie in of herlaad het",
-    "version_line": "Component {component_version} - Server ha-mcp {server_version} ({channel} kanaal)",
+    "version_line": "Component {component_version} - Server ha-mcp {server_version} ({source})",
+    "server_source_paired": "geïnstalleerd met deze componentrelease",
+    "server_source_override": "pip-vereiste overschrijven",
     "version_not_installed": "nog niet geïnstalleerd",
     "version_unknown": "onbekend"
   }
