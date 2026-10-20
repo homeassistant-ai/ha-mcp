@@ -122,6 +122,10 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n\t<!--\n${reason("N/A")}`), null],
     [(s) => (s.issue.body += `\n\n<!- x\n${reason("N/A")}`), null],
     [(s) => (s.issue.body += `\n\n<!-- template --> see below\n${reason("N/A")}`), null],
+    // Text after the "-->" that ends such a comment shows, and so does an
+    // unclosed fence's content.
+    [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here --> Found by reading the code.")}`), null],
+    [(s) => (s.issue.body += `\n\n${reason("```\nha-mcp exits before the handshake")}`), null],
     // What an issue form writes for an empty optional field.
     [(s) => (s.issue.body += `\n\n${reason("_No response_")}`), "label"],
     // A heading with a tab after its hashes, or an empty one, ends the reason
@@ -142,6 +146,12 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n${reason("<!--\nExplain here\n-->")}`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("<!-- a --><!-- b -->")}`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("<!-- e.g. Settings > Integrations -->")}`), "label"],
+    // A comment left open hides the rest of the issue, and an empty code block
+    // shows no text.
+    [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here")}`), "label"],
+    [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here\nwhy there is no report")}`), "label"],
+    [(s) => (s.issue.body += `\n\n${reason("```\n```")}`), "label"],
+    [(s) => (s.issue.body += `\n\n${reason("~~~ yaml\n\n~~~")}`), "label"],
     [(s) => (s.issue.body += `\n\n\`\`\`\nlog\n\`\`\`yaml\n${reason("in the log")}\n\`\`\``), "label"],
     // A shorter or other-kind fence line closes no fence, and a tilde fence's
     // info string may hold backticks.
