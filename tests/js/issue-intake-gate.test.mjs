@@ -113,6 +113,15 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\nI saw <!-- in the body.\n\n${reason("N/A")}\n\n<!-- template -->`), null],
     [(s) => (s.issue.body += `\n\nThe form leaves \`<!--\` behind.\n\n${reason("N/A")}\n\n<!-- template -->`), null],
     [(s) => (s.issue.body += `\n\n<!-->\n${reason("N/A")}\n\n<!-- template -->`), null],
+    // Only a comment opening a line hides the lines after it, a fence included;
+    // one opened after text on its line is text up to the next heading, and so
+    // is one indented as code, "<!-" or text after the closing "-->".
+    [(s) => (s.issue.body += `\n\nThe call hangs <!-- see below\n${reason("N/A")}\n\n-->`), null],
+    [(s) => (s.issue.body += `\n\n<!--\n\`\`\`\n-->\n\n${reason("N/A")}`), null],
+    [(s) => (s.issue.body += `\n\n    <!--\n${reason("N/A")}`), null],
+    [(s) => (s.issue.body += `\n\n\t<!--\n${reason("N/A")}`), null],
+    [(s) => (s.issue.body += `\n\n<!- x\n${reason("N/A")}`), null],
+    [(s) => (s.issue.body += `\n\n<!-- template --> see below\n${reason("N/A")}`), null],
     // What an issue form writes for an empty optional field.
     [(s) => (s.issue.body += `\n\n${reason("_No response_")}`), "label"],
     // A heading with a tab after its hashes, or an empty one, ends the reason
@@ -120,8 +129,16 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n### ${noReportHeading}\n\n_No response_\n\n###\tAdditional context\n\nnone`), "label"],
     [(s) => (s.issue.body += `\n\n### ${noReportHeading}\n\n_No response_\n\n###\n\nmore`), "label"],
     // A blank issue's template comment is not the reporter's answer, nor is a
-    // heading inside a code block the page shows as code.
+    // heading inside a comment or a code block the page shows as code.
     [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here -->")}`), "label"],
+    [(s) => (s.issue.body += `\n\n<!--\n${reason("Explain why here")}\n-->`), "label"],
+    [(s) => (s.issue.body += `\n\n   <!-- template\n${reason("Explain why here")}`), "label"],
+    // Such a comment runs over blank lines and a ">", and may open right after
+    // a paragraph line.
+    [(s) => (s.issue.body += `\n\n<!--\n\n${reason("Explain why here")}\n-->`), "label"],
+    [(s) => (s.issue.body += `\n\n<!-- a > b\n${reason("Explain why here")}\n-->`), "label"],
+    [(s) => (s.issue.body += `\n\n<!-- a -> b\n${reason("Explain why here")}\n-->`), "label"],
+    [(s) => (s.issue.body += `\n\nThe call hangs.\n<!-- see below\n${reason("Explain why here")}\n-->`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("<!--\nExplain here\n-->")}`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("<!-- a --><!-- b -->")}`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("<!-- e.g. Settings > Integrations -->")}`), "label"],

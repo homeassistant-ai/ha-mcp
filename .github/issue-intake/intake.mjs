@@ -522,18 +522,25 @@ const fenceLine = /^ {0,3}(`{3,}(?!.*`)|~{3,})/;
 // A closing fence has nothing but whitespace after it, so ```yaml stays inside.
 const closingFenceLine = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const headingLine = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+// A comment opening a line hides the lines up to the one holding "-->", as an
+// HTML block does; one opened after text on its line is text and hides no
+// heading.
+const commentLine = /^ {0,3}<!--/;
 // Every section under an answer heading, each ending at the next heading
-// outside a code fence: logs and config pasted there carry "# " lines.
+// outside a code fence or comment: pasted logs and config carry "# " lines.
 export function answerSections(text, answerLine = answerHeadingLine) {
   const sections = [];
   let current = null;
   let fence = null;
+  let comment = false;
   for (const line of (text || "").split(/\r?\n/)) {
     const marker = fenceLine.exec(line)?.[1];
     if (fence) {
       const close = closingFenceLine.exec(line)?.[1];
       if (close?.[0] === fence[0] && close.length >= fence.length)
         fence = null;
+    } else if (comment || commentLine.test(line)) {
+      comment = !line.includes("-->");
     } else if (marker) {
       fence = marker;
     } else if (headingLine.test(line)) {

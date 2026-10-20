@@ -683,7 +683,10 @@ test("a bug report without ha_report_issue output is asked for one, without need
   quoted.comments.push(
     comment(2, "maintainer", `Please add:\n\n### ${noReportHeading}\n\n<your reason>`),
   );
-  for (const s of [plain, mention, emptyReason, fieldOnly, quoted]) {
+  // A reason heading inside a comment is not on the page.
+  const commented = structuredClone(plain);
+  commented.issue.body += `\n\n<!--\n### ${noReportHeading}\n\nFound by reading the code.\n-->`;
+  for (const s of [plain, mention, emptyReason, fieldOnly, quoted, commented]) {
     const r = result();
     r.missing_fields = [];
     const api = new FakeGitHub(s);
