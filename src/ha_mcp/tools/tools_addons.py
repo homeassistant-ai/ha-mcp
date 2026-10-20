@@ -858,6 +858,11 @@ async def _create_ingress_session(client: HomeAssistantClient) -> str:
     return session
 
 
+def _direct_addon_host(addon: dict[str, Any]) -> str:
+    """Return the reachable host for an app's published port."""
+    return "127.0.0.1" if addon.get("host_network") else addon.get("ip_address", "")
+
+
 async def _resolve_http_route(
     client: HomeAssistantClient,
     addon: dict[str, Any],
@@ -884,7 +889,7 @@ async def _resolve_http_route(
     headers: dict[str, str] = {}
 
     if port:
-        addon_ip = addon.get("ip_address", "")
+        addon_ip = _direct_addon_host(addon)
         if not addon_ip:
             raise_tool_error(
                 create_error_response(
@@ -953,7 +958,7 @@ async def _resolve_ws_route(
     headers: dict[str, str] = {}
 
     if port:
-        addon_ip = addon.get("ip_address", "")
+        addon_ip = _direct_addon_host(addon)
         if not addon_ip:
             raise_tool_error(
                 create_error_response(

@@ -458,6 +458,41 @@ class TestCallAddonApiErrors:
         mock_ingress_session.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_http_direct_port_uses_loopback_for_host_network(self):
+        """Host-network apps publish their ports on the shared loopback interface."""
+        client = _make_mock_client()
+        addon_info = {
+            **_RUNNING_ADDON_INFO,
+            "addon": {**_RUNNING_ADDON_INFO["addon"], "host_network": True},
+        }
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_info,
+            ),
+            patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
+        ):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 200
+            response.json.return_value = {"ok": True}
+            response.text = '{"ok": true}'
+            mock_http_client = AsyncMock()
+            mock_http_client.request.return_value = response
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await _call_addon_api(client, "test_addon", "/", port=6052)
+
+        assert mock_http_client.request.await_args.kwargs["url"] == (
+            "http://127.0.0.1:6052/"
+        )
+
+    @pytest.mark.asyncio
     async def test_http_direct_port_offhost_error_hints_at_ingress(
         self, mock_ingress_session
     ):
