@@ -523,9 +523,7 @@ export function answerSections(text, answerLine = answerHeadingLine) {
   const sections = [];
   let current = null;
   let fence = null;
-  // A comment can span lines, and a heading inside it is not on the page.
-  const visible = (text || "").replace(/<!--[\s\S]*?-->/g, "");
-  for (const line of visible.split(/\r?\n/)) {
+  for (const line of (text || "").split(/\r?\n/)) {
     const marker = fenceLine.exec(line)?.[1];
     if (fence) {
       const close = closingFenceLine.exec(line)?.[1];
@@ -543,9 +541,13 @@ export function answerSections(text, answerLine = answerHeadingLine) {
   return sections.map((lines) => lines.join("\n"));
 }
 // GitHub's issue forms write "_No response_" for an optional field left
-// empty; a blank issue's template comments are already gone.
+// empty, and a blank issue's template comments are not an answer.
 const answered = (section) =>
-  section.replace(/_No response_/g, "").trim() !== "";
+  section
+    .split(/<!--[\s\S]*?-->/)
+    .join(" ")
+    .replace(/_No response_/g, "")
+    .trim() !== "";
 // What the report gate accepts instead of a report.
 export const hasAnswer = (text) => answerSections(text).some(answered);
 // The reporter's own words: the issue body and their comments.

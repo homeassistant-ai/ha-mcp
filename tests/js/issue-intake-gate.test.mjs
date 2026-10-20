@@ -88,12 +88,26 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n${section(reportFieldLabel, "N/A")}`), null],
     // Pasted config opens the reason; its comment line is not a heading.
     [(s) => (s.issue.body += `\n\n${reason("```\n# uvx ha-mcp\n```")}`), null],
+    // Template comments around a reason leave it in place, and a "<!--" the page
+    // shows as text hides nothing after it.
+    [(s) => (s.issue.body += `\n\n<!-- What went wrong? -->\nThe call hangs.\n\n${reason("ha-mcp does not start.")}\n\n<!-- Any other relevant information: -->`), null],
+    [(s) => (s.issue.body += `\n\n${reason("Found by reading the code. <!-- from the form -->")}`), null],
+    [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here -->\nFound by reading the code.\n<!-- Optional -->")}`), null],
+    [(s) => (s.issue.body += `\n\n${reason("N/A <!-- a --><!-- b -->")}`), null],
+    [(s) => (s.issue.body += `\n\n${reason("<!---->N/A")}`), null],
+    [(s) => (s.issue.body += `\n\n\`\`\`\n<!-- broken\n\`\`\`\n\n${reason("N/A")}\n\n<!-- template -->`), null],
+    [(s) => (s.issue.body += `\n\n\`\`\`<!--\ncode\n\`\`\`\n\n${reason("N/A")}\n\n<!-- template -->`), null],
+    [(s) => (s.issue.body += `\n\nI saw <!-- in the body.\n\n${reason("N/A")}\n\n<!-- template -->`), null],
+    [(s) => (s.issue.body += `\n\nThe form leaves \`<!--\` behind.\n\n${reason("N/A")}\n\n<!-- template -->`), null],
+    [(s) => (s.issue.body += `\n\n<!-->\n${reason("N/A")}\n\n<!-- template -->`), null],
     // What an issue form writes for an empty optional field.
     [(s) => (s.issue.body += `\n\n${reason("_No response_")}`), "label"],
     // A blank issue's template comment is not the reporter's answer, nor is a
-    // heading inside a comment or a code block the page shows as code.
+    // heading inside a code block the page shows as code.
     [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here -->")}`), "label"],
-    [(s) => (s.issue.body += `\n\n<!--\n${reason("Explain why here")}\n-->`), "label"],
+    [(s) => (s.issue.body += `\n\n${reason("<!--\nExplain here\n-->")}`), "label"],
+    [(s) => (s.issue.body += `\n\n${reason("<!-- a --><!-- b -->")}`), "label"],
+    [(s) => (s.issue.body += `\n\n${reason("<!-- e.g. Settings > Integrations -->")}`), "label"],
     [(s) => (s.issue.body += `\n\n\`\`\`\nlog\n\`\`\`yaml\n${reason("in the log")}\n\`\`\``), "label"],
     [(s) => (s.issue.body += ` The ${reportMarker} heading is missing.`), "label"],
     // The heading over a summary, or a paste cut off before the environment.
