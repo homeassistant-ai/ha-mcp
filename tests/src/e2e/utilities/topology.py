@@ -49,9 +49,10 @@ def component_surface_available() -> bool:
     surface (#2291), so shared component capabilities — a config entry's
     ``unique_id``, the component-side scans — still answer there even though the
     privileged filesystem / YAML services are gone. The other no-tools shapes
-    (plain container, HAOS inaddon) have no active component entry at all, so
+    (plain container, HAOS inaddon) start without an active component entry, so
     those capabilities have no source and server code must degrade to whatever
-    the legacy REST path can see.
+    the legacy REST path can see. On HAOS inaddon a test can still enable the
+    baked server entry later in the session; this predicate does not track it.
     """
     # Same normalization as conftest's backend selectors, so a padded or
     # differently-cased env value can't make this predicate disagree with

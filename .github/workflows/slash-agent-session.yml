@@ -46,7 +46,7 @@ jobs:
           HA_MCP_APP_SLUG: ${{ vars.HA_MCP_AGENT_APP_SLUG }}
           SLASH_SESSION_ROOT: ${{ inputs.session_root }}
         run: node .github/slash-agent/main.mjs admit
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: steps.plan.outputs.run == 'true'
         timeout-minutes: 1
         with:
@@ -80,12 +80,12 @@ jobs:
           ref: ${{ needs.admit.outputs.head }}
           path: source
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         timeout-minutes: 1
         with:
           name: slash-plan
           path: control/slash-state
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         timeout-minutes: 2
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
@@ -124,7 +124,7 @@ jobs:
           OUTPUT_PATH: ${{ steps.codex.outputs.output-path }}
           CODEX_LOG_PATH: ${{ steps.codex.outputs.log-path }}
         run: node control/.github/slash-agent/main.mjs package
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         timeout-minutes: 1
         with:
           name: slash-result
@@ -187,12 +187,12 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: .github
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         timeout-minutes: 1
         with:
           name: slash-plan
           path: slash-state
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         if: needs.code.result == 'success'
         timeout-minutes: 1
         with:
@@ -201,7 +201,7 @@ jobs:
       - name: Mint publication credential after the worker has exited
         id: app-token
         timeout-minutes: 1
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           client-id: ${{ vars.HA_MCP_AGENT_CLIENT_ID }}
           private-key: ${{ secrets.HA_MCP_AGENT_APP_PRIVATE_KEY }}

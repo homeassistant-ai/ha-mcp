@@ -23,11 +23,17 @@ from .log_common import (
 )
 from .log_sources import _SYSTEM_LOG_MESSAGE_CAP, CoreLogSourcesMixin
 from .log_sources_fault import FaultLogSourceMixin
+from .log_sources_logbook import LogbookLogSourceMixin
 from .log_sources_supervisor import SupervisorLogSourcesMixin
 from .tool_hints import read_only_hints
 
 
-class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMixin):
+class LogTools(
+    LogbookLogSourceMixin,
+    CoreLogSourcesMixin,
+    SupervisorLogSourcesMixin,
+    FaultLogSourceMixin,
+):
     """Dispatches ``ha_get_logs`` to one log source and shapes the response."""
 
     def __init__(self, client: Any) -> None:
@@ -40,6 +46,8 @@ class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMix
         search: str | None,
         hours_back: int,
         entity_id: str | None,
+        device_id: str | None,
+        context_id: str | None,
         end_time: str | None,
         offset: int,
         compact: bool,
@@ -53,6 +61,8 @@ class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMix
             return await self._get_logbook(
                 hours_back=hours_back,
                 entity_id=entity_id,
+                device_id=device_id,
+                context_id=context_id,
                 end_time=end_time,
                 limit=limit,
                 offset=offset,
@@ -99,6 +109,8 @@ class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMix
         search: str | None,
         hours_back: int,
         entity_id: str | None,
+        device_id: str | None,
+        context_id: str | None,
         end_time: str | None,
         offset: int,
         compact: bool,
@@ -110,7 +122,15 @@ class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMix
     ) -> dict[str, Any]:
         level = _validate_log_level(level)
         warnings = _collect_log_warnings(
-            source, level, entity_id, end_time, slug, order, offset
+            source,
+            level,
+            entity_id,
+            device_id,
+            context_id,
+            end_time,
+            slug,
+            order,
+            offset,
         )
         structured_error_log = structured and source == "error_log"
         if structured and source != "error_log":
@@ -138,6 +158,8 @@ class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMix
             search,
             hours_back,
             entity_id,
+            device_id,
+            context_id,
             end_time,
             offset,
             compact,
@@ -234,7 +256,34 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int, Field(ge=1, description="Logbook only: how many hours back to read.")
         ] = 1,
         entity_id: Annotated[
-            str | None, Field(description="Logbook only: restrict to this entity.")
+            str | None,
+            Field(
+                description=(
+                    "Logbook only: restrict to one entity, or a comma-separated "
+                    "list of entity IDs."
+                )
+            ),
+        ] = None,
+        device_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Logbook only: native Core device filter - events attributed "
+                    "to this device and the context chains they caused. State "
+                    "changes of the device's entities are not included; filter by "
+                    "entity_id for those. Requires the WebSocket path."
+                )
+            ),
+        ] = None,
+        context_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Logbook only: only events sharing this context - 'what "
+                    "caused this'. Cannot be combined with entity_id or "
+                    "device_id; works on both transports when used alone."
+                )
+            ),
         ] = None,
         end_time: Annotated[
             str | None,
@@ -306,7 +355,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "source='supervisor': app slug, e.g. 'core_mosquitto' (use "
                     "ha_get_app() to list installed slugs). "
                     "source='system_service': service name, one of supervisor, "
-                    "host, core, dns, audio, cli, multicast, observer — here "
+                    "host, core, dns, audio, multicast — here "
                     "'supervisor' is the Supervisor service's own logs, not an "
                     "app with that name."
                 )
@@ -337,6 +386,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             search=search,
             hours_back=hours_back,
             entity_id=entity_id,
+            device_id=device_id,
+            context_id=context_id,
             end_time=end_time,
             offset=offset,
             compact=compact,

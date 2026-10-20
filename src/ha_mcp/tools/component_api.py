@@ -19,6 +19,10 @@ or somewhere in between. This module negotiates that with a single cached
   surface entirely; caps are cached as ``None`` and every consumer falls back
   to its legacy path.
 
+``read_info`` reads ``info`` fresh for callers that show a field which can
+change while the client lives (the bug report's component version and webhook
+auth mode); routing and gating keep using the snapshot.
+
 This mirrors the caller-token cache in ``tools_filesystem.py``: weak-keyed by
 client so multi-client / OAuth setups each negotiate independently and the
 entry self-evicts when a client is garbage-collected.
@@ -45,6 +49,8 @@ logger = logging.getLogger(__name__)
 # The WS command every 1.1.0+ component registers; probing it does double duty
 # (existence check + capability enumeration — see module docstring).
 INFO_COMMAND = "ha_mcp_tools/info"
+# The ``result`` of an ``info`` call, as ``read_info`` returns it.
+InfoResult = dict[str, Any]
 
 # HA's structured error code for a command no handler is registered for. Routing
 # keys off this (via the ``code`` attribute threaded onto
@@ -406,3 +412,61 @@ def invalidate_caps(client: Any) -> None:
     _CAPS_CACHE.pop(client, None)
     _NEGATIVE_CACHE_TS.pop(client, None)
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
+
+
+async def read_info(client: Any) -> InfoResult | None:
+    """The ``result`` of a fresh ``ha_mcp_tools/info`` call (#2584).
+
+    For callers that show a field which can change while the client lives:
+    the bug report's component version and webhook auth mode. Routing and
+    gating keep the ``get_component_caps`` snapshot, which lasts as long as the
+    client (for a server running outside HA, an HA restart does not end it),
+    while a component update changes the version and an options change the
+    mode. Only a component whose ``info`` the snapshot accepted is asked. The
+    call goes to ``send_command`` on the pooled WebSocket directly, as the
+    probe does, bypassing ``send_websocket_message``'s ERROR log (a report
+    quotes its log sections); an ``unknown_command`` drops the snapshot so the
+    next caller re-probes. None in that case and on any failure.
+    """
+    if await get_component_caps(client) is None:
+        return None
+    try:
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
+        response = await ws.send_command(INFO_COMMAND)
+    except Exception as e:  # noqa: BLE001
+        if is_unknown_command(e):
+            invalidate_caps(client)
+        logger.info("Fresh %s read failed: %s (%s)", INFO_COMMAND, e, type(e).__name__)
+        return None
+    result = response.get("result") if isinstance(response, dict) else None
+    return result if isinstance(result, dict) else None
+
+
+async def read_component_version(client: Any, info: InfoResult | None) -> str | None:
+    """The component version for a report: from ``info``, else the snapshot's.
+
+    ``info`` is a ``read_info`` result. When that read failed, the snapshot
+    still shows the component is installed. After an ``unknown_command``,
+    ``read_info`` has dropped the snapshot, so the re-probe normally finds no
+    ``info`` either and the result is None. ``""`` when the component reports no
+    version; None only when there is no usable ``info``.
+    """
+    if info is not None:
+        return str(info.get("component_version") or "")
+    caps = await get_component_caps(client)
+    return caps.component_version if caps is not None else None
+
+
+def webhook_auth(info: InfoResult | None) -> str | None:
+    """The server entry's webhook auth mode from a ``read_info`` result.
+
+    Python None, not the ``"none"`` mode: without ``info``, or when its
+    ``webhook_auth`` is missing (an older component) or not a string. The
+    component sends None without a running in-process server.
+    """
+    auth = info.get("webhook_auth") if info else None
+    return auth if isinstance(auth, str) else None

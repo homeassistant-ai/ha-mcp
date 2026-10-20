@@ -110,6 +110,15 @@ the info handshake carries no capability entry:
   entity_ids: [...]}``. The ``services`` shape is the REST ``/api/services`` list
   ``build_service_index`` reads (bodies are empty dicts — the index only reads
   keys); ``entity_ids`` is every ``hass.states.async_all()`` id. Pure, no prep.
+* ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
+  ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
+  ``include_entity_name=True``) and the ``logbook/get_events`` filter set
+  (``entity_ids`` / ``device_ids`` / ``context_id``), so names, context fields
+  and row shape come from Core itself. The recorder read AND the result
+  encoding run in the async prep (Core's own approach for this command), so
+  the handler sends finished bytes instead of encoding on the event loop; the
+  server's ``ha_get_logs`` logbook source prefers this command and keeps
+  ``/api/logbook`` + ``logbook/get_events`` as its fallbacks.
 * ``ha_mcp_tools/search`` (``search_visibility`` capability) — the search command
   additionally accepts a raw ``visibility`` config dict; when present it excludes
   the server's opt-in hidden entities before counts/pagination (the pure
@@ -282,16 +291,21 @@ Module layout. This package's ``__init__`` holds the registration seam
 code lives in the submodules:
 
 * ``constants`` and ``schemas``: the wire contract, capability list and request schemas.
+* ``seam``: the pre-serialized result wrapper for commands whose payload is encoded off the loop.
 * ``registry``, ``secrets``, ``assist`` and ``flow_domains``: shared registry, secret-scrub, Assist exposure and flow-helper domain helpers.
 * ``search``, ``search_config``, ``search_score`` and ``visibility``: ``ha_mcp_tools/search``.
-* ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries`` and ``dashboards``: the read commands.
+* ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries``,
+  ``dashboards`` and ``logbook``: the read commands.
 * ``system``: ``info``, ``system_snapshot``, ``backup_prep``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
 * ``call_service`` and ``bulk``: the write commands.
 * ``oauth_callbacks``: read and replace the none-mode OAuth callback allowlist.
 
 Extension point — to add another command later: write ``_do_<name>(hass,
 params)``, append its capability to :data:`CAPABILITIES`, and add one row to
-:func:`_command_specs`. ``info`` enumerates the rest.
+:func:`_command_specs`. ``info`` enumerates the rest. Return
+:class:`seam.PreSerializedResult` from a formatter when the payload was already
+encoded off the loop (``logbook_events`` does): the shared handler sends those
+bytes instead of running ``connection.send_result``'s synchronous encode.
 """
 
 from __future__ import annotations
@@ -315,6 +329,7 @@ from .dashboards import (
     _do_dashboard_edit,
     _do_dashboards,
 )
+from .logbook import _do_logbook_events, _logbook_events_prep
 from .lookups import (
     _blueprint_get_prep,
     _do_blueprint_get,
@@ -343,6 +358,7 @@ from .schemas import (
     _exposure_schema,
     _helpers_list_schema,
     _info_schema,
+    _logbook_events_schema,
     _overview_schema,
     _reference_data_schema,
     _registries_schema,
@@ -355,6 +371,7 @@ from .schemas import (
     _system_snapshot_schema,
     _template_diagnose_schema,
 )
+from .seam import PreSerializedResult
 from .search import _do_search, _search_prep
 from .services import _do_reference_data, _do_services_list, _services_list_prep
 from .system import (
@@ -445,6 +462,10 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_dashboard_edit_schema(), _do_dashboard_edit, _dashboard_edit_prep),
         (_services_list_schema(), _do_services_list, _services_list_prep),
         (_reference_data_schema(), _do_reference_data, None),
+        # Core's own logbook query (EventProcessor with the REST flags) run in
+        # the live process: the recorder read lives in the async prep, the
+        # pure formatter only wraps the rows.
+        (_logbook_events_schema(), _do_logbook_events, _logbook_events_prep),
         (_server_entry_schema(), _do_server_entry, None),
         # The WRITE counterpart of server_entry: the deferred ``async_update_entry``
         # scheduling is inherently async, so it lives in ``_server_entry_update_prep``
@@ -490,6 +511,13 @@ def _build_handler(schema: dict[Any, Any], do_fn: Any, prep: Any = None) -> Any:
     ) -> None:
         msg["ha_mcp_context"] = connection.context(msg)
         extra = await prep(hass, msg) if prep is not None else {}
-        connection.send_result(msg["id"], do_fn(hass, msg, **extra))
+        result = do_fn(hass, msg, **extra)
+        if isinstance(result, PreSerializedResult):
+            # Already encoded off the event loop (large payloads): sending the
+            # bytes skips the synchronous encode ``send_result`` would run on
+            # the loop. See ``seam.PreSerializedResult``.
+            connection.send_message(result.payload)
+        else:
+            connection.send_result(msg["id"], result)
 
     return _handler

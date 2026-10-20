@@ -455,4 +455,4 @@ See AGENTS.md § *Boy Scout Rule — Handling Discovered Improvements* for the a
 
 ## Native Core contracts
 
-Read and write wrappers follow the [native Core contract guidance](../docs/agents/native-core-contracts.md). Keep domain validation in Core; distinguish wrapper safeguards and incomplete schema descriptions from native validation.
+Read and write wrappers follow the [native Core contract guidance](../docs/agents/native-core-contracts.md). Native covers Core, the frontend, Supervisor and the hassio proxy alike. Keep domain validation in Core; distinguish wrapper safeguards and incomplete schema descriptions from native validation.

@@ -1,0 +1,7 @@
+{
+  "reason": "#2759 gates tests/src/e2e/workflows/integrations/test_component_diagnostics.py with the new requires_component_surface marker instead of a runtime skip: it needs an active ha_mcp_tools config entry, so it skips at collection on the two no-tools lanes without an active server entry (plain container, HAOS inaddon, where it is absent or disabled) and runs everywhere else.",
+  "deltas": {
+    "container_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}

@@ -21,6 +21,7 @@ from ._conftest_embedded import (
     _is_embedded_backend_selected,
     _is_no_tools_entry_selected,
 )
+from .utilities.topology import component_surface_available
 
 
 def _move_haos_tls_items_last(items: list[Any]) -> None:
@@ -48,6 +49,18 @@ def _apply_haos_tls_skip(item: Any, enabled: bool, skip_marker: Any) -> None:
     repo-wide C901 ceiling — inlining this branch trips it.
     """
     if "haos_tls" in item.keywords and not enabled:
+        item.add_marker(skip_marker)
+
+
+def _apply_requires_component_surface_skip(
+    item: Any, available: bool, skip_marker: Any
+) -> None:
+    """Skip a ``requires_component_surface`` item on a lane without the surface.
+
+    ``available`` is ``component_surface_available()``, the lane's starting
+    shape. Out-of-line for the same reason as ``_apply_haos_tls_skip``.
+    """
+    if "requires_component_surface" in item.keywords and not available:
         item.add_marker(skip_marker)
 
 
@@ -139,6 +152,9 @@ def pytest_collection_modifyitems(config, items):
       component's "File & YAML Tools" config entry and skips where it is
       absent; the second pins the absent-entry behaviour and skips everywhere
       the entry IS installed.
+    - ``requires_component_surface``: needs an active component config entry,
+      so it skips on the two no-tools lanes without one (plain container, HAOS
+      inaddon); the server-entry-only lanes still run it.
     """
     del config
     haos = is_haos_backend_selected()
@@ -207,6 +223,11 @@ def pytest_collection_modifyitems(config, items):
         reason="no-tools lane required (set E2E_NO_TOOLS_ENTRY=1); only that "
         "lane runs without the File & YAML Tools config entry"
     )
+    component_surface = component_surface_available()
+    skip_requires_component_surface = pytest.mark.skip(
+        reason="no active ha_mcp_tools config entry on this lane "
+        "(E2E_NO_TOOLS_ENTRY=1 on a lane without the in-process server)"
+    )
     skip_not_on_embedded = pytest.mark.skip(
         reason="redundant on the embedded backend (the lane's own session "
         "backend already exercises this path)"
@@ -233,6 +254,9 @@ def pytest_collection_modifyitems(config, items):
         _apply_beta_haos_only_skip(item, beta_haos, skip_beta_haos_only)
         _apply_no_tools_entry_skips(
             item, no_tools_entry, skip_requires_tools_entry, skip_no_tools_only
+        )
+        _apply_requires_component_surface_skip(
+            item, component_surface, skip_requires_component_surface
         )
         # Deliberate: inserting the haos_tls dispatch above broke the old
         # ``elif`` chain into this ``if``. An item carrying several gate

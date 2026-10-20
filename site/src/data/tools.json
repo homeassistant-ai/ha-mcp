@@ -2644,7 +2644,17 @@
         },
         "entity_id": {
           "type": "str | None",
-          "description": "Logbook only: restrict to this entity.",
+          "description": "Logbook only: restrict to one entity, or a comma-separated list of entity IDs.",
+          "default": null
+        },
+        "device_id": {
+          "type": "str | None",
+          "description": "Logbook only: native Core device filter - events attributed to this device and the context chains they caused. State changes of the device's entities are not included; filter by entity_id for those. Requires the WebSocket path.",
+          "default": null
+        },
+        "context_id": {
+          "type": "str | None",
+          "description": "Logbook only: only events sharing this context - 'what caused this'. Cannot be combined with entity_id or device_id; works on both transports when used alone.",
           "default": null
         },
         "end_time": {
@@ -2685,7 +2695,7 @@
         },
         "slug": {
           "type": "str | None",
-          "description": "source='supervisor': app slug, e.g. 'core_mosquitto' (use ha_get_app() to list installed slugs). source='system_service': service name, one of supervisor, host, core, dns, audio, cli, multicast, observer — here 'supervisor' is the Supervisor service's own logs, not an app with that name.",
+          "description": "source='supervisor': app slug, e.g. 'core_mosquitto' (use ha_get_app() to list installed slugs). source='system_service': service name, one of supervisor, host, core, dns, audio, multicast — here 'supervisor' is the Supervisor service's own logs, not an app with that name.",
           "default": null
         }
       }

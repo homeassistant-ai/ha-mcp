@@ -15,18 +15,46 @@
       },
       "server": {
         "title": "HA-MCP Servilo",
-        "description": "Ĉi tio rulas la plenan ha-mcp servilon ene de Home Assistant kaj elmetas ĝin malproksime per Home Assistant rethoko (webhook) (atingebla per Nabu Casa aŭ iu ajn inversa prokurilo). Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por la apo (aldonaĵo), Docker, uvx/PyPI, kaj stdio instalaj metodoj — ne rulu ĝin kune kun alia ha-mcp servilo. Elektu **Submit** por starti ĝin; vi povas ŝalti la pordon, ligadon, kaj aŭtentigon poste en la integriĝaj opcioj."
+        "description": "Ĉi tio rulas la plenan ha-mcp servilon ene de Home Assistant. Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por la instalamodoj de la apo (aldonaĵo), Docker, uvx/PyPI, kaj stdio — ne rulas ĝin apud alia ha-mcp servilo.\n\nDefaŭlte nenio ekster ĉi tiu Home Assistant maŝino povas atingi ĝin: la flanka panelo kaj la propraj konversaciaj agentoj de Home Assistant funkcias, sed MCP-klientoj sur aliaj aparatoj ne povas konektiĝi ĝis vi elektas sube reĝimon de fora aliro aŭ aliron al la loka reto. Vi povas ŝanĝi ambaŭ poste en la agordoj de la integriĝo.",
+        "data": {
+          "remote_access": "Fora aliro per Home Assistant",
+          "bind_host": "Reta aliro",
+          "admin_token": "Administranta alirtono",
+          "admin_username": "Aŭ: salutnomo de nur-loka konto kreita por HA-MCP",
+          "admin_password": "La pasvorto de tiu konto"
+        },
+        "data_description": {
+          "remote_access": "Permesas al MCP-klientoj konektiĝi per Home Assistant retookazo (webhook), kiu funkcias kie ajn Home Assistant estas atingebla (inkluzive de Nabu Casa). Ensaluto al Home Assistant: klientoj kiel claude.ai ensalutas per administranta konto de Home Assistant. Malnova OAuth: Klienta ID kaj Sekreto por englui en klientojn, kiuj bezonas tion. Sekreta URL: la retookaza ligilo mem estas la sola akreditaĵo — iu ajn, kiu havas ĝin, povas uzi ĉiun ilon.",
+          "bind_host": "Kiu povas konektiĝi rekte al la propra pordo de la servilo. Nur ĉi tiu maŝino estas la sekura defaŭlto. Loka reto ebligas al aliaj aparatoj en via reto konektiĝi per la sekreta rekt-alira URL montrata sur la agorda ekrano.",
+          "admin_token": "Longdaŭra alirtono de administranta konto. Via propra funkcias: malfermu vian profilon (via nomo ĉe la sudo de la flanka panelo), elektu la langeton Sekureco, kaj sub Longdaŭraj alirtonoj elektu Krei tonon. Via propra tono ankaŭ funkcias de ekster via hejma reto se ĝi iam elfluas, kaj Home Assistant registras la ŝanĝojn de la servilo sub via nomo. Pli sekure: konto kreita nur por HA-MCP, kun nur Loka aliro ŝaltita (vidu la kampojn sube).",
+          "admin_username": "Nur por konto, kiun vi kreis nur por HA-MCP, sub Agordoj → Personoj → Aldoni personon kun Permesi ensaluton, Nur loka aliro kaj Administranto ŝaltitaj. Neniam enigu vian propran ensaluton ĉi tie: por uzi vian propran konton, aliflanke engluu ĝian tonon supre. HA-MCP kreas la tonon de ĉi tiu konto (nomitan HA-MCP Server), do neniu devas ensaluti kiel ĝi, kaj la pasvorto ne estas konservita. Ĝia tono funkcias nur de via loka reto, kie la servilo rulas, kaj Home Assistant registras la ŝanĝojn de la servilo sub ĉi tiu konto.",
+          "admin_password": "Uzata unue, por krei la tonon. Neniam via propra pasvorto."
+        }
       }
     },
     "abort": {
       "already_configured": "Ĉi tiu eniro jam estas agordita.",
       "unsupported_home_assistant": "La enproceza HA-MCP Server postulas Home Assistant {required} aŭ pli novan, sed ĉi tiu instanco rulas {installed}. Vi ankoraŭ povas uzi la eniron HA-MCP File & YAML Tools de ĉi tiu kompenento kun ekstera ha-mcp servilo rulanta kiel apo (aldonaĵo) aŭ Docker-ujo."
+    },
+    "error": {
+      "invalid_token": "Home Assistant ne rekonas ĉi tiun tonon. Kopiu la tutan tonon, aŭ kreu novan.",
+      "token_not_long_lived": "Ĉi tio estas provizora ensaluta tono, kiu eksvalidiĝas. Anstataŭe kreu longdaŭran alirtonon.",
+      "token_not_admin": "Ĉi tiu tono apartenas al konto, kiu ne estas aktiva administranto.",
+      "invalid_login": "Enigu la salutnomon kaj pasvorton de nur-loka administranta konto kreita por HA-MCP.",
+      "credentials_needed": "Enigu la salutnomon kaj pasvorton de administranta konto, aŭ engluu alirtonon."
     }
   },
   "options": {
     "error": {
       "invalid_connect_path": "Ne devas enhavi #, ?, %, aŭ blankspacon.",
-      "invalid_webhook_id": "Webhook-identigiloj ne devas enhavi oblikvon (/)."
+      "invalid_webhook_id": "Webhook-identigiloj ne devas enhavi oblikvon (/).",
+      "invalid_oauth_callback": "Ĉiu reagreso devas esti https:// URL, aŭ http:// URL ĉe 127.0.0.1, [::1] aŭ localhost, sen salutnomo, pasvorto aŭ #fragment, kaj maksimume 2048 signojn longa. Solvo: {invalid_callbacks}",
+      "too_many_oauth_callbacks": "Listigu maksimume {max_callbacks} reagresojn.",
+      "invalid_token": "Home Assistant ne rekonas ĉi tiun tonon. Kopiu la tutan tonon, aŭ kreu novan.",
+      "token_not_long_lived": "Ĉi tio estas provizora ensaluta tono, kiu eksvalidiĝas. Anstataŭe kreu longdaŭran alirtonon.",
+      "token_not_admin": "Ĉi tiu tono apartenas al konto, kiu ne estas aktiva administranto.",
+      "invalid_login": "Enigu la salutnomon kaj pasvorton de nur-loka administranta konto kreita por HA-MCP.",
+      "credentials_needed": "Enigu la salutnomon kaj pasvorton de administranta konto, aŭ engluu alirtonon."
     },
     "step": {
       "tools_info": {
@@ -61,16 +89,20 @@
           "enable_llm_api": "Konversacia-agenta LLM API",
           "llm_api_exposure": "Konversacia-agenta ilo-ekspono",
           "enable_startup_notification": "Komenca sciigo",
-          "enable_sidebar_panel": "Flankbreta agorda panelo"
+          "enable_sidebar_panel": "Flankbreta agorda panelo",
+          "oauth_redirect_allowlist": "Permesitaj OAuth-retrekomencaj URL-oj",
+          "admin_token_replacement": "Anstataŭigi la administrantan alirtonon (laŭvola)",
+          "admin_username": "Aŭ ŝalti al nur-loka konto kreita por HA-MCP: salutnomo (laŭvola)",
+          "admin_password": "La pasvorto de tiu konto"
         },
         "data_description": {
           "server_port": "La pordo, kiun ĉi tiu servilo aŭskultas. La ha-mcp apo (aldonaĵo) uzas 9583, do ĉi tio defaŭltas al 9584 por lasi ambaŭ ruli flank-al-flanke — se vi ne rulas la apon (aldonaĵon), iu ajn libera pordo funkcias.",
-          "bind_host": "Kiu povas konekti al la MCP-servila pordo rekte. La defaŭlto kongruas kun la apo (aldonaĵo): atingebla en via loka retumo, kun la sekreta vojo kiel la akreditaĵo. Elektu enbuklon (loopback) por permesi nur konektojn de la Home Assistant-maŝino mem — la rethoka URL kaj la flanka panelo funkcias ambaŭkaze.",
-          "webhook_auth": "Kiel MCP-klientoj pruvas sin ĉe la retkroĉa URL. Kun la sekreta URL, la ligilo mem estas la sola akreditaĵo — OAuth ankoraŭ funkcias por klientoj, kiuj uzas ĝin, sed ĉiu ensaluto estas aŭtomate aprobita: neniu ensaluto kaj neniu Klienta ID aŭ Sekreto necesas. Kun Home Assistant-ensaluto, klientoj kiel claude.ai ensalutas per Home Assistant-administranta konto (OAuth). Kun hereda OAuth, ĉi tiu integriĝo funkciigas sian propran ensalutan servon kaj eldonas Klientan ID-on kaj Sekreton por alglui en klientojn, kiuj postulas tian — rekomenco de Home Assistant eble necesos por plene ŝalti aŭ malŝalti ĝin.",
+          "bind_host": "Kiu povas konektiĝi rekte al la pordo de la MCP-servilo. Loka reto igas ĝin atingebla de via loka reto, kun la sekreta vojo kiel akreditaĵo, kiel la apo (aldonaĵo). Nur ĉi tiu maŝino permesas konektojn nur de la Home Assistant maŝino mem — la retookaza URL kaj la flanka panelo funkcias ambaŭkaze.",
+          "webhook_auth": "Kiel MCP-klientoj pruvas sin ĉe la retookaza URL. Kun la sekreta URL, la ligilo mem estas la sola akreditaĵo — OAuth ankoraŭ rulas por klientoj, kiuj uzas ĝin, kaj ensaluto, kiu revenas al permesita reagresa URL (vidu sube), estas aŭtomate aprobita: neniu ensaluto kaj neniu Klienta ID aŭ Sekreto bezonata. Kun Home Assistant-ensaluto, klientoj kiel claude.ai ensalutas per administranta konto de Home Assistant (OAuth). Kun malnova OAuth, ĉi tiu integriĝo rulas sian propran ensalutan servon kaj eldonas Klientan ID kaj Sekreton por englui en klientojn, kiuj postulas tion — rekomenco de Home Assistant eble estos bezonata por plene ŝalti aŭ malŝalti ĝin.",
           "oauth_client_id_override": "Anstataŭigas la aŭtomate generitan heredan OAuth Klientan ID. Lasu malplena por konservi la nunan. Nur uzata kiam Aŭtentiga reĝimo estas agordita al hereda OAuth.",
           "oauth_client_secret_override": "Anstataŭigas la aŭtomate generitan heredan OAuth Klientan Sekreton. Lasu malplena por konservi la nunan. Nur uzata kiam Aŭtentiga reĝimo estas agordita al hereda OAuth.",
           "oauth_regenerate": "Unufoja ago: kreas novan Klientan ID kaj Sekreton por hereda OAuth-reĝimo. Ĝi ekvalidas nur post la rekomenco de Home Assistant, kiun la ripara peto petas — ĝis vi rekomencos, la antaŭaj Klienta ID kaj Sekreto daŭre funkcias kaj la novaj ne. Ankaŭ malplenigas la du superregajn kampojn supre.",
-          "pip_spec": "Lasu malplena. Nur por testi specifan ha-mcp konstruaĵon (ekzemple antaŭ-eldona fiksado); superregas la eldonan kanalon kaj malŝaltas aŭtomatajn ĝisdatigojn ĝis malplenigite.",
+          "pip_spec": "Lasu malplena por ruli la ha-mcp servilon kiun ĉi tiu komponenta eldono instalis. Nur por testi specifan ha-mcp eldonon (versian pinglon, tir-petan tarball aŭ wheel URL); aplikiĝas per reŝargo de la servilo, sen rekomenci Home Assistant. Malplenigu ĝin por reveni al la parigita servilo.",
           "server_url": "La URL, kiun la servilo funkcianta en la sama procezo uzas por atingi vian Home Assistant (kutime ĉi tiu instanco mem). Lasu ĝin malplena por derivi la valoron el la pordo kaj la SSL-agordoj de ĉi tiu instanco; agordu valoron nur kiam la servilo bezonas alian vojon.",
           "external_url": "Montrata kiel la ĉefa konekta URL — uzu ĉi tion kiam Home Assistant sidas malantaŭ via propra domajno aŭ inversa prokurilo. Enigu la plenan bazan adreson inkluzive de la skemo. Ĝi devas montri rekte al Home Assistant — malfermante ĝin en retumilo devus atingi vian HA ensalutan paĝon — kaj ne devas enhavi pordon kiel :8123 (aŭ iu ajn alia pordo), alie malproksimaj MCP klientoj ne povos atingi ĝin. Lasu malplena por uzi Nabu Casa / la lokan adreson aŭtomate.",
           "webhook_id_override": "Anstataŭigas la hazardan retkroĉan sekreton en la konekta URL (/api/webhook/...). La URL estas la akreditaĵo — uzu longan, malfacile diveneblan valoron. Lasu malplena por konservi la nunan.",
@@ -79,8 +111,12 @@
           "enable_webhook": "Malŝaltu por nur-loka reĝimo: la retkroĉo de Home Assistant tute ne estas registrita, do nenio — inkluzive de Nabu Casa — povas atingi la servilon per Home Assistant. La rekta servila pordo kaj la flanka panelo daŭre funkcias.",
           "enable_llm_api": "Proponu la plenan ilaron al konversaciaj agentoj de Home Assistant (OpenAI, Google, Ollama, ...): dum ebligite, agentoj povas elekti 'HA-MCP Server' sub Kontroli Home Assistant kaj uzi la ilojn el Asista babilejo kaj voĉo. Ebligo nur igas ĝin elektebla — nenio estas elmontrita ĝis vi elektas ĝin ĉe agento. Gvidilo pri uzado: {llm_api_docs_url}",
           "llm_api_exposure": "Formo de la ilaro proponita al konversaciaj agentoj. Ilo-serĉo (defaŭlta) tenas la kuntekston de la agento malgranda: kompakta API kun fiksitaj iloj plus serĉaj/ekzekutaj meta-iloj. Plena katalogo listigas ĉiun elmontritan ilon rekte — pli bone por grand-kuntekstaj modeloj. Ambaŭ registras la du flank-al-flanke, do ĉiu agento elektas sian propran sub Kontroli Home Assistant. Elmontro laŭ ilo estas administrata en la agorda panelo de HA-MCP; detaloj: {llm_api_docs_url}",
-          "enable_startup_notification": "Montru sciigon ĉiufoje kiam la servilo startas, montrante al la nur-administraj agordaj surfacoj. Malŝaltu por starti silente — la konektaj URL-oj ankoraŭ aperas en la protokolo de Home Assistant.",
-          "enable_sidebar_panel": "Montru la agordan panelon de HA-MCP en la flanka kolumno (nur por administrantoj). Malŝaltu por forigi la flankan eniron — servilaj opcioj restas disponeblaj sur ĉi tiu ekrano."
+          "enable_startup_notification": "Montri sciigon ĉiufoje kiam la servilo startas, indikante al la administrant-nuraj agordaj surfacoj. Malŝaltu por starti silente — la konektaj URL-oj restas sur ĉi tiu ekrano.",
+          "enable_sidebar_panel": "Montru la agordan panelon de HA-MCP en la flanka kolumno (nur por administrantoj). Malŝaltu por forigi la flankan eniron — servilaj opcioj restas disponeblaj sur ĉi tiu ekrano.",
+          "oauth_redirect_allowlist": "Nur uzata dum la Aŭtentikiga reĝimo estas la sekreta retmesaĝa URL (webhook URL). Kiam kliento ensalutas per OAuth, HA-MCP resendas la ensaluton nur al retvoka URL (callback URL) en ĉi tiu listo; iu ajn alia estas rifuzita per paĝo klariganta kiel aldoni ĝin. Enigu ĉiun retvokon ekzakte kiel la kliento sendas ĝin. Retvoko de http://-enbuklo (127.0.0.1, [::1] aŭ localhost) ankaŭ kongruas je iu ajn pordo. Kliento, kiu konektas nur per la retmesaĝa URL (webhook URL), bezonas neniun enskribon. Ekvalidas sen rekomenco.",
+          "admin_token_replacement": "Lasu malplena por konservi la nunan aliron; la servilo rekomencas kiam vi ŝaltas. Longdaŭra alirtono de administranta konto. Via propra funkcias: malfermu vian profilon (via nomo ĉe la sudo de la flanka panelo), elektu la langeton Sekureco, kaj sub Longdaŭraj alirtonoj elektu Krei tonon. Via propra tono ankaŭ funkcias de ekster via hejma reto se ĝi iam elfluas, kaj Home Assistant registras la ŝanĝojn de la servilo sub via nomo. Pli sekure: konto kreita nur por HA-MCP, kun nur Loka aliro ŝaltita (vidu la kampojn sube).",
+          "admin_username": "Nur por konto, kiun vi kreis nur por HA-MCP, sub Agordoj → Homoj → Aldoni personon kun Permesi ensaluton, Loka aliro nur kaj Administranto ŝaltitaj. Neniam enigu vian propran ensaluton ĉi tie: por uzi vian propran konton, algluu ties valortokenon supre anstataŭe. HA-MCP kreas la valortokenon de ĉi tiu konto (nomita HA-MCP Server), do neniu devas ensaluti kiel ĝi, kaj la pasvorto ne estas konservata. Ties valortokeno funkcias nur de via loka reto, kie la servilo rulas, kaj Home Assistant registras la ŝanĝojn de la servilo sub ĉi tiu konto.",
+          "admin_password": "Uzita unufoje, por krei la valortokenon. Neniam via propra pasvorto."
         }
       }
     }
@@ -91,7 +127,19 @@
       "description": "La en-proceza servilo de HA-MCP ne povis esti startigita ene de Home Assistant:\n\n{detail}\n\nKontrolu la protokolojn de Home Assistant, poste reŝarĝu la integradon (aŭ riparu la suban problemon kaj reŝarĝu) por reprovi."
     },
     "server_package_install_failed": {
-      "title": "La pakaĵo de la en-proceza servilo de HA-MCP ne povis esti instalita"
+      "title": "La pakaĵo de la en-proceza servilo de HA-MCP ne povis esti instalita",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Rekomencinstali la HA-MCP servilon",
+            "description": "La enproceza servilo de HA-MCP ne povis esti instalita aŭ startita:\n\n{detail}\n\nSendu por rekomenci Home Assistant; la servila pakaĵo estas rekomencinstalita antaŭ ol la servilo startas, kune kun ajna dependeco kies versio jam ne kontentigas ĝin. Se la mesaĝo supre nomas alian integriĝon kiu ŝanĝis unu el tiuj pakaĵoj, ĝisdatigu aŭ forigu tiun integriĝon unue: alie Home Assistant remetas sian version la venontan fojon kiam ĝi startas. Se vi agordis **ha-mcp package (advanced)** en la opcioj de la HA-MCP Server, kontrolu tiun valoron unue: rekomencinstali pakaĵon, kiu ne povas esti instalita, malsukcesas same."
+          }
+        },
+        "abort": {
+          "entry_removed": "La ero de la HA-MCP Server jam ekzistas ne plu.",
+          "externally_managed": "Home Assistant estis startita kun skip_pip, do ĝi ne instalas Python-pakaĵojn. Rekomencinstalu la pakaĵon ha-mcp per la pakaĵmastrumilo de via sistemo, tiam reŝargu la integriĝon."
+        }
+      }
     },
     "component_outdated": {
       "title": "Ĝisdatigu la Personan Komponanton de HA-MCP per HACS",
@@ -107,12 +155,46 @@
           }
         }
       }
+    },
+    "server_token_needed": {
+      "title": "HA-MCP bezonas administran alirtokenon",
+      "fix_flow": {
+        "step": {
+          "token": {
+            "title": "Enigu administran alirtokenon",
+            "description": "La enproceza servilo de HA-MCP havas neniun Home Assistant tokenon uzeblan, do ĝi ne rulas. La tokeno eble mankas, estas revokita aŭ eksvalidiĝis, aŭ ties konto eble ne plu estas aktiva administranto. Algluu novan longdaŭran alirtokenon, aŭ enigu la ensaluton de nur-loka konto, kiun vi kreis nur por HA-MCP (neniam vian propran ensaluton) kaj HA-MCP kreas ties tokenon.",
+            "data": {
+              "admin_token": "Administra alirtokeno",
+              "admin_username": "Aŭ: uzantnomo de nur-loka konto kreita por HA-MCP",
+              "admin_password": "La pasvorto de tiu konto"
+            }
+          }
+        },
+        "error": {
+          "invalid_token": "Home Assistant ne rekonas ĉi tiun tokenon. Kopiu la tutan tokenon, aŭ kreu novan.",
+          "token_not_long_lived": "Ĉi tio estas provizora ensaluta tokeno, kiu eksvalidiĝas. Kreu longdaŭran alirtokenon anstataŭe.",
+          "token_not_admin": "Ĉi tiu tokeno apartenas al konto, kiu ne estas aktiva administranto.",
+          "invalid_login": "Enigu la uzantnomon kaj pasvorton de nur-loka administra konto kreita por HA-MCP.",
+          "credentials_needed": "Enigu la uzantnomon kaj pasvorton de administra konto, aŭ algluu alirtokenon."
+        },
+        "abort": {
+          "entry_removed": "La ero de la HA-MCP Server jam ekzistas ne plu."
+        }
+      }
     }
   },
   "selector": {
+    "server_remote_access": {
+      "options": {
+        "disabled": "Malŝaltita (defaŭlta)",
+        "ha_auth": "Home Assistant ensaluto",
+        "legacy": "Legacy OAuth (Klienta ID kaj Sekreto)",
+        "none": "Sekreta URL (sen ensaluto)"
+      }
+    },
     "server_webhook_auth": {
       "options": {
-        "none": "Sekreta retkroĉa URL (defaŭlta)",
+        "none": "Sekreta retkokida URL",
         "ha_auth": "Ensaluti per Home Assistant (OAuth)",
         "legacy": "Hereda OAuth (ĉi tiu integriĝo eldonas Klientan ID-on/Sekreton por alglui)"
       }
@@ -130,7 +212,7 @@
     "connect_local_lan": "Loka/LAN (kiam Reto-aliro estas \"Local network\"): {url}",
     "connect_remote_url": "Fora konekta URL: {url}",
     "connect_urls_label": "Konektaj URL(j):",
-    "connect_urls_pending": "La konektaj URL-oj aperos ĉi tie (kaj en la protokolo de Home Assistant) post kiam la servilo startos.",
+    "connect_urls_pending": "La konektaj URL-oj aperas ĉi tie kiam la servilo startis.",
     "connect_webhook_disabled": "Fora aliro per retkroĉo estas malŝaltita (nur-loka reĝimo).",
     "oauth_creds_pending": "La Klienta ID kaj Klienta Sekreto aperos ĉi tie post kiam la servilo startos.",
     "oauth_not_serving": "Legacy OAuth ankoraŭ ne liveras ilin — rekomencu Home Assistant, kiam ĝi petas vin pri tio, por aktivigi ilin.",
@@ -139,7 +221,9 @@
     "tools_module_installed": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Instalita",
     "tools_module_not_installed": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Ne instalita — premu \"Aldoni eniron\" sur la paĝo de ĉi tiu integriĝo kaj elektu \"HA-MCP File & YAML Tools\" por aldoni ĝin",
     "tools_module_not_loaded": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Instalita sed ne ŝargita — ebligu aŭ reŝarĝu la eniron \"HA-MCP File & YAML Tools\" sur la paĝo de ĉi tiu integriĝo",
-    "version_line": "Komponanto {component_version} - Servilo ha-mcp {server_version} ({channel} kanalo)",
+    "version_line": "Komponento {component_version} - Servilo ha-mcp {server_version} ({source})",
+    "server_source_paired": "instalita kun ĉi tiu komponenta eldono",
+    "server_source_override": "pip-postula anstataŭigo",
     "version_not_installed": "ankoraŭ ne instalita",
     "version_unknown": "nekonata"
   }

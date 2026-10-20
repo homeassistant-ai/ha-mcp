@@ -12,10 +12,14 @@ from .. import template_diagnose
 from ..const import (
     COMPONENT_VERSION,
     CONF_ENTRY_TYPE,
+    DATA_WEBHOOK,
     DEFAULT_PIP_SPEC,
     DOMAIN,
     ENTRY_TYPE_SERVER,
+    OPT_ENABLE_WEBHOOK,
     OPT_PIP_SPEC,
+    OPT_WEBHOOK_AUTH,
+    WEBHOOK_AUTH_NONE,
 )
 from .constants import (
     CAPABILITIES,
@@ -73,13 +77,16 @@ def _do_info(hass: HomeAssistant | None = None) -> dict[str, Any]:
     detect by presence — they carry NO capability entry and do NOT bump
     ``schema_version``. ``hass`` is optional (defaulting to ``None`` so a direct
     ``_do_info()`` still works for callers that only need the static handshake);
-    when absent, both degrade to ``None``.
+    when absent, they and ``webhook_auth`` degrade to ``None``.
 
     ``tools_services`` exists because 2.1.0 registers this command surface from
     BOTH entry types (#2289): ``info`` answering no longer implies the tools
     entry — and its filesystem/YAML services — are present (#2292). The server's
     filesystem/YAML gate reads this field to keep raising its actionable
     "tools entry not set up" error on server-entry-only installs.
+
+    ``webhook_auth`` (#2584) is the server entry's webhook auth mode, shown by
+    ``ha_report_issue``; same additive contract.
     """
     return {
         "schema_version": SCHEMA_VERSION,
@@ -88,6 +95,7 @@ def _do_info(hass: HomeAssistant | None = None) -> dict[str, Any]:
         "limits": dict(LIMITS),
         "timezone": _config_time_zone(hass),
         "tools_services": _tools_services_loaded(hass),
+        "webhook_auth": _server_webhook_auth(hass),
     }
 
 
@@ -113,6 +121,33 @@ def _tools_services_loaded(hass: HomeAssistant | None) -> bool | None:
     # Literal matches SERVICE_READ_FILE in __init__.py (importing it here would
     # be circular).
     return bool(services.has_service(DOMAIN, "read_file"))
+
+
+def _server_webhook_auth(hass: HomeAssistant | None) -> str | None:
+    """The server entry's ``webhook_auth`` option, ``None`` without that entry.
+
+    Looked up via the server config entry, not the entry that registered
+    ``info``, because either entry type may answer it. Options are read as
+    bring-up reads them. ``disabled`` when the webhook is turned off (local-only
+    mode): no webhook request is authenticated then, and a reader of ``none``
+    would assume an open webhook. ``None`` as well while no webhook
+    registration exists (``DATA_WEBHOOK``, stored by bring-up once the server
+    has started and removed by teardown): the entry is disabled or unloaded,
+    or its bring-up has not got that far or failed, which leaves it loaded.
+    """
+    if hass is None:
+        return None
+    entry = _find_server_config_entry(hass)
+    if entry is None:
+        return None
+    domain_data = _hass_data_get(hass, DOMAIN)
+    if not isinstance(domain_data, Mapping) or domain_data.get(DATA_WEBHOOK) is None:
+        return None
+    options = getattr(entry, "options", None)
+    opts = options if isinstance(options, Mapping) else {}
+    if not bool(opts.get(OPT_ENABLE_WEBHOOK, True)):
+        return "disabled"
+    return str(opts.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE))
 
 
 # =============================================================================

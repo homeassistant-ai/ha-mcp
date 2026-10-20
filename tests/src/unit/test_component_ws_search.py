@@ -45,8 +45,7 @@ from ._component_ws_fakes import (
 )
 
 # Force the REAL voluptuous into sys.modules (sibling unit modules stub it with
-# a MagicMock at import time). Captured for the schema / registration tests,
-# which need a working validator and functional decorators.
+# a MagicMock at import time); the schema/registration tests need a real one.
 sys.modules.pop("voluptuous", None)
 import voluptuous as _REAL_VOL  # noqa: E402
 
@@ -1902,13 +1901,14 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_REFERENCE_DATA,
             wsapi.WS_SERVER_ENTRY,
             # This set only guards drift. Prep + admin-gate coverage lives in
-            # test_component_server_entry_update_contract.py (server_entry_update),
-            # test_component_ws_phase2_async.py ((bulk_)call_service), and
-            # test_component_template_diagnose.py / _oauth_callbacks_ws.py.
+            # test_component_server_entry_update_contract.py,
+            # test_component_ws_phase2_async.py, test_component_template_diagnose.py,
+            # _oauth_callbacks_ws.py and test_component_ws_logbook.py.
             wsapi.WS_SERVER_ENTRY_UPDATE,
             wsapi.WS_CALL_SERVICE,
             wsapi.WS_BULK_CALL_SERVICE,
             wsapi.WS_TEMPLATE_DIAGNOSE,
+            wsapi.WS_LOGBOOK_EVENTS,
             wsapi.WS_OAUTH_CALLBACKS,
             wsapi.WS_OAUTH_CALLBACKS_UPDATE,
             *wsapi.helper_collections.COMMANDS,  # test_component_helper_collections.py

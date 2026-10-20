@@ -6,13 +6,20 @@ variables every unit test starts with.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Iterator
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from ha_mcp.tools.component_api import ComponentCaps
 
 # Core's generated flow registry, which the component imports at module level
 # for its flow-helper set. Home Assistant is not a unit-test dependency, and the
@@ -48,6 +55,41 @@ sys.modules.setdefault(
         }
     ),
 )
+
+# Core's logbook/recorder helpers are imported at module scope by the
+# component's ``ha_mcp_tools/logbook_events`` command. Home Assistant is not a
+# unit-test dependency, so the modules must exist before ANY test module
+# imports the component surface (same reason as the flow registry above).
+for _ha_logbook_stub in (
+    "homeassistant.components.logbook",
+    "homeassistant.components.logbook.helpers",
+    "homeassistant.components.logbook.processor",
+    "homeassistant.components.recorder",
+    "homeassistant.components.websocket_api",
+    "homeassistant.helpers.json",
+    "homeassistant.util",
+    "homeassistant.util.dt",
+):
+    sys.modules.setdefault(_ha_logbook_stub, MagicMock())
+
+
+@pytest.fixture
+def logbook_component_caps() -> Iterator[ComponentCaps]:
+    """Pretend the component advertises ``logbook_events`` (transport tests)."""
+    from ha_mcp.tools.component_api import ComponentCaps
+
+    caps = ComponentCaps(
+        schema_version=1,
+        component_version="2.2.3",
+        capabilities=frozenset({"logbook_events"}),
+        limits={},
+    )
+    with patch(
+        "ha_mcp.tools.log_sources_logbook.get_component_caps",
+        AsyncMock(return_value=caps),
+    ):
+        yield caps
+
 
 _ISOLATION_VARS = ("HA_MCP_CONFIG_DIR", "HA_MCP_DISABLE_SETTINGS_UI")
 _SESSION_DATA_DIR = ""
@@ -282,3 +324,33 @@ def real_probatio():
         ]:
             del sys.modules[name]
         sys.modules.update(saved)
+
+
+@pytest.fixture
+def mock_client():
+    """HomeAssistantClient with stubbed internals — no real network.
+
+    Mirror every instance attribute the real ``__init__`` sets, so a
+    `getattr` fallback in production code isn't needed to paper over a
+    test-fixture omission (and so future `__init__` attribute additions
+    that this fixture forgets to mirror fail loudly here instead of
+    silently no-op-ing).
+    """
+    # Imported here rather than at module scope: conftest imports run before
+    # ``pytest_configure`` redirects the config directory, so importing ha_mcp
+    # during collection creates ~/.ha-mcp and the CI "no local state" gate
+    # fails.
+    from ha_mcp.client.rest_client import HomeAssistantClient
+
+    with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
+        client = HomeAssistantClient()
+        client.base_url = "http://test.local:8123"
+        client.token = "test-token"
+        client.timeout = 30
+        client.verify_ssl = True
+        client.httpx_client = MagicMock()
+        client._supervised_detected = None
+        client._is_admin = True
+        client._admin_route_refused = False
+        client._admin_route_lock = asyncio.Lock()
+        return client

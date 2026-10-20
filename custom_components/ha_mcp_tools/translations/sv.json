@@ -15,18 +15,46 @@
       },
       "server": {
         "title": "HA-MCP Server",
-        "description": "Detta kör hela ha-mcp-servern inne i Home Assistant och exponerar den på distans via en Home Assistant-webhook (nås via Nabu Casa eller vilken omvänd proxy som helst). Den är en fristående server och en komplett ersättning för installationsmetoderna app (tillägg), Docker, uvx/PyPI och stdio – kör den inte tillsammans med en annan ha-mcp-server. Välj **Skicka** för att starta den; du kan ändra port, bindning och autentisering i efterhand i integreringsalternativen."
+        "description": "Detta kör hela ha-mcp-servern inne i Home Assistant. Det är en fristående server och en komplett ersättning för metoderna app (tillägg), Docker, uvx/PyPI och stdio-installation – kör den inte tillsammans med en annan ha-mcp-server.\n\nSom standard kan ingenting utanför denna Home Assistant-maskin nå den: sidopanelen och Home Assistants egna konversationsagenter fungerar, men MCP-klienter på andra enheter kan inte ansluta förrän du väljer ett läge för fjärråtkomst eller lokal nätverksåtkomst nedan. Du kan ändra båda senare i integrationsalternativen.",
+        "data": {
+          "remote_access": "Fjärråtkomst via Home Assistant",
+          "bind_host": "Nätverksåtkomst",
+          "admin_token": "Administratörsåtkomsttoken",
+          "admin_username": "Eller: användarnamn för ett konto som endast är till för lokalt bruk skapat för HA-MCP",
+          "admin_password": "Det kontots lösenord"
+        },
+        "data_description": {
+          "remote_access": "Låter MCP-klienter ansluta via en Home Assistant-webhook, vilket fungerar var som helst där Home Assistant kan nås (inklusive Nabu Casa). Home Assistant-inloggning: klienter som claude.ai loggar in med ett Home Assistant-administratörskonto. Legacy OAuth: ett klient-ID och en hemlighet att klistra in i klienter som behöver det. Hemlig URL: själva webhook-länken är den enda inloggningsuppgiften – alla som har den kan använda varje verktyg.",
+          "bind_host": "Vem som kan ansluta direkt till serverns egen port. Endast denna maskin är det säkra standardvalet. Lokalt nätverk låter andra enheter i ditt nätverk ansluta med den hemliga direktåtkomst-URL som visas på konfigurationsskärmen.",
+          "admin_token": "En långlivad åtkomsttoken för ett administratörskonto. Din egen fungerar: öppna din profil (ditt namn längst ner i sidopanelen), välj fliken Säkerhet och välj Skapa token under Långlivade åtkomsttoken. Din egen token fungerar också utanför ditt hemmanätverk om den någonsin läcker, och Home Assistant registrerar serverns ändringar under ditt namn. Säkrare: ett konto skapat enbart för HA-MCP, med Endast lokal åtkomst aktiverat (se fälten nedan).",
+          "admin_username": "Endast för ett konto som du skapade enbart för HA-MCP, under Inställningar → Personer → Lägg till person med Tillåt inloggning, Endast lokal åtkomst och Administratör markerade. Ange aldrig din egen inloggning här: för att använda ditt eget konto, klistra in dess token ovan istället. HA-MCP skapar detta kontots token (med namnet HA-MCP Server), så att ingen behöver logga in som det, och lösenordet sparas inte. Dess token fungerar endast från ditt lokala nätverk, där servern körs, och Home Assistant registrerar serverns ändringar under detta konto.",
+          "admin_password": "Används en gång för att skapa token. Aldrig ditt eget lösenord."
+        }
       }
     },
     "abort": {
       "already_configured": "Denna post är redan konfigurerad.",
       "unsupported_home_assistant": "Den inbyggda HA-MCP-servern kräver Home Assistant {required} eller nyare, men denna instans kör {installed}. Du kan fortfarande använda denna komponents post för HA-MCP File & YAML Tools med en extern ha-mcp-server som körs som en app (tillägg) eller Docker-behållare."
+    },
+    "error": {
+      "invalid_token": "Home Assistant känner inte igen denna token. Kopiera hela token eller skapa en ny.",
+      "token_not_long_lived": "Detta är en tillfällig inloggningstoken som har en utgångstid. Skapa en långlivad åtkomsttoken istället.",
+      "token_not_admin": "Denna token tillhör ett konto som inte är en aktiv administratör.",
+      "invalid_login": "Ange användarnamn och lösenord för ett administratörskonto som endast är lokalt skapat för HA-MCP.",
+      "credentials_needed": "Ange ett administratörskontos användarnamn och lösenord, eller klistra in en åtkomsttoken."
     }
   },
   "options": {
     "error": {
       "invalid_connect_path": "Får inte innehålla #, ?, % eller mellanslag.",
-      "invalid_webhook_id": "Webhook-ID:n får inte innehålla ett snedstreck (/)."
+      "invalid_webhook_id": "Webhook-ID:n får inte innehålla ett snedstreck (/).",
+      "invalid_oauth_callback": "Varje återuppringning måste vara en https://-URL eller en http://-URL på 127.0.0.1, [::1] eller localhost, utan användarnamn, lösenord eller #fragment, och innehålla högst 2048 tecken. Åtgärd: {invalid_callbacks}",
+      "too_many_oauth_callbacks": "Lista högst {max_callbacks} återuppringningar.",
+      "invalid_token": "Home Assistant känner inte igen denna token. Kopiera hela token eller skapa en ny.",
+      "token_not_long_lived": "Detta är en tillfällig inloggningstoken som har en utgångstid. Skapa en långlivad åtkomsttoken istället.",
+      "token_not_admin": "Denna token tillhör ett konto som inte är en aktiv administratör.",
+      "invalid_login": "Ange användarnamn och lösenord för ett administratörskonto endast för lokalt bruk skapat för HA-MCP.",
+      "credentials_needed": "Ange ett administratörskontos användarnamn och lösenord, eller klistra in en åtkomsttoken."
     },
     "step": {
       "tools_info": {
@@ -61,16 +89,20 @@
           "enable_llm_api": "Konversationsagent LLM API",
           "llm_api_exposure": "Exponering av konversationsagentverktyg",
           "enable_startup_notification": "Startmeddelande",
-          "enable_sidebar_panel": "Sidopanel för inställningar"
+          "enable_sidebar_panel": "Sidopanel för inställningar",
+          "oauth_redirect_allowlist": "Tillåtna OAuth-återanrops-URL:er",
+          "admin_token_replacement": "Byt ut administratörsåtkomsttoken (valfritt)",
+          "admin_username": "Eller växla till ett konto som endast är till för lokalt bruk skapat för HA-MCP: användarnamn (valfritt)",
+          "admin_password": "Det kontots lösenord"
         },
         "data_description": {
           "server_port": "Porten som denna server lyssnar på. Ha-mcp-appen (tillägget) använder 9583, så standardvärdet är 9584 för att låta båda köra sida vid sida – om du inte kör appen (tillägget) fungerar vilken ledig port som helst.",
-          "bind_host": "Vem som kan ansluta direkt till MCP-serverporten. Standardvärdet matchar appen (tillägget): nås på ditt lokala nätverk, med den hemliga sökvägen som autentiseringsuppgift. Välj loopback för att endast tillåta anslutningar från själva Home Assistant-maskinen – webhook-URL:en och sidofältsspanelen fungerar oavsett vilket.",
-          "webhook_auth": "Hur MCP-klienter autentiserar sig vid webhook-URL:en. Med den hemliga URL:en är länken i sig den enda autentiseringsuppgiften – OAuth körs fortfarande för klienter som använder det, men varje inloggning godkänns automatiskt: ingen inloggning och inget klient-ID eller hemlighet behövs. Med Home Assistant-inloggning loggar klienter som claude.ai in med ett Home Assistant-administratörskonto (OAuth). Med äldre OAuth kör denna integration sin egen inloggningstjänst och utfärdar ett klient-ID och en hemlighet att klistra in i klienter som kräver ett – en omstart av Home Assistant kan behövas för att helt aktivera eller inaktivera det.",
+          "bind_host": "Vem som kan ansluta direkt till MCP-serverporten. Lokalt nätverk gör den nåbar från ditt lokala nätverk, med den hemliga sökvägen som inloggningsuppgift, precis som appen (tillägget). Endast denna maskin tillåter endast anslutningar från själva Home Assistant-maskinen – webhook-URL:en och sidopanelen fungerar oavsett.",
+          "webhook_auth": "Hur MCP-klienter styrkt sin identitet vid webhook-URL:en. Med den hemliga URL:en är själva länken den enda inloggningsuppgiften – OAuth körs fortfarande för klienter som använder det, och en inloggning som återvänder till en tillåten återuppringnings-URL (se nedan) godkänns automatiskt: ingen inloggning och inget klient-ID eller hemlighet behövs. Med Home Assistant-inloggning loggar klienter som claude.ai in med ett Home Assistant-administratörskonto (OAuth). Med Legacy OAuth kör denna integration sin egen inloggningstjänst och utfärdar ett klient-ID och en hemlighet att klistra in i klienter som kräver det – en omstart av Home Assistant kan behövas för att slå på eller av det helt.",
           "oauth_client_id_override": "Ersätter det automatiskt genererade äldre OAuth-klient-ID:t. Lämna tomt för att behålla det nuvarande. Används endast när autentiseringsläget är inställt på äldre OAuth.",
           "oauth_client_secret_override": "Ersätter den automatiskt genererade äldre OAuth-klienthemligheten. Lämna tomt för att behålla den nuvarande. Används endast när autentiseringsläget är inställt på äldre OAuth.",
           "oauth_regenerate": "Engångsåtgärd: skapar ett nytt klient-ID och hemlighet för äldre OAuth-läge. Det träder i kraft först efter den Home Assistant-omstart som reparationsmeddelandet ber om – tills du startar om fortsätter det tidigare klient-ID:t och hemligheten att fungera och de nya gör det inte. Rensar även de två åsidosättningsfälten ovan.",
-          "pip_spec": "Lämna tomt. Endast för att testa en specifik ha-mcp-version (till exempel en förhandsversion); åsidosätter utgivningskanalen och inaktiverar automatiska uppdateringar tills det rensas.",
+          "pip_spec": "Lämna tomt för att köra den ha-mcp-server som denna komponentversion installerade. Endast för att testa ett specifik ha-mcp-bygge (en versionslåsning, ett pull-request-arkiv eller en wheel-URL); tillämpas genom att servern läses in på nytt, utan att Home Assistant startas om. Rensa för att återgå till den parkopplade servern.",
           "server_url": "URL:en som den inbyggda servern använder för att nå din Home Assistant (vanligtvis denna instans själv). Lämna tomt för att härleda den från denna instans port- och SSL-inställningar; ange ett värde endast när servern behöver en annan rutt.",
           "external_url": "Visas som den primära anslutnings-URL:en – använd detta när Home Assistant ligger bakom din egen domän eller omvänd proxy. Ange den fullständiga basadressen inklusive schemat. Den måste peka direkt på Home Assistant – att öppna den i en webbläsare ska nå din HA-inloggningssida – och får inte innehålla en port som :8123 (eller någon annan port), annars kommer fjärranslutna MCP-klienter inte att kunna nå den. Lämna tomt för att automatiskt använda Nabu Casa / den lokala adressen.",
           "webhook_id_override": "Ersätter den slumpmässiga webhook-hemligheten i anslutnings-URL:en (/api/webhook/...). URL:en är autentiseringsuppgiften – använd ett långt, svårt att gissa värde. Lämna tomt för att behålla den nuvarande.",
@@ -79,8 +111,12 @@
           "enable_webhook": "Stäng av för endast-lokalt-läge: Home Assistant-webhooken registreras inte alls, så ingenting – inklusive Nabu Casa – kan nå servern via Home Assistant. Den direkta serverporten och sidopanelen fortsätter att fungera.",
           "enable_llm_api": "Erbjud hela verktygsuppsättningen till Home Assistant-konversationsagenter (OpenAI, Google, Ollama, ...): när aktiverat kan agenter välja 'HA-MCP Server' under Kontrollera Home Assistant och styra verktygen från Assist-chatt och röst. Aktivering gör det bara valbart – inget exponeras förrän du väljer det på en agent. Användarhandbok: {llm_api_docs_url}",
           "llm_api_exposure": "Form på verktygsuppsättningen som erbjuds konversationsagenter. Verktygssökning (standard) håller agentens kontext liten: ett kompakt API med fästa verktyg plus sök-/exekvera-metaverktyg. Fullständig katalog listar varje exponerat verktyg direkt – bättre för modeller med stor kontext. Båda registrerar de två sida vid sida så att varje agent väljer sin egen under Kontrollera Home Assistant. Exponering per verktyg hanteras i HA-MCP-inställningspanelen; detaljer: {llm_api_docs_url}",
-          "enable_startup_notification": "Visa en avisering varje gång servern startar, som pekar på de endast-för-administratörer-inställningsytorna. Stäng av för att starta tyst – anslutnings-URL:erna visas fortfarande i Home Assistant-loggen.",
-          "enable_sidebar_panel": "Visa HA-MCP-inställningspanelen i sidofältet (endast administratörer). Stäng av för att ta bort sidofältsinlägget – serveralternativen förblir tillgängliga på denna skärm."
+          "enable_startup_notification": "Visa en avisering varje gång servern startar, som pekar på inställningssidorna enbart för administratörer. Stäng av för att starta tyst – anslutnings-URL:erna finns kvar på den här skärmen.",
+          "enable_sidebar_panel": "Visa HA-MCP-inställningspanelen i sidofältet (endast administratörer). Stäng av för att ta bort sidofältsinlägget – serveralternativen förblir tillgängliga på denna skärm.",
+          "oauth_redirect_allowlist": "Används endast när autentiseringsläget är den hemliga webhook-URL:en. När en klient loggar in med OAuth returnerar HA-MCP endast inloggningen till en återuppringnings-URL på denna lista; alla andra nekas med en sida som förklarar hur den läggs till. Ange varje återuppringning exakt så som klienten skickar den. En http://-loopback-återuppringning (127.0.0.1, [::1] eller localhost) matchar också på vilken port som helst. Klienter som ansluter enbart med webhook-URL:en behöver ingen post. Träder i kraft utan omstart.",
+          "admin_token_replacement": "Lämna tomt för att behålla den aktuella åtkomsten; servern startar om när du växlar. En långlivad åtkomsttoken för ett administratörskonto. Din egen fungerar: öppna din profil (ditt namn längst ner i sidopanelen), välj fliken Säkerhet och välj Skapa token under Långlivade åtkomsttoken. Din egen token fungerar också utanför ditt hemmanätverk om den någonsin läcker, och Home Assistant registrerar serverns ändringar under ditt namn. Säkrare: ett konto skapat enbart för HA-MCP, med Endast lokal åtkomst aktiverat (se fälten nedan).",
+          "admin_username": "Endast för ett konto som du har skapat enbart för HA-MCP, under Inställningar → Personer → Lägg till person med Tillåt inloggning, Endast lokal åtkomst och Administratör på. Ange aldrig din egen inloggning här: för att använda ditt eget konto, klistra in dess token ovan istället. HA-MCP skapar detta kontots token (med namnet HA-MCP Server), så att ingen behöver logga in som det, och lösenordet sparas inte. Dess token fungerar endast från ditt lokala nätverk, där servern körs, och Home Assistant registrerar serverns ändringar under detta konto.",
+          "admin_password": "Används en gång för att skapa token. Aldrig ditt eget lösenord."
         }
       }
     }
@@ -91,7 +127,19 @@
       "description": "HA-MCP-servern i processen kunde inte startas inuti Home Assistant:\n\n{detail}\n\nKontrollera Home Assistant-loggarna, ladda sedan om integrationen (eller åtgärda det underliggande problemet och ladda om) för att försöka igen."
     },
     "server_package_install_failed": {
-      "title": "HA-MCP-serverpaketet i processen kunde inte installeras"
+      "title": "HA-MCP-serverpaketet i processen kunde inte installeras",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Installera om HA-MCP-servern",
+            "description": "Den inbyggda HA-MCP-servern kunde inte installeras eller startas:\n\n{detail}\n\nSkicka in för att starta om Home Assistant; serverpaketet installeras om innan servern startar, tillsammans med alla beroenden vars version inte längre uppfyller kraven. Om meddelandet ovan nämner en annan integration som ändrade ett av dessa paket, uppdatera eller ta bort den integrationen först: annars sätter Home Assistant tillbaka sin version nästa gång den startar. Om du ställer in <strong>ha-mcp package (advanced)</strong> i alternativen för HA-MCP-servern, kontrollera det värdet först: att installera om ett paket som inte kan installeras misslyckas på samma sätt."
+          }
+        },
+        "abort": {
+          "entry_removed": "HA-MCP Server-posten finns inte längre.",
+          "externally_managed": "Home Assistant startades med skip_pip, så den installerar inte Python-paket. Installera om ha-mcp-paketet med systemets pakethanterare och läs sedan om integrationen."
+        }
+      }
     },
     "component_outdated": {
       "title": "Uppdatera HA-MCP Custom Component via HACS",
@@ -107,12 +155,46 @@
           }
         }
       }
+    },
+    "server_token_needed": {
+      "title": "HA-MCP behöver en administratörsåtkomsttoken",
+      "fix_flow": {
+        "step": {
+          "token": {
+            "title": "Ange en administratörsåtkomsttoken",
+            "description": "Den inbyggda HA-MCP-servern har ingen Home Assistant-token som den kan använda, så den körs inte. Token kan saknas, ha återkallats eller gått ut, eller så kanske dess konto inte längre är en aktiv administratör. Klistra in en ny långlivad åtkomsttoken, eller ange inloggningen för ett konto med enbart lokal åtkomst som du skapat enbart för HA-MCP (aldrig din egen inloggning) så skapar HA-MCP dess token.",
+            "data": {
+              "admin_token": "Administratörsåtkomsttoken",
+              "admin_username": "Eller: användarnamn för ett konto med enbart lokal åtkomst skapat för HA-MCP",
+              "admin_password": "Det kontots lösenord"
+            }
+          }
+        },
+        "error": {
+          "invalid_token": "Home Assistant känner inte igen denna token. Kopiera hela token eller skapa en ny.",
+          "token_not_long_lived": "Detta är en tillfällig inloggningstoken som går ut. Skapa en långlivad åtkomsttoken istället.",
+          "token_not_admin": "Denna token tillhör ett konto som inte är en aktiv administratör.",
+          "invalid_login": "Ange användarnamn och lösenord för ett administratörskonto med enbart lokal åtkomst som skapats för HA-MCP.",
+          "credentials_needed": "Ange ett administratörskontos användarnamn och lösenord, eller klistra in en åtkomsttoken."
+        },
+        "abort": {
+          "entry_removed": "HA-MCP Server-posten finns inte längre."
+        }
+      }
     }
   },
   "selector": {
+    "server_remote_access": {
+      "options": {
+        "disabled": "Inaktiverad (standard)",
+        "ha_auth": "Home Assistant-inloggning",
+        "legacy": "Äldre OAuth (klient-ID och hemlighet)",
+        "none": "Hemlig URL (ingen inloggning)"
+      }
+    },
     "server_webhook_auth": {
       "options": {
-        "none": "Hemlig webhook-URL (standard)",
+        "none": "Hemlig webhook-URL",
         "ha_auth": "Logga in med Home Assistant (OAuth)",
         "legacy": "Äldre OAuth (denna integration utfärdar ett klient-ID/en hemlighet att klistra in)"
       }
@@ -130,7 +212,7 @@
     "connect_local_lan": "Lokalt/LAN (när Nätverksåtkomst är \"Local network\"): {url}",
     "connect_remote_url": "Fjärranslutnings-URL: {url}",
     "connect_urls_label": "Anslutnings-URL(er):",
-    "connect_urls_pending": "Anslutnings-URL:erna visas här (och i Home Assistant-loggen) när servern har startat.",
+    "connect_urls_pending": "Anslutnings-URL:erna visas här när servern har startat.",
     "connect_webhook_disabled": "Fjärråtkomst via webhook är inaktiverad (endast-lokalt-läge).",
     "oauth_creds_pending": "Klient-ID och klienthemlighet visas här när servern har startat.",
     "oauth_not_serving": "Legacy OAuth tillhandahåller dem inte ännu — starta om Home Assistant när du blir ombedd, så aktiveras de.",
@@ -139,7 +221,9 @@
     "tools_module_installed": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Installerad",
     "tools_module_not_installed": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Ej installerad — tryck på \"Lägg till post\" på denna integrationssida och välj \"HA-MCP File & YAML Tools\" för att lägga till den",
     "tools_module_not_loaded": "Beta/avancerad fil- & YAML-verktygsmodul (valfritt): Installerad men inte laddad — aktivera eller ladda om posten \"HA-MCP File & YAML Tools\" på denna integrationssida",
-    "version_line": "Komponent {component_version} - Server ha-mcp {server_version} ({channel}-kanal)",
+    "version_line": "Komponent {component_version} - Server ha-mcp {server_version} ({source})",
+    "server_source_paired": "installerad med denna komponentversion",
+    "server_source_override": "åsidosättning av pip-krav",
     "version_not_installed": "inte installerad ännu",
     "version_unknown": "okänd"
   }

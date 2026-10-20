@@ -126,6 +126,36 @@ def test_no_tools_haos_inaddon_has_no_component_surface(
     assert topology.component_surface_available() is False
 
 
+def test_requires_component_surface_skips_only_without_the_surface() -> None:
+    """The gated item is skipped exactly where ``component_surface_available()``
+    is False; an inverted condition would skip it on every lane that has the
+    surface."""
+    from tests.src.e2e import _conftest_collection
+
+    class Item:
+        def __init__(self, *, gated: bool) -> None:
+            self.keywords = {"requires_component_surface": True} if gated else {}
+            self.markers: list[Any] = []
+
+        def add_marker(self, marker: Any) -> None:
+            self.markers.append(marker)
+
+    marker = object()
+    apply = _conftest_collection._apply_requires_component_surface_skip
+
+    absent = Item(gated=True)
+    apply(absent, False, marker)
+    assert absent.markers == [marker]
+
+    present = Item(gated=True)
+    apply(present, True, marker)
+    assert present.markers == []
+
+    ordinary = Item(gated=False)
+    apply(ordinary, False, marker)
+    assert ordinary.markers == []
+
+
 # --------------------------------------------------------------------------
 # The workflow half: which lane carries which env
 # --------------------------------------------------------------------------

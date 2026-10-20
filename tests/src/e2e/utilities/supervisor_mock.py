@@ -22,7 +22,7 @@ the test event loop and can't deadlock against in-process MCP server work.
 Endpoints implemented for this fixture:
 
 - ``GET /{service}/logs`` for service ∈ {supervisor, host, core, dns, audio,
-  cli, multicast, observer} — the eight Supervisor-managed system services
+  multicast} — the six Supervisor-managed system services
 - ``GET /addons/{slug}/logs`` and ``GET /addons/self/logs`` — app container logs
 - ``POST /addons/self/restart`` — app self-restart (Supervisor envelope reply)
 
@@ -51,11 +51,9 @@ MOCK_SUPERVISOR_TOKEN = "test-supervisor-token"
 # role-mismatch branch.
 MOCK_INSUFFICIENT_ROLE_TOKEN = "test-supervisor-token-low-role"
 
-# The eight Supervisor-managed system services exposed at /<service>/logs.
+# The six Supervisor-managed system services exposed at /<service>/logs.
 # Mirrors SYSTEM_SERVICE_SLUGS in src/ha_mcp/tools/log_common.py.
-SYSTEM_SERVICES = frozenset(
-    {"supervisor", "host", "core", "dns", "audio", "cli", "multicast", "observer"}
-)
+SYSTEM_SERVICES = frozenset({"supervisor", "host", "core", "dns", "audio", "multicast"})
 
 _SERVICE_LOGS_RE = re.compile(r"^/([a-z]+)/logs$")
 _ADDON_LOGS_RE = re.compile(r"^/addons/([^/]+)/logs$")

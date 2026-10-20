@@ -9,52 +9,18 @@ caps oversized ``system`` message strings.
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantConnectionError
+from ha_mcp.client.models import ErrorLogPage
 from ha_mcp.tools.log_sources import _SYSTEM_LOG_MESSAGE_CAP
 from ha_mcp.tools.tools_logs import LogTools
 
-
-@pytest.fixture(autouse=True)
-def _no_real_caps_probe():
-    """Keep the ``ha_mcp_tools/info`` caps probe from opening a real socket.
-
-    The mock clients here carry a real-looking ``base_url``/``token`` but never
-    patch ``get_websocket_client``, so ``get_component_caps`` (invoked by the
-    logbook path's ``add_timezone_metadata`` for every completed
-    ``ha_get_logs`` call) would otherwise attempt a real WS connection and pay
-    its full failure latency per test. Forcing a
-    ``HomeAssistantConnectionError`` reproduces the "component absent" outcome
-    these tests already assume, without the real connection attempt (mirrors
-    ``test_tools_history.py``'s fixture of the same name).
-    """
-    with patch(
-        "ha_mcp.tools.component_api.get_websocket_client",
-        AsyncMock(side_effect=HomeAssistantConnectionError("no WS in unit tests")),
-    ):
-        yield
-
-
-def _call_kwargs(**overrides):
-    """Full keyword set for ``LogTools.get_logs`` with sensible defaults."""
-    base = {
-        "source": "logbook",
-        "limit": None,
-        "search": None,
-        "hours_back": 1,
-        "entity_id": None,
-        "end_time": None,
-        "offset": 0,
-        "compact": True,
-        "level": None,
-        "slug": None,
-    }
-    base.update(overrides)
-    return base
+from ._logbook_fallback import call_kwargs as _call_kwargs
+from ._logbook_fallback import disable_logbook_websocket
+from .test_tools_history import _no_real_caps_probe  # noqa: F401
 
 
 class TestLogbookOrder:
@@ -65,6 +31,7 @@ class TestLogbookOrder:
         client = AsyncMock()
         client.get_logbook = AsyncMock(return_value=entries)
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        disable_logbook_websocket(client)
         return client
 
     @staticmethod
@@ -186,6 +153,7 @@ class TestLogbookOrder:
         client = AsyncMock()
         client.get_logbook = AsyncMock(return_value={"unexpected": "shape"})
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        disable_logbook_websocket(client)
         tools = LogTools(client)
         result = await tools.get_logs(**_call_kwargs(source="logbook", limit=2))
         data = result["data"]
