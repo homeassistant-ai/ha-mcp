@@ -12,18 +12,18 @@ def addon_connection_failure_suggestions(
     timed_out: bool = False,
 ) -> list[str]:
     """Reserve listener setup advice for connection failures, not timeouts."""
+    if timed_out:
+        return [
+            "Check app logs for slow or blocked operations. The operation may "
+            + "still be running; check its status before retrying.",
+        ]
     if port:
         suggestions = [
             f"Check ha_get_app(slug='{slug}'): app (add-on) running and service "
             + f"listening on internal port {port}. Bridge-network apps do not need "
             + "a published host port. Check app logs for listener failures.",
         ]
-        if timed_out:
-            suggestions = [
-                "Check app logs for slow or blocked operations. The operation may "
-                + "still be running; check its status before retrying.",
-            ]
-        elif slug.rsplit("_", 1)[-1] in {"esphome", "esphome-beta", "esphome-dev"}:
+        if slug.rsplit("_", 1)[-1] in {"esphome", "esphome-beta", "esphome-dev"}:
             suggestions.append(
                 "For ESPHome: enable its dashboard port under Configuration > "
                 "Network and leave_front_door_open, then restart. This enables its "
