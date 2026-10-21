@@ -56,7 +56,7 @@
         },
         "path": {
           "type": "str | None",
-          "description": "Proxy mode: API path relative to the app (add-on) root (e.g., '/flows', '/api/events', '/api/stats'). Required for proxy mode.",
+          "description": "Proxy mode: API path relative to the app (add-on) root (e.g., '/flows', '/api/events', '/api/stats'). Required for proxy mode. ESPHome 2026.10+: POST JSON-RPC to '/api/mcp' (initialize, notifications/initialized, tools/list, then tools/call); check response.error first, then response.result.isError.",
           "default": null
         },
         "method": {
@@ -76,7 +76,7 @@
         },
         "port": {
           "type": "int | None",
-          "description": "Proxy mode only. Connect to this port instead of the Ingress port. Use ha_get_app(slug='...') to find available ports. Some apps, including Node-RED, reject direct access unless their leave_front_door_open option is enabled and the app is restarted.",
+          "description": "Proxy mode only. Connect to this port instead of the Ingress port. Use ha_get_app(slug='...') to find available ports. Some apps, including Node-RED and ESPHome, reject direct access unless their leave_front_door_open option is enabled and the app is restarted.",
           "default": null
         },
         "offset": {
