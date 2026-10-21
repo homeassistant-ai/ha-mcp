@@ -56,11 +56,16 @@ _LOCAL_SKILLS_FALLBACK = (
     f"{SKILL_TOOL_NAME} fallback tool is disabled on this server)."
 )
 
-_SKILL_TOOL_FALLBACK = (
-    f"If for any reason you cannot access MCP resources, call {SKILL_TOOL_NAME}() "
-    "with no arguments as a fallback: it returns SKILL.md, then "
-    "pass file='<path>' for a reference file. If you can access "
-    "resources normally, do not waste time or tokens on that tool."
+# The tool, not the resources, whenever it is served (#2802): the strict-BPS
+# key and the MandatoryBPS=false opt-out ride only on its responses, so a
+# client that reads the resources still gets every reference file attached
+# to its writes. The opt-out is deliberately not named here: an agent told
+# about it up front could switch the attach off without reading anything.
+_SKILL_TOOL_ACCESS = (
+    f"Call {SKILL_TOOL_NAME}() with no arguments: it returns SKILL.md. "
+    "Then pass file='<path>' for each reference file the table points "
+    "to. Use this tool even if your client can read the skill:// "
+    "resources."
 )
 
 
@@ -88,6 +93,23 @@ def skill_tool_hidden(settings: Settings) -> bool:
         return False
 
 
+def search_tool_skills_hint(tool_hidden: bool) -> str:
+    """The skills hint on the tool-search description: same tool-first rule."""
+    if tool_hidden:
+        return (
+            "This server also provides best-practice skills via skill:// "
+            "resources. Read the relevant SKILL.md (or your locally "
+            "installed copy of these skills) before creating automations "
+            "or configuring devices."
+        )
+    return (
+        f"This server also provides best-practice skills. Call "
+        f"{SKILL_TOOL_NAME} (directly, no proxy needed) to read the "
+        "relevant SKILL.md before creating automations or configuring "
+        "devices, even if your client supports MCP resources."
+    )
+
+
 def skill_block(skill_name: str, description: str) -> str:
     """One skill's entry: its resource URI and its LLM-authored description."""
     uri = f"skill://{skill_name}/SKILL.md"
@@ -108,8 +130,10 @@ def build_skills_instructions(
     if not skills:
         return None
 
-    fallback = _LOCAL_SKILLS_FALLBACK if tool_hidden else _SKILL_TOOL_FALLBACK
-    header = _SKILLS_HEADER.format(access_method=_RESOURCE_ACCESS + fallback)
+    access_method = (
+        _RESOURCE_ACCESS + _LOCAL_SKILLS_FALLBACK if tool_hidden else _SKILL_TOOL_ACCESS
+    )
+    header = _SKILLS_HEADER.format(access_method=access_method)
     instructions = header + "\n".join(
         skill_block(name, frontmatter["description"])
         for name, _dir, frontmatter in skills

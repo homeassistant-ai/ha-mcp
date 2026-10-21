@@ -41,17 +41,20 @@ class TestSkillsSection:
     def test_agents_are_told_to_read_skills_and_how(
         self, settings: MagicMock, tmp_path: Path
     ) -> None:
-        """The access method names resources and the ha_get_skill_guide fallback."""
+        """#2802: agents that read the skill:// resources never get the
+        strict-BPS key or the MandatoryBPS=false opt-out, so the served
+        ha_get_skill_guide is the access method, not a fallback."""
         _write_skill(tmp_path)
 
         result = build_skills_instructions(tmp_path, settings, tool_hidden=False)
 
         assert result is not None
         assert "IMPORTANT" in result
-        assert "resources/read" in result
         assert "### Skill: my-skill (skill://my-skill/SKILL.md)" in result
         assert "Best practices for my-skill tasks." in result
-        assert f"call {SKILL_TOOL_NAME}()" in result
+        assert f"Call {SKILL_TOOL_NAME}()" in result
+        assert "even if your client can read the skill:// resources" in result
+        assert "do not waste time or tokens" not in result
         # The pre-consolidation pair must no longer appear (#1134).
         assert "ha_list_resources" not in result
         assert "ha_read_resource" not in result
@@ -66,8 +69,9 @@ class TestSkillsSection:
         result = build_skills_instructions(tmp_path, settings, tool_hidden=True)
 
         assert result is not None
+        assert "resources/read" in result
         assert "locally installed copy" in result
-        assert f"call {SKILL_TOOL_NAME}()" not in result
+        assert f"Call {SKILL_TOOL_NAME}()" not in result
 
     def test_the_skill_tool_counts_as_hidden_only_when_disabled_and_unlocked(
         self, settings: MagicMock
@@ -166,6 +170,37 @@ class TestCustomInstructions:
         assert compose_instructions(None, settings).endswith(
             "First rule.\nSecond rule."
         )
+
+
+@pytest.mark.parametrize("hidden", [False, True])
+def test_the_search_tool_points_at_the_skill_tool_only_while_it_is_served(
+    hidden: bool,
+) -> None:
+    """#2802: with tool search on, the search tool's description is the one
+    skills hint every client sees; it must send agents to the served
+    ha_get_skill_guide, and never to a disabled one."""
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    srv = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
+    srv.settings = MagicMock(
+        enable_tool_search=True, tool_search_max_results=5, enable_code_mode=False
+    )
+    srv.mcp = MagicMock()
+    srv._user_enabled_tools = set()
+    srv._user_pinned_tools = []
+    with (
+        patch("ha_mcp.server.skill_tool_hidden", return_value=hidden),
+        patch("ha_mcp.transforms.CategorizedSearchTransform") as transform,
+    ):
+        srv._apply_tool_search()
+
+    description = transform.call_args.kwargs["search_tool_description"]
+    if hidden:
+        assert SKILL_TOOL_NAME not in description
+        assert "locally installed copy" in description
+    else:
+        assert f"Call {SKILL_TOOL_NAME}" in description
+        assert "even if your client supports MCP resources" in description
 
 
 def test_the_server_starts_with_the_composed_instructions(tmp_path: Path) -> None:
