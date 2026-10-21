@@ -5,18 +5,33 @@ from ..client.rest_client import HomeAssistantClient
 
 
 def addon_connection_failure_suggestions(
-    client: HomeAssistantClient, port: int | None, slug: str
+    client: HomeAssistantClient,
+    port: int | None,
+    slug: str,
+    *,
+    timed_out: bool = False,
 ) -> list[str]:
-    """Suggest setup checks for direct ports and route-specific ingress failures."""
+    """Reserve listener setup advice for connection failures, not timeouts."""
     if port:
-        return [
+        suggestions = [
             f"Check ha_get_app(slug='{slug}'): app (add-on) running and service "
             + f"listening on internal port {port}. Bridge-network apps do not need "
             + "a published host port. Check app logs for listener failures.",
-            "For ESPHome only: enable its dashboard port under Configuration > "
-            + "Network and leave_front_door_open, then restart. This enables its "
-            + "direct listener without authentication; get explicit user approval "
-            + "before enabling it.",
+        ]
+        if timed_out:
+            suggestions = [
+                "Check app logs for slow or blocked operations. The operation may "
+                + "still be running; check its status before retrying.",
+            ]
+        elif slug.rsplit("_", 1)[-1] in {"esphome", "esphome-beta", "esphome-dev"}:
+            suggestions.append(
+                "For ESPHome: enable its dashboard port under Configuration > "
+                "Network and leave_front_door_open, then restart. This enables its "
+                "direct listener without authentication; get explicit user approval "
+                "before enabling it."
+            )
+        return [
+            *suggestions,
             "Direct-port access requires the MCP host to share Home "
             + "Assistant's container network. On PyPI/uvx installs, drop "
             + "the 'port' parameter to route through Ingress instead.",

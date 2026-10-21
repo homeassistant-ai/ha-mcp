@@ -1760,7 +1760,9 @@ async def _call_addon_ws(
                     "timeout_seconds": timeout,
                     "direct_port": bool(port),
                 },
-                suggestions=addon_connection_failure_suggestions(client, port, slug),
+                suggestions=addon_connection_failure_suggestions(
+                    client, port, slug, timed_out=True
+                ),
             )
         )
     except OSError as e:
@@ -2370,7 +2372,9 @@ async def _call_addon_api(
                     "timeout_seconds": timeout,
                     "direct_port": bool(port),
                 },
-                suggestions=addon_connection_failure_suggestions(client, port, slug),
+                suggestions=addon_connection_failure_suggestions(
+                    client, port, slug, timed_out=True
+                ),
             )
         )
     except httpx.ConnectError as e:
