@@ -18,7 +18,9 @@ from .test_tools_addons import (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("websocket", [False, True])
 @pytest.mark.parametrize("slug", ["test_addon", "5c53de3b_esphome"])
-async def test_refused_app_port_explains_listener_setup(monkeypatch, websocket, slug):
+async def test_refused_app_port_explains_listener_setup(
+    monkeypatch: pytest.MonkeyPatch, websocket: bool, slug: str
+) -> None:
     """Both proxy transports must return actionable setup and auth guidance."""
     monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
     client = _make_mock_client()
@@ -65,7 +67,10 @@ async def test_refused_app_port_explains_listener_setup(monkeypatch, websocket, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("websocket", [False, True])
-async def test_app_timeout_does_not_change_listener_auth(monkeypatch, websocket):
+@pytest.mark.parametrize("port", [None, 6052])
+async def test_app_timeout_does_not_change_listener_auth(
+    monkeypatch: pytest.MonkeyPatch, websocket: bool, port: int | None
+) -> None:
     """A connected app timing out must not prompt disabling authentication."""
     monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
     client = _make_mock_client()
@@ -93,7 +98,7 @@ async def test_app_timeout_does_not_change_listener_auth(monkeypatch, websocket)
 
         with pytest.raises(ToolError) as exc_info:
             await call(
-                client, "5c53de3b_esphome", "/", port=6052, body={"command": "run"}
+                client, "5c53de3b_esphome", "/", port=port, body={"command": "run"}
             )
 
     result = _parse_tool_error(exc_info)
@@ -102,4 +107,5 @@ async def test_app_timeout_does_not_change_listener_auth(monkeypatch, websocket)
     assert "leave_front_door_open" not in guidance
     assert "Configuration > Network" not in guidance
     assert "restart" not in guidance.lower()
+    assert "'port' parameter" not in guidance
     assert "logs" in guidance.lower() and "retry" in guidance.lower()
