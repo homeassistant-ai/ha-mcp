@@ -11,7 +11,7 @@
   "src/ha_mcp/backup_manager.py": 3942,
   "src/ha_mcp/client/rest_client.py": 2669,
   "src/ha_mcp/client/websocket_client.py": 1812,
-  "src/ha_mcp/server.py": 1185,
+  "src/ha_mcp/server.py": 1184,
   "src/ha_mcp/stdio_settings_sidecar.py": 1504,
   "src/ha_mcp/tools/backup.py": 2205,
   "src/ha_mcp/tools/config_entry_flow_form.py": 1114,
