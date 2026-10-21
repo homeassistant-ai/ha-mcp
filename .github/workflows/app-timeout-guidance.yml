@@ -21,13 +21,13 @@ jobs:
           version: '0.13.0'
           python-version: ${{ matrix.python }}
       - run: uv sync --all-extras --dev
-      - name: Prove timeout regressions fail before the fix
+      - name: Prove timeout and app-scope regressions fail before the fix
         run: |
           git fetch --depth=1 origin dec3e1d4e5f68fd028deec8c9a3abb1dfda10adf
           git show dec3e1d4e5f68fd028deec8c9a3abb1dfda10adf:src/ha_mcp/tools/tools_addons.py > src/ha_mcp/tools/tools_addons.py
           git show dec3e1d4e5f68fd028deec8c9a3abb1dfda10adf:src/ha_mcp/tools/addon_connection_hints.py > src/ha_mcp/tools/addon_connection_hints.py
           status=0
-          uv run pytest tests/src/unit/test_addon_connection_hints.py -k timeout --tb=short --junitxml=red.xml || status=$?
+          uv run pytest tests/src/unit/test_addon_connection_hints.py --tb=short --junitxml=red.xml || status=$?
           git restore src/ha_mcp/tools/tools_addons.py src/ha_mcp/tools/addon_connection_hints.py
           test "$status" -eq 1
           python - <<'PY'
@@ -35,7 +35,7 @@ jobs:
           root = ET.parse('red.xml').getroot()
           assert not root.findall('.//error')
           failures = root.findall('.//failure')
-          assert len(failures) == 2
+          assert len(failures) == 4
           assert all('leave_front_door_open' in (failure.text or '') for failure in failures)
           PY
       - name: Run app proxy regression suite
