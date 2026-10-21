@@ -23,9 +23,9 @@ jobs:
       - run: uv sync --all-extras --dev
       - name: Prove timeout and app-scope regressions fail before the fix
         run: |
-          git fetch --depth=1 origin dec3e1d4e5f68fd028deec8c9a3abb1dfda10adf
-          git show dec3e1d4e5f68fd028deec8c9a3abb1dfda10adf:src/ha_mcp/tools/tools_addons.py > src/ha_mcp/tools/tools_addons.py
-          git show dec3e1d4e5f68fd028deec8c9a3abb1dfda10adf:src/ha_mcp/tools/addon_connection_hints.py > src/ha_mcp/tools/addon_connection_hints.py
+          git fetch --depth=1 origin 91a72df369572c419e0ce7e77b3c9d5a3ccd4a40
+          git show 91a72df369572c419e0ce7e77b3c9d5a3ccd4a40:src/ha_mcp/tools/tools_addons.py > src/ha_mcp/tools/tools_addons.py
+          git show 91a72df369572c419e0ce7e77b3c9d5a3ccd4a40:src/ha_mcp/tools/addon_connection_hints.py > src/ha_mcp/tools/addon_connection_hints.py
           status=0
           uv run pytest tests/src/unit/test_addon_connection_hints.py --tb=short --maxfail=0 --junitxml=red.xml || status=$?
           git restore src/ha_mcp/tools/tools_addons.py src/ha_mcp/tools/addon_connection_hints.py
@@ -36,7 +36,7 @@ jobs:
           assert not root.findall('.//error')
           failures = root.findall('.//failure')
           assert len(failures) == 4
-          assert all('leave_front_door_open' in (failure.text or '') for failure in failures)
+          assert all('restart' in (failure.text or '') or "'port' parameter" in (failure.text or '') for failure in failures)
           PY
       - name: Run app proxy regression suite
         run: uv run pytest tests/src/unit/test_tools_addons.py tests/src/unit/test_addon_connection_hints.py --tb=short --maxfail=0
