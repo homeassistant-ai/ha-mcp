@@ -491,16 +491,8 @@ class TestCallAddonApiErrors:
         assert any("ingress" in s.lower() for s in suggestions), suggestions
 
     @pytest.mark.asyncio
-    async def test_http_direct_port_timeout_hints_at_ingress(
-        self, mock_ingress_session
-    ):
-        """Timeouts in direct-port mode should also suggest dropping `port`.
-
-        On real off-host installs, packets to the addon's container IP often
-        get silently dropped by the upstream router instead of refused —
-        which surfaces as TimeoutException, not ConnectError. The same
-        actionable hint must apply.
-        """
+    async def test_http_direct_timeout(self, mock_ingress_session: AsyncMock) -> None:
+        """An unclassified timeout must not assume the route needs changing."""
         client = _make_mock_client()
 
         with (
@@ -528,12 +520,11 @@ class TestCallAddonApiErrors:
                 )
 
         result = _parse_tool_error(exc_info)
-        suggestions = result["error"].get("suggestions", [])
-        assert any("ingress" in s.lower() for s in suggestions), suggestions
+        assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
-    async def test_http_ingress_timeout_hints_at_ha_core(self, mock_ingress_session):
-        """Timeouts in ingress mode should point at HA Core, not the add-on."""
+    async def test_http_ingress_timeout(self, mock_ingress_session: AsyncMock) -> None:
+        """Ingress timeouts should check operation status before retrying."""
         client = _make_mock_client()
 
         with (
@@ -557,9 +548,7 @@ class TestCallAddonApiErrors:
                 await _call_addon_api(client, "test_addon", "/api/test", timeout=5)
 
         result = _parse_tool_error(exc_info)
-        suggestions = result["error"].get("suggestions", [])
-        assert any(client.base_url in s for s in suggestions), suggestions
-        assert not any("'port' parameter" in s for s in suggestions), suggestions
+        assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
     async def test_http_ingress_connection_error_hints_at_ha_core(
@@ -1981,8 +1970,8 @@ class TestCallAddonWsErrors:
         assert any("ingress" in s.lower() for s in suggestions), suggestions
 
     @pytest.mark.asyncio
-    async def test_ws_direct_port_timeout_hints_at_ingress(self, mock_ingress_session):
-        """TimeoutError in direct-port WS mode should suggest dropping `port`."""
+    async def test_ws_direct_timeout(self, mock_ingress_session: AsyncMock) -> None:
+        """An unclassified WS timeout must not assume the route needs changing."""
         client = _make_mock_client()
 
         with (
@@ -2006,12 +1995,11 @@ class TestCallAddonWsErrors:
                 )
 
         result = _parse_tool_error(exc_info)
-        suggestions = result["error"].get("suggestions", [])
-        assert any("ingress" in s.lower() for s in suggestions), suggestions
+        assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
-    async def test_ws_ingress_timeout_hints_at_ha_core(self, mock_ingress_session):
-        """TimeoutError in ingress WS mode should point at HA Core."""
+    async def test_ws_ingress_timeout(self, mock_ingress_session: AsyncMock) -> None:
+        """Ingress WS timeouts should check operation status before retrying."""
         client = _make_mock_client()
 
         with (
@@ -2033,9 +2021,7 @@ class TestCallAddonWsErrors:
                 await _call_addon_ws(client, "test_addon", "/validate", timeout=5)
 
         result = _parse_tool_error(exc_info)
-        suggestions = result["error"].get("suggestions", [])
-        assert any(client.base_url in s for s in suggestions), suggestions
-        assert not any("'port' parameter" in s for s in suggestions), suggestions
+        assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
     async def test_ws_ingress_connection_error_hints_at_ha_core(

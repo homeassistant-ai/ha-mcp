@@ -53,6 +53,7 @@ from ..utils.python_sandbox import (
     format_sandbox_error,
     safe_execute_expression,
 )
+from .addon_connection_hints import addon_connection_failure_suggestions
 from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
@@ -800,37 +801,6 @@ async def _supervisor_api_call(
         return None  # unreachable: raise_tool_error always raises
 
 
-def _addon_connection_failure_suggestions(
-    client: HomeAssistantClient, port: int | None
-) -> list[str]:
-    """Suggestions for connect/timeout failures against an app (add-on).
-
-    Three modes — direct-port hits a container IP, the app-mode ingress
-    route hits a sibling container's ingress port, the off-host ingress route
-    hits HA Core. Each mode fails for different reasons, so suggest different
-    next steps.
-    """
-    if port:
-        return [
-            "Check that the app (add-on) is running",
-            "Direct-port access requires the MCP host to share Home "
-            + "Assistant's container network. On PyPI/uvx installs, drop "
-            + "the 'port' parameter to route through Ingress instead.",
-        ]
-    if is_running_in_addon():
-        return [
-            "The target app (add-on) container may not be reachable from this "
-            + "MCP app. Check that the target app is running.",
-            "If the failure persists, the app (add-on) Docker network may be "
-            + "unhealthy — try restarting the target app, then this "
-            + "MCP app.",
-        ]
-    return [
-        f"Verify Home Assistant is reachable at {client.base_url}",
-        "Check network connectivity from the MCP host to HA Core",
-    ]
-
-
 async def _create_ingress_session(client: HomeAssistantClient) -> str:
     """Create a Supervisor ingress session and return its token.
 
@@ -1451,7 +1421,7 @@ def _raise_connect_failure(
             f"Failed to connect to {label}: {e!s}",
             details=f"url={url}",
             context={"slug": slug, "direct_port": bool(port)},
-            suggestions=_addon_connection_failure_suggestions(client, port),
+            suggestions=addon_connection_failure_suggestions(client, port, slug),
         )
     )
 
@@ -1790,7 +1760,9 @@ async def _call_addon_ws(
                     "timeout_seconds": timeout,
                     "direct_port": bool(port),
                 },
-                suggestions=_addon_connection_failure_suggestions(client, port),
+                suggestions=addon_connection_failure_suggestions(
+                    client, port, slug, timed_out=True
+                ),
             )
         )
     except OSError as e:
@@ -2387,6 +2359,15 @@ async def _call_addon_api(
                 headers=headers,
                 content=request_content,
             )
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        _raise_connect_failure(
+            client,
+            e,
+            label=f"app (add-on) '{addon_name}'",
+            url=url,
+            slug=slug,
+            port=port,
+        )
     except httpx.TimeoutException:
         raise_tool_error(
             create_error_response(
@@ -2400,19 +2381,11 @@ async def _call_addon_api(
                     "timeout_seconds": timeout,
                     "direct_port": bool(port),
                 },
-                suggestions=_addon_connection_failure_suggestions(client, port),
+                suggestions=addon_connection_failure_suggestions(
+                    client, port, slug, timed_out=True
+                ),
             )
         )
-    except httpx.ConnectError as e:
-        _raise_connect_failure(
-            client,
-            e,
-            label=f"app (add-on) '{addon_name}'",
-            url=url,
-            slug=slug,
-            port=port,
-        )
-
     # 6. Parse response body
     response_data: Any = _parse_response_body(response)
 
@@ -3836,7 +3809,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             Field(
                 description="Proxy mode: API path relative to the app (add-on) root "
                 "(e.g., '/flows', '/api/events', '/api/stats'). "
-                "Required for proxy mode.",
+                "Required for proxy mode. ESPHome 2026.10+: POST JSON-RPC to '/api/mcp' "
+                "(initialize, notifications/initialized, tools/list, then tools/call); "
+                "check response.error first, then response.result.isError.",
                 default=None,
             ),
         ] = None,
@@ -3867,7 +3842,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             Field(
                 description="Proxy mode only. Connect to this port instead of the Ingress port. Use"
                 " ha_get_app(slug='...') to find available ports. Some apps, including "
-                "Node-RED, reject direct access unless their leave_front_door_open "
+                "Node-RED and ESPHome, reject direct access unless their leave_front_door_open "
                 "option is enabled and the app is restarted.",
                 default=None,
             ),
