@@ -22,6 +22,7 @@ from .http_transport import HttpTransportFastMCP as FastMCP
 from .server_instructions import (
     build_skills_instructions,
     compose_instructions,
+    search_tool_skills_hint,
     skill_tool_hidden,
 )
 from .server_lifespan import server_lifespan
@@ -588,10 +589,11 @@ class HomeAssistantSmartMCPServer:
 
         # Build the always_visible list: defaults (minus tools the user
         # explicitly toggled to "enabled" in the Tools tab) + user pins.
-        # The skill guide tool is part of DEFAULT_PINNED_TOOLS and is
-        # also in MANDATORY_TOOLS (settings UI strips it from any
-        # disable list before applying), so the catalog presence is
-        # protected from both the search transform and user disables.
+        # The skill guide tool is part of DEFAULT_PINNED_TOOLS, and in
+        # strict-BPS mode also in BPS_MANDATORY_TOOLS (settings UI strips
+        # it from any disable list before applying), so the catalog
+        # presence is protected from the search transform and, in strict
+        # mode, from user disables.
         # Filtering by _user_enabled_tools is how a user unpins a
         # default-pinned tool — flipping its UI state to "enabled" (not
         # "pinned") removes it from the always_visible set so it goes
@@ -611,13 +613,10 @@ class HomeAssistantSmartMCPServer:
         # The client may not support resources or server instructions — add
         # skills hint to the search tool description (the one place the LLM
         # is guaranteed to see).
-        description = self._SEARCH_TOOL_DESCRIPTION + (
-            "\n\nThis server also provides best-practice skills via "
-            "skill:// resources. If your client supports MCP resources, "
-            f"prefer reading them directly. Otherwise, call "
-            f"{SKILL_TOOL_NAME} (directly, no proxy needed) to access the "
-            "relevant SKILL.md before creating automations or configuring "
-            "devices."
+        description = (
+            self._SEARCH_TOOL_DESCRIPTION
+            + "\n\n"
+            + search_tool_skills_hint(skill_tool_hidden(self.settings))
         )
 
         try:
