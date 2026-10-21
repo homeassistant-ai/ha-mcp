@@ -11,11 +11,11 @@ def addon_connection_failure_suggestions(
     if port:
         return [
             f"Check ha_get_app(slug='{slug}'): app (add-on) running, port {port} "
-            "enabled under Configuration > Network, service listening. Restart "
-            "after configuration changes.",
+            + "enabled under Configuration > Network, service listening. Restart "
+            + "after configuration changes.",
             "If the app requires leave_front_door_open for direct access, "
-            "enable it only with explicit user approval: it removes direct-access "
-            "authentication. Restart afterward.",
+            + "enable it only with explicit user approval: it removes direct-access "
+            + "authentication. Restart afterward.",
             "Direct-port access requires the MCP host to share Home "
             + "Assistant's container network. On PyPI/uvx installs, drop "
             + "the 'port' parameter to route through Ingress instead.",
