@@ -2359,6 +2359,15 @@ async def _call_addon_api(
                 headers=headers,
                 content=request_content,
             )
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        _raise_connect_failure(
+            client,
+            e,
+            label=f"app (add-on) '{addon_name}'",
+            url=url,
+            slug=slug,
+            port=port,
+        )
     except httpx.TimeoutException:
         raise_tool_error(
             create_error_response(
@@ -2377,16 +2386,6 @@ async def _call_addon_api(
                 ),
             )
         )
-    except httpx.ConnectError as e:
-        _raise_connect_failure(
-            client,
-            e,
-            label=f"app (add-on) '{addon_name}'",
-            url=url,
-            slug=slug,
-            port=port,
-        )
-
     # 6. Parse response body
     response_data: Any = _parse_response_body(response)
 

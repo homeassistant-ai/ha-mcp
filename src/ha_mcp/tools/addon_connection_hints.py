@@ -23,7 +23,11 @@ def addon_connection_failure_suggestions(
             + f"listening on internal port {port}. Bridge-network apps do not need "
             + "a published host port. Check app logs for listener failures.",
         ]
-        if slug.rsplit("_", 1)[-1] in {"esphome", "esphome-beta", "esphome-dev"}:
+        if port == 6052 and slug.rsplit("_", 1)[-1] in {
+            "esphome",
+            "esphome-beta",
+            "esphome-dev",
+        }:
             suggestions.append(
                 "For ESPHome: enable its dashboard port under Configuration > "
                 "Network and leave_front_door_open, then restart. This enables its "
