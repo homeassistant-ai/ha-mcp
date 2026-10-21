@@ -92,7 +92,9 @@ async def test_app_timeout_does_not_change_listener_auth(monkeypatch, websocket)
             call = _call_addon_api
 
         with pytest.raises(ToolError) as exc_info:
-            await call(client, "test_addon", "/", port=6052, body={"command": "run"})
+            await call(
+                client, "5c53de3b_esphome", "/", port=6052, body={"command": "run"}
+            )
 
     result = _parse_tool_error(exc_info)
     assert result["error"]["code"] == "TIMEOUT_OPERATION"
