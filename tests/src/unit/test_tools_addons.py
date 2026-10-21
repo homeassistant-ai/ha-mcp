@@ -458,10 +458,13 @@ class TestCallAddonApiErrors:
         mock_ingress_session.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_http_direct_port_offhost_error_hints_at_ingress(
-        self, mock_ingress_session
+    @pytest.mark.parametrize("in_app", [False, True])
+    async def test_http_direct_port_failure_explains_listener_setup(
+        self, mock_ingress_session, monkeypatch, in_app
     ):
-        """ConnectError in direct-port mode should suggest dropping `port` for off-host hosts."""
+        """A refused direct port must explain app setup before blaming routing."""
+        if in_app:
+            monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
         client = _make_mock_client()
 
         with (
@@ -489,6 +492,12 @@ class TestCallAddonApiErrors:
         result = _parse_tool_error(exc_info)
         suggestions = result["error"].get("suggestions", [])
         assert any("ingress" in s.lower() for s in suggestions), suggestions
+        guidance = " ".join(suggestions)
+        assert "ha_get_app(slug='test_addon')" in guidance
+        assert "1880" in guidance and "Network" in guidance
+        assert "listening" in guidance and "restart" in guidance.lower()
+        assert "leave_front_door_open" in guidance and "authentication" in guidance
+        assert "user" in guidance and "explicit" in guidance
 
     @pytest.mark.asyncio
     async def test_http_direct_port_timeout_hints_at_ingress(
@@ -1952,10 +1961,11 @@ class TestCallAddonWsErrors:
         )
 
     @pytest.mark.asyncio
-    async def test_ws_direct_port_offhost_error_hints_at_ingress(
-        self, mock_ingress_session
+    async def test_ws_direct_port_failure_explains_listener_setup(
+        self, mock_ingress_session, monkeypatch
     ):
-        """OSError in direct-port WS mode should suggest dropping `port` for off-host hosts."""
+        """The WebSocket failure path must expose the same setup remedies."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
         client = _make_mock_client()
 
         with (
@@ -1979,6 +1989,12 @@ class TestCallAddonWsErrors:
         result = _parse_tool_error(exc_info)
         suggestions = result["error"].get("suggestions", [])
         assert any("ingress" in s.lower() for s in suggestions), suggestions
+        guidance = " ".join(suggestions)
+        assert "ha_get_app(slug='test_addon')" in guidance
+        assert "6052" in guidance and "Network" in guidance
+        assert "listening" in guidance and "restart" in guidance.lower()
+        assert "leave_front_door_open" in guidance and "authentication" in guidance
+        assert "user" in guidance and "explicit" in guidance
 
     @pytest.mark.asyncio
     async def test_ws_direct_port_timeout_hints_at_ingress(self, mock_ingress_session):
