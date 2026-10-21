@@ -17,7 +17,8 @@ from .test_tools_addons import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("websocket", [False, True])
-async def test_refused_app_port_explains_listener_setup(monkeypatch, websocket):
+@pytest.mark.parametrize("slug", ["test_addon", "5c53de3b_esphome"])
+async def test_refused_app_port_explains_listener_setup(monkeypatch, websocket, slug):
     """Both proxy transports must return actionable setup and auth guidance."""
     monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
     client = _make_mock_client()
@@ -46,16 +47,20 @@ async def test_refused_app_port_explains_listener_setup(monkeypatch, websocket):
             call = _call_addon_api
 
         with pytest.raises(ToolError) as exc_info:
-            await call(client, "test_addon", "/", port=6052)
+            await call(client, slug, "/", port=6052)
 
     result = _parse_tool_error(exc_info)
     assert result["error"]["code"] == "CONNECTION_FAILED"
     guidance = " ".join(result["error"]["suggestions"])
-    assert "ha_get_app(slug='test_addon')" in guidance
-    assert "6052" in guidance and "Network" in guidance
-    assert "listening" in guidance and "restart" in guidance.lower()
-    assert "leave_front_door_open" in guidance and "authentication" in guidance
-    assert "user" in guidance and "explicit" in guidance
+    assert f"ha_get_app(slug='{slug}')" in guidance
+    assert "6052" in guidance and "listening" in guidance
+    if slug == "test_addon":
+        assert "leave_front_door_open" not in guidance
+        assert "Configuration > Network" not in guidance
+    else:
+        assert "Network" in guidance and "restart" in guidance.lower()
+        assert "leave_front_door_open" in guidance and "authentication" in guidance
+        assert "user" in guidance and "explicit" in guidance
 
 
 @pytest.mark.asyncio
