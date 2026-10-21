@@ -103,7 +103,9 @@ async def test_app_timeout_does_not_change_listener_auth(
 
     result = _parse_tool_error(exc_info)
     assert result["error"]["code"] == "TIMEOUT_OPERATION"
-    guidance = " ".join(result["error"]["suggestions"])
+    guidance = " ".join(
+        result["error"].get("suggestions", [result["error"]["suggestion"]])
+    )
     assert "leave_front_door_open" not in guidance
     assert "Configuration > Network" not in guidance
     assert "restart" not in guidance.lower()

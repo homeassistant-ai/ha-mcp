@@ -520,8 +520,7 @@ class TestCallAddonApiErrors:
                 )
 
         result = _parse_tool_error(exc_info)
-        suggestions = result["error"].get("suggestions", [])
-        assert any("status before retrying" in s for s in suggestions), suggestions
+        assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
     async def test_http_ingress_timeout(self, mock_ingress_session: AsyncMock) -> None:
@@ -549,9 +548,7 @@ class TestCallAddonApiErrors:
                 await _call_addon_api(client, "test_addon", "/api/test", timeout=5)
 
         result = _parse_tool_error(exc_info)
-        suggestions = result["error"].get("suggestions", [])
-        assert any("status before retrying" in s for s in suggestions), suggestions
-        assert not any("'port' parameter" in s for s in suggestions), suggestions
+        assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
     async def test_http_ingress_connection_error_hints_at_ha_core(
@@ -1998,8 +1995,7 @@ class TestCallAddonWsErrors:
                 )
 
         result = _parse_tool_error(exc_info)
-        suggestions = result["error"].get("suggestions", [])
-        assert any("status before retrying" in s for s in suggestions), suggestions
+        assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
     async def test_ws_ingress_timeout(self, mock_ingress_session: AsyncMock) -> None:
@@ -2025,9 +2021,7 @@ class TestCallAddonWsErrors:
                 await _call_addon_ws(client, "test_addon", "/validate", timeout=5)
 
         result = _parse_tool_error(exc_info)
-        suggestions = result["error"].get("suggestions", [])
-        assert any("status before retrying" in s for s in suggestions), suggestions
-        assert not any("'port' parameter" in s for s in suggestions), suggestions
+        assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
     async def test_ws_ingress_connection_error_hints_at_ha_core(
