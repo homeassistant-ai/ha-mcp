@@ -3808,7 +3808,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 "(e.g., '/flows', '/api/events', '/api/stats'). "
                 "Required for proxy mode. ESPHome 2026.10+: POST JSON-RPC to '/api/mcp' "
                 "(initialize, notifications/initialized, tools/list, then tools/call); "
-                "check response.result.isError for tool failures.",
+                "check response.error first, then response.result.isError.",
                 default=None,
             ),
         ] = None,

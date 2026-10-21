@@ -10,12 +10,13 @@ def addon_connection_failure_suggestions(
     """Suggest setup checks for direct ports and route-specific ingress failures."""
     if port:
         return [
-            f"Check ha_get_app(slug='{slug}'): app (add-on) running, port {port} "
-            + "enabled under Configuration > Network, service listening. Restart "
-            + "after configuration changes.",
-            "If the app requires leave_front_door_open for direct access, "
-            + "enable it only with explicit user approval: it removes direct-access "
-            + "authentication. Restart afterward.",
+            f"Check ha_get_app(slug='{slug}'): app (add-on) running and service "
+            + f"listening on internal port {port}. Bridge-network apps do not need "
+            + "a published host port. Check app logs for listener failures.",
+            "For ESPHome only: enable its dashboard port under Configuration > "
+            + "Network and leave_front_door_open, then restart. This enables its "
+            + "direct listener without authentication; get explicit user approval "
+            + "before enabling it.",
             "Direct-port access requires the MCP host to share Home "
             + "Assistant's container network. On PyPI/uvx installs, drop "
             + "the 'port' parameter to route through Ingress instead.",
