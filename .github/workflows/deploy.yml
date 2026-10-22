@@ -3,7 +3,8 @@ name: Deploy to GitHub Pages
 # The site is built from the `stable` tag, not master, so the published setup
 # instructions always match the current stable release. A site change merged
 # to master goes live at the next stable release, or sooner by dispatching
-# this workflow (optionally with another `ref`).
+# this workflow with another `ref`. That override lasts only until the next
+# scheduled or release-driven rebuild.
 #
 # Stable releases arrive through workflow_run rather than a release or tag
 # trigger: the github-pages environment only lets runs on `master` deploy,

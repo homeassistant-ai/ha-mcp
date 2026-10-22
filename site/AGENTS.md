@@ -17,7 +17,8 @@ npm run preview  # Preview production build locally
 deploys it to GitHub Pages after each stable release, so the published setup
 instructions match the current stable version. A site change merged to
 `master` goes live at the next stable release. To publish sooner, or to
-publish another tag or commit, dispatch `deploy.yml` with its `ref` input.
+publish another tag or commit, dispatch `deploy.yml` with its `ref` input;
+that override lasts only until the next weekly or release-driven rebuild.
 
 ## Setup Wizard (`site/src/pages/setup.astro`)
 
