@@ -37,6 +37,9 @@ concurrency:
 
 jobs:
   build:
+    # SemVer Release moves `stable` before it publishes the release and app
+    # config; a run that fails after that point must not publish the site.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -47,9 +50,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # Every non-dispatch trigger builds `stable`, whatever the SemVer
-          # Release run concluded: the tag only moves on a successful release,
-          # so rebuilding it is always safe.
+          # Every non-dispatch trigger builds `stable`; on a gated-out release
+          # week the tag has not moved, so the rebuild is a no-op.
           ref: ${{ inputs.ref || 'stable' }}
 
       - name: Generate star history charts
