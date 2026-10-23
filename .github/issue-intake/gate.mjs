@@ -69,9 +69,12 @@ const answered = (section) =>
     .trim() !== "";
 const hasAnswer = (text) => answerSections(text).some(answered);
 // Whether a section holds any text once comment markers are removed: typed
-// into a comment, or a template's placeholder.
+// into a comment, or a template's placeholder. Plain string splits: this only
+// looks for text and filters no HTML.
 const hasText = (section) =>
-  section.replace(/<!--|-->|_No response_/g, "").trim() !== "";
+  ["<!--", "-->", "_No response_"]
+    .reduce((text, marker) => text.split(marker).join(" "), section)
+    .trim() !== "";
 const gateExemptRoles = ["write", "maintain", "admin"];
 
 // The reporter's own words: the issue body and their comments. Without an
