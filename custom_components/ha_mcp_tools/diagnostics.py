@@ -61,6 +61,7 @@ from .const import (
     OPT_WEBHOOK_ID_OVERRIDE,
     WEBHOOK_AUTH_NONE,
 )
+from .embedded_entry import access_enabled
 from .spec_dist import version_dist
 from .websocket_api.registry import _enum_value
 
@@ -166,6 +167,7 @@ async def _async_server_summary(
             _installed_ha_mcp_version, version_dist(spec)
         ),
         "package_override_set": bool(override),
+        "access_enabled": access_enabled(entry),
         "running": isinstance(manager, EmbeddedServerManager) and manager.is_running,
         "bring_up_in_progress": bringup is not None and not bringup.done(),
         "startup_error": _startup_error(hass, entry),

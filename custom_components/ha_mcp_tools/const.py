@@ -38,6 +38,10 @@ ENTRY_TYPE_SERVER = "server"
 TOOLS_ENTRY_TITLE = "HA-MCP File & YAML Tools"
 TOOLS_ENTRY_LEGACY_TITLE = "HA MCP Tools"
 SERVER_ENTRY_TITLE = "HA-MCP Server"
+# Entity platforms the server entry forwards to (the access switch, #2801).
+# Plain strings: Home Assistant accepts them, and importing ``Platform`` would
+# tie the entry wiring to the shape of a stubbed ``homeassistant.const``.
+SERVER_PLATFORMS: tuple[str, ...] = ("switch",)
 # Kept level with the HACS floor in hacs.json: from component 2.1.3 the manifest
 # declares voluptuous-openapi, which Core releases before 2026.7 pin to an older
 # version so the requirement cannot resolve there, and
@@ -360,6 +364,9 @@ OPT_ENABLE_STARTUP_NOTIFICATION = "enable_startup_notification"
 # When False, the admin-only "HA-MCP" sidebar settings panel is not registered;
 # the server's options stay reachable on the entry's Configure screen.
 OPT_ENABLE_SIDEBAR_PANEL = "enable_sidebar_panel"
+# When True, the server's access switch (#2801) turns off whenever Home
+# Assistant starts instead of restoring its last state.
+OPT_ACCESS_OFF_AFTER_RESTART = "access_off_after_restart"
 # One-shot Configure field: an administrator's long-lived access token to
 # switch the server to (#2427). The options flow validates it and writes it
 # straight into entry.data (_adopt_token); it is never stored in options or
@@ -433,12 +440,18 @@ DATA_ACCESS_TOKEN = "access_token"
 # pip-spec override) force an actual reinstall on the next start instead
 # of hitting the requirements manager's is-installed shortcut.
 DATA_LAST_PIP_SPEC = "last_pip_spec"
+# State of the server's access switch (#2801). Absent means on, so installs
+# from before the switch keep serving.
+DATA_ACCESS_ENABLED = "access_enabled"
 # hass.data[DOMAIN] sub-keys for the server runtime. Distinct from the tools
 # entry's sub-keys ("caller_token" / "allowed_paths") so both entry types can
 # share hass.data[DOMAIN] without collision.
 DATA_MANAGER = "manager"
 DATA_WEBHOOK = "webhook"
 DATA_BRINGUP_TASK = "bringup_task"
+# Server entry ids already set up in this Home Assistant process, so
+# OPT_ACCESS_OFF_AFTER_RESTART applies at startup but not on a reload.
+DATA_STARTED_ENTRIES = "started_entries"
 # Snapshot of entry.options taken at setup so the update listener reloads only
 # on a genuine options change — the background bring-up persists ids/token/pip
 # spec to entry.data, and those writes must not trigger a self-reload.

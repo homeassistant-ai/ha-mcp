@@ -22,6 +22,7 @@ import custom_components.ha_mcp_tools.embedded_server as eserver  # noqa: E402
 import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CONF_ENTRY_TYPE,
+    DATA_ACCESS_ENABLED,
     DATA_ACCESS_TOKEN,
     DATA_BRINGUP_TASK,
     DATA_DCR_SIGNING_KEY,
@@ -368,11 +369,14 @@ async def test_server_summary_reports_configured_options() -> None:
         OPT_EXTERNAL_URL: "https://ha.example.com",
     }
 
-    result = await _diagnostics(FakeHass([_server_entry(options)]))
+    entry = _server_entry(options, {DATA_ACCESS_ENABLED: False})
+
+    result = await _diagnostics(FakeHass([entry]))
 
     assert result["server"] == {
         "installed_server_version": "8.7.0",
         "package_override_set": True,
+        "access_enabled": False,
         "running": False,
         "bring_up_in_progress": False,
         "startup_error": None,
@@ -421,6 +425,7 @@ async def test_server_summary_defaults_for_unset_options(pip_spec: Any) -> None:
     server = (await _diagnostics(FakeHass([_server_entry(options)])))["server"]
 
     assert server["package_override_set"] is False
+    assert server["access_enabled"] is True
     assert server["webhook_enabled"] is True
     assert server["webhook_auth"] == WEBHOOK_AUTH_NONE
     assert server["external_url_set"] is False

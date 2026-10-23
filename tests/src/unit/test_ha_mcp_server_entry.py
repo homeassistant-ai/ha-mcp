@@ -30,13 +30,16 @@ import custom_components.ha_mcp_tools.embedded_entry as pkg  # noqa: E402
 import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CONF_ENTRY_TYPE,
+    DATA_ACCESS_ENABLED,
     DATA_BRINGUP_TASK,
     DATA_LAST_OPTIONS,
     DATA_SECRET_PATH,
+    DATA_STARTED_ENTRIES,
     DATA_WEBHOOK_ID,
     DOMAIN,
     ENTRY_TYPE_SERVER,
     ENTRY_TYPE_TOOLS,
+    OPT_ACCESS_OFF_AFTER_RESTART,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
 
@@ -184,7 +187,8 @@ class TestSetupEntry:
         unload_args = [c.args[0] for c in entry.async_on_unload.call_args_list]
         assert unload_args == ["UNSUB"]
         # No update platform is forwarded any more.
-        hass.config_entries.async_forward_entry_setups.assert_not_called()
+        [call] = hass.config_entries.async_forward_entry_setups.call_args_list
+        assert "update" not in call.args[1]
 
 
 class TestUnloadEntry:
@@ -215,6 +219,85 @@ class TestUnloadEntry:
         assert result is True
         assert not done.cancelled()
         esetup.async_teardown_server.assert_awaited_once()
+
+
+class TestAccessSwitch:
+    """The access switch opens and closes the server while the entry stays loaded (#2801)."""
+
+    async def test_access_left_off_keeps_the_server_down_after_a_restart(self):
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_ACCESS_ENABLED: False})
+
+        await pkg.async_setup_server_entry(hass, entry)
+
+        esetup.async_bring_up_server.assert_not_called()
+        assert DATA_BRINGUP_TASK not in hass.data[DOMAIN]
+
+    async def test_off_after_restart_option_closes_access_at_startup(self):
+        hass = _make_hass()
+        entry = _make_entry(options={OPT_ACCESS_OFF_AFTER_RESTART: True})
+
+        await pkg.async_setup_server_entry(hass, entry)
+
+        assert entry.data[DATA_ACCESS_ENABLED] is False
+        esetup.async_bring_up_server.assert_not_called()
+
+    async def test_off_after_restart_option_does_not_close_access_on_a_reload(self):
+        # An options save reloads the entry; that is not a restart, so access the
+        # user turned on stays on.
+        hass = _make_hass()
+        hass.data[DOMAIN] = {DATA_STARTED_ENTRIES: {"entry-1"}}
+        entry = _make_entry(options={OPT_ACCESS_OFF_AFTER_RESTART: True})
+
+        await pkg.async_setup_server_entry(hass, entry)
+
+        assert pkg.access_enabled(entry)
+        esetup.async_bring_up_server.assert_called_once()
+
+    async def test_switching_off_cancels_a_running_bring_up_before_teardown(self):
+        # A bring-up still in flight would otherwise register the webhook and the
+        # LLM API after the teardown, reopening access.
+        hass = _make_hass()
+        entry = _make_entry()
+        pending = asyncio.get_running_loop().create_future()
+        hass.data[DOMAIN] = {DATA_BRINGUP_TASK: pending}
+
+        await pkg.async_set_access(hass, entry, False)
+
+        assert pending.cancelled()
+        esetup.async_teardown_server.assert_awaited_once_with(hass)
+        assert entry.data[DATA_ACCESS_ENABLED] is False
+
+    async def test_switching_on_starts_the_server_without_a_notification(self):
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_ACCESS_ENABLED: False})
+
+        await pkg.async_set_access(hass, entry, True)
+
+        esetup.async_bring_up_server.assert_called_once_with(
+            hass, entry, announce=False
+        )
+        assert hass.data[DOMAIN][DATA_BRINGUP_TASK] == "BRINGUP_TASK"
+        assert pkg.access_enabled(entry)
+
+    async def test_switching_on_while_on_starts_no_second_server(self):
+        hass = _make_hass()
+        entry = _make_entry()
+
+        await pkg.async_set_access(hass, entry, True)
+
+        esetup.async_bring_up_server.assert_not_called()
+
+    async def test_changing_the_restart_option_does_not_reload_the_server(self):
+        hass = _make_hass()
+        entry = _make_entry(
+            options={"server_port": 9584, OPT_ACCESS_OFF_AFTER_RESTART: True}
+        )
+        hass.data[DOMAIN] = {DATA_LAST_OPTIONS: {"server_port": 9584}}
+
+        await pkg._async_options_updated(hass, entry)
+
+        hass.config_entries.async_reload.assert_not_awaited()
 
 
 class TestRemoveEntry:
