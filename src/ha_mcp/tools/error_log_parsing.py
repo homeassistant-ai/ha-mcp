@@ -218,6 +218,158 @@ def _extract_log_entries(
     )
 
 
+# Extra old lines fetched behind the caller's limit so a record whose header
+# sits just outside the visible window still arrives whole. The wider fetch is
+# paid on every raw read; a traceback longer than this is caught by the
+# refetch-on-leading-continuation path instead.
+_ERROR_LOG_HEADER_LOOKBACK_LINES = 200
+
+
+@dataclass(frozen=True)
+class _LogRecord:
+    """One log record: a header line plus its continuation lines.
+
+    ``header`` is ``None`` for a leading partial record — lines at the oldest
+    edge of a window whose header fell outside it. ``start_index`` is the
+    record's first line in the fetched window; paging resumes from it so a
+    record cannot be split across pages.
+    """
+
+    lines: list[str]
+    start_index: int
+    header: str | None
+    level: str | None
+
+    @property
+    def line_count(self) -> int:
+        """Number of raw lines in the record."""
+        return len(self.lines)
+
+
+@dataclass(frozen=True)
+class _TruncatedRecord:
+    """The one over-long record a page had to cut, with its original size."""
+
+    total_lines: int
+    returned_lines: int
+
+
+@dataclass(frozen=True)
+class _RecordPage:
+    """Records selected for one response, in display order."""
+
+    records: list[_LogRecord]
+    lines: list[str]
+    oldest_index: int | None
+    truncated: _TruncatedRecord | None
+    leading_partial: bool
+
+
+def _split_log_records(lines: list[str]) -> list[_LogRecord]:
+    """Group window lines into records: a header plus its continuation lines.
+
+    Blank lines stay inside the record: Python prints chained exceptions with
+    blank lines around the separator, so a blank boundary would cut a
+    traceback. Lines before the first header are one leading partial record.
+    """
+    records: list[_LogRecord] = []
+    current: list[str] = []
+    start = 0
+    header: str | None = None
+    level: str | None = None
+    for index, line in enumerate(lines):
+        clean = _strip_ansi(line).strip()
+        match = _HA_LOG_LINE_RE.match(clean)
+        if match:
+            if current:
+                records.append(_LogRecord(current, start, header, level))
+            current = [line]
+            start = index
+            header = clean
+            level = match.group(2).upper()
+        else:
+            if not current:
+                start = index
+            current.append(line)
+    if current:
+        records.append(_LogRecord(current, start, header, level))
+    if (
+        records
+        and records[0].header is None
+        and all(not _strip_ansi(line).strip() for line in records[0].lines)
+    ):
+        # A leading partial made only of separator blanks carries nothing.
+        records.pop(0)
+    return records
+
+
+def _filter_log_records(
+    records: list[_LogRecord], search: str | None, level: str | None
+) -> tuple[list[_LogRecord], dict[str, str]]:
+    """Filter records as units: level on the header, search on any line."""
+    filtered = records
+    filters_applied: dict[str, str] = {}
+    if level:
+        target = level.upper()
+        filtered = [record for record in filtered if record.level == target]
+        filters_applied["level"] = level
+    if search:
+        needle = search.lower()
+        filtered = [
+            record
+            for record in filtered
+            if any(needle in _strip_ansi(line).lower() for line in record.lines)
+        ]
+        filters_applied["search"] = search
+    return filtered, filters_applied
+
+
+def _select_error_log_page(
+    records: list[_LogRecord],
+    limit: int,
+    order: Literal["newest", "oldest"],
+) -> _RecordPage:
+    """Take the most recent records that fit ``limit`` lines.
+
+    Records are never split to fit, apart from the single newest record when
+    it alone exceeds the limit. ``order`` controls display direction only, as
+    before: newest-first, or chronological within the selected window.
+    """
+    selected: list[_LogRecord] = []
+    used = 0
+    truncated: _TruncatedRecord | None = None
+    for record in reversed(records):
+        if used + record.line_count <= limit:
+            selected.append(record)
+            used += record.line_count
+            continue
+        if not selected and limit > 0:
+            selected.append(
+                _LogRecord(
+                    record.lines[:limit],
+                    record.start_index,
+                    record.header,
+                    record.level,
+                )
+            )
+            truncated = _TruncatedRecord(record.line_count, limit)
+            used = limit
+        break
+
+    if order == "oldest":
+        selected.reverse()
+    lines = [line for record in selected for line in record.lines]
+    oldest_index = min((record.start_index for record in selected), default=None)
+    leading_partial = any(record.header is None for record in selected)
+    return _RecordPage(
+        records=selected,
+        lines=lines,
+        oldest_index=oldest_index,
+        truncated=truncated,
+        leading_partial=leading_partial,
+    )
+
+
 def _parse_error_log_structured(
     raw_text: str,
     search: str | None = None,
@@ -456,23 +608,24 @@ def _error_log_window_lines(
     )
     if search or level:
         return max(effective_limit, SUPERVISOR_SEARCH_WINDOW_LINES)
-    return max(effective_limit, MIN_LOG_WINDOW_LINES)
+    # Raw reads group lines into records, so the window must reach behind the
+    # caller's limit for the header of the oldest visible record.
+    return max(effective_limit + _ERROR_LOG_HEADER_LOOKBACK_LINES, MIN_LOG_WINDOW_LINES)
 
 
-def _next_page_step(window: _ErrorLogWindow, shown: list[tuple[int, str]]) -> int:
+def _next_page_step(window: _ErrorLogWindow, oldest_index: int | None) -> int:
     """How far back the next page's ``offset`` sits from this one's.
 
-    The window text runs oldest-first, so the oldest line shown sits
-    ``raw_line_count - index`` lines back from the window's newest edge;
-    resuming there is what keeps a filtered read from skipping the matches
-    it did not show. Capped at the window size because on journald the step
-    is spent in ENTRY units, where an uncapped line-derived step could
-    overshoot the window that produced it. Nothing shown means nothing to
-    resume before, so the whole window is consumed.
+    The next page resumes just before the oldest returned record's first line
+    (its header when whole), so a record cannot be split across pages. Capped
+    at the window size because on journald the step is spent in ENTRY units,
+    where an uncapped line-derived step could overshoot the window that
+    produced it. Nothing shown means nothing to resume before, so the whole
+    window is consumed.
     """
-    if not shown:
+    if oldest_index is None:
         return window.fetch_lines
-    return min(window.raw_line_count - shown[0][0], window.fetch_lines)
+    return min(window.raw_line_count - oldest_index, window.fetch_lines)
 
 
 def _build_error_log_pagination_hint(

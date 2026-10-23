@@ -17,6 +17,7 @@ from typing import Any, Literal
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
+    ErrorLogPage,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
@@ -25,16 +26,21 @@ from ..errors import ErrorCode, create_error_response
 from .error_log_parsing import (
     _DEFAULT_TOP_N,
     _EMPTY_FETCH_WARNING,
+    _ERROR_LOG_HEADER_LOOKBACK_LINES,
     _attach_error_log_pagination,
     _error_log_window_lines,
     _ErrorLogWindow,
+    _filter_log_records,
     _next_page_step,
     _parse_error_log_structured,
+    _select_error_log_page,
+    _split_log_records,
 )
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import (
-    _LOG_LEVEL_RE,
     DEFAULT_LOG_LIMIT,
+    MAX_LIMIT,
+    SUPERVISOR_SEARCH_WINDOW_LINES,
     _addon_auth_error_suggestions,
     _coerce_limit,
 )
@@ -180,6 +186,7 @@ class CoreLogSourcesMixin:
                     and (
                         search_lower in str(e.get("message", "")).lower()
                         or search_lower in str(e.get("name", "")).lower()
+                        or search_lower in str(e.get("exception", "")).lower()
                     )
                 ]
                 filters_applied["search"] = search
@@ -283,34 +290,33 @@ class CoreLogSourcesMixin:
             )
         return result
 
-    @staticmethod
-    def _filter_error_log_lines(
-        lines: list[str], search: str | None, level: str | None
-    ) -> tuple[list[tuple[int, str]], dict[str, str]]:
-        """Filter window lines, keeping each survivor's index in the window.
+    async def _widen_error_log_for_record_header(
+        self,
+        fetch_lines: int,
+        offset: int,
+        raw_text: str,
+        page: ErrorLogPage,
+    ) -> tuple[int, ErrorLogPage, str]:
+        """Re-fetch once when the fetched window opens inside a record.
 
-        The index is what makes paging exact: the next page has to resume where
-        the returned block starts, not a whole window further back, or a filter
-        that drops most of a window silently skips everything it dropped.
+        ``offset`` addresses the newest edge, so increasing ``lines`` extends
+        the same window further back. The extra room brings a traceback's
+        header into a page that would otherwise start mid-record. Capped at the
+        search-window bound used elsewhere, so this never becomes an unbounded
+        read.
         """
-        indexed = list(enumerate(lines))
-        filters_applied: dict[str, str] = {}
-
-        if level:
-
-            def _line_has_level(ln: str, target: str) -> bool:
-                m = _LOG_LEVEL_RE.search(ln)
-                return m is not None and m.group(1).upper() == target
-
-            indexed = [(i, ln) for i, ln in indexed if _line_has_level(ln, level)]
-            filters_applied["level"] = level
-
-        if search:
-            search_lower = search.lower()
-            indexed = [(i, ln) for i, ln in indexed if search_lower in ln.lower()]
-            filters_applied["search"] = search
-
-        return indexed, filters_applied
+        records = _split_log_records(raw_text.splitlines())
+        if not records or records[0].header is not None:
+            return fetch_lines, page, raw_text
+        leading = records[0].line_count
+        wider = min(
+            fetch_lines + leading + _ERROR_LOG_HEADER_LOOKBACK_LINES,
+            SUPERVISOR_SEARCH_WINDOW_LINES,
+        )
+        if wider <= fetch_lines:
+            return fetch_lines, page, raw_text
+        page = await self._client.get_error_log(lines=wider, offset=offset)
+        return wider, page, page.text or ""
 
     def _build_raw_error_log(
         self,
@@ -321,42 +327,69 @@ class CoreLogSourcesMixin:
         order: Literal["newest", "oldest"],
         window: _ErrorLogWindow,
     ) -> tuple[dict[str, Any], int]:
-        """Return the most recent matching lines, plus the next page's step.
+        """Return the most recent matching records, plus the next page's step.
 
-        The step is how far back ``offset`` must move to resume just before the
-        oldest line returned here. ``effective_limit`` arrives already coerced:
-        the caller needs the same value for the pagination hint, and the
-        summary path must not coerce it at all.
+        Records are the unit: ``search`` matches any line of a record and
+        ``level`` matches its header, then whole records are selected within
+        the caller's line budget. ``order`` controls display direction only
+        (the selected window is always the most recent one); a record's own
+        lines never reverse. The step resumes just before the oldest returned
+        record so a record cannot be split across pages.
         """
-        matches, filters_applied = self._filter_error_log_lines(
-            raw_log.splitlines(), search, level
-        )
-
-        total_lines = len(matches)
-        # Always take the most-recent window (the tail of the chronological
-        # file); 'order' controls only the display direction of that window.
-        shown = matches[-effective_limit:]
-        step = _next_page_step(window, shown)
-        lines = [ln for _, ln in shown]
-        if order == "newest":
-            lines = list(reversed(lines))
+        records = _split_log_records(raw_log.splitlines())
+        matches, filters_applied = _filter_log_records(records, search, level)
+        page = _select_error_log_page(matches, effective_limit, order)
+        step = _next_page_step(window, page.oldest_index)
+        total_lines = sum(record.line_count for record in matches)
 
         data: dict[str, Any] = {
             "success": True,
             "source": "error_log",
-            "log": "\n".join(lines),
+            "log": "\n".join(page.lines),
             "total_lines": total_lines,
-            "returned_lines": len(lines),
+            "returned_lines": len(page.lines),
+            "total_records": len(matches),
+            "returned_records": len(page.records),
             "limit": effective_limit,
             "window_lines": window.fetch_lines,
             "order": order,
             "note": (
-                "Returned the most recent log lines matching filters, from a "
+                "Returned the most recent log records matching filters, from a "
                 "bounded window of the log. 'offset' counts raw log lines back "
                 "from the newest entry; filters apply within each fetched "
-                "window, so 'total_lines' counts matches in this window only"
+                "window, so 'total_lines' counts the lines of matching records "
+                "in this window only. 'order' controls display direction; a "
+                "record's lines always stay in their original order."
             ),
         }
+        warnings: list[str] = []
+        if page.leading_partial:
+            warnings.append(
+                "The oldest matched lines are the tail of a record whose "
+                "header lies outside the fetched history; they are returned as "
+                "a partial record."
+            )
+        if page.truncated is not None:
+            cut = page.truncated.total_lines - page.truncated.returned_lines
+            if (
+                page.truncated.total_lines <= MAX_LIMIT
+                and effective_limit < page.truncated.total_lines
+            ):
+                warnings.append(
+                    f"The newest record is {page.truncated.total_lines} lines; "
+                    f"'limit'={effective_limit} returned its first "
+                    f"{page.truncated.returned_lines} and cut {cut}. Repeat "
+                    f"with limit={min(page.truncated.total_lines, MAX_LIMIT)} "
+                    "to return it whole."
+                )
+            else:
+                warnings.append(
+                    f"The newest record is {page.truncated.total_lines} lines, "
+                    f"longer than the per-call maximum ({MAX_LIMIT}); {cut} "
+                    "lines were cut."
+                )
+        if warnings:
+            data["warnings"] = warnings
         if filters_applied:
             data["filters_applied"] = filters_applied
         return data, step
@@ -419,6 +452,14 @@ class CoreLogSourcesMixin:
             fetch_lines = _error_log_window_lines(limit, search, level, structured)
             page = await self._client.get_error_log(lines=fetch_lines, offset=offset)
             raw_text = page.text or ""
+            if not structured:
+                (
+                    fetch_lines,
+                    page,
+                    raw_text,
+                ) = await self._widen_error_log_for_record_header(
+                    fetch_lines, offset, raw_text, page
+                )
             window = _ErrorLogWindow(
                 offset=offset,
                 fetch_lines=fetch_lines,
