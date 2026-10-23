@@ -322,24 +322,34 @@ the secret path) and the admin-only sidebar panel.
 The **HA-MCP Server** device has an **Access** switch. Turning it off closes
 every way into the server at once: the webhook and its `/readonly` alias
 (including the Nabu Casa path), the direct port, and the conversation-agent LLM
-API. The sidebar panel is unavailable until access is on again. Turning it on
-starts the server again, which takes as long as a normal start; credentials and
-connect URLs stay the same.
+API. The sidebar panel stays in the sidebar but shows that the server is not
+running until access is on again. Turning it on starts the server again, which
+takes as long as a normal start; credentials and connect URLs stay the same. If
+the start fails, a repair under **Settings → System → Repairs** says why, and
+turning the switch on again retries it.
 
 Because it is an ordinary switch, scripts and automations can use
-`switch.turn_on` and `switch.turn_off`, and the logbook records who changed it.
-To close access an hour after it was opened, for example, trigger an automation
-on the switch being on `for: "01:00:00"`. A restart drops that pending timer, so
-turn on **Turn access off after a restart** if access must never outlast a
-restart; otherwise the switch keeps its last state.
+`switch.turn_on` and `switch.turn_off`, and the logbook records which user or
+automation changed it. To close access an hour after it was opened, for
+example, trigger an automation on the switch being on `for: "01:00:00"`. A
+restart (or reloading automations) drops that pending timer, so turn on **Turn
+access off after a restart** if access must never outlast a restart; otherwise
+the switch keeps its last state. That option also applies when a server entry
+that was disabled when Home Assistant started is enabled.
 
 The switch is a configuration entity, so Assist does not expose it by default.
 Exposing it would let a conversation agent or voice satellite turn access on.
+Do not disable the switch entity while access is off: nothing can turn access
+back on until you enable the entity again.
 
-Turning access off does not revoke credentials a client already holds. With
-**Authentication mode** `ha_auth`, a client holds a refresh token that Home
-Assistant issued for your account; revoke it under **Refresh tokens** on the
-**Security** tab of your Home Assistant profile to end that client's access.
+Turning access off does not revoke credentials a client already holds; when
+access is on again, they work as before. With **Authentication mode**
+`ha_auth`, a client holds a Home Assistant token of the administrator who
+signed in, usually a refresh token. That token also works against Home
+Assistant's own API, whatever the switch says. To end it, delete it under
+**Refresh tokens** (or **Long-lived access tokens**) on the **Security** tab of
+that administrator's profile. In `none` and `legacy` mode, rotate the connect
+secrets instead (see [Rotating your connect URL](#rotating-your-connect-url)).
 While access is on, a connected client can also change the automations that
 would turn it off.
 

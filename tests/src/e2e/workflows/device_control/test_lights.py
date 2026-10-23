@@ -20,6 +20,7 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ...utilities.entity_finders import without_access_switch
 
 logger = logging.getLogger(__name__)
 
@@ -557,6 +558,7 @@ async def test_universal_device_controls(mcp_client: Client) -> None:
     try:
         search_data = assert_mcp_success(search_result, "search for switch entities")
         data = search_data
+        data["entities"] = without_access_switch(data.get("entities", []))
         if not data.get("entities"):
             # Fallback to light entities
             search_result = await mcp_client.call_tool(

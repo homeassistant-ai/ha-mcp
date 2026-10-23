@@ -361,10 +361,11 @@ The token is stored in the config entry and handed to the server in memory
 entry stops the server, and so does turning off the entry's **Access** switch
 (#2801), which closes the webhook, the direct port and the conversation-agent
 LLM API while the entry stays loaded. The switch is a configuration entity, so
-Assist does not expose it by default, and it does not revoke Home Assistant
-credentials a `ha_auth` client already holds. Removing the entry deletes only
-an account an older release created, never an account the user created, and
-revokes only a token the
+Assist does not expose it by default. It does not revoke Home Assistant
+credentials a `ha_auth` client already holds: those work against Home
+Assistant's own API regardless of the switch, and against the server again once
+access is back on. Removing the entry deletes only an account an older release
+created, never an account the user created, and revokes only a token the
 component issued, never a pasted one. As with
 standard mode, that token's Home Assistant permissions define what the server can
 do.

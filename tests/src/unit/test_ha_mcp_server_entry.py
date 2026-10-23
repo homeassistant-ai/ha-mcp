@@ -17,6 +17,7 @@ Home Assistant / aiohttp are stubbed via ``_embedded_stubs``.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -33,14 +34,17 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_ACCESS_ENABLED,
     DATA_BRINGUP_TASK,
     DATA_LAST_OPTIONS,
+    DATA_MANAGER,
     DATA_SECRET_PATH,
-    DATA_STARTED_ENTRIES,
     DATA_WEBHOOK_ID,
     DOMAIN,
     ENTRY_TYPE_SERVER,
     ENTRY_TYPE_TOOLS,
     OPT_ACCESS_OFF_AFTER_RESTART,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
+)
+from custom_components.ha_mcp_tools.embedded_server import (  # noqa: E402
+    EmbeddedServerManager,
 )
 
 
@@ -78,6 +82,23 @@ def _make_entry(*, options=None, data=None) -> MagicMock:
     entry.add_update_listener = MagicMock(return_value="UNSUB")
     entry.async_on_unload = MagicMock()
     return entry
+
+
+def _pending_task(*_args):
+    """A bring-up still running, for tests that switch or unload after setup."""
+    return asyncio.get_running_loop().create_future()
+
+
+def _finished_future() -> asyncio.Future:
+    task = asyncio.get_running_loop().create_future()
+    task.set_result(None)
+    return task
+
+
+def _manager(*, running: bool) -> MagicMock:
+    manager = MagicMock(spec=EmbeddedServerManager)
+    manager.is_running = running
+    return manager
 
 
 @pytest.fixture(autouse=True)
@@ -186,9 +207,6 @@ class TestSetupEntry:
         entry.add_update_listener.assert_called_once_with(pkg._async_options_updated)
         unload_args = [c.args[0] for c in entry.async_on_unload.call_args_list]
         assert unload_args == ["UNSUB"]
-        # No update platform is forwarded any more.
-        [call] = hass.config_entries.async_forward_entry_setups.call_args_list
-        assert "update" not in call.args[1]
 
 
 class TestUnloadEntry:
@@ -220,6 +238,70 @@ class TestUnloadEntry:
         assert not done.cancelled()
         esetup.async_teardown_server.assert_awaited_once()
 
+    async def test_every_forwarded_platform_exists(self):
+        hass = _make_hass()
+        entry = _make_entry()
+
+        await pkg.async_setup_server_entry(hass, entry)
+
+        forwarded = hass.config_entries.async_forward_entry_setups.await_args.args[1]
+        assert forwarded
+        for platform in forwarded:
+            assert importlib.util.find_spec(
+                f"custom_components.ha_mcp_tools.{platform}"
+            ), platform
+
+    async def test_failed_platform_unload_is_reported_and_still_stops_the_server(
+        self,
+    ):
+        hass = _make_hass()
+        entry = _make_entry()
+        hass.config_entries.async_unload_platforms.return_value = False
+
+        assert await pkg.async_unload_server_entry(hass, entry) is False
+        esetup.async_teardown_server.assert_awaited_once_with(hass)
+
+    async def test_server_stops_even_when_the_switch_platform_fails_to_unload(self):
+        hass = _make_hass()
+        hass.data[DOMAIN] = {DATA_LAST_OPTIONS: {}}
+        entry = _make_entry()
+        hass.config_entries.async_unload_platforms.side_effect = RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            await pkg.async_unload_server_entry(hass, entry)
+
+        esetup.async_teardown_server.assert_awaited_once_with(hass)
+        assert DATA_LAST_OPTIONS not in hass.data[DOMAIN]
+
+    async def test_unload_waits_for_a_switch_on_in_progress(self):
+        # A start scheduled after the unload's stop would run for an entry that
+        # is no longer loaded.
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_ACCESS_ENABLED: False})
+        started: list[asyncio.Future] = []
+
+        def _record(*_args):
+            started.append(_pending_task())
+            return started[-1]
+
+        entry.async_create_background_task.side_effect = _record
+        release = asyncio.Event()
+
+        async def _slow_first_teardown(_hass):
+            if not release.is_set() and not started:
+                await release.wait()
+
+        esetup.async_teardown_server.side_effect = _slow_first_teardown
+
+        on = asyncio.ensure_future(pkg.async_set_access(hass, entry, True))
+        unload = asyncio.ensure_future(pkg.async_unload_server_entry(hass, entry))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(on, unload)
+
+        assert started
+        assert all(task.cancelled() for task in started)
+
 
 class TestAccessSwitch:
     """The access switch opens and closes the server while the entry stays loaded (#2801)."""
@@ -246,13 +328,103 @@ class TestAccessSwitch:
         # An options save reloads the entry; that is not a restart, so access the
         # user turned on stays on.
         hass = _make_hass()
-        hass.data[DOMAIN] = {DATA_STARTED_ENTRIES: {"entry-1"}}
         entry = _make_entry(options={OPT_ACCESS_OFF_AFTER_RESTART: True})
+        entry.async_create_background_task.side_effect = _pending_task
+        await pkg.async_setup_server_entry(hass, entry)
+        await pkg.async_set_access(hass, entry, True)
+        await pkg.async_unload_server_entry(hass, entry)
+        esetup.async_bring_up_server.reset_mock()
 
         await pkg.async_setup_server_entry(hass, entry)
 
         assert pkg.access_enabled(entry)
         esetup.async_bring_up_server.assert_called_once()
+
+    async def test_switch_starts_out_off_after_a_restart_with_the_option(self):
+        # The switch reports the stored state when it is added; storing after
+        # the platform forward would show it on while the server is down.
+        hass = _make_hass()
+        entry = _make_entry(options={OPT_ACCESS_OFF_AFTER_RESTART: True})
+        seen: list[bool] = []
+        hass.config_entries.async_forward_entry_setups.side_effect = lambda *_a: (
+            seen.append(pkg.access_enabled(entry))
+        )
+
+        await pkg.async_setup_server_entry(hass, entry)
+
+        assert seen == [False]
+
+    async def test_switching_on_after_the_entry_unloaded_starts_nothing(self):
+        # A switch-on queued behind the unload (disable, or a slow stop) must
+        # not start a server for an entry that is no longer loaded.
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_ACCESS_ENABLED: False})
+        await pkg.async_setup_server_entry(hass, entry)
+        await pkg.async_unload_server_entry(hass, entry)
+
+        await pkg.async_set_access(hass, entry, True)
+
+        esetup.async_bring_up_server.assert_not_called()
+
+    async def test_switching_on_works_again_after_a_reload(self):
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_ACCESS_ENABLED: False})
+        await pkg.async_setup_server_entry(hass, entry)
+        await pkg.async_unload_server_entry(hass, entry)
+        await pkg.async_setup_server_entry(hass, entry)
+
+        await pkg.async_set_access(hass, entry, True)
+
+        esetup.async_bring_up_server.assert_called_once()
+
+    async def test_setup_starts_no_second_server_when_one_is_starting(self):
+        # A switch-on from the previous load may win the lock over the new
+        # setup and start the server first.
+        hass = _make_hass()
+        hass.data[DOMAIN] = {DATA_BRINGUP_TASK: _pending_task()}
+        entry = _make_entry()
+
+        await pkg.async_setup_server_entry(hass, entry)
+
+        esetup.async_bring_up_server.assert_not_called()
+
+    async def test_setup_waits_for_a_stop_in_progress(self):
+        # A reload right after a switch-off: the new setup must not start the
+        # server while the old one still holds the port.
+        hass = _make_hass()
+        entry = _make_entry()
+        release = asyncio.Event()
+        order: list[str] = []
+
+        async def _slow_teardown(_hass):
+            if not order:
+                order.append("slow_stop")
+                await release.wait()
+                order.append("slow_stop_done")
+
+        esetup.async_teardown_server.side_effect = _slow_teardown
+        esetup.async_bring_up_server.side_effect = lambda *a, **k: order.append(
+            "bring_up"
+        )
+
+        off = asyncio.ensure_future(pkg.async_set_access(hass, entry, False))
+        await asyncio.sleep(0)
+        entry.data = {**entry.data, DATA_ACCESS_ENABLED: True}
+        setup = asyncio.ensure_future(pkg.async_setup_server_entry(hass, entry))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(off, setup)
+
+        assert order == ["slow_stop", "slow_stop_done", "bring_up"]
+
+    async def test_switching_access_keeps_the_connect_url(self):
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_keep", DATA_SECRET_PATH: "/p"})
+
+        await pkg.async_set_access(hass, entry, False)
+
+        assert entry.data[DATA_WEBHOOK_ID] == "mcp_keep"
+        assert entry.data[DATA_SECRET_PATH] == "/p"
 
     async def test_switching_off_cancels_a_running_bring_up_before_teardown(self):
         # A bring-up still in flight would otherwise register the webhook and the
@@ -261,11 +433,14 @@ class TestAccessSwitch:
         entry = _make_entry()
         pending = asyncio.get_running_loop().create_future()
         hass.data[DOMAIN] = {DATA_BRINGUP_TASK: pending}
+        cancelled_at_teardown: list[bool] = []
+        esetup.async_teardown_server.side_effect = lambda _hass: (
+            cancelled_at_teardown.append(pending.cancelled())
+        )
 
         await pkg.async_set_access(hass, entry, False)
 
-        assert pending.cancelled()
-        esetup.async_teardown_server.assert_awaited_once_with(hass)
+        assert cancelled_at_teardown == [True]
         assert entry.data[DATA_ACCESS_ENABLED] is False
 
     async def test_switching_on_starts_the_server_without_a_notification(self):
@@ -280,13 +455,135 @@ class TestAccessSwitch:
         assert hass.data[DOMAIN][DATA_BRINGUP_TASK] == "BRINGUP_TASK"
         assert pkg.access_enabled(entry)
 
-    async def test_switching_on_while_on_starts_no_second_server(self):
+    async def test_switching_on_while_a_start_runs_starts_no_second_server(self):
         hass = _make_hass()
         entry = _make_entry()
+        hass.data[DOMAIN] = {
+            DATA_BRINGUP_TASK: asyncio.get_running_loop().create_future()
+        }
 
         await pkg.async_set_access(hass, entry, True)
 
         esetup.async_bring_up_server.assert_not_called()
+        esetup.async_teardown_server.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "manager_running", [None, False], ids=["failed", "crashed"]
+    )
+    async def test_switching_on_again_retries_a_failed_start(self, manager_running):
+        # A failed bring-up, or a server that crashed later, leaves access on
+        # with nothing running; turning the switch on again retries the start.
+        hass = _make_hass()
+        entry = _make_entry()
+        hass.data[DOMAIN] = {DATA_BRINGUP_TASK: _finished_future()}
+        if manager_running is not None:
+            hass.data[DOMAIN][DATA_MANAGER] = _manager(running=manager_running)
+
+        await pkg.async_set_access(hass, entry, True)
+
+        esetup.async_teardown_server.assert_awaited_once_with(hass)
+        esetup.async_bring_up_server.assert_called_once()
+
+    async def test_switching_on_leaves_a_running_server_alone(self):
+        # An automation turning the switch on while it is on must not drop the
+        # connected clients.
+        hass = _make_hass()
+        entry = _make_entry()
+        hass.data[DOMAIN] = {
+            DATA_BRINGUP_TASK: _finished_future(),
+            DATA_MANAGER: _manager(running=True),
+        }
+
+        await pkg.async_set_access(hass, entry, True)
+
+        esetup.async_teardown_server.assert_not_awaited()
+        esetup.async_bring_up_server.assert_not_called()
+
+    async def test_switching_on_keeps_access_off_when_the_cleanup_fails(self):
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_ACCESS_ENABLED: False})
+        esetup.async_teardown_server.side_effect = RuntimeError("stop failed")
+
+        with pytest.raises(RuntimeError):
+            await pkg.async_set_access(hass, entry, True)
+
+        assert not pkg.access_enabled(entry)
+
+    async def test_switching_off_again_retries_the_stop(self):
+        # A stop that raised leaves access stored off; the next off must not be
+        # skipped as already done.
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_ACCESS_ENABLED: False})
+
+        await pkg.async_set_access(hass, entry, False)
+
+        esetup.async_teardown_server.assert_awaited_once_with(hass)
+
+    async def test_switching_on_waits_for_a_stop_in_progress(self):
+        # A start overlapping a slow stop would claim the server port while the
+        # old server still holds it.
+        hass = _make_hass()
+        entry = _make_entry()
+        release = asyncio.Event()
+        order: list[str] = []
+
+        async def _slow_teardown(_hass):
+            # Only the first stop is slow: a start that did not wait for it
+            # would finish first.
+            if not order:
+                order.append("slow_stop")
+                await release.wait()
+                order.append("slow_stop_done")
+
+        esetup.async_teardown_server.side_effect = _slow_teardown
+        esetup.async_bring_up_server.side_effect = lambda *a, **k: order.append(
+            "bring_up"
+        )
+
+        off = asyncio.ensure_future(pkg.async_set_access(hass, entry, False))
+        on = asyncio.ensure_future(pkg.async_set_access(hass, entry, True))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(off, on)
+
+        assert order == ["slow_stop", "slow_stop_done", "bring_up"]
+
+    async def test_switching_off_stops_the_server_when_the_cancelled_start_fails(
+        self,
+    ):
+        # A start cancelled mid-way tears down its partial state itself; when
+        # that raises, the stop must still run.
+        async def _start_failing_on_cancel():
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                raise RuntimeError("partial teardown failed") from None
+
+        hass = _make_hass()
+        entry = _make_entry()
+        task = asyncio.ensure_future(_start_failing_on_cancel())
+        await asyncio.sleep(0)
+        hass.data[DOMAIN] = {DATA_BRINGUP_TASK: task}
+
+        with pytest.raises(RuntimeError):
+            await pkg.async_set_access(hass, entry, False)
+
+        esetup.async_teardown_server.assert_awaited_once_with(hass)
+
+    async def test_switching_on_during_setup_starts_one_server(self):
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.async_create_background_task.side_effect = _pending_task
+
+        async def _forward(*_args):
+            # The switch exists from here on; a turn_on can arrive at once.
+            await pkg.async_set_access(hass, entry, True)
+
+        hass.config_entries.async_forward_entry_setups.side_effect = _forward
+
+        await pkg.async_setup_server_entry(hass, entry)
+
+        esetup.async_bring_up_server.assert_called_once()
 
     async def test_changing_the_restart_option_does_not_reload_the_server(self):
         hass = _make_hass()

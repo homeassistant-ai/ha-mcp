@@ -3,8 +3,9 @@
 Turning it off closes every way into the server while the entry stays loaded,
 so access can be granted on demand and revoked by automations. The state lives
 in ``entry.data`` (see :func:`embedded_entry.access_enabled`), not in the
-entity: the entry setup reads it before this platform exists, and a disabled
-entity must not leave the server permanently off.
+entity, because the entry setup decides on the bring-up before this platform is
+forwarded. Disabling the entity keeps the last state; while that is off,
+nothing can turn access back on until the entity is enabled again.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ class ServerAccessSwitch(SwitchEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "server_access"
     # A config entity is not exposed to Assist by default, so a conversation
-    # agent or voice satellite cannot turn access on.
+    # agent or voice satellite is not offered it unless someone exposes it.
     _attr_entity_category = EntityCategory.CONFIG
     _attr_should_poll = False
 
@@ -55,5 +56,9 @@ class ServerAccessSwitch(SwitchEntity):
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await async_set_access(self.hass, self._entry, False)
-        self.async_write_ha_state()
+        # The stored state is off before the stop runs; if the stop raises, the
+        # switch must still show it.
+        try:
+            await async_set_access(self.hass, self._entry, False)
+        finally:
+            self.async_write_ha_state()

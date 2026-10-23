@@ -10,8 +10,10 @@ same names cannot leak in. The bring-up / teardown it drives are patched on
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from enum import StrEnum
+from pathlib import Path
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock
 
@@ -60,7 +62,7 @@ def switch_platform(monkeypatch):
         sys.modules, "custom_components.ha_mcp_tools.switch", raising=False
     )
     monkeypatch.setattr(esetup, "async_teardown_server", AsyncMock(name="teardown"))
-    monkeypatch.setattr(esetup, "dismiss_connect_notification", MagicMock())
+    monkeypatch.setattr(esetup, "async_bring_up_server", MagicMock(name="bring_up"))
     return importlib.import_module("custom_components.ha_mcp_tools.switch")
 
 
@@ -79,6 +81,25 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
     return hass, entry
 
 
+async def test_the_server_entry_gets_one_access_switch(switch_platform):
+    hass, entry = _hass_and_entry()
+    added: list = []
+
+    await switch_platform.async_setup_entry(hass, entry, added.extend)
+
+    [switch] = added
+    assert isinstance(switch, switch_platform.ServerAccessSwitch)
+    assert switch.is_on
+
+
+def test_the_switch_name_comes_from_the_catalog(switch_platform):
+    # A translation key the catalog lacks leaves the entity with no name.
+    strings = Path(switch_platform.__file__).with_name("strings.json")
+    names = json.loads(strings.read_text(encoding="utf-8"))["entity"]["switch"]
+
+    assert switch_platform.ServerAccessSwitch._attr_translation_key in names
+
+
 def test_assist_does_not_expose_the_access_switch_by_default(switch_platform):
     # Home Assistant exposes switches to Assist by default unless they carry an
     # entity category; exposed, a voice satellite could turn access back on.
@@ -89,14 +110,26 @@ def test_assist_does_not_expose_the_access_switch_by_default(switch_platform):
     assert switch.entity_category is not None
 
 
-async def test_turning_the_switch_off_closes_access_and_shows_off(switch_platform):
+async def test_turning_the_switch_on_shows_on(switch_platform):
     hass, entry = _hass_and_entry()
+    entry.data = {DATA_ACCESS_ENABLED: False}
     switch = switch_platform.ServerAccessSwitch(entry)
     switch.hass = hass
-    assert switch.is_on
 
-    await switch.async_turn_off()
+    await switch.async_turn_on()
 
-    esetup.async_teardown_server.assert_awaited_once_with(hass)
-    assert entry.data[DATA_ACCESS_ENABLED] is False
+    assert switch.written_state is True
+
+
+async def test_switch_shows_off_when_the_stop_fails(switch_platform):
+    # Access is stored off before the stop runs; a failing stop must not leave
+    # the switch showing on.
+    hass, entry = _hass_and_entry()
+    esetup.async_teardown_server.side_effect = RuntimeError("stop failed")
+    switch = switch_platform.ServerAccessSwitch(entry)
+    switch.hass = hass
+
+    with pytest.raises(RuntimeError):
+        await switch.async_turn_off()
+
     assert switch.written_state is False

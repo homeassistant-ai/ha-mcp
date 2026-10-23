@@ -290,28 +290,6 @@ class TestBringUp:
         esetup.ir.async_create_issue.assert_not_called()  # cancellation isn't a fault
 
 
-class TestTeardown:
-    async def test_unregisters_and_stops_without_revoking(self, fake_manager):
-        hass = _make_hass()
-        entry = _make_entry()
-        await esetup.async_bring_up_server(hass, entry)
-        fake_manager.async_stop.reset_mock()
-
-        await esetup.async_teardown_server(hass)
-
-        esetup.async_unregister_webhook.assert_awaited()
-        esetup.async_unregister_llm_api.assert_called()
-        fake_manager.async_stop.assert_awaited_once()
-        assert DATA_MANAGER not in hass.data.get(DOMAIN, {})
-        # A reload must keep the provisioned token.
-        fake_manager.async_revoke_credentials.assert_not_awaited()
-
-    async def test_teardown_is_noop_when_not_running(self, fake_manager):
-        hass = _make_hass()
-        await esetup.async_teardown_server(hass)  # must not raise
-        esetup.async_unregister_webhook.assert_awaited_once()
-
-
 class TestRevokeOnRemove:
     async def test_revokes_credentials_and_clears_issues(self, fake_manager):
         hass = _make_hass()

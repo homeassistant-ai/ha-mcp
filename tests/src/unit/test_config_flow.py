@@ -819,16 +819,15 @@ class TestServerOptionsFlow:
         assert not hasattr(const, "OPT_EMBEDDED_ENABLED")
 
     def test_new_toggles_default_on_for_fresh_entry(self):
-        # Both UX toggles (start-up notification, sidebar panel) are present in
-        # the rendered schema and default on when the entry has never stored
-        # them.
+        # The UX toggles default on and the restart-access toggle off (an
+        # existing install's first save must not close access after restarts)
+        # when the entry has never stored them; a missing field is a KeyError.
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         form = asyncio.run(flow.async_step_init(None))
         markers = {m.schema: m for m in form["data_schema"].schema}
-        assert const.OPT_ENABLE_STARTUP_NOTIFICATION in markers
         assert markers[const.OPT_ENABLE_STARTUP_NOTIFICATION].default() is True
-        assert const.OPT_ENABLE_SIDEBAR_PANEL in markers
         assert markers[const.OPT_ENABLE_SIDEBAR_PANEL].default() is True
+        assert markers[const.OPT_ACCESS_OFF_AFTER_RESTART].default() is False
 
     def test_new_toggles_placed_right_after_enable_webhook(self):
         # Contract: both toggles sit immediately after the enable_webhook field.
