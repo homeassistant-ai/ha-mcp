@@ -1,4 +1,4 @@
-"""System commands: info, system snapshot, backup prep, server entry, diagnose."""
+"""System commands: info, system snapshot, server entry, diagnose."""
 
 from __future__ import annotations
 

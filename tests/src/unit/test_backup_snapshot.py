@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.errors import ErrorCode
 from ha_mcp.tools import backup
 from ha_mcp.tools.backup import (
@@ -29,6 +30,11 @@ from ha_mcp.tools.backup import (
 
 _COMPLETED = {"manager_state": "create_backup", "state": "completed"}
 _FAILED = {
+    "manager_state": "create_backup",
+    "state": "failed",
+    "reason": "unknown_error",
+}
+_UPLOAD_FAILED = {
     "manager_state": "create_backup",
     "state": "failed",
     "reason": "upload_failed",
@@ -46,10 +52,10 @@ def _short_backup_wait():
 class FakeWS:
     """WebSocket stand-in: canned replies per command, a backup event stream.
 
-    ``events`` is what ``backup/subscribe_events`` streams: the manager's last
-    event (idle) first, as Core sends it, then the job's events. A generated
-    backup gets an id other than the job id, as on Supervisor installs, and
-    ``backup/info`` lists it next to an older backup.
+    ``events`` is what ``backup/subscribe_events`` streams after ``last``, the
+    manager's last event that Core sends first. A generated backup gets an id
+    other than the job id, as on Supervisor installs, and ``backup/info``
+    lists it next to an older backup.
     """
 
     def __init__(
@@ -57,6 +63,7 @@ class FakeWS:
         *,
         agent_ids: list[str] | None = None,
         password: str | None = "pw",
+        last: dict[str, Any] = _IDLE,
         events: list[dict[str, Any]] | None = None,
         details: dict[str, Any] | None = None,
         new_backup: dict[str, Any] | None = None,
@@ -64,7 +71,7 @@ class FakeWS:
     ) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        for event in [_IDLE, *(events if events is not None else [_COMPLETED])]:
+        for event in [last, *(events if events is not None else [_COMPLETED])]:
             self.queue.put_nowait({"type": "event", "event": event})
         self.agent_ids = agent_ids if agent_ids is not None else ["backup.local"]
         self.password = password
@@ -106,7 +113,7 @@ class FakeWS:
 
 
 def _entry(backup_id: str, **fields: Any) -> dict[str, Any]:
-    """One ``backup/info`` / ``backup/details`` entry in Core's shape."""
+    """A ``backup/info`` / ``backup/details`` entry with a subset of Core's fields."""
     return {
         "backup_id": backup_id,
         "name": f"name-{backup_id}",
@@ -116,6 +123,8 @@ def _entry(backup_id: str, **fields: Any) -> dict[str, Any]:
         "folders": [],
         "database_included": False,
         "failed_agent_ids": [],
+        "failed_addons": [],
+        "failed_folders": [],
         **fields,
     }
 
@@ -125,7 +134,9 @@ def _client(*, supervised: bool = False) -> MagicMock:
     client.base_url = "http://ha"
     client.token = "t"
     client.verify_ssl = False
-    client._is_supervised_install = AsyncMock(return_value=supervised)
+    client.get_config = AsyncMock(
+        return_value={"components": ["hassio"] if supervised else ["backup"]}
+    )
     return client
 
 
@@ -168,17 +179,36 @@ class TestWhereBackupsGo:
     async def test_backup_lands_where_home_assistant_puts_its_own(
         self, configured, supervised, mounts, expected
     ) -> None:
-        """A backup no longer lands on the local disk when HA backs up elsewhere."""
+        """A backup lands where Home Assistant backs up, not on the local disk."""
         ws = FakeWS(agent_ids=configured)
         await _run(create_backup, ws, _client(supervised=supervised), mounts=mounts)
         assert ws.sent("backup/generate")[0]["agent_ids"] == expected
 
     @pytest.mark.asyncio
-    async def test_addons_are_only_requested_on_supervisor_installs(self) -> None:
-        """Core rejects add-ons in a backup, so a Core install must not ask."""
+    @pytest.mark.parametrize(("supervised", "addons"), [(True, True), (False, False)])
+    async def test_addons_are_requested_only_on_supervisor_installs(
+        self, supervised, addons
+    ) -> None:
+        """Core rejects add-ons in a backup; Supervisor backups must include them."""
         ws = FakeWS()
-        await _run(create_backup, ws, _client(supervised=False))
-        assert ws.sent("backup/generate")[0]["include_all_addons"] is False
+        await _run(create_backup, ws, _client(supervised=supervised))
+        sent = ws.sent("backup/generate")[0]
+        assert sent["include_all_addons"] is addons
+        # The documented fast backup: configuration without the database.
+        assert sent["include_homeassistant"] is True
+        assert sent["include_database"] is False
+
+    @pytest.mark.asyncio
+    async def test_failed_install_probe_fails_instead_of_dropping_addons(
+        self,
+    ) -> None:
+        """A Supervisor install read as Core would back up without add-ons."""
+        ws = FakeWS()
+        client = _client()
+        client.get_config = AsyncMock(side_effect=OSError("config unreachable"))
+        with pytest.raises(ToolError):
+            await _run(create_backup, ws, client)
+        assert not ws.sent("backup/generate")
 
     @pytest.mark.asyncio
     async def test_create_without_default_password_is_refused(self) -> None:
@@ -186,6 +216,14 @@ class TestWhereBackupsGo:
         with pytest.raises(ToolError, match="No default backup password"):
             await _run(create_backup, ws, _client())
         assert not ws.sent("backup/generate")
+
+    @pytest.mark.asyncio
+    async def test_name_is_matched_as_home_assistant_stores_it(self) -> None:
+        """Core strips the name; an unstripped match would miss the new backup."""
+        ws = FakeWS()
+        result = await _run(create_backup, ws, _client(), name="  mine ")
+        assert ws.sent("backup/generate")[0]["name"] == "mine"
+        assert result["backup_id"] == "new-backup"
 
 
 class TestWaitingForTheBackup:
@@ -230,15 +268,49 @@ class TestWaitingForTheBackup:
         with pytest.raises(ToolError) as exc_info:
             await _run(create_backup, ws, _client())
         assert ErrorCode.SERVICE_CALL_FAILED.value in str(exc_info.value)
-        assert "upload_failed" in str(exc_info.value)
+        assert "unknown_error" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_unavailable_agents_are_named_in_warnings(self) -> None:
-        ws = FakeWS(new_backup={"failed_agent_ids": ["hassio.gone"]})
+    async def test_backup_kept_after_a_failed_upload_is_returned_with_a_warning(
+        self,
+    ) -> None:
+        """Core keeps the backup on the agents whose upload worked."""
+        ws = FakeWS(
+            events=[_UPLOAD_FAILED], new_backup={"failed_agent_ids": ["hassio.nas"]}
+        )
         result = await _run(create_backup, ws, _client())
+        assert result["backup_id"] == "new-backup"
+        assert result["warnings"] == ["Not stored on backup agents: hassio.nas"]
+
+    @pytest.mark.asyncio
+    async def test_failed_upload_without_a_stored_backup_is_a_failure(self) -> None:
+        ws = FakeWS(events=[_UPLOAD_FAILED], new_backup={"name": "someone-else"})
+        with pytest.raises(ToolError, match="Backup creation failed"):
+            await _run(create_backup, ws, _client(), name="mine")
+
+    @pytest.mark.asyncio
+    async def test_addons_and_folders_left_out_are_named_in_warnings(self) -> None:
+        """Core reports a backup as done when add-ons or folders failed."""
+        ws = FakeWS(
+            new_backup={
+                "failed_addons": [{"slug": "core_ssh", "name": "SSH"}],
+                "failed_folders": ["media"],
+            }
+        )
+        result = await _run(create_backup, ws, _client(supervised=True))
         assert result["warnings"] == [
-            "Not stored on unavailable backup agents: hassio.gone"
+            "Add-ons that could not be backed up: core_ssh",
+            "Folders that could not be backed up: media",
         ]
+
+    @pytest.mark.asyncio
+    async def test_busy_backup_manager_is_reported_before_starting(self) -> None:
+        """Another operation's events must not be read as this job's."""
+        running = {"manager_state": "create_backup", "state": "in_progress"}
+        ws = FakeWS(last=running)
+        with pytest.raises(ToolError, match="busy"):
+            await _run(create_backup, ws, _client())
+        assert not ws.sent("backup/generate")
 
     @pytest.mark.asyncio
     async def test_timeout_says_the_backup_may_still_be_running(self) -> None:
@@ -258,16 +330,23 @@ class TestWaitingForTheBackup:
         self,
     ) -> None:
         ws = FakeWS(events=[])
-        ws.queue.shutdown(immediate=True)
+
+        async def _close_later() -> None:
+            await asyncio.sleep(0.02)
+            ws.queue.shutdown(immediate=True)
+
+        closer = asyncio.create_task(_close_later())
         with pytest.raises(ToolError) as exc_info:
             await _run(create_backup, ws, _client())
+        await closer
         assert ErrorCode.CONNECTION_FAILED.value in str(exc_info.value)
         assert "likely_in_progress" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_long_backup_sends_progress_heartbeats(self) -> None:
+    @pytest.mark.parametrize("action", ["create", "restore"])
+    async def test_long_backup_sends_progress_heartbeats(self, action) -> None:
         """#1861: without heartbeats a client drops a long-running call."""
-        ws = FakeWS(events=[])
+        ws = FakeWS(events=[], details=_entry("b1"))
         ctx = MagicMock()
         ctx.report_progress = AsyncMock()
 
@@ -275,9 +354,11 @@ class TestWaitingForTheBackup:
             await asyncio.sleep(0.05)
             ws.queue.put_nowait({"type": "event", "event": _COMPLETED})
 
+        args = (_client(),) if action == "create" else (_client(), "b1")
+        tool = create_backup if action == "create" else restore_backup
         with patch.object(backup, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
             finisher = asyncio.create_task(_finish_later())
-            await _run(create_backup, ws, _client(), ctx=ctx)
+            await _run(tool, ws, *args, ctx=ctx)
             await finisher
         assert ctx.report_progress.await_count >= 3
 
@@ -306,47 +387,68 @@ class TestRestore:
     @pytest.mark.parametrize(
         ("agents", "expected"),
         [
-            pytest.param({"hassio.nas": {}}, "hassio.nas", id="remote-only"),
+            pytest.param({"s3.bucket": {}}, "s3.bucket", id="remote-only"),
             pytest.param(
-                {"hassio.nas": {}, "hassio.local": {}}, "hassio.local", id="local-copy"
+                {"s3.bucket": {}, "hassio.nas": {}}, "hassio.nas", id="mount-copy"
+            ),
+            pytest.param(
+                {"s3.bucket": {}, "backup.local": {}}, "backup.local", id="core-local"
             ),
         ],
     )
     async def test_restore_reads_from_an_agent_that_holds_the_backup(
         self, agents, expected
     ) -> None:
-        """A backup stored only on a network mount used to be unrestorable."""
+        """A backup stored only on a network mount restores from that mount."""
         ws = FakeWS(details=_entry("b1", agents=agents))
         await _run(restore_backup, ws, _client(), "b1")
         assert ws.sent("backup/restore")[0]["agent_id"] == expected
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("requested", "expected"),
+        ("included", "requested", "expected"),
         [
-            pytest.param(None, True, id="default-follows-backup"),
-            pytest.param(False, False, id="explicit-passes-through"),
+            pytest.param(True, None, True, id="default-with-database"),
+            pytest.param(False, None, False, id="default-without-database"),
+            pytest.param(None, None, False, id="default-field-absent"),
+            pytest.param(True, False, False, id="explicit-passes-through"),
         ],
     )
     async def test_restore_database_follows_the_backup_unless_given(
-        self, requested, expected
+        self, included, requested, expected
     ) -> None:
-        ws = FakeWS(details=_entry("b1", database_included=True))
-        await _run(restore_backup, ws, _client(), "b1", restore_database=requested)
+        """Supervisor rejects a database restore that does not match the backup."""
+        target = _entry("b1", database_included=included)
+        if included is None:
+            del target["database_included"]
+        ws = FakeWS(details=target)
+        result = await _run(
+            restore_backup, ws, _client(), "b1", restore_database=requested
+        )
         assert ws.sent("backup/restore")[0]["restore_database"] is expected
+        assert result["restore_database"] is expected
 
     @pytest.mark.asyncio
-    async def test_restore_names_the_backups_own_addons_and_folders(self) -> None:
+    @pytest.mark.parametrize(
+        ("supervised", "addons", "folders"),
+        [
+            pytest.param(True, ["core_ssh"], ["share"], id="supervisor"),
+            pytest.param(False, [], [], id="core-rejects-them"),
+        ],
+    )
+    async def test_restore_names_the_backups_own_addons_and_folders(
+        self, supervised, addons, folders
+    ) -> None:
         target = _entry(
             "b1",
             addons=[{"slug": "core_ssh", "name": "SSH", "version": "1"}],
             folders=["share"],
         )
         ws = FakeWS(details=target)
-        await _run(restore_backup, ws, _client(supervised=True), "b1")
+        await _run(restore_backup, ws, _client(supervised=supervised), "b1")
         sent = ws.sent("backup/restore")[0]
-        assert sent["restore_addons"] == ["core_ssh"]
-        assert sent["restore_folders"] == ["share"]
+        assert sent["restore_addons"] == addons
+        assert sent["restore_folders"] == folders
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -359,22 +461,49 @@ class TestRestore:
     async def test_password_is_sent_only_for_an_encrypted_backup(
         self, protected, forwarded
     ) -> None:
-        """Core rejects a password for an unencrypted backup."""
         target = _entry("b1", agents={"backup.local": {"protected": protected}})
         ws = FakeWS(details=target)
         await _run(restore_backup, ws, _client(), "b1")
         assert ("password" in ws.sent("backup/restore")[0]) is forwarded
 
     @pytest.mark.asyncio
-    async def test_safety_backup_finishes_before_the_restore_starts(self) -> None:
-        ws = FakeWS(agent_ids=["hassio.nas"], details=_entry("b1"))
-        result = await _run(restore_backup, ws, _client(supervised=True), "b1")
+    @pytest.mark.parametrize("supervised", [True, False])
+    async def test_safety_backup_holds_what_the_restore_replaces(
+        self, supervised
+    ) -> None:
+        """Config, database, add-ons and restored folders, before the restore starts."""
+        folders = ["share"] if supervised else []
+        ws = FakeWS(agent_ids=["hassio.nas"], details=_entry("b1", folders=folders))
+        result = await _run(restore_backup, ws, _client(supervised=supervised), "b1")
         names = [name for name, _ in ws.calls]
         assert names.index("backup/restore") > names.index("backup/generate")
         safety = ws.sent("backup/generate")[0]
         assert safety["agent_ids"] == ["hassio.nas"]
+        assert safety["include_homeassistant"] is True
         assert safety["include_database"] is True
+        # Core rejects add-ons and folders; Supervisor must include them.
+        assert safety["include_all_addons"] is supervised
+        assert safety.get("include_folders", []) == folders
+        restore = ws.sent("backup/restore")[0]
+        assert (restore["backup_id"], restore["restore_homeassistant"]) == ("b1", True)
         assert result["safety_backup_id"] == "new-backup"
+
+    @pytest.mark.asyncio
+    async def test_rejected_restore_is_an_error_naming_the_backup(self) -> None:
+        ws = FakeWS(details=_entry("b1"))
+        original = ws.send_command
+
+        async def _send(command: str, **kwargs: Any) -> dict[str, Any]:
+            if command == "backup/restore":
+                raise HomeAssistantCommandError(
+                    "Command failed: boom", "home_assistant_error"
+                )
+            return await original(command, **kwargs)
+
+        ws.send_command = _send  # type: ignore[method-assign]
+        with pytest.raises(ToolError) as exc_info:
+            await _run(restore_backup, ws, _client(), "b1")
+        assert "b1" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_failed_safety_backup_stops_the_restore(self) -> None:
@@ -391,6 +520,7 @@ class TestRestore:
         ws = FakeWS(password=None, details=_entry("b1"))
         result = await _run(restore_backup, ws, _client(), "b1")
         assert not ws.sent("backup/generate")
+        assert "password" not in ws.sent("backup/restore")[0]
         assert result["safety_backup_id"] is None
         assert any("No safety backup" in w for w in result["warnings"])
 
@@ -398,16 +528,19 @@ class TestRestore:
 class TestList:
     @pytest.mark.asyncio
     async def test_list_keeps_cores_fields_newest_first(self) -> None:
-        """A partial list (agent_errors) and per-backup details reach the caller."""
-        older = _entry("old", date="2026-09-01T00:00:00Z")
-        newer = _entry("new", date="2026-10-01T00:00:00+00:00", failed_agent_ids=["x"])
+        """Per-backup details and Core's top-level fields reach the caller."""
+        # Same second: as strings "...00Z" would sort after "...00.500000+00:00".
+        older = _entry("old", date="2026-10-01T00:00:00Z")
+        newer = _entry(
+            "new", date="2026-10-01T00:00:00.500000+00:00", failed_agent_ids=["x"]
+        )
         undated = _entry("undated", date=None)
         client = _client()
         client.send_websocket_message = AsyncMock(
             return_value={
                 "success": True,
                 "result": {
-                    "agent_errors": {"hassio.nas": "unreachable"},
+                    "agent_errors": {},
                     "backups": [undated, older, newer],
                     "next_automatic_backup": "2026-10-24T04:45:00+00:00",
                 },
@@ -416,9 +549,28 @@ class TestList:
         result = await list_backups(client, limit=2)
         assert [b["backup_id"] for b in result["backups"]] == ["new", "old"]
         assert result["backups"][0]["failed_agent_ids"] == ["x"]
-        assert result["agent_errors"] == {"hassio.nas": "unreachable"}
         assert result["next_automatic_backup"] == "2026-10-24T04:45:00+00:00"
         assert (result["count"], result["total"]) == (2, 3)
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_partial_list_says_so(self) -> None:
+        """A caller checking whether a backup landed must know the list is partial."""
+        client = _client()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "agent_errors": {"hassio.nas": "unreachable"},
+                    "backups": [],
+                },
+            }
+        )
+        result = await list_backups(client)
+        assert result["agent_errors"] == {"hassio.nas": "unreachable"}
+        assert result["warnings"] == [
+            "Partial list: these backup agents failed to list their backups: hassio.nas"
+        ]
 
     @pytest.mark.asyncio
     async def test_list_failure_raises(self) -> None:
@@ -437,16 +589,14 @@ class TestBackupProtected:
         entry = {"agents": {"a": {"protected": False}, "b": {"protected": True}}}
         assert _backup_protected(entry) is True
 
-    def test_all_agents_unprotected(self) -> None:
-        assert _backup_protected({"agents": {"a": {"protected": False}}}) is False
-
     @pytest.mark.parametrize(
         "entry",
         [
+            pytest.param({"agents": {"a": {"protected": False}}}, id="unprotected"),
             pytest.param({}, id="missing-agents"),
             pytest.param({"agents": {"a": {}}}, id="no-flag"),
             pytest.param({"agents": ["a"]}, id="non-dict"),
         ],
     )
-    def test_unknown_when_no_agent_reports_it(self, entry) -> None:
-        assert _backup_protected(entry) is None
+    def test_not_protected_unless_an_agent_says_so(self, entry) -> None:
+        assert _backup_protected(entry) is False
