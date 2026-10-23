@@ -344,7 +344,8 @@ class CoreLogSourcesMixin:
         the caller's line budget. ``order`` controls display direction only
         (the selected window is always the most recent one); a record's own
         lines never reverse. The step resumes just before the oldest returned
-        record so a record cannot be split across pages.
+        record, which keeps it whole across pages where ``offset`` counts
+        lines (journald counts entries, so there the step is approximate).
         """
         records = _split_log_records(raw_log.splitlines())
         matches, filters_applied = _filter_log_records(records, search, level)

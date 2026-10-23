@@ -231,8 +231,8 @@ class _LogRecord:
 
     ``header`` is ``None`` for a leading partial record — lines at the oldest
     edge of a window whose header fell outside it. ``start_index`` is the
-    record's first line in the fetched window; paging resumes from it so a
-    record cannot be split across pages.
+    record's first line in the fetched window; paging resumes from it, which
+    keeps a record whole across pages where ``offset`` counts lines.
     """
 
     lines: list[str]
@@ -616,11 +616,13 @@ def _next_page_step(window: _ErrorLogWindow, oldest_index: int | None) -> int:
     """How far back the next page's ``offset`` sits from this one's.
 
     The next page resumes just before the oldest returned record's first line
-    (its header when whole), so a record cannot be split across pages. Capped
-    at the window size because on journald the step is spent in ENTRY units,
-    where an uncapped line-derived step could overshoot the window that
-    produced it. Nothing shown means nothing to resume before, so the whole
-    window is consumed.
+    (its header when whole). On container and pip installs, where ``offset``
+    counts lines, that keeps every record whole across pages. On journald
+    ``offset`` counts entries, so the step is approximate: it can land inside
+    a multi-line entry and re-read part of a window — the mismatch described
+    on ``_ErrorLogWindow``. The cap at the window size keeps that error to
+    re-reading rather than skipping. Nothing shown means nothing to resume
+    before, so the whole window is consumed.
     """
     if oldest_index is None:
         return window.fetch_lines
