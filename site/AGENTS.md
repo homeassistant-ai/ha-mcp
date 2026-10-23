@@ -11,6 +11,15 @@ npm run build    # Production build
 npm run preview  # Preview production build locally
 ```
 
+## Deployment
+
+`.github/workflows/deploy.yml` builds the site from the `stable` tag and
+deploys it to GitHub Pages after each stable release, so the published setup
+instructions match the current stable version. A site change merged to
+`master` goes live at the next stable release. To publish sooner, or to
+publish another tag or commit, dispatch `deploy.yml` with its `ref` input;
+that override lasts only until the next weekly or release-driven rebuild.
+
 ## Setup Wizard (`site/src/pages/setup.astro`)
 
 Single-file Astro page that drives the on-site setup flow. Both the metadata (which clients/platforms/scopes exist) and the per-client instruction prose live in this one file.
