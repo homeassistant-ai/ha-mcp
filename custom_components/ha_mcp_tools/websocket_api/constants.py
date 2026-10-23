@@ -39,7 +39,6 @@ __all__ = [
     "SERVER_ENTRY_UPDATE_FLUSH_DELAY_S",
     "SERVER_ENTRY_UPDATE_MAX_PIP_SPEC",
     "WS_API_PREFIX",
-    "WS_BACKUP_PREP",
     "WS_BLUEPRINT_GET",
     "WS_BULK_CALL_SERVICE",
     "WS_CALL_SERVICE",
@@ -86,7 +85,6 @@ WS_CONFIG_ENTRIES = f"{WS_API_PREFIX}/config_entries"
 WS_REGISTRY_LOOKUP = f"{WS_API_PREFIX}/registry_lookup"
 WS_SYSTEM_SNAPSHOT = f"{WS_API_PREFIX}/system_snapshot"
 WS_ENTITY_LOOKUP = f"{WS_API_PREFIX}/entity_lookup"
-WS_BACKUP_PREP = f"{WS_API_PREFIX}/backup_prep"
 WS_REGISTRIES = f"{WS_API_PREFIX}/registries"
 WS_DASHBOARDS = f"{WS_API_PREFIX}/dashboards"
 WS_DASHBOARD_EDIT = f"{WS_API_PREFIX}/dashboard_edit"
@@ -143,7 +141,6 @@ CAPABILITIES: list[str] = [
     "registry_lookup",
     "system_snapshot",
     "entity_lookup",
-    "backup_prep",
     "registries",
     "dashboards",
     "dashboard_edit",

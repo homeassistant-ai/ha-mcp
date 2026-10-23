@@ -1085,34 +1085,33 @@ class TestSweepWarningsShape:
     async def test_backup_restore_warnings_shape(self):
         from ha_mcp.tools.backup import restore_backup
 
+        target = {"backup_id": "abc", "agents": {"backup.local": {}}}
         ws = AsyncMock()
         ws.send_command.side_effect = [
-            {"success": True, "result": {"backups": [{"backup_id": "abc"}]}},
+            {"success": True, "result": {"backup": target}},
             {
                 "success": True,
-                "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]},
+                "result": {
+                    "config": {"create_backup": {"agent_ids": [], "password": "pw"}}
+                },
             },
-            {
-                "success": True,
-                "result": {"config": {"create_backup": {"password": "pw"}}},
-            },
-            {"success": True, "result": {"backup_job_id": "job"}},
             {"success": True},
         ]
         client = MagicMock()
         client.base_url = "http://test"
         client.token = "t"
         client.verify_ssl = False
-        # Stub the safety-backup completion poll (exercised by test_backup_restore)
-        # so this test stays focused on the warnings-list shape contract.
+        client._is_supervised_install = AsyncMock(return_value=False)
+        # Stub the safety backup (exercised by test_backup_snapshot) so this
+        # test stays focused on the warnings-list shape contract.
         with (
             patch(
                 "ha_mcp.tools.backup.get_connected_ws_client",
                 new=AsyncMock(return_value=(ws, None)),
             ),
             patch(
-                "ha_mcp.tools.backup._poll_backup_completion",
-                new=AsyncMock(return_value={"success": True}),
+                "ha_mcp.tools.backup._generate_backup",
+                new=AsyncMock(return_value=({"backup_id": "safety"}, 1)),
             ),
         ):
             result = await restore_backup(client, "abc")

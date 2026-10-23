@@ -415,9 +415,8 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "src/ha_mcp/tools/backup.py",
         "Mixing implicit and explicit returns",
         "",
-        "False positive on _finalize_backup_timeout and _perform_restore's "
-        "success-branch-vs-raise shape (helpers extracted from the C901 "
-        "refactor, issue #925): the non-return branch in each always goes "
+        "False positive on the success-branch-vs-raise shape: the "
+        "non-return branch always goes "
         "through raise_tool_error, typed '-> NoReturn' (see helpers.py), so "
         "there is no implicit None return for CodeQL's heuristic to have "
         "correctly caught. mypy already confirms this file is clean under "
