@@ -1096,13 +1096,18 @@ class TestErrorLogPagination:
         On journald the step is spent in ENTRY units while it is derived from
         LINES, and a multi-line entry makes a window come back longer than the
         entry count asked for — an uncapped step would then page over entries
-        that were never shown. Here 20 lines answer a 5-line ask.
+        that were never shown. Here a 2050-line log answers a 2000-line search
+        window, and the only match sits at its oldest line, so the uncapped
+        step (2050) would overshoot the window that produced it.
         """
-        client = _make_client(_numbered_log(20), has_more=True)
+        window = SUPERVISOR_SEARCH_WINDOW_LINES
+        client = _make_client(_numbered_log(window + 50), has_more=True)
         tools = _register_and_collect(client)
-        result = await tools["ha_get_logs"](source="error_log", limit=5)
-        assert result["window_lines"] == 5 + _ERROR_LOG_HEADER_LOOKBACK_LINES
-        assert result["next_offset"] == 5
+        result = await tools["ha_get_logs"](
+            source="error_log", limit=5, search="issue 0"
+        )
+        assert result["window_lines"] == window
+        assert result["next_offset"] == window
 
     @pytest.mark.asyncio
     async def test_a_fully_filtered_window_steps_the_whole_window(self):

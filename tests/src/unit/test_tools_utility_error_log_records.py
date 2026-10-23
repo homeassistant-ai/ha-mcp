@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ha_mcp.client.rest_client import ErrorLogPage
+from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantConnectionError
 from ha_mcp.tools.error_log_parsing import (
     _split_log_records,
 )
@@ -93,10 +93,11 @@ class TestSplitLogRecords:
         assert [record.level for record in records] == ["ERROR", "WARNING"]
 
     def test_leading_continuation_is_a_partial_record(self) -> None:
-        records = _split_log_records("  frame\nValueError: x")
+        records = _split_log_records(["  frame", "ValueError: x"])
         assert len(records) == 1
         assert records[0].header is None
         assert records[0].start_index == 0
+        assert records[0].lines == ["  frame", "ValueError: x"]
 
 
 class TestRecordFiltering:
@@ -223,14 +224,15 @@ class TestRecordLimitAndPaging:
 
     @pytest.mark.asyncio
     async def test_leading_partial_is_widened_to_reach_its_header(self) -> None:
-        leading = "  frame\nValueError: device did not respond"
+        log = f"{_ERROR_RECORD}\n" + "\n".join(f"  frame {i}" for i in range(400))
+
+        async def _tail_page(lines: int, offset: int = 0) -> ErrorLogPage:
+            return ErrorLogPage(
+                text="\n".join(log.splitlines()[-lines:]), has_more=True
+            )
+
         client = AsyncMock()
-        client.get_error_log = AsyncMock(
-            side_effect=[
-                ErrorLogPage(text=leading, has_more=True),
-                ErrorLogPage(text=_ERROR_RECORD, has_more=True),
-            ]
-        )
+        client.get_error_log = AsyncMock(side_effect=_tail_page)
         tools = LogTools(client)
         result = await tools.get_logs(**_kwargs(limit=5))
 
@@ -251,6 +253,23 @@ class TestRecordLimitAndPaging:
         )
         tools = LogTools(client)
         result = await tools.get_logs(**_kwargs(limit=5))
+        assert any("partial record" in w for w in result["warnings"])
+        assert result["log"].splitlines()[0] == "  frame"
+
+    @pytest.mark.asyncio
+    async def test_a_failed_widening_keeps_the_first_page(self) -> None:
+        leading = "  frame\nValueError: device did not respond"
+        client = AsyncMock()
+        client.get_error_log = AsyncMock(
+            side_effect=[
+                ErrorLogPage(text=leading, has_more=True),
+                HomeAssistantConnectionError("widen failed"),
+            ]
+        )
+        tools = LogTools(client)
+        result = await tools.get_logs(**_kwargs(limit=5))
+
+        assert client.get_error_log.await_count == 2
         assert any("partial record" in w for w in result["warnings"])
         assert result["log"].splitlines()[0] == "  frame"
 

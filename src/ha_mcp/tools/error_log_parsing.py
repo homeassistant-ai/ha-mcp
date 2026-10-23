@@ -353,7 +353,6 @@ def _select_error_log_page(
                 )
             )
             truncated = _TruncatedRecord(record.line_count, limit)
-            used = limit
         break
 
     if order == "oldest":

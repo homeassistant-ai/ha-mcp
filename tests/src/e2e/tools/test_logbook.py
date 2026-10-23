@@ -477,9 +477,10 @@ async def test_logs_error_log_source(mcp_client):
     # Pagination contract (#2279): the fetch is a bounded window, so the
     # response has to say how big it was and whether history remains. The
     # window carries a header lookback beyond the caller's limit so the oldest
-    # visible record can arrive whole.
+    # visible record can arrive whole; when the window opens inside a record
+    # the tool re-fetches wider, so only the floor is fixed here.
     assert data["offset"] == 0
-    assert data["window_lines"] == 20 + _ERROR_LOG_HEADER_LOOKBACK_LINES
+    assert data["window_lines"] >= 20 + _ERROR_LOG_HEADER_LOOKBACK_LINES
     assert isinstance(data["has_more"], bool), (
         f"has_more should be a bool, got {data['has_more']!r}"
     )

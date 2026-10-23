@@ -315,8 +315,18 @@ class CoreLogSourcesMixin:
         )
         if wider <= fetch_lines:
             return fetch_lines, page, raw_text
-        page = await self._client.get_error_log(lines=wider, offset=offset)
-        return wider, page, page.text or ""
+        try:
+            wider_page = await self._client.get_error_log(lines=wider, offset=offset)
+        except (
+            HomeAssistantConnectionError,
+            HomeAssistantAPIError,
+            TimeoutError,
+            OSError,
+        ):
+            # The first page is already usable and carries the partial-record
+            # warning; losing the header is better than losing the read.
+            return fetch_lines, page, raw_text
+        return wider, wider_page, wider_page.text or ""
 
     def _build_raw_error_log(
         self,
