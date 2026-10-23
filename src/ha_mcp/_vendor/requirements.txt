@@ -6,6 +6,6 @@
 # a bump; tests/src/unit/test_vendored_*.py reject stale or altered trees.
 # For a manual pin change, run the same generator and commit its outputs.
 websockets==17.2
-fastmcp-slim==4.1.0
+fastmcp-slim==4.1.2
 mcp==2.3.0
 mcp-types==2.3.0
