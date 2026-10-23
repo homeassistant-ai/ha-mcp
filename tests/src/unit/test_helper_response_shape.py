@@ -1101,7 +1101,7 @@ class TestSweepWarningsShape:
         client.base_url = "http://test"
         client.token = "t"
         client.verify_ssl = False
-        client._is_supervised_install = AsyncMock(return_value=False)
+        client.get_config = AsyncMock(return_value={"components": []})
         # Stub the safety backup (exercised by test_backup_snapshot) so this
         # test stays focused on the warnings-list shape contract.
         with (

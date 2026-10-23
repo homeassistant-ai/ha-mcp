@@ -415,12 +415,11 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "src/ha_mcp/tools/backup.py",
         "Mixing implicit and explicit returns",
         "",
-        "False positive on the success-branch-vs-raise shape: the "
-        "non-return branch always goes "
-        "through raise_tool_error, typed '-> NoReturn' (see helpers.py), so "
-        "there is no implicit None return for CodeQL's heuristic to have "
-        "correctly caught. mypy already confirms this file is clean under "
-        "that typing.",
+        "False positive on _wait_for_backup's return-in-the-loop vs raise "
+        "shape: after the loop it always goes through raise_tool_error, typed "
+        "'-> NoReturn' (see helpers.py), so there is no implicit None return "
+        "for CodeQL's heuristic to have correctly caught. mypy already "
+        "confirms this file is clean under that typing.",
     ),
     # ---- Security-suite entries (the workflow also gates the default
     # <language>-code-scanning suites; see codeql-quality.yml header). Entries
