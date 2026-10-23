@@ -86,6 +86,10 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n${reason("N/A")}`), null],
     [(s) => (s.issue.body += `\n\n${section(noReportHeading.toLowerCase(), "N/A")}`), null],
     [(s) => (s.issue.body += `\n\n${section(reportFieldLabel, "N/A")}`), null],
+    // Levels two to four count, indented by up to three spaces.
+    [(s) => (s.issue.body += `\n\n## ${noReportHeading}\n\nN/A`), null],
+    [(s) => (s.issue.body += `\n\n#### ${noReportHeading}\n\nN/A`), null],
+    [(s) => (s.issue.body += `\n\n   ### ${noReportHeading}\n\nN/A`), null],
     // Other ATX forms GitHub renders as the same heading.
     [(s) => (s.issue.body += `\n\n### ${noReportHeading} ###\n\nN/A`), null],
     [(s) => (s.issue.body += `\n\n###\t${noReportHeading}\n\nN/A`), null],
@@ -125,7 +129,11 @@ test("a report, or any answer in the report field or reason section, keeps an is
     // Text after the "-->" that ends such a comment shows, and so does an
     // unclosed fence's content.
     [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here --> Found by reading the code.")}`), null],
+    [(s) => (s.issue.body += `\n\n${reason("<!--\nExplain here\n--> Found by reading the code.")}`), null],
     [(s) => (s.issue.body += `\n\n${reason("```\nha-mcp exits before the handshake")}`), null],
+    // A code block shows a comment in it as text.
+    [(s) => (s.issue.body += `\n\n${reason("```html\n<!-- x -->\n```")}`), null],
+    [(s) => (s.issue.body += `\n\n${reason("```\n<!-- broken\n```\nFound by reading the code.")}`), null],
     // What an issue form writes for an empty optional field.
     [(s) => (s.issue.body += `\n\n${reason("_No response_")}`), "label"],
     // A heading with a tab after its hashes, or an empty one, ends the reason
@@ -137,12 +145,14 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here -->")}`), "label"],
     [(s) => (s.issue.body += `\n\n<!--\n${reason("Explain why here")}\n-->`), "label"],
     [(s) => (s.issue.body += `\n\n   <!-- template\n${reason("Explain why here")}`), "label"],
+    [(s) => (s.issue.body += `\n\n\`\`\`\nlog\n\`\`\`yaml\n${reason("in the log")}\n\`\`\``), "label"],
     // Such a comment runs over blank lines and a ">", and may open right after
     // a paragraph line.
     [(s) => (s.issue.body += `\n\n<!--\n\n${reason("Explain why here")}\n-->`), "label"],
     [(s) => (s.issue.body += `\n\n<!-- a > b\n${reason("Explain why here")}\n-->`), "label"],
     [(s) => (s.issue.body += `\n\n<!-- a -> b\n${reason("Explain why here")}\n-->`), "label"],
     [(s) => (s.issue.body += `\n\nThe call hangs.\n<!-- see below\n${reason("Explain why here")}\n-->`), "label"],
+    // A reason of nothing but comments is none.
     [(s) => (s.issue.body += `\n\n${reason("<!--\nExplain here\n-->")}`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("<!-- a --><!-- b -->")}`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("<!-- e.g. Settings > Integrations -->")}`), "label"],
@@ -152,26 +162,31 @@ test("a report, or any answer in the report field or reason section, keeps an is
     [(s) => (s.issue.body += `\n\n${reason("<!-- Explain here\nwhy there is no report")}`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("```\n```")}`), "label"],
     [(s) => (s.issue.body += `\n\n${reason("~~~ yaml\n\n~~~")}`), "label"],
-    [(s) => (s.issue.body += `\n\n\`\`\`\nlog\n\`\`\`yaml\n${reason("in the log")}\n\`\`\``), "label"],
     // A shorter or other-kind fence line closes no fence, and a tilde fence's
     // info string may hold backticks.
     [(s) => (s.issue.body += `\n\n\`\`\`\`\n\`\`\`\n${reason("in the log")}\n\`\`\`\``), "label"],
     [(s) => (s.issue.body += `\n\n\`\`\`\n~~~\n${reason("in the log")}\n\`\`\``), "label"],
     [(s) => (s.issue.body += `\n\n~~~ \`x\`\n${reason("in the log")}\n~~~`), "label"],
+    // A fifth level, or a heading indented as code, is not the reason heading.
+    [(s) => (s.issue.body += `\n\n##### ${noReportHeading}\n\nN/A`), "label"],
+    [(s) => (s.issue.body += `\n\n    ### ${noReportHeading}\n\nN/A`), "label"],
     // Text after the label, a "#" included, makes it another heading.
     [(s) => (s.issue.body += `\n\n### ${noReportHeading}#\n\nN/A`), "label"],
     [(s) => (s.issue.body += `\n\n### ${noReportHeading} (reading the code)\n\nN/A`), "label"],
     [(s) => (s.issue.body += `\n\n### ${noReportHeading} ## more\n\nN/A`), "label"],
+    // Naming the report's heading in prose is no report.
     [(s) => (s.issue.body += ` The ${reportMarker} heading is missing.`), "label"],
     // The heading over a summary, or a paste cut off before the environment.
     [(s) => (s.issue.body = `## 🚨 ${reportMarker}\n\nThe call hangs.`), "label"],
     [(s) => s.comments.push(comment(1, "bystander", report)), "label"],
   ];
-  for (const [edit, expected] of cases) {
+  const wrong = cases.flatMap(([edit, expected]) => {
     const s = snapshot();
     edit(s);
-    assert.equal(gateAction(s, bot, opened), expected, edit.toString());
-  }
+    const actual = gateAction(s, bot, opened);
+    return actual === expected ? [] : [{ edit: edit.toString(), expected, actual }];
+  });
+  assert.deepEqual(wrong, []);
 });
 
 test("feature requests, maintainers, bots and documentation issues are not gated", () => {
@@ -330,6 +345,8 @@ test("the sweep's close posts a new notice and closes as not planned", async () 
 test("the sweep closes a labeled issue that has no user", async () => {
   const s = labeled();
   s.issue.user = null;
+  // Without a reporter login, a reason in a reply by a null user is not theirs.
+  s.comments.push(comment(6, "nobody", reason("Found by reading the code."), { user: null }));
   const api = new FakeGitHub(s);
   const acted = await expire(api, "test/repo", bot, Date.parse("2026-09-21T00:00:00Z"), true);
   assert.deepEqual(acted, ["1:close"]);
@@ -354,7 +371,7 @@ test("a warning names the answer section that came empty", async () => {
     s.issue.body = section(heading, "_No response_");
     const api = new FakeGitHub(s);
     await gate(api, "test/repo", 1, bot, opened, true);
-    assert.ok(api.writes[0].data.body.includes(`\`### ${expected}\` section is empty`));
+    assert.ok(api.writes[0].data.body.includes(`\`### ${expected}\` section is empty`), heading);
   }
 });
 

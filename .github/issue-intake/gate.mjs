@@ -40,35 +40,38 @@ const fenceLine = /^ {0,3}(`{3,}(?!.*`)|~{3,})/;
 // A closing fence has nothing but whitespace after it, so ```yaml stays inside.
 const closingFenceLine = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const headingLine = /^ {0,3}#{1,6}(?:[ \t]|$)/;
-// A comment opening a line hides the lines up to the one holding "-->", or to
-// the end if none does, as an HTML block does; one opened after text on its
-// line is text and hides no heading.
+// A comment opening a line hides everything up to the first "-->", or the rest
+// of the issue if none follows, as an HTML block does. One opened after text
+// on its line hides no heading.
 const commentLine = /^ {0,3}<!--/;
-// What the page shows under each answer heading, each section ending at the
-// next heading outside a code fence or comment: pasted logs and config carry
-// "# " lines. The fence lines themselves show no text.
+// The text under each answer heading, without fence lines or comments that
+// open a line. A section ends at the next heading outside a fence or comment:
+// pasted logs and config carry "# " lines.
 function answerSections(text, answerLine = answerHeadingLine) {
   const sections = [];
   let current = null;
   let fence = null;
   let comment = false;
   for (const line of (text || "").split(/\r?\n/)) {
-    const marker = fenceLine.exec(line)?.[1];
     if (fence) {
       const close = closingFenceLine.exec(line)?.[1];
-      if (close?.[0] === fence[0] && close.length >= fence.length) {
-        fence = null;
-        continue;
-      }
-    } else if (comment || commentLine.test(line)) {
+      if (close?.[0] === fence[0] && close.length >= fence.length) fence = null;
+      // Code shows a comment as text, so answered() must not strip it.
+      else current?.push(line.replaceAll("<!--", ""));
+      continue;
+    }
+    if (comment || commentLine.test(line)) {
       const end = line.indexOf("-->");
       comment = end < 0;
       if (!comment) current?.push(line.slice(end + 3));
       continue;
-    } else if (marker) {
+    }
+    const marker = fenceLine.exec(line)?.[1];
+    if (marker) {
       fence = marker;
       continue;
-    } else if (headingLine.test(line)) {
+    }
+    if (headingLine.test(line)) {
       current = answerLine.test(line) ? [] : null;
       if (current) sections.push(current);
       continue;

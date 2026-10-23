@@ -61,10 +61,10 @@ workflow/PR write permission, or ruleset bypass is needed for issue documentatio
 The `gate` job (`.github/issue-intake/gate.mjs`) runs before admission on issue
 opens, edits, reopenings and new or edited comments, without the model. An issue passes when its reporter's body
 or one of their comments carries the `ha_report_issue` report heading together
-with the report's `ha-mcp Version:` line, or any text, even "N/A", under the
+with the report's `ha-mcp Version:` line, or any text the page shows, even "N/A", under the
 forms' `📋 ha_report_issue Report` field or a
 `### Why there is no ha_report_issue report` heading. The forms make the report
-field required, so an issue filed through them always passes; the gate exists
+field required, so an issue filed through them passes unless that field shows no text; the gate exists
 for blank and API-filed issues. Maintainers (write role or above), bots,
 `documentation` issues and feature requests (a `[FEATURE]` title or the
 `enhancement` label) are exempt.
