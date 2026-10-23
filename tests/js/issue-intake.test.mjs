@@ -703,6 +703,11 @@ test("no report request when one is present or the issue is not a bug", () => {
   const unclear = snapshot();
   for (const s of [withReport, replied, feature, unclear])
     assert.doesNotMatch(render(result(), prepare(s, bot)), /Diagnostic report/);
+  // A report inside a comment is not shown, so it is asked for.
+  const hidden = snapshot();
+  hidden.issue.title = "[BUG] Dashboard call hangs";
+  hidden.issue.body += `\n\n<!--\n## 🚨 ${reportMarker}\n${reportVersionLine} 8.6.0\n-->`;
+  assert.match(render(result(), prepare(hidden, bot)), /### Diagnostic report/);
 });
 
 test("an untitled report with a stated error is asked for the tool output", () => {
