@@ -336,10 +336,10 @@ class WebSocketConnectionState:
         return tuple(self._event_handlers[event_type])
 
     def register_subscription_queue(
-        self, message_id: int
+        self, message_id: int, *, maxsize: int = 0
     ) -> asyncio.Queue[dict[str, Any]]:
         """Register a queue for continuous-subscription event delivery."""
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        queue = _SubscriptionEventQueue(maxsize=maxsize)
         self._subscription_queues[message_id] = queue
         return queue
 
@@ -357,6 +357,25 @@ class WebSocketConnectionState:
             # pending ``get()`` so a waiter doesn't deadlock when the
             # caller decides to stop listening.
             queue.shutdown(immediate=True)
+
+
+class _SubscriptionEventQueue(asyncio.Queue[dict[str, Any]]):
+    """Event queue that can bound memory and count dropped oldest frames."""
+
+    def __init__(self, maxsize: int = 0) -> None:
+        super().__init__(maxsize=maxsize)
+        self.dropped_count = 0
+
+    def put_event_nowait(self, item: dict[str, Any]) -> None:
+        """Keep the newest event when a bounded subscriber falls behind."""
+        if self.full():
+            try:
+                self.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            else:
+                self.dropped_count += 1
+        self.put_nowait(item)
 
 
 class HomeAssistantWebSocketClient:
@@ -659,7 +678,10 @@ class HomeAssistantWebSocketClient:
             queue = self._state.get_subscription_queue(message_id)
             if queue is not None:
                 try:
-                    queue.put_nowait(data)
+                    if isinstance(queue, _SubscriptionEventQueue):
+                        queue.put_event_nowait(data)
+                    else:
+                        queue.put_nowait(data)
                 except asyncio.QueueShutDown:
                     # Caller unsubscribed between dispatch and delivery —
                     # drop the event quietly rather than logging an
@@ -1188,6 +1210,7 @@ class HomeAssistantWebSocketClient:
         command_type: str,
         *,
         wait_timeout: float = 30.0,
+        queue_maxsize: int = 0,
         **kwargs: Any,
     ) -> tuple[int, asyncio.Queue[dict[str, Any]]]:
         """Send a subscribe-style command and return (subscription_id, queue).
@@ -1204,12 +1227,17 @@ class HomeAssistantWebSocketClient:
         fields of the command, and some commands (``render_template``) carry a
         ``timeout`` field of their own.
 
+        ``queue_maxsize`` bounds buffered event frames. If full, the queue
+        discards its oldest frame and increments ``dropped_count``.
+
         Returns:
             (subscription_id, queue) — ``await queue.get()`` yields each
             incoming ``{"id": N, "type": "event", "event": ...}`` payload.
             Cancel the subscription via :meth:`unsubscribe_command`, or
             :meth:`release_subscription` from a ``finally``.
         """
+        if queue_maxsize < 0:
+            raise ValueError("queue_maxsize cannot be negative")
         if not self._state.is_ready:
             raise HomeAssistantConnectionError("WebSocket not authenticated")
 
@@ -1218,7 +1246,9 @@ class HomeAssistantWebSocketClient:
 
         # Register the queue BEFORE sending so we never miss an event
         # that arrives between the result and the first ``get()``.
-        queue = self._state.register_subscription_queue(message_id)
+        queue = self._state.register_subscription_queue(
+            message_id, maxsize=queue_maxsize
+        )
         result_future = self.register_pending_response(message_id)
 
         try:
