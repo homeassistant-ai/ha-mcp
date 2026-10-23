@@ -70,7 +70,11 @@ from .oauth_legacy import (
     _issuer_for,
     read_form,
 )
-from .oauth_redirect_allowlist import _is_valid_redirect_uri, is_redirect_allowed
+from .oauth_redirect_allowlist import (
+    _is_listable,
+    _is_valid_redirect_uri,
+    is_redirect_allowed,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -200,12 +204,23 @@ class AutoApproveProvider:
     administrator's edit applies without a reload.
     """
 
-    def __init__(self, allowlist: Callable[[], Iterable[str]]) -> None:
+    def __init__(
+        self,
+        allowlist: Callable[[], Iterable[str]],
+        allow_any: Callable[[], bool] = lambda: False,
+    ) -> None:
         self._code_store = PKCECodeStore()
         self._allowlist = allowlist
+        self._allow_any = allow_any
 
     def allows_redirect(self, redirect_uri: str) -> bool:
-        """True when ``redirect_uri`` is on the live callback allowlist."""
+        """True when ``redirect_uri`` is on the live callback allowlist.
+
+        With the list turned off, any callback the list itself could hold is
+        accepted: still https, or http on a loopback host, with no userinfo.
+        """
+        if self._allow_any():
+            return _is_listable(redirect_uri)
         return is_redirect_allowed(redirect_uri, self._allowlist())
 
     def issue_code(self, redirect_uri: str, code_challenge: str) -> str | None:

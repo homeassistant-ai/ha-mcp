@@ -503,7 +503,11 @@ def _dump_haos_session_logs(base_url: str, token: str, inaddon: bool) -> None:
     # = 120s before boot_haos_qemu's own SIGTERM/SIGKILL kicks
     # in. Without per-call timeout an indefinitely-hanging
     # supervisor would stall session teardown forever.
-    log_dest = Path("/tmp/haos-diagnostics")
+    # One directory per xdist worker, each of which boots its own VM: a shared
+    # file name kept only the last worker's logs, not the failing one's.
+    log_dest = Path("/tmp/haos-diagnostics") / os.environ.get(
+        "PYTEST_XDIST_WORKER", "master"
+    )
     log_dest.mkdir(parents=True, exist_ok=True)
     log_endpoints = [
         (

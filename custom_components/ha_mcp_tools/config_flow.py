@@ -70,8 +70,6 @@ from .const import (
     DEFAULT_LOOPBACK_URL,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
-    DIST_NAME_DEV,
-    DIST_NAME_STABLE,
     DOMAIN,
     ENTRY_TYPE_SERVER,
     ENTRY_TYPE_TOOLS,
@@ -89,6 +87,7 @@ from .const import (
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_LLM_API_EXPOSURE,
+    OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
@@ -111,6 +110,8 @@ from .oauth_redirect_allowlist import (
     normalize_allowlist,
     stored_allowlist,
 )
+from .server_pin import server_pins
+from .spec_dist import version_dist
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
@@ -151,21 +152,15 @@ def _legacy_restart_pending(hass: HomeAssistant) -> bool:
     return legacy_restart_pending(hass)
 
 
-def _installed_server_version() -> str | None:
-    """Return the installed ha-mcp server version, or None if not installed.
+def _installed_server_version(spec: str) -> str | None:
+    """Return the installed server version, or None if not installed (blocking).
 
-    Checks both server distributions (only one is ever installed at a time).
-    Kept dependency-free (``importlib.metadata``) and swallow-nothing-surprising
-    so a read can never break the options form.
+    Read as bring-up reads it: the distribution ``spec`` installs first, so
+    metadata another server distribution left behind cannot mask it (#2787).
     """
-    import importlib.metadata
+    from .embedded_server import _installed_ha_mcp_version
 
-    for dist in (DIST_NAME_STABLE, DIST_NAME_DEV):
-        try:
-            return importlib.metadata.version(dist)
-        except importlib.metadata.PackageNotFoundError:
-            continue
-    return None
+    return _installed_ha_mcp_version(version_dist(spec))
 
 
 def _bind_host_selector() -> SelectSelector:
@@ -191,6 +186,8 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     """Handle the config flow for the HA-MCP custom component (both entry types)."""
 
     VERSION = 1
+    # 2: the update that cleared saved package overrides (entry_migration).
+    MINOR_VERSION = 2
 
     @staticmethod
     @callback
@@ -291,6 +288,17 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
                     err.reason
                 )
             else:
+                try:
+                    # Another setup may have finished while the login was
+                    # checked; a token issued for this one would then be left
+                    # with no entry to revoke it.
+                    self._abort_if_unique_id_configured()
+                except Exception:
+                    if issued:
+                        await server_credentials.async_release_credentials(
+                            self.hass, {DATA_ISSUED_TOKEN_ID: issued}
+                        )
+                    raise
                 remote = user_input.get(SETUP_REMOTE_ACCESS, REMOTE_ACCESS_DISABLED)
                 enabled = remote != REMOTE_ACCESS_DISABLED
                 data = {CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER, DATA_ADMIN_TOKEN: token}
@@ -619,6 +627,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 ): TextSelector(
                     TextSelectorConfig(type=TextSelectorType.URL, multiple=True)
                 ),
+                vol.Optional(
+                    OPT_OAUTH_ALLOW_ANY_CALLBACK,
+                    default=bool(form_values.get(OPT_OAUTH_ALLOW_ANY_CALLBACK, False)),
+                ): bool,
             }
         )
         # The sidebar-panel sentence in the description is only truthful while
@@ -761,10 +773,13 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         )
 
         component_version = common["version_unknown"]
+        # The effective spec, as bring-up resolves it: the override, else the pin.
+        spec = override if override != DEFAULT_PIP_SPEC else ""
         hass = getattr(self, "hass", None)
         if hass is not None:
             try:
                 integration = await async_get_integration(hass, DOMAIN)
+                spec = spec or next(iter(server_pins(integration.requirements)), "")
                 # A manifest without a version yields None, not an exception —
                 # ``str()`` would render the literal "None" into the form and
                 # the "unknown" wording would never appear for the likeliest
@@ -787,10 +802,11 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         try:
             # importlib.metadata scans dist-info via os.listdir (blocking I/O),
             # so run it on the executor rather than the event loop.
+            spec = spec or DEFAULT_PIP_SPEC
             raw_version = (
-                await hass.async_add_executor_job(_installed_server_version)
+                await hass.async_add_executor_job(_installed_server_version, spec)
                 if hass is not None
-                else _installed_server_version()
+                else _installed_server_version(spec)
             )
             server_version = raw_version or common["version_not_installed"]
         except Exception as err:  # noqa: BLE001

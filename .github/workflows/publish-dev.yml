@@ -172,7 +172,11 @@ jobs:
 
   create-prerelease:
     name: Create GitHub pre-release
-    needs: prepare
+    # HACS installs this tag, and Home Assistant then installs its pin from
+    # PyPI: only master's build is the dev pre-release (a branch dispatch
+    # computes master's number), and only once PyPI serves it.
+    needs: [prepare, publish-pypi-dev]
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -180,45 +184,72 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          # The notes list the commits since the previous dev build's tag.
+          fetch-depth: 0
+          fetch-tags: true
+
+      # HACS installs a pre-release from the commit its tag names, so that
+      # commit must carry the component stamped with this build's version and
+      # its ha-mcp-dev pin (#2763). The stamp goes on a commit of its own that
+      # only the tag references; master is untouched.
+      - name: Wait for the build on PyPI
+        env:
+          VERSION: ${{ needs.prepare.outputs.dev_version }}
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null "https://pypi.org/pypi/ha-mcp-dev/${VERSION}/json"; then
+              echo "PyPI serves ha-mcp-dev ${VERSION}"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::PyPI never served ha-mcp-dev ${VERSION}; not tagging a component that pins it."
+          exit 1
+
+      - name: Stamp the component for this build
+        env:
+          VERSION: ${{ needs.prepare.outputs.dev_version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 scripts/stamp_component_version.py \
+            --component-dir custom_components/ha_mcp_tools \
+            --version "${VERSION%.dev*}" --pin "$VERSION" --dist ha-mcp-dev
+          git commit --quiet -am "chore(internal): stamp the component for dev build ${VERSION} [skip ci]"
 
       - name: Create pre-release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.dev_version }}
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
         run: |
-          VERSION="${{ needs.prepare.outputs.dev_version }}"
           TAG="v${VERSION}"
-          SHORT_SHA="${{ needs.prepare.outputs.short_sha }}"
 
-          # Create release notes
-          cat > release_notes.md << EOF
-          ## Development Build
+          # One line per pull request merged since the previous dev build,
+          # then the other ways to install this build.
+          python3 scripts/build_mirror_release_notes.py \
+            --dev-pin "$VERSION" --dist ha-mcp-dev \
+            --source "$GITHUB_SHA" --source-label "${GITHUB_REPOSITORY}@${SHORT_SHA}" \
+            --out release_notes.md
+          cat >> release_notes.md << EOF
 
-          **Version:** ${VERSION}
-          **Commit:** ${SHORT_SHA}
-          **Branch:** master
+          ### Other installs
 
-          This is an automated development build. Use at your own risk.
+          **Docker (dev channel):** \`docker pull ghcr.io/${GITHUB_REPOSITORY}:dev\`
 
-          For stable releases, download from the [latest release](https://github.com/${{ github.repository }}/releases/latest).
-
-          ### Installation
-
-          **Docker (dev channel):**
-          \`\`\`bash
-          docker pull ghcr.io/${{ github.repository }}:dev
-          \`\`\`
-
-          **PyPI (dev channel):**
-          \`\`\`bash
-          pip install ha-mcp-dev
-          \`\`\`
+          **PyPI (dev channel):** \`pip install ha-mcp-dev\`
           EOF
 
           # Delete old pre-release with same tag if exists
           gh release delete "$TAG" --yes 2>/dev/null || true
           gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" 2>/dev/null || true
 
+          # Forced both ways: a re-run holds this tag from the checkout's
+          # fetch, and the remote one stays if its deletion above failed.
+          git tag -f "$TAG" HEAD
+          git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
           gh release create "$TAG" \
+            --verify-tag \
             --title "Dev Build $VERSION" \
             --notes-file release_notes.md \
             --prerelease

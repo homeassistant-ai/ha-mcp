@@ -2370,7 +2370,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
                 "discovery_keys": {},
                 "domain": HA_MCP_SERVER_DOMAIN,
                 "entry_id": HA_MCP_SERVER_ENTRY_ID,
-                "minor_version": 1,
+                "minor_version": 2,  # past the one-time pip_spec clear
                 "modified_at": "2025-09-07T23:56:28.040747+00:00",
                 "options": {
                     # Overwritten with the checkout wheel by the _conftest_haos.py HAOS

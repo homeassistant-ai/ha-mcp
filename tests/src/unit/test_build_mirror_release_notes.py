@@ -156,3 +156,40 @@ def test_select_stable_tags_raises_on_no_stable_tags() -> None:
 
     with pytest.raises(ValueError):
         build.select_stable_tags(["v7.1.0.dev1", "stable"])
+
+
+def test_previous_dev_tag_is_the_newest_older_build() -> None:
+    tags = ["v9.0.0.dev3096", "v8.7.0.dev3080", "v9.0.0.dev3100", "v9.0.0", "stable"]
+    assert build.previous_dev_tag(tags, "9.0.0.dev3100") == "v9.0.0.dev3096"
+
+
+def test_previous_dev_tag_compares_build_numbers_numerically() -> None:
+    tags = ["v9.0.0.dev999", "v9.0.0.dev1000"]
+    assert build.previous_dev_tag(tags, "9.0.0.dev1001") == "v9.0.0.dev1000"
+
+
+def test_the_first_dev_build_has_no_previous_one() -> None:
+    assert build.previous_dev_tag(["v9.0.0"], "9.0.0.dev1") is None
+
+
+def test_dev_notes_list_each_merged_pull_request() -> None:
+    notes = build.format_dev_release_notes(
+        "9.0.0.dev3100",
+        "ha-mcp-dev",
+        "homeassistant-ai/ha-mcp@37fb92e0a",
+        [
+            "deps(deps): bump cyclopts from 5.1.1 to 5.2.0 (#2779)",
+            "chore(internal): sync ratchet baselines after merge [skip ci]",
+            "feat(component): something (#2742)",
+        ],
+    )
+    assert "## HA-MCP Custom Component 9.0.0 (development pre-release)" in notes
+    assert "Installs ha-mcp-dev==9.0.0.dev3100." in notes
+    assert "- deps(deps): bump cyclopts from 5.1.1 to 5.2.0 (#2779)" in notes
+    assert "- feat(component): something (#2742)" in notes
+    assert "[skip ci]" not in notes
+
+
+def test_dev_notes_without_changes_say_so() -> None:
+    notes = build.format_dev_release_notes("9.0.0.dev1", "ha-mcp-dev", "x@y", [])
+    assert "No changes since the previous pre-release." in notes

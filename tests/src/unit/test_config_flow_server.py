@@ -156,6 +156,34 @@ class TestServerBranch:
         assert entry["data"][const.DATA_ISSUED_TOKEN_ID] == "i1"
         assert cf.server_credentials.ADMIN_PASSWORD not in entry["options"]
 
+    def test_a_setup_that_lost_the_race_revokes_the_token_it_issued(
+        self, monkeypatch
+    ) -> None:
+        # Two setups with two accounts: the other one created the entry while
+        # this one's login was checked, so its issued token has no entry.
+        class _AlreadyConfigured(Exception):
+            pass
+
+        monkeypatch.setattr(
+            cf.server_credentials,
+            "async_credential_from_input",
+            AsyncMock(return_value=("issued-tok", "i1")),
+        )
+        release = AsyncMock()
+        monkeypatch.setattr(cf.server_credentials, "async_release_credentials", release)
+        flow = _make_flow()
+        flow._abort_if_unique_id_configured.side_effect = [None, _AlreadyConfigured()]
+        values = {
+            cf.server_credentials.ADMIN_USERNAME: "ha-mcp",
+            cf.server_credentials.ADMIN_PASSWORD: "pw",
+        }
+
+        with pytest.raises(_AlreadyConfigured):
+            asyncio.run(flow.async_step_server(values))
+
+        release.assert_awaited_once_with(flow.hass, {const.DATA_ISSUED_TOKEN_ID: "i1"})
+        flow.async_create_entry.assert_not_called()
+
     def test_a_refused_login_keeps_the_form_open(self, monkeypatch):
         monkeypatch.setattr(
             cf.server_credentials,
@@ -316,6 +344,21 @@ class TestOAuthCallbackAllowlistOption:
             )
         )["data"]
         assert second != first
+        assert entry_mod._reload_relevant(second) == entry_mod._reload_relevant(first)
+
+    def test_the_allow_any_switch_saves_without_a_reload(self) -> None:
+        # Read per request like the list, so turning it on needs no reload.
+        import custom_components.ha_mcp_tools.embedded_entry as entry_mod
+
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        first = asyncio.run(flow.async_step_init({}))["data"]
+        flow = _make_options_flow(
+            options=first, data={const.DATA_WEBHOOK_ID: "mcp_abc"}
+        )
+        second = asyncio.run(
+            flow.async_step_init({**first, const.OPT_OAUTH_ALLOW_ANY_CALLBACK: True})
+        )["data"]
+        assert second[const.OPT_OAUTH_ALLOW_ANY_CALLBACK] is True
         assert entry_mod._reload_relevant(second) == entry_mod._reload_relevant(first)
 
     def test_removing_every_callback_sticks(self):
@@ -530,3 +573,29 @@ class TestOAuthCredsHint:
         assert "Client Secret: new-secret" in hint
         assert "not serving these yet" in hint
         assert "restart" in hint
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({}, "ha-mcp-dev==9.0.0.dev3"),
+        ({const.OPT_PIP_SPEC: "acme-ha-mcp==1.0"}, "acme-ha-mcp==1.0"),
+    ],
+    ids=["pre-release-pin", "override"],
+)
+def test_the_version_line_reads_what_the_server_runs(monkeypatch, options, expected):
+    # #2787: the form reads the version as bring-up does, so an ha-mcp left
+    # beside the pre-release pin or an override cannot mask it.
+    from unittest.mock import MagicMock
+
+    flow = _make_options_flow(options=options, data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+    flow.hass = MagicMock()
+    flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
+    integration = SimpleNamespace(requirements=["ha-mcp-dev==9.0.0.dev3"], version="9")
+    monkeypatch.setattr(
+        cf, "async_get_integration", AsyncMock(return_value=integration)
+    )
+    read: list[str] = []
+    monkeypatch.setattr(cf, "_installed_server_version", read.append)
+    asyncio.run(flow.async_step_init(None))
+    assert read == [expected]

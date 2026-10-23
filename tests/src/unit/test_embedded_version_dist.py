@@ -95,6 +95,10 @@ def _metadata(versions: dict[str, str]) -> Callable[[str | None], str]:
         ("file:///config/acme_ha_mcp-1.0-py3-none-any.whl#sha256=ab", OTHER_DIST),
         # A repository tarball names no distribution and installs ha-mcp.
         ("https://example/t.tgz", DIST_NAME_STABLE),
+        ("https://github.com/o/r/archive/refs/pull/12/head.tar.gz", DIST_NAME_STABLE),
+        ("https://github.com/o/r/archive/refs/heads/fix-2427.tar.gz", DIST_NAME_STABLE),
+        # An sdist names its distribution (PEP 625), like a wheel (#2787).
+        ("https://files.example/ha_mcp_dev-8.8.0.dev3.tar.gz", DIST_NAME_DEV),
     ],
 )
 def test_version_is_read_from_what_the_spec_installs(spec: str, dist: str) -> None:

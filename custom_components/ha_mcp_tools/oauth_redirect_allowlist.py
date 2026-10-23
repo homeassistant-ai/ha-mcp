@@ -98,7 +98,10 @@ def _is_listable(redirect_uri: str) -> bool:
     if not _is_valid_redirect_uri(redirect_uri):
         return False
     parsed = urlparse(redirect_uri)
-    return parsed.username is None and parsed.password is None
+    # "#" alone parses as no fragment, but is still a fragment component.
+    return (
+        parsed.username is None and parsed.password is None and "#" not in redirect_uri
+    )
 
 
 def effective_allowlist(options: Mapping[str, Any]) -> list[str]:

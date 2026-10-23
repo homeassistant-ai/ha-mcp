@@ -231,7 +231,11 @@ choice keep the webhook on in `none` mode with LAN binding.
   a 400 page and no redirect, so the Home Assistant origin is not an open
   redirector. The list ships with the common clients' published callbacks. It is stored on the
   server entry and edited on its Configure screen or in the admin-only
-  sidebar panel; dynamic client registration cannot add to it.
+  sidebar panel; dynamic client registration cannot add to it. An
+  administrator can turn the list off with **Allow any OAuth callback URL**,
+  which accepts any `https` or loopback `http` callback without userinfo or a
+  fragment and so makes that endpoint an open redirector again; it is off by
+  default.
 - **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth
   authorization server: the entry serves the discovery documents and
   validates inbound Bearer tokens against Home Assistant's own auth, so access

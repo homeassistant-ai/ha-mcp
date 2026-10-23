@@ -184,7 +184,7 @@ def embedded_server(
             f"webhook within {_READY_TIMEOUT_S}s of enabling {HA_MCP_SERVER_ENTRY_ID}. "
             f"Wheel-staging status for this worker: {staging}. "
             "If staging ok=True, the runtime pip install of the fastmcp tree or "
-            "the server thread start failed (see ha-core-runtime.log in the HAOS "
+            "the server thread start failed (see <worker>/ha-core-runtime.log in the HAOS "
             "diagnostics artifact); if ok=False or None, the checkout wheel never "
             "reached the VM (haos_runtime.stage_embedded_server_wheel_in_qcow2)."
         )

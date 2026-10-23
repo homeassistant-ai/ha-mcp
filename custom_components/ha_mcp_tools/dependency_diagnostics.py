@@ -698,9 +698,9 @@ def _action_sentence(
         )
     if failed:
         return (
-            f"Reinstall the server from {repair} so its dependencies are "
-            "resolved again; if the same failure returns, check the log for "
-            "the failing import."
+            f"Reinstall the server from {repair}, which also replaces any "
+            "dependency whose version no longer satisfies it; if the same "
+            "failure returns, check the log for the failing import."
         )
     return (
         f"If the server fails to start, {repair} reinstalls it and any "

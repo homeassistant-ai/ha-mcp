@@ -55,6 +55,7 @@ from .const import (
     DATA_WEBHOOK_ID,
     DOMAIN,
     OAUTH_BASE,
+    OPT_OAUTH_ALLOW_ANY_CALLBACK,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
@@ -811,7 +812,8 @@ def _bind_none_surface(
         # Read the entry's options per request: an allowlist edit applies to
         # the next sign-in without re-registering (#2427).
         cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider(
-            lambda: effective_allowlist(entry.options)
+            lambda: effective_allowlist(entry.options),
+            lambda: bool(entry.options.get(OPT_OAUTH_ALLOW_ANY_CALLBACK)),
         )
     except Exception:
         _LOGGER.exception(

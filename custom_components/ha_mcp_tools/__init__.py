@@ -61,6 +61,7 @@ from .const import (
     YAML_KEY_POST_ACTIONS,
 )
 from .entry_device import async_register_entry_device
+from .entry_migration import async_migrate_entry as async_migrate_entry
 from .websocket_api import async_register_commands
 from .yaml_rt import (
     apply_seq_indent,
@@ -2673,10 +2674,9 @@ def _migrate_legacy_backup_dir(config_dir: Path) -> tuple[int, int]:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up a config entry, dispatching on its entry type.
 
-    The integration serves two entry types under one domain: the ``tools``
-    services entry (the original component) and the in-process ``server`` entry
-    (issue #1527). A missing ``entry_type`` means ``tools`` so pre-existing
-    entries keep working across the component update with no migration.
+    Two entry types share the domain: ``tools`` (the original services entry)
+    and the in-process ``server`` (#1527); a missing ``entry_type`` means
+    ``tools``, so entries from before the server entry need no migration.
     """
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SERVER:
         from .embedded_entry import async_setup_server_entry

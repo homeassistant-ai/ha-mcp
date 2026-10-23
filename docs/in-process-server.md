@@ -67,9 +67,12 @@ run current `ha-mcp` servers.
 
 ## Setup
 
+The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
+
 1. **Install the component.** Install **HA-MCP Custom Component** from HACS
-   (repository `homeassistant-ai/ha-mcp-integration`, the component's HACS
-   distribution mirror), or, without
+   (custom repository `homeassistant-ai/ha-mcp`; an install from the earlier
+   `homeassistant-ai/ha-mcp-integration` mirror keeps receiving the same
+   releases, so it needs no change), or, without
    HACS, copy the `custom_components/ha_mcp_tools` directory from this repository
    into your Home Assistant `config/custom_components/` directory (so you end up
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.
@@ -244,6 +247,7 @@ Configure there just reports that.)
 | **Custom direct-access path (optional)** | empty | Replaces the random `/private_...` path on the server port. Same rule: the path is the credential. |
 | **Regenerate connect secrets now** | off | One-time action: mints fresh random values for both secrets, immediately invalidating the old connect URLs (and clearing the two overrides). |
 | **Allowed OAuth callback URLs** | the common clients' callbacks (below) | In `none` mode, the only callback URLs an OAuth sign-in is sent back to. Also editable in the **HA-MCP** sidebar panel under **Server Settings → Remote access**. See [Security](#security). |
+| **Allow any OAuth callback URL** | off | In `none` mode, accept any well-formed callback instead of only the **Allowed OAuth callback URLs**. See [Security](#security). |
 
 ### Server updates
 
@@ -269,7 +273,8 @@ restarts the server in place, with no Home Assistant restart. Clear the field to
 return to the server this component release installed. Home Assistant puts the
 paired server back each time it starts, so with an override set, every Home
 Assistant restart installs the override again afterwards (this needs network
-access at startup).
+access at startup). Updating to version 9.0.0 clears an override saved before
+it, once, so the update runs the server it pins.
 
 `ha-mcp` and `ha-mcp-dev` share the same import package. When the pin or an
 override installs one of them while the other is present, the other is
@@ -346,7 +351,12 @@ The in-process server offers three authentication postures, chosen with the
   to add it; registering a client cannot add to the list. Clients that connect
   without an OAuth sign-in step need no entry. Before this list existed, any
   callback was accepted, so an OAuth client outside the default list that worked
-  before needs its callback added after upgrading.
+  before needs its callback added after upgrading. If you would rather not
+  manage the list, turn on **Allow any OAuth callback URL** in Configure: any
+  `https://` callback, or `http://` on a loopback host, is then accepted. The
+  cost is that your Home Assistant address forwards a crafted sign-in link to
+  any website it names, which a phishing link can use to look like it comes
+  from your Home Assistant.
 - **`ha_auth`: clients sign in with your Home Assistant account.** Home Assistant
   Core acts as the OAuth authorization server. MCP clients that support OAuth
   (for example claude.ai and ChatGPT) discover the sign-in endpoints
@@ -379,16 +389,16 @@ access token: created at setup from the login of an account you chose, or
 pasted in. It is stored in the config entry and handed to the server in memory
 (never through the Home Assistant process environment). As with every
 deployment, that token's Home Assistant permissions define what the server can
-do. The component never creates a Home Assistant account of its own.
+do. The component never creates a Home Assistant account of its own. The token
+is checked each time the server starts: a token revoked while the server runs
+makes its requests fail until the next start, and an account that loses
+administrator rights keeps serving with the reduced rights until then.
 
 Entries created before this change keep the **HA-MCP Server** account and token
 an older release created, for as long as both work. If the token is missing,
 revoked or expired, or its account is no longer an active administrator, the
 server does not start and the repair **HA-MCP needs an administrator access
-token** asks for a new one. These checks run when the server starts. A token
-revoked while the server runs makes its requests fail until the next start, and
-an account that loses administrator rights keeps serving with the reduced
-rights until then. You can also switch at any time in the entry's options,
+token** asks for a new one. You can also switch at any time in the entry's options,
 with another account's user name and password or a pasted token. Switching
 revokes a token HA-MCP created, from a login or by an older release; a token
 you pasted stays in its account's profile. The **HA-MCP Server** account an

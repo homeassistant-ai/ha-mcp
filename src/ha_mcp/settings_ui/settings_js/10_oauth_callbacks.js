@@ -47,12 +47,15 @@ function renderOAuthCallbacks() {
   const defaults = (d.default_allowlist || []).map(u => `<code>${escapeHtml(u)}</code>`).join(', ');
   info.innerHTML =
     `<div class="feature-name" id="label-oauth-callbacks">${escapeHtml(t('oauth_callbacks.title', {}, 'Allowed OAuth callback URLs'))}</div>` +
-    `<div class="feature-help">${tHtml('oauth_callbacks.help', {}, 'While Authentication mode is the secret webhook URL, a client that signs in with OAuth is sent back only to a callback URL on this list; any other callback is refused with a page explaining how to add it. Enter one URL per line, exactly as the client sends it. An <code>http://</code> loopback callback (127.0.0.1, [::1] or localhost) also matches on any port. Clients that connect with the webhook URL alone need no entry. Changes apply to the next sign-in, without a restart.')}</div>` +
+    `<div class="feature-help">${tHtml('oauth_callbacks.help', {}, 'While Authentication mode is the secret webhook URL, a client that signs in with OAuth is sent back only to a callback URL on this list; any other callback is refused with a page explaining how to add it. Enter one URL per line, exactly as the client sends it. An <code>http://</code> loopback callback (127.0.0.1, [::1] or localhost) also matches on any port. Clients that connect without an OAuth sign-in need no entry. Changes apply to the next sign-in, without a restart.')}</div>` +
     (defaults
       ? `<div class="feature-help">${tHtml('oauth_callbacks.default', {urls: defaults}, 'Default list: {urls}')}</div>`
       : '') +
     (d.available && !d.applies
       ? `<div class="feature-locked-note">${escapeHtml(t('oauth_callbacks.inactive', {}, 'Not in use right now: the list applies only while remote access is on and Authentication mode is the secret webhook URL.'))}</div>`
+      : '') +
+    (d.available && d.applies && d.allow_any
+      ? `<div class="feature-locked-note">${escapeHtml(t('oauth_callbacks.allow_any', {}, 'Turned off: Allow any OAuth callback URL is on in Configure, so any https:// or loopback callback is accepted and this list is not used.'))}</div>`
       : '');
 
   const control = document.createElement('div');
