@@ -2274,7 +2274,7 @@ async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
     service_data: dict[str, Any] = {"object_id": object_id}
     if config.get("name"):
         service_data["name"] = config["name"]
-    if config.get("entities"):
+    if config.get("entities") is not None:
         service_data["entities"] = config["entities"]
     if config.get("icon"):
         service_data["icon"] = config["icon"]

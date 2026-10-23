@@ -14,10 +14,11 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
-from ..errors import ErrorCode, create_error_response
+from ..errors import create_entity_not_found_error, create_error_response
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
 from .helpers import (
@@ -26,6 +27,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
+    ws_failure_code,
 )
 from .response_helpers import build_pagination_metadata
 from .tool_hints import read_only_hints, write_hints
@@ -40,67 +42,35 @@ class GroupTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    @staticmethod
-    def _validate_group_params(
-        object_id: str,
-        entities: list[str] | None,
-        add_entities: list[str] | None,
-        remove_entities: list[str] | None,
+    async def _read_group_state(self, entity_id: str) -> dict[str, Any] | None:
+        """The group's current state, or None when Core has no such group."""
+        try:
+            state: dict[str, Any] = await self._client.get_entity_state(entity_id)
+        except HomeAssistantAPIError as e:
+            if e.status_code != 404:
+                raise
+            return None
+        return state
+
+    async def _call_group_service(
+        self, service: str, service_data: dict[str, Any]
     ) -> None:
-        """Validate group parameters: object_id format, mutual exclusivity, and non-empty lists."""
-        # Validate object_id doesn't contain invalid characters
-        if "." in object_id:
+        """Call group.<service> over WebSocket, where Core's schema rejection
+        keeps its text (the REST endpoint answers it with a bare 400)."""
+        result = await self._client.send_websocket_message(
+            {
+                "type": "call_service",
+                "domain": "group",
+                "service": service,
+                "service_data": service_data,
+            }
+        )
+        if not result.get("success"):
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid object_id: '{object_id}'. Do not include 'group.' prefix or dots.",
-                    context={"object_id": object_id},
-                    suggestions=["Provide object_id without 'group.' prefix or dots"],
-                )
-            )
-
-        # Check mutual exclusivity of entity operations
-        entity_ops = [
-            ("entities", entities),
-            ("add_entities", add_entities),
-            ("remove_entities", remove_entities),
-        ]
-        provided_ops = [
-            (op_name, val) for op_name, val in entity_ops if val is not None
-        ]
-
-        if len(provided_ops) > 1:
-            op_names = [op_name for op_name, _ in provided_ops]
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Only one of entities, add_entities, or remove_entities can be provided. Got: {op_names}",
-                    context={"object_id": object_id, "provided_ops": op_names},
-                    suggestions=[
-                        "Use only one of: entities, add_entities, or remove_entities"
-                    ],
-                )
-            )
-
-        # Validate non-empty lists
-        if entities is not None and not entities:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Entities list cannot be empty",
-                    context={"object_id": object_id},
-                    suggestions=["Provide at least one entity ID in the entities list"],
-                )
-            )
-        if add_entities is not None and not add_entities:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "add_entities list cannot be empty",
-                    context={"object_id": object_id},
-                    suggestions=[
-                        "Provide at least one entity ID in the add_entities list"
-                    ],
+                    ws_failure_code(result),
+                    f"group.{service} failed: {result.get('error', 'Unknown error')}",
+                    context={"object_id": service_data["object_id"]},
                 )
             )
 
@@ -164,7 +134,9 @@ class GroupTools:
         or YAML configuration (platform-specific groups such as light or cover
         groups are separate entities); `total_count` and `has_more` report the
         full set. Each group includes its entity_id, friendly name, state,
-        member entities, icon and all mode.
+        member entities, icon, order and `auto`: true for a group created by
+        group.set, false for a YAML group, which group.reload and a restart
+        rebuild from YAML. Core does not expose a group's all/any mode.
 
         EXAMPLE: ha_config_list_groups(offset=100)
         """
@@ -185,8 +157,8 @@ class GroupTools:
                             "friendly_name": attributes.get("friendly_name"),
                             "icon": attributes.get("icon"),
                             "entity_ids": attributes.get("entity_id", []),
-                            "all": attributes.get("all", False),
                             "order": attributes.get("order"),
+                            "auto": attributes.get("auto", False),
                         }
                     )
 
@@ -310,8 +282,8 @@ class GroupTools:
         Groups created here are only removable via `ha_config_remove_group` —
         `ha_remove_helpers_integrations` will not find them.
 
-        **For NEW groups:** Provide object_id and entities (required).
-        **For EXISTING groups:** Provide object_id and any fields to update.
+        Core creates the group when group.<object_id> does not exist yet (entities are
+        optional and the name defaults to object_id) and updates it otherwise.
         entities, add_entities, and remove_entities are mutually exclusive.
 
         EXAMPLES:
@@ -319,11 +291,8 @@ class GroupTools:
         - Add entities: ha_config_set_group("lights", add_entities=["light.extra"])
         """
         try:
-            # ``_validate_group_params`` only catches dots in object_id and
-            # entity-list issues; empty/whitespace object_id would slip
-            # through to ``call_service("group", "set", {"object_id": "", ...})``
-            # and surface as a misleading HA service-call failure. Symmetric
-            # with the ``ha_config_remove_group`` pre-flight added in this PR.
+            # Core's cv.slug accepts "", and group.set then creates a group under
+            # a generated entity_id (group.unnamed_device without a name).
             validate_identifier_not_empty(
                 object_id,
                 "object_id",
@@ -332,9 +301,6 @@ class GroupTools:
                     "Or provide a fresh object_id (without 'group.' prefix) to create a new group",
                 ],
                 context={"operation": "set_group"},
-            )
-            self._validate_group_params(
-                object_id, entities, add_entities, remove_entities
             )
 
             service_data = self._build_group_service_data(
@@ -347,21 +313,20 @@ class GroupTools:
                 remove_entities,
             )
 
-            # Call group.set service
-            await self._client.call_service("group", "set", service_data)
-
             entity_id = f"group.{object_id}"
+            # Core creates or updates by whether the group exists.
+            existing = await self._read_group_state(entity_id)
+            await self._call_group_service("set", service_data)
+
+            is_create = existing is None
             updated_fields = [k for k in service_data if k != "object_id"]
 
-            # Determine if this was a create or update based on fields provided
-            is_create = (
-                entities is not None
-                and name is None
-                and add_entities is None
-                and remove_entities is None
-            )
-
             result: dict[str, Any] = {}
+            if existing is not None and not existing.get("attributes", {}).get("auto"):
+                result["warnings"] = [
+                    f"{entity_id} is defined in YAML: group.reload and a restart "
+                    "rebuild it from YAML and drop this change."
+                ]
             if wait:
                 action_word = "created" if is_create else "updated"
                 try:
@@ -396,8 +361,6 @@ class GroupTools:
                 context={"object_id": object_id},
                 suggestions=[
                     "Check Home Assistant connection",
-                    "Verify all entity IDs in the entities list exist",
-                    "Ensure object_id is valid (no dots, no 'group.' prefix)",
                     "Use ha_config_list_groups() to see existing groups",
                 ],
             )
@@ -449,10 +412,6 @@ class GroupTools:
         - This only removes old-style groups, not platform-specific groups.
         """
         try:
-            # Empty/whitespace would surface as a misleading service-call failure.
-            # Runs before the "." format check below so the empty/whitespace
-            # case is named first; the order is locked by the test in
-            # TestGroupsIdentifierValidation.
             validate_identifier_not_empty(
                 object_id,
                 "object_id",
@@ -461,26 +420,20 @@ class GroupTools:
                 ],
                 context={"operation": "remove_group"},
             )
-            # Validate object_id format
-            if "." in object_id:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid object_id: '{object_id}'. Do not include 'group.' prefix.",
-                        context={"object_id": object_id},
-                        suggestions=[
-                            "Provide object_id without 'group.' prefix or dots"
-                        ],
-                    )
-                )
-
-            # Call group.remove service
-            service_data = {"object_id": object_id}
-            await self._client.call_service("group", "remove", service_data)
 
             entity_id = f"group.{object_id}"
+            # Core's group.remove only logs a warning for a missing group.
+            existing = await self._read_group_state(entity_id)
+            if existing is None:
+                raise_tool_error(create_entity_not_found_error(entity_id))
+            await self._call_group_service("remove", {"object_id": object_id})
 
             result: dict[str, Any] = {}
+            if not existing.get("attributes", {}).get("auto"):
+                result["warnings"] = [
+                    f"{entity_id} is defined in YAML: group.reload and a restart "
+                    "bring it back."
+                ]
             if wait:
                 await verify_entity_removed(self._client, entity_id, result)
 
