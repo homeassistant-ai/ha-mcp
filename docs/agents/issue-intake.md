@@ -61,17 +61,20 @@ workflow/PR write permission, or ruleset bypass is needed for issue documentatio
 The `gate` job (`.github/issue-intake/gate.mjs`) runs before admission on issue
 opens, edits, reopenings and new or edited comments, without the model. An issue passes when its reporter's body
 or one of their comments carries the `ha_report_issue` report heading together
-with the report's `ha-mcp Version:` line, or any text, even "N/A", under the
-forms' `📋 ha_report_issue Report` field or a
-`### Why there is no ha_report_issue report` heading. The forms make the report
-field required, so an issue filed through them always passes; the gate exists
-for blank and API-filed issues. Maintainers (write role or above), bots,
+with the report's `ha-mcp Version:` line, as the page shows them (a report
+inside an HTML comment does not count), or any text the page shows, even "N/A",
+directly under the forms' `📋 ha_report_issue Report` field or a
+`### Why there is no ha_report_issue report` heading, before the next heading;
+`_No response_` there counts as empty. The forms make the report field
+required, so an issue filed through them passes unless the page shows no text
+directly under that field's heading; the gate exists for blank and API-filed issues. Maintainers (write role or above), bots,
 `documentation` issues and feature requests (a `[FEATURE]` title or the
 `enhancement` label) are exempt.
 
 A failing issue gets the `missing bug report output` label and an App comment that mentions
 the reporter, says it will be closed in 24 hours, and says when it holds a
-report heading without the rest of the report. Only an opened issue, or one
+report heading without the rest of the report, or when an HTML comment hides
+the report or the only text under an answer heading. Only an opened issue, or one
 reopened by someone below the write role, is labeled, so an edit never starts
 the clock on an issue that predates the gate. A reply alone does not clear the
 label; the report or a reason does, and then the gate removes the label and
@@ -84,13 +87,18 @@ hours after the label was last applied, whether by the gate or by a maintainer
 by hand. An issue that becomes a feature request or documentation issue while
 labeled loses the label instead, with a note that no report is needed. When the report or reason is added
 later, the gate reopens an issue it closed itself; it never reopens an issue a
-human closed. Admission waits for the gate, so a labeled issue is still
+human closed, nor one it never acts on (whose author is a maintainer, a bot or
+no user at all, that was transferred in, or whose label a maintainer last
+removed), so that issue's close comment promises no reopen. One issue the
+sweep fails on does not stop it: the run handles the others, then goes red and
+names each issue that still failed when it tried to close or clear it. Admission waits for the gate, so a labeled issue is still
 documented.
 
 An issue transferred in from another repository (the HACS mirror files against
-its own forms) is never labeled or closed: if it arrives without a report or a
-reason, the gate posts one notice asking for it, so the reporter continues here
-instead of refiling on the mirror.
+its own forms) is never labeled by the gate, so the sweep closes it only after
+a maintainer labels it by hand: if it arrives without a report or a reason, the
+gate posts one notice asking for it, so the reporter continues here instead of
+refiling on the mirror.
 
 Reads and idempotent writes retry twice after a rate limit or server error. The
 gate fails open: if it still fails, its run goes red and admission documents the
@@ -105,7 +113,8 @@ kinds of label; it does not execute instructions from the report.
 
 - needs-info, driven by the model's missing fields, as described below.
 - Report type labels, set without the model. An issue whose body carries an
-  `ha_report_issue` report (its heading and `ha-mcp Version:` line) gets `bug` for a `[BUG]` title,
+  `ha_report_issue` report (its heading and `ha-mcp Version:` line, outside an
+  HTML comment) gets `bug` for a `[BUG]` title,
   `agent-behavior` for an `[AGENT]` title, or `enhancement` for a
   `[FEATURE]` title. That tool files blank issues,
   which no issue form labels. Whether a bug is a runtime or startup bug is

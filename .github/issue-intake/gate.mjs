@@ -8,14 +8,17 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   GitHub,
+  authorLogin,
   collect,
   escapeRegExp,
+  hasHiddenReport,
   hasReport,
   isHuman,
   latestEvent,
   noReportHeading,
-  reportHeading,
   roleFor,
+  shownLines,
+  showsReportHeading,
 } from "./intake.mjs";
 
 export const gateMarker = "<!-- ha-mcp-report-gate -->";
@@ -23,34 +26,36 @@ export const gateMarker = "<!-- ha-mcp-report-gate -->";
 // the requirement for that issue.
 export const gateLabel = "missing bug report output";
 export const gateGraceHours = 24;
-// The issue forms' required report field. Anything typed there, "N/A"
-// included, counts as an answer.
+// The issue forms' required report field. Any text the page shows there,
+// "N/A" included, counts as an answer.
 export const reportFieldLabel = "📋 ha_report_issue Report";
-const answerHeadingLine = new RegExp(
-  `^ {0,3}#{2,4} +(?:${escapeRegExp(noReportHeading)}|${escapeRegExp(reportFieldLabel)})[ \\t]*$`,
-  "iu",
-);
-const fenceLine = /^ {0,3}(`{3,}|~{3,})/;
-const headingLine = /^ {0,3}#{1,6}(?: |$)/;
-// Every section under an answer heading, each ending at the next heading
-// outside a code fence: logs and config pasted there carry "# " lines.
-function answerSections(text) {
+// ATX headings allow tabs after the opening hashes and a closing run of hashes.
+const answerHeading = (...labels) =>
+  new RegExp(
+    `^ {0,3}#{2,4}[ \\t]+(?:${labels.map(escapeRegExp).join("|")})(?:[ \\t]+#+)?[ \\t]*$`,
+    "iu",
+  );
+const answerHeadingLine = answerHeading(noReportHeading, reportFieldLabel);
+const reasonHeadingLine = answerHeading(noReportHeading);
+const fieldHeadingLine = answerHeading(reportFieldLabel);
+const headingLine = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+// The text under each answer heading as the page shows it (shownLines). A
+// section ends at the next heading outside a fence or comment: pasted logs and
+// config carry "# " lines. With `hidden`, it keeps what a comment hides, and
+// a heading inside the comment still ends a section, so a template's
+// commented-out headings are not read as text under the one before.
+function answerSections(text, answerLine = answerHeadingLine, hidden = false) {
   const sections = [];
   let current = null;
-  let fence = null;
-  for (const line of (text || "").split(/\r?\n/)) {
-    const marker = fenceLine.exec(line)?.[1];
-    if (fence) {
-      if (marker?.[0] === fence[0] && marker.length >= fence.length)
-        fence = null;
-    } else if (marker) {
-      fence = marker;
-    } else if (headingLine.test(line)) {
-      current = answerHeadingLine.test(line) ? [] : null;
+  for (const { line, kind } of shownLines(text, hidden)) {
+    const heading = kind === "text" || (hidden && kind === "html");
+    if (heading && headingLine.test(line)) {
+      current = answerLine.test(line) ? [] : null;
       if (current) sections.push(current);
-      continue;
+    } else {
+      // Code shows a comment as text, so answered() must not strip it.
+      current?.push(kind === "code" ? line.replaceAll("<!--", "") : line);
     }
-    current?.push(line);
   }
   return sections.map((lines) => lines.join("\n"));
 }
@@ -63,13 +68,21 @@ const answered = (section) =>
     .replace(/_No response_/g, "")
     .trim() !== "";
 const hasAnswer = (text) => answerSections(text).some(answered);
+// Whether a section holds any text once comment markers are removed: typed
+// into a comment, or a template's placeholder. Plain string splits: this only
+// looks for text and filters no HTML.
+const hasText = (section) =>
+  ["<!--", "-->", "_No response_"]
+    .reduce((text, marker) => text.split(marker).join(" "), section)
+    .trim() !== "";
 const gateExemptRoles = ["write", "maintain", "admin"];
 
-// The reporter's own words: the issue body and their comments.
+// The reporter's own words: the issue body and their comments. Without an
+// issue user there is no login, so no reply can be attributed to the reporter.
 const reporterTexts = ({ issue, comments }) => [
   issue.body || "",
   ...comments
-    .filter((c) => c.user?.login === issue.user.login)
+    .filter((c) => issue.user && c.user?.login === issue.user.login)
     .map((c) => c.body || ""),
 ];
 // Feature requests and documentation issues are not gated. An issue that
@@ -77,6 +90,13 @@ const reporterTexts = ({ issue, comments }) => [
 const exemptKind = (issue) =>
   issue.title.trim().toUpperCase().startsWith("[FEATURE]") ||
   issue.labels.some((l) => ["enhancement", "documentation"].includes(l.name));
+// gateAction() acts only for a human reporter below the write role.
+const gated = ({ issue, roles }) =>
+  isHuman(issue.user) && !gateExemptRoles.includes(roles[issue.user.login]);
+const transferred = ({ events }) => events.some((e) => e.event === "transferred");
+// Whether gateAction() reopens the issue once it is answered.
+const reopenable = (snapshot) =>
+  gated(snapshot) && !transferred(snapshot) && !waived(snapshot);
 const hasGateLabel = (issue) => issue.labels.some((l) => l.name === gateLabel);
 const isLabelEvent = (e, kind) =>
   e.event === kind && e.label?.name === gateLabel;
@@ -101,10 +121,8 @@ export function satisfied(snapshot) {
 }
 
 export function gateAction(snapshot, bot, event) {
-  const { issue, events, roles } = snapshot;
-  const author = issue.user;
-  if (!isHuman(author) || gateExemptRoles.includes(roles[author.login]))
-    return null;
+  const { issue, events } = snapshot;
+  if (!gated(snapshot)) return null;
   if (exemptKind(issue)) {
     if (issue.state === "open") return hasGateLabel(issue) ? "exempt" : null;
     const closed = latestEvent(events, (e) => e.event === "closed");
@@ -113,7 +131,7 @@ export function gateAction(snapshot, bot, event) {
   const done = satisfied(snapshot);
   // An issue moved in from the HACS mirror is asked once, never labeled or
   // closed: a reporter whose issue was closed would refile it on the mirror.
-  if (events.some((e) => e.event === "transferred"))
+  if (transferred(snapshot))
     return !done &&
       issue.state === "open" &&
       event.action === "opened" &&
@@ -158,18 +176,28 @@ export function expireAction(snapshot, now) {
 // Why an attempt did not count, so the reporter can fix what they posted
 // instead of being told it is missing.
 function gateHint(texts) {
-  if (texts.some((t) => reportHeading.test(t)))
+  const hiddenNote = (what) =>
+    `${what} sits inside an HTML comment (\`<!-- ... -->\`), which the page does not show; write it outside the comment.`;
+  if (texts.some(hasHiddenReport)) return hiddenNote("The report");
+  if (texts.some(showsReportHeading))
     return "It has the report's heading but not the rest of the report, such as its `ha-mcp Version` line. Paste the whole report, from the Auto-Generated heading to its end, as raw Markdown.";
-  if (texts.some((t) => answerSections(t).length))
-    return `The \`### ${noReportHeading}\` section is empty.`;
-  return "";
+  const sections = [
+    [reasonHeadingLine, noReportHeading],
+    [fieldHeadingLine, reportFieldLabel],
+  ].filter(([heading]) => texts.some((t) => answerSections(t, heading).length));
+  // The page shows no answer, so any text under these headings is hidden.
+  const hidden = sections.find(([heading]) =>
+    texts.some((t) => answerSections(t, heading, true).some(hasText)),
+  );
+  if (hidden) return hiddenNote(`The text under \`### ${hidden[1]}\``);
+  return sections.length ? `The \`### ${sections[0][1]}\` section is empty.` : "";
 }
 
 const howTo = `Ask your AI agent to run \`ha_report_issue\` in the session where the problem happened and add the report it generates (its \`issue_body\`, starting with the Auto-Generated heading) to the issue description or a comment, with secrets removed. It records the ha-mcp version, install type, client, settings and tool calls that maintainers otherwise have to ask for.
 
 If no report can exist, add a section headed \`### ${noReportHeading}\` and say why, for example that ha-mcp does not start or connect (include your startup logs and configuration, tokens removed) or that the problem was found by reading the code. "N/A" is enough.`;
 
-export function gateComment(action, login, hint = "") {
+export function gateComment(action, login, hint, reopens) {
   const extra = hint ? ` ${hint}` : "";
   switch (action) {
     case "reopen":
@@ -178,7 +206,7 @@ export function gateComment(action, login, hint = "") {
     case "exempt":
       return `${gateMarker}\nThis issue is not a bug report, so no \`ha_report_issue\` report is needed.\n`;
     case "close":
-      return `${gateMarker}\n@${login}, this issue was closed automatically because no \`ha_report_issue\` report or reason was added within ${gateGraceHours} hours.${extra} Add one and the issue reopens automatically.\n\n${howTo}\n`;
+      return `${gateMarker}\n@${login}, this issue was closed automatically because no \`ha_report_issue\` report or reason was added within ${gateGraceHours} hours.${extra}${reopens ? " Add one and the issue reopens automatically." : ""}\n\n${howTo}\n`;
     case "request":
       return `${gateMarker}\n@${login}, this issue was moved to this repository and does not include an \`ha_report_issue\` report. Please add it here rather than in the repository you filed it in.${extra}\n\n${howTo}\n`;
     default:
@@ -220,8 +248,11 @@ async function gateSnapshot(api, repository, number) {
 
 async function applyGate(api, repository, number, bot, snapshot, action) {
   const base = `repos/${repository}/issues`;
-  const login = snapshot.issue.user.login;
-  const body = gateComment(action, login, gateHint(reporterTexts(snapshot)));
+  // The sweep also closes issues gateAction() never reopens, such as one
+  // without a user; their close notice promises no reopen.
+  const login = authorLogin(snapshot.issue);
+  const hint = gateHint(reporterTexts(snapshot));
+  const body = gateComment(action, login, hint, reopenable(snapshot));
   const post = () =>
     api.request(`${base}/${number}/comments`, {
       method: "POST",
@@ -290,15 +321,22 @@ export async function expire(api, repository, bot, now, write) {
     ),
   );
   const acted = [];
+  const failed = [];
   for (const { number, pull_request } of issues) {
     if (pull_request) continue;
-    const snapshot = await gateSnapshot(api, repository, number);
-    const action = expireAction(snapshot, now);
-    if (!action) continue;
-    if (write) await applyGate(api, repository, number, bot, snapshot, action);
-    acted.push(`${number}:${action}`);
+    // One failing issue must not stop the sweep for the others.
+    try {
+      const snapshot = await gateSnapshot(api, repository, number);
+      const action = expireAction(snapshot, now);
+      if (!action) continue;
+      if (write)
+        await applyGate(api, repository, number, bot, snapshot, action);
+      acted.push(`${number}:${action}`);
+    } catch (error) {
+      failed.push(`#${number}: ${error.message}`);
+    }
   }
-  return acted;
+  return { acted, failed };
 }
 
 export async function main(command, options = {}) {
@@ -335,9 +373,26 @@ export async function main(command, options = {}) {
     console.log(`Report gate: ${action ?? "no action"}`);
   } else if (command === "gate-expire-check" || command === "gate-expire-apply") {
     const now = options.now ?? Date.now();
-    const acted = await expire(api, env.GITHUB_REPOSITORY, bot, now, apply);
-    if (!apply) appendFileSync(env.GITHUB_OUTPUT, `due=${acted.length}\n`);
+    const { acted, failed } = await expire(
+      api,
+      env.GITHUB_REPOSITORY,
+      bot,
+      now,
+      apply,
+    );
+    // A failed issue counts as due, so the apply step runs, acts on the
+    // others and then fails naming it; a failing check step would skip it.
+    if (!apply)
+      appendFileSync(
+        env.GITHUB_OUTPUT,
+        `due=${acted.length + failed.length}\n`,
+      );
     console.log(`Report gate sweep: ${acted.join(", ") || "nothing due"}`);
+    if (failed.length) {
+      const message = `Report gate sweep failed for ${failed.join("; ")}`;
+      if (apply) throw Error(message);
+      console.log(`::warning::${message.replace(/[\r\n]/g, " ")}`);
+    }
   } else
     throw Error(
       "Expected gate-check, gate-apply, gate-expire-check or gate-expire-apply",
