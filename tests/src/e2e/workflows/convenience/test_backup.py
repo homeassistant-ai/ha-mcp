@@ -73,19 +73,21 @@ class TestBackupTools:
                     raise AssertionError(f"Backup creation failed: {error_msg}")
 
             # Verify backup was created successfully
-            assert "backup_job_id" in data, "No backup_job_id returned"
+            assert "backup_id" in data, "No backup_id returned"
             assert "name" in data, "No backup name returned"
             assert data["name"].startswith("MCP_Backup_"), (
                 f"Unexpected backup name: {data['name']}"
             )
-
-            backup_job_id = data["backup_job_id"]
-            backup_name = data["name"]
-            backup_id = data.get("backup_id")
-
-            logger.info(
-                f"✅ Backup created: {backup_name} (ID: {backup_id}, job: {backup_job_id})"
+            # The seed configures no automatic-backup agents, so the backup
+            # lands on Home Assistant's default agent: local storage.
+            assert set(data["agents"]) & {"backup.local", "hassio.local"}, (
+                f"Backup not on the local agent: {data['agents']}"
             )
+
+            backup_name = data["name"]
+            backup_id = data["backup_id"]
+
+            logger.info(f"✅ Backup created: {backup_name} (ID: {backup_id})")
 
             # Verify backup completed (tool waits for completion)
             assert "status" in data, "No status returned"
@@ -96,9 +98,6 @@ class TestBackupTools:
             # Log backup details
             if "duration_seconds" in data:
                 logger.info(f"⏱️ Backup duration: {data['duration_seconds']} seconds")
-            if "size_bytes" in data:
-                size_mb = data["size_bytes"] / (1024 * 1024)
-                logger.info(f"📦 Backup size: {size_mb:.2f} MB")
 
             logger.info("✅ Backup test completed successfully")
 
@@ -145,18 +144,14 @@ class TestBackupTools:
                     raise AssertionError(f"Backup creation failed: {error_msg}")
 
             # Verify backup was created successfully
-            assert "backup_job_id" in data, "No backup_job_id returned"
             assert "backup_id" in data, "No backup_id returned"
             assert data["name"] == custom_name, (
                 f"Backup name mismatch: {data['name']} != {custom_name}"
             )
 
-            backup_job_id = data["backup_job_id"]
             backup_id = data["backup_id"]
 
-            logger.info(
-                f"✅ Backup created: {custom_name} (ID: {backup_id}, job: {backup_job_id})"
-            )
+            logger.info(f"✅ Backup created: {custom_name} (ID: {backup_id})")
 
             # Verify backup completed (tool waits for completion)
             assert "completed" in data["status"].lower(), (

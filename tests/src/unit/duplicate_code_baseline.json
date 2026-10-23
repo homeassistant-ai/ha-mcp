@@ -137,10 +137,6 @@
     "tests/src/unit/test_take_control_of_blueprint.py::_error",
     "tests/src/unit/test_take_control_of_blueprint_script.py::_error"
   ],
-  "2e89536fcd3e": [
-    "tests/src/unit/test_component_backup_prep_contract.py::_client",
-    "tests/src/unit/test_ha_manage_backup_component_routing.py::_client"
-  ],
   "2ecf228e5354": [
     "tests/src/unit/test_history_pagination.py::TestHistoryLimitBoundary._patch_ws",
     "tests/src/unit/test_history_pagination.py::TestHistoryPagination._patch_ws"
@@ -299,7 +295,6 @@
   ],
   "53430555035c": [
     "tests/src/unit/test_blueprint_sources.py::_clear_caps_cache",
-    "tests/src/unit/test_component_backup_prep_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_bulk_call_service_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_call_service_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_entity_lookup_contract.py::_clear_caps_cache",
@@ -321,7 +316,6 @@
     "tests/src/unit/test_ha_get_state_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_get_zone_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_list_services_component_routing.py::_clear_caps_cache",
-    "tests/src/unit/test_ha_manage_backup_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_manage_blueprints_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_remove_device_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_system_health_component_routing.py::_clear_caps_cache",

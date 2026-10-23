@@ -34,13 +34,8 @@ from ..backup_manager import (
     SnapshotInUseError,
     get_backup_manager,
 )
-from ..client.rest_client import (
-    HomeAssistantClient,
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantError,
-)
-from ..client.websocket_client import HomeAssistantWebSocketClient, get_websocket_client
+from ..client.rest_client import HomeAssistantClient
+from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .backup_access import (
@@ -53,12 +48,6 @@ from .backup_access import (
     require_backup_param as _require,
 )
 from .backup_on_demand import capture_on_demand
-from .component_api import (
-    component_supports,
-    get_component_caps,
-    invalidate_caps,
-    is_unknown_command,
-)
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
@@ -73,40 +62,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Poll window for full HA backups. HA's own frontend imposes no timeout at
-# all on backup creation — it subscribes to `backup/subscribe_events` and
-# waits however long the job takes. Our poll-based design still needs a
-# finite bound per tool call, so this mirrors _SAFETY_BACKUP_MAX_WAIT_S (the
-# codebase's existing "generous but bounded" ceiling) rather than inventing a
-# third number.
-#
-# Two distinct problems, both fixed in the same PR, by different mechanisms:
-# the client-side abort reported in #1861 (an MCP client that received no
-# progress notifications for 300s concluded the connection was dead) is
-# fixed by the ctx.report_progress heartbeats in _poll_backup_completion,
-# not by this constant. Raising it from 300 to 1800 instead fixes *our own*
-# poll loop giving up on a legitimately >5-minute backup — the job keeps
-# running server-side after our loop times out, so a too-tight ceiling here
-# means _poll_backup_completion raises TIMEOUT_OPERATION on a backup that
-# would otherwise have succeeded. 120s before that underfit slow HA
-# instances too (#1433: poll loop exited while HA was still in
-# state="create_backup", the wrapper treated that as failure, retried, and
-# produced duplicate backups).
+# Upper bound for one backup wait. Home Assistant's frontend waits on
+# backup/subscribe_events without a timeout; a tool call needs a finite bound,
+# and a multi-GB full backup on slow hardware takes many minutes (#1433, #1681).
 _BACKUP_MAX_WAIT_S = 1800
-_BACKUP_POLL_INTERVAL_S = 2
-# The pre-restore safety backup is a *full* backup (include_database=True, plus
-# all add-ons on Supervised), unlike the fast create_backup path. A multi-GB
-# full backup on constrained hardware (~2.1 GB on a Pi 5, #1681) can run well
-# past the fast-backup window, so its completion poll gets a larger budget —
-# timing out here aborts the restore and the retry spawns another full backup.
-_SAFETY_BACKUP_MAX_WAIT_S = 1800
-# Clock-skew tolerance when filtering backup entries by date vs job-start.
-_BACKUP_DATE_FILTER_TOLERANCE_S = 5
-# Minimum spacing between in-loop MCP progress heartbeats during a backup
-# poll (#1861: with no progress notifications at all, a client can decide
-# the connection is dead and abort mid-backup — "sent no response or
-# progress for 300s"). Independent of poll_interval so a tight poll loop
-# doesn't flood the client with redundant notifications.
+# Spacing of MCP progress heartbeats while a backup runs (#1861: a client that
+# saw no progress for 300s concluded the connection was dead).
 _BACKUP_PROGRESS_INTERVAL_S = 10
 # backup/delete fans out to every configured agent (including cloud/remote
 # ones — S3, Google Drive, WebDAV, etc.) via asyncio.gather server-side, and
@@ -115,9 +76,8 @@ _BACKUP_PROGRESS_INTERVAL_S = 10
 # _wait_timeout) can be too tight for a slow or rate-limited remote agent —
 # same class of false-timeout problem this file already fixes for creation.
 _BACKUP_DELETE_WAIT_S = 60.0
-# WS command name is a module-local constant per the component-routing seam
-# pattern (see component_api.py / component_devices.py).
-WS_BACKUP_PREP = "ha_mcp_tools/backup_prep"
+# Home Assistant Cloud's backup agent (domain and name are both "cloud").
+_CLOUD_AGENT_ID = "cloud.cloud"
 
 
 def _get_backup_hint_text() -> str:
@@ -154,188 +114,41 @@ def _get_backup_hint_text() -> str:
     return hints[hint]
 
 
-async def _get_local_backup_agent_id(
-    ws_client: HomeAssistantWebSocketClient,
-) -> str:
-    """Discover the local backup agent_id at call time.
+async def _backup_plan(
+    client: HomeAssistantClient, ws_client: HomeAssistantWebSocketClient
+) -> tuple[str | None, list[str], bool]:
+    """Return ``(password, agent_ids, is_supervised)`` for a new backup.
 
-    HA Supervised registers ``hassio.local`` and HA Core registers
-    ``backup.local`` — both have ``name: "local"``. Hardcoding either breaks
-    the other deployment. We probe ``backup/agents/info`` and pick the agent
-    whose name is exactly ``"local"``, preferring ``hassio.local`` if both
-    happen to be registered.
-
-    Raises ToolError if no local agent is available.
+    Agents are picked the way Home Assistant picks them for its own backup
+    before a Core update (``backup_core_before_update`` in hassio/backup.py):
+    the configured automatic-backup agents, else the default agent. The cloud
+    agent is left out: Home Assistant Cloud keeps a single backup per instance,
+    which an ha-mcp backup would replace.
     """
-    response = await ws_client.send_command("backup/agents/info")
-    if not response.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Failed to enumerate backup agents",
-                context={"details": response},
-            )
-        )
-
-    agents = response.get("result", {}).get("agents", [])
-    if not agents:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "No backup agents registered with Home Assistant",
-                suggestions=[
-                    "The HA backup integration may not be fully set up; "
-                    "check the backup panel in Home Assistant",
-                ],
-            )
-        )
-
-    local_agents: list[str] = [
-        a["agent_id"] for a in agents if a.get("name") == "local" and a.get("agent_id")
-    ]
-    # Prefer hassio.local (Supervisor) over backup.local (Core) when both exist
-    for preferred in ("hassio.local", "backup.local"):
-        if preferred in local_agents:
-            return preferred
-    if local_agents:
-        return local_agents[0]
-
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            "No local backup agent found",
-            context={
-                "available_agents": [
-                    a.get("agent_id") for a in agents if a.get("agent_id")
-                ]
-            },
-            suggestions=[
-                "Backup creation requires a local agent (hassio.local on "
-                "Supervised, backup.local on Core); none is registered",
-            ],
-        )
-    )
+    info = await ws_client.send_command("backup/config/info")
+    create = info["result"]["config"]["create_backup"]
+    is_supervised = await client._is_supervised_install()
+    agent_ids = [a for a in create["agent_ids"] if a != _CLOUD_AGENT_ID]
+    if not agent_ids:
+        agent_ids = [await _default_agent(client, is_supervised)]
+    return create.get("password"), agent_ids, is_supervised
 
 
-async def _get_backup_password(
-    ws_client: HomeAssistantWebSocketClient,
-) -> str:
+async def _default_agent(client: HomeAssistantClient, is_supervised: bool) -> str:
+    """Home Assistant's default backup agent (``_default_agent`` in hassio/backup.py).
+
+    Supervisor's default backup mount, else local storage; a Core install
+    always has the backup integration's local agent.
     """
-    Retrieve default backup password from Home Assistant configuration.
+    if not is_supervised:
+        return "backup.local"
+    from .tools_addons import _supervisor_api_call
 
-    Args:
-        ws_client: Connected WebSocket client
-
-    Returns:
-        The backup password string.
-
-    Raises:
-        ToolError: If backup config cannot be retrieved or no password is configured.
-    """
-    backup_config = await ws_client.send_command("backup/config/info")
-    if not backup_config.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Failed to retrieve backup configuration",
-                context={"details": backup_config},
-            )
-        )
-
-    config_data = backup_config.get("result", {}).get("config", {})
-    default_password = config_data.get("create_backup", {}).get("password")
-
-    if not default_password:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "No default backup password configured in Home Assistant",
-                suggestions=[
-                    "Configure automatic backups in Home Assistant settings to set a default password"
-                ],
-            )
-        )
-
-    return cast(str, default_password)
-
-
-async def _backup_prep_via_component(
-    client: HomeAssistantClient,
-) -> dict[str, Any] | None:
-    """One ``ha_mcp_tools/backup_prep`` read; ``None`` ⇒ run the legacy two-call path.
-
-    Returns the component's ``{agent_ids, local_agent_id, default_password}``
-    payload, replacing the sequential ``backup/agents/info`` (local-agent
-    discovery, :func:`_get_local_backup_agent_id`) + ``backup/config/info``
-    (default password, :func:`_get_backup_password`) WS round-trips with one
-    in-process read. ``None`` on capability miss, downgrade (``unknown_command``
-    → invalidate the cached caps), or command error/timeout (logged) — the
-    caller falls back to the legacy sequential calls. A
-    ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed
-    (re)connect — is caught here and mapped to ``None``: the legacy probes (``_get_local_backup_agent_id`` /
-    ``_get_backup_password``) run on a DEDICATED ``get_connected_ws_client`` socket
-    already connected before this read, NOT this pooled one — so a wedged pooled
-    socket must fall back to the legacy calls rather than fail create/restore.
-    Same caps-gate discipline as ``component_devices.fetch_device_via_component``.
-    """
-    caps = await get_component_caps(client)
-    if not component_supports(caps, "backup_prep"):
-        return None
-    try:
-        ws = await get_websocket_client(
-            url=client.base_url,
-            token=client.token,
-            verify_ssl=getattr(client, "verify_ssl", None),
-        )
-        raw = await ws.send_command(WS_BACKUP_PREP)
-    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-        if is_unknown_command(exc):
-            invalidate_caps(client)
-        else:
-            logger.warning("%s failed; fell back to legacy: %r", WS_BACKUP_PREP, exc)
-        return None
-    except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError: a pooled-WS drop or a failed
-        # (re)connect. The legacy probes
-        # ride a dedicated already-connected socket, so fall back rather than fail
-        # create/restore on a wedged pooled socket.
-        logger.warning(
-            "%s connection error; falling back to legacy: %r", WS_BACKUP_PREP, exc
-        )
-        return None
-    result = raw.get("result")
-    if not isinstance(result, dict) or "local_agent_id" not in result:
-        logger.debug(
-            "%s returned a malformed result (missing 'local_agent_id' key); "
-            "falling back to legacy",
-            WS_BACKUP_PREP,
-        )
-        return None
-    return result
-
-
-def _raise_no_local_backup_agent_error(agent_ids: list[Any] | None) -> NoReturn:
-    """Same "no local agent" error ``_get_local_backup_agent_id`` raises.
-
-    Used when the ``backup_prep`` component read comes back with
-    ``local_agent_id: None`` — the SAME outcome as the legacy probe finding no
-    agent named ``"local"``, so both paths fail identically.
-    """
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            "No local backup agent found",
-            context={"available_agents": [a for a in (agent_ids or []) if a]},
-            suggestions=[
-                "Backup creation requires a local agent (hassio.local on "
-                "Supervised, backup.local on Core); none is registered",
-            ],
-        )
-    )
+    mounts = (await _supervisor_api_call(client, "/mounts")).get("result") or {}
+    return f"hassio.{mounts.get('default_backup_mount') or 'local'}"
 
 
 def _raise_no_default_password_error() -> NoReturn:
-    """Same error ``_get_backup_password`` raises when no default password is configured."""
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
@@ -347,372 +160,140 @@ def _raise_no_default_password_error() -> NoReturn:
     )
 
 
-def _parse_backup_date(raw: Any) -> datetime | None:
-    """Parse an HA backup `date` (ISO-8601, may use `Z` suffix) to a tz-aware
-    datetime, returning None on missing/malformed input. Naive timestamps are
-    treated as UTC."""
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        dt = datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt
-
-
-def _build_success_response_if_found(
-    info_result: dict[str, Any],
-    *,
-    name: str,
-    backup_job_id: str,
-    agent_id: str,
-    duration_seconds: int,
-    job_start_ts: datetime,
-) -> dict[str, Any] | None:
-    """Return the canonical success-response dict, or None.
-
-    Single source of truth for "did this backup actually complete cleanly?".
-    Called from both the in-loop branch and the post-timeout final check.
-
-    Returns None unless ALL of:
-
-    * `result.state == "idle"` AND `result.last_action_event.state == "completed"`
-      — list-membership alone is insufficient because HA registers the entry in
-      `backups` before compression/encryption finish; claiming success on a
-      half-written entry would let callers immediately attempt restore on a
-      partial file. The state-gate enforces "fully finalized".
-    * The match resolves to *this* job, not a stale prior-run entry with the
-      same name (HA does not enforce unique backup names, and the post-timeout
-      window is exactly when collisions are likely after a retry). Filters to
-      entries with `name == name` AND `date >= job_start_ts - tolerance`,
-      then within that fresh set prefers a `last_action_event.backup_id`
-      match if HA exposes one, otherwise picks the newest by date.
-    """
-    result_block = info_result.get("result") or {}
-    state = result_block.get("state")
-    last_event = result_block.get("last_action_event") or {}
-    if state != "idle" or last_event.get("state") != "completed":
-        return None
-
-    backups = result_block.get("backups") or []
-
-    # Freshness gate applies uniformly — both the `last_action_event.backup_id`
-    # path and the name-only fallback are constrained to entries dated
-    # at-or-after the job start. Without this, a concurrent backup (e.g. UI-
-    # triggered) updating `last_action_event` between our last in-loop poll
-    # and the post-timeout lookup could let us match its entry as if it were
-    # ours.
-    tolerance = timedelta(seconds=_BACKUP_DATE_FILTER_TOLERANCE_S)
-    cutoff = job_start_ts - tolerance
-    fresh = [
-        b
-        for b in backups
-        if b.get("name") == name
-        and (entry_date := _parse_backup_date(b.get("date"))) is not None
-        and entry_date >= cutoff
-    ]
-    if not fresh:
-        return None
-
-    target_id = last_event.get("backup_id")
-    authoritative = (
-        next((b for b in fresh if b.get("backup_id") == target_id), None)
-        if target_id
-        else None
-    )
-    match = authoritative or max(
-        fresh,
-        key=lambda b: _parse_backup_date(b.get("date")) or job_start_ts,
-    )
-
-    return {
-        "success": True,
-        "backup_id": match.get("backup_id"),
-        "backup_job_id": backup_job_id,
-        "name": name,
-        "date": match.get("date"),
-        "size_bytes": (match.get("agents") or {}).get(agent_id, {}).get("size"),
-        "status": "Backup completed successfully",
-        "duration_seconds": duration_seconds,
-        "note": "Backup uses your Home Assistant's default backup password",
-    }
-
-
-async def _poll_backup_completion(
+async def _generate_backup(
     ws_client: HomeAssistantWebSocketClient,
-    name: str,
-    backup_job_id: str,
-    max_wait_seconds: int,
-    poll_interval: int,
-    agent_id: str,
-    ctx: Context | None = None,
-) -> dict[str, Any]:
-    """Poll backup/info until the named backup completes, fails, or times out.
+    ctx: Context | None,
+    **params: Any,
+) -> tuple[dict[str, Any], int]:
+    """Run ``backup/generate`` to completion; return ``(backup entry, seconds)``.
 
-    ``agent_id`` is the local agent that owns this backup (e.g.
-    ``hassio.local`` on Supervised, ``backup.local`` on Core); used to look
-    up the per-agent size in the backup-info payload.
-
-    On timeout, performs one final ``backup/info`` lookup before raising. If
-    that lookup confirms `state=idle` + `event_state=completed` AND finds a
-    backup belonging to *this* job (by ``last_action_event.backup_id`` or
-    fresh date-window name-match), returns the success response with a
-    ``warnings`` entry noting the late detection (#1433). Otherwise raises
-    ``TIMEOUT_OPERATION`` — and if the entry exists but state still indicates
-    creation in progress, surfaces ``likely_in_progress=true`` in the error
-    context so callers can back off retries instead of compounding duplicates.
-
-    ``ctx``, when supplied, receives a ``report_progress`` heartbeat before
-    the first poll and at least every ``_BACKUP_PROGRESS_INTERVAL_S`` while
-    waiting, so an MCP client watching for "no response or progress" doesn't
-    abort the connection mid-backup (#1861).
-
-    Raises ToolError on backup failure or final timeout with no completion.
+    Subscribes to ``backup/subscribe_events`` before starting, as Home
+    Assistant's frontend does. The job id is not the backup id on Supervisor
+    installs, and the manager runs one backup at a time, so the result is the
+    one backup with this name that ``backup/info`` lists after the job and did
+    not list before it.
     """
-    job_start_ts = datetime.now(UTC)
-    waited = 0
-    next_progress_at = _BACKUP_PROGRESS_INTERVAL_S
-    await safe_progress(
-        ctx,
-        progress=0,
-        total=max_wait_seconds,
-        message="waiting for backup to complete",
-    )
-
-    while waited < max_wait_seconds:
-        await asyncio.sleep(poll_interval)
-        waited += poll_interval
-        if waited >= next_progress_at:
-            await safe_progress(
-                ctx,
-                progress=waited,
-                total=max_wait_seconds,
-                message=f"waiting for backup to complete ({waited}s elapsed)",
+    known = {b["backup_id"] for b in (await _backup_info(ws_client))["backups"]}
+    sub_id, queue = await ws_client.subscribe_command("backup/subscribe_events")
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    try:
+        job = await ws_client.send_command("backup/generate", **params)
+        job_id = job["result"]["backup_job_id"]
+        await _wait_for_backup(queue, job_id, started, ctx)
+    finally:
+        await ws_client.release_subscription(sub_id)
+    listing = await _backup_info(ws_client)
+    new = [
+        b
+        for b in listing["backups"]
+        if b["backup_id"] not in known and b.get("name") == params["name"]
+    ]
+    # An agent that fails to list drops its backups from either listing, so
+    # anything but exactly one match is not a backup ha-mcp can name.
+    if len(new) != 1:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Backup finished, but Home Assistant lists {len(new)} new "
+                f"backups named {params['name']!r}",
+                context={
+                    "backup_job_id": job_id,
+                    "agent_errors": listing.get("agent_errors") or {},
+                },
+                suggestions=[
+                    "Check the snapshot list before retrying: the backup may "
+                    "exist on an agent that failed to list it"
+                ],
             )
-            next_progress_at = waited + _BACKUP_PROGRESS_INTERVAL_S
-
-        info_result = await ws_client.send_command("backup/info")
-        if not info_result.get("success"):
-            logger.debug(
-                f"backup/info returned success=False at waited={waited}s; retrying"
-            )
-            continue
-
-        result_block = info_result.get("result") or {}
-        last_event = result_block.get("last_action_event") or {}
-        event_state = last_event.get("state")
-        logger.debug(
-            f"Backup state: {result_block.get('state')}, "
-            f"event_state: {event_state}, waited: {waited}s"
         )
+    return new[0], round(loop.time() - started)
 
-        if event_state == "failed":
-            # Surface the failure event verbatim — HA's failed event
-            # carries the cause (e.g. another backup already in
-            # progress), and dropping it left CI failures reading
-            # "Backup creation failed: Backup creation failed" with
-            # nothing to diagnose.
+
+async def _backup_info(ws_client: HomeAssistantWebSocketClient) -> dict[str, Any]:
+    info = await ws_client.send_command("backup/info")
+    return cast(dict[str, Any], info["result"])
+
+
+async def _wait_for_backup(
+    queue: asyncio.Queue[dict[str, Any]],
+    job_id: str,
+    started: float,
+    ctx: Context | None,
+) -> None:
+    """Wait for the backup manager's terminal create event, sending heartbeats.
+
+    The manager runs one operation at a time, so the create event after our
+    ``backup/generate`` belongs to it. Heartbeats keep an MCP client from
+    dropping the connection during a long backup (#1861).
+    """
+    loop = asyncio.get_running_loop()
+    in_progress = {"backup_job_id": job_id, "likely_in_progress": True}
+    while (waited := loop.time() - started) < _BACKUP_MAX_WAIT_S:
+        await safe_progress(
+            ctx,
+            progress=round(waited),
+            total=_BACKUP_MAX_WAIT_S,
+            message="waiting for backup to complete",
+        )
+        try:
+            message = await asyncio.wait_for(
+                queue.get(),
+                timeout=min(_BACKUP_PROGRESS_INTERVAL_S, _BACKUP_MAX_WAIT_S - waited),
+            )
+        except TimeoutError:
+            continue
+        except asyncio.QueueShutDown:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Connection to Home Assistant closed while waiting for the backup",
+                    context=in_progress,
+                )
+            )
+        event = message.get("event") or {}
+        if event.get("manager_state") != "create_backup":
+            continue
+        if event.get("state") == "completed":
+            return
+        if event.get("state") == "failed":
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Backup creation failed",
-                    context={
-                        "backup_job_id": backup_job_id,
-                        "last_action_event": last_event,
-                    },
+                    context={"backup_job_id": job_id, "event": event},
                 )
             )
-
-        response = _build_success_response_if_found(
-            info_result,
-            name=name,
-            backup_job_id=backup_job_id,
-            agent_id=agent_id,
-            duration_seconds=waited,
-            job_start_ts=job_start_ts,
-        )
-        if response is not None:
-            logger.info(f"Backup completed successfully: {response['backup_id']}")
-            return response
-        # state=idle+completed observed but entry not yet (or not freshly) in
-        # the list — same bug class as #1433 one tick earlier; continue polling.
-
-    return await _finalize_backup_timeout(
-        ws_client,
-        name=name,
-        backup_job_id=backup_job_id,
-        agent_id=agent_id,
-        max_wait_seconds=max_wait_seconds,
-        job_start_ts=job_start_ts,
-    )
-
-
-async def _finalize_backup_timeout(
-    ws_client: HomeAssistantWebSocketClient,
-    *,
-    name: str,
-    backup_job_id: str,
-    agent_id: str,
-    max_wait_seconds: int,
-    job_start_ts: datetime,
-) -> dict[str, Any]:
-    """Final backup-list lookup after the poll window; return a late success or raise.
-
-    One best-effort ``backup/info`` lookup after the poll loop gives up: if it
-    confirms the backup completed just after the window, returns the success
-    response (with a late-completion warning); otherwise raises
-    ``TIMEOUT_OPERATION``, annotating the context with ``verification_error``
-    (the lookup itself failed) or ``likely_in_progress`` (still creating).
-    """
-    logger.info(
-        f"Backup did not complete within {max_wait_seconds}s; "
-        "performing final backup-list lookup before raising timeout"
-    )
-    # send_command raises on HA-side failure rather than returning
-    # success=false. Treat any `HomeAssistantError` (incl. AuthError,
-    # ConnectionError, CommandError) during this best-effort verification
-    # as "couldn't verify"; surface the failure in the error context via
-    # `verification_error` so the auth-case stops being invisible behind a
-    # misleading TIMEOUT_OPERATION. Programming errors (AttributeError,
-    # TypeError, KeyError) intentionally propagate.
-    verification_error: str | None = None
-    likely_in_progress = False
-    final_info: dict[str, Any] | None = None
-    try:
-        final_info = await ws_client.send_command("backup/info")
-    except HomeAssistantError as e:
-        verification_error = repr(e)
-        logger.warning(
-            f"Post-timeout backup/info lookup failed ({e!r}); "
-            "falling through to TIMEOUT_OPERATION"
-        )
-
-    if final_info is not None and final_info.get("success"):
-        response, likely_in_progress = _inspect_post_timeout_info(
-            final_info,
-            name=name,
-            backup_job_id=backup_job_id,
-            agent_id=agent_id,
-            max_wait_seconds=max_wait_seconds,
-            job_start_ts=job_start_ts,
-        )
-        if response is not None:
-            return response
-
-    logger.warning(f"Backup did not complete within {max_wait_seconds} seconds")
-    error_context: dict[str, Any] = {"backup_job_id": backup_job_id, "name": name}
-    if verification_error is not None:
-        error_context["verification_error"] = verification_error
-    if likely_in_progress:
-        error_context["likely_in_progress"] = True
-
     raise_tool_error(
         create_error_response(
             ErrorCode.TIMEOUT_OPERATION,
-            f"Backup creation timed out after {max_wait_seconds} seconds",
-            context=error_context,
+            f"Backup did not finish within {_BACKUP_MAX_WAIT_S} seconds",
+            context=in_progress,
             suggestions=[
-                "Backup may still be in progress. Check Home Assistant backup status."
+                "The backup keeps running in Home Assistant; check the snapshot "
+                "list before retrying"
             ],
         )
     )
 
 
-def _inspect_post_timeout_info(
-    final_info: dict[str, Any],
-    *,
-    name: str,
-    backup_job_id: str,
-    agent_id: str,
-    max_wait_seconds: int,
-    job_start_ts: datetime,
-) -> tuple[dict[str, Any] | None, bool]:
-    """Interpret the post-timeout ``backup/info``: (late-success, likely_in_progress).
-
-    Returns the late-completion success response (with a warning appended) when
-    the backup finished just after the poll window, else ``(None,
-    likely_in_progress)``. Raises ``SERVICE_CALL_FAILED`` when the final lookup
-    shows the backup failed in the gap after the last in-loop poll.
-    """
-    response = _build_success_response_if_found(
-        final_info,
-        name=name,
-        backup_job_id=backup_job_id,
-        agent_id=agent_id,
-        duration_seconds=max_wait_seconds,
-        job_start_ts=job_start_ts,
-    )
-    if response is not None:
-        response["warnings"] = [
-            f"Backup completion observed only after the {max_wait_seconds}s "
-            "poll window — the operation succeeded but took longer than "
-            "expected. Increase max_wait_seconds if this recurs.",
+def _backup_result(entry: dict[str, Any], seconds: int) -> dict[str, Any]:
+    """Success fields for a finished backup, from its ``backup/info`` entry."""
+    result: dict[str, Any] = {
+        "success": True,
+        "backup_id": entry.get("backup_id"),
+        "name": entry.get("name"),
+        "date": entry.get("date"),
+        "agents": entry.get("agents"),
+        "duration_seconds": seconds,
+    }
+    # Agents that were not available; an agent whose upload fails fails the
+    # whole backup instead.
+    if failed := entry.get("failed_agent_ids"):
+        result["warnings"] = [
+            f"Not stored on unavailable backup agents: {', '.join(failed)}"
         ]
-        logger.info(
-            f"Backup found in post-timeout list lookup: {response['backup_id']}"
-        )
-        return response, False
-    # Helper returned None. Three cases distinguishable from the raw
-    # final_info: (a) backup failed in the gap between last in-loop poll
-    # and the final lookup → raise SERVICE_CALL_FAILED, the failure mode
-    # is known and unambiguous; (b) state still indicates creation in
-    # progress → surface `likely_in_progress` so callers back off retries
-    # rather than compounding duplicates; (c) state idle+completed but no
-    # fresh matching entry → genuine TIMEOUT_OPERATION, nothing extra to
-    # add.
-    result_block = final_info.get("result") or {}
-    last_event = result_block.get("last_action_event") or {}
-    state = result_block.get("state")
-    event_state = last_event.get("state")
-    if event_state == "failed":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Backup creation failed (observed at post-timeout lookup)",
-                context={
-                    "backup_job_id": backup_job_id,
-                    "name": name,
-                    "last_action_event": last_event,
-                },
-            )
-        )
-    likely_in_progress = False
-    if state != "idle":
-        likely_in_progress = True
-    return None, likely_in_progress
-
-
-async def _resolve_backup_credentials(
-    client: HomeAssistantClient, ws_client: HomeAssistantWebSocketClient
-) -> tuple[str, str]:
-    """Resolve ``(password, local_agent_id)`` for a create_backup call.
-
-    One ``backup_prep`` component read replaces the sequential password +
-    local-agent probes when supported; otherwise falls back to the legacy
-    per-probe WS calls. Raises when the default password or local agent is
-    missing (both are required to create a backup).
-    """
-    # One component read replaces the sequential password + local-agent
-    # probes when the ha_mcp_tools component supports backup_prep.
-    prep = await _backup_prep_via_component(client)
-    if prep is not None:
-        password = prep.get("default_password")
-        if not password:
-            _raise_no_default_password_error()
-        local_agent = prep.get("local_agent_id")
-        if not local_agent:
-            _raise_no_local_backup_agent_error(prep.get("agent_ids"))
-    else:
-        # Get backup password (raises ToolError on failure)
-        password = await _get_backup_password(ws_client)
-
-        # Discover the local backup agent at call time. HA Core registers
-        # `backup.local`; HA Supervised registers `hassio.local`. Hardcoding
-        # either breaks the other deployment.
-        local_agent = await _get_local_backup_agent_id(ws_client)
-    return password, local_agent
+    return result
 
 
 async def create_backup(
@@ -720,16 +301,12 @@ async def create_backup(
     name: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """
-    Create a fast Home Assistant backup (local only, excludes database).
+    """Create a fast Home Assistant backup (no database) on the configured agents.
 
     Args:
         client: Home Assistant REST client
         name: Optional backup name (auto-generated if not provided)
         ctx: Optional FastMCP context for progress heartbeats during the wait
-
-    Returns:
-        Dictionary with backup result including backup_id, status, duration, etc.
     """
     ws_client = None
 
@@ -748,53 +325,25 @@ async def create_backup(
             )
         ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
-        password, local_agent = await _resolve_backup_credentials(client, ws_client)
-
-        # Generate backup name if not provided
-        if not name:
-            now = datetime.now()
-            name = f"MCP_Backup_{now.strftime('%Y-%m-%d_%H:%M:%S')}"
-
-        # Addons + addon folders are Supervisor concepts — HA Core errors
-        # with "Addons and folders are not supported by core backup" if we
-        # ask for them. Toggle off when we detect the Core local agent.
-        is_supervised = local_agent == "hassio.local"
-        logger.info(
-            f"Detected {'Supervised' if is_supervised else 'Core'} install "
-            f"via backup agent '{local_agent}'"
-        )
-        backup_params = {
-            "name": name,
-            "password": password,
-            "agent_ids": [local_agent],
-            "include_homeassistant": True,
-            "include_database": False,  # Fast backup
-            "include_all_addons": is_supervised,
-        }
-
-        # Send backup request
-        result = await ws_client.send_command("backup/generate", **backup_params)
-
-        if not result.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    result.get("error", "Backup creation failed"),
-                )
-            )
-
-        backup_job_id = result.get("result", {}).get("backup_job_id")
-        logger.info(f"Backup job started: {backup_job_id}, waiting for completion...")
-
-        return await _poll_backup_completion(
+        password, agent_ids, is_supervised = await _backup_plan(client, ws_client)
+        if not password:
+            _raise_no_default_password_error()
+        entry, seconds = await _generate_backup(
             ws_client,
-            name,
-            backup_job_id,
-            max_wait_seconds=_BACKUP_MAX_WAIT_S,
-            poll_interval=_BACKUP_POLL_INTERVAL_S,
-            agent_id=local_agent,
-            ctx=ctx,
+            ctx,
+            name=name or f"MCP_Backup_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}",
+            password=password,
+            agent_ids=agent_ids,
+            include_homeassistant=True,
+            include_database=False,  # Fast backup
+            # Add-ons are a Supervisor concept; Core rejects them.
+            include_all_addons=is_supervised,
         )
+        return {
+            **_backup_result(entry, seconds),
+            "status": "Backup completed successfully",
+            "note": "Backup uses your Home Assistant's default backup password",
+        }
 
     except ToolError:
         raise
@@ -820,77 +369,19 @@ async def create_backup(
                 )
 
 
-async def _create_safety_backup(
-    ws_client: HomeAssistantWebSocketClient,
-    password: str | None,
-    agent_id: str,
-    ctx: Context | None = None,
-) -> tuple[str | None, list[str]]:
-    """Create a pre-restore safety backup and wait for it to complete.
-
-    ``agent_id`` is the local backup agent (Supervisor's ``hassio.local`` or
-    Core's ``backup.local``) discovered by the caller.
-
-    Blocks until the safety backup finishes. HA's ``backup/generate`` returns
-    on job initiation, not completion, so waiting here lets the caller issue
-    ``backup/restore`` afterwards without colliding with a still-running
-    backup. Returns ``(job_id, warnings)`` — ``job_id`` is None when password
-    is None (backup intentionally skipped); ``warnings`` carries any late-
-    completion notice from the poll so the caller can surface it before the
-    destructive restore. Raises ToolError if the backup fails to start or does
-    not complete in time.
-    """
-    if password is None:
-        return None, []
-
-    now = datetime.now()
-    safety_backup_name = f"PreRestore_Safety_{now.strftime('%Y-%m-%d_%H:%M:%S')}"
-
-    # include_all_addons is a Supervisor concept; HA Core rejects it.
-    is_supervised = agent_id == "hassio.local"
-    safety_backup = await ws_client.send_command(
-        "backup/generate",
-        name=safety_backup_name,
-        password=password,
-        agent_ids=[agent_id],
-        include_homeassistant=True,
-        include_database=True,
-        include_all_addons=is_supervised,
-    )
-
-    if not safety_backup.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                safety_backup.get(
-                    "error", "Failed to create safety backup before restore"
-                ),
-                suggestions=["Cannot proceed with restore without safety backup"],
-            )
-        )
-
-    safety_backup_id = safety_backup.get("result", {}).get("backup_job_id")
-    logger.info(f"Safety backup started: {safety_backup_id}, waiting for completion...")
-
-    # Wait for the safety backup to finish before returning. HA's
-    # backup/generate WS command returns as soon as the job is *initiated*,
-    # not when it completes, and the backup manager rejects any new operation
-    # while a backup is running ("Backup manager busy: create_backup"). If the
-    # caller issued backup/restore right after this returned, it would collide
-    # with the safety backup this same call just started – a self-induced
-    # deadlock (#1681). Reuse the same completion poll create_backup already
-    # uses rather than adding a second wait mechanism.
-    poll_result = await _poll_backup_completion(
-        ws_client,
-        safety_backup_name,
-        cast(str, safety_backup_id),
-        max_wait_seconds=_SAFETY_BACKUP_MAX_WAIT_S,
-        poll_interval=_BACKUP_POLL_INTERVAL_S,
-        agent_id=agent_id,
-        ctx=ctx,
-    )
-    logger.info(f"Safety backup completed: {safety_backup_id}")
-    return cast(str, safety_backup_id), poll_result.get("warnings", [])
+def _parse_backup_date(raw: Any) -> datetime | None:
+    """Parse an HA backup `date` (ISO-8601, may use `Z` suffix) to a tz-aware
+    datetime, returning None on missing/malformed input. Naive timestamps are
+    treated as UTC."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
 
 
 def _backup_protected(entry: dict[str, Any]) -> bool | None:
@@ -912,207 +403,18 @@ def _backup_protected(entry: dict[str, Any]) -> bool | None:
     return any(flags) if flags else None
 
 
-async def _verify_backup_exists(
-    ws_client: HomeAssistantWebSocketClient, backup_id: str
-) -> dict[str, Any]:
-    """Confirm ``backup_id`` exists in ``backup/info``; return its entry or raise."""
-    # Verify backup exists
-    backup_info = await ws_client.send_command("backup/info")
-    if not backup_info.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                backup_info.get("error", "Failed to retrieve backup information"),
-            )
-        )
-
-    backups = backup_info.get("result", {}).get("backups", [])
-    matched = next((b for b in backups if b.get("backup_id") == backup_id), None)
-
-    if matched is None:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                f"Backup '{backup_id}' not found",
-                suggestions=[
-                    "Inspect available snapshots in Home Assistant's "
-                    "backup panel before retrying"
-                ],
-            )
-        )
-    return cast(dict[str, Any], matched)
-
-
-async def _resolve_restore_credentials(
-    client: HomeAssistantClient, ws_client: HomeAssistantWebSocketClient
-) -> tuple[str | None, str]:
-    """Resolve ``(password, local_agent_id)`` for a restore.
-
-    Unlike create, a missing default password is tolerated (returns ``None``)
-    so the restore can proceed without a safety backup — the local agent is
-    still required. One ``backup_prep`` component read replaces the sequential
-    probes when supported; otherwise falls back to the legacy WS calls.
-    """
-    # One component read replaces the sequential local-agent + password
-    # probes when the ha_mcp_tools component supports backup_prep.
-    prep = await _backup_prep_via_component(client)
-    if prep is not None:
-        # Local backup agent (Supervisor's hassio.local on Supervised,
-        # backup.local on Core). Used for both the safety backup and the
-        # restore call below.
-        local_agent = prep.get("local_agent_id")
-        if not local_agent:
-            _raise_no_local_backup_agent_error(prep.get("agent_ids"))
-
-        # Create safety backup BEFORE restoring
-        logger.info("Creating safety backup before restore...")
-        password = prep.get("default_password")
-        if not password:
-            # No default password - log warning but continue (restore might still work)
-            logger.warning("No default password - proceeding without safety backup")
-            password = None
-    else:
-        # Discover the local backup agent (Supervisor's hassio.local on
-        # Supervised, backup.local on Core). Used for both the safety backup
-        # and the restore call below.
-        local_agent = await _get_local_backup_agent_id(ws_client)
-
-        # Create safety backup BEFORE restoring
-        logger.info("Creating safety backup before restore...")
-        try:
-            password = await _get_backup_password(ws_client)
-        except ToolError:
-            # Password error - log warning but continue (restore might still work)
-            logger.warning("No default password - proceeding without safety backup")
-            password = None
-    return password, local_agent
-
-
-async def _perform_restore(
-    ws_client: HomeAssistantWebSocketClient,
-    matched: dict[str, Any],
-    *,
-    backup_id: str,
-    local_agent: str,
-    password: str | None,
-    restore_database: bool,
-    safety_backup_id: str | None,
-    safety_warnings: list[str],
-) -> dict[str, Any]:
-    """Issue ``backup/restore`` and build the success response (or raise on failure).
-
-    Reconciles ``restore_database`` against the target on Supervised, forwards
-    the default password only for a protected target, and assembles the
-    user-facing warnings/note.
-    """
-    # `backup/info` returns ManagerBackup entries: `database_included` is a
-    # top-level field (inherited from BaseBackup), but `protected` is NOT —
-    # it lives per-agent under the entry's `agents` map (AgentBackupStatus),
-    # so a top-level `matched.get("protected")` is always None against real
-    # HA. Derive it from the agents map (shared with _summarize_backup).
-    target_protected = _backup_protected(matched)
-
-    # Reconcile restore_database with the target only on Supervised. HA's
-    # Supervisor raises "Restore database must match backup" when
-    # restore_homeassistant is set and restore_database != the backup's
-    # database_included flag (hassio/backup.py). HA Core's restore path
-    # (CoreBackupReaderWriter) has no such constraint and writes the caller's
-    # value verbatim, so overriding it there would silently discard an
-    # explicit request for no HA-side reason. Fall back to the caller's
-    # request when not Supervised or when the field is absent. Surface a
-    # warning when the derived value overrides what the caller asked for so
-    # the override isn't silent on a destructive op.
-    is_supervised = local_agent == "hassio.local"
-    target_database_included = matched.get("database_included")
-    if is_supervised and target_database_included is not None:
-        effective_restore_database = target_database_included
-    else:
-        effective_restore_database = restore_database
-
-    # Perform restore
-    restore_params: dict[str, Any] = {
-        "backup_id": backup_id,
-        "agent_id": local_agent,
-        "restore_database": effective_restore_database,
-        "restore_homeassistant": True,
-        "restore_addons": [],  # Restore all addons from backup
-        "restore_folders": [],  # Restore all folders from backup
-    }
-    # Forward the default backup password ONLY for a protected (encrypted)
-    # target. `password` here is HA's default create_backup.password, which
-    # is independent of whether *this* backup is encrypted: HA validates the
-    # password against the target unconditionally and rejects a password on
-    # an unprotected backup ("Invalid password for backup" →
-    # IncorrectPasswordError). Gate on the target's per-agent `protected`
-    # flag (read above) so an unprotected snapshot still restores on a
-    # default-password instance. HA's backup/restore schema types `password`
-    # as `str` (not `str | None`), so only include the key when we actually
-    # forward one — passing None would fail voluptuous validation. Without
-    # this a protected backup cannot be restored even though the HA UI,
-    # which applies the stored key, succeeds (#1681).
-    if password is not None and target_protected:
-        restore_params["password"] = password
-
-    result = await ws_client.send_command("backup/restore", **restore_params)
-
-    if result.get("success"):
-        # Honest note + warnings depending on whether the safety
-        # backup actually landed. When ``password is None`` (default
-        # password unavailable / not configured), ``_create_safety_backup``
-        # returned None; telling the user "a safety backup was created"
-        # in that case is user-visible misinformation.
-        warnings = [
-            "Home Assistant is restarting. Connection will be temporarily lost."
-        ]
-        # Surface any late-completion notice from the safety-backup poll —
-        # a slow backup subsystem right before a destructive restore is
-        # exactly the signal a caller wants to see.
-        warnings.extend(safety_warnings)
-        if effective_restore_database != restore_database:
-            warnings.append(
-                "restore_database was adjusted to "
-                f"{effective_restore_database} to match the target backup "
-                "(Home Assistant's Supervisor requires it to match the "
-                "backup's database_included flag when restoring Home "
-                "Assistant)."
-            )
-        if safety_backup_id is None:
-            warnings.append(
-                "No safety backup was created (the default backup "
-                "password is not set). If the restore corrupts state, "
-                "there is no automatic rollback — configure the "
-                "default password in Settings → System → Backups and "
-                "retry to get a safety net."
-            )
-            note = "Restore proceeding WITHOUT a safety backup. See warnings above."
-        else:
-            note = (
-                "A safety backup was created before restore. You can "
-                "restore from it if needed."
-            )
-        return {
-            "success": True,
-            "backup_id": backup_id,
-            "status": "Restore initiated - Home Assistant will restart",
-            "safety_backup_id": safety_backup_id,
-            "restore_database": effective_restore_database,
-            "warnings": warnings,
-            "note": note,
-        }
-    else:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                result.get("error", "Restore operation failed"),
-                context={"backup_id": backup_id},
-            )
-        )
+def _restore_agent(target: dict[str, Any]) -> str:
+    """An agent that holds ``target``; a local copy restores without a download."""
+    agent_ids = list(target.get("agents") or {})
+    return next(
+        (a for a in ("hassio.local", "backup.local") if a in agent_ids), agent_ids[0]
+    )
 
 
 async def restore_backup(
     client: HomeAssistantClient,
     backup_id: str,
-    restore_database: bool = False,
+    restore_database: bool | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -1123,12 +425,9 @@ async def restore_backup(
     Args:
         client: Home Assistant REST client
         backup_id: Backup ID to restore
-        restore_database: Whether to restore database (historical data).
-            On Supervised installs this is reconciled against the target
-            backup's ``database_included`` flag, which Supervisor requires to
-            match when restoring Home Assistant; a warning is returned if the
-            value is overridden. On Core installs the caller's value is honoured
-            as-is (Core enforces no such match).
+        restore_database: Whether to restore the database; ``None`` restores
+            it when the backup contains it. On Supervisor installs Home
+            Assistant rejects a value that does not match the backup.
         ctx: Optional FastMCP context for progress heartbeats during the
             pre-restore safety-backup wait
 
@@ -1152,24 +451,78 @@ async def restore_backup(
             )
         ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
-        matched = await _verify_backup_exists(ws_client, backup_id)
+        details = await ws_client.send_command("backup/details", backup_id=backup_id)
+        target = details["result"]["backup"]
+        if target is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"Backup '{backup_id}' not found",
+                    suggestions=[
+                        "List snapshots with ha_manage_backup(scope='snapshot', "
+                        "action='list') before retrying"
+                    ],
+                )
+            )
 
-        password, local_agent = await _resolve_restore_credentials(client, ws_client)
+        password, agent_ids, is_supervised = await _backup_plan(client, ws_client)
+        warnings = [
+            "Home Assistant is restarting. Connection will be temporarily lost."
+        ]
+        safety_backup_id = None
+        if password:
+            # The safety backup is a full backup, so a restore can be undone.
+            safety, _ = await _generate_backup(
+                ws_client,
+                ctx,
+                name=f"PreRestore_Safety_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}",
+                password=password,
+                agent_ids=agent_ids,
+                include_homeassistant=True,
+                include_database=True,
+                include_all_addons=is_supervised,
+            )
+            safety_backup_id = safety["backup_id"]
+            note = (
+                "A safety backup was created before restore. You can "
+                "restore from it if needed."
+            )
+        else:
+            warnings.append(
+                "No safety backup was created (the default backup "
+                "password is not set). If the restore corrupts state, "
+                "there is no automatic rollback — configure the "
+                "default password in Settings → System → Backups and "
+                "retry to get a safety net."
+            )
+            note = "Restore proceeding WITHOUT a safety backup. See warnings above."
 
-        safety_backup_id, safety_warnings = await _create_safety_backup(
-            ws_client, password, local_agent, ctx=ctx
-        )
+        if restore_database is None:
+            restore_database = bool(target.get("database_included"))
+        restore_params: dict[str, Any] = {
+            "backup_id": backup_id,
+            "agent_id": _restore_agent(target),
+            "restore_homeassistant": True,
+            "restore_database": restore_database,
+            # The backup's own contents, so the restore takes exactly them.
+            "restore_addons": [a["slug"] for a in target.get("addons") or []],
+            "restore_folders": target.get("folders") or [],
+        }
+        # Home Assistant rejects a password for an unencrypted backup, and
+        # the default password is the only one ha-mcp knows.
+        if password and _backup_protected(target):
+            restore_params["password"] = password
 
-        return await _perform_restore(
-            ws_client,
-            matched,
-            backup_id=backup_id,
-            local_agent=local_agent,
-            password=password,
-            restore_database=restore_database,
-            safety_backup_id=safety_backup_id,
-            safety_warnings=safety_warnings,
-        )
+        await ws_client.send_command("backup/restore", **restore_params)
+        return {
+            "success": True,
+            "backup_id": backup_id,
+            "status": "Restore initiated - Home Assistant will restart",
+            "safety_backup_id": safety_backup_id,
+            "restore_database": restore_database,
+            "warnings": warnings,
+            "note": note,
+        }
 
     except ToolError:
         raise
@@ -1195,60 +548,17 @@ async def restore_backup(
                 )
 
 
-def _summarize_backup(entry: dict[str, Any]) -> dict[str, Any]:
-    """Project one HA ``backup/info`` entry to the fields a caller needs to
-    identify and choose a snapshot (issue #1586).
-
-    Size is reported per backup agent; we surface the largest reported size
-    across agents. Every field is ``.get`` so a schema the running HA version
-    doesn't populate yields ``None`` rather than raising.
-    """
-    agents = entry.get("agents") or {}
-    size_bytes: int | None = None
-    if isinstance(agents, dict):
-        sizes: list[int] = []
-        for a in agents.values():
-            if isinstance(a, dict):
-                size = a.get("size")
-                # Accept int or float (some agents report byte counts as float);
-                # bool is an int subclass but never a real size, so exclude it.
-                if isinstance(size, (int, float)) and not isinstance(size, bool):
-                    sizes.append(int(size))
-        if sizes:
-            size_bytes = max(sizes)
-    return {
-        "backup_id": entry.get("backup_id"),
-        "name": entry.get("name"),
-        "date": entry.get("date"),
-        "size_bytes": size_bytes,
-        # per-agent field, derived from the agents map (see _backup_protected)
-        "protected": _backup_protected(entry),
-        "database_included": entry.get("database_included"),
-        "homeassistant_included": entry.get("homeassistant_included"),
-        "homeassistant_version": entry.get("homeassistant_version"),
-        "with_automatic_settings": entry.get("with_automatic_settings"),
-        "agent_ids": list(agents.keys()) if isinstance(agents, dict) else [],
-    }
-
-
 async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[str, Any]:
-    """List the full HA snapshot tarballs known to Home Assistant (issue #1586).
+    """List the full HA snapshots Home Assistant reports, newest first (#1586).
 
-    Surfaces the inventory HA already returns from its WebSocket ``backup/info``
-    command — the same data ``restore_backup`` uses internally to verify a
-    ``backup_id`` exists. Before this, the snapshot scope exposed only
-    ``create`` and ``restore``, so a caller had no way to discover backup IDs or
-    confirm a specific backup landed; they had to already know the ID. Newest
-    first. Read-only: no safety backup, no restart.
+    Returns Core's ``backup/info`` reply as is, with ``backups`` sorted and cut
+    to ``limit`` (``count`` / ``total``), so per-agent sizes and encryption,
+    failed agents, add-ons, folders and a top-level ``agent_errors`` (a partial
+    list) reach the caller. Read-only: no safety backup, no restart.
     """
     try:
-        # Route through the shared pooled WebSocket (issue #1813) rather than a
-        # dedicated connect/auth handshake per call. ``list_backups`` issues a
-        # single request/response ``backup/info`` command; the pooled client
-        # owns the connection lifecycle, so there is no per-call connect or
-        # disconnect. A failed command surfaces as ``success=False`` and is
-        # handled by the guard below (send_websocket_message never raises for
-        # WS command failures).
+        # Shared pooled WebSocket (#1813): one request/response command, so no
+        # per-call connect. A failed command surfaces as ``success=False``.
         info = await client.send_websocket_message({"type": "backup/info"})
         if not info.get("success"):
             raise_tool_error(
@@ -1258,26 +568,21 @@ async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[st
                 )
             )
 
-        result_block = info.get("result") or {}
-        raw_backups = result_block.get("backups") or []
-        summarized = [_summarize_backup(b) for b in raw_backups]
-        # Newest first so "did my backup land?" is answered by the top entry.
-        # Parse via _parse_backup_date (handles `Z`/naive) rather than sorting
-        # the raw strings lexicographically — `'Z'` > `'+'` would misorder a mix
-        # of `...Z` and `...+00:00`. Undated entries sink to the bottom.
-        _date_floor = datetime.min.replace(tzinfo=UTC)
-        summarized.sort(
-            key=lambda b: _parse_backup_date(b.get("date")) or _date_floor,
+        result = dict(info.get("result") or {})
+        # Parsed dates, not raw strings: `'Z'` sorts after `'+'`. Undated
+        # entries sink to the bottom.
+        date_floor = datetime.min.replace(tzinfo=UTC)
+        backups = sorted(
+            result.get("backups") or [],
+            key=lambda b: _parse_backup_date(b.get("date")) or date_floor,
             reverse=True,
         )
-        total = len(summarized)
-        if limit and total > limit:
-            summarized = summarized[:limit]
         return {
+            **result,
             "success": True,
-            "count": len(summarized),
-            "total": total,
-            "backups": summarized,
+            "count": min(len(backups), limit),
+            "total": len(backups),
+            "backups": backups[:limit],
         }
 
     except ToolError:
@@ -1343,7 +648,7 @@ async def delete_backup(
        the "does it exist" check right below, since an agent that failed
        to enumerate its backups could make that list (and every guard
        below) incomplete. The backup must then exist (verified against
-       ``backup/info``, mirroring ``restore_backup`` — HA's own
+       ``backup/info`` — HA's own
        ``backup/delete`` silently no-ops on an unknown ID rather than
        erroring).
     3. Scheduled backups (``with_automatic_settings=True``) are never
@@ -1589,8 +894,8 @@ def register_backup_tools(
 
 | scope | action | What it does |
 |---|---|---|
-| `snapshot` | `create` | Create a full HA tarball (config + addons, no DB by default). Can take a while on a large instance; progress heartbeats are sent while waiting. |
-| `snapshot` | `list` | List full HA tarball snapshots (id, name, date, size). Read-only — use to discover a `backup_id` or confirm a backup landed. |
+| `snapshot` | `create` | Create a full HA tarball (config + addons, no DB) on the backup locations set in Home Assistant's automatic-backup settings, except Home Assistant Cloud; without any, on the default location. Can take a while on a large instance; progress heartbeats are sent while waiting. |
+| `snapshot` | `list` | List full HA tarball snapshots as Home Assistant reports them (id, name, date, per-location size). Read-only — use to discover a `backup_id` or confirm a backup landed. |
 | `snapshot` | `restore` | Restore a full HA tarball. **Restarts HA.** Last-resort recovery. |
 | `snapshot` | `delete` | Delete one full HA tarball by `backup_id` (`confirm=True` required). **Disabled by default** (`enable_snapshot_delete` setting) and layered with guards even when enabled — see below. |
 | `edits` | `create` | On-demand snapshot of one entity (`domain` + `entity_id` required). Use before the user manually edits in the HA UI. Same handler path the decorator takes on writes; bypasses the `enable_auto_backup` toggle. |
@@ -1672,13 +977,13 @@ survives an agent's own mistakes.
             ),
         ] = None,
         restore_database: Annotated[
-            bool,
+            bool | None,
             Field(
-                default=False,
-                description="(snapshot.restore) Include the database in the restore; otherwise "
-                "config only.",
+                default=None,
+                description="(snapshot.restore) Include the database in the restore. Default: "
+                "restore it when the backup contains it.",
             ),
-        ] = False,
+        ] = None,
         confirm: Annotated[
             bool,
             Field(
@@ -1772,7 +1077,7 @@ async def _dispatch_snapshot_action(
     scope: str,
     name: str | None,
     backup_id: str | None,
-    restore_database: bool,
+    restore_database: bool | None,
     confirm: bool,
     limit: int,
     ctx: Context | None,
