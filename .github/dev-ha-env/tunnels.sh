@@ -66,6 +66,15 @@ revive_tunnels() {
       || [ ! -s "tunnel-$name.url" ]; then
       had_url=""
       [ -s "tunnel-$name.url" ] && had_url=1
+      if [ "$name" = mcp ] && [ "${DEVENV_OAUTH:-}" = 1 ]; then
+        # ha-mcp-oauth advertises the URL it started with as its issuer; a
+        # new quick-tunnel URL would publish an endpoint whose OAuth flows
+        # all fail. Report the MCP URL as down instead.
+        echo "::error::The mcp tunnel is down; the OAuth server still advertises its old URL. Start a new run."
+        rm -f "tunnel-$name.url"
+        [ -z "$had_url" ] || changed=1
+        continue
+      fi
       echo "::warning::The $name tunnel is down; restarting it, so its URL changes."
       if start_tunnel "$name" "$(cat "tunnel-$name.target")" || [ -n "$had_url" ]; then
         changed=1

@@ -182,11 +182,11 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
-        "tests/src/e2e/workflows/hacs/test_auto_refresh_startup.py",
+        "tests/src/e2e/utilities/http_launcher.py",
         "This statement has no effect",
         "await task",
         "False positive on the bare 'await task' inside contextlib.suppress "
-        "in _HttpLauncher.wait_for_lifespan_started: awaiting the cancelled "
+        "in HttpLauncher.wait_for_lifespan_started: awaiting the cancelled "
         "racer IS the effect (it drives the loser of the started-vs-exited "
         "race to completion before returning).",
     ),
