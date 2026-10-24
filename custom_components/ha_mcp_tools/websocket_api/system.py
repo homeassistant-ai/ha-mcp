@@ -1,4 +1,4 @@
-"""System commands: info, system snapshot, backup prep, server entry, diagnose."""
+"""System commands: info, system snapshot, server entry, diagnose."""
 
 from __future__ import annotations
 
@@ -221,60 +221,6 @@ def _snapshot_states(hass: HomeAssistant) -> list[dict[str, Any]]:
     return out
 
 
-# =============================================================================
-# ha_mcp_tools/backup_prep
-# =============================================================================
-def _do_backup_prep(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
-    """Return the backup identity the server needs before a create.
-
-    ``{agent_ids: [...], local_agent_id: <str|None>, default_password:
-    <str|None>}`` read from the backup integration's in-process manager
-    (``hass.data[DATA_MANAGER]``). ``local_agent_id`` uses the SAME preference the
-    server's ``_get_local_backup_agent_id`` does — an agent whose ``name`` is
-    ``"local"``, preferring ``hassio.local`` (Supervised) over ``backup.local``
-    (Core). ``default_password`` is getattr-chained off
-    ``manager.config.data.create_backup.password``.
-
-    A missing backup integration (``ImportError``) or an uninitialized manager
-    raises ``HomeAssistantError`` so the server's command-error path falls back to
-    its legacy WS reads — NOT a silent empty result the server could mistake for
-    "no agents". The password is sensitive, but the legacy ``backup/config/info``
-    already serves it to the same admin connection (parity, not new exposure).
-
-    STRUCTURAL core drift raises for the same reason, rather than degrading to a
-    well-formed authoritative negative: a non-Mapping ``manager.backup_agents``
-    (below) or a broken config→data→create_backup chain
-    (:func:`_backup_default_password`) would otherwise produce a "no agents" / "no
-    password" answer the server trusts and hard-fails on (or, for the password,
-    silently drops the restore safety backup) with no fallback. Value-level reads
-    (an id string, a genuinely-``None`` password on an intact chain) stay
-    getattr-guarded and pass through.
-    """
-    try:
-        from homeassistant.components.backup import DATA_MANAGER
-    except ImportError as exc:
-        raise _backup_unavailable("backup integration is not available") from exc
-    manager = _hass_data_get(hass, DATA_MANAGER)
-    if manager is None:
-        raise _backup_unavailable("backup manager is not initialized")
-    agents = getattr(manager, "backup_agents", None)
-    if not isinstance(agents, Mapping):
-        raise _backup_unavailable("backup manager exposes no agent mapping")
-    return {
-        "agent_ids": [str(a) for a in agents],
-        "local_agent_id": _preferred_local_agent_id(agents),
-        "default_password": _backup_default_password(manager),
-    }
-
-
-def _backup_unavailable(message: str) -> Exception:
-    """Build a ``HomeAssistantError`` (imported function-locally — test-stubbable)."""
-    from homeassistant.exceptions import HomeAssistantError
-
-    err: Exception = HomeAssistantError(message)
-    return err
-
-
 def _hass_data_get(hass: HomeAssistant, key: Any) -> Any:
     """``hass.data.get(key)`` guarded against a non-mapping / drift."""
     data = getattr(hass, "data", None)
@@ -284,46 +230,6 @@ def _hass_data_get(hass: HomeAssistant, key: Any) -> Any:
         return data.get(key)
     except Exception:  # pragma: no cover - defensive  # noqa: BLE001
         return None
-
-
-def _preferred_local_agent_id(agents: Any) -> str | None:
-    """The local backup agent id, mirroring the server's hassio-over-core preference.
-
-    Collects agent ids whose agent ``name`` is exactly ``"local"``
-    (``hassio.local`` on Supervised, ``backup.local`` on Core both use that
-    name), prefers ``hassio.local`` then ``backup.local``, else the first local
-    agent, else ``None``.
-    """
-    if not isinstance(agents, Mapping):
-        return None
-    local_ids: list[str] = [
-        str(agent_id)
-        for agent_id, agent in agents.items()
-        if getattr(agent, "name", None) == "local"
-    ]
-    for preferred in ("hassio.local", "backup.local"):
-        if preferred in local_ids:
-            return preferred
-    return local_ids[0] if local_ids else None
-
-
-def _backup_default_password(manager: Any) -> str | None:
-    """``manager.config.data.create_backup.password`` (getattr-chained; ``str``/None).
-
-    A STRUCTURALLY broken chain (a missing ``config`` / ``data`` / ``create_backup``
-    link — core drift) RAISES ``HomeAssistantError`` so the server falls back to its
-    legacy ``backup/config/info`` read, rather than returning ``None`` the server
-    reads as "no default password configured" — which on restore silently drops the
-    safety backup while telling the user the password is unset. Only a genuine
-    ``None`` ``password`` on an INTACT chain is the authoritative "not configured".
-    """
-    config = getattr(manager, "config", None)
-    data = getattr(config, "data", None)
-    create_backup = getattr(data, "create_backup", None)
-    if config is None or data is None or create_backup is None:
-        raise _backup_unavailable("backup manager config chain is unavailable")
-    password = getattr(create_backup, "password", None)
-    return password if isinstance(password, str) else None
 
 
 # =============================================================================

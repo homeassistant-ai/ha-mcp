@@ -530,12 +530,12 @@ def _do_registry_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str
 def _registry_lookup_missing_target() -> Exception:
     """Build a ``HomeAssistantError`` for a target-less ``registry_lookup`` request.
 
-    Mirrors :func:`_backup_unavailable`: imported function-locally (test-stubbable)
-    so a request with no usable target — neither ``entity_ids`` nor
-    ``config_entry_id``, OR only an empty-string / empty-list one — raises instead of
+    Raised so a request with no usable target — neither ``entity_ids`` nor
+    ``config_entry_id``, OR only an empty-string / empty-list one — fails instead of
     returning ``{entities: [], missing: []}``, a shape indistinguishable from a
     genuine "nothing matched" result, letting the server's command-error fallback
-    fire for the degenerate case. (This is a deliberate divergence from
+    fire for the degenerate case. ``HomeAssistantError`` is imported
+    function-locally so tests can stub it. (This is a deliberate divergence from
     ``config_entries``, whose empty-string ``entry_id`` is an authoritative empty
     result mirroring ``async_get_entry("")`` — a different, intentional semantic.)
     """

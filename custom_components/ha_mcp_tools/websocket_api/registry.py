@@ -79,8 +79,8 @@ def _substrate_unavailable(name: str) -> Exception:
     the server trust an authoritative-negative it should instead fall back to legacy
     for (mistaking core DRIFT for "no such entry" / "empty catalog"). Raising routes
     the server's command-error path to its legacy WS/REST read, mirroring
-    :func:`_backup_unavailable` / :func:`_registries_missing_category_scopes`. A
-    genuinely-EMPTY-but-present substrate (a real empty registry) is NOT drift and
+    :func:`_registries_missing_category_scopes`. A genuinely-EMPTY-but-present
+    substrate (a real empty registry) is NOT drift and
     keeps returning its empty result — the guards below key off unavailability
     (``None`` / non-``Mapping``), never off an empty-but-valid collection.
     """
