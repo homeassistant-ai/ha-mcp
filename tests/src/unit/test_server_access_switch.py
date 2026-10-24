@@ -75,7 +75,9 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
     hass = MagicMock(name="hass")
     hass.data = {DOMAIN: {}}
 
-    def _update_entry(entry, *, data=None, **_kw):
+    def _update_entry(
+        entry: MagicMock, *, data: dict[str, object] | None = None, **_kw: object
+    ) -> None:
         if data is not None:
             entry.data = data
 

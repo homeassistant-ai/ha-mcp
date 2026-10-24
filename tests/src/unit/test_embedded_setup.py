@@ -167,8 +167,8 @@ class TestBringUp:
         )
 
     async def test_start_from_the_access_switch_reaches_the_notification_gate(
-        self, fake_manager
-    ):
+        self, fake_manager: type
+    ) -> None:
         hass = _make_hass()
         entry = _make_entry()
 
@@ -637,7 +637,7 @@ class TestSurfaceConnectUrls:
             "on that same configuration screen.\n"
         )
 
-    def test_switching_access_on_raises_no_running_notification(self):
+    def test_switching_access_on_raises_no_running_notification(self) -> None:
         # The user just turned the access switch on (#2801); a notification on
         # every toggle would only repeat that.
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")

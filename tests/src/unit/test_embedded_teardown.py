@@ -36,7 +36,9 @@ def _spy(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestTeardown:
-    async def test_unregisters_and_stops_without_revoking(self, fake_manager):
+    async def test_unregisters_and_stops_without_revoking(
+        self, fake_manager: type
+    ) -> None:
         hass = _make_hass()
         entry = _make_entry()
         await esetup.async_bring_up_server(hass, entry)
@@ -51,14 +53,14 @@ class TestTeardown:
         # A reload must keep the provisioned token.
         fake_manager.async_revoke_credentials.assert_not_awaited()
 
-    async def test_teardown_is_noop_when_not_running(self, fake_manager):
+    async def test_teardown_is_noop_when_not_running(self, fake_manager: type) -> None:
         hass = _make_hass()
         await esetup.async_teardown_server(hass)  # must not raise
         esetup.async_unregister_webhook.assert_awaited_once()
 
     async def test_port_closes_even_when_the_webhook_fails_to_unregister(
-        self, fake_manager, monkeypatch
-    ):
+        self, fake_manager: type, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # The direct port is a way in of its own; turning access off must close
         # it whatever happens to the webhook.
         hass = _make_hass()
@@ -75,8 +77,8 @@ class TestTeardown:
         dismiss.assert_called_once_with(hass, esetup._NOTIFICATION_ID)
 
     async def test_webhook_closes_even_when_the_llm_api_fails_to_unregister(
-        self, fake_manager
-    ):
+        self, fake_manager: type
+    ) -> None:
         # Otherwise the webhook and its /readonly alias stay routed to a server
         # that is gone.
         hass = _make_hass()
@@ -91,8 +93,8 @@ class TestTeardown:
         fake_manager.async_stop.assert_awaited_once()
 
     async def test_stopped_server_leaves_no_running_notice_or_stale_repair(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         dismiss = MagicMock()
         monkeypatch.setattr(esetup.persistent_notification, "async_dismiss", dismiss)
         hass = _make_hass()
