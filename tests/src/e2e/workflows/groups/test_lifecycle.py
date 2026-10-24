@@ -14,10 +14,11 @@ production-level functionality and compatibility.
 """
 
 import logging
+import uuid
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -62,7 +63,8 @@ class TestGroupLifecycle:
 
         async with MCPAssertions(mcp_client) as mcp:
             # 1. CREATE: Basic group with entities
-            object_id = "test_e2e_lights"
+            # A fresh id: the create assertion below fails on a leftover group.
+            object_id = f"test_e2e_lights_{uuid.uuid4().hex[:8]}"
             group_name = "Test E2E Lights"
             create_data = await mcp.call_tool_success(
                 "ha_config_set_group",
@@ -401,7 +403,7 @@ class TestGroupLifecycle:
             )
             logger.info("All-on group cleaned up")
 
-    async def test_group_input_validation(self, mcp_client, cleanup_tracker):
+    async def test_group_input_validation(self, mcp_client):
         """
         Test: Home Assistant's own validation reaches the caller
 
@@ -432,28 +434,34 @@ class TestGroupLifecycle:
             )
 
             # Core accepts an empty member list and creates an empty group.
-            object_id = "test_e2e_empty_members"
-            created = await mcp.call_tool_success(
-                "ha_config_set_group",
-                {"object_id": object_id, "entities": []},
-            )
-            cleanup_tracker.track("group", object_id)
-            assert (
-                created["message"] == f"Successfully created group: group.{object_id}"
-            )
-            list_data = await mcp.call_tool_success("ha_config_list_groups", {})
-            group = next(g for g in list_data["groups"] if g["object_id"] == object_id)
-            assert group["entity_ids"] == [], group
-            await mcp.call_tool_success(
-                "ha_config_remove_group", {"object_id": object_id}
-            )
+            object_id = f"test_e2e_empty_members_{uuid.uuid4().hex[:8]}"
+            try:
+                created = await mcp.call_tool_success(
+                    "ha_config_set_group",
+                    {"object_id": object_id, "entities": []},
+                )
+                assert (
+                    created["message"]
+                    == f"Successfully created group: group.{object_id}"
+                )
+                list_data = await mcp.call_tool_success("ha_config_list_groups", {})
+                group = next(
+                    (g for g in list_data["groups"] if g["object_id"] == object_id),
+                    None,
+                )
+                assert group is not None, list_data
+                assert group["entity_ids"] == [], group
+            finally:
+                await safe_call_tool(
+                    mcp_client, "ha_config_remove_group", {"object_id": object_id}
+                )
 
             # Core's group.remove only logs a warning for a missing group; the
             # tool must not report it as removed.
             await mcp.call_tool_failure(
                 "ha_config_remove_group",
                 {"object_id": "test_e2e_never_created"},
-                expected_error="not found",
+                expected_error="Group 'group.test_e2e_never_created' not found",
             )
 
             logger.info("All input validation tests passed")

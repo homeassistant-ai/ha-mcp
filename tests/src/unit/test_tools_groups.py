@@ -3,27 +3,30 @@ Unit tests for Group management tools.
 
 Core owns group.set / group.remove validation; these tests pin that the tools
 pass requests to Core over WebSocket, report Core's own rejection, and read
-create/update and existence from the group's state instead of guessing.
+create/update and existence from the group's state.
 """
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import _restore_group
-from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantCommandNotSent,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.tools_groups import GroupTools
 
 # Core's WebSocket ``call_service`` reply for a payload its schema rejects, as
-# ``send_websocket_message`` returns it.
+# ``send_websocket_message`` returns it (probatio renders the path as "at").
 _CORE_SLUG_REJECTION = {
     "success": False,
     "error": (
-        "Command failed: invalid slug Living Room (try living_room) "
-        "for dictionary value @ data['object_id']"
+        "Command failed: invalid slug group.lights (try group_lights) at 'object_id'"
     ),
     "error_code": "invalid_format",
 }
@@ -42,7 +45,15 @@ def _group_state(object_id: str, *, auto: bool, members: list[str]) -> dict[str,
         "entity_id": f"group.{object_id}",
         "state": "off",
         "attributes": attributes,
+        "last_changed": "2026-10-23T10:00:00+00:00",
+        "last_updated": "2026-10-23T10:00:00+00:00",
+        "context": {"id": "ctx", "parent_id": None, "user_id": None},
     }
+
+
+def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
+    error: dict[str, Any] = json.loads(str(exc_info.value))["error"]
+    return error
 
 
 @pytest.fixture
@@ -52,7 +63,7 @@ def states() -> dict[str, dict[str, Any]]:
 
 @pytest.fixture
 def mock_client(states):
-    """Client whose group services change ``states`` the way Core does."""
+    """Client whose group services create and remove ``states`` the way Core does."""
     client = MagicMock()
 
     async def get_entity_state(entity_id: str) -> dict[str, Any]:
@@ -74,7 +85,6 @@ def mock_client(states):
     client.get_entity_state = AsyncMock(side_effect=get_entity_state)
     client.send_websocket_message = AsyncMock(side_effect=send_websocket_message)
     client.get_states = AsyncMock(side_effect=lambda: list(states.values()))
-    client.call_service = AsyncMock(return_value=[])
     return client
 
 
@@ -88,10 +98,13 @@ def _sent_call(mock_client) -> dict[str, Any]:
 
 
 class TestListGroups:
-    async def test_list_passes_core_attributes_through(self, tools, states):
+    async def test_list_keeps_core_fields_and_reports_yaml_groups_as_not_auto(
+        self, tools, states
+    ):
         states["group.service_made"] = _group_state(
             "service_made", auto=True, members=["light.a"]
         )
+        states["group.service_made"]["attributes"]["assumed_state"] = True
         states["group.from_yaml"] = _group_state(
             "from_yaml", auto=False, members=["light.b"]
         )
@@ -103,31 +116,50 @@ class TestListGroups:
 
         result = await tools.ha_config_list_groups()
 
-        assert result["success"] is True
         assert result["count"] == 2
         by_id = {g["object_id"]: g for g in result["groups"]}
-        assert by_id["service_made"]["auto"] is True
-        assert by_id["from_yaml"]["auto"] is False
-        assert by_id["service_made"]["entity_ids"] == ["light.a"]
-        # Core never exposes a group's all/any mode, so the tool must not
-        # report one.
+        made, yaml_group = by_id["service_made"], by_id["from_yaml"]
+        assert made["auto"] is True
+        assert yaml_group["auto"] is False
+        assert made["entity_id"] == "group.service_made"
+        assert made["entity_ids"] == ["light.a"]
+        # Fields Core sends reach the caller instead of a hand-picked subset.
+        assert made["assumed_state"] is True
+        assert made["last_changed"] == "2026-10-23T10:00:00+00:00"
+        # Core never exposes a group's all/any mode.
         assert all("all" not in g for g in result["groups"])
 
-    async def test_list_groups_error_handling(self, mock_client):
+    async def test_list_groups_error_handling(self, tools, mock_client):
         mock_client.get_states = AsyncMock(side_effect=Exception("Connection failed"))
 
         with pytest.raises(ToolError) as exc_info:
-            await GroupTools(mock_client).ha_config_list_groups()
+            await tools.ha_config_list_groups()
 
         assert json.loads(str(exc_info.value))["success"] is False
 
 
 class TestSetGroup:
-    async def test_create_is_reported_from_core_state_not_arguments(
+    async def test_set_is_sent_as_core_call_service_over_websocket(
         self, tools, mock_client
     ):
-        # The docstring's own create example passes name=, which the old
-        # argument-based guess reported as "updated".
+        await tools.ha_config_set_group(
+            object_id="lights", entities=["light.a"], all_on=True
+        )
+
+        assert _sent_call(mock_client) == {
+            "type": "call_service",
+            "domain": "group",
+            "service": "set",
+            "service_data": {
+                "object_id": "lights",
+                "all": True,
+                "entities": ["light.a"],
+            },
+        }
+
+    async def test_create_with_name_is_reported_as_created(self, tools):
+        # The docstring's create example passes name=; a create must still
+        # read as created.
         result = await tools.ha_config_set_group(
             object_id="bedroom_lights",
             entities=["light.lamp", "light.ceiling"],
@@ -135,16 +167,7 @@ class TestSetGroup:
         )
 
         assert result["message"] == "Successfully created group: group.bedroom_lights"
-        assert _sent_call(mock_client) == {
-            "type": "call_service",
-            "domain": "group",
-            "service": "set",
-            "service_data": {
-                "object_id": "bedroom_lights",
-                "name": "Bedroom Lights",
-                "entities": ["light.lamp", "light.ceiling"],
-            },
-        }
+        assert "warnings" not in result
 
     async def test_entities_on_existing_group_is_reported_as_update(
         self, tools, states
@@ -158,24 +181,26 @@ class TestSetGroup:
         assert result["message"] == "Successfully updated group: group.lights"
         assert "warnings" not in result
 
-    async def test_create_without_entities_reaches_core(self, tools, mock_client):
-        # Core creates a group without members and names it after object_id.
-        result = await tools.ha_config_set_group(object_id="empty_group")
-
-        assert result["message"] == "Successfully created group: group.empty_group"
-        assert _sent_call(mock_client)["service_data"] == {"object_id": "empty_group"}
-
     @pytest.mark.parametrize(
         "arguments",
         [
+            {},
             {"entities": []},
             {"add_entities": []},
             {"entities": ["light.a"], "add_entities": ["light.b"]},
             {"object_id": "group.lights"},
         ],
-        ids=["empty-entities", "empty-add", "exclusive-lists", "dotted-object-id"],
+        ids=[
+            "no-entities",
+            "empty-entities",
+            "empty-add",
+            "exclusive-lists",
+            "dotted-object-id",
+        ],
     )
-    async def test_core_decides_validity(self, tools, mock_client, arguments):
+    async def test_arguments_are_left_for_core_to_judge(
+        self, tools, mock_client, arguments
+    ):
         arguments = {"object_id": "lights", **arguments}
 
         await tools.ha_config_set_group(**arguments, wait=False)
@@ -188,11 +213,16 @@ class TestSetGroup:
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_set_group(object_id="Living Room")
+            await tools.ha_config_set_group(object_id="group.lights")
 
-        error = json.loads(str(exc_info.value))["error"]
+        error = _error(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "invalid slug Living Room (try living_room)" in error["message"]
+        assert error["message"] == (
+            "group.set failed: invalid slug group.lights (try group_lights) "
+            "at 'object_id'"
+        )
+        # Core's "try group_lights" names a new group; the hint says why.
+        assert "without the 'group.' prefix" in error["suggestion"]
 
     async def test_yaml_group_update_warns_reload_reverts_it(self, tools, states):
         states["group.from_yaml"] = _group_state(
@@ -206,22 +236,97 @@ class TestSetGroup:
         assert result["message"] == "Successfully updated group: group.from_yaml"
         assert any("YAML" in w for w in result["warnings"])
 
-    async def test_all_on_is_sent_as_core_all(self, tools, mock_client):
-        await tools.ha_config_set_group(
-            object_id="test_group", entities=["light.lamp1"], all_on=True
+    async def test_remove_entities_on_unknown_group_warns_it_was_created_empty(
+        self, tools
+    ):
+        result = await tools.ha_config_set_group(
+            object_id="typo_lights", remove_entities=["light.a"]
         )
 
-        assert _sent_call(mock_client)["service_data"]["all"] is True
+        assert result["message"] == "Successfully created group: group.typo_lights"
+        assert any("without members" in w for w in result["warnings"])
 
-    async def test_transport_failure_is_structured(self, tools, mock_client):
+
+class TestServiceFailures:
+    @pytest.mark.parametrize("tool_name", ["set", "remove"])
+    async def test_state_read_failure_aborts_before_the_write(
+        self, tools, mock_client, states, tool_name
+    ):
+        # A 500 must not read as "no such group": set would report a create
+        # and remove a missing group.
+        states["group.lights"] = _group_state("lights", auto=True, members=[])
+        mock_client.get_entity_state = AsyncMock(
+            side_effect=HomeAssistantAPIError("Server error", status_code=500)
+        )
+        tool = getattr(tools, f"ha_config_{tool_name}_group")
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool(object_id="lights")
+
+        assert _error(exc_info)["code"] != "ENTITY_NOT_FOUND"
+        mock_client.send_websocket_message.assert_not_called()
+
+    async def test_lost_reply_says_the_write_may_have_landed(self, tools, mock_client):
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=Exception("Service failed")
+            side_effect=HomeAssistantConnectionError("connection closed")
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_set_group(object_id="test_group")
+            await tools.ha_config_set_group(object_id="lights")
 
-        assert json.loads(str(exc_info.value))["success"] is False
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["write_outcome_unknown"] is True
+
+    async def test_unsent_command_is_not_reported_as_possibly_applied(
+        self, tools, mock_client
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantCommandNotSent("not authenticated")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_group(object_id="lights")
+
+        assert "write_outcome_unknown" not in json.loads(str(exc_info.value))
+
+    async def test_other_core_errors_carry_no_object_id_hint(self, tools, mock_client):
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Something broke",
+                "error_code": "home_assistant_error",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_group(object_id="lights")
+
+        error = _error(exc_info)
+        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert "object_id" not in error.get("suggestion", "")
+
+    async def test_missing_group_service_is_not_reported_as_missing_group(
+        self, tools, mock_client, states
+    ):
+        # Core answers not_found when the group integration is not loaded.
+        states["group.lights"] = _group_state("lights", auto=True, members=[])
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Service group.remove not found.",
+                "error_code": "not_found",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_remove_group(object_id="lights")
+
+        error = _error(exc_info)
+        assert error["code"] == "SERVICE_NOT_FOUND"
+        assert (
+            error["message"] == "group.remove failed: Service group.remove not found."
+        )
 
 
 class TestRemoveGroup:
@@ -234,8 +339,8 @@ class TestRemoveGroup:
 
         assert result["success"] is True
         assert result["entity_id"] == "group.test_group"
-        # The real removal check ran clean: a bug in it would only show up as
-        # a warning, since any failed check after a delete is one.
+        # verify_entity_removed runs unpatched and reports any failure as a
+        # warning, so no warnings means the removal was confirmed.
         assert "warnings" not in result
         assert _sent_call(mock_client) == {
             "type": "call_service",
@@ -249,8 +354,9 @@ class TestRemoveGroup:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_remove_group(object_id="no_such_group")
 
-        error = json.loads(str(exc_info.value))["error"]
+        error = _error(exc_info)
         assert error["code"] == "ENTITY_NOT_FOUND"
+        assert "without the 'group.' prefix" in error["suggestion"]
         mock_client.send_websocket_message.assert_not_called()
 
     async def test_yaml_group_removal_warns_it_returns(self, tools, states):
@@ -262,40 +368,18 @@ class TestRemoveGroup:
 
         assert any("YAML" in w for w in result["warnings"])
 
-    async def test_core_rejection_is_passed_through(self, tools, mock_client, states):
-        states["group.lights"] = _group_state("lights", auto=True, members=[])
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": "Command failed: Service group.remove not found.",
-                "error_code": "not_found",
-            }
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_group(object_id="lights")
-
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "RESOURCE_NOT_FOUND"
-        assert "Service group.remove not found." in error["message"]
-
 
 class TestGroupBackupRestore:
     async def test_restore_clears_members_added_after_the_snapshot(self):
         # Core's cv.entity_ids accepts [], and group.set with entities=[]
         # empties an existing group; skipping the key would keep members a
         # later edit added.
-        client = MagicMock()
-        client._request = AsyncMock(return_value=[])
+        with patch("ha_mcp.backup_manager._ws_send", new_callable=AsyncMock) as ws_send:
+            await _restore_group(
+                MagicMock(),
+                "group.lights",
+                {"object_id": "lights", "name": "Lights", "entities": [], "icon": None},
+            )
 
-        await _restore_group(
-            client,
-            "group.lights",
-            {"object_id": "lights", "name": "Lights", "entities": [], "icon": None},
-        )
-
-        client._request.assert_awaited_once_with(
-            "POST",
-            "services/group/set",
-            json={"object_id": "lights", "name": "Lights", "entities": []},
-        )
+        sent = ws_send.call_args[0][1]
+        assert sent["service_data"]["entities"] == []

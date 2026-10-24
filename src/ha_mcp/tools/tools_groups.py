@@ -14,15 +14,16 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import (
-    HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
-from ..errors import create_entity_not_found_error, create_error_response
+from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
+    get_entity_state_or_none,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
@@ -35,6 +36,11 @@ from .ws_waiters import verify_entity_removed, wait_for_entity_registered
 
 logger = logging.getLogger(__name__)
 
+_OBJECT_ID_DESCRIPTION = (
+    "Group identifier: a lowercase slug without the 'group.' prefix "
+    "(e.g., 'living_room_lights')"
+)
+
 
 class GroupTools:
     """Entity group management tools for Home Assistant."""
@@ -42,65 +48,57 @@ class GroupTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    async def _read_group_state(self, entity_id: str) -> dict[str, Any] | None:
-        """The group's current state, or None when Core has no such group."""
-        try:
-            state: dict[str, Any] = await self._client.get_entity_state(entity_id)
-        except HomeAssistantAPIError as e:
-            if e.status_code != 404:
-                raise
-            return None
-        return state
-
     async def _call_group_service(
         self, service: str, service_data: dict[str, Any]
     ) -> None:
-        """Call group.<service> over WebSocket, where Core's schema rejection
-        keeps its text (the REST endpoint answers it with a bare 400)."""
-        result = await self._client.send_websocket_message(
-            {
-                "type": "call_service",
-                "domain": "group",
-                "service": service,
-                "service_data": service_data,
-            }
-        )
-        if not result.get("success"):
+        """Call group.<service> over WebSocket, where Core's schema rejection keeps
+        its text; the REST endpoint answers it with a bare 400."""
+        object_id = service_data["object_id"]
+        try:
+            result = await self._client.send_websocket_message(
+                {
+                    "type": "call_service",
+                    "domain": "group",
+                    "service": service,
+                    "service_data": service_data,
+                }
+            )
+        except HomeAssistantCommandNotSent:
+            raise
+        except HomeAssistantConnectionError as e:
             raise_tool_error(
                 create_error_response(
-                    ws_failure_code(result),
-                    f"group.{service} failed: {result.get('error', 'Unknown error')}",
-                    context={"object_id": service_data["object_id"]},
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"group.{service} got no answer, so whether it was applied is "
+                    f"unknown: {e}",
+                    context={"object_id": object_id, "write_outcome_unknown": True},
+                    suggestions=["Check with ha_config_list_groups() before retrying"],
                 )
             )
-
-    @staticmethod
-    def _build_group_service_data(
-        object_id: str,
-        name: str | None,
-        icon: str | None,
-        all_on: bool | None,
-        entities: list[str] | None,
-        add_entities: list[str] | None,
-        remove_entities: list[str] | None,
-    ) -> dict[str, Any]:
-        """Build service data dict for group.set service call."""
-        service_data: dict[str, Any] = {
-            "object_id": object_id,
-        }
-        if name is not None:
-            service_data["name"] = name
-        if icon is not None:
-            service_data["icon"] = icon
-        if all_on is not None:
-            service_data["all"] = all_on
-        if entities is not None:
-            service_data["entities"] = entities
-        if add_entities is not None:
-            service_data["add_entities"] = add_entities
-        if remove_entities is not None:
-            service_data["remove_entities"] = remove_entities
-        return service_data
+        if result.get("success"):
+            return
+        error = str(result.get("error", "Unknown error")).removeprefix(
+            "Command failed: "
+        )
+        if result.get("error_code") == "not_found":
+            # Core's call_service answers not_found only for an unknown service.
+            code = ErrorCode.SERVICE_NOT_FOUND
+            suggestions = ["The group integration is not loaded in Home Assistant"]
+        else:
+            code = ws_failure_code(result)
+            suggestions = (
+                [f"object_id: {_OBJECT_ID_DESCRIPTION}"]
+                if result.get("error_code") == "invalid_format"
+                else []
+            )
+        raise_tool_error(
+            create_error_response(
+                code,
+                f"group.{service} failed: {error}",
+                context={"object_id": object_id},
+                suggestions=suggestions,
+            )
+        )
 
     @tool(
         name="ha_config_list_groups",
@@ -133,10 +131,10 @@ class GroupTools:
         Returns one page of old-style groups created via the group.set service
         or YAML configuration (platform-specific groups such as light or cover
         groups are separate entities); `total_count` and `has_more` report the
-        full set. Each group includes its entity_id, friendly name, state,
-        member entities, icon, order and `auto`: true for a group created by
-        group.set, false for a YAML group, which group.reload and a restart
-        rebuild from YAML. Core does not expose a group's all/any mode.
+        full set. Each group carries Core's state fields and attributes, its
+        members as `entity_ids`, and its object_id. `auto` is true for a group
+        created by ha_config_set_group (group.set) and false for a YAML group.
+        Core does not expose a group's all/any mode.
 
         EXAMPLE: ha_config_list_groups(offset=100)
         """
@@ -148,16 +146,17 @@ class GroupTools:
             for state in states:
                 entity_id = state.get("entity_id", "")
                 if entity_id.startswith("group."):
-                    attributes = state.get("attributes", {})
+                    attributes = dict(state.get("attributes") or {})
+                    members = attributes.pop("entity_id", [])
                     groups.append(
                         {
-                            "entity_id": entity_id,
+                            "friendly_name": None,
+                            "icon": None,
+                            **attributes,
+                            **{k: v for k, v in state.items() if k != "attributes"},
                             "object_id": entity_id.removeprefix("group."),
-                            "state": state.get("state"),
-                            "friendly_name": attributes.get("friendly_name"),
-                            "icon": attributes.get("icon"),
-                            "entity_ids": attributes.get("entity_id", []),
-                            "order": attributes.get("order"),
+                            "entity_ids": members,
+                            # Core sets ``auto`` only on group.set groups.
                             "auto": attributes.get("auto", False),
                         }
                     )
@@ -210,12 +209,7 @@ class GroupTools:
     @log_tool_usage
     async def ha_config_set_group(
         self,
-        object_id: Annotated[
-            str,
-            Field(
-                description="Group identifier without 'group.' prefix (e.g., 'living_room_lights')"
-            ),
-        ],
+        object_id: Annotated[str, Field(description=_OBJECT_ID_DESCRIPTION)],
         entities: Annotated[
             list[str] | None,
             JSON_STRING_COERCION,
@@ -227,7 +221,7 @@ class GroupTools:
         name: Annotated[
             str | None,
             Field(
-                description="Friendly display name for the group",
+                description="Friendly display name; a new group without one is named after object_id",
                 default=None,
             ),
         ] = None,
@@ -249,7 +243,7 @@ class GroupTools:
             list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Add these entities to an existing group",
+                description="Entities to add to the group's members",
                 default=None,
             ),
         ] = None,
@@ -257,7 +251,7 @@ class GroupTools:
             list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Remove these entities from an existing group",
+                description="Entities to remove from the group's members",
                 default=None,
             ),
         ] = None,
@@ -280,11 +274,12 @@ class GroupTools:
         **When to use:** compatibility with existing groups already configured via group.set
         or YAML, or the rare case where entity-registry membership is explicitly unwanted.
         Groups created here are only removable via `ha_config_remove_group` —
-        `ha_remove_helpers_integrations` will not find them.
+        `ha_remove_helpers_integrations` will not find them. They survive group.reload but
+        not a restart.
 
-        Core creates the group when group.<object_id> does not exist yet (entities are
-        optional and the name defaults to object_id) and updates it otherwise.
-        entities, add_entities, and remove_entities are mutually exclusive.
+        Core creates group.<object_id> when it does not exist (members from entities or
+        add_entities) and updates it otherwise. entities, add_entities, and remove_entities
+        are mutually exclusive.
 
         EXAMPLES:
         - Create: ha_config_set_group("bedroom_lights", entities=["light.lamp", "light.ceiling"], name="Bedroom Lights")
@@ -303,32 +298,40 @@ class GroupTools:
                 context={"operation": "set_group"},
             )
 
-            service_data = self._build_group_service_data(
-                object_id,
-                name,
-                icon,
-                all_on,
-                entities,
-                add_entities,
-                remove_entities,
-            )
+            optional_fields = {
+                "name": name,
+                "icon": icon,
+                "all": all_on,
+                "entities": entities,
+                "add_entities": add_entities,
+                "remove_entities": remove_entities,
+            }
+            service_data: dict[str, Any] = {
+                "object_id": object_id,
+                **{k: v for k, v in optional_fields.items() if v is not None},
+            }
 
             entity_id = f"group.{object_id}"
-            # Core creates or updates by whether the group exists.
-            existing = await self._read_group_state(entity_id)
+            # Read first: Core picks create or update by whether the group
+            # exists, and the reply reports which.
+            existing = await get_entity_state_or_none(self._client, entity_id)
             await self._call_group_service("set", service_data)
 
-            is_create = existing is None
+            action_word = "created" if existing is None else "updated"
             updated_fields = [k for k in service_data if k != "object_id"]
 
             result: dict[str, Any] = {}
+            if existing is None and remove_entities is not None:
+                result["warnings"] = [
+                    f"{entity_id} did not exist, so Core created it without "
+                    "members; remove_entities had nothing to remove."
+                ]
             if existing is not None and not existing.get("attributes", {}).get("auto"):
                 result["warnings"] = [
                     f"{entity_id} is defined in YAML: group.reload and a restart "
                     "rebuild it from YAML and drop this change."
                 ]
             if wait:
-                action_word = "created" if is_create else "updated"
                 try:
                     registered = await wait_for_entity_registered(
                         self._client, entity_id
@@ -348,7 +351,7 @@ class GroupTools:
                 "entity_id": entity_id,
                 "object_id": object_id,
                 "updated_fields": updated_fields,
-                "message": f"Successfully {'created' if is_create else 'updated'} group: {entity_id}",
+                "message": f"Successfully {action_word} group: {entity_id}",
                 **result,
             }
 
@@ -377,12 +380,7 @@ class GroupTools:
     @log_tool_usage
     async def ha_config_remove_group(
         self,
-        object_id: Annotated[
-            str,
-            Field(
-                description="Group identifier without 'group.' prefix (e.g., 'living_room_lights')"
-            ),
-        ],
+        object_id: Annotated[str, Field(description=_OBJECT_ID_DESCRIPTION)],
         wait: Annotated[
             bool,
             Field(
@@ -408,7 +406,8 @@ class GroupTools:
 
         **WARNING:**
         - Removing a group used in automations may cause those automations to fail.
-        - Groups defined in YAML can be removed at runtime but will reappear after restart.
+        - Groups defined in YAML can be removed at runtime but come back on group.reload
+          or a restart.
         - This only removes old-style groups, not platform-specific groups.
         """
         try:
@@ -423,9 +422,19 @@ class GroupTools:
 
             entity_id = f"group.{object_id}"
             # Core's group.remove only logs a warning for a missing group.
-            existing = await self._read_group_state(entity_id)
+            existing = await get_entity_state_or_none(self._client, entity_id)
             if existing is None:
-                raise_tool_error(create_entity_not_found_error(entity_id))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        f"Group '{entity_id}' not found",
+                        context={"entity_id": entity_id},
+                        suggestions=[
+                            "Use ha_config_list_groups() to find the object_id "
+                            "(without the 'group.' prefix)"
+                        ],
+                    )
+                )
             await self._call_group_service("remove", {"object_id": object_id})
 
             result: dict[str, Any] = {}
@@ -452,11 +461,7 @@ class GroupTools:
             exception_to_structured_error(
                 e,
                 context={"object_id": object_id},
-                suggestions=[
-                    "Check Home Assistant connection",
-                    "Verify the group exists using ha_config_list_groups()",
-                    "Groups defined in YAML cannot be permanently removed",
-                ],
+                suggestions=["Check Home Assistant connection"],
             )
             return None  # unreachable: exception_to_structured_error always raises
 
