@@ -358,7 +358,7 @@ class TestWaitingForTheBackup:
         )
         result = await _run(create_backup, ws, _client(supervised=True))
         assert result["warnings"] == [
-            "Add-ons that could not be backed up: core_ssh",
+            "Apps (add-ons) that could not be backed up: core_ssh",
             "Folders that could not be backed up: media",
         ]
 
@@ -408,7 +408,7 @@ class TestWaitingForTheBackup:
         closer = asyncio.create_task(_close_later())
         with pytest.raises(ToolError) as exc_info:
             await _run(create_backup, ws, _client())
-        await closer
+        await asyncio.gather(closer)
         assert ErrorCode.CONNECTION_FAILED.value in str(exc_info.value)
         assert "likely_in_progress" in str(exc_info.value)
         assert "Check the snapshot list" in str(exc_info.value)
@@ -434,7 +434,7 @@ class TestWaitingForTheBackup:
         with patch.object(backup, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
             finisher = asyncio.create_task(_finish_later())
             await _run(tool, ws, _client(), *args, ctx=ctx)
-            await finisher
+            await asyncio.gather(finisher)
         assert ctx.report_progress.await_count >= 3
 
     @pytest.mark.asyncio
