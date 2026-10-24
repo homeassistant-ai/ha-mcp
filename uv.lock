@@ -761,7 +761,7 @@ requires-dist = [
     { name = "jsonref", specifier = ">=1.1.0" },
     { name = "jsonschema", specifier = ">=4.20.0" },
     { name = "jsonschema-path", specifier = ">=0.3.4" },
-    { name = "openapi-pydantic", specifier = ">=0.5.1" },
+    { name = "openapi-pydantic", specifier = ">=0.6.0" },
     { name = "opentelemetry-api", specifier = ">=1.28.0" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "platformdirs", specifier = ">=4.0.0" },
