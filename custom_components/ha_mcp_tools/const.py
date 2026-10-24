@@ -449,7 +449,8 @@ DATA_BRINGUP_TASK = "bringup_task"
 # OPT_ACCESS_OFF_AFTER_RESTART applies at an entry's first setup (startup, or
 # enabling an entry that was disabled at startup) but not on a reload.
 DATA_STARTED_ENTRIES = "started_entries"
-# Serializes the access switch and the unload (see embedded_entry).
+# Serializes the server entry's setup, its unload and the access switch (see
+# embedded_entry).
 DATA_ACCESS_LOCK = "access_lock"
 # Server entry ids unloaded and not set up again, so a switch-on queued behind
 # the unload starts nothing.

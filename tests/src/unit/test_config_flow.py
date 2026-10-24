@@ -818,7 +818,7 @@ class TestServerOptionsFlow:
         # toggle was dropped (entry-exists = server runs).
         assert not hasattr(const, "OPT_EMBEDDED_ENABLED")
 
-    def test_new_toggles_default_on_for_fresh_entry(self):
+    def test_new_toggle_defaults_for_fresh_entry(self):
         # The UX toggles default on and the restart-access toggle off (an
         # existing install's first save must not close access after restarts)
         # when the entry has never stored them; a missing field is a KeyError.

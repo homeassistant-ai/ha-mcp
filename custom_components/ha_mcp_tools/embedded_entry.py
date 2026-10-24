@@ -141,8 +141,9 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             started.add(entry.entry_id)
             if entry.options.get(OPT_ACCESS_OFF_AFTER_RESTART):
                 _store_access(hass, entry, False)
-        # Before the switch exists; a switch-on left over from the previous load
-        # may already have started the server.
+        # Before the switch exists. Nothing should be live here: the unload
+        # cancels the bring-up, and a switch-on queued behind it starts nothing.
+        # The _server_live check is a defensive guard against a second start.
         if access_enabled(entry) and not _server_live(hass):
             _schedule_bring_up(hass, entry, announce=True)
     await hass.config_entries.async_forward_entry_setups(entry, _PLATFORMS)
@@ -204,8 +205,9 @@ async def async_set_access(
 
 
 def _access_lock(hass: HomeAssistant) -> asyncio.Lock:
-    """Serialize switching and unloading: a stop can take seconds, and a start
-    overlapping it would claim the port while the old server still holds it."""
+    """Serialize the entry's setup, its unload and the access switch: a stop can
+    take seconds, and a start overlapping it would claim the port while the old
+    server still holds it."""
     lock: asyncio.Lock = hass.data.setdefault(DOMAIN, {}).setdefault(
         DATA_ACCESS_LOCK, asyncio.Lock()
     )

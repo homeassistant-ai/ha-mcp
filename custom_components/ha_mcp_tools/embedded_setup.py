@@ -76,8 +76,8 @@ async def async_bring_up_server(
     """Install, start, and expose the server. Runs as a background task.
 
     On failure files the matching repair issue and returns — Home Assistant stays
-    up. On cancellation (the entry is being unloaded mid-bring-up) tears down any
-    partial state and re-raises so the task ends cancelled. The secret webhook id
+    up. On cancellation (the entry is unloaded, or access is switched off,
+    mid-bring-up) tears down any partial state and re-raises so the task ends cancelled. The secret webhook id
     and secret path must already exist in ``entry.data`` (the entry setup writes
     them before scheduling this task). ``announce=False`` skips the "server is
     running" notification, for a start the access switch requested.
@@ -165,8 +165,8 @@ async def async_bring_up_server(
                 "will not be offered to Home Assistant conversation agents"
             )
     except asyncio.CancelledError:
-        # Unloaded mid-bring-up: undo whatever partial state exists, then let the
-        # cancellation propagate so the task ends cancelled.
+        # Unloaded or switched off mid-bring-up: undo whatever partial state
+        # exists, then let the cancellation propagate so the task ends cancelled.
         await async_teardown_server(hass)
         raise
     except EmbeddedServerError as err:
