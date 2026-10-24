@@ -18,7 +18,7 @@ from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantConnectionError
 from ha_mcp.tools.error_log_parsing import (
     _split_log_records,
 )
-from ha_mcp.tools.log_common import MAX_LIMIT
+from ha_mcp.tools.log_common import MAX_LIMIT, SUPERVISOR_SEARCH_WINDOW_LINES
 from ha_mcp.tools.tools_logs import LogTools
 
 _HEADER = (
@@ -253,6 +253,34 @@ class TestRecordLimitAndPaging:
         warning = next(w for w in result["warnings"] if "newest record" in w)
         assert f"per-call maximum ({MAX_LIMIT})" in warning
         assert "100 lines were cut" in warning
+
+    @pytest.mark.asyncio
+    async def test_cut_record_with_limit_one_keeps_only_the_header(self) -> None:
+        frames = "\n".join(f"  frame {i}" for i in range(4))
+        record = f"{_HEADER}\n{frames}"
+        tools = LogTools(_client(record))
+        result = await tools.get_logs(**_kwargs(limit=1))
+        assert result["returned_lines"] == 1
+        assert result["log"] == _HEADER
+
+    @pytest.mark.asyncio
+    async def test_record_spanning_the_window_consumes_it_on_the_next_page(
+        self,
+    ) -> None:
+        frames = "\n".join(
+            f"  frame {i}" for i in range(SUPERVISOR_SEARCH_WINDOW_LINES + 100)
+        )
+        record = f"{_HEADER}\n{frames}\nValueError: NEEDLE"
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(record.splitlines())
+        tools = LogTools(client)
+        result = await tools.get_logs(**_kwargs(limit=100, search="NEEDLE"))
+        assert result["returned_lines"] == 100
+        assert result["has_more"] is True
+        assert result["next_offset"] == SUPERVISOR_SEARCH_WINDOW_LINES
+        assert any(
+            "header could not be included" in warning for warning in result["warnings"]
+        )
 
     @pytest.mark.asyncio
     async def test_leading_partial_is_widened_to_reach_its_header(self) -> None:
