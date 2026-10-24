@@ -11,21 +11,9 @@ import pytest
 from ha_mcp.auth.consent_form import create_consent_html, create_error_html
 from ha_mcp.auth.provider import (
     ACCESS_TOKEN_EXPIRY_SECONDS,
-    HomeAssistantCredentials,
+    HomeAssistantAuthorizationCode,
     HomeAssistantOAuthProvider,
 )
-
-
-class TestHomeAssistantCredentials:
-    """Tests for HomeAssistantCredentials class."""
-
-    def test_credentials_creation(self):
-        """Test creating credentials stores values correctly."""
-        creds = HomeAssistantCredentials(
-            ha_token="test_token_123",
-        )
-
-        assert creds.ha_token == "test_token_123"
 
 
 class TestConsentForm:
@@ -270,7 +258,6 @@ class TestHomeAssistantOAuthProvider:
         """Test exchanging auth code for tokens with stateless credentials."""
         from pydantic import AnyHttpUrl
 
-        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
         from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         # Register client
@@ -280,13 +267,8 @@ class TestHomeAssistantOAuthProvider:
         )
         await provider.register_client(client_info)
 
-        # Store HA credentials (simulates consent form submission)
-        provider.ha_credentials["test-client"] = HomeAssistantCredentials(
-            ha_token="test_token_abc123",
-        )
-
         # Create auth code directly
-        auth_code = AuthorizationCode(
+        auth_code = HomeAssistantAuthorizationCode(
             code="test_code_123",
             client_id="test-client",
             redirect_uri=AnyHttpUrl("http://localhost/cb"),
@@ -294,6 +276,7 @@ class TestHomeAssistantOAuthProvider:
             scopes=["homeassistant"],
             expires_at=time.time() + 300,
             code_challenge="test_challenge_value",
+            ha_token="test_token_abc123",
         )
         provider.auth_codes["test_code_123"] = auth_code
 
@@ -307,9 +290,6 @@ class TestHomeAssistantOAuthProvider:
 
         # Auth code should be consumed
         assert "test_code_123" not in provider.auth_codes
-
-        # Credentials should be cleaned up (no longer stored in memory)
-        assert "test-client" not in provider.ha_credentials
 
     @pytest.mark.asyncio
     async def test_load_access_token(self, provider):
@@ -429,19 +409,6 @@ class TestHomeAssistantOAuthProvider:
 
         # Should not raise
         await provider.revoke_token(refresh)
-
-    def test_get_ha_credentials(self, provider):
-        """Test getting HA credentials for a client."""
-        provider.ha_credentials["client-123"] = HomeAssistantCredentials(
-            ha_token="token",
-        )
-
-        result = provider.get_ha_credentials("client-123")
-        assert result is not None
-        assert result.ha_token == "token"
-
-        result_none = provider.get_ha_credentials("nonexistent")
-        assert result_none is None
 
     def test_get_routes_includes_consent(self, provider):
         """Test that routes include consent endpoints."""
@@ -632,7 +599,6 @@ class TestOAuthRoutes:
             "created_at": time.time(),
         }
 
-        # No more _validate_ha_credentials mock needed - validation removed
         request = mock_request(
             form_data={
                 "txn_id": txn_id,
@@ -730,16 +696,9 @@ class TestEndToEndOAuthFlow:
         pending = provider.pending_authorizations[txn_id]
         assert pending["client_id"] == "e2e-client"
 
-        # Store HA credentials (simulates successful consent - only token, no URL)
-        provider.ha_credentials["e2e-client"] = HomeAssistantCredentials(
-            ha_token="e2e_test_token",
-        )
-
         # Create auth code (simulates consent POST creating the code)
-        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
-
         auth_code_value = "e2e-auth-code-123"
-        auth_code = AuthorizationCode(
+        auth_code = HomeAssistantAuthorizationCode(
             code=auth_code_value,
             client_id="e2e-client",
             redirect_uri=AnyHttpUrl("http://localhost:9999/callback"),
@@ -747,6 +706,7 @@ class TestEndToEndOAuthFlow:
             scopes=["homeassistant", "mcp"],
             expires_at=time.time() + 300,
             code_challenge="e2e-challenge-xyz",
+            ha_token="e2e_test_token",
         )
         provider.auth_codes[auth_code_value] = auth_code
 
@@ -816,7 +776,6 @@ class TestStatelessTokenResilience:
         """HMAC secret is persisted — tokens issued by provider1 are valid on provider2."""
         from pydantic import AnyHttpUrl
 
-        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
         from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         # Provider 1: complete a full OAuth flow
@@ -830,10 +789,7 @@ class TestStatelessTokenResilience:
         )
         await provider1.register_client(client_info)
 
-        provider1.ha_credentials["persist-client"] = HomeAssistantCredentials(
-            ha_token="persistent_ha_token",
-        )
-        auth_code = AuthorizationCode(
+        auth_code = HomeAssistantAuthorizationCode(
             code="persist-code",
             client_id="persist-client",
             redirect_uri=AnyHttpUrl("http://localhost/cb"),
@@ -841,6 +797,7 @@ class TestStatelessTokenResilience:
             scopes=["homeassistant", "mcp"],
             expires_at=time.time() + 300,
             code_challenge="test_challenge",
+            ha_token="persistent_ha_token",
         )
         provider1.auth_codes["persist-code"] = auth_code
         token_response = await provider1.exchange_authorization_code(
@@ -878,7 +835,6 @@ class TestStatelessTokenResilience:
         """Tokens are rejected when the HMAC secret file is deleted (fresh secret generated)."""
         from pydantic import AnyHttpUrl
 
-        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
         from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         provider1 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
@@ -889,10 +845,7 @@ class TestStatelessTokenResilience:
             scope="homeassistant mcp",
         )
         await provider1.register_client(client_info)
-        provider1.ha_credentials["volatile-client"] = HomeAssistantCredentials(
-            ha_token="test_token",
-        )
-        auth_code = AuthorizationCode(
+        auth_code = HomeAssistantAuthorizationCode(
             code="volatile-code",
             client_id="volatile-client",
             redirect_uri=AnyHttpUrl("http://localhost/cb"),
@@ -900,6 +853,7 @@ class TestStatelessTokenResilience:
             scopes=["homeassistant", "mcp"],
             expires_at=time.time() + 300,
             code_challenge="challenge",
+            ha_token="test_token",
         )
         provider1.auth_codes["volatile-code"] = auth_code
         token_response = await provider1.exchange_authorization_code(
@@ -921,7 +875,6 @@ class TestStatelessTokenResilience:
         """Chained refresh tokens work within the same provider instance."""
         from pydantic import AnyHttpUrl
 
-        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
         from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
@@ -931,10 +884,7 @@ class TestStatelessTokenResilience:
             scope="homeassistant",
         )
         await provider.register_client(client_info)
-        provider.ha_credentials["chain-client"] = HomeAssistantCredentials(
-            ha_token="chain_ha_token",
-        )
-        auth_code = AuthorizationCode(
+        auth_code = HomeAssistantAuthorizationCode(
             code="chain-code",
             client_id="chain-client",
             redirect_uri=AnyHttpUrl("http://localhost/cb"),
@@ -942,6 +892,7 @@ class TestStatelessTokenResilience:
             scopes=["homeassistant"],
             expires_at=time.time() + 300,
             code_challenge="test_challenge",
+            ha_token="chain_ha_token",
         )
         provider.auth_codes["chain-code"] = auth_code
         token1 = await provider.exchange_authorization_code(client_info, auth_code)
@@ -1048,7 +999,6 @@ class TestStatelessTokenResilience:
         """Revoking a stateless token is a no-op; the token remains decodable."""
         from pydantic import AnyHttpUrl
 
-        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
         from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
@@ -1058,10 +1008,7 @@ class TestStatelessTokenResilience:
             scope="homeassistant",
         )
         await provider.register_client(client_info)
-        provider.ha_credentials["revoke-client"] = HomeAssistantCredentials(
-            ha_token="revoke_ha_token",
-        )
-        auth_code = AuthorizationCode(
+        auth_code = HomeAssistantAuthorizationCode(
             code="revoke-code",
             client_id="revoke-client",
             redirect_uri=AnyHttpUrl("http://localhost/cb"),
@@ -1069,6 +1016,7 @@ class TestStatelessTokenResilience:
             scopes=["homeassistant"],
             expires_at=time.time() + 300,
             code_challenge="challenge",
+            ha_token="revoke_ha_token",
         )
         provider.auth_codes["revoke-code"] = auth_code
         token_resp = await provider.exchange_authorization_code(client_info, auth_code)

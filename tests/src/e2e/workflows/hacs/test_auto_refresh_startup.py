@@ -43,9 +43,6 @@ separately pins the shared lifespan wiring.
 import asyncio
 import json
 import logging
-import os
-from contextlib import suppress
-from pathlib import Path
 
 import pytest
 
@@ -63,6 +60,7 @@ from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS
 from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
 
 from ...conftest import TEST_TOKEN, _retire_stdio_sidecar, _stdio_env
+from ...utilities.http_launcher import http_launcher_env, spawn_http_launcher
 from ...utilities.wait_helpers import wait_for_condition
 
 logger = logging.getLogger(__name__)
@@ -267,11 +265,6 @@ async def test_stdio_launcher_runs_the_startup_nudge(
 # own process and created the nudge task. The negative lane below needs that
 # proof: without it, "no marker appeared" could just mean the server never
 # started.
-_LIFESPAN_STARTED_LOG_FRAGMENTS = (
-    "Application startup complete",
-    "Uvicorn running on",
-)
-
 # Log fragments ``hacs_auto_refresh`` emits only once a pass has gone PAST the
 # gates — the per-attempt failure, the give-up line, and the success line. None
 # of them can come from a pass that returned at the OAuth sentinel gate.
@@ -280,122 +273,6 @@ _NUDGE_RAN_LOG_FRAGMENTS = (
     "Could not reach HACS to refresh the component repository",
     "Asked HACS to refresh component repository info",
 )
-
-
-def _http_launcher_env(ha_url: str, config_dir: Path) -> dict[str, str]:
-    """Env shared by the HTTP launcher lanes, minus each lane's credentials.
-
-    Same shape as the stdio test's env (including the deliberate absence of
-    HA_MCP_DISABLE_UPDATE_CHECK, which would return the nudge early) plus the
-    HTTP knobs: loopback bind on an ephemeral port and a throwaway secret path,
-    because nothing ever connects to these servers — the lifespan fires at
-    uvicorn startup on its own.
-    """
-    return {
-        "HOMEASSISTANT_URL": ha_url,
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "HA_MAX_RETRIES": "1",
-        "ENABLE_STRICT_MANDATORY_BPS": "false",
-        "HA_MCP_CONFIG_DIR": str(config_dir),
-        "MCP_HOST": "127.0.0.1",
-        "MCP_PORT": "0",
-        "MCP_SECRET_PATH": "/e2e-nudge-probe",
-    }
-
-
-class _HttpLauncher:
-    """A real ha-mcp HTTP launcher subprocess whose output is drained live.
-
-    stdout and stderr are merged into one pipe that a background task keeps
-    reading. That is not just for diagnostics: a launcher whose pipe buffer
-    filled would block inside its own log write, which could stall it before or
-    inside the lifespan and make both assertions below meaningless.
-    """
-
-    def __init__(self, proc: asyncio.subprocess.Process) -> None:
-        self._proc = proc
-        self._lines: list[str] = []
-        self._lifespan_started = asyncio.Event()
-        self._drain_task = asyncio.create_task(self._drain())
-
-    async def _drain(self) -> None:
-        assert self._proc.stdout is not None
-        buffer = ""
-        while True:
-            # Chunked reads rather than ``readline()``: a line longer than the
-            # stream reader's limit makes ``readline`` raise instead of
-            # returning, and a server banner is not a size we control.
-            chunk = await self._proc.stdout.read(4096)
-            if not chunk:
-                if buffer:
-                    self._record(buffer)
-                return
-            buffer += chunk.decode("utf-8", errors="replace")
-            *complete, buffer = buffer.split("\n")
-            for line in complete:
-                self._record(line)
-
-    def _record(self, line: str) -> None:
-        self._lines.append(line)
-        if any(f in line for f in _LIFESPAN_STARTED_LOG_FRAGMENTS):
-            self._lifespan_started.set()
-
-    async def wait_for_lifespan_started(self, timeout: float = 30) -> bool:
-        """True once the launcher reports a completed ASGI lifespan startup.
-
-        Raced against the process exiting so a launcher that died on a config
-        error reports back immediately instead of costing the whole timeout.
-        """
-        started = asyncio.ensure_future(self._lifespan_started.wait())
-        exited = asyncio.ensure_future(self._proc.wait())
-        try:
-            done, _pending = await asyncio.wait(
-                {started, exited},
-                timeout=timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        finally:
-            for task in (started, exited):
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
-        return started in done
-
-    def lines_matching(self, fragments: tuple[str, ...]) -> list[str]:
-        return [line for line in self._lines if any(f in line for f in fragments)]
-
-    def output(self, limit: int = 40) -> str:
-        """The tail of the launcher's merged output, for failure messages."""
-        return "\n".join(self._lines[-limit:]) or "<no output captured>"
-
-    async def aclose(self) -> None:
-        """Stop the launcher and its drain — never leave an orphaned process."""
-        if self._proc.returncode is None:
-            self._proc.terminate()
-            try:
-                await asyncio.wait_for(self._proc.wait(), timeout=10)
-            except TimeoutError:
-                self._proc.kill()
-                await self._proc.wait()
-        self._drain_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await self._drain_task
-
-
-async def _spawn_http_launcher(command: str, env: dict[str, str]) -> _HttpLauncher:
-    """Spawn ``command`` (an ha-mcp HTTP console script) with a drained pipe.
-
-    Not StdioTransport: these entry points speak HTTP, not MCP-over-stdio, so
-    the test drives the process directly.
-    """
-    proc = await asyncio.create_subprocess_exec(
-        command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        env=env,
-    )
-    return _HttpLauncher(proc)
 
 
 @pytest.mark.hacs
@@ -408,13 +285,13 @@ async def test_web_launcher_runs_the_startup_nudge(
 
     container_info = ha_container_with_fresh_config
     await _wait_for_hacs_ws_ready(container_info)
-    env = _http_launcher_env(container_info["base_url"], tmp_path)
+    env = http_launcher_env(container_info["base_url"], tmp_path)
     env["HOMEASSISTANT_TOKEN"] = container_info.get("token", TEST_TOKEN)
 
     def marker_files():
         return list(tmp_path.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
 
-    launcher = await _spawn_http_launcher("ha-mcp-web", env)
+    launcher = await spawn_http_launcher("ha-mcp-web", env)
     try:
         # The marker IS the readiness signal: it can only be written after
         # uvicorn ran the lifespan and the nudge completed a pass. Nothing
@@ -476,7 +353,7 @@ async def test_oauth_launcher_skips_the_startup_nudge(
     logger.info("Testing the HACS startup nudge gate on the ha-mcp-oauth launcher...")
 
     container_info = ha_container_with_fresh_config
-    env = _http_launcher_env(container_info["base_url"], tmp_path)
+    env = http_launcher_env(container_info["base_url"], tmp_path)
     # No HOMEASSISTANT_TOKEN: main_oauth substitutes OAUTH_MODE_TOKEN for it,
     # which is exactly the state under test. MCP_BASE_URL is only echoed into
     # the OAuth metadata URLs — HomeAssistantOAuthProvider never fetches it —
@@ -489,7 +366,7 @@ async def test_oauth_launcher_skips_the_startup_nudge(
     def marker_files():
         return list(tmp_path.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
 
-    launcher = await _spawn_http_launcher("ha-mcp-oauth", env)
+    launcher = await spawn_http_launcher("ha-mcp-oauth", env)
     try:
         started = await launcher.wait_for_lifespan_started(timeout=30)
         assert started, (
