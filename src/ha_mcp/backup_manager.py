@@ -2272,13 +2272,13 @@ async def _fetch_group(client: Any, entity_id: str) -> Any:
 async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
     object_id = config.get("object_id") or entity_id.split(".", 1)[-1]
     service_data: dict[str, Any] = {"object_id": object_id}
-    if config.get("name"):
-        service_data["name"] = config["name"]
-    if config.get("entities"):
+    for key in ("name", "icon"):
+        if config.get(key):
+            service_data[key] = config[key]
+    if config.get("entities") is not None:
         service_data["entities"] = config["entities"]
-    if config.get("icon"):
-        service_data["icon"] = config["icon"]
-    return await _rest_post(client, "services/group/set", service_data)
+    group_set = {"type": "call_service", "domain": "group", "service": "set"}
+    return await _ws_send(client, {**group_set, "service_data": service_data})
 
 
 # Calendar events — calendar.get_events to fetch, calendar.create/update services.
