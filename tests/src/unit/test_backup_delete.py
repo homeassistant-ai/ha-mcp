@@ -33,6 +33,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.errors import ErrorCode
 from ha_mcp.tools.backup_snapshot import delete_backup
 
@@ -359,6 +360,26 @@ class TestSnapshotDeleteSuccess:
         with p1, p2, pytest.raises(ToolError) as exc_info:
             await delete_backup(_client(), "target", confirm=True)
         assert ErrorCode.SERVICE_CALL_FAILED.value in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_rejected_delete_command_is_a_structured_error(self) -> None:
+        """send_command raises on success=false; the error names the backup."""
+        old = _iso(_now() - timedelta(days=100))
+        newer = _iso(_now() - timedelta(days=1))
+        ws = _ws_client([_entry("target", date=old), _entry("other", date=newer)])
+        reply = ws.send_command.side_effect
+
+        async def _send(command: str, **kwargs: Any) -> dict[str, Any]:
+            if command == "backup/delete":
+                raise HomeAssistantCommandError("Command failed: boom", "unknown_error")
+            return await reply(command, **kwargs)
+
+        ws.send_command.side_effect = _send
+        p1, p2 = _patched(ws, _settings(enabled=True, min_age_days=7))
+        with p1, p2, pytest.raises(ToolError) as exc_info:
+            await delete_backup(_client(), "target", confirm=True)
+        assert "boom" in str(exc_info.value)
+        assert '"backup_id": "target"' in str(exc_info.value)
 
 
 class TestSnapshotDeleteAgentErrorsOnInfo:

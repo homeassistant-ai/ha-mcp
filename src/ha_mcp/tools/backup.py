@@ -6,7 +6,8 @@ Provides the polymorphic ``ha_manage_backup`` tool, which handles both:
 * **Full HA snapshots** (``scope="snapshot"``) — the original
   ``ha_backup_create`` / ``ha_backup_restore`` functionality. Heavy
   tarball creation via HA's native backup integration; restore restarts
-  HA. Last-resort recovery. Implemented in ``backup_snapshot.py``.
+  HA. Last-resort recovery. Implemented in ``backup_snapshot.py`` and
+  ``backup_snapshot_restore.py``.
 * **Per-edit auto-backups** (``scope="edits"``) — list / view / restore
   / delete operations against the per-entity snapshots produced by the
   ``@with_auto_backup`` decorator (#1288). Lightweight, no HA restart.
@@ -46,12 +47,9 @@ from .backup_access import (
     require_backup_param as _require,
 )
 from .backup_on_demand import capture_on_demand
-from .backup_snapshot import (
-    create_backup,
-    delete_backup,
-    list_backups,
-    restore_backup,
-)
+from .backup_snapshot import create_backup, delete_backup, list_backups
+from .backup_snapshot_restore import restore_backup
+from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -117,7 +115,7 @@ def register_backup_tools(
 |---|---|---|
 | `snapshot` | `create` | Create an HA tarball (config, plus all apps (add-ons) on Supervisor installs; no DB, no share/media folders) on the backup locations of Home Assistant's automatic-backup settings other than Home Assistant Cloud; without those, on the default location. Can take a while on a large instance; progress heartbeats are sent while waiting. |
 | `snapshot` | `list` | List full HA tarball snapshots as Home Assistant reports them (id, name, date, per-location size). Read-only — use to discover a `backup_id` or confirm a backup landed; a non-empty `agent_errors` means the list is partial. |
-| `snapshot` | `restore` | Restore a full HA tarball. **Restarts HA.** Last-resort recovery. |
+| `snapshot` | `restore` | Restore from a full HA tarball. Replaces Home Assistant's configuration plus what `restore_database` / `restore_addons` / `restore_folders` select; other apps and folders stay as they are. **Restarts HA.** Last-resort recovery. |
 | `snapshot` | `delete` | Delete one full HA tarball by `backup_id` (`confirm=True` required). **Disabled by default** (`enable_snapshot_delete` setting) and layered with guards even when enabled — see below. |
 | `edits` | `create` | On-demand snapshot of one entity (`domain` + `entity_id` required). Use before the user manually edits in the HA UI. Same handler path the decorator takes on writes; bypasses the `enable_auto_backup` toggle. |
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
@@ -128,7 +126,7 @@ def register_backup_tools(
 
 **When to use which scope:**
 - Use `scope="edits"` to undo a recent automation/script/scene/dashboard/helper edit by the agent. Lightweight, fast, no restart.
-- Use `scope="snapshot"` only for system-wide recovery (botched add-on update, mass config corruption, etc.).
+- Use `scope="snapshot"` only for system-wide recovery (mass config corruption, a broken app update with that app in `restore_addons`, etc.).
 
 **`scope="snapshot"` backup-hint:**
 {backup_hint_text}
@@ -150,7 +148,8 @@ survives an agent's own mistakes.
 **Examples:**
 - Snapshot before risky op: `ha_manage_backup(scope="snapshot", action="create", name="Before_Big_Change")`
 - List snapshots (to discover a backup_id or confirm one landed): `ha_manage_backup(scope="snapshot", action="list")`
-- Restore full snapshot: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed")`
+- Restore a snapshot's configuration (the database follows the backup): `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed")`
+- Restore a snapshot with one of its apps: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed", restore_addons=["core_mosquitto"])`
 - Delete an old snapshot (requires `enable_snapshot_delete=true`): `ha_manage_backup(scope="snapshot", action="delete", backup_id="dd7550ed", confirm=True)`
 - On-demand entity snapshot before a manual UI edit: `ha_manage_backup(scope="edits", action="create", domain="helper_input_boolean", entity_id="welcome_home_active")`
 - List recent auto-backups for one automation: `ha_manage_backup(scope="edits", action="list", domain="automation", entity_id="welcome_home")`
@@ -202,8 +201,28 @@ survives an agent's own mistakes.
             Field(
                 default=None,
                 description="(snapshot.restore) Include the database in the restore. Default: "
-                "restore it when the backup contains it. On Supervisor installs it must "
-                "match whether the backup contains the database.",
+                "restore it when the backup contains it. Must be false for a backup "
+                "without one; on Supervisor installs it must match the backup.",
+            ),
+        ] = None,
+        restore_addons: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description="(snapshot.restore) Slugs of apps (add-ons) in the backup to "
+                "restore, from its `addons` in the snapshot list. Default: none. "
+                "Supervisor installs only.",
+            ),
+        ] = None,
+        restore_folders: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description="(snapshot.restore) Folders in the backup to restore, from its "
+                "`folders` in the snapshot list (`share`, `addons/local`, `ssl`, `media`). "
+                "Default: none. Supervisor installs only.",
             ),
         ] = None,
         confirm: Annotated[
@@ -272,6 +291,8 @@ survives an agent's own mistakes.
                 name=name,
                 backup_id=backup_id,
                 restore_database=restore_database,
+                restore_addons=restore_addons,
+                restore_folders=restore_folders,
                 confirm=confirm,
                 limit=limit,
                 ctx=ctx,
@@ -300,6 +321,8 @@ async def _dispatch_snapshot_action(
     name: str | None,
     backup_id: str | None,
     restore_database: bool | None,
+    restore_addons: list[str] | None,
+    restore_folders: list[str] | None,
     confirm: bool,
     limit: int,
     ctx: Context | None,
@@ -314,7 +337,14 @@ async def _dispatch_snapshot_action(
         return await delete_backup(client, bid, confirm, ctx=ctx)
     # action == "restore"
     bid = _require("backup_id", backup_id, scope, action)
-    return await restore_backup(client, bid, restore_database, ctx=ctx)
+    return await restore_backup(
+        client,
+        bid,
+        restore_database,
+        ctx=ctx,
+        restore_addons=restore_addons,
+        restore_folders=restore_folders,
+    )
 
 
 async def _dispatch_edits_action(

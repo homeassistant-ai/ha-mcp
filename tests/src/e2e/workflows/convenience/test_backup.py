@@ -373,7 +373,7 @@ class TestSnapshotDelete:
 
         A second, newer backup is created after the target so the target
         is NOT also the single newest snapshot — otherwise the newest-
-        snapshot guard (checked first; see backup.py) would fire instead
+        snapshot guard (checked first; see backup_snapshot.py) would fire instead
         of the age-floor guard this test is meant to isolate, since a
         freshly created backup with nothing after it is trivially "newest"
         in a shared test container.

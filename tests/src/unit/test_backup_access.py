@@ -250,6 +250,28 @@ async def test_registered_transport_and_categorized_proxies_enforce_backup_contr
     _assert_no_io(backup_world)
 
 
+async def test_restore_selection_reaches_the_restore_as_given(
+    backup_world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A selection lost on the way would restore no app and back none up.
+
+    Some MCP clients send arrays as JSON strings.
+    """
+    restore = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(backup, "restore_backup", restore)
+    arguments = {
+        "scope": "snapshot",
+        "action": "restore",
+        "backup_id": "b1",
+        "restore_addons": '["core_ssh"]',
+        "restore_folders": ["share"],
+    }
+    async with Client(backup_world.mcp) as client:
+        await client.call_tool("ha_manage_backup", arguments)
+    assert restore.await_args.kwargs["restore_addons"] == ["core_ssh"]
+    assert restore.await_args.kwargs["restore_folders"] == ["share"]
+
+
 async def test_backup_read_only_keeps_automatic_pre_edit_capture(
     backup_world: SimpleNamespace,
 ) -> None:

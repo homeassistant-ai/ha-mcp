@@ -600,7 +600,7 @@ async def test_ha_get_automation_traces_empty_diagnostics_emits_progress() -> No
 # tools_backup.ha_manage_backup (#1861) — the tool is a nested-function
 # @mcp.tool closure inside register_backup_tools, not a class method like
 # every other tool above. Its unit tests (test_backup_delete.py,
-# test_backup_snapshot.py) call the module-level create_backup /
+# test_backup_snapshot*.py) call the module-level create_backup /
 # restore_backup / delete_backup functions directly with an explicit
 # ctx= kwarg, which proves the plumbing but NOT that FastMCP actually
 # injects a live Context into ha_manage_backup's own signature when a

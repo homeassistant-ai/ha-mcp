@@ -767,10 +767,10 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "name",
         "backup_id",
         "restore_database",
-        # snapshot delete confirmation flag — the (scope, action) dispatch
-        # already blocks (snapshot, delete) outright; confirm has no
-        # mutation capability of its own, it only gates whether that
-        # already-blocked action proceeds.
+        "restore_addons",
+        "restore_folders",
+        # snapshot delete confirmation flag — the dispatch blocks (snapshot,
+        # delete) outright, so confirm has no mutation capability of its own.
         "confirm",
         # ...edits create payload / list filters (list is an allowed read),
         "domain",

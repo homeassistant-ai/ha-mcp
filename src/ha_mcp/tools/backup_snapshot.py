@@ -1,8 +1,8 @@
 """Full Home Assistant snapshots for ``ha_manage_backup(scope="snapshot")``.
 
-Create, list, restore and delete go through Home Assistant's own backup
-integration (``backup/*`` WebSocket commands). The tool itself is registered
-in ``backup.py``.
+Create, list and delete go through Home Assistant's own backup integration
+(``backup/*`` WebSocket commands); restore is in ``backup_snapshot_restore.py``.
+The tool itself is registered in ``backup.py``.
 """
 
 import asyncio
@@ -17,8 +17,6 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
     HomeAssistantClient,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
 )
 from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..config import get_global_settings
@@ -125,8 +123,10 @@ async def _default_agent(client: HomeAssistantClient, is_supervised: bool) -> st
     return f"hassio.{mounts.get('default_backup_mount') or 'local'}"
 
 
-def _require_idle(queue: asyncio.Queue[dict[str, Any]]) -> None:
-    """Refuse unless the backup manager is idle.
+def _require_idle(
+    queue: asyncio.Queue[dict[str, Any]], context: dict[str, Any] | None = None
+) -> None:
+    """Refuse unless the backup manager is idle; ``context`` goes into the error.
 
     Core sends the manager's last event before acknowledging the subscription;
     anything but idle is another operation whose events would be read as this
@@ -139,6 +139,7 @@ def _require_idle(queue: asyncio.Queue[dict[str, Any]]) -> None:
                 ErrorCode.SERVICE_CALL_FAILED,
                 "Home Assistant's backup manager is busy "
                 f"({last.get('manager_state')}); wait for it to finish",
+                context=context,
             )
         )
 
@@ -369,227 +370,6 @@ def _parse_backup_date(raw: Any) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt
-
-
-def _backup_protected(entry: dict[str, Any]) -> bool:
-    """Whether a ``backup/info`` or ``backup/details`` entry is encrypted.
-
-    ``protected`` is per agent (AgentBackupStatus), not top-level; a backup
-    is encrypted as a whole, so any agent reporting it decides.
-    """
-    agents = entry.get("agents")
-    if not isinstance(agents, dict):
-        return False
-    return any(a.get("protected") for a in agents.values() if isinstance(a, dict))
-
-
-def _restore_agent(target: dict[str, Any]) -> str:
-    """An agent that holds ``target``; local and Supervisor locations need no download."""
-    agent_ids: list[str] = list(target.get("agents") or {})
-    return next(
-        (a for a in agent_ids if a.startswith(("hassio.", "backup."))),
-        agent_ids[0],
-    )
-
-
-async def _send_restore(
-    ws_client: HomeAssistantWebSocketClient,
-    params: dict[str, Any],
-    ctx: Context | None,
-    started: float,
-) -> bool:
-    """Send ``backup/restore``; True when Home Assistant accepted it but never replied.
-
-    Core restarts inside the restore command, and Supervisor stops Core before
-    its restore job reports done, so a real restore usually ends with the
-    connection closing instead of a reply. A restore event that is not
-    ``failed`` tells that apart from a connection lost before Home Assistant
-    took the restore; it does not prove the restore finished. Heartbeats
-    continue while it waits; ``started`` keeps their progress rising after
-    the safety backup's.
-    """
-    loop = asyncio.get_running_loop()
-    sub_id, queue = await ws_client.subscribe_command("backup/subscribe_events")
-    events: list[dict[str, Any]] = []
-
-    async def _collect() -> None:
-        try:
-            while True:
-                await safe_progress(
-                    ctx,
-                    progress=round(loop.time() - started),
-                    message="waiting for the restore",
-                )
-                try:
-                    message = await asyncio.wait_for(
-                        queue.get(), timeout=_BACKUP_PROGRESS_INTERVAL_S
-                    )
-                except TimeoutError:
-                    continue
-                events.append(message.get("event") or {})
-        except asyncio.QueueShutDown:
-            return
-
-    collector: asyncio.Task[None] | None = None
-    try:
-        _require_idle(queue)
-        collector = asyncio.create_task(_collect())
-        # A Supervisor restore can run for minutes before Core goes down.
-        await ws_client.send_command(
-            "backup/restore", _wait_timeout=_BACKUP_MAX_WAIT_S, **params
-        )
-        return False
-    except (HomeAssistantConnectionError, HomeAssistantCommandTimeout):
-        restore = [e for e in events if e.get("manager_state") == "restore_backup"]
-        if not restore or restore[-1].get("state") == "failed":
-            raise
-        return True
-    finally:
-        if collector is not None:
-            collector.cancel()
-        await ws_client.release_subscription(sub_id)
-
-
-async def restore_backup(
-    client: HomeAssistantClient,
-    backup_id: str,
-    restore_database: bool | None = None,
-    ctx: Context | None = None,
-) -> dict[str, Any]:
-    """
-    Restore Home Assistant from a backup (DESTRUCTIVE - use with caution).
-
-    Creates a safety backup first when the default backup password is set.
-
-    Args:
-        client: Home Assistant REST client
-        backup_id: Backup ID to restore
-        restore_database: Whether to restore the database; ``None`` restores
-            it when the backup contains it. On Supervisor installs Home
-            Assistant rejects a value that does not match the backup.
-        ctx: Optional FastMCP context for progress heartbeats during the
-            safety-backup and restore waits
-
-    Returns:
-        Dictionary with restore result including safety_backup_id, status, etc.
-    """
-    started = asyncio.get_running_loop().time()
-    try:
-        async with _dedicated_ws(client) as ws_client:
-            details = await ws_client.send_command(
-                "backup/details", backup_id=backup_id
-            )
-            target = details["result"]["backup"]
-            if target is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Backup '{backup_id}' not found",
-                        context={
-                            "agent_errors": details["result"].get("agent_errors") or {}
-                        },
-                        suggestions=[
-                            "List snapshots with ha_manage_backup(scope='snapshot', "
-                            "action='list') before retrying"
-                        ],
-                    )
-                )
-
-            password, agent_ids, is_supervised = await _backup_plan(client, ws_client)
-            if restore_database is None:
-                restore_database = bool(target.get("database_included"))
-            # Add-ons and folders are restored as the backup holds them; Core
-            # installs restore neither and reject a non-empty list.
-            if is_supervised:
-                addons = [a["slug"] for a in target.get("addons") or []]
-                folders = list(target.get("folders") or [])
-            else:
-                addons, folders = [], []
-            restore_params: dict[str, Any] = {
-                "backup_id": backup_id,
-                "agent_id": _restore_agent(target),
-                "restore_homeassistant": True,
-                "restore_database": restore_database,
-                "restore_addons": addons,
-                "restore_folders": folders,
-            }
-            # Home Assistant checks a given password against the backup, and
-            # the default password is the only one ha-mcp knows.
-            if password and _backup_protected(target):
-                restore_params["password"] = password
-
-            warnings = [
-                "Home Assistant is restarting. Connection will be temporarily lost."
-            ]
-            safety_backup_id = None
-            if password:
-                # Holds what the restore replaces: configuration, database,
-                # add-ons and the folders the restore writes.
-                safety, _, safety_warnings = await _generate_backup(
-                    ws_client,
-                    ctx,
-                    name=f"PreRestore_Safety_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}",
-                    password=password,
-                    agent_ids=agent_ids,
-                    include_homeassistant=True,
-                    include_database=True,
-                    include_all_addons=is_supervised,
-                    **({"include_folders": folders} if folders else {}),
-                )
-                safety_backup_id = safety["backup_id"]
-                if safety.get("failed_addons") or safety.get("failed_folders"):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            "The safety backup is missing apps (add-ons) or folders the "
-                            "restore would overwrite; the restore was not started",
-                            context={
-                                "safety_backup_id": safety_backup_id,
-                                "warnings": safety_warnings,
-                            },
-                        )
-                    )
-                warnings.extend(safety_warnings)
-                note = (
-                    "A safety backup was created before restore. You can "
-                    "restore from it if needed."
-                )
-            else:
-                warnings.append(
-                    "No safety backup was created (the default backup "
-                    "password is not set). If the restore corrupts state, "
-                    "there is no automatic rollback — configure the "
-                    "default password in Settings → System → Backups and "
-                    "retry to get a safety net."
-                )
-                note = "Restore proceeding WITHOUT a safety backup. See warnings above."
-
-            if await _send_restore(ws_client, restore_params, ctx, started):
-                warnings.append(
-                    "Home Assistant accepted the restore but did not confirm it "
-                    "before the connection closed, as its restart does; check "
-                    "its state once it is back before retrying."
-                )
-        return {
-            "success": True,
-            "backup_id": backup_id,
-            "status": "Restore initiated - Home Assistant will restart",
-            "safety_backup_id": safety_backup_id,
-            "restore_database": restore_database,
-            "warnings": warnings,
-            "note": note,
-        }
-
-    except ToolError:
-        raise
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"Error restoring backup: {e}")
-        exception_to_structured_error(
-            e,
-            context={"tool": "restore_backup", "backup_id": backup_id},
-            suggestions=["Check Home Assistant connection and backup availability"],
-        )
-        return None  # unreachable: exception_to_structured_error always raises
 
 
 async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[str, Any]:
@@ -872,14 +652,6 @@ async def _execute_snapshot_delete(
         backup_id=backup_id,
         _wait_timeout=_BACKUP_DELETE_WAIT_S,
     )
-    if not delete_result.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                delete_result.get("error", "Backup deletion failed"),
-                context={"backup_id": backup_id},
-            )
-        )
     agent_errors = (delete_result.get("result") or {}).get("agent_errors") or {}
     if agent_errors:
         raise_tool_error(
