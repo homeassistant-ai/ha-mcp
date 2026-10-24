@@ -23,10 +23,10 @@ def provider() -> HomeAssistantOAuthProvider:
     return HomeAssistantOAuthProvider(base_url="http://localhost:8086")
 
 
-def _consent_request(form: dict[str, str]) -> SimpleNamespace:
+def _consent_request(form: dict[str, object]) -> SimpleNamespace:
     """A consent-form POST carrying ``form`` as its body."""
 
-    async def read_form() -> dict[str, str]:
+    async def read_form() -> dict[str, object]:
         return form
 
     return SimpleNamespace(query_params={}, form=read_form)
@@ -115,6 +115,42 @@ async def test_token_carries_the_credential_submitted_for_its_own_code(provider)
         payload = provider._decode_token(token.access_token)
         assert payload is not None
         assert payload["ha_token"] == f"llat-{user}"
+
+
+@pytest.mark.asyncio
+async def test_padded_token_is_bound_without_its_whitespace(provider):
+    """Whitespace around a pasted token must not reach Home Assistant."""
+    client_info = await _register(provider, "pad-client")
+    code = await _consent(provider, "pad-client", "txn", "  llat \n")
+
+    auth_code = await provider.load_authorization_code(client_info, code)
+    assert auth_code is not None
+    token = await provider.exchange_authorization_code(client_info, auth_code)
+    payload = provider._decode_token(token.access_token)
+    assert payload is not None
+    assert payload["ha_token"] == "llat"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ha_token",
+    ["   ", SimpleNamespace(filename="token.txt")],
+    ids=["whitespace-only", "file-upload"],
+)
+async def test_consent_post_rejects_a_token_that_is_not_text(provider, ha_token):
+    """A blank or uploaded token field returns the user to the form, minting nothing."""
+    provider.pending_authorizations["txn"] = _pending("test-client")
+
+    response = await provider._consent_post(
+        _consent_request({"txn_id": "txn", "ha_token": ha_token})
+    )
+
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert "/consent?" in location
+    assert "error=" in location
+    assert not provider.auth_codes
+    assert "txn" in provider.pending_authorizations
 
 
 @pytest.mark.asyncio
