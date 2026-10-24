@@ -76,3 +76,17 @@ updates:
           - "websockets"
         update-types:
           - "patch"
+
+  # Renovate alone updates src/ha_mcp/_vendor/requirements.txt, because each
+  # pin bump must regenerate its vendored tree (renovate.json). Dependabot
+  # security updates still scan the file and would open a pin-only duplicate
+  # that fails the vendored-tree tests; this entry ignores every dependency
+  # there for both update kinds. The alerts themselves stay on: Renovate's
+  # vulnerabilityAlerts reads them to open its own security PR.
+  - package-ecosystem: "pip"
+    directory: "/src/ha_mcp/_vendor"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
