@@ -1086,24 +1086,18 @@ class TestSweepWarningsShape:
         from ha_mcp.tools.backup import restore_backup
 
         target = {"backup_id": "abc", "agents": {"backup.local": {}}}
+        create = {"agent_ids": [], "password": "pw"}
         ws = AsyncMock()
         ws.send_command.side_effect = [
             {"success": True, "result": {"backup": target}},
-            {
-                "success": True,
-                "result": {
-                    "config": {"create_backup": {"agent_ids": [], "password": "pw"}}
-                },
-            },
-            {"success": True},
+            {"success": True, "result": {"config": {"create_backup": create}}},
         ]
         client = MagicMock()
         client.base_url = "http://test"
         client.token = "t"
         client.verify_ssl = False
         client.get_config = AsyncMock(return_value={"components": []})
-        # Stub the safety backup (exercised by test_backup_snapshot) so this
-        # test stays focused on the warnings-list shape contract.
+        # Safety backup and restore send are exercised by test_backup_snapshot.
         with (
             patch(
                 "ha_mcp.tools.backup.get_connected_ws_client",
@@ -1112,6 +1106,10 @@ class TestSweepWarningsShape:
             patch(
                 "ha_mcp.tools.backup._generate_backup",
                 new=AsyncMock(return_value=({"backup_id": "safety"}, 1, [])),
+            ),
+            patch(
+                "ha_mcp.tools.backup._send_restore",
+                new=AsyncMock(return_value=False),
             ),
         ):
             result = await restore_backup(client, "abc")

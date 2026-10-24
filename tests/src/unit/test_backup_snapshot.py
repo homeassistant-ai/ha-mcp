@@ -18,7 +18,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.errors import ErrorCode
 from ha_mcp.tools import backup
 from ha_mcp.tools.backup import (
@@ -91,6 +95,7 @@ class FakeWS:
 
     async def send_command(self, command: str, **kwargs: Any) -> dict[str, Any]:
         self.calls.append((command, kwargs))
+        await asyncio.sleep(0)  # a network round trip lets other tasks run
         if (err := self.errors.get(command)) is not None:
             raise err
         if command == "backup/config/info":
@@ -596,6 +601,59 @@ class TestRestore:
             await _run(restore_backup, ws, _client(), "b1")
         assert ErrorCode.SERVICE_CALL_FAILED.value in str(exc_info.value)
         assert not ws.sent("backup/restore")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("events", "error", "initiated"),
+        [
+            pytest.param(
+                [{"manager_state": "restore_backup", "state": "core_restart"}],
+                HomeAssistantConnectionError("closed"),
+                True,
+                id="restart-for-the-restore",
+            ),
+            pytest.param(
+                [{"manager_state": "restore_backup", "state": "in_progress"}],
+                HomeAssistantCommandTimeout("no reply"),
+                True,
+                id="still-running",
+            ),
+            pytest.param(
+                [], HomeAssistantConnectionError("closed"), False, id="no-event"
+            ),
+            pytest.param(
+                [{"manager_state": "restore_backup", "state": "failed"}],
+                HomeAssistantConnectionError("closed"),
+                False,
+                id="restore-failed",
+            ),
+        ],
+    )
+    async def test_connection_closed_by_the_restore_restart_is_not_a_failure(
+        self, events, error, initiated
+    ) -> None:
+        """Home Assistant restarts before it answers a real restore.
+
+        Reporting that as a failure invites a retry: a second safety backup
+        and a second restore.
+        """
+        ws = FakeWS(
+            password=None,
+            details=_entry("b1"),
+            events=events,
+            errors={"backup/restore": error},
+        )
+        if initiated:
+            result = await _run(restore_backup, ws, _client(), "b1")
+            assert result["warnings"][-1].startswith(
+                "Home Assistant accepted the restore but did not confirm it"
+            )
+        else:
+            with pytest.raises(ToolError) as exc_info:
+                await _run(restore_backup, ws, _client(), "b1")
+            assert "closed" in str(exc_info.value)
+        assert ws.sent("backup/restore")
+        ws.release_subscription.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_without_password_restore_warns_there_is_no_safety_backup(
