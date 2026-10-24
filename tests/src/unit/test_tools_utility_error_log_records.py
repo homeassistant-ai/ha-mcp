@@ -417,9 +417,7 @@ class TestRecordLimitAndPaging:
                 **_kwargs(limit=int(match.group(1)), offset=offset)
             )
             final_seen = [
-                line
-                for line in final["log"].splitlines()
-                if line.startswith("2026-")
+                line for line in final["log"].splitlines() if line.startswith("2026-")
             ]
             assert final["has_more"] is False
             assert len(set(seen) | set(final_seen)) == len(records), (
