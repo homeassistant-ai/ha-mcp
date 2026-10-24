@@ -195,6 +195,24 @@ async def _default_agent(client: HomeAssistantClient, is_supervised: bool) -> st
     return f"hassio.{mounts.get('default_backup_mount') or 'local'}"
 
 
+def _require_idle(queue: asyncio.Queue[dict[str, Any]]) -> None:
+    """Refuse unless the backup manager is idle.
+
+    Core sends the manager's last event before acknowledging the subscription;
+    anything but idle is another operation whose events would be read as this
+    one's.
+    """
+    last = queue.get_nowait().get("event") or {}
+    if last.get("manager_state") != "idle":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Home Assistant's backup manager is busy "
+                f"({last.get('manager_state')}); wait for it to finish",
+            )
+        )
+
+
 async def _generate_backup(
     ws_client: HomeAssistantWebSocketClient,
     ctx: Context | None,
@@ -208,26 +226,19 @@ async def _generate_backup(
     Assistant's frontend does. The job id is not the backup id on Supervisor
     installs, and the manager runs one backup at a time, so the result is the
     backup with this name that ``backup/info`` lists after the job and did not
-    list before it. A failed upload still leaves the backup on the agents
-    whose upload worked; it is returned with a warning.
+    list before it, unless only agents that failed the earlier listing hold
+    it. A failed upload still leaves the backup on the agents whose upload
+    worked; it is returned with a warning.
     """
-    known = {b["backup_id"] for b in (await _backup_info(ws_client))["backups"]}
+    before = await _backup_info(ws_client)
+    known = {b["backup_id"] for b in before["backups"]}
+    # A backup held only by agents that failed this listing may predate the job.
+    unlisted = set(before.get("agent_errors") or {})
     sub_id, queue = await ws_client.subscribe_command("backup/subscribe_events")
     loop = asyncio.get_running_loop()
     started = loop.time()
     try:
-        # Core sends the manager's last event before acknowledging the
-        # subscription; anything but idle is another operation whose events
-        # would be read as this job's.
-        last = queue.get_nowait().get("event") or {}
-        if last.get("manager_state") != "idle":
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Home Assistant's backup manager is busy "
-                    f"({last.get('manager_state')}); wait for it to finish",
-                )
-            )
+        _require_idle(queue)
         job = await ws_client.send_command("backup/generate", name=name, **params)
         job_id = job["result"]["backup_job_id"]
         outcome = await _wait_for_backup(queue, job_id, started, ctx)
@@ -237,7 +248,9 @@ async def _generate_backup(
     new = [
         b
         for b in listing["backups"]
-        if b["backup_id"] not in known and b.get("name") == name
+        if b["backup_id"] not in known
+        and b.get("name") == name
+        and not (unlisted and unlisted.issuperset(b.get("agents") or {}))
     ]
     # A failed upload still leaves the backup on the agents whose upload worked.
     kept = outcome.get("reason") == "upload_failed" and len(new) == 1
@@ -260,6 +273,7 @@ async def _generate_backup(
                 context={
                     "backup_job_id": job_id,
                     "agent_errors": listing.get("agent_errors") or {},
+                    "agent_errors_before_job": before.get("agent_errors") or {},
                 },
                 suggestions=[_CHECK_LIST_SUGGESTION],
             )
@@ -449,7 +463,10 @@ def _restore_agent(target: dict[str, Any]) -> str:
 
 
 async def _send_restore(
-    ws_client: HomeAssistantWebSocketClient, params: dict[str, Any]
+    ws_client: HomeAssistantWebSocketClient,
+    params: dict[str, Any],
+    ctx: Context | None,
+    started: float,
 ) -> bool:
     """Send ``backup/restore``; True when Home Assistant accepted it but never replied.
 
@@ -457,20 +474,36 @@ async def _send_restore(
     its restore job reports done, so a real restore usually ends with the
     connection closing instead of a reply. A restore event that is not
     ``failed`` tells that apart from a connection lost before Home Assistant
-    took the restore; it does not prove the restore finished.
+    took the restore; it does not prove the restore finished. Heartbeats
+    continue while it waits; ``started`` keeps their progress rising after
+    the safety backup's.
     """
+    loop = asyncio.get_running_loop()
     sub_id, queue = await ws_client.subscribe_command("backup/subscribe_events")
     events: list[dict[str, Any]] = []
 
     async def _collect() -> None:
         try:
             while True:
-                events.append((await queue.get()).get("event") or {})
+                await safe_progress(
+                    ctx,
+                    progress=round(loop.time() - started),
+                    message="waiting for the restore",
+                )
+                try:
+                    message = await asyncio.wait_for(
+                        queue.get(), timeout=_BACKUP_PROGRESS_INTERVAL_S
+                    )
+                except TimeoutError:
+                    continue
+                events.append(message.get("event") or {})
         except asyncio.QueueShutDown:
             return
 
-    collector = asyncio.create_task(_collect())
+    collector: asyncio.Task[None] | None = None
     try:
+        _require_idle(queue)
+        collector = asyncio.create_task(_collect())
         # A Supervisor restore can run for minutes before Core goes down.
         await ws_client.send_command(
             "backup/restore", _wait_timeout=_BACKUP_MAX_WAIT_S, **params
@@ -482,7 +515,8 @@ async def _send_restore(
             raise
         return True
     finally:
-        collector.cancel()
+        if collector is not None:
+            collector.cancel()
         await ws_client.release_subscription(sub_id)
 
 
@@ -504,11 +538,12 @@ async def restore_backup(
             it when the backup contains it. On Supervisor installs Home
             Assistant rejects a value that does not match the backup.
         ctx: Optional FastMCP context for progress heartbeats during the
-            pre-restore safety-backup wait
+            safety-backup and restore waits
 
     Returns:
         Dictionary with restore result including safety_backup_id, status, etc.
     """
+    started = asyncio.get_running_loop().time()
     try:
         async with _dedicated_ws(client) as ws_client:
             details = await ws_client.send_command(
@@ -599,7 +634,7 @@ async def restore_backup(
                 )
                 note = "Restore proceeding WITHOUT a safety backup. See warnings above."
 
-            if await _send_restore(ws_client, restore_params):
+            if await _send_restore(ws_client, restore_params, ctx, started):
                 warnings.append(
                     "Home Assistant accepted the restore but did not confirm it "
                     "before the connection closed, as its restart does; check "

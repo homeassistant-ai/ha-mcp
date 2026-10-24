@@ -57,9 +57,9 @@ class FakeWS:
     """WebSocket stand-in: canned replies per command, a backup event stream.
 
     ``events`` is what ``backup/subscribe_events`` streams after ``last``, the
-    manager's last event that Core sends first. A generated backup gets an id
-    other than the job id, as on Supervisor installs, and ``backup/info``
-    lists it next to an older backup.
+    manager's last event that Core sends first on every subscription. A
+    generated backup gets an id other than the job id, as on Supervisor
+    installs, and ``backup/info`` lists it next to an older backup.
     """
 
     def __init__(
@@ -75,15 +75,17 @@ class FakeWS:
     ) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        for event in [last, *(events if events is not None else [_COMPLETED])]:
-            self.queue.put_nowait({"type": "event", "event": event})
+        self.last = last
+        self.events = events if events is not None else [_COMPLETED]
         self.agent_ids = agent_ids if agent_ids is not None else ["backup.local"]
         self.password = password
         self.details = details
         self.new_backup_fields = new_backup or {}
         self.stored = [_entry("older")]
-        # Backups the first listing misses (an agent failed to list them).
+        # Backups the first listing misses; with ``unlisted`` set, those agents
+        # report a listing error until the job runs.
         self.late: list[dict[str, Any]] = []
+        self.unlisted: dict[str, str] = {}
         self.errors = errors or {}
         self.details_agent_errors: dict[str, str] = {}
         self.release_subscription = AsyncMock()
@@ -91,6 +93,10 @@ class FakeWS:
 
     async def subscribe_command(self, command: str) -> tuple[int, Any]:
         self.calls.append((command, {}))
+        for event in [self.last, *self.events]:
+            self.queue.put_nowait({"type": "event", "event": event})
+        # The job's events are streamed once; the manager is idle after it.
+        self.last, self.events = _IDLE, []
         return 7, self.queue
 
     async def send_command(self, command: str, **kwargs: Any) -> dict[str, Any]:
@@ -107,7 +113,9 @@ class FakeWS:
             self.stored.extend(self.late)
             return {"success": True, "result": {"backup_job_id": "job1"}}
         if command == "backup/info":
-            return {"success": True, "result": {"backups": list(self.stored)}}
+            errors = {} if self.sent("backup/generate") else self.unlisted
+            result = {"backups": list(self.stored), "agent_errors": errors}
+            return {"success": True, "result": result}
         if command == "backup/details":
             result = {"backup": self.details, "agent_errors": self.details_agent_errors}
             return {"success": True, "result": result}
@@ -134,6 +142,19 @@ def _entry(backup_id: str, **fields: Any) -> dict[str, Any]:
         "failed_folders": [],
         **fields,
     }
+
+
+def _slow_restore(ws: FakeWS) -> FakeWS:
+    """Make ``backup/restore`` take a moment before Home Assistant replies."""
+    reply = ws.send_command
+
+    async def _send(command: str, **kwargs: Any) -> dict[str, Any]:
+        if command == "backup/restore":
+            await asyncio.sleep(0.05)
+        return await reply(command, **kwargs)
+
+    ws.send_command = _send
+    return ws
 
 
 def _client(*, supervised: bool = False) -> MagicMock:
@@ -304,6 +325,55 @@ class TestWaitingForTheBackup:
         with pytest.raises(ToolError, match="lists 2 new backups") as exc_info:
             await _run(create_backup, ws, _client(), name="mine")
         assert "Check the snapshot list" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_failed_upload_does_not_take_an_older_backup_for_its_own(
+        self,
+    ) -> None:
+        """A same-named backup on an agent that failed the first listing is old."""
+        ws = FakeWS(events=[_UPLOAD_FAILED], new_backup={"name": "someone-else"})
+        ws.unlisted = {"hassio.nas": "unreachable"}
+        ws.late = [
+            _entry(
+                "old",
+                name="mine",
+                date="2020-01-01T00:00:00+00:00",
+                agents={"hassio.nas": {"protected": True, "size": 10}},
+            )
+        ]
+        with pytest.raises(ToolError, match="Backup creation failed"):
+            await _run(create_backup, ws, _client(), name="mine")
+
+    @pytest.mark.asyncio
+    async def test_new_backup_is_found_next_to_one_an_unlisted_agent_held(
+        self,
+    ) -> None:
+        """A failing agent's older backup does not hide the job's own.
+
+        The job's backup is also on that agent: one listed agent holding it
+        is enough.
+        """
+        both = {"backup.local": {"protected": True}, "hassio.nas": {"protected": True}}
+        ws = FakeWS(new_backup={"agents": both})
+        ws.unlisted = {"hassio.nas": "unreachable"}
+        ws.late = [
+            _entry("old", name="mine", agents={"hassio.nas": {"protected": True}})
+        ]
+        result = await _run(create_backup, ws, _client(), name="mine")
+        assert result["backup_id"] == "new-backup"
+
+    @pytest.mark.asyncio
+    async def test_backup_only_unlisted_agents_hold_names_their_errors(
+        self,
+    ) -> None:
+        """It may predate the job, so it is not named; the error says why."""
+        nas = {"hassio.nas": {"protected": True, "size": 10}}
+        ws = FakeWS(agent_ids=["hassio.nas"], new_backup={"agents": nas})
+        ws.unlisted = {"hassio.nas": "timeout"}
+        with pytest.raises(ToolError, match="lists 0 new backups") as exc_info:
+            await _run(create_backup, ws, _client(), name="mine")
+        assert "agent_errors_before_job" in str(exc_info.value)
+        assert "timeout" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_finished_job_without_its_backup_is_an_error(self) -> None:
@@ -654,6 +724,54 @@ class TestRestore:
             assert "closed" in str(exc_info.value)
         assert ws.sent("backup/restore")
         ws.release_subscription.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_busy_backup_manager_stops_a_restore_without_safety_backup(
+        self,
+    ) -> None:
+        """Another restore's replayed event must not read as this one's."""
+        ws = FakeWS(
+            password=None,
+            details=_entry("b1"),
+            last={"manager_state": "restore_backup", "state": "in_progress"},
+            events=[],
+            errors={"backup/restore": HomeAssistantConnectionError("closed")},
+        )
+        with pytest.raises(ToolError, match="busy"):
+            await _run(restore_backup, ws, _client(), "b1")
+        assert not ws.sent("backup/restore")
+        ws.release_subscription.assert_awaited_once_with(7)
+
+    @pytest.mark.asyncio
+    async def test_long_restore_sends_progress_heartbeats(self) -> None:
+        """#1861: a restore can run for minutes before Home Assistant replies.
+
+        The heartbeats stop once it has.
+        """
+        ws = _slow_restore(FakeWS(password=None, details=_entry("b1")))
+        ctx = MagicMock()
+        ctx.report_progress = AsyncMock()
+        with patch.object(backup, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
+            await _run(restore_backup, ws, _client(), "b1", ctx=ctx)
+            sent = ctx.report_progress.await_count
+            await asyncio.sleep(0.05)
+        assert sent >= 3
+        assert ctx.report_progress.await_count == sent
+
+    @pytest.mark.asyncio
+    async def test_restore_progress_counts_from_the_start_of_the_call(
+        self,
+    ) -> None:
+        """It never drops below the safety backup's, which started later."""
+        ws = _slow_restore(FakeWS())
+        ctx = MagicMock()
+        ctx.report_progress = AsyncMock()
+        started = asyncio.get_running_loop().time() - 100
+        with patch.object(backup, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
+            await backup._send_restore(ws, {"backup_id": "b1"}, ctx, started)
+        progress = [c.kwargs["progress"] for c in ctx.report_progress.await_args_list]
+        assert progress
+        assert min(progress) >= 100
 
     @pytest.mark.asyncio
     async def test_without_password_restore_warns_there_is_no_safety_backup(
