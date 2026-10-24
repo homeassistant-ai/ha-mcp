@@ -57,7 +57,9 @@ def _code(
     )
 
 
-async def _register(provider: HomeAssistantOAuthProvider, client_id: str):
+async def _register(
+    provider: HomeAssistantOAuthProvider, client_id: str
+) -> OAuthClientInformationFull:
     client_info = OAuthClientInformationFull(
         client_id=client_id, redirect_uris=[REDIRECT_URI]
     )
@@ -78,7 +80,9 @@ async def _consent(
 
 
 @pytest.mark.asyncio
-async def test_consent_post_rejects_expired_transaction(provider):
+async def test_consent_post_rejects_expired_transaction(
+    provider: HomeAssistantOAuthProvider,
+) -> None:
     """A consent form submitted after its window must not mint a code."""
     provider.pending_authorizations["stale-txn"] = _pending(
         "test-client", STALE_CREATED_AT
@@ -95,7 +99,9 @@ async def test_consent_post_rejects_expired_transaction(provider):
 
 
 @pytest.mark.asyncio
-async def test_token_carries_the_credential_submitted_for_its_own_code(provider):
+async def test_token_carries_the_credential_submitted_for_its_own_code(
+    provider: HomeAssistantOAuthProvider,
+) -> None:
     """Two consents for one client must not swap credentials at exchange.
 
     The submitted LLAT used to be stored per client, so a second consent for
@@ -118,7 +124,9 @@ async def test_token_carries_the_credential_submitted_for_its_own_code(provider)
 
 
 @pytest.mark.asyncio
-async def test_padded_token_is_bound_without_its_whitespace(provider):
+async def test_padded_token_is_bound_without_its_whitespace(
+    provider: HomeAssistantOAuthProvider,
+) -> None:
     """Whitespace around a pasted token must not reach Home Assistant."""
     client_info = await _register(provider, "pad-client")
     code = await _consent(provider, "pad-client", "txn", "  llat \n")
@@ -137,7 +145,9 @@ async def test_padded_token_is_bound_without_its_whitespace(provider):
     ["   ", SimpleNamespace(filename="token.txt")],
     ids=["whitespace-only", "file-upload"],
 )
-async def test_consent_post_rejects_a_token_that_is_not_text(provider, ha_token):
+async def test_consent_post_rejects_a_token_that_is_not_text(
+    provider: HomeAssistantOAuthProvider, ha_token: object
+) -> None:
     """A blank or uploaded token field returns the user to the form, minting nothing."""
     provider.pending_authorizations["txn"] = _pending("test-client")
 
@@ -154,7 +164,9 @@ async def test_consent_post_rejects_a_token_that_is_not_text(provider, ha_token)
 
 
 @pytest.mark.asyncio
-async def test_code_cannot_be_exchanged_twice(provider):
+async def test_code_cannot_be_exchanged_twice(
+    provider: HomeAssistantOAuthProvider,
+) -> None:
     """A redeemed code must not yield the user's credential a second time."""
     client_info = await _register(provider, "once-client")
     code = await _consent(provider, "once-client", "txn", "llat")
@@ -168,7 +180,9 @@ async def test_code_cannot_be_exchanged_twice(provider):
 
 
 @pytest.mark.asyncio
-async def test_code_is_not_loaded_for_another_client(provider):
+async def test_code_is_not_loaded_for_another_client(
+    provider: HomeAssistantOAuthProvider,
+) -> None:
     """One client's code must not be loadable, with its credential, by another."""
     owner = await _register(provider, "owner-client")
     other = await _register(provider, "other-client")
@@ -179,7 +193,9 @@ async def test_code_is_not_loaded_for_another_client(provider):
 
 
 @pytest.mark.asyncio
-async def test_expired_state_is_evicted_when_a_new_authorization_starts(provider):
+async def test_expired_state_is_evicted_when_a_new_authorization_starts(
+    provider: HomeAssistantOAuthProvider,
+) -> None:
     """Abandoned consent forms and unredeemed codes must not accumulate.
 
     Live entries must survive the sweep: a sweep that cleared everything would
@@ -215,7 +231,7 @@ async def test_expired_state_is_evicted_when_a_new_authorization_starts(provider
     assert len(provider.pending_authorizations) == 2
 
 
-def test_authorization_code_repr_hides_the_token():
+def test_authorization_code_repr_hides_the_token() -> None:
     """A logged or dumped code must not print the user's credential."""
     code = _code("c", "code", time.time() + 60)
     assert "token" not in repr(code)
