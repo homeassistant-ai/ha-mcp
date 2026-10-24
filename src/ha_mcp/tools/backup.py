@@ -342,7 +342,7 @@ def _backup_warnings(entry: dict[str, Any]) -> list[str]:
         warnings.append(f"Not stored on backup agents: {', '.join(failed)}")
     if failed := entry.get("failed_addons"):
         slugs = ", ".join(a.get("slug", "?") for a in failed)
-        warnings.append(f"Add-ons that could not be backed up: {slugs}")
+        warnings.append(f"Apps (add-ons) that could not be backed up: {slugs}")
     if failed := entry.get("failed_folders"):
         warnings.append(f"Folders that could not be backed up: {', '.join(failed)}")
     return warnings
@@ -576,7 +576,7 @@ async def restore_backup(
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
-                            "The safety backup is missing add-ons or folders the "
+                            "The safety backup is missing apps (add-ons) or folders the "
                             "restore would overwrite; the restore was not started",
                             context={
                                 "safety_backup_id": safety_backup_id,
@@ -949,7 +949,7 @@ def register_backup_tools(
 
 | scope | action | What it does |
 |---|---|---|
-| `snapshot` | `create` | Create an HA tarball (config, plus all add-ons on Supervisor installs; no DB, no share/media folders) on the backup locations of Home Assistant's automatic-backup settings other than Home Assistant Cloud; without those, on the default location. Can take a while on a large instance; progress heartbeats are sent while waiting. |
+| `snapshot` | `create` | Create an HA tarball (config, plus all apps (add-ons) on Supervisor installs; no DB, no share/media folders) on the backup locations of Home Assistant's automatic-backup settings other than Home Assistant Cloud; without those, on the default location. Can take a while on a large instance; progress heartbeats are sent while waiting. |
 | `snapshot` | `list` | List full HA tarball snapshots as Home Assistant reports them (id, name, date, per-location size). Read-only — use to discover a `backup_id` or confirm a backup landed; a non-empty `agent_errors` means the list is partial. |
 | `snapshot` | `restore` | Restore a full HA tarball. **Restarts HA.** Last-resort recovery. |
 | `snapshot` | `delete` | Delete one full HA tarball by `backup_id` (`confirm=True` required). **Disabled by default** (`enable_snapshot_delete` setting) and layered with guards even when enabled — see below. |
