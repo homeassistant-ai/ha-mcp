@@ -8,6 +8,7 @@ the oldest returned record.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -404,7 +405,23 @@ class TestRecordLimitAndPaging:
             offset = last["next_offset"]
 
         assert len(seen) == len(set(seen)), "a record must not be returned twice"
+
         if len(seen) < len(records):
-            # Leftovers inside a terminal window are reachable by raising the
-            # limit, not by paging, so the response has to say so.
-            assert "limit" in last["pagination_hint"]
+            # The terminal window cannot page further; its hint has to make the
+            # remainder reachable, and one call at the hinted limit must prove
+            # that no record is silently lost.
+            hint = last.get("pagination_hint") or ""
+            match = re.search(r"limit=(\d+)", hint)
+            assert match, f"terminal hint must name an actionable limit: {hint}"
+            final = await tools.get_logs(
+                **_kwargs(limit=int(match.group(1)), offset=offset)
+            )
+            final_seen = [
+                line
+                for line in final["log"].splitlines()
+                if line.startswith("2026-")
+            ]
+            assert final["has_more"] is False
+            assert len(set(seen) | set(final_seen)) == len(records), (
+                "the terminal hint must make every remaining record reachable"
+            )
