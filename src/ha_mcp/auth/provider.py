@@ -629,7 +629,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
     @staticmethod
     def _pending_expired(pending: dict[str, Any], now: float) -> bool:
-        return now - pending["created_at"] > PENDING_AUTHORIZATION_EXPIRY_SECONDS
+        created_at = float(pending["created_at"])
+        return now - created_at > PENDING_AUTHORIZATION_EXPIRY_SECONDS
 
     def _evict_expired(self, now: float) -> None:
         """Drop pending transactions and codes past their expiry.
