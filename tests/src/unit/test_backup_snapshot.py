@@ -24,9 +24,9 @@ from ha_mcp.tools.backup_snapshot import create_backup, list_backups
 from ha_mcp.tools.backup_snapshot_restore import _backup_protected, restore_backup
 
 from ._backup_snapshot_fakes import (
-    _COMPLETED,
-    _FAILED,
-    _UPLOAD_FAILED,
+    COMPLETED,
+    FAILED,
+    UPLOAD_FAILED,
     FakeWS,
     _client,
     _entry,
@@ -187,7 +187,7 @@ class TestWaitingForTheBackup:
         self,
     ) -> None:
         """A same-named backup on an agent that failed the first listing is old."""
-        ws = FakeWS(events=[_UPLOAD_FAILED], new_backup={"name": "someone-else"})
+        ws = FakeWS(events=[UPLOAD_FAILED], new_backup={"name": "someone-else"})
         ws.unlisted = {"hassio.nas": "unreachable"}
         ws.late = [
             _entry(
@@ -241,7 +241,7 @@ class TestWaitingForTheBackup:
 
     @pytest.mark.asyncio
     async def test_failed_backup_is_reported_as_failure(self) -> None:
-        ws = FakeWS(events=[_FAILED])
+        ws = FakeWS(events=[FAILED])
         with pytest.raises(ToolError) as exc_info:
             await _run(create_backup, ws, _client())
         assert ErrorCode.SERVICE_CALL_FAILED.value in str(exc_info.value)
@@ -258,7 +258,7 @@ class TestWaitingForTheBackup:
         not depend on them.
         """
         ws = FakeWS(
-            events=[_UPLOAD_FAILED], new_backup={"failed_agent_ids": failed_agents}
+            events=[UPLOAD_FAILED], new_backup={"failed_agent_ids": failed_agents}
         )
         result = await _run(create_backup, ws, _client())
         assert result["backup_id"] == "new-backup"
@@ -269,7 +269,7 @@ class TestWaitingForTheBackup:
 
     @pytest.mark.asyncio
     async def test_failed_upload_without_a_stored_backup_is_a_failure(self) -> None:
-        ws = FakeWS(events=[_UPLOAD_FAILED], new_backup={"name": "someone-else"})
+        ws = FakeWS(events=[UPLOAD_FAILED], new_backup={"name": "someone-else"})
         with pytest.raises(ToolError, match="Backup creation failed"):
             await _run(create_backup, ws, _client(), name="mine")
 
@@ -355,7 +355,7 @@ class TestWaitingForTheBackup:
 
         async def _finish_later() -> None:
             await asyncio.sleep(0.05)
-            ws.queue.put_nowait({"type": "event", "event": _COMPLETED})
+            ws.queue.put_nowait({"type": "event", "event": COMPLETED})
 
         with patch.object(backup_snapshot, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
             finisher = asyncio.create_task(_finish_later())

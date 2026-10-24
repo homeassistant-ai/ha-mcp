@@ -8,18 +8,18 @@ import pytest
 
 from ha_mcp.tools import backup_snapshot, backup_snapshot_restore
 
-_COMPLETED = {"manager_state": "create_backup", "state": "completed"}
-_FAILED = {
+COMPLETED = {"manager_state": "create_backup", "state": "completed"}
+FAILED = {
     "manager_state": "create_backup",
     "state": "failed",
     "reason": "unknown_error",
 }
-_UPLOAD_FAILED = {
+UPLOAD_FAILED = {
     "manager_state": "create_backup",
     "state": "failed",
     "reason": "upload_failed",
 }
-_IDLE = {"manager_state": "idle"}
+IDLE = {"manager_state": "idle"}
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +46,7 @@ class FakeWS:
         *,
         agent_ids: list[str] | None = None,
         password: str | None = "pw",
-        last: dict[str, Any] = _IDLE,
+        last: dict[str, Any] = IDLE,
         events: list[dict[str, Any]] | None = None,
         details: dict[str, Any] | None = None,
         new_backup: dict[str, Any] | None = None,
@@ -55,7 +55,7 @@ class FakeWS:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.last = last
-        self.events = events if events is not None else [_COMPLETED]
+        self.events = events if events is not None else [COMPLETED]
         self.agent_ids = agent_ids if agent_ids is not None else ["backup.local"]
         self.password = password
         self.details = details
@@ -75,7 +75,7 @@ class FakeWS:
         for event in [self.last, *self.events]:
             self.queue.put_nowait({"type": "event", "event": event})
         # The job's events are streamed once; the manager is idle after it.
-        self.last, self.events = _IDLE, []
+        self.last, self.events = IDLE, []
         return 7, self.queue
 
     async def send_command(self, command: str, **kwargs: Any) -> dict[str, Any]:

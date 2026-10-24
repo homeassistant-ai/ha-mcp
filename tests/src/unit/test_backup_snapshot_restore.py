@@ -25,7 +25,7 @@ from ha_mcp.tools import backup_snapshot_restore
 from ha_mcp.tools.backup_snapshot_restore import restore_backup
 
 from ._backup_snapshot_fakes import (
-    _FAILED,
+    FAILED,
     FakeWS,
     _client,
     _entry,
@@ -334,7 +334,7 @@ class TestRestore:
 
     @pytest.mark.asyncio
     async def test_failed_safety_backup_stops_the_restore(self) -> None:
-        ws = FakeWS(details=_entry("b1"), events=[_FAILED])
+        ws = FakeWS(details=_entry("b1"), events=[FAILED])
         with pytest.raises(ToolError) as exc_info:
             await _run(restore_backup, ws, _client(), "b1")
         assert ErrorCode.SERVICE_CALL_FAILED.value in str(exc_info.value)
