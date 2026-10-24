@@ -93,7 +93,8 @@
           "oauth_redirect_allowlist": "Permesitaj OAuth-retrekomencaj URL-oj",
           "admin_token_replacement": "Anstataŭigi la administrantan alirtonon (laŭvola)",
           "admin_username": "Aŭ ŝalti al nur-loka konto kreita por HA-MCP: salutnomo (laŭvola)",
-          "admin_password": "La pasvorto de tiu konto"
+          "admin_password": "La pasvorto de tiu konto",
+          "oauth_allow_any_callback": "Permesi iun ajn OAuth-redirektan URL-on (malŝaltas la supran liston)"
         },
         "data_description": {
           "server_port": "La pordo, kiun ĉi tiu servilo aŭskultas. La ha-mcp apo (aldonaĵo) uzas 9583, do ĉi tio defaŭltas al 9584 por lasi ambaŭ ruli flank-al-flanke — se vi ne rulas la apon (aldonaĵon), iu ajn libera pordo funkcias.",
@@ -113,10 +114,11 @@
           "llm_api_exposure": "Formo de la ilaro proponita al konversaciaj agentoj. Ilo-serĉo (defaŭlta) tenas la kuntekston de la agento malgranda: kompakta API kun fiksitaj iloj plus serĉaj/ekzekutaj meta-iloj. Plena katalogo listigas ĉiun elmontritan ilon rekte — pli bone por grand-kuntekstaj modeloj. Ambaŭ registras la du flank-al-flanke, do ĉiu agento elektas sian propran sub Kontroli Home Assistant. Elmontro laŭ ilo estas administrata en la agorda panelo de HA-MCP; detaloj: {llm_api_docs_url}",
           "enable_startup_notification": "Montri sciigon ĉiufoje kiam la servilo startas, indikante al la administrant-nuraj agordaj surfacoj. Malŝaltu por starti silente — la konektaj URL-oj restas sur ĉi tiu ekrano.",
           "enable_sidebar_panel": "Montru la agordan panelon de HA-MCP en la flanka kolumno (nur por administrantoj). Malŝaltu por forigi la flankan eniron — servilaj opcioj restas disponeblaj sur ĉi tiu ekrano.",
-          "oauth_redirect_allowlist": "Nur uzata dum la Aŭtentikiga reĝimo estas la sekreta retmesaĝa URL (webhook URL). Kiam kliento ensalutas per OAuth, HA-MCP resendas la ensaluton nur al retvoka URL (callback URL) en ĉi tiu listo; iu ajn alia estas rifuzita per paĝo klariganta kiel aldoni ĝin. Enigu ĉiun retvokon ekzakte kiel la kliento sendas ĝin. Retvoko de http://-enbuklo (127.0.0.1, [::1] aŭ localhost) ankaŭ kongruas je iu ajn pordo. Kliento, kiu konektas nur per la retmesaĝa URL (webhook URL), bezonas neniun enskribon. Ekvalidas sen rekomenco.",
+          "oauth_redirect_allowlist": "Uzata nur dum la Aŭtentiga reĝimo estas la sekreta retmesaĝa ligilo (webhook URL). Kiam kliento ensalutas per OAuth, HA-MCP resendas la ensaluton nur al redirekta URL en ĉi tiu listo; ĉiu alia estas rifuzita per paĝo klariganta kiel aldoni ĝin. Enigu ĉiun redirekton ekzakte kiel la kliento sendas ĝin. http://-enbukla (loopback) redirekto (127.0.0.1, [::1] aŭ localhost) ankaŭ kongruas kun ajna pordo. Kliento kiu konektiĝas sen OAuth-ensaluto bezonas neniun eniron. Ekvalidas sen rekomenco.",
           "admin_token_replacement": "Lasu malplena por konservi la nunan aliron; la servilo rekomencas kiam vi ŝaltas. Longdaŭra alirtono de administranta konto. Via propra funkcias: malfermu vian profilon (via nomo ĉe la sudo de la flanka panelo), elektu la langeton Sekureco, kaj sub Longdaŭraj alirtonoj elektu Krei tonon. Via propra tono ankaŭ funkcias de ekster via hejma reto se ĝi iam elfluas, kaj Home Assistant registras la ŝanĝojn de la servilo sub via nomo. Pli sekure: konto kreita nur por HA-MCP, kun nur Loka aliro ŝaltita (vidu la kampojn sube).",
           "admin_username": "Nur por konto, kiun vi kreis nur por HA-MCP, sub Agordoj → Homoj → Aldoni personon kun Permesi ensaluton, Loka aliro nur kaj Administranto ŝaltitaj. Neniam enigu vian propran ensaluton ĉi tie: por uzi vian propran konton, algluu ties valortokenon supre anstataŭe. HA-MCP kreas la valortokenon de ĉi tiu konto (nomita HA-MCP Server), do neniu devas ensaluti kiel ĝi, kaj la pasvorto ne estas konservata. Ties valortokeno funkcias nur de via loka reto, kie la servilo rulas, kaj Home Assistant registras la ŝanĝojn de la servilo sub ĉi tiu konto.",
-          "admin_password": "Uzita unufoje, por krei la valortokenon. Neniam via propra pasvorto."
+          "admin_password": "Uzita unufoje, por krei la valortokenon. Neniam via propra pasvorto.",
+          "oauth_allow_any_callback": "Uzata nur dum la Aŭtentiga reĝimo estas la sekreta retmesaĝa ligilo (webhook URL). Akceptas OAuth-ensaluton al ajna https://-redirekto, aŭ http:// ĉe 127.0.0.1, [::1] aŭ localhost, anstataŭ nur la supre listigitaj, do vi neniam bezonas aldoni klienton. La prezo: via Home Assistant-adreso tiam plusendas prilaboritan ensalutligilon al ajna retejo kiun ĝi nomas, kiun fiŝkapta ligilo (phishing) povas uzi por aspekti kvazaŭ ĝi devenas de via Home Assistant. Ekvalidas sen rekomenco."
         }
       }
     }
