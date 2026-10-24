@@ -673,6 +673,70 @@ class TestOAuthRoutes:
         assert response.status_code == 303
         assert "error=" in response.headers["location"]
 
+    @pytest.mark.asyncio
+    async def test_consent_post_rejects_expired_transaction(
+        self, provider, mock_request
+    ):
+        """A consent form submitted after its window must not mint a code."""
+        txn_id = "stale-txn"
+        provider.pending_authorizations[txn_id] = {
+            "client_id": "test-client",
+            "redirect_uri": "http://localhost/cb",
+            "code_challenge": "test-challenge",
+            "created_at": time.time() - 400,  # More than 5 minutes ago
+        }
+
+        response = await provider._consent_post(
+            mock_request(form_data={"txn_id": txn_id, "ha_token": "token"})
+        )
+
+        assert response.status_code == 400
+        assert b"expired" in response.body
+        assert txn_id not in provider.pending_authorizations
+        assert not provider.auth_codes
+
+    @pytest.mark.asyncio
+    async def test_token_carries_the_credential_submitted_for_its_own_code(
+        self, provider, mock_request
+    ):
+        """Two consents for one client must not swap credentials at exchange.
+
+        The submitted LLAT used to be stored per client, so a second consent
+        for the same client overwrote the first and whichever code was
+        redeemed first was issued the other submitter's credential.
+        """
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
+
+        client_info = OAuthClientInformationFull(
+            client_id="shared-client",
+            redirect_uris=["http://localhost/cb"],
+        )
+        await provider.register_client(client_info)
+
+        codes: dict[str, str] = {}
+        for user in ("first", "second"):
+            txn_id = f"txn-{user}"
+            provider.pending_authorizations[txn_id] = {
+                "client_id": "shared-client",
+                "redirect_uri": "http://localhost/cb",
+                "scopes": ["homeassistant"],
+                "code_challenge": "test-challenge",
+                "created_at": time.time(),
+            }
+            response = await provider._consent_post(
+                mock_request(form_data={"txn_id": txn_id, "ha_token": f"llat-{user}"})
+            )
+            location = urlparse(response.headers["location"])
+            codes[user] = parse_qs(location.query)["code"][0]
+
+        for user in ("first", "second"):
+            auth_code = await provider.load_authorization_code(client_info, codes[user])
+            assert auth_code is not None
+            token = await provider.exchange_authorization_code(client_info, auth_code)
+            payload = provider._decode_token(token.access_token)
+            assert payload is not None
+            assert payload["ha_token"] == f"llat-{user}"
+
 
 class TestEndToEndOAuthFlow:
     """End-to-end tests for complete OAuth flow."""
