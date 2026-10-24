@@ -384,6 +384,11 @@ class CoreLogSourcesMixin:
             and len(page.records) == len(matches)
         )
         if held_back and leading_record is not None:
+            # A record longer than the page limit is already returned cut by
+            # _select_error_log_page, which builds a new record object. The
+            # identity check therefore holds back only an uncut leading tail;
+            # a cut record (including one spanning the whole window) stays
+            # visible with its partial-record warning instead of vanishing.
             if any(record is leading_record for record in page.records):
                 page = _page_without_record(page, leading_record)
             matches = [record for record in matches if record is not leading_record]
