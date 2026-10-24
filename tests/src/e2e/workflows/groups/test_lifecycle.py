@@ -137,6 +137,9 @@ class TestGroupLifecycle:
                     )
                     # Core marks group.set groups with ``auto``.
                     assert group["auto"] is True, group
+                    # State fields the tool used to drop now reach the caller.
+                    assert "last_changed" in group, group
+                    assert "context" in group, group
                     break
 
             assert group_found, f"Group {object_id} not found in list"
@@ -413,7 +416,8 @@ class TestGroupLifecycle:
         logger.info("Testing group input validation...")
 
         async with MCPAssertions(mcp_client) as mcp:
-            # Core's cv.slug rejects the prefix and names the slug to use.
+            # Core's cv.slug rejects the prefix; its "try group_invalid" names
+            # another group, so the tool adds a hint to drop the prefix.
             await mcp.call_tool_failure(
                 "ha_config_set_group",
                 {

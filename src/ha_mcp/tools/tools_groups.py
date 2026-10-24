@@ -80,17 +80,18 @@ class GroupTools:
         error = str(result.get("error", "Unknown error")).removeprefix(
             "Command failed: "
         )
-        if result.get("error_code") == "not_found":
+        error_code = result.get("error_code")
+        code = ws_failure_code(result)
+        suggestions: list[str] | None = None
+        if error_code == "not_found":
             # Core's call_service answers not_found only for an unknown service.
             code = ErrorCode.SERVICE_NOT_FOUND
             suggestions = ["The group integration is not loaded in Home Assistant"]
-        else:
-            code = ws_failure_code(result)
-            suggestions = (
-                [f"object_id: {_OBJECT_ID_DESCRIPTION}"]
-                if result.get("error_code") == "invalid_format"
-                else []
-            )
+        elif error_code == "invalid_format" and object_id.startswith("group."):
+            # Core's slug hint ("try group_x") names a different group.
+            suggestions = [
+                f"Drop the 'group.' prefix: object_id={object_id.removeprefix('group.')!r}"
+            ]
         raise_tool_error(
             create_error_response(
                 code,
@@ -152,12 +153,12 @@ class GroupTools:
                         {
                             "friendly_name": None,
                             "icon": None,
+                            # Core sets ``auto`` only on group.set groups.
+                            "auto": False,
                             **attributes,
                             **{k: v for k, v in state.items() if k != "attributes"},
                             "object_id": entity_id.removeprefix("group."),
                             "entity_ids": members,
-                            # Core sets ``auto`` only on group.set groups.
-                            "auto": attributes.get("auto", False),
                         }
                     )
 
@@ -306,19 +307,17 @@ class GroupTools:
                 "add_entities": add_entities,
                 "remove_entities": remove_entities,
             }
-            service_data: dict[str, Any] = {
-                "object_id": object_id,
-                **{k: v for k, v in optional_fields.items() if v is not None},
-            }
+            passed_fields = {k: v for k, v in optional_fields.items() if v is not None}
+            service_data: dict[str, Any] = {"object_id": object_id, **passed_fields}
 
             entity_id = f"group.{object_id}"
             # Read first: Core picks create or update by whether the group
-            # exists, and the reply reports which.
+            # exists, so the reply can say which.
             existing = await get_entity_state_or_none(self._client, entity_id)
             await self._call_group_service("set", service_data)
 
             action_word = "created" if existing is None else "updated"
-            updated_fields = [k for k in service_data if k != "object_id"]
+            updated_fields = list(passed_fields)
 
             result: dict[str, Any] = {}
             if existing is None and remove_entities is not None:

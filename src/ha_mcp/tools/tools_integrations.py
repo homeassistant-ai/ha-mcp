@@ -67,6 +67,7 @@ from .flow_helper_lookup import (
 from .helper_flows import require_helper_type
 from .helpers import (
     exception_to_structured_error,
+    get_entity_state_or_none,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
@@ -2884,23 +2885,7 @@ class IntegrationTools:
         A non-404 APIError (transient/auth) is re-raised so it is not
         mis-classified as a missing target; a 404 is treated as state-absent.
         """
-        client = self._client
-        try:
-            final_state_check = await client.get_entity_state(entity_id)
-            return not final_state_check
-        except HomeAssistantAPIError as e:
-            # Only 404 confirms the entity is absent from the state
-            # machine. Other API failures (500, 401, …) are transient
-            # or auth issues and must propagate so they aren't
-            # mis-classified as a missing target. Mirrors the
-            # status_code == 404 narrow in _delete_direct_entry.
-            if e.status_code != 404:
-                raise
-            logger.debug(
-                f"State check for {entity_id} raised 404 "
-                f"(treating as state-absent): {e}"
-            )
-            return True
+        return not await get_entity_state_or_none(self._client, entity_id)
 
     async def _registry_still_has_entry(self, target: str, entity_id: str) -> bool:
         """Return True if ``entity_id`` still has an entity-registry entry.
