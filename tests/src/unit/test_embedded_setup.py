@@ -125,6 +125,24 @@ def _spy(monkeypatch: pytest.MonkeyPatch) -> None:
     install_spies(monkeypatch)
 
 
+@pytest.fixture(autouse=True)
+def _restore_network_modules():
+    """Undo ``_install_network_cloud``'s ``sys.modules`` swaps after each test.
+
+    Left in place, they reach later test modules in the same process: the
+    config flow then builds its connect hint from the stubs instead of falling
+    back to the translated remote-URL prose.
+    """
+    names = ("homeassistant.helpers.network", "homeassistant.components.cloud")
+    saved = {name: sys.modules.get(name) for name in names}
+    yield
+    for name, module in saved.items():
+        if module is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
+
+
 class TestBringUp:
     async def test_legacy_bring_up_passes_creds_active_verdict(
         self, fake_manager, monkeypatch
