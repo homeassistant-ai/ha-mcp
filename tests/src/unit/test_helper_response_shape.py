@@ -1111,7 +1111,7 @@ class TestSweepWarningsShape:
             ),
             patch(
                 "ha_mcp.tools.backup._generate_backup",
-                new=AsyncMock(return_value=({"backup_id": "safety"}, 1)),
+                new=AsyncMock(return_value=({"backup_id": "safety"}, 1, [])),
             ),
         ):
             result = await restore_backup(client, "abc")
