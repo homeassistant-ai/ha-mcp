@@ -215,7 +215,8 @@ class GroupTools:
             list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description="List of entity IDs for the group. When updating, replaces all entities.",
+                description="List of entity IDs for the group. When updating, replaces all entities;"
+                " an empty list empties the group, or creates it without members.",
                 default=None,
             ),
         ] = None,
@@ -236,7 +237,8 @@ class GroupTools:
         all_on: Annotated[
             bool | None,
             Field(
-                description="If True, all entities must be on for group to be on",
+                description="If True, all entities must be on for group to be on. Core does not"
+                " expose the mode, so it cannot be read back and a backup does not restore it.",
                 default=None,
             ),
         ] = None,
