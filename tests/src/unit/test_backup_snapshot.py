@@ -1,4 +1,4 @@
-"""Unit tests for ``ha_manage_backup(scope="snapshot")`` in ``tools/backup.py``.
+"""Unit tests for ``ha_manage_backup(scope="snapshot")`` in ``tools/backup_snapshot.py``.
 
 The snapshot actions follow Home Assistant's own contracts (#2632, #2786):
 
@@ -24,8 +24,8 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.errors import ErrorCode
-from ha_mcp.tools import backup
-from ha_mcp.tools.backup import (
+from ha_mcp.tools import backup_snapshot
+from ha_mcp.tools.backup_snapshot import (
     _backup_protected,
     create_backup,
     list_backups,
@@ -49,7 +49,7 @@ _IDLE = {"manager_state": "idle"}
 @pytest.fixture(autouse=True)
 def _short_backup_wait():
     """A missed terminal event fails within a second instead of 30 minutes."""
-    with patch.object(backup, "_BACKUP_MAX_WAIT_S", 1):
+    with patch.object(backup_snapshot, "_BACKUP_MAX_WAIT_S", 1):
         yield
 
 
@@ -172,7 +172,9 @@ async def _run(coro_fn, ws: FakeWS, *args: Any, mounts: dict | None = None, **kw
     supervisor = AsyncMock(return_value={"success": True, "result": mounts or {}})
     with (
         patch.object(
-            backup, "get_connected_ws_client", AsyncMock(return_value=(ws, None))
+            backup_snapshot,
+            "get_connected_ws_client",
+            AsyncMock(return_value=(ws, None)),
         ),
         patch("ha_mcp.tools.tools_addons._supervisor_api_call", supervisor),
     ):
@@ -269,7 +271,7 @@ class TestConnection:
         reason = {"error": {"code": "CONNECTION_FAILED", "message": "TLS handshake"}}
         with (
             patch.object(
-                backup,
+                backup_snapshot,
                 "get_connected_ws_client",
                 AsyncMock(return_value=(None, reason)),
             ),
@@ -456,8 +458,8 @@ class TestWaitingForTheBackup:
         """A retry after a timeout must not start a second backup blindly."""
         ws = FakeWS(events=[])
         with (
-            patch.object(backup, "_BACKUP_MAX_WAIT_S", 0.05),
-            patch.object(backup, "_BACKUP_PROGRESS_INTERVAL_S", 0.01),
+            patch.object(backup_snapshot, "_BACKUP_MAX_WAIT_S", 0.05),
+            patch.object(backup_snapshot, "_BACKUP_PROGRESS_INTERVAL_S", 0.01),
             pytest.raises(ToolError) as exc_info,
         ):
             await _run(create_backup, ws, _client())
@@ -501,7 +503,7 @@ class TestWaitingForTheBackup:
             await asyncio.sleep(0.05)
             ws.queue.put_nowait({"type": "event", "event": _COMPLETED})
 
-        with patch.object(backup, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
+        with patch.object(backup_snapshot, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
             finisher = asyncio.create_task(_finish_later())
             await _run(tool, ws, _client(), *args, ctx=ctx)
             await asyncio.gather(finisher)
@@ -751,7 +753,7 @@ class TestRestore:
         ws = _slow_restore(FakeWS(password=None, details=_entry("b1")))
         ctx = MagicMock()
         ctx.report_progress = AsyncMock()
-        with patch.object(backup, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
+        with patch.object(backup_snapshot, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
             await _run(restore_backup, ws, _client(), "b1", ctx=ctx)
             sent = ctx.report_progress.await_count
             await asyncio.sleep(0.05)
@@ -767,8 +769,8 @@ class TestRestore:
         ctx = MagicMock()
         ctx.report_progress = AsyncMock()
         started = asyncio.get_running_loop().time() - 100
-        with patch.object(backup, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
-            await backup._send_restore(ws, {"backup_id": "b1"}, ctx, started)
+        with patch.object(backup_snapshot, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
+            await backup_snapshot._send_restore(ws, {"backup_id": "b1"}, ctx, started)
         progress = [c.kwargs["progress"] for c in ctx.report_progress.await_args_list]
         assert progress
         assert min(progress) >= 100

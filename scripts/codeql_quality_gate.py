@@ -409,10 +409,10 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "clean under that typing.",
     ),
     # NOTE: same PATH-WIDE caveat as the server.py entry above — re-audit if
-    # backup.py grows genuinely mixed-returns functions.
+    # backup_snapshot.py grows genuinely mixed-returns functions.
     (
         "py/mixed-returns",
-        "src/ha_mcp/tools/backup.py",
+        "src/ha_mcp/tools/backup_snapshot.py",
         "Mixing implicit and explicit returns",
         "",
         "False positive on _wait_for_backup's return-in-the-loop vs raise "

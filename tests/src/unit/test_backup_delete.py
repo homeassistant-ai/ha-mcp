@@ -1,4 +1,4 @@
-"""Unit tests for the snapshot-delete path in `backup.py` (#1861).
+"""Unit tests for the snapshot-delete path in `backup_snapshot.py` (#1861).
 
 `ha_manage_backup(scope="snapshot", action="delete")` did not exist before
 this change — snapshots could be created but never removed, so an agent
@@ -34,7 +34,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.errors import ErrorCode
-from ha_mcp.tools.backup import delete_backup
+from ha_mcp.tools.backup_snapshot import delete_backup
 
 
 def _now() -> datetime:
@@ -106,10 +106,12 @@ def _client() -> MagicMock:
 def _patched(ws: AsyncMock, settings: MagicMock):
     return (
         patch(
-            "ha_mcp.tools.backup.get_connected_ws_client",
+            "ha_mcp.tools.backup_snapshot.get_connected_ws_client",
             new=AsyncMock(return_value=(ws, None)),
         ),
-        patch("ha_mcp.tools.backup.get_global_settings", return_value=settings),
+        patch(
+            "ha_mcp.tools.backup_snapshot.get_global_settings", return_value=settings
+        ),
     )
 
 

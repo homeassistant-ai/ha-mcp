@@ -754,7 +754,7 @@ class Settings(BaseSettings):
     # snapshots before deleting old ones, but it cannot forge a backup's
     # HA-stamped creation date. 0 disables the age floor (still gated by
     # enable_snapshot_delete + the newest-snapshot / automatic-backup
-    # guards enforced in tools/backup.py).
+    # guards enforced in tools/backup_snapshot.py).
     snapshot_delete_min_age_days: Annotated[
         int, Setting(surface="backup", app=_ALL_FLAVORS, range=(0, 365))
     ] = Field(7, alias="SNAPSHOT_DELETE_MIN_AGE_DAYS")

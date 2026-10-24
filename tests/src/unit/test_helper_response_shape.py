@@ -1045,7 +1045,7 @@ class TestSweepWarningsShape:
     split by response-shape contract:
 
     **Strict helper (top-level ``success: True`` + warnings) — 4 of 8:**
-    - ``backup.py`` (restore_backup)
+    - ``backup_snapshot.py`` (restore_backup)
     - ``tools_service.py`` (ha_call_event timeout)
     - ``tools_system.py`` (ha_restart success)
     - ``tools_energy.py`` (ha_manage_energy_prefs dry_run with validate
@@ -1083,7 +1083,7 @@ class TestSweepWarningsShape:
 
     @pytest.mark.asyncio
     async def test_backup_restore_warnings_shape(self):
-        from ha_mcp.tools.backup import restore_backup
+        from ha_mcp.tools.backup_snapshot import restore_backup
 
         target = {"backup_id": "abc", "agents": {"backup.local": {}}}
         create = {"agent_ids": [], "password": "pw"}
@@ -1100,15 +1100,15 @@ class TestSweepWarningsShape:
         # Safety backup and restore send are exercised by test_backup_snapshot.
         with (
             patch(
-                "ha_mcp.tools.backup.get_connected_ws_client",
+                "ha_mcp.tools.backup_snapshot.get_connected_ws_client",
                 new=AsyncMock(return_value=(ws, None)),
             ),
             patch(
-                "ha_mcp.tools.backup._generate_backup",
+                "ha_mcp.tools.backup_snapshot._generate_backup",
                 new=AsyncMock(return_value=({"backup_id": "safety"}, 1, [])),
             ),
             patch(
-                "ha_mcp.tools.backup._send_restore",
+                "ha_mcp.tools.backup_snapshot._send_restore",
                 new=AsyncMock(return_value=False),
             ),
         ):

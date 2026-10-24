@@ -22,7 +22,7 @@ from ha_mcp.config import (
 )
 from ha_mcp.read_only import read_only_request
 from ha_mcp.settings_ui import _handlers_backups as backup_ui
-from ha_mcp.tools import backup
+from ha_mcp.tools import backup, backup_snapshot
 from ha_mcp.tools.auto_backup import with_auto_backup
 from ha_mcp.tools.tools_dev import DevTools
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
@@ -47,7 +47,12 @@ def backup_world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNames
         auto_backup_dir=str(tmp_path / "backups"),
     )
     settings = SimpleNamespace(**values)
-    for module in (backup, "ha_mcp.read_only", "ha_mcp.tools.auto_backup"):
+    for module in (
+        backup,
+        backup_snapshot,
+        "ha_mcp.read_only",
+        "ha_mcp.tools.auto_backup",
+    ):
         if isinstance(module, str):
             monkeypatch.setattr(f"{module}.get_global_settings", lambda: settings)
         else:
@@ -65,7 +70,7 @@ def backup_world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNames
     )
     ws.disconnect = AsyncMock()
     connect = AsyncMock(return_value=(ws, None))
-    monkeypatch.setattr(backup, "get_connected_ws_client", connect)
+    monkeypatch.setattr(backup_snapshot, "get_connected_ws_client", connect)
     manager = BackupManager(settings, ha)
 
     async def fetch(_client: Any, _entity_id: str) -> dict[str, Any]:
