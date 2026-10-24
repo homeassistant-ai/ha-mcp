@@ -67,7 +67,7 @@ class FakeWS:
         events: list[dict[str, Any]] | None = None,
         details: dict[str, Any] | None = None,
         new_backup: dict[str, Any] | None = None,
-        generate_error: Exception | None = None,
+        errors: dict[str, Exception] | None = None,
     ) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -80,7 +80,8 @@ class FakeWS:
         self.stored = [_entry("older")]
         # Backups the first listing misses (an agent failed to list them).
         self.late: list[dict[str, Any]] = []
-        self.generate_error = generate_error
+        self.errors = errors or {}
+        self.details_agent_errors: dict[str, str] = {}
         self.release_subscription = AsyncMock()
         self.disconnect = AsyncMock()
 
@@ -90,12 +91,12 @@ class FakeWS:
 
     async def send_command(self, command: str, **kwargs: Any) -> dict[str, Any]:
         self.calls.append((command, kwargs))
+        if (err := self.errors.get(command)) is not None:
+            raise err
         if command == "backup/config/info":
             create = {"agent_ids": self.agent_ids, "password": self.password}
             return {"success": True, "result": {"config": {"create_backup": create}}}
         if command == "backup/generate":
-            if self.generate_error:
-                raise self.generate_error
             fields = {"name": kwargs["name"], **self.new_backup_fields}
             self.stored.append(_entry("new-backup", **fields))
             self.stored.extend(self.late)
@@ -103,7 +104,8 @@ class FakeWS:
         if command == "backup/info":
             return {"success": True, "result": {"backups": list(self.stored)}}
         if command == "backup/details":
-            return {"success": True, "result": {"backup": self.details}}
+            result = {"backup": self.details, "agent_errors": self.details_agent_errors}
+            return {"success": True, "result": result}
         if command == "backup/restore":
             return {"success": True, "result": None}
         raise AssertionError(f"unexpected WS command: {command!r}")
@@ -226,6 +228,48 @@ class TestWhereBackupsGo:
         assert result["backup_id"] == "new-backup"
 
 
+class TestConnection:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            pytest.param(create_backup, (), id="create"),
+            pytest.param(restore_backup, ("b1",), id="restore"),
+        ],
+    )
+    async def test_connect_failure_keeps_home_assistants_reason(
+        self, tool, args
+    ) -> None:
+        reason = {"error": {"code": "CONNECTION_FAILED", "message": "TLS handshake"}}
+        with (
+            patch.object(
+                backup,
+                "get_connected_ws_client",
+                AsyncMock(return_value=(None, reason)),
+            ),
+            pytest.raises(ToolError, match="TLS handshake"),
+        ):
+            await tool(_client(), *args)
+
+    @pytest.mark.asyncio
+    async def test_cleanup_transport_error_keeps_a_finished_backup(self) -> None:
+        """A retry after a false failure would start a second backup."""
+        ws = FakeWS()
+        ws.disconnect = AsyncMock(side_effect=OSError("socket gone"))
+        result = await _run(create_backup, ws, _client())
+        assert result["backup_id"] == "new-backup"
+
+    @pytest.mark.asyncio
+    async def test_unreadable_install_type_fails_instead_of_guessing(self) -> None:
+        """An empty /api/config reply must not read as a Core install."""
+        ws = FakeWS()
+        client = _client()
+        client.get_config = AsyncMock(return_value={})
+        with pytest.raises(ToolError):
+            await _run(create_backup, ws, client)
+        assert not ws.sent("backup/generate")
+
+
 class TestWaitingForTheBackup:
     @pytest.mark.asyncio
     async def test_result_is_the_backup_the_job_added(self) -> None:
@@ -235,6 +279,7 @@ class TestWaitingForTheBackup:
         assert result["backup_id"] == "new-backup"
         assert result["agents"] == {"backup.local": {"protected": True, "size": 10}}
         assert "warnings" not in result
+        ws.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_older_backup_with_the_same_name_is_not_taken(self) -> None:
@@ -251,8 +296,9 @@ class TestWaitingForTheBackup:
         """An older same-named backup that only reappears later is not returned."""
         ws = FakeWS()
         ws.late = [_entry("hidden", name="mine")]
-        with pytest.raises(ToolError, match="lists 2 new backups"):
+        with pytest.raises(ToolError, match="lists 2 new backups") as exc_info:
             await _run(create_backup, ws, _client(), name="mine")
+        assert "Check the snapshot list" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_finished_job_without_its_backup_is_an_error(self) -> None:
@@ -271,16 +317,24 @@ class TestWaitingForTheBackup:
         assert "unknown_error" in str(exc_info.value)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("failed_agents", [["hassio.nas"], []])
     async def test_backup_kept_after_a_failed_upload_is_returned_with_a_warning(
-        self,
+        self, failed_agents
     ) -> None:
-        """Core keeps the backup on the agents whose upload worked."""
+        """Core keeps the backup on the agents whose upload worked.
+
+        Core does not always record the failed agents, so the warning must
+        not depend on them.
+        """
         ws = FakeWS(
-            events=[_UPLOAD_FAILED], new_backup={"failed_agent_ids": ["hassio.nas"]}
+            events=[_UPLOAD_FAILED], new_backup={"failed_agent_ids": failed_agents}
         )
         result = await _run(create_backup, ws, _client())
         assert result["backup_id"] == "new-backup"
-        assert result["warnings"] == ["Not stored on backup agents: hassio.nas"]
+        assert result["warnings"][-1] == (
+            "Home Assistant reported the upload as failed; the backup is "
+            "stored on: backup.local"
+        )
 
     @pytest.mark.asyncio
     async def test_failed_upload_without_a_stored_backup_is_a_failure(self) -> None:
@@ -304,13 +358,23 @@ class TestWaitingForTheBackup:
         ]
 
     @pytest.mark.asyncio
-    async def test_busy_backup_manager_is_reported_before_starting(self) -> None:
+    @pytest.mark.parametrize(
+        "last",
+        [
+            {"manager_state": "create_backup", "state": "in_progress"},
+            {"manager_state": "restore_backup", "state": "in_progress"},
+            {"manager_state": "receive_backup", "state": "in_progress"},
+            {"manager_state": "blocked"},
+        ],
+        ids=["creating", "restoring", "receiving", "starting-up"],
+    )
+    async def test_busy_backup_manager_is_reported_before_starting(self, last) -> None:
         """Another operation's events must not be read as this job's."""
-        running = {"manager_state": "create_backup", "state": "in_progress"}
-        ws = FakeWS(last=running)
+        ws = FakeWS(last=last)
         with pytest.raises(ToolError, match="busy"):
             await _run(create_backup, ws, _client())
         assert not ws.sent("backup/generate")
+        ws.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_timeout_says_the_backup_may_still_be_running(self) -> None:
@@ -324,6 +388,7 @@ class TestWaitingForTheBackup:
             await _run(create_backup, ws, _client())
         assert ErrorCode.TIMEOUT_OPERATION.value in str(exc_info.value)
         assert "likely_in_progress" in str(exc_info.value)
+        assert "Check the snapshot list" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_closed_connection_says_the_backup_may_still_be_running(
@@ -341,10 +406,17 @@ class TestWaitingForTheBackup:
         await closer
         assert ErrorCode.CONNECTION_FAILED.value in str(exc_info.value)
         assert "likely_in_progress" in str(exc_info.value)
+        assert "Check the snapshot list" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("action", ["create", "restore"])
-    async def test_long_backup_sends_progress_heartbeats(self, action) -> None:
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            pytest.param(create_backup, (), id="create"),
+            pytest.param(restore_backup, ("b1",), id="restore"),
+        ],
+    )
+    async def test_long_backup_sends_progress_heartbeats(self, tool, args) -> None:
         """#1861: without heartbeats a client drops a long-running call."""
         ws = FakeWS(events=[], details=_entry("b1"))
         ctx = MagicMock()
@@ -354,11 +426,9 @@ class TestWaitingForTheBackup:
             await asyncio.sleep(0.05)
             ws.queue.put_nowait({"type": "event", "event": _COMPLETED})
 
-        args = (_client(),) if action == "create" else (_client(), "b1")
-        tool = create_backup if action == "create" else restore_backup
         with patch.object(backup, "_BACKUP_PROGRESS_INTERVAL_S", 0.01):
             finisher = asyncio.create_task(_finish_later())
-            await _run(tool, ws, *args, ctx=ctx)
+            await _run(tool, ws, _client(), *args, ctx=ctx)
             await finisher
         assert ctx.report_progress.await_count >= 3
 
@@ -367,7 +437,7 @@ class TestWaitingForTheBackup:
         self,
     ) -> None:
         """Core keeps an unreleased subscription for the socket's lifetime."""
-        ws = FakeWS(generate_error=RuntimeError("Backup manager busy"))
+        ws = FakeWS(errors={"backup/generate": RuntimeError("generate rejected")})
         with pytest.raises(ToolError):
             await _run(create_backup, ws, _client())
         ws.release_subscription.assert_awaited_once_with(7)
@@ -376,10 +446,13 @@ class TestWaitingForTheBackup:
 class TestRestore:
     @pytest.mark.asyncio
     async def test_unknown_backup_is_not_found_and_nothing_runs(self) -> None:
+        """An agent that failed to list the backup is named, not hidden."""
         ws = FakeWS(details=None)
+        ws.details_agent_errors = {"hassio.nas": "unreachable"}
         with pytest.raises(ToolError) as exc_info:
             await _run(restore_backup, ws, _client(), "nope")
         assert ErrorCode.RESOURCE_NOT_FOUND.value in str(exc_info.value)
+        assert "hassio.nas" in str(exc_info.value)
         assert not ws.sent("backup/generate")
         assert not ws.sent("backup/restore")
 
@@ -490,20 +563,31 @@ class TestRestore:
 
     @pytest.mark.asyncio
     async def test_rejected_restore_is_an_error_naming_the_backup(self) -> None:
-        ws = FakeWS(details=_entry("b1"))
-        original = ws.send_command
-
-        async def _send(command: str, **kwargs: Any) -> dict[str, Any]:
-            if command == "backup/restore":
-                raise HomeAssistantCommandError(
-                    "Command failed: boom", "home_assistant_error"
-                )
-            return await original(command, **kwargs)
-
-        ws.send_command = _send  # type: ignore[method-assign]
+        rejected = HomeAssistantCommandError(
+            "Command failed: boom", "home_assistant_error"
+        )
+        ws = FakeWS(details=_entry("b1"), errors={"backup/restore": rejected})
         with pytest.raises(ToolError) as exc_info:
             await _run(restore_backup, ws, _client(), "b1")
         assert "b1" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_safety_backup_missing_addons_stops_the_restore(self) -> None:
+        """Overwriting an add-on the safety backup lacks could not be undone."""
+        ws = FakeWS(
+            details=_entry("b1"),
+            new_backup={"failed_addons": [{"slug": "core_ssh", "name": "SSH"}]},
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await _run(restore_backup, ws, _client(supervised=True), "b1")
+        assert "new-backup" in str(exc_info.value)
+        assert not ws.sent("backup/restore")
+
+    @pytest.mark.asyncio
+    async def test_safety_backup_warnings_reach_the_restore_reply(self) -> None:
+        ws = FakeWS(details=_entry("b1"), new_backup={"failed_agent_ids": ["s3.x"]})
+        result = await _run(restore_backup, ws, _client(), "b1")
+        assert "Not stored on backup agents: s3.x" in result["warnings"]
 
     @pytest.mark.asyncio
     async def test_failed_safety_backup_stops_the_restore(self) -> None:
@@ -517,10 +601,17 @@ class TestRestore:
     async def test_without_password_restore_warns_there_is_no_safety_backup(
         self,
     ) -> None:
-        ws = FakeWS(password=None, details=_entry("b1"))
-        result = await _run(restore_backup, ws, _client(), "b1")
+        """The install type still counts: add-ons and folders are restored."""
+        target = _entry("b1", addons=[{"slug": "core_ssh"}], folders=["share"])
+        ws = FakeWS(password=None, details=target)
+        result = await _run(restore_backup, ws, _client(supervised=True), "b1")
         assert not ws.sent("backup/generate")
-        assert "password" not in ws.sent("backup/restore")[0]
+        sent = ws.sent("backup/restore")[0]
+        assert "password" not in sent
+        assert (sent["restore_addons"], sent["restore_folders"]) == (
+            ["core_ssh"],
+            ["share"],
+        )
         assert result["safety_backup_id"] is None
         assert any("No safety backup" in w for w in result["warnings"])
 

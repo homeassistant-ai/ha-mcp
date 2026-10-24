@@ -164,10 +164,10 @@ async def _backup_plan(
     """
     info = await ws_client.send_command("backup/config/info")
     create = info["result"]["config"]["create_backup"]
-    # Not the fail-open probe: a Supervisor install read as Core would back
-    # up without add-ons and still report success.
+    # Not the fail-open probe, and no default for a missing key: a Supervisor
+    # install read as Core would back up without add-ons and report success.
     config = await client.get_config()
-    is_supervised = "hassio" in config.get("components", [])
+    is_supervised = "hassio" in config["components"]
     password = create.get("password")
     if not password:
         return None, [], is_supervised
@@ -197,15 +197,15 @@ async def _generate_backup(
     *,
     name: str,
     **params: Any,
-) -> tuple[dict[str, Any], int]:
-    """Run ``backup/generate`` to completion; return ``(backup entry, seconds)``.
+) -> tuple[dict[str, Any], int, list[str]]:
+    """Run ``backup/generate`` to completion; return ``(entry, seconds, warnings)``.
 
     Subscribes to ``backup/subscribe_events`` before starting, as Home
     Assistant's frontend does. The job id is not the backup id on Supervisor
     installs, and the manager runs one backup at a time, so the result is the
     backup with this name that ``backup/info`` lists after the job and did not
-    list before it. A failed upload to some agents still leaves the backup on
-    the others; it is returned with those agents in ``failed_agent_ids``.
+    list before it. A failed upload still leaves the backup on the agents
+    whose upload worked; it is returned with a warning.
     """
     known = {b["backup_id"] for b in (await _backup_info(ws_client))["backups"]}
     sub_id, queue = await ws_client.subscribe_command("backup/subscribe_events")
@@ -235,9 +235,9 @@ async def _generate_backup(
         for b in listing["backups"]
         if b["backup_id"] not in known and b.get("name") == name
     ]
-    if outcome.get("state") == "failed" and not (
-        outcome.get("reason") == "upload_failed" and len(new) == 1
-    ):
+    # A failed upload still leaves the backup on the agents whose upload worked.
+    kept = outcome.get("reason") == "upload_failed" and len(new) == 1
+    if outcome.get("state") == "failed" and not kept:
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
@@ -260,12 +260,19 @@ async def _generate_backup(
                 suggestions=[_CHECK_LIST_SUGGESTION],
             )
         )
-    return new[0], round(loop.time() - started)
+    entry = new[0]
+    warnings = _backup_warnings(entry)
+    if outcome.get("state") == "failed":
+        warnings.append(
+            "Home Assistant reported the upload as failed; the backup is "
+            f"stored on: {', '.join(entry.get('agents') or {})}"
+        )
+    return entry, round(loop.time() - started), warnings
 
 
 async def _backup_info(ws_client: HomeAssistantWebSocketClient) -> dict[str, Any]:
     info = await ws_client.send_command("backup/info")
-    return cast(dict[str, Any], info["result"])
+    return cast(dict[str, Any], info.get("result") or {})
 
 
 async def _wait_for_backup(
@@ -280,7 +287,7 @@ async def _wait_for_backup(
     backup (#1861).
     """
     loop = asyncio.get_running_loop()
-    unknown = {"backup_job_id": job_id, "likely_in_progress": True}
+    may_still_run = {"backup_job_id": job_id, "likely_in_progress": True}
     while (waited := loop.time() - started) < _BACKUP_MAX_WAIT_S:
         await safe_progress(
             ctx,
@@ -300,7 +307,7 @@ async def _wait_for_backup(
                 create_error_response(
                     ErrorCode.CONNECTION_FAILED,
                     "Connection to Home Assistant closed while waiting for the backup",
-                    context=unknown,
+                    context=may_still_run,
                     suggestions=[_CHECK_LIST_SUGGESTION],
                 )
             )
@@ -314,7 +321,7 @@ async def _wait_for_backup(
         create_error_response(
             ErrorCode.TIMEOUT_OPERATION,
             f"Backup did not finish within {_BACKUP_MAX_WAIT_S} seconds",
-            context=unknown,
+            context=may_still_run,
             suggestions=[_CHECK_LIST_SUGGESTION],
         )
     )
@@ -367,7 +374,7 @@ async def create_backup(
             name = (name or "").strip() or (
                 f"MCP_Backup_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}"
             )
-            entry, seconds = await _generate_backup(
+            entry, seconds, warnings = await _generate_backup(
                 ws_client,
                 ctx,
                 name=name,
@@ -385,7 +392,7 @@ async def create_backup(
             "status": "Backup completed successfully",
             "note": "Backup uses your Home Assistant's default backup password",
         }
-        if warnings := _backup_warnings(entry):
+        if warnings:
             result["warnings"] = warnings
         return result
 
@@ -432,7 +439,7 @@ def _restore_agent(target: dict[str, Any]) -> str:
     """An agent that holds ``target``; local and Supervisor locations need no download."""
     agent_ids: list[str] = list(target.get("agents") or {})
     return next(
-        (a for a in agent_ids if a.partition(".")[0] in ("hassio", "backup")),
+        (a for a in agent_ids if a.startswith(("hassio.", "backup."))),
         agent_ids[0],
     )
 
@@ -486,9 +493,10 @@ async def restore_backup(
                 restore_database = bool(target.get("database_included"))
             # Add-ons and folders are restored as the backup holds them; Core
             # installs restore neither and reject a non-empty list.
-            addons = [a["slug"] for a in target.get("addons") or []]
-            folders = list(target.get("folders") or [])
-            if not is_supervised:
+            if is_supervised:
+                addons = [a["slug"] for a in target.get("addons") or []]
+                folders = list(target.get("folders") or [])
+            else:
                 addons, folders = [], []
             restore_params: dict[str, Any] = {
                 "backup_id": backup_id,
@@ -510,7 +518,7 @@ async def restore_backup(
             if password:
                 # Holds what the restore replaces: configuration, database,
                 # add-ons and the folders the restore writes.
-                safety, _ = await _generate_backup(
+                safety, _, safety_warnings = await _generate_backup(
                     ws_client,
                     ctx,
                     name=f"PreRestore_Safety_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}",
@@ -522,7 +530,19 @@ async def restore_backup(
                     **({"include_folders": folders} if folders else {}),
                 )
                 safety_backup_id = safety["backup_id"]
-                warnings.extend(_backup_warnings(safety))
+                if safety.get("failed_addons") or safety.get("failed_folders"):
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            "The safety backup is missing add-ons or folders the "
+                            "restore would overwrite; the restore was not started",
+                            context={
+                                "safety_backup_id": safety_backup_id,
+                                "warnings": safety_warnings,
+                            },
+                        )
+                    )
+                warnings.extend(safety_warnings)
                 note = (
                     "A safety backup was created before restore. You can "
                     "restore from it if needed."
@@ -737,15 +757,7 @@ async def _verify_delete_inventory(
     would make the newest/scheduled guards untrustworthy) and when the target
     backup does not exist.
     """
-    info_result = await ws_client.send_command("backup/info")
-    if not info_result.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                info_result.get("error", "Failed to retrieve backup information"),
-            )
-        )
-    info_result_block = info_result.get("result") or {}
+    info_result_block = await _backup_info(ws_client)
     info_agent_errors = info_result_block.get("agent_errors") or {}
     if info_agent_errors:
         raise_tool_error(
