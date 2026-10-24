@@ -70,14 +70,18 @@ _NOTIFICATION_ID = "ha_mcp_tools_server_connect"
 _ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED, ISSUE_TOKEN_NEEDED)
 
 
-async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def async_bring_up_server(
+    hass: HomeAssistant, entry: ConfigEntry, *, announce: bool = True
+) -> None:
     """Install, start, and expose the server. Runs as a background task.
 
     On failure files the matching repair issue and returns — Home Assistant stays
-    up. On cancellation (the entry is being unloaded mid-bring-up) tears down any
-    partial state and re-raises so the task ends cancelled. The secret webhook id
-    and secret path must already exist in ``entry.data`` (the entry setup writes
-    them before scheduling this task).
+    up. On cancellation (the entry is unloaded, or access is switched off,
+    mid-bring-up) tears down any partial state and re-raises so the task ends
+    cancelled. The secret webhook id and secret path must already exist in
+    ``entry.data`` (the entry setup writes them before scheduling this task).
+    ``announce=False`` skips the "server is running" notification, for a start
+    the access switch requested.
     """
     _clear_issues(hass)
 
@@ -147,6 +151,7 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
             webhook_enabled=webhook_enabled,
             oauth_creds_active=oauth_creds_active,
             oauth_restart_pending=oauth_restart_needed,
+            announce=announce,
         )
         # Conversation-agent LLM API (#1745), gated on its option (default on).
         # Advisory: registration failures are contained inside (logged, feature
@@ -161,8 +166,8 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
                 "will not be offered to Home Assistant conversation agents"
             )
     except asyncio.CancelledError:
-        # Unloaded mid-bring-up: undo whatever partial state exists, then let the
-        # cancellation propagate so the task ends cancelled.
+        # Unloaded or switched off mid-bring-up: undo whatever partial state
+        # exists, then let the cancellation propagate so the task ends cancelled.
         await async_teardown_server(hass)
         raise
     except EmbeddedServerError as err:
@@ -193,17 +198,24 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
 
 async def async_teardown_server(hass: HomeAssistant) -> None:
     """Unregister the LLM API + webhook and stop the server thread (reload-safe,
-    idempotent).
+    idempotent), then drop the notices about a running or failed server.
 
     Does NOT release credentials — a reload must keep them. The ha_auth
     discovery views stay bound (aiohttp can't unregister them until HA restarts);
-    they 404 while the entry is not live.
+    they 404 while the entry is not live. Each step runs even when an earlier
+    unregister step raises: the webhook and the thread's port are ways in.
     """
-    async_unregister_llm_api(hass)
-    await async_unregister_webhook(hass)
-    manager = hass.data.get(DOMAIN, {}).pop(DATA_MANAGER, None)
-    if isinstance(manager, EmbeddedServerManager):
-        await manager.async_stop()
+    try:
+        try:
+            async_unregister_llm_api(hass)
+        finally:
+            await async_unregister_webhook(hass)
+    finally:
+        manager = hass.data.get(DOMAIN, {}).pop(DATA_MANAGER, None)
+        if isinstance(manager, EmbeddedServerManager):
+            await manager.async_stop()
+        persistent_notification.async_dismiss(hass, _NOTIFICATION_ID)
+        _clear_issues(hass)
 
 
 async def async_revoke_credentials_on_remove(
@@ -379,8 +391,10 @@ def _surface_connect_urls(
     webhook_enabled: bool = True,
     oauth_creds_active: bool = True,
     oauth_restart_pending: bool = False,
+    announce: bool = True,
 ) -> None:
-    """Log where to find the connect details and (re)create a notification.
+    """Log where to find the connect details and, unless ``announce`` is False,
+    (re)create a notification.
 
     Neither surface carries a connect URL or a credential. In the secret-URL
     (``none``) mode the URL IS an admin-equivalent credential, and the log is
@@ -424,6 +438,8 @@ def _surface_connect_urls(
                 "is asking for; the credentials work once you restart."
             )
     _LOGGER.info(log_message)
+    if not announce:
+        return
     if not bool(entry.options.get(OPT_ENABLE_STARTUP_NOTIFICATION, True)):
         # Notification suppressed by option: clear any notification created
         # before the toggle was turned off, then skip creating a fresh one.

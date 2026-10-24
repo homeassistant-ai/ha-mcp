@@ -39,6 +39,7 @@ def _make_hass() -> MagicMock:
     hass = MagicMock(name="hass")
     hass.data = {}
     hass.config_entries.async_forward_entry_setups = AsyncMock()
+    hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
 
     background_tasks: list[asyncio.Task] = []
 
@@ -201,9 +202,10 @@ class TestSetup:
 
         assert result is True
         fake_collaborators.setup.async_bring_up_server.assert_called_once_with(
-            hass, entry
+            hass, entry, announce=True
         )
-        hass.config_entries.async_forward_entry_setups.assert_not_called()
+        [call] = hass.config_entries.async_forward_entry_setups.call_args_list
+        assert "update" not in call.args[1]
         assert hass.async_create_background_task.call_count == 0
 
     async def test_removes_the_retired_server_update_entity(

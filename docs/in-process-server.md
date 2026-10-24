@@ -229,7 +229,8 @@ uses **9583**, so an existing app install does not conflict.
 
 Open **Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure** to change these. Saving the options reloads the server so
 the changes take effect; a change to the OAuth callback list alone applies to the
-next sign-in without a reload. (The **HA-MCP File & YAML Tools** entry has no options — a
+next sign-in without a reload, and **Turn access off after a restart** applies at
+the next Home Assistant start. (The **HA-MCP File & YAML Tools** entry has no options — a
 Configure there just reports that.)
 
 | Option | Default | What it does |
@@ -240,6 +241,7 @@ Configure there just reports that.)
 | **ha-mcp package (advanced)** | empty (the server this component release installed) | Leave it empty unless you are testing a specific build — it accepts any pip requirement string, including a version pin, a pull-request tarball or a wheel URL. Saving it reinstalls the server and restarts it in place, without restarting Home Assistant; clearing it returns to the paired server. See [Server updates](#server-updates). |
 | **Home Assistant URL for the server (advanced)** | empty (derived from your HA's http config) | How the in-process server reaches Home Assistant. Empty derives the loopback URL from your instance's real port and SSL setting (an SSL-enabled HA is reached over `https://127.0.0.1` with certificate verification off — the certificate never matches a loopback address). Only set a value when the server must take a different route entirely. |
 | **Remote access via webhook** | off for new installs (as chosen at setup) | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
+| **Turn access off after a restart** | off | Start with the **Access** switch off after every Home Assistant restart, instead of keeping its last state. Enable the switch first: while it is disabled, nothing can turn access back on. See [Turning access on and off](#turning-access-on-and-off). |
 | **Conversation-agent LLM API** | on | Offers the toolset to Home Assistant conversation agents — see [Chat with the toolset](#chat-with-the-toolset-from-home-assistant-conversation-agents--voice). Enabling only makes it selectable per agent; turn off to remove it from every agent's selector. |
 | **Conversation-agent tool exposure** | `tool_search` | Shape of the toolset agents get: compact tool-search API (default), the full catalog, or both side by side (choose per agent). See [Exposure modes](#exposure-modes). |
 | **External URL (optional)** | empty | Shown as the primary connect URL - for your own domain / reverse proxy (e.g. `https://ha.example.com`). Opening it should reach your HA login page, and must not contain a port like `:8123` (any port breaks remote MCP clients). Empty = Nabu Casa / local automatically. |
@@ -314,6 +316,52 @@ Turn **Remote access via webhook** off to keep the server unreachable through
 Home Assistant entirely - no webhook means no Nabu Casa path and no
 `/api/webhook/...` endpoint. You keep direct access on the server port (with
 the secret path) and the admin-only sidebar panel.
+
+### Turning access on and off
+
+The **HA-MCP Server** device has an **Access** switch. It is disabled by
+default, because a service call with `entity_id: all` (an automation or an
+agent turning off every switch, for example) reaches every enabled switch. To
+use it, enable it on the device page; Home Assistant reloads the entry about 30
+seconds later, which restarts a running server once. Turning the switch off
+closes every way into the server at once: the webhook and its `/readonly` alias
+(including the Nabu Casa path), the direct port, and the conversation-agent LLM
+API. The sidebar panel stays in the sidebar but shows that the server is not
+running until access is on again. Turning it on starts the server again, which
+takes as long as a normal start; credentials and connect URLs stay the same. If
+the start fails, a repair under **Settings → System → Repairs** says why. The
+switch still shows on then, so turn it off and on again, or call
+`switch.turn_on`, to retry.
+
+Because it is an ordinary switch, scripts and automations can use
+`switch.turn_on` and `switch.turn_off`, and the logbook records which user or
+automation changed it. To close access an hour after it was opened, for
+example, trigger an automation on the switch being on `for: "01:00:00"`. A
+restart (or reloading automations) drops that pending timer, so turn on **Turn
+access off after a restart** if access must never outlast a restart; otherwise
+the switch keeps its last state. That option also applies when a server entry
+that was disabled when Home Assistant started is enabled.
+
+The switch is a configuration entity, so Assist does not expose it by default.
+Exposing it would let a conversation agent or voice satellite turn access on.
+Do not disable the switch entity while access is off: nothing can turn access
+back on until you enable the entity again.
+
+Turning access off does not revoke credentials a client already holds; when
+access is on again, they work as before. With **Authentication mode**
+`ha_auth`, a client holds a Home Assistant token of the administrator who
+signed in, usually a refresh token. That token also gets the client into Home
+Assistant's own API (a refresh token through the access tokens it issues),
+whatever the switch says. To end it, delete it under **Refresh tokens** (or
+**Long-lived access tokens**) on the **Security** tab of that administrator's
+profile. In `none` and `legacy` mode, rotating the connect secrets (see
+[Rotating your connect URL](#rotating-your-connect-url)) cuts every client off
+at once, because the old URLs stop working. A `legacy` client's tokens
+themselves can be revoked only by also rotating the Client ID / Secret (see
+[Security](#security)) and then restarting Home Assistant. A rotation saved
+while access is off files no repair asking for that restart, because that
+repair is filed when the server starts. While access is on, a connected client
+can also change the automations that would turn it off.
 
 ### Rotating your connect URL
 
