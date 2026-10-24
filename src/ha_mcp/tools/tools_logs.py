@@ -204,9 +204,11 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "exception tracebacks; search also matches those exceptions. "
                     "'error_log': raw log text (home-assistant.log on "
                     "container/pip installs; HA Core's journald stream on "
-                    "Supervisor-backed installs), grouped into records (header "
-                    "plus traceback frames); search matches any line of a "
-                    "record and level matches its header. 'supervisor': app "
+                    "Supervisor-backed installs), grouped into records: a header "
+                    "line starts one and every following line that is not itself "
+                    "a header joins it — traceback frames, the blank lines around "
+                    "chained exceptions, and non-HA banners such as s6-overlay "
+                    "restart lines. 'supervisor': app "
                     "(add-on) container logs (needs slug). 'system_service': "
                     "Supervisor-managed system service logs (needs slug). "
                     "'logger': effective log level per integration (confirms "
@@ -225,8 +227,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | None,
             Field(
                 description=(
-                    "Max entries/lines to return. Does not apply to "
-                    "source='error_log' with structured=True."
+                    "Max entries/lines to return. For source='error_log' with "
+                    "structured=False it bounds returned lines: whole records "
+                    "are selected within it, and a record longer than it is cut "
+                    "(header and last lines kept) with a warning naming how many "
+                    "lines were cut. Does not apply to source='error_log' with "
+                    "structured=True."
                 )
             ),
         ] = None,
@@ -329,7 +335,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "system / error_log only: keep only entries at exactly this level "
-                    "(ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold."
+                    "(ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold. "
+                    "For source='error_log' it matches the record's header only, so "
+                    "matching text in a traceback frame does not satisfy it."
                 )
             ),
         ] = None,
@@ -376,19 +384,15 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         traceback, and its counts run since each error first occurred. error_log with
         structured=True counts only what is inside the fetched window (reported
         as window_start/window_end; every install reads a capped window) and
-        drops tracebacks; structured=False returns raw records instead, with
-        each record's header and traceback frames kept together, so it covers
-        what falls outside system_log's WARNING+ in-memory buffer. Use
+        drops tracebacks; structured=False returns the raw records instead, so
+        it covers what falls outside system_log's WARNING+ in-memory buffer. Use
         structured=True for the per-component rollup; in structured mode
         limit/order do not apply: issues are ranked by count, then severity,
         then recency, over a fixed deep window.
 
         Raw-text sources (error_log, supervisor, system_service) read a bounded
         window per call, so level/search filter and limit slice within that
-        window only; window_lines reports the size requested. On error_log,
-        limit counts lines and whole records are selected within it (an
-        over-long record is cut and the response says how many lines were cut);
-        total_records/returned_records accompany the line counts. Logbook
+        window only; window_lines reports the size requested. Logbook
         responses carry has_more plus a pagination_hint; error_log and fault_log
         carry has_more with a next_offset to pass back while it stays true.
         """

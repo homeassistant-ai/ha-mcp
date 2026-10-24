@@ -17,7 +17,7 @@ from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantConnectionError
 from ha_mcp.tools.error_log_parsing import (
     _split_log_records,
 )
-from ha_mcp.tools.log_common import MAX_LIMIT, SUPERVISOR_SEARCH_WINDOW_LINES
+from ha_mcp.tools.log_common import MAX_LIMIT
 from ha_mcp.tools.tools_logs import LogTools
 
 _HEADER = (
@@ -72,6 +72,17 @@ def _client(text: str, *, has_more: bool = False) -> AsyncMock:
     return client
 
 
+def _offset_aware_page(log_lines: list[str]):
+    """``get_error_log`` stub that honours ``lines``/``offset`` like a log file."""
+
+    async def _page(lines: int, offset: int = 0) -> ErrorLogPage:
+        end = max(0, len(log_lines) - offset)
+        start = max(0, end - lines)
+        return ErrorLogPage(text="\n".join(log_lines[start:end]), has_more=start > 0)
+
+    return _page
+
+
 class TestSplitLogRecords:
     """The grouping primitive keeps chained tracebacks in one record."""
 
@@ -98,6 +109,22 @@ class TestSplitLogRecords:
         assert records[0].header is None
         assert records[0].start_index == 0
         assert records[0].lines == ["  frame", "ValueError: x"]
+
+    def test_lines_that_are_not_ha_log_lines_join_the_preceding_record(self) -> None:
+        """s6-overlay restart banners have no HA header, so they attach.
+
+        The Core journald stream carries them at every restart; treating them
+        as a record's continuation lines is the documented behaviour the
+        Supervisor path depends on.
+        """
+        banner = [
+            "s6-rc: info: service legacy-services: stopping",
+            "[12:00:00] INFO: Home Assistant Core finish process exit code 0",
+        ]
+        records = _split_log_records(_ERROR_RECORD.splitlines() + banner)
+        assert len(records) == 1
+        assert records[0].level == "ERROR"
+        assert records[0].lines[-2:] == banner
 
 
 class TestRecordFiltering:
@@ -199,16 +226,20 @@ class TestRecordLimitAndPaging:
 
     @pytest.mark.asyncio
     async def test_over_long_record_is_cut_with_a_larger_limit_hint(self) -> None:
-        frames = "\n".join(f"  frame {i}" for i in range(9))
+        frames = "\n".join(f"  frame {i}" for i in range(8)) + "\nValueError: NEEDLE"
         record = f"{_HEADER}\n{frames}"
         tools = LogTools(_client(record))
         result = await tools.get_logs(**_kwargs(limit=3))
         assert result["returned_lines"] == 3
         assert result["returned_records"] == 1
+        # The header names the logger and message; the exception line is the
+        # match the caller filtered for. Both ends survive the cut.
         assert result["log"].splitlines()[0] == _HEADER
+        assert result["log"].splitlines()[-1] == "ValueError: NEEDLE"
         warning = next(w for w in result["warnings"] if "newest record" in w)
         assert "10 lines" in warning
         assert "cut 7" in warning
+        assert "from the middle" in warning
         assert "limit=10" in warning
 
     @pytest.mark.asyncio
@@ -257,6 +288,20 @@ class TestRecordLimitAndPaging:
         assert result["log"].splitlines()[0] == "  frame"
 
     @pytest.mark.asyncio
+    async def test_a_window_that_reaches_history_start_is_not_refetched(self) -> None:
+        """A partial tail on a terminal window has no older history to widen into."""
+        leading = "  frame\nValueError: device did not respond"
+        client = AsyncMock()
+        client.get_error_log = AsyncMock(
+            return_value=ErrorLogPage(text=leading, has_more=False)
+        )
+        tools = LogTools(client)
+        result = await tools.get_logs(**_kwargs(limit=5))
+
+        assert client.get_error_log.await_count == 1
+        assert any("partial record" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
     async def test_a_failed_widening_keeps_the_first_page(self) -> None:
         leading = "  frame\nValueError: device did not respond"
         client = AsyncMock()
@@ -271,12 +316,95 @@ class TestRecordLimitAndPaging:
 
         assert client.get_error_log.await_count == 2
         assert any("partial record" in w for w in result["warnings"])
+        assert any("wider read" in w and "failed" in w for w in result["warnings"])
+        assert not any(
+            "lies outside the fetched history" in w for w in result["warnings"]
+        )
         assert result["log"].splitlines()[0] == "  frame"
 
     @pytest.mark.asyncio
-    async def test_a_no_match_window_steps_a_whole_window(self) -> None:
-        client = _client(_ERROR_RECORD, has_more=True)
+    @pytest.mark.parametrize("filter_name", ["search", "level"])
+    async def test_a_filtered_page_held_back_from_mid_record_returns_it_whole(
+        self, filter_name: str
+    ) -> None:
+        """A filtered window that opens inside a record must not split it.
+
+        The filtered window is already the search-window bound, so the widening
+        refetch cannot grow it; the tail has to be left off this page and the
+        next page re-opened at its last line, or the record's header is lost
+        (and a `level` read drops the tail silently).
+        """
+        filler = [
+            f"2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] filler {i}"
+            for i in range(3985)
+        ]
+        long_record = (
+            _HEADER
+            + "\n"
+            + "\n".join(f"  frame {i}" for i in range(40))
+            + "\nValueError: NEEDLE"
+        )
+        lines = filler[:1990] + long_record.splitlines() + filler[1990:]
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(lines)
         tools = LogTools(client)
-        result = await tools.get_logs(**_kwargs(search="nothing-matches"))
-        assert result["returned_lines"] == 0
-        assert result["next_offset"] == SUPERVISOR_SEARCH_WINDOW_LINES
+
+        first = await tools.get_logs(
+            **_kwargs(
+                limit=20,
+                **{filter_name: "NEEDLE" if filter_name == "search" else "ERROR"},
+            )
+        )
+
+        # The tail is held back, so page 1 cannot present it as a partial.
+        assert first["returned_records"] == 0
+        assert not any("partial record" in w for w in first.get("warnings", []))
+        assert first["has_more"] is True
+
+        second = await tools.get_logs(
+            **_kwargs(
+                limit=20,
+                offset=first["next_offset"],
+                **{filter_name: "NEEDLE" if filter_name == "search" else "ERROR"},
+            )
+        )
+        assert second["returned_records"] == 1
+        assert second["log"].splitlines()[0] == _HEADER
+        assert second["log"].splitlines()[-1] == "ValueError: NEEDLE"
+
+    @pytest.mark.asyncio
+    async def test_walking_next_offset_never_repeats_a_record(self) -> None:
+        """Following the hint pages backwards without repeats or split records."""
+        records = [
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
+            f"  frame {i}.0\n  frame {i}.1"
+            for i in range(700)
+        ]
+        lines = "\n".join(records).splitlines()
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(lines)
+        tools = LogTools(client)
+
+        seen: list[str] = []
+        offset = 0
+        last: dict[str, Any] = {}
+        for _ in range(40):
+            last = await tools.get_logs(**_kwargs(limit=100, offset=offset))
+            if last["returned_lines"]:
+                assert (
+                    last["log"]
+                    .splitlines()[0]
+                    .startswith("2026-05-27 10:00:00.000 ERROR")
+                ), "every page must open on a record header"
+            seen.extend(
+                line for line in last["log"].splitlines() if line.startswith("2026-")
+            )
+            if not last["has_more"]:
+                break
+            offset = last["next_offset"]
+
+        assert len(seen) == len(set(seen)), "a record must not be returned twice"
+        if len(seen) < len(records):
+            # Leftovers inside a terminal window are reachable by raising the
+            # limit, not by paging, so the response has to say so.
+            assert "limit" in last["pagination_hint"]

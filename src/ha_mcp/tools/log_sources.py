@@ -32,7 +32,9 @@ from .error_log_parsing import (
     _ErrorLogWindow,
     _filter_log_records,
     _next_page_step,
+    _page_without_record,
     _parse_error_log_structured,
+    _reopen_at_record_end,
     _select_error_log_page,
     _split_log_records,
 )
@@ -296,7 +298,7 @@ class CoreLogSourcesMixin:
         offset: int,
         raw_text: str,
         page: ErrorLogPage,
-    ) -> tuple[int, ErrorLogPage, str]:
+    ) -> tuple[int, ErrorLogPage, str, bool]:
         """Re-fetch once when the fetched window opens inside a record.
 
         ``offset`` addresses the newest edge, so increasing ``lines`` extends
@@ -304,17 +306,27 @@ class CoreLogSourcesMixin:
         header into a page that would otherwise start mid-record. Capped at the
         search-window bound used elsewhere, so this never becomes an unbounded
         read.
+
+        Skipped when the page already reaches the start of history: there is
+        nothing older to fetch, and on container installs each call downloads
+        the whole log file.
+
+        Returns the fourth element ``refetch_failed`` so the caller can say
+        that a header was left out by a failed read rather than because the
+        history ends.
         """
+        if not page.has_more:
+            return fetch_lines, page, raw_text, False
         records = _split_log_records(raw_text.splitlines())
         if not records or records[0].header is not None:
-            return fetch_lines, page, raw_text
+            return fetch_lines, page, raw_text, False
         leading = records[0].line_count
         wider = min(
             fetch_lines + leading + _ERROR_LOG_HEADER_LOOKBACK_LINES,
             SUPERVISOR_SEARCH_WINDOW_LINES,
         )
         if wider <= fetch_lines:
-            return fetch_lines, page, raw_text
+            return fetch_lines, page, raw_text, False
         try:
             wider_page = await self._client.get_error_log(lines=wider, offset=offset)
         except (
@@ -322,11 +334,16 @@ class CoreLogSourcesMixin:
             HomeAssistantAPIError,
             TimeoutError,
             OSError,
-        ):
-            # The first page is already usable and carries the partial-record
-            # warning; losing the header is better than losing the read.
-            return fetch_lines, page, raw_text
-        return wider, wider_page, wider_page.text or ""
+        ) as e:
+            # The first page is already usable; losing the header is better
+            # than losing the read. Say so rather than discarding the reason.
+            logger.warning(
+                "error_log: wider read for a record header failed (%s); "
+                "continuing with the first window",
+                e,
+            )
+            return fetch_lines, page, raw_text, True
+        return wider, wider_page, wider_page.text or "", False
 
     def _build_raw_error_log(
         self,
@@ -336,6 +353,7 @@ class CoreLogSourcesMixin:
         effective_limit: int,
         order: Literal["newest", "oldest"],
         window: _ErrorLogWindow,
+        refetch_failed: bool = False,
     ) -> tuple[dict[str, Any], int]:
         """Return the most recent matching records, plus the next page's step.
 
@@ -345,12 +363,32 @@ class CoreLogSourcesMixin:
         (the selected window is always the most recent one); a record's own
         lines never reverse. The step resumes just before the oldest returned
         record, which keeps it whole across pages where ``offset`` counts
-        lines (journald counts entries, so there the step is approximate).
+        lines (journald counts entries, so there the step overshoots).
+
+        A filtered window can open inside a record, and there the same fixed
+        width keeps it opening inside that record every page. When history
+        remains and nothing behind the page went unreturned, the tail is held
+        back and the step re-opens the next page at the record's last line, so
+        the record arrives whole with its header instead of split in two.
         """
         records = _split_log_records(raw_log.splitlines())
+        leading_record = records[0] if records and records[0].header is None else None
         matches, filters_applied = _filter_log_records(records, search, level)
         page = _select_error_log_page(matches, effective_limit, order)
         step = _next_page_step(window, page.oldest_index)
+
+        held_back = (
+            window.has_more
+            and not refetch_failed
+            and leading_record is not None
+            and len(page.records) == len(matches)
+        )
+        if held_back and leading_record is not None:
+            if any(record is leading_record for record in page.records):
+                page = _page_without_record(page, leading_record)
+            matches = [record for record in matches if record is not leading_record]
+            step = _reopen_at_record_end(window, leading_record)
+
         total_lines = sum(record.line_count for record in matches)
 
         data: dict[str, Any] = {
@@ -374,24 +412,35 @@ class CoreLogSourcesMixin:
             ),
         }
         warnings: list[str] = []
+        if refetch_failed:
+            warnings.append(
+                "The wider read that would have brought the oldest record's "
+                "header failed; this page is the first window only."
+            )
         if page.leading_partial:
+            gate = (
+                "a wider read failed before reaching it"
+                if refetch_failed
+                else "it lies outside the fetched history"
+            )
             warnings.append(
                 "The oldest matched lines are the tail of a record whose "
-                "header lies outside the fetched history; they are returned as "
-                "a partial record."
+                f"header could not be included because {gate}; they are "
+                "returned as a partial record."
             )
         if page.truncated is not None:
             cut = page.truncated.total_lines - page.truncated.returned_lines
-            if (
-                page.truncated.total_lines <= MAX_LIMIT
-                and effective_limit < page.truncated.total_lines
-            ):
+            kept = (
+                "only its header"
+                if page.truncated.returned_lines <= 1
+                else f"its header and last {page.truncated.returned_lines - 1} lines"
+            )
+            if page.truncated.total_lines <= MAX_LIMIT:
                 warnings.append(
                     f"The newest record is {page.truncated.total_lines} lines; "
-                    f"'limit'={effective_limit} returned its first "
-                    f"{page.truncated.returned_lines} and cut {cut}. Repeat "
-                    f"with limit={min(page.truncated.total_lines, MAX_LIMIT)} "
-                    "to return it whole."
+                    f"'limit'={effective_limit} returned {kept} and cut {cut} "
+                    f"from the middle. Repeat with "
+                    f"limit={page.truncated.total_lines} to return it whole."
                 )
             else:
                 warnings.append(
@@ -463,11 +512,13 @@ class CoreLogSourcesMixin:
             fetch_lines = _error_log_window_lines(limit, search, level, structured)
             page = await self._client.get_error_log(lines=fetch_lines, offset=offset)
             raw_text = page.text or ""
+            refetch_failed = False
             if not structured:
                 (
                     fetch_lines,
                     page,
                     raw_text,
+                    refetch_failed,
                 ) = await self._widen_error_log_for_record_header(
                     fetch_lines, offset, raw_text, page
                 )
@@ -503,6 +554,7 @@ class CoreLogSourcesMixin:
                     effective_limit=effective_limit,
                     order=order,
                     window=window,
+                    refetch_failed=refetch_failed,
                 )
             self._apply_empty_window_warning(data, raw_text, offset, structured)
             _attach_error_log_pagination(

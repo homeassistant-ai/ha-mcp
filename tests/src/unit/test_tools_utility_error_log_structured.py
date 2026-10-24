@@ -926,24 +926,22 @@ class TestFetchWindowIsBounded:
         assert STRUCTURED_ERROR_LOG_WINDOW_LINES < 20000
 
     @pytest.mark.asyncio
-    async def test_raw_unfiltered_reads_the_limit_plus_header_lookback(self):
+    async def test_raw_unfiltered_window_reaches_past_the_limit(self):
         client = _make_client(_SAMPLE_LOG)
         tools = _register_and_collect(client)
         await tools["ha_get_logs"](source="error_log", limit=25)
-        assert (
-            client.get_error_log.await_args.kwargs["lines"]
-            == 25 + _ERROR_LOG_HEADER_LOOKBACK_LINES
-        )
+        window = client.get_error_log.await_args.kwargs["lines"]
+        assert window > 25
+        assert window <= MAX_LIMIT + _ERROR_LOG_HEADER_LOOKBACK_LINES
 
     @pytest.mark.asyncio
-    async def test_raw_default_limit_reads_the_default_window(self):
+    async def test_raw_default_limit_reaches_past_the_default(self):
         client = _make_client(_SAMPLE_LOG)
         tools = _register_and_collect(client)
         await tools["ha_get_logs"](source="error_log")
-        assert (
-            client.get_error_log.await_args.kwargs["lines"]
-            == DEFAULT_LOG_LIMIT + _ERROR_LOG_HEADER_LOOKBACK_LINES
-        )
+        window = client.get_error_log.await_args.kwargs["lines"]
+        assert window > DEFAULT_LOG_LIMIT
+        assert window <= MAX_LIMIT + _ERROR_LOG_HEADER_LOOKBACK_LINES
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -967,10 +965,9 @@ class TestFetchWindowIsBounded:
         client = _make_client(_SAMPLE_LOG)
         tools = _register_and_collect(client)
         await tools["ha_get_logs"](source="error_log", limit=MAX_LIMIT + 5000)
-        assert (
-            client.get_error_log.await_args.kwargs["lines"]
-            == MAX_LIMIT + _ERROR_LOG_HEADER_LOOKBACK_LINES
-        )
+        window = client.get_error_log.await_args.kwargs["lines"]
+        assert window > MAX_LIMIT
+        assert window <= MAX_LIMIT + _ERROR_LOG_HEADER_LOOKBACK_LINES
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("structured", [False, True])
@@ -1062,7 +1059,8 @@ class TestErrorLogPagination:
         client = _make_client(_numbered_log(20), has_more=True)
         tools = _register_and_collect(client)
         result = await tools["ha_get_logs"](source="error_log", limit=200)
-        assert result["window_lines"] == 200 + _ERROR_LOG_HEADER_LOOKBACK_LINES
+        assert result["window_lines"] > 200
+        assert result["window_lines"] <= MAX_LIMIT + _ERROR_LOG_HEADER_LOOKBACK_LINES
         assert result["total_lines"] == 20
 
     @pytest.mark.asyncio

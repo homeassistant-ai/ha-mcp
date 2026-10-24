@@ -29,8 +29,6 @@ from .log_common import (
 
 # Full HA log line, e.g.
 # "2026-05-27 10:15:23.456 ERROR (MainThread) [homeassistant.components.zha] msg"
-# Distinct from `_LOG_LEVEL_RE` in `log_common`, which only sniffs the level
-# out of a line for the raw path's filter.
 # The thread field is matched lazily instead of as `\([^)]*\)`: since Python 3.10
 # an unnamed thread is called "Thread-1 (target_fn)", so the field itself can
 # contain parentheses, and a class that cannot cross them drops every line those
@@ -324,6 +322,18 @@ def _filter_log_records(
     return filtered, filters_applied
 
 
+def _cut_record_lines(record: _LogRecord, limit: int) -> list[str]:
+    """The ``limit`` lines of an over-long record that a page keeps.
+
+    The header carries the logger and the message, and the last line carries
+    the exception; the frames between them are the least informative part, so
+    a cut record keeps both ends instead of just its top.
+    """
+    if limit <= 1:
+        return record.lines[:limit]
+    return [record.lines[0], *record.lines[-(limit - 1) :]]
+
+
 def _select_error_log_page(
     records: list[_LogRecord],
     limit: int,
@@ -332,8 +342,10 @@ def _select_error_log_page(
     """Take the most recent records that fit ``limit`` lines.
 
     Records are never split to fit, apart from the single newest record when
-    it alone exceeds the limit. ``order`` controls display direction only, as
-    before: newest-first, or chronological within the selected window.
+    it alone exceeds the limit. That one keeps its header plus the last
+    ``limit - 1`` lines, so a match in the exception line survives the cut.
+    ``order`` controls display direction only, as before: newest-first, or
+    chronological within the selected window.
     """
     selected: list[_LogRecord] = []
     used = 0
@@ -346,7 +358,7 @@ def _select_error_log_page(
         if not selected and limit > 0:
             selected.append(
                 _LogRecord(
-                    record.lines[:limit],
+                    _cut_record_lines(record, limit),
                     record.start_index,
                     record.header,
                     record.level,
@@ -366,6 +378,18 @@ def _select_error_log_page(
         oldest_index=oldest_index,
         truncated=truncated,
         leading_partial=leading_partial,
+    )
+
+
+def _page_without_record(page: _RecordPage, dropped: _LogRecord) -> _RecordPage:
+    """``page`` with one record removed, in the same display order."""
+    records = [record for record in page.records if record is not dropped]
+    return _RecordPage(
+        records=records,
+        lines=[line for record in records for line in record.lines],
+        oldest_index=min((record.start_index for record in records), default=None),
+        truncated=page.truncated,
+        leading_partial=any(record.header is None for record in records),
     )
 
 
@@ -558,10 +582,10 @@ class _ErrorLogWindow:
     ``offset`` addresses journald ENTRIES on Supervisor-backed installs and
     text LINES on container/pip ones; the two coincide only while every entry
     is a single line, which a traceback is not. Paging is therefore exact on
-    container and approximate on journald, where a step derived from line
-    counts can land inside an entry — hence the cap at ``fetch_lines``, which
-    bounds the error to re-reading part of a window rather than skipping past
-    one.
+    container and approximate on journald: a step derived from line counts is
+    spent in entry units there, and since an entry is at least one line it
+    overshoots — it skips more history than the lines it counted. The cap at
+    ``fetch_lines`` bounds that skip to one window.
     """
 
     offset: int
@@ -588,11 +612,12 @@ def _error_log_window_lines(
     """Number of raw log lines a single error-log fetch requests.
 
     Bounded on every path (#2279). The structured summary reads a fixed
-    deep window; the raw path reads the caller's limit, widened to the
-    search window when ``level`` or ``search`` is set, since both filter
-    client-side over the fetched text and need history behind the limit to
-    find matches in (the same widening ``_get_supervisor_log`` applies for
-    ``search``; it has no ``level`` parameter). Floored at the client's
+    deep window; the raw path reads the caller's limit plus a header lookback
+    (``_ERROR_LOG_HEADER_LOOKBACK_LINES``), widened to the search window when
+    ``level`` or ``search`` is set, since both filter client-side over the
+    fetched text and need history behind the limit to find matches in (the
+    same widening ``_get_supervisor_log`` applies for ``search``; it has no
+    ``level`` parameter). Floored at the client's
     minimum window so the recorded size matches the one actually served.
     """
     if structured:
@@ -618,15 +643,30 @@ def _next_page_step(window: _ErrorLogWindow, oldest_index: int | None) -> int:
     The next page resumes just before the oldest returned record's first line
     (its header when whole). On container and pip installs, where ``offset``
     counts lines, that keeps every record whole across pages. On journald
-    ``offset`` counts entries, so the step is approximate: it can land inside
-    a multi-line entry and re-read part of a window — the mismatch described
-    on ``_ErrorLogWindow``. The cap at the window size keeps that error to
-    re-reading rather than skipping. Nothing shown means nothing to resume
-    before, so the whole window is consumed.
+    ``offset`` counts entries, so a line-counted step is spent faster and
+    overshoots, skipping more history than it counted — the mismatch described
+    on ``_ErrorLogWindow``. The cap at the window size bounds that skip to one
+    window. Nothing shown means nothing to resume before, so the whole window
+    is consumed.
     """
     if oldest_index is None:
         return window.fetch_lines
     return min(window.raw_line_count - oldest_index, window.fetch_lines)
+
+
+def _reopen_at_record_end(window: _ErrorLogWindow, record: _LogRecord) -> int:
+    """Step that puts the next page's newest edge on ``record``'s last line.
+
+    A held-back leading tail has to be re-fetched with its header, and the
+    window width never changes, so the next page must start at the record's
+    own last line rather than just before the oldest record returned. Capped
+    like every other step; a record spanning the whole window leaves nothing
+    to anchor to, so the window is consumed instead.
+    """
+    reanchor = window.raw_line_count - record.start_index - record.line_count
+    if reanchor <= 0:
+        return window.fetch_lines
+    return min(reanchor, window.fetch_lines)
 
 
 def _build_error_log_pagination_hint(
