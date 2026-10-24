@@ -36,7 +36,11 @@ from ..backup_manager import (
     SnapshotInUseError,
     get_backup_manager,
 )
-from ..client.rest_client import HomeAssistantClient
+from ..client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
@@ -444,6 +448,44 @@ def _restore_agent(target: dict[str, Any]) -> str:
     )
 
 
+async def _send_restore(
+    ws_client: HomeAssistantWebSocketClient, params: dict[str, Any]
+) -> bool:
+    """Send ``backup/restore``; True when Home Assistant accepted it but never replied.
+
+    Core restarts inside the restore command, and Supervisor stops Core before
+    its restore job reports done, so a real restore usually ends with the
+    connection closing instead of a reply. A restore event that is not
+    ``failed`` tells that apart from a connection lost before Home Assistant
+    took the restore; it does not prove the restore finished.
+    """
+    sub_id, queue = await ws_client.subscribe_command("backup/subscribe_events")
+    events: list[dict[str, Any]] = []
+
+    async def _collect() -> None:
+        try:
+            while True:
+                events.append((await queue.get()).get("event") or {})
+        except asyncio.QueueShutDown:
+            return
+
+    collector = asyncio.create_task(_collect())
+    try:
+        # A Supervisor restore can run for minutes before Core goes down.
+        await ws_client.send_command(
+            "backup/restore", _wait_timeout=_BACKUP_MAX_WAIT_S, **params
+        )
+        return False
+    except (HomeAssistantConnectionError, HomeAssistantCommandTimeout):
+        restore = [e for e in events if e.get("manager_state") == "restore_backup"]
+        if not restore or restore[-1].get("state") == "failed":
+            raise
+        return True
+    finally:
+        collector.cancel()
+        await ws_client.release_subscription(sub_id)
+
+
 async def restore_backup(
     client: HomeAssistantClient,
     backup_id: str,
@@ -557,7 +599,12 @@ async def restore_backup(
                 )
                 note = "Restore proceeding WITHOUT a safety backup. See warnings above."
 
-            await ws_client.send_command("backup/restore", **restore_params)
+            if await _send_restore(ws_client, restore_params):
+                warnings.append(
+                    "Home Assistant accepted the restore but did not confirm it "
+                    "before the connection closed, as its restart does; check "
+                    "its state once it is back before retrying."
+                )
         return {
             "success": True,
             "backup_id": backup_id,
