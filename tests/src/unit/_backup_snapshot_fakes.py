@@ -1,6 +1,7 @@
 """Fakes shared by the ``backup_snapshot`` and ``backup_snapshot_restore`` unit tests."""
 
 import asyncio
+from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,7 +24,7 @@ IDLE = {"manager_state": "idle"}
 
 
 @pytest.fixture(autouse=True)
-def _short_backup_wait():
+def _short_backup_wait() -> Iterator[None]:
     """A missed terminal event fails within a second instead of 30 minutes."""
     with (
         patch.object(backup_snapshot, "_BACKUP_MAX_WAIT_S", 1),
@@ -147,7 +148,13 @@ def _client(*, supervised: bool = False) -> MagicMock:
     return client
 
 
-async def _run(coro_fn, ws: FakeWS, *args: Any, mounts: dict | None = None, **kw):
+async def _run(
+    coro_fn: Callable[..., Awaitable[dict[str, Any]]],
+    ws: FakeWS,
+    *args: Any,
+    mounts: dict[str, Any] | None = None,
+    **kw: Any,
+) -> dict[str, Any]:
     supervisor = AsyncMock(return_value={"success": True, "result": mounts or {}})
     with (
         patch.object(
