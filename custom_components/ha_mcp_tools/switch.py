@@ -45,7 +45,6 @@ class ServerAccessSwitch(SwitchEntity):
     # A config entity is not exposed to Assist by default, so a conversation
     # agent or voice satellite is not offered it unless someone exposes it.
     _attr_entity_category = EntityCategory.CONFIG
-    # Opt-in, see the module docstring.
     _attr_entity_registry_enabled_default = False
     _attr_should_poll = False
 

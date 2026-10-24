@@ -77,10 +77,11 @@ async def async_bring_up_server(
 
     On failure files the matching repair issue and returns — Home Assistant stays
     up. On cancellation (the entry is unloaded, or access is switched off,
-    mid-bring-up) tears down any partial state and re-raises so the task ends cancelled. The secret webhook id
-    and secret path must already exist in ``entry.data`` (the entry setup writes
-    them before scheduling this task). ``announce=False`` skips the "server is
-    running" notification, for a start the access switch requested.
+    mid-bring-up) tears down any partial state and re-raises so the task ends
+    cancelled. The secret webhook id and secret path must already exist in
+    ``entry.data`` (the entry setup writes them before scheduling this task).
+    ``announce=False`` skips the "server is running" notification, for a start
+    the access switch requested.
     """
     _clear_issues(hass)
 

@@ -378,8 +378,9 @@ class TestAccessSwitch:
         esetup.async_bring_up_server.assert_called_once()
 
     async def test_setup_starts_no_second_server_when_one_is_starting(self):
-        # A switch-on from the previous load may win the lock over the new
-        # setup and start the server first.
+        # A defensive guard: the unload cancels the bring-up and a switch-on
+        # queued behind it starts nothing, but a bring-up still in flight at
+        # setup must not get a second server next to it.
         hass = _make_hass()
         hass.data[DOMAIN] = {DATA_BRINGUP_TASK: _pending_task()}
         entry = _make_entry()

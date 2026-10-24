@@ -115,7 +115,9 @@ def test_assist_does_not_expose_the_access_switch_by_default(switch_platform):
     assert switch.entity_category is not None
 
 
-def test_the_access_switch_is_registered_disabled(switch_platform):
+def test_an_everything_off_call_cannot_close_access_on_a_default_install(
+    switch_platform,
+):
     # `entity_id: all` reaches every entity of the switch platform, entity
     # category or not. Home Assistant adds no disabled entity to its platform,
     # so an "everything off" call can close access only once a user enabled it.

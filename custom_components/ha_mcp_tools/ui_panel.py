@@ -695,7 +695,8 @@ async function showApp() {{
       showMessage(
         "The in-process MCP server is starting or is not running yet. " +
           "This view will refresh automatically. If the server's Access " +
-          "switch is off, turn it on; if it does not start, " +
+          "switch is off, turn it on (enable it on the HA-MCP Server " +
+          "device first if it is disabled); if it does not start, " +
           "Settings - System - Repairs says what it needs."
       );
     }}
