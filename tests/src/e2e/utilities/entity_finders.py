@@ -35,11 +35,3 @@ async def find_test_light_entity(mcp_client) -> str:
     if not entity_id:
         pytest.skip("No valid light entity found for testing")
     return entity_id
-
-
-def without_access_switch(entities: list[dict]) -> list[dict]:
-    """Drop the embedded lane's own Access switch (#2801): toggling it would
-    cut the server the test talks to."""
-    return [
-        e for e in entities if not e.get("entity_id", "").startswith("switch.ha_mcp_")
-    ]

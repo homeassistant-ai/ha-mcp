@@ -6,6 +6,11 @@ in ``entry.data`` (see :func:`embedded_entry.access_enabled`), not in the
 entity, because the entry setup decides on the bring-up before this platform is
 forwarded. Disabling the entity keeps the last state; while that is off,
 nothing can turn access back on until the entity is enabled again.
+
+The entity is registered disabled, so the switch is opt-in: a service call
+with ``entity_id: all`` reaches every entity of the switch platform, whatever
+its entity category, and would otherwise close access on installs that never
+asked for the switch. Home Assistant adds no disabled entity to the platform.
 """
 
 from __future__ import annotations
@@ -40,6 +45,8 @@ class ServerAccessSwitch(SwitchEntity):
     # A config entity is not exposed to Assist by default, so a conversation
     # agent or voice satellite is not offered it unless someone exposes it.
     _attr_entity_category = EntityCategory.CONFIG
+    # Opt-in, see the module docstring.
+    _attr_entity_registry_enabled_default = False
     _attr_should_poll = False
 
     def __init__(self, entry: ConfigEntry) -> None:

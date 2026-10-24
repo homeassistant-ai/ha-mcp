@@ -360,8 +360,8 @@ The token is stored in the config entry and handed to the server in memory
 (never through the Home Assistant process environment). Disabling the config
 entry stops the server, and so does turning off the entry's **Access** switch
 (#2801), which closes the webhook, the direct port and the conversation-agent
-LLM API while the entry stays loaded. The switch is a configuration entity, so
-Assist does not expose it by default. It does not revoke Home Assistant
+LLM API while the entry stays loaded. The switch is disabled by default, and as
+a configuration entity it is not exposed to Assist by default. It does not revoke Home Assistant
 credentials a `ha_auth` client already holds: those work against Home
 Assistant's own API regardless of the switch, and against the server again once
 access is back on. Removing the entry deletes only an account an older release

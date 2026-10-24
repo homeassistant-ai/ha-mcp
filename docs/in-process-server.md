@@ -241,7 +241,7 @@ Configure there just reports that.)
 | **ha-mcp package (advanced)** | empty (the server this component release installed) | Leave it empty unless you are testing a specific build — it accepts any pip requirement string, including a version pin, a pull-request tarball or a wheel URL. Saving it reinstalls the server and restarts it in place, without restarting Home Assistant; clearing it returns to the paired server. See [Server updates](#server-updates). |
 | **Home Assistant URL for the server (advanced)** | empty (derived from your HA's http config) | How the in-process server reaches Home Assistant. Empty derives the loopback URL from your instance's real port and SSL setting (an SSL-enabled HA is reached over `https://127.0.0.1` with certificate verification off — the certificate never matches a loopback address). Only set a value when the server must take a different route entirely. |
 | **Remote access via webhook** | off for new installs (as chosen at setup) | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
-| **Turn access off after a restart** | off | Start with the **Access** switch off after every Home Assistant restart, instead of keeping its last state. See [Turning access on and off](#turning-access-on-and-off). |
+| **Turn access off after a restart** | off | Start with the **Access** switch off after every Home Assistant restart, instead of keeping its last state. Enable the switch first: while it is disabled, nothing can turn access back on. See [Turning access on and off](#turning-access-on-and-off). |
 | **Conversation-agent LLM API** | on | Offers the toolset to Home Assistant conversation agents — see [Chat with the toolset](#chat-with-the-toolset-from-home-assistant-conversation-agents--voice). Enabling only makes it selectable per agent; turn off to remove it from every agent's selector. |
 | **Conversation-agent tool exposure** | `tool_search` | Shape of the toolset agents get: compact tool-search API (default), the full catalog, or both side by side (choose per agent). See [Exposure modes](#exposure-modes). |
 | **External URL (optional)** | empty | Shown as the primary connect URL - for your own domain / reverse proxy (e.g. `https://ha.example.com`). Opening it should reach your HA login page, and must not contain a port like `:8123` (any port breaks remote MCP clients). Empty = Nabu Casa / local automatically. |
@@ -319,14 +319,19 @@ the secret path) and the admin-only sidebar panel.
 
 ### Turning access on and off
 
-The **HA-MCP Server** device has an **Access** switch. Turning it off closes
-every way into the server at once: the webhook and its `/readonly` alias
+The **HA-MCP Server** device has an **Access** switch. It is disabled by
+default, because a service call with `entity_id: all` (an automation or an
+agent turning off every switch, for example) reaches every enabled switch. To
+use it, enable it on the device page; Home Assistant reloads the entry about
+30 seconds later, which restarts a running server once. Turning the switch
+off closes every way into the server at once: the webhook and its `/readonly` alias
 (including the Nabu Casa path), the direct port, and the conversation-agent LLM
 API. The sidebar panel stays in the sidebar but shows that the server is not
 running until access is on again. Turning it on starts the server again, which
 takes as long as a normal start; credentials and connect URLs stay the same. If
-the start fails, a repair under **Settings → System → Repairs** says why, and
-turning the switch on again retries it.
+the start fails, a repair under **Settings → System → Repairs** says why. The
+switch still shows on then, so turn it off and on again, or call
+`switch.turn_on`, to retry.
 
 Because it is an ordinary switch, scripts and automations can use
 `switch.turn_on` and `switch.turn_off`, and the logbook records which user or

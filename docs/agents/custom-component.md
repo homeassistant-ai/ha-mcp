@@ -149,7 +149,7 @@ keep their provisioned pair while it works,
 and a missing or refused credential files the fixable `server_token_needed`
 repair instead. The token is passed in memory, not through the Home Assistant
 process environment; disabling the entry stops the server, and so does the
-entry's **Access** switch while the entry stays loaded. Removing the entry
+entry's **Access** switch (disabled by default) while the entry stays loaded. Removing the entry
 deletes only an account an older release created, never the user's.
 
 The settings panel reverse-proxies the web UI through Home Assistant. Browser

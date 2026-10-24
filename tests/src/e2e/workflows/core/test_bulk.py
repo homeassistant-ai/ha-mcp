@@ -19,7 +19,6 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
-from ...utilities.entity_finders import without_access_switch
 from ...utilities.wait_helpers import wait_for_entity_state
 
 logger = logging.getLogger(__name__)
@@ -516,7 +515,7 @@ class TestBulkControl:
             {"domain_filter": "switch", "limit": 2},
         )
         switch_data = parse_mcp_result(switch_result)
-        switch_results = without_access_switch(switch_data.get("entities", []))
+        switch_results = switch_data.get("entities", [])
 
         entities = []
         if light_results:

@@ -43,6 +43,11 @@ class _SwitchEntity:
         # As Home Assistant's Entity: the class attribute backs the property.
         return getattr(self, "_attr_entity_category", None)
 
+    @property
+    def entity_registry_enabled_default(self) -> bool:
+        # As Home Assistant's Entity: enabled unless the class attribute says not.
+        return getattr(self, "_attr_entity_registry_enabled_default", True)
+
     def async_write_ha_state(self) -> None:
         self.written_state = self.is_on  # type: ignore[attr-defined]
 
@@ -108,6 +113,17 @@ def test_assist_does_not_expose_the_access_switch_by_default(switch_platform):
     switch = switch_platform.ServerAccessSwitch(entry)
 
     assert switch.entity_category is not None
+
+
+def test_the_access_switch_is_registered_disabled(switch_platform):
+    # `entity_id: all` reaches every entity of the switch platform, entity
+    # category or not. Home Assistant adds no disabled entity to its platform,
+    # so an "everything off" call can close access only once a user enabled it.
+    _hass, entry = _hass_and_entry()
+
+    switch = switch_platform.ServerAccessSwitch(entry)
+
+    assert switch.entity_registry_enabled_default is False
 
 
 async def test_turning_the_switch_on_shows_on(switch_platform):
