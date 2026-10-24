@@ -1887,7 +1887,7 @@
   {
     "name": "ha_config_list_groups",
     "title": "List Groups",
-    "description": "List Home Assistant entity groups with their member entities.\n\nReturns one page of old-style groups created via the group.set service\nor YAML configuration (platform-specific groups such as light or cover\ngroups are separate entities); `total_count` and `has_more` report the\nfull set. Each group includes its entity_id, friendly name, state,\nmember entities, icon and all mode.\n\nEXAMPLE: ha_config_list_groups(offset=100)",
+    "description": "List Home Assistant entity groups with their member entities.\n\nReturns one page of old-style groups created via the group.set service\nor YAML configuration (platform-specific groups such as light or cover\ngroups are separate entities); `total_count` and `has_more` report the\nfull set. Each group carries Core's state fields and attributes, its\nmembers as `entity_ids`, and its object_id. `auto` is true for a group\ncreated by ha_config_set_group (group.set) and false for a YAML group.\nCore does not expose a group's all/any mode.\n\nEXAMPLE: ha_config_list_groups(offset=100)",
     "inputSchema": {
       "properties": {
         "limit": {
@@ -1923,12 +1923,12 @@
   {
     "name": "ha_config_remove_group",
     "title": "Remove Group",
-    "description": "Remove a service-based Home Assistant entity group via the group.remove service.\n\n**When NOT to use:** for groups created through `ha_config_set_helper(helper_type=\"group\", ...)`,\nuse `ha_remove_helpers_integrations`. Those config-entry-backed groups are not reachable via the\ngroup.remove service.\n\n**When to use:** removing groups created with `ha_config_set_group` or defined in YAML\nvia `group:` configuration. Config-entry-backed deletion tools cannot find these.\n\nEXAMPLES:\n- Remove group: ha_config_remove_group(\"living_room_lights\")\n\nUse ha_config_list_groups() to find existing groups.\n\n**WARNING:**\n- Removing a group used in automations may cause those automations to fail.\n- Groups defined in YAML can be removed at runtime but will reappear after restart.\n- This only removes old-style groups, not platform-specific groups.",
+    "description": "Remove a service-based Home Assistant entity group via the group.remove service.\n\n**When NOT to use:** for groups created through `ha_config_set_helper(helper_type=\"group\", ...)`,\nuse `ha_remove_helpers_integrations`. Those config-entry-backed groups are not reachable via the\ngroup.remove service.\n\n**When to use:** removing groups created with `ha_config_set_group` or defined in YAML\nvia `group:` configuration. Config-entry-backed deletion tools cannot find these.\n\nEXAMPLES:\n- Remove group: ha_config_remove_group(\"living_room_lights\")\n\nUse ha_config_list_groups() to find existing groups.\n\n**WARNING:**\n- Removing a group used in automations may cause those automations to fail.\n- Groups defined in YAML can be removed at runtime but come back on group.reload\n  or a restart.\n- This only removes old-style groups, not platform-specific groups.",
     "inputSchema": {
       "properties": {
         "object_id": {
           "type": "str",
-          "description": "Group identifier without 'group.' prefix (e.g., 'living_room_lights')"
+          "description": "Group identifier: a lowercase slug without the 'group.' prefix (e.g., 'living_room_lights')"
         },
         "wait": {
           "type": "bool",
@@ -1954,21 +1954,21 @@
   {
     "name": "ha_config_set_group",
     "title": "Create or Update Group",
-    "description": "Create or update a service-based Home Assistant entity group via the group.set service.\n\n**When NOT to use:** for typical \"combine these entities into one controllable group\"\nrequests, prefer `ha_config_set_helper(helper_type=\"group\", ...)`. Config-entry-backed\ngroups are registered in the entity registry, so `ha_set_entity` can assign them to\nareas and they are deletable via `ha_remove_helpers_integrations`.\n\n**When to use:** compatibility with existing groups already configured via group.set\nor YAML, or the rare case where entity-registry membership is explicitly unwanted.\nGroups created here are only removable via `ha_config_remove_group` —\n`ha_remove_helpers_integrations` will not find them.\n\n**For NEW groups:** Provide object_id and entities (required).\n**For EXISTING groups:** Provide object_id and any fields to update.\nentities, add_entities, and remove_entities are mutually exclusive.\n\nEXAMPLES:\n- Create: ha_config_set_group(\"bedroom_lights\", entities=[\"light.lamp\", \"light.ceiling\"], name=\"Bedroom Lights\")\n- Add entities: ha_config_set_group(\"lights\", add_entities=[\"light.extra\"])",
+    "description": "Create or update a service-based Home Assistant entity group via the group.set service.\n\n**When NOT to use:** for typical \"combine these entities into one controllable group\"\nrequests, prefer `ha_config_set_helper(helper_type=\"group\", ...)`. Config-entry-backed\ngroups are registered in the entity registry, so `ha_set_entity` can assign them to\nareas and they are deletable via `ha_remove_helpers_integrations`.\n\n**When to use:** compatibility with existing groups already configured via group.set\nor YAML, or the rare case where entity-registry membership is explicitly unwanted.\nGroups created here are only removable via `ha_config_remove_group` —\n`ha_remove_helpers_integrations` will not find them. They survive group.reload but\nnot a restart.\n\nCore creates group.<object_id> when it does not exist (members from entities or\nadd_entities) and updates it otherwise. entities, add_entities, and remove_entities\nare mutually exclusive.\n\nEXAMPLES:\n- Create: ha_config_set_group(\"bedroom_lights\", entities=[\"light.lamp\", \"light.ceiling\"], name=\"Bedroom Lights\")\n- Add entities: ha_config_set_group(\"lights\", add_entities=[\"light.extra\"])",
     "inputSchema": {
       "properties": {
         "object_id": {
           "type": "str",
-          "description": "Group identifier without 'group.' prefix (e.g., 'living_room_lights')"
+          "description": "Group identifier: a lowercase slug without the 'group.' prefix (e.g., 'living_room_lights')"
         },
         "entities": {
           "type": "list[str] | None",
-          "description": "List of entity IDs for the group. When updating, replaces all entities.",
+          "description": "List of entity IDs for the group. When updating, replaces all entities; an empty list empties the group, or creates it without members.",
           "default": null
         },
         "name": {
           "type": "str | None",
-          "description": "Friendly display name for the group",
+          "description": "Friendly display name; a new group without one is named after object_id",
           "default": null
         },
         "icon": {
@@ -1978,17 +1978,17 @@
         },
         "all_on": {
           "type": "bool | None",
-          "description": "If True, all entities must be on for group to be on",
+          "description": "If True, all entities must be on for group to be on. Core does not expose the mode, so it cannot be read back and a backup does not restore it.",
           "default": null
         },
         "add_entities": {
           "type": "list[str] | None",
-          "description": "Add these entities to an existing group",
+          "description": "Entities to add to the group's members",
           "default": null
         },
         "remove_entities": {
           "type": "list[str] | None",
-          "description": "Remove these entities from an existing group",
+          "description": "Entities to remove from the group's members",
           "default": null
         },
         "wait": {
