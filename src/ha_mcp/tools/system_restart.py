@@ -4,6 +4,8 @@ import asyncio
 import logging
 from typing import Any
 
+import httpx
+
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_embedded
@@ -28,9 +30,18 @@ def _schedule_embedded_restart(client: Any) -> None:
         await asyncio.sleep(_EMBEDDED_RESTART_DELAY_S)
         try:
             await client.call_service("homeassistant", "restart", {})
-        except Exception:
-            # No caller left to answer; WARNING is the level HA surfaces.
-            logger.warning("Deferred Home Assistant restart failed", exc_info=True)
+        except Exception as exc:
+            # No caller left to answer; WARNING is the level HA surfaces. A
+            # lost reply means the restart reached HA and it went down first
+            # (expected); a connect error or timeout may never have
+            # dispatched, so those keep the traceback.
+            if isinstance(exc.__cause__, httpx.ReadError | httpx.RemoteProtocolError):
+                logger.warning(
+                    "Deferred Home Assistant restart dispatched; HA closed the "
+                    "connection before replying (expected)"
+                )
+            else:
+                logger.warning("Deferred Home Assistant restart failed", exc_info=True)
 
     task = asyncio.get_running_loop().create_task(_restart())
     _RESTART_TASKS.add(task)

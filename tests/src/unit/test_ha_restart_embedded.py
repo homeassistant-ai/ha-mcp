@@ -1,10 +1,13 @@
 """ha_restart replies before restarting when the server runs inside HA (#2691)."""
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools import system_restart
 from ha_mcp.tools.tools_system import SystemTools
 
@@ -30,6 +33,52 @@ async def test_embedded_replies_before_restart(monkeypatch: pytest.MonkeyPatch) 
     client.call_service.assert_not_awaited()
     await asyncio.gather(*system_restart._RESTART_TASKS)
     client.call_service.assert_awaited_once_with("homeassistant", "restart", {})
+
+
+def _raise_from(cause: Exception) -> HomeAssistantConnectionError:
+    try:
+        raise HomeAssistantConnectionError(f"HTTP error: {cause}") from cause
+    except HomeAssistantConnectionError as err:
+        return err
+
+
+async def _run_failing_restart(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+    client = _client()
+    client.call_service.side_effect = error
+    await SystemTools(client).ha_restart(confirm=True)
+    await asyncio.gather(*system_restart._RESTART_TASKS)
+
+
+async def test_embedded_lost_reply_logs_one_line(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    error = _raise_from(
+        httpx.RemoteProtocolError("Server disconnected without sending a response.")
+    )
+
+    with caplog.at_level(logging.WARNING, logger=system_restart.__name__):
+        await _run_failing_restart(monkeypatch, error)
+
+    (record,) = caplog.records
+    assert record.levelno == logging.WARNING
+    assert "dispatched" in record.getMessage()
+    assert record.exc_info is None
+
+
+async def test_embedded_connect_error_keeps_traceback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    error = _raise_from(httpx.ConnectError("Connection refused"))
+
+    with caplog.at_level(logging.WARNING, logger=system_restart.__name__):
+        await _run_failing_restart(monkeypatch, error)
+
+    (record,) = caplog.records
+    assert "failed" in record.getMessage()
+    assert record.exc_info is not None
 
 
 async def test_embedded_invalid_config_does_not_schedule(
