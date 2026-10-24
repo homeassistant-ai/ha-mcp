@@ -18,11 +18,15 @@ copied into the tracked branch's E2E directory only for the run.
 | `haos` | `standalone` | HAOS VM; your branch's server runs on the runner |
 | `haos` | `embedded` | HAOS VM; the server runs inside the component |
 | `haos` | `app` | HAOS VM; the server runs as the app (add-on) |
+| `docker` | `oauth` | HA container; your branch's server runs on the runner as `ha-mcp-oauth`, with the `MCP:` tunnel as its public URL |
 
 Test on `server=embedded` with the File & YAML Tools entry in place first (the
 defaults): the server running in-process inside the component, with the
 filesystem tools beside it, is ha-mcp's main install. Use `standalone` or `app`
-for a change specific to that mode.
+for a change specific to that mode. `oauth` runs the standalone server through
+the `ha-mcp-oauth` entrypoint: `MCP:` answers 401 until a client completes the
+consent flow against that URL's origin, so drive the flow first and pass the
+access token as a Bearer.
 
 `no_component=true` removes the component's File & YAML Tools entry, like the
 no-tools E2E lanes. `strict_bps` (default on, as agents meet it) sets strict

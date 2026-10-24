@@ -46,6 +46,8 @@ MAX_TRIES = 3
 
 # Agents meet strict best-practices mode by default; the E2E suite pins it off.
 STRICT_BPS = os.environ.get("DEVENV_STRICT_BPS", "true") == "true"
+# server=oauth: the standalone server runs ha-mcp-oauth behind its tunnel.
+OAUTH = os.environ.get("DEVENV_OAUTH") == "1"
 _conftest_embedded._EMBEDDED_FEATURE_FLAGS["enable_strict_mandatory_bps"] = STRICT_BPS
 # Developer mode exposes ha_dev_manage_server, the tool that updates the
 # embedded server in place, as on a developer's own instance.
@@ -175,10 +177,17 @@ class Instance:
             "ENABLE_STRICT_MANDATORY_BPS": str(STRICT_BPS).lower(),
             "HAMCP_ENABLE_DEV_MODE": "true",
         }
+        command = "ha-mcp-web"
+        if OAUTH:
+            # Per-user tokens come from the consent form; MCP_BASE_URL is the
+            # tunnel the workflow opened before launching the holder.
+            command = "ha-mcp-oauth"
+            env.pop("HOMEASSISTANT_TOKEN")
+            env["HA_MCP_DISABLE_SETTINGS_UI"] = "true"
         # The child keeps its own copy of the log handle.
         with open(SRC.parent / "server.log", "ab") as out:
             self.server = subprocess.Popen(
-                ["uv", "run", "ha-mcp-web"], cwd=SRC, env=env, stdout=out, stderr=out
+                ["uv", "run", command], cwd=SRC, env=env, stdout=out, stderr=out
             )
 
     def update_component(self) -> None:
@@ -208,6 +217,19 @@ class Instance:
         self.wait_server()
 
     def wait_server(self) -> None:
+        if self.standalone and OAUTH:
+            # The MCP endpoint answers 401 until a consent flow mints a token;
+            # the discovery document is the readiness signal instead.
+            url = self.targets()["mcp"] + "/.well-known/oauth-authorization-server"
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                try:
+                    if requests.get(url, timeout=5).status_code == 200:
+                        return
+                except requests.RequestException:
+                    pass
+                time.sleep(2)
+            raise RuntimeError("oauth server did not answer; see server.log")
         if self.standalone:
             target = self.targets()
             if not _wait_for_embedded_webhook_ready(

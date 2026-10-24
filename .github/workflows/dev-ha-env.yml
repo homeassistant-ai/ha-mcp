@@ -24,9 +24,9 @@ on:
         options: [docker, haos]
         default: docker
       server:
-        description: "How the server runs: standalone beside HA, embedded in the component, or the app (haos only)"
+        description: "How the server runs: standalone beside HA, embedded in the component, the app (haos only), or oauth (standalone ha-mcp-oauth, docker only)"
         type: choice
-        options: [standalone, embedded, app]
+        options: [standalone, embedded, app, oauth]
         default: embedded
       no_component:
         description: Without the ha_mcp_tools File & YAML Tools entry (like the no-tools E2E lanes)
@@ -89,6 +89,10 @@ jobs:
           fi
           if [ "$PLATFORM" = docker ] && [ "$SERVER" = app ]; then
             echo "::error::The app needs Supervisor: use platform haos."
+            exit 1
+          fi
+          if [ "$PLATFORM" = haos ] && [ "$SERVER" = oauth ]; then
+            echo "::error::oauth mode runs on docker only."
             exit 1
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -228,6 +232,14 @@ jobs:
           SECRET="mcp-$(openssl rand -hex 16)"
           echo "::add-mask::$SECRET"
           export MCP_SECRET_PATH="/$SECRET"
+          source devenv/.github/dev-ha-env/tunnels.sh
+          if [ "$SERVER" = oauth ]; then
+            # The OAuth server advertises its public URL at startup, so its
+            # tunnel must exist before the holder launches it.
+            start_tunnel mcp "http://127.0.0.1:$MCP_PORT" || { echo "mcp tunnel never started"; exit 1; }
+            export DEVENV_OAUTH=1
+            export MCP_BASE_URL="$(cat tunnel-mcp.url)"
+          fi
           cp devenv/.github/dev-ha-env/hold.py src/tests/src/e2e/test_dev_ha_env_hold.py
           cd src/tests
           # Not an E2E lane: pytest only runs the holder, which keeps one
@@ -253,10 +265,9 @@ jobs:
           fi
           target() { python3 -c "import json,sys;print(json.load(open('targets.json'))[sys.argv[1]])" "$1"; }
           target mcp_path > mcp-path
-          source devenv/.github/dev-ha-env/tunnels.sh
           # A tunnel that will not start leaves HA up: Keep running retries it.
           start_tunnel ha "$(target ha)" || true
-          start_tunnel mcp "$(target mcp)" || true
+          [ "$SERVER" = oauth ] || start_tunnel mcp "$(target mcp)" || true
           publish_urls
           rm targets.json
           grep STATUS env.log | tail -3
