@@ -734,6 +734,19 @@ async def safe_progress(
         logger.debug("ctx.report_progress failed (%s): %s", type(e).__name__, e)
 
 
+async def get_entity_state_or_none(
+    client: Any, entity_id: str
+) -> dict[str, Any] | None:
+    """Return the entity's state, or None when Core answers 404; other failures propagate."""
+    try:
+        state: dict[str, Any] = await client.get_entity_state(entity_id)
+    except HomeAssistantAPIError as e:
+        if e.status_code != 404:
+            raise
+        return None
+    return state
+
+
 def ws_failure_code(result: dict[str, Any]) -> ErrorCode:
     """Map Core's WS error code: ``invalid_format`` is the caller's input,
     ``not_found`` an item Core does not hold (e.g. a YAML-configured helper)."""

@@ -1708,8 +1708,8 @@ class TestAreaCaptureRestore:
 @pytest.mark.cleanup
 @pytest.mark.external_only
 class TestGroupCaptureRestore:
-    """Group restore is **Group 3** (service-call restore via
-    ``/api/services/group/set``). Different mechanism from the WS-update
+    """Group restore is **Group 3** (service-call restore: a WebSocket
+    ``call_service`` of group.set). Different mechanism from the WS-update
     family — proves the service-call payload shape works end-to-end."""
 
     async def test_group_full_loop(

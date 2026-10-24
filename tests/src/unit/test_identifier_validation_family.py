@@ -774,33 +774,25 @@ class TestGroupsIdentifierValidation:
 
     @pytest.mark.parametrize("bad", ["", "   "])
     async def test_remove_rejects_empty_object_id(self, tools, bad):
-        # Empty/whitespace object_id would propagate to the group.remove
-        # service call and surface as a misleading HA service-call failure.
-        # The pre-flight runs before the pre-existing "." format check so the
-        # error names the empty/whitespace problem first. The
-        # ``"parameter": "object_id"`` substring discriminates the new
-        # validator's structured error from the ``.`` format check's error
-        # (which uses ``context={"object_id": ...}`` without a ``parameter``
-        # key) — a regression swapping the two guards' order would lose the
-        # ``parameter`` field and break this assertion.
+        # Empty/whitespace object_id would reach the group state read and
+        # surface as a misleading "not found".
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_config_remove_group(object_id=bad)
         _assert_invalid_param(excinfo)
         assert '"parameter": "object_id"' in str(excinfo.value), str(excinfo.value)
-        tools._client.call_service.assert_not_called()
+        tools._client.get_entity_state.assert_not_called()
+        tools._client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
     async def test_set_rejects_empty_object_id(self, tools, bad):
-        # ``_validate_group_params`` only catches ``"." in object_id`` and
-        # mutex/empty-list issues; empty/whitespace ``object_id`` would slip
-        # through to ``call_service("group", "set", ...)`` and surface as a
-        # misleading HA service-call failure. Symmetric with the
-        # ``ha_config_remove_group`` pre-flight added in this PR.
+        # Core's cv.slug accepts "", so group.set would create a group under a
+        # generated entity_id instead of rejecting the call.
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_config_set_group(object_id=bad, entities=["light.example"])
         _assert_invalid_param(excinfo)
         assert '"parameter": "object_id"' in str(excinfo.value), str(excinfo.value)
-        tools._client.call_service.assert_not_called()
+        tools._client.get_entity_state.assert_not_called()
+        tools._client.send_websocket_message.assert_not_called()
 
 
 # --- _handle_flow_helper direct guard test --------------------------------

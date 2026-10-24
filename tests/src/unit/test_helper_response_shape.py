@@ -691,8 +691,9 @@ class TestLifecycleWriteWarningsShape:
         from ha_mcp.tools.tools_groups import GroupTools
 
         client = MagicMock()
-        client.call_service = AsyncMock(return_value=None)
-        client.get_entity_state = AsyncMock(return_value={"state": "on"})
+        client.send_websocket_message = AsyncMock(return_value={"success": True})
+        # An existing group.set group: no YAML warning joins the one under test.
+        client.get_entity_state = AsyncMock(return_value={"attributes": {"auto": True}})
         client.get_states = AsyncMock(return_value=[])
         return GroupTools(client)
 
@@ -833,10 +834,9 @@ class TestLifecycleWriteWarningsShape:
         assert any("removal verification failed" in w for w in result["warnings"])
 
     async def test_groups_update_path_uses_updated_action_word(self, groups_tools):
-        # Rename-only call (name set, entities/add/remove all None) — the
-        # is_create branch in tools_groups.py:306 evaluates to False, so
-        # action_word must be "updated". Pins the create/update branching
-        # against a regression hardcoding "created" on the update path.
+        # The group already exists, so action_word must be "updated". Pins
+        # the create/update branching against a regression hardcoding
+        # "created" on the update path.
         with patch(
             "ha_mcp.tools.tools_groups.wait_for_entity_registered",
             new_callable=AsyncMock,

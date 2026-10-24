@@ -4,14 +4,13 @@ import logging
 from typing import Any, Literal, NoReturn
 
 from ..client.rest_client import (
-    HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
 from .helper_flows import helper_flow_types, listed_helper_flows
-from .helpers import raise_tool_error, ws_failure_code
+from .helpers import get_entity_state_or_none, raise_tool_error, ws_failure_code
 
 logger = logging.getLogger(__name__)
 
@@ -130,12 +129,7 @@ async def _absence_reason(client: Any, entity_id: str) -> FlowLookupReason:
     template sensor without unique_id, ``zone.home``) still has a state. A
     state read failing with a status other than 404 propagates.
     """
-    try:
-        state = await client.get_entity_state(entity_id)
-    except HomeAssistantAPIError as e:
-        if e.status_code != 404:
-            raise
-        state = None
+    state = await get_entity_state_or_none(client, entity_id)
     return "not_registry_managed" if state else "not_in_registry"
 
 
