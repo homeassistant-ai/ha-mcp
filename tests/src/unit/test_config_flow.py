@@ -612,9 +612,9 @@ class TestServerOptionsFlow:
             const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
             const.OPT_PIP_SPEC: "ha-mcp==0.0.1",
             const.OPT_SERVER_URL: "https://ha.example:8123",
-            # Saved False (non-default) proves the LLM-API toggle prefills.
+            # Saved non-defaults prove each of these toggles and selectors prefills.
             const.OPT_ENABLE_LLM_API: False,
-            # Saved full (non-default) proves the exposure selector prefills.
+            const.OPT_ACCESS_OFF_AFTER_RESTART: True,
             const.OPT_LLM_API_EXPOSURE: const.EXPOSURE_FULL,
             const.OPT_EXTERNAL_URL: "https://ha.example.com",
             const.OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook",
@@ -818,17 +818,16 @@ class TestServerOptionsFlow:
         # toggle was dropped (entry-exists = server runs).
         assert not hasattr(const, "OPT_EMBEDDED_ENABLED")
 
-    def test_new_toggles_default_on_for_fresh_entry(self):
-        # Both UX toggles (start-up notification, sidebar panel) are present in
-        # the rendered schema and default on when the entry has never stored
-        # them.
+    def test_new_toggle_defaults_for_fresh_entry(self):
+        # The UX toggles default on and the restart-access toggle off (an
+        # existing install's first save must not close access after restarts)
+        # when the entry has never stored them; a missing field is a KeyError.
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         form = asyncio.run(flow.async_step_init(None))
         markers = {m.schema: m for m in form["data_schema"].schema}
-        assert const.OPT_ENABLE_STARTUP_NOTIFICATION in markers
         assert markers[const.OPT_ENABLE_STARTUP_NOTIFICATION].default() is True
-        assert const.OPT_ENABLE_SIDEBAR_PANEL in markers
         assert markers[const.OPT_ENABLE_SIDEBAR_PANEL].default() is True
+        assert markers[const.OPT_ACCESS_OFF_AFTER_RESTART].default() is False
 
     def test_new_toggles_placed_right_after_enable_webhook(self):
         # Contract: both toggles sit immediately after the enable_webhook field.

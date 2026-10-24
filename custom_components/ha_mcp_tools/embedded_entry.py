@@ -3,8 +3,10 @@
 Runs the full ha-mcp FastMCP server in-process inside Home Assistant and exposes
 it remotely through a Home Assistant webhook. Creating the "server" config entry
 starts the server; disabling the entry pauses it (HA calls
-:func:`async_unload_server_entry` via the domain dispatcher in ``__init__``);
-removing the entry deletes the account and token an older release provisioned.
+:func:`async_unload_server_entry` via the domain dispatcher in ``__init__``), and
+so does the entry's access switch (:func:`async_set_access`, #2801) while the
+entry stays loaded; removing the entry deletes the account and token an older
+release provisioned.
 
 ``__init__.async_setup_entry`` dispatches to these functions for the "server"
 entry type; the "tools" services entry is handled separately. This module is
@@ -24,14 +26,20 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    DATA_ACCESS_ENABLED,
+    DATA_ACCESS_LOCK,
     DATA_BRINGUP_TASK,
     DATA_LAST_OPTIONS,
+    DATA_MANAGER,
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
     DATA_SECRET_PATH,
+    DATA_STARTED_ENTRIES,
+    DATA_UNLOADED_ENTRIES,
     DATA_WEBHOOK_ID,
     DOMAIN,
+    OPT_ACCESS_OFF_AFTER_RESTART,
     OPT_ENABLE_SIDEBAR_PANEL,
     OPT_ENABLE_WEBHOOK,
     OPT_OAUTH_ALLOW_ANY_CALLBACK,
@@ -62,21 +70,27 @@ from .entry_device import async_register_entry_device
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
+# The access switch (#2801). Plain strings: Home Assistant accepts them, and
+# the unit tests' ``homeassistant.const`` stubs carry no ``Platform``.
+_PLATFORMS = ("switch",)
+
 
 async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up the server entry: schedule the server bring-up as a background task.
+    """Set up the server entry and, unless access is off, start the server.
 
-    The bring-up (an override's pip install of the fastmcp tree, token checks,
-    thread start, webhook registration) can take minutes, so it must not stall HA
-    startup. It runs as a config-entry background task — automatically cancelled
-    on unload. The secret webhook id and secret path are generated first, before
+    On the entry's first setup in a Home Assistant run,
+    ``OPT_ACCESS_OFF_AFTER_RESTART`` turns access off before the switch platform
+    is forwarded, so the switch starts out off. The bring-up (an override's pip
+    install of the fastmcp tree, token checks, thread start, webhook
+    registration) can take minutes, so it must not stall HA startup. It runs as
+    a config-entry background task — automatically cancelled on unload. The
+    secret webhook id and secret path are generated first, before
     the update listener is registered, so those ``entry.data`` writes never
     trigger a mid-setup reload. The ``ha_mcp_tools/*`` WebSocket command surface
     is registered up front, before any of that.
     """
     # Imported lazily (see the import note) so the aiohttp / auth / requirements
     # chain is pulled in only when an entry is actually set up.
-    from .embedded_setup import async_bring_up_server
     from .ui_panel import async_register_ui_panel
     from .websocket_api import async_register_commands
 
@@ -120,35 +134,140 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         hass, entry, name=SERVER_ENTRY_TITLE, model="ha-mcp (in-process server)"
     )
 
-    task = entry.async_create_background_task(
-        hass, async_bring_up_server(hass, entry), f"{DOMAIN}_bring_up"
-    )
-    domain_data[DATA_BRINGUP_TASK] = task
+    async with _access_lock(hass):
+        domain_data.setdefault(DATA_UNLOADED_ENTRIES, set()).discard(entry.entry_id)
+        started = domain_data.setdefault(DATA_STARTED_ENTRIES, set())
+        if entry.entry_id not in started:
+            started.add(entry.entry_id)
+            if entry.options.get(OPT_ACCESS_OFF_AFTER_RESTART):
+                _store_access(hass, entry, False)
+        # Before the switch exists. Nothing should be live here: the unload
+        # cancels the bring-up, and a switch-on queued behind it starts nothing.
+        # The _server_live check is a defensive guard against a second start.
+        if access_enabled(entry) and not _server_live(hass):
+            _schedule_bring_up(hass, entry, announce=True)
+    await hass.config_entries.async_forward_entry_setups(entry, _PLATFORMS)
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
 
 async def async_unload_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Stop the server + ingress webhook (reload-safe; keeps the credentials).
-
-    Cancels the bring-up task first so a still-in-flight install/start is torn
-    down before the explicit teardown runs.
-    """
-    from .embedded_setup import async_teardown_server  # lazy (see import note)
+    """Stop the server + ingress webhook (reload-safe; keeps the credentials)."""
     from .ui_panel import async_unregister_ui_panel
 
-    domain_data = hass.data.get(DOMAIN, {})
-    task = domain_data.pop(DATA_BRINGUP_TASK, None)
-    if task is not None and not task.done():
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+    async with _access_lock(hass):
+        domain_data = hass.data.setdefault(DOMAIN, {})
+        # A switch-on still waiting for the lock must not start a server for an
+        # entry that is no longer loaded.
+        domain_data.setdefault(DATA_UNLOADED_ENTRIES, set()).add(entry.entry_id)
+        try:
+            unloaded = await hass.config_entries.async_unload_platforms(
+                entry, _PLATFORMS
+            )
+        finally:
+            await _async_stop_server(hass)
+            async_unregister_ui_panel(hass)
+            domain_data.pop(DATA_LAST_OPTIONS, None)
+    return bool(unloaded)
 
-    await async_teardown_server(hass)
-    async_unregister_ui_panel(hass)
-    domain_data.pop(DATA_LAST_OPTIONS, None)
-    return True
+
+def access_enabled(entry: ConfigEntry) -> bool:
+    """Whether the server's access switch (#2801) is on."""
+    return bool(entry.data.get(DATA_ACCESS_ENABLED, True))
+
+
+async def async_set_access(
+    hass: HomeAssistant, entry: ConfigEntry, enabled: bool
+) -> None:
+    """Open or close every way into the server while the entry stays loaded.
+
+    Off runs the same stop as an unload, so the webhook with its ``/readonly``
+    alias, the direct port and the conversation-agent LLM API close together;
+    it always runs, so turning off again runs the stop again. On while on
+    starts the server again only when nothing is running, which retries a
+    failed start. The switch cannot just disable the entry: it belongs to the
+    entry and would unload with it, leaving nothing to turn access back on.
+    """
+    async with _access_lock(hass):
+        if not enabled:
+            _store_access(hass, entry, False)
+            await _async_stop_server(hass)
+            return
+        if entry.entry_id in hass.data[DOMAIN].get(DATA_UNLOADED_ENTRIES, ()):
+            return
+        if _server_live(hass):
+            return
+        # Clears what a failed or crashed start left registered.
+        await _async_stop_server(hass)
+        _store_access(hass, entry, True)
+        _schedule_bring_up(hass, entry, announce=False)
+
+
+def _access_lock(hass: HomeAssistant) -> asyncio.Lock:
+    """Serialize the entry's setup, its unload and the access switch: a stop can
+    take seconds, and a start overlapping it would claim the port while the old
+    server still holds it."""
+    lock: asyncio.Lock = hass.data.setdefault(DOMAIN, {}).setdefault(
+        DATA_ACCESS_LOCK, asyncio.Lock()
+    )
+    return lock
+
+
+def bring_up_in_progress(hass: HomeAssistant) -> bool:
+    task = hass.data.get(DOMAIN, {}).get(DATA_BRINGUP_TASK)
+    return task is not None and not task.done()
+
+
+def server_running(hass: HomeAssistant) -> bool:
+    from .embedded_server import EmbeddedServerManager  # lazy (see import note)
+
+    manager = hass.data.get(DOMAIN, {}).get(DATA_MANAGER)
+    return isinstance(manager, EmbeddedServerManager) and manager.is_running
+
+
+def _server_live(hass: HomeAssistant) -> bool:
+    return bring_up_in_progress(hass) or server_running(hass)
+
+
+def _store_access(hass: HomeAssistant, entry: ConfigEntry, enabled: bool) -> None:
+    # entry.data only: _async_options_updated compares options, so no reload.
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, DATA_ACCESS_ENABLED: enabled}
+    )
+
+
+def _schedule_bring_up(
+    hass: HomeAssistant, entry: ConfigEntry, *, announce: bool
+) -> None:
+    """Start the server as an entry background task, cancelled on unload."""
+    from .embedded_setup import async_bring_up_server  # lazy (see import note)
+
+    hass.data.setdefault(DOMAIN, {})[DATA_BRINGUP_TASK] = (
+        entry.async_create_background_task(
+            hass,
+            async_bring_up_server(hass, entry, announce=announce),
+            f"{DOMAIN}_bring_up",
+        )
+    )
+
+
+async def _async_stop_server(hass: HomeAssistant) -> None:
+    """Cancel an in-flight bring-up, then tear the server down.
+
+    A bare teardown would let a bring-up still running re-register the webhook
+    and the LLM API after it.
+    """
+    from .embedded_setup import async_teardown_server  # lazy (see import note)
+
+    task = hass.data.get(DOMAIN, {}).pop(DATA_BRINGUP_TASK, None)
+    try:
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+    finally:
+        await async_teardown_server(hass)
 
 
 def _remove_retired_update_entity(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -177,13 +296,19 @@ async def async_remove_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     await async_revoke_credentials_on_remove(hass, entry)
 
 
-_LIVE_OPTIONS = frozenset({OPT_OAUTH_REDIRECT_ALLOWLIST, OPT_OAUTH_ALLOW_ANY_CALLBACK})
+_NO_RELOAD_OPTIONS = frozenset(
+    {
+        OPT_OAUTH_REDIRECT_ALLOWLIST,
+        OPT_OAUTH_ALLOW_ANY_CALLBACK,
+        OPT_ACCESS_OFF_AFTER_RESTART,
+    }
+)
 
 
 def _reload_relevant(options: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if options is None:
         return None
-    return {k: v for k, v in options.items() if k not in _LIVE_OPTIONS}
+    return {k: v for k, v in options.items() if k not in _NO_RELOAD_OPTIONS}
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -191,8 +316,9 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
     Ignores the ``entry.data`` writes the background bring-up performs (webhook
     id, secret path, an adopted token, last pip spec): those fire the same
-    update listener but must not reload the entry. Options read live on every
-    request (the callback allowlist) need no reload either.
+    update listener but must not reload the entry. Options read per request
+    (the callback allowlist) or only at the entry's first setup in a run (access
+    off after a restart) need no reload either.
     """
     domain_data = hass.data.get(DOMAIN, {})
     if _reload_relevant(domain_data.get(DATA_LAST_OPTIONS)) == _reload_relevant(

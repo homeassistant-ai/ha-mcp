@@ -79,6 +79,7 @@ from .const import (
     LLM_API_DOCS_URL,
     MAX_OAUTH_CALLBACKS,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
+    OPT_ACCESS_OFF_AFTER_RESTART,
     OPT_ADMIN_TOKEN_REPLACEMENT,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
@@ -542,6 +543,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 vol.Required(
                     OPT_ENABLE_SIDEBAR_PANEL,
                     default=bool(form_values.get(OPT_ENABLE_SIDEBAR_PANEL, True)),
+                ): bool,
+                vol.Required(
+                    OPT_ACCESS_OFF_AFTER_RESTART,
+                    default=bool(form_values.get(OPT_ACCESS_OFF_AFTER_RESTART, False)),
                 ): bool,
                 vol.Required(
                     OPT_ENABLE_LLM_API,

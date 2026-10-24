@@ -358,11 +358,16 @@ missing, revoked or non-administrator credential stops the server and files a
 repair that asks for a replacement, rather than minting a new administrator.
 The token is stored in the config entry and handed to the server in memory
 (never through the Home Assistant process environment). Disabling the config
-entry stops the server; removing it deletes only an account an older release
-created, never an account the user created, and revokes only a token the
-component issued, never a pasted one. As with
-standard mode, that token's Home Assistant permissions define what the server can
-do.
+entry stops the server, and so does turning off the entry's **Access** switch
+(#2801), which closes the webhook, the direct port and the conversation-agent
+LLM API while the entry stays loaded. The switch is disabled by default, and as
+a configuration entity it is not exposed to Assist by default. It does not
+revoke Home Assistant credentials a `ha_auth` client already holds: those work
+against Home Assistant's own API regardless of the switch, and against the
+server again once access is back on. Removing the entry deletes only an account
+an older release created, never an account the user created, and revokes only a
+token the component issued, never a pasted one. As with standard mode, that
+token's Home Assistant permissions define what the server can do.
 
 The component also adds an admin-only **settings panel** to the Home Assistant
 sidebar that reverse-proxies the server's web settings UI over Home Assistant's
