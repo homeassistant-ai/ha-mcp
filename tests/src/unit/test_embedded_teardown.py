@@ -74,6 +74,23 @@ class TestTeardown:
         fake_manager.async_stop.assert_awaited_once()
         dismiss.assert_called_once_with(hass, esetup._NOTIFICATION_ID)
 
+    async def test_webhook_closes_even_when_the_llm_api_fails_to_unregister(
+        self, fake_manager
+    ):
+        # Otherwise the webhook and its /readonly alias stay routed to a server
+        # that is gone.
+        hass = _make_hass()
+        await esetup.async_bring_up_server(hass, _make_entry())
+        fake_manager.async_stop.reset_mock()
+        esetup.async_unregister_webhook.reset_mock()
+        esetup.async_unregister_llm_api.side_effect = RuntimeError("unregister failed")
+
+        with pytest.raises(RuntimeError):
+            await esetup.async_teardown_server(hass)
+
+        esetup.async_unregister_webhook.assert_awaited_once()
+        fake_manager.async_stop.assert_awaited_once()
+
     async def test_stopped_server_leaves_no_running_notice_or_stale_repair(
         self, monkeypatch
     ):

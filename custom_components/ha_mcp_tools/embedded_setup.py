@@ -202,12 +202,14 @@ async def async_teardown_server(hass: HomeAssistant) -> None:
 
     Does NOT release credentials — a reload must keep them. The ha_auth
     discovery views stay bound (aiohttp can't unregister them until HA restarts);
-    they 404 while the entry is not live. The thread is stopped even when an
-    unregister step raises: its port is the way in that stays open otherwise.
+    they 404 while the entry is not live. Each step runs even when an earlier
+    unregister step raises: the webhook and the thread's port are ways in.
     """
     try:
-        async_unregister_llm_api(hass)
-        await async_unregister_webhook(hass)
+        try:
+            async_unregister_llm_api(hass)
+        finally:
+            await async_unregister_webhook(hass)
     finally:
         manager = hass.data.get(DOMAIN, {}).pop(DATA_MANAGER, None)
         if isinstance(manager, EmbeddedServerManager):
