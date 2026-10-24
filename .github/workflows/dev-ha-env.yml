@@ -234,11 +234,18 @@ jobs:
           export MCP_SECRET_PATH="/$SECRET"
           source devenv/.github/dev-ha-env/tunnels.sh
           if [ "$SERVER" = oauth ]; then
-            # The OAuth server advertises its public URL at startup, so its
-            # tunnel must exist before the holder launches it.
-            start_tunnel mcp "http://127.0.0.1:$MCP_PORT" || { echo "mcp tunnel never started"; exit 1; }
+            # ha-mcp-oauth reads its public URL (MCP_BASE_URL) at startup and
+            # builds its issuer and metadata from it, so the tunnel must exist
+            # before the holder launches the server.
+            start_tunnel mcp "http://127.0.0.1:$MCP_PORT" || {
+              echo "::error::The mcp tunnel never started; oauth mode needs it before the server launches."
+              tail -20 tunnel-mcp.log
+              exit 1
+            }
             export DEVENV_OAUTH=1
             export MCP_BASE_URL="$(cat tunnel-mcp.url)"
+            # Keep running steps revive tunnels; they must know this mode.
+            echo "DEVENV_OAUTH=1" >> "$GITHUB_ENV"
           fi
           cp devenv/.github/dev-ha-env/hold.py src/tests/src/e2e/test_dev_ha_env_hold.py
           cd src/tests

@@ -6,6 +6,8 @@ from urllib.parse import parse_qs, urlparse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+_REDIRECT_STATUSES = frozenset({302, 303, 307})
+
 
 class StampIssOnErrorRedirects:
     """ASGI wrapper that stamps ``iss`` on the error redirects of the app it wraps.
@@ -21,10 +23,9 @@ class StampIssOnErrorRedirects:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         async def send_stamped(message: Message) -> None:
-            if message["type"] == "http.response.start" and message["status"] in (
-                302,
-                303,
-                307,
+            if (
+                message["type"] == "http.response.start"
+                and message["status"] in _REDIRECT_STATUSES
             ):
                 headers = MutableHeaders(scope=message)
                 location = headers.get("location", "")

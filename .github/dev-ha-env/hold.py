@@ -2,7 +2,8 @@
 
 The workflow copies this file into the tracked checkout's tests/src/e2e/ and
 runs it with pytest, so the E2E session fixture does the whole bring-up for the
-selected backend: the Docker container (standalone or embedded server) or HAOS
+selected backend: the Docker container (standalone, standalone through
+ha-mcp-oauth with DEVENV_OAUTH, or embedded server) or HAOS
 (external, embedded or app). It writes the local targets to tunnel to
 DEVENV_TARGETS and keeps the instance up. The standalone and embedded servers
 run in developer mode, so a branch is iterated on with the same tools as on any
@@ -60,6 +61,32 @@ def git(*args: str) -> str:
 
 def log(**status: object) -> None:
     print("STATUS", json.dumps(status), flush=True)
+
+
+def _wait_for_oauth_discovery(
+    server: subprocess.Popen | None, url: str, timeout: int
+) -> None:
+    """Wait until ha-mcp-oauth serves its discovery document, or raise why not.
+
+    The MCP endpoint answers 401 without a Bearer token, which only a consent
+    flow mints, so the discovery document is the readiness signal.
+    """
+    last = "no response"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if server is not None and server.poll() is not None:
+            raise RuntimeError(
+                f"ha-mcp-oauth exited with {server.returncode}; see server.log"
+            )
+        try:
+            status = requests.get(url, timeout=5).status_code
+            if status == 200:
+                return
+            last = f"HTTP {status}"
+        except requests.RequestException as err:
+            last = f"{type(err).__name__}: {err}"
+        time.sleep(2)
+    raise RuntimeError(f"oauth server did not answer at {url} ({last}); see server.log")
 
 
 def _boot_gate(url: str, timeout: int, **kwargs: Any) -> bool:
@@ -217,22 +244,15 @@ class Instance:
         self.wait_server()
 
     def wait_server(self) -> None:
-        if self.standalone and OAUTH:
-            # The MCP endpoint answers 401 until a consent flow mints a token;
-            # the discovery document is the readiness signal instead.
-            url = self.targets()["mcp"] + "/.well-known/oauth-authorization-server"
-            deadline = time.monotonic() + 120
-            while time.monotonic() < deadline:
-                try:
-                    if requests.get(url, timeout=5).status_code == 200:
-                        return
-                except requests.RequestException:
-                    pass
-                time.sleep(2)
-            raise RuntimeError("oauth server did not answer; see server.log")
         if self.standalone:
             target = self.targets()
-            if not _wait_for_embedded_webhook_ready(
+            if OAUTH:
+                _wait_for_oauth_discovery(
+                    self.server,
+                    target["mcp"] + "/.well-known/oauth-authorization-server",
+                    timeout=120,
+                )
+            elif not _wait_for_embedded_webhook_ready(
                 target["mcp"] + target["mcp_path"], timeout=120
             ):
                 raise RuntimeError("standalone server did not answer; see server.log")

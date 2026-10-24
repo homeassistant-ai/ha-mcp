@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from pydantic import AnyHttpUrl, ValidationError
+from pydantic import AnyHttpUrl, Field, ValidationError
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
@@ -48,11 +48,11 @@ from .iss_stamp import StampIssOnErrorRedirects
 
 logger = logging.getLogger(__name__)
 
-# Token expiration times
+# Expiry windows
 PENDING_AUTHORIZATION_EXPIRY_SECONDS = 5 * 60  # window to submit the consent form
-AUTH_CODE_EXPIRY_SECONDS = 5 * 60  # 5 minutes
-ACCESS_TOKEN_EXPIRY_SECONDS = 60 * 60  # 1 hour
-REFRESH_TOKEN_EXPIRY_SECONDS = 7 * 24 * 60 * 60  # 7 days
+AUTH_CODE_EXPIRY_SECONDS = 5 * 60
+ACCESS_TOKEN_EXPIRY_SECONDS = 60 * 60
+REFRESH_TOKEN_EXPIRY_SECONDS = 7 * 24 * 60 * 60
 
 
 class HomeAssistantAuthorizationCode(AuthorizationCode):
@@ -63,7 +63,8 @@ class HomeAssistantAuthorizationCode(AuthorizationCode):
     credential to the other at the token endpoint.
     """
 
-    ha_token: str
+    # repr=False keeps the secret out of logs and tracebacks that print the code.
+    ha_token: str = Field(repr=False, min_length=1)
 
 
 class HomeAssistantOAuthProvider(OAuthProvider):
@@ -140,7 +141,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         self.clients: dict[str, OAuthClientInformationFull] = self._load_clients()
 
         # Short-lived in-memory state (no persistence needed or wanted). Each
-        # code carries the LLAT submitted for it, held only until exchanged.
+        # code carries the LLAT submitted for it, held until exchanged or
+        # evicted as expired.
         self.auth_codes: dict[str, HomeAssistantAuthorizationCode] = {}
 
         # Pending authorization requests (for consent form flow)
@@ -601,7 +603,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 error_description=f"Client '{client.client_id}' not registered.",
             )
 
-        self._evict_expired()
+        self._evict_expired(time.time())
 
         # Generate a unique transaction ID for this authorization
         txn_id = secrets.token_urlsafe(32)
@@ -625,18 +627,21 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         logger.debug(f"Redirecting to consent form: {consent_url}")
         return consent_url
 
-    def _evict_expired(self) -> None:
+    @staticmethod
+    def _pending_expired(pending: dict[str, Any], now: float) -> bool:
+        return now - pending["created_at"] > PENDING_AUTHORIZATION_EXPIRY_SECONDS
+
+    def _evict_expired(self, now: float) -> None:
         """Drop pending transactions and codes past their expiry.
 
-        Nothing else sweeps them: an unsubmitted consent form or an unredeemed
-        code would otherwise stay in memory (with its LLAT) for the life of
-        the process.
+        A lookup only drops the one expired entry it finds, so an abandoned
+        consent form, or an unredeemed code and its LLAT, would otherwise stay
+        in memory for the life of the process.
         """
-        now = time.time()
         stale_txns = [
             txn_id
             for txn_id, pending in self.pending_authorizations.items()
-            if now - pending["created_at"] > PENDING_AUTHORIZATION_EXPIRY_SECONDS
+            if self._pending_expired(pending, now)
         ]
         for txn_id in stale_txns:
             del self.pending_authorizations[txn_id]
@@ -645,8 +650,16 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         ]
         for code in stale_codes:
             del self.auth_codes[code]
+        if stale_txns or stale_codes:
+            logger.debug(
+                "Evicted %d expired consent transactions and %d expired "
+                "authorization codes",
+                len(stale_txns),
+                len(stale_codes),
+            )
 
-    def _expired_pending_response(self, txn_id: str) -> Response:
+    def _reject_expired_pending(self, txn_id: str) -> Response:
+        """Drop the expired transaction and render the expired-request page."""
         del self.pending_authorizations[txn_id]
         return HTMLResponse(
             create_error_html(
@@ -680,8 +693,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 status_code=400,
             )
 
-        if time.time() - pending["created_at"] > PENDING_AUTHORIZATION_EXPIRY_SECONDS:
-            return self._expired_pending_response(txn_id)
+        if self._pending_expired(pending, time.time()):
+            return self._reject_expired_pending(txn_id)
 
         redirect_uri = pending.get("redirect_uri", "")
         if not redirect_uri:
@@ -705,12 +718,17 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
     async def _consent_post(self, request: Request) -> Response:
         """Handle POST request from consent form."""
-        logger.info("=== CONSENT FORM POST RECEIVED ===")
         form = await request.form()
 
         txn_id = form.get("txn_id")
         ha_token = form.get("ha_token")
-        logger.info(f"Form data: txn_id={txn_id}, has_token={ha_token is not None}")
+        # The txn_id stays out of the log: it is what binds a submitted LLAT
+        # to the code the client receives.
+        logger.debug(
+            "Consent form submitted (has_txn=%s, has_token=%s)",
+            txn_id is not None,
+            ha_token is not None,
+        )
 
         if not txn_id:
             return HTMLResponse(
@@ -720,8 +738,9 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 ),
                 status_code=400,
             )
+        txn_id = str(txn_id)
 
-        pending = self.pending_authorizations.get(str(txn_id))
+        pending = self.pending_authorizations.get(txn_id)
         if not pending:
             return HTMLResponse(
                 create_error_html(
@@ -731,10 +750,11 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 status_code=400,
             )
 
-        if time.time() - pending["created_at"] > PENDING_AUTHORIZATION_EXPIRY_SECONDS:
-            return self._expired_pending_response(str(txn_id))
+        if self._pending_expired(pending, time.time()):
+            return self._reject_expired_pending(txn_id)
 
-        if not ha_token:
+        # A multipart upload in the token field is not a token.
+        if not isinstance(ha_token, str) or not ha_token.strip():
             # Redirect back to form with error
             base = str(self.base_url).rstrip("/")
             error_params = urlencode(
@@ -747,8 +767,6 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 f"{base}/consent?{error_params}",
                 status_code=303,
             )
-
-        self._evict_expired()
 
         # The token is not validated here; the first API call to the
         # configured HA instance does that. It is bound to this code alone.
@@ -770,12 +788,12 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             scopes=scopes_list,
             expires_at=expires_at,
             code_challenge=pending.get("code_challenge"),  # type: ignore[arg-type]  # None is valid per PKCE spec (RFC 7636 §4.3); empty string would break validation
-            ha_token=str(ha_token),
+            ha_token=ha_token.strip(),
         )
         self.auth_codes[auth_code_value] = auth_code
 
         # Clean up pending authorization
-        del self.pending_authorizations[str(txn_id)]
+        del self.pending_authorizations[txn_id]
 
         # Redirect back to client with auth code. RFC 9207: the authorization
         # response carries the issuer that produced it, so a client registered
@@ -813,7 +831,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
         """Exchange authorization code for stateless access and refresh tokens."""
-        # Consume the auth code; the stored copy is the one carrying the LLAT.
+        # Consume the auth code. The parameter is typed as the SDK's
+        # AuthorizationCode; the stored copy is the one carrying the LLAT.
         stored = self.auth_codes.pop(authorization_code.code, None)
         if stored is None:
             raise TokenError(
@@ -823,7 +842,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         if client.client_id is None:
             raise TokenError("invalid_client", "Client ID is required")
 
-        scopes = authorization_code.scopes
+        scopes = stored.scopes
         access_token_expires_at = int(time.time() + ACCESS_TOKEN_EXPIRY_SECONDS)
         refresh_token_expires_at = int(time.time() + REFRESH_TOKEN_EXPIRY_SECONDS)
 
