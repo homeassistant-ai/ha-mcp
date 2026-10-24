@@ -249,17 +249,8 @@ def _embedded_mcp_result(resp: requests.Response) -> dict[str, Any] | None:
     return parse_mcp_response(resp.headers.get("Content-Type", ""), resp.content)
 
 
-def _wait_for_embedded_webhook_ready(
-    webhook_url: str, timeout: int, *, verify: bool = True
-) -> bool:
-    """Poll the embedded server's ingress webhook until MCP ``initialize`` works.
-
-    A valid JSON-RPC ``result`` means the in-process MCP server has installed
-    itself, started its worker thread, and registered the webhook. Returns False
-    on timeout so the caller can dump diagnostics and fail with context.
-    ``verify=False`` lets the TLS scenario poll the ``https://`` webhook while
-    Core runs its trial certificate.
-    """
+def _embedded_initialize_ok(webhook_url: str, *, verify: bool = True) -> bool:
+    """One MCP ``initialize`` through the webhook; True on a JSON-RPC result."""
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -274,6 +265,28 @@ def _wait_for_embedded_webhook_ready(
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
+    resp = requests.post(
+        webhook_url,
+        headers=headers,
+        data=json.dumps(payload),
+        timeout=30,
+        verify=verify,
+    )
+    parsed = _embedded_mcp_result(resp) if resp.status_code == 200 else None
+    return parsed is not None and "result" in parsed
+
+
+def _wait_for_embedded_webhook_ready(
+    webhook_url: str, timeout: int, *, verify: bool = True
+) -> bool:
+    """Poll the embedded server's ingress webhook until MCP ``initialize`` works.
+
+    A valid JSON-RPC ``result`` means the in-process MCP server has installed
+    itself, started its worker thread, and registered the webhook. Returns False
+    on timeout so the caller can dump diagnostics and fail with context.
+    ``verify=False`` lets the TLS scenario poll the ``https://`` webhook while
+    Core runs its trial certificate.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -283,21 +296,11 @@ def _wait_for_embedded_webhook_ready(
                     # loopback certificate. Keep the suite's warnings-as-errors
                     # policy for every warning except this expected one.
                     warnings.simplefilter("ignore", InsecureRequestWarning)
-                resp = requests.post(
-                    webhook_url,
-                    headers=headers,
-                    data=json.dumps(payload),
-                    timeout=30,
-                    verify=verify,
-                )
-            if resp.status_code == 200:
-                parsed = _embedded_mcp_result(resp)
-                if parsed is not None and "result" in parsed:
-                    elapsed = int(time.monotonic() - (deadline - timeout))
-                    logger.info(
-                        "✅ Embedded MCP server webhook ready after ~%ds", elapsed
-                    )
-                    return True
+                ready = _embedded_initialize_ok(webhook_url, verify=verify)
+            if ready:
+                elapsed = int(time.monotonic() - (deadline - timeout))
+                logger.info("✅ Embedded MCP server webhook ready after ~%ds", elapsed)
+                return True
         except requests.exceptions.RequestException:
             # Bring-up still in flight (pip force-install, thread start): retry.
             pass
