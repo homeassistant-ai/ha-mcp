@@ -223,26 +223,6 @@ class TestLoopbackDerivation:
     instance with ``http.ssl_certificate`` configured, killing every HA
     round-trip while the MCP handshake kept working."""
 
-    def test_no_api_object_falls_back_to_constant(self, tmp_path):
-        hass = _make_hass(tmp_path)
-        hass.config.api = None
-        assert es._derive_loopback_url(hass) == ("http://127.0.0.1:8123", None)
-
-    def test_ssl_enabled_derives_https_with_verify_off(self, tmp_path):
-        hass = _make_hass(tmp_path)
-        hass.config.api = SimpleNamespace(port=8123, use_ssl=True)
-        assert es._derive_loopback_url(hass) == ("https://127.0.0.1:8123", False)
-
-    def test_custom_port_is_honored(self, tmp_path):
-        hass = _make_hass(tmp_path)
-        hass.config.api = SimpleNamespace(port=8444, use_ssl=False)
-        assert es._derive_loopback_url(hass) == ("http://127.0.0.1:8444", None)
-
-    def test_unusable_port_falls_back_to_8123(self, tmp_path):
-        hass = _make_hass(tmp_path)
-        hass.config.api = SimpleNamespace(port=object(), use_ssl=True)
-        assert es._derive_loopback_url(hass) == ("https://127.0.0.1:8123", False)
-
     def test_manager_derives_when_no_override(self, tmp_path):
         hass = _make_hass(tmp_path)
         hass.config.api = SimpleNamespace(port=8443, use_ssl=True)

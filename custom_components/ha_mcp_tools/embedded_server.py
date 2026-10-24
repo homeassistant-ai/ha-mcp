@@ -83,6 +83,7 @@ from .dependency_diagnostics import (
     requirement_forces_conflict,
     root_import_failure,
 )
+from .loopback_url import derive_loopback_url
 from .pip_compat import pip_kwargs
 from .server_credentials import (
     CredentialNeeded,
@@ -156,50 +157,6 @@ _PENDING_INSTALL_WAIT_SECONDS = 600.0
 # Older distributions can be left behind by an unsupported Core version's
 # constraints and must never enter the worker thread.
 MIN_EMBEDDED_SERVER_VERSION = "7.10.0"
-
-
-def _derive_loopback_url(hass: HomeAssistant) -> tuple[str, bool | None]:
-    """Resolve the loopback base URL for HA core from the http integration.
-
-    Returns ``(url, verify_ssl)`` where ``verify_ssl`` is ``False`` when the
-    URL is ``https`` (HA's certificate is issued for its hostname, never for
-    127.0.0.1, so verification on the loopback hop can only fail) and ``None``
-    when no override of the server's default is needed.
-
-    The hardcoded ``http://127.0.0.1:8123`` default this replaces broke every
-    instance with ``http.ssl_certificate`` configured (issue #1890): port 8123
-    speaks TLS there, so the server's plaintext REST/WS calls died with
-    "Server disconnected without sending a response" / "did not receive a
-    valid HTTP response" on every tool call — while the MCP handshake and
-    tools/list (no HA round-trip) kept working. A custom ``server_port``
-    similarly broke the hardcoded port. Both live in ``hass.config.api``,
-    set by the ``http`` integration this component depends on; the constant
-    remains the fallback if it is ever absent.
-    """
-    api = getattr(hass.config, "api", None)
-    if api is None:
-        # Leave a trail: if this ever fires on a real instance, the resulting
-        # failure looks exactly like issue #1890 (TLS loopback broken, MCP
-        # handshake fine) and took a live reproduction to diagnose last time.
-        _LOGGER.debug(
-            "hass.config.api unavailable; using hardcoded loopback default %s",
-            DEFAULT_LOOPBACK_URL,
-        )
-        return DEFAULT_LOOPBACK_URL, None
-    # Strict type checks (not coercion / truthiness): a malformed api object
-    # must resolve to the plaintext default on port 8123, never to a surprise
-    # port or https flip. bool is excluded because it is an int subclass.
-    port_raw = getattr(api, "port", None)
-    port = (
-        port_raw
-        if isinstance(port_raw, int)
-        and not isinstance(port_raw, bool)
-        and 0 < port_raw <= 65535
-        else 8123
-    )
-    if getattr(api, "use_ssl", False) is True:
-        return f"https://127.0.0.1:{port}", False
-    return f"http://127.0.0.1:{port}", None
 
 
 class EmbeddedServerError(Exception):
@@ -302,7 +259,7 @@ class EmbeddedServerManager:
         if _url_override and _url_override != DEFAULT_LOOPBACK_URL:
             self._server_url: str = _url_override
         else:
-            self._server_url, self._loopback_verify_ssl = _derive_loopback_url(hass)
+            self._server_url, self._loopback_verify_ssl = derive_loopback_url(hass)
         # An explicit pip-spec override (PR / pre-release testing) wins over the
         # server requirement this component release pins in its manifest.
         # DEFAULT_PIP_SPEC in the field means "no override" (the options flow
@@ -329,10 +286,13 @@ class EmbeddedServerManager:
         self._hass_config_dir: str = hass.config.config_dir
 
         # Worker-thread state. ``_loop`` and ``_stop_event`` are created in the
-        # thread before its loop runs, so a stop request can always reach them.
+        # thread, so a stop can come before they exist; ``_stop_requested`` is
+        # replaced by each async_start before Thread.start() and covers that gap
+        # (#2801).
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
+        self._stop_requested = threading.Event()
         self._thread_exc: BaseException | None = None
         # A worker that refused to die within the stop-join timeout (e.g.
         # wedged in a slow cold import). Tracked so the next start can skip
@@ -414,6 +374,7 @@ class EmbeddedServerManager:
 
         self._thread_exc = None
         self._startup_phase = "waiting for the worker thread"
+        self._stop_requested = threading.Event()
         self._thread = threading.Thread(
             target=self._thread_main,
             args=(access_token,),
@@ -468,6 +429,9 @@ class EmbeddedServerManager:
         if thread is None:
             return
 
+        # Before reading the event: a worker that publishes it after this read
+        # sees the request and stops itself.
+        self._stop_requested.set()
         loop = self._loop
         stop_event = self._stop_event
         if loop is not None and stop_event is not None and not loop.is_closed():
@@ -1431,6 +1395,8 @@ class EmbeddedServerManager:
         detection see them. The loopback URL and the admin token are handed to
         ha_mcp in memory inside :meth:`_serve` — never via ``os.environ``.
         """
+        # Captured once, so a later start's fresh flag never reaches this worker.
+        stop_requested = self._stop_requested
         os.environ["HA_MCP_CONFIG_DIR"] = self._config_dir
         os.environ["HA_MCP_EMBEDDED"] = "1"
 
@@ -1442,6 +1408,9 @@ class EmbeddedServerManager:
         stop_event = asyncio.Event()
         self._loop = loop
         self._stop_event = stop_event
+        # After publishing: a stop that found no event above set the flag first.
+        if stop_requested.is_set():
+            stop_event.set()
         # Registration in _IMPORTING_WORKERS happened on the MAIN thread,
         # before start() — see async_start. This thread only deregisters:
         # in _serve once the import section completes, and in the finally
