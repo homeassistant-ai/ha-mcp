@@ -1,5 +1,6 @@
 """Drive the standalone OAuth entrypoint's public-client PKCE flow over HTTP."""
 
+import asyncio
 import base64
 import hashlib
 import secrets
@@ -26,6 +27,7 @@ async def wait_for_discovery(http: httpx.AsyncClient, timeout: float = 30) -> No
                 raise
         if time.monotonic() > deadline:
             raise TimeoutError(f"{DISCOVERY_PATH} did not answer within {timeout}s")
+        await asyncio.sleep(0.25)
 
 
 async def register_public_client(
