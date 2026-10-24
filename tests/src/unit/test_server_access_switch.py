@@ -53,7 +53,7 @@ class _SwitchEntity:
 
 
 @pytest.fixture
-def switch_platform(monkeypatch):
+def switch_platform(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     switch_mod = ModuleType("homeassistant.components.switch")
     switch_mod.SwitchEntity = _SwitchEntity  # type: ignore[attr-defined]
     const_mod = ModuleType("homeassistant.const")
@@ -86,7 +86,9 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
     return hass, entry
 
 
-async def test_the_server_entry_gets_one_access_switch(switch_platform):
+async def test_the_server_entry_gets_one_access_switch(
+    switch_platform: ModuleType,
+) -> None:
     hass, entry = _hass_and_entry()
     added: list = []
 
@@ -97,7 +99,7 @@ async def test_the_server_entry_gets_one_access_switch(switch_platform):
     assert switch.is_on
 
 
-def test_the_switch_name_comes_from_the_catalog(switch_platform):
+def test_the_switch_name_comes_from_the_catalog(switch_platform: ModuleType) -> None:
     # A translation key the catalog lacks leaves the entity with no name.
     strings = Path(switch_platform.__file__).with_name("strings.json")
     names = json.loads(strings.read_text(encoding="utf-8"))["entity"]["switch"]
@@ -105,7 +107,9 @@ def test_the_switch_name_comes_from_the_catalog(switch_platform):
     assert switch_platform.ServerAccessSwitch._attr_translation_key in names
 
 
-def test_assist_does_not_expose_the_access_switch_by_default(switch_platform):
+def test_assist_does_not_expose_the_access_switch_by_default(
+    switch_platform: ModuleType,
+) -> None:
     # Home Assistant exposes switches to Assist by default unless they carry an
     # entity category; exposed, a voice satellite could turn access back on.
     _hass, entry = _hass_and_entry()
@@ -116,8 +120,8 @@ def test_assist_does_not_expose_the_access_switch_by_default(switch_platform):
 
 
 def test_an_everything_off_call_cannot_close_access_on_a_default_install(
-    switch_platform,
-):
+    switch_platform: ModuleType,
+) -> None:
     # `entity_id: all` reaches every entity of the switch platform, entity
     # category or not. Home Assistant adds no disabled entity to its platform,
     # so an "everything off" call can close access only once a user enabled it.
@@ -128,7 +132,7 @@ def test_an_everything_off_call_cannot_close_access_on_a_default_install(
     assert switch.entity_registry_enabled_default is False
 
 
-async def test_turning_the_switch_on_shows_on(switch_platform):
+async def test_turning_the_switch_on_shows_on(switch_platform: ModuleType) -> None:
     hass, entry = _hass_and_entry()
     entry.data = {DATA_ACCESS_ENABLED: False}
     switch = switch_platform.ServerAccessSwitch(entry)
@@ -139,7 +143,9 @@ async def test_turning_the_switch_on_shows_on(switch_platform):
     assert switch.written_state is True
 
 
-async def test_switch_shows_off_when_the_stop_fails(switch_platform):
+async def test_switch_shows_off_when_the_stop_fails(
+    switch_platform: ModuleType,
+) -> None:
     # Access is stored off before the stop runs; a failing stop must not leave
     # the switch showing on.
     hass, entry = _hass_and_entry()

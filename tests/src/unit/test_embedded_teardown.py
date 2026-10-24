@@ -82,10 +82,9 @@ class TestTeardown:
         hass = _make_hass()
         await esetup.async_bring_up_server(hass, _make_entry())
         fake_manager.async_stop.reset_mock()
-        esetup.async_unregister_webhook.reset_mock()
         esetup.async_unregister_llm_api.side_effect = RuntimeError("unregister failed")
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(RuntimeError, match="unregister failed"):
             await esetup.async_teardown_server(hass)
 
         esetup.async_unregister_webhook.assert_awaited_once()

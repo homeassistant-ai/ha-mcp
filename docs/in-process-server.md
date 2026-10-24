@@ -353,10 +353,14 @@ access is on again, they work as before. With **Authentication mode**
 signed in, usually a refresh token. That token also works against Home
 Assistant's own API, whatever the switch says. To end it, delete it under
 **Refresh tokens** (or **Long-lived access tokens**) on the **Security** tab of
-that administrator's profile. In `none` and `legacy` mode, rotate the connect
-secrets instead (see [Rotating your connect URL](#rotating-your-connect-url)).
-While access is on, a connected client can also change the automations that
-would turn it off.
+that administrator's profile. In `none` and `legacy` mode, rotating the connect
+secrets (see [Rotating your connect URL](#rotating-your-connect-url)) cuts every
+client off at once, because the old URLs stop working. A `legacy` client's
+tokens themselves can be revoked only by also rotating the Client ID / Secret
+(see [Security](#security)) and then restarting Home Assistant. A rotation
+saved while access is off files no repair asking for that restart, because that
+repair is filed when the server starts. While access is on, a connected client
+can also change the automations that would turn it off.
 
 ### Rotating your connect URL
 
