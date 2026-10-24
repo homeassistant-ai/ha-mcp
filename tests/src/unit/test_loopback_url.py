@@ -45,7 +45,9 @@ from custom_components.ha_mcp_tools.loopback_url import (  # noqa: E402
         "junk-port",
     ],
 )
-def test_loopback_url_follows_the_http_config_and_rejects_bad_ports(api, expected):
+def test_loopback_url_follows_the_http_config_and_rejects_bad_ports(
+    api: SimpleNamespace | None, expected: tuple[str, bool | None]
+) -> None:
     hass = SimpleNamespace(config=SimpleNamespace(api=api))
 
     assert derive_loopback_url(hass) == expected

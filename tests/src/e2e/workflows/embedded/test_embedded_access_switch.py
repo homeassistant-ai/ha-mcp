@@ -13,6 +13,7 @@ own container, so no other test sees the gap.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -54,12 +55,15 @@ async def test_switching_access_off_closes_the_server_until_switched_on(
 ) -> None:
     webhook_url = ha_container_with_fresh_config["embedded_webhook_url"]
     entity_id = await _access_switch_id(ha_client)
-    assert _embedded_initialize_ok(webhook_url)
+    assert await asyncio.to_thread(_embedded_initialize_ok, webhook_url)
 
     try:
         await ha_client.call_service("switch", "turn_off", {"entity_id": entity_id})
         assert (await ha_client.get_entity_state(entity_id))["state"] == "off"
-        assert not _embedded_initialize_ok(webhook_url)
+        assert not await asyncio.to_thread(_embedded_initialize_ok, webhook_url)
+        # Stopped by the switch itself, before a reload could stop it.
+        summary = await _server_summary(ha_client)
+        assert summary["running"] is False, summary
 
         await ha_client.call_service(
             "homeassistant", "reload_config_entry", {"entry_id": _EMBEDDED_ENTRY_ID}
@@ -72,7 +76,9 @@ async def test_switching_access_off_closes_the_server_until_switched_on(
         assert summary["running"] is False, summary
     finally:
         await ha_client.call_service("switch", "turn_on", {"entity_id": entity_id})
-        ready = _wait_for_embedded_webhook_ready(webhook_url, _READY_TIMEOUT_S)
+        ready = await asyncio.to_thread(
+            _wait_for_embedded_webhook_ready, webhook_url, _READY_TIMEOUT_S
+        )
 
     assert ready
     assert (await ha_client.get_entity_state(entity_id))["state"] == "on"

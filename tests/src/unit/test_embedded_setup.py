@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import Iterator
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -126,7 +127,7 @@ def _spy(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _restore_network_modules():
+def _restore_network_modules() -> Iterator[None]:
     """Undo ``_install_network_cloud``'s ``sys.modules`` swaps after each test.
 
     Left in place, they reach later test modules in the same process: the

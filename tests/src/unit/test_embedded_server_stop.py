@@ -8,8 +8,12 @@ Reuses the fakes of test_embedded_server.py.
 
 from __future__ import annotations
 
+import asyncio
 import threading
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from ._embedded_stubs import install
 
@@ -22,7 +26,7 @@ from .test_embedded_server import (  # noqa: E402
 )
 
 
-def _clear_worker_env(monkeypatch) -> None:
+def _clear_worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # The worker writes these into os.environ. setenv first so monkeypatch
     # records the prior state and undoes the worker's writes; a bare delenv of
     # an unset key records nothing, and HA_MCP_EMBEDDED=1 would leak into later
@@ -33,15 +37,15 @@ def _clear_worker_env(monkeypatch) -> None:
 
 
 async def test_stop_before_the_worker_publishes_its_event_stops_it(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _clear_worker_env(monkeypatch)
     mgr, _hass, _entry = _manager(tmp_path)
     mgr._thread = threading.Thread(target=lambda: None)
     mgr._thread.start()
     seen: list[bool] = []
 
-    async def _fake_serve(_token, stop_event):
+    async def _fake_serve(_token: str, stop_event: asyncio.Event) -> None:
         seen.append(stop_event.is_set())
 
     monkeypatch.setattr(mgr, "_serve", _fake_serve)
@@ -54,7 +58,9 @@ async def test_stop_before_the_worker_publishes_its_event_stops_it(
     assert seen == [True]
 
 
-def test_worker_checks_the_flag_only_after_publishing_its_event(tmp_path, monkeypatch):
+def test_worker_checks_the_flag_only_after_publishing_its_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Checking first would miss a stop that looks for the event in between.
     _clear_worker_env(monkeypatch)
     mgr, _hass, _entry = _manager(tmp_path)
@@ -67,7 +73,7 @@ def test_worker_checks_the_flag_only_after_publishing_its_event(tmp_path, monkey
 
     mgr._stop_requested = _Flag()
 
-    async def _fake_serve(_token, _stop_event):
+    async def _fake_serve(_token: str, _stop_event: asyncio.Event) -> None:
         return None
 
     monkeypatch.setattr(mgr, "_serve", _fake_serve)
@@ -77,7 +83,7 @@ def test_worker_checks_the_flag_only_after_publishing_its_event(tmp_path, monkey
     assert published_at_check == [True]
 
 
-async def test_stop_sets_the_flag_before_looking_for_the_event(tmp_path):
+async def test_stop_sets_the_flag_before_looking_for_the_event(tmp_path: Path) -> None:
     # A worker that publishes its event between the two steps must still be
     # signalled; looking first would find nothing and skip it.
     mgr, _hass, _entry = _manager(tmp_path)
@@ -100,7 +106,9 @@ async def test_stop_sets_the_flag_before_looking_for_the_event(tmp_path):
     loop.call_soon_threadsafe.assert_called_once_with(event.set)
 
 
-async def test_each_start_hands_its_worker_a_clear_stop_flag(tmp_path, monkeypatch):
+async def test_each_start_hands_its_worker_a_clear_stop_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A flag left set by the previous stop would stop the new worker at once.
     mgr, _hass, _entry = _manager(tmp_path)
     monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
