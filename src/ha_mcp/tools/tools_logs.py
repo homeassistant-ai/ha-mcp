@@ -200,11 +200,16 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "'logbook': entity state-change history. 'system': HA's "
-                    "structured system_log entries (errors, warnings). "
+                    "structured system_log entries (errors, warnings) with full "
+                    "exception tracebacks; search also matches those exceptions. "
                     "'error_log': raw log text (home-assistant.log on "
                     "container/pip installs; HA Core's journald stream on "
-                    "Supervisor-backed installs). 'supervisor': app (add-on) "
-                    "container logs (needs slug). 'system_service': "
+                    "Supervisor-backed installs), grouped into records: a header "
+                    "line starts one and every following line that is not itself "
+                    "a header joins it — traceback frames, the blank lines around "
+                    "chained exceptions, and non-HA banners such as s6-overlay "
+                    "restart lines. 'supervisor': app "
+                    "(add-on) container logs (needs slug). 'system_service': "
                     "Supervisor-managed system service logs (needs slug). "
                     "'logger': effective log level per integration (confirms "
                     "ha_set_integration(log_level=...) changes took effect). 'fault_log': HA "
@@ -222,8 +227,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | None,
             Field(
                 description=(
-                    "Max entries/lines to return. Does not apply to "
-                    "source='error_log' with structured=True."
+                    "Max entries/lines to return. For source='error_log' with "
+                    "structured=False it bounds returned lines: whole records "
+                    "are selected within it, and a record longer than it is cut "
+                    "(header and last lines kept) with a warning naming how many "
+                    "lines were cut. Does not apply to source='error_log' with "
+                    "structured=True."
                 )
             ),
         ] = None,
@@ -231,10 +240,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 description=(
-                    "Keyword filter on entries/lines; matches the integration "
-                    "domain for source='logger'. In structured error_log mode it "
-                    "matches the message and logger name only; on the raw path "
-                    "the whole line."
+                    "Keyword filter on entries/lines. For source='system' it "
+                    "matches message, name and exception text; for the raw "
+                    "error_log path it matches any line of a record, so a "
+                    "traceback frame brings back its header and siblings. "
+                    "Structured error_log mode matches message and logger name "
+                    "only; source='logger' matches the integration domain."
                 )
             ),
         ] = None,
@@ -246,8 +257,10 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "supervisor, system_service, fault_log): 'newest' returns "
                     "most-recent first; 'oldest' returns chronological-first. For "
                     "raw-text sources it sets the read direction of the most-recent "
-                    "window; fault_log orders whole crash blocks. Ignored for "
-                    "source='logger', and for source='error_log' with structured=True."
+                    "window; fault_log orders whole crash blocks; error_log orders "
+                    "whole records and keeps each record's lines in place. Ignored "
+                    "for source='logger', and for source='error_log' with "
+                    "structured=True."
                 )
             ),
         ] = "newest",
@@ -322,7 +335,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "system / error_log only: keep only entries at exactly this level "
-                    "(ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold."
+                    "(ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold. "
+                    "For source='error_log' it matches the record's header only, so "
+                    "matching text in a traceback frame does not satisfy it."
                 )
             ),
         ] = None,
@@ -369,16 +384,17 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         traceback, and its counts run since each error first occurred. error_log with
         structured=True counts only what is inside the fetched window (reported
         as window_start/window_end; every install reads a capped window) and
-        drops tracebacks, which structured=False gets back; use it for entries
-        below system_log's WARNING+ ~50-entry cap, or for the per-component
-        rollup. In structured mode limit/order do not apply: issues are ranked
-        by count, then severity, then recency, over a fixed deep window.
+        drops tracebacks; structured=False returns the raw records instead, so
+        it covers what falls outside system_log's WARNING+ in-memory buffer. Use
+        structured=True for the per-component rollup; in structured mode
+        limit/order do not apply: issues are ranked by count, then severity,
+        then recency, over a fixed deep window.
 
         Raw-text sources (error_log, supervisor, system_service) read a bounded
         window per call, so level/search filter and limit slice within that
-        window only; window_lines reports the size requested. Logbook responses
-        carry has_more plus a pagination_hint; error_log and fault_log carry
-        has_more with a next_offset to pass back while it stays true.
+        window only; window_lines reports the size requested. Logbook
+        responses carry has_more plus a pagination_hint; error_log and fault_log
+        carry has_more with a next_offset to pass back while it stays true.
         """
         return await tools.get_logs(
             source=source,
