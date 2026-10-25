@@ -1002,7 +1002,7 @@ class HomeAssistantClient:
         """
         text = await fetch(lines, offset)
         if not text or len(text.splitlines()) < lines:
-            return ErrorLogPage(text=text, has_more=False)
+            return ErrorLogPage(text=text, has_more=False, entry_offsets=True)
         probe = await fetch(_PROBE_ENTRIES, offset + lines)
         probe_lines = probe.splitlines()
         window_lines = text.splitlines()
@@ -1015,6 +1015,7 @@ class HomeAssistantClient:
         return ErrorLogPage(
             text=text,
             has_more=shared > 0 and probe_lines[:shared] != window_lines[:shared],
+            entry_offsets=True,
         )
 
     async def get_error_log(self, lines: int, offset: int = 0) -> ErrorLogPage:

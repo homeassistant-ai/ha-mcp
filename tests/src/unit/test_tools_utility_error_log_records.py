@@ -75,14 +75,18 @@ def _client(text: str, *, has_more: bool = False) -> AsyncMock:
 
 
 def _offset_aware_page(
-    log_lines: list[str],
+    log_lines: list[str], *, entry_offsets: bool = False
 ) -> Callable[..., Awaitable[ErrorLogPage]]:
     """``get_error_log`` stub that honours ``lines``/``offset`` like a log file."""
 
     async def _page(lines: int, offset: int = 0) -> ErrorLogPage:
         end = max(0, len(log_lines) - offset)
         start = max(0, end - lines)
-        return ErrorLogPage(text="\n".join(log_lines[start:end]), has_more=start > 0)
+        return ErrorLogPage(
+            text="\n".join(log_lines[start:end]),
+            has_more=start > 0,
+            entry_offsets=entry_offsets,
+        )
 
     return _page
 
@@ -297,6 +301,35 @@ class TestRecordLimitAndPaging:
         assert any("partial record" in warning for warning in result["warnings"])
 
     @pytest.mark.asyncio
+    async def test_an_entry_offset_read_returns_the_tail_as_a_partial(self) -> None:
+        """A journald route must not hold back: its resume step counts entries.
+
+        The reopen step is derived from lines, so on an entry-offset route it
+        can skip the withheld record; the tail is returned here instead.
+        """
+        filler = [
+            f"2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] filler {i}"
+            for i in range(3970)
+        ]
+        record = (
+            _HEADER
+            + "\n"
+            + "\n".join(f"  frame {i}" for i in range(40))
+            + "\nValueError: NEEDLE"
+        )
+        lines = filler[:1985] + record.splitlines() + filler[1985:]
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(lines, entry_offsets=True)
+        tools = LogTools(client)
+
+        result = await tools.get_logs(**_kwargs(limit=20, search="NEEDLE"))
+
+        assert result["returned_records"] == 1
+        assert result["total_records"] == 1
+        assert any("counts entries" in warning for warning in result["warnings"])
+        assert result["has_more"] is True
+
+    @pytest.mark.asyncio
     async def test_a_cut_leading_partial_is_held_back_with_consistent_counts(
         self,
     ) -> None:
@@ -369,6 +402,42 @@ class TestRecordLimitAndPaging:
         assert "TARGET" in result["log"]
 
     @pytest.mark.asyncio
+    async def test_walking_a_filtered_read_keeps_matches_in_order(self) -> None:
+        """A filtered walk must keep cross-page ordering, not just uniqueness."""
+        records = [
+            "2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] filler\n"
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
+            f"  frame {i}.0"
+            for i in range(600)
+        ]
+        lines = "\n".join(records).splitlines()
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(lines)
+        tools = LogTools(client)
+
+        seen: list[int] = []
+        offset = 0
+        for _ in range(6):
+            page = await tools.get_logs(
+                **_kwargs(limit=20, offset=offset, search="issue")
+            )
+            if page["returned_lines"]:
+                assert page["log"].splitlines()[0].startswith("2026-")
+            for line in page["log"].splitlines():
+                match = re.search(r"issue (\d+)", line)
+                if match:
+                    seen.append(int(match.group(1)))
+            if not page["has_more"]:
+                break
+            offset = page["next_offset"]
+
+        assert seen, "the filtered walk returned no matches"
+        assert len(seen) == len(set(seen)), "a filtered match repeated across pages"
+        assert seen == sorted(seen, reverse=True), (
+            "filtered paging must keep newest-first order across pages"
+        )
+
+    @pytest.mark.asyncio
     async def test_leading_partial_is_widened_to_reach_its_header(self) -> None:
         log = f"{_ERROR_RECORD}\n" + "\n".join(f"  frame {i}" for i in range(400))
 
@@ -417,7 +486,7 @@ class TestRecordLimitAndPaging:
         assert any("partial record" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
-    async def test_a_failed_widening_keeps_the_first_page(self) -> None:
+    async def test_a_failed_widening_keeps_the_first_page(self, caplog) -> None:
         leading = "  frame\nValueError: device did not respond"
         client = AsyncMock()
         client.get_error_log = AsyncMock(
@@ -427,7 +496,8 @@ class TestRecordLimitAndPaging:
             ]
         )
         tools = LogTools(client)
-        result = await tools.get_logs(**_kwargs(limit=5))
+        with caplog.at_level("WARNING", logger="ha_mcp.tools.log_sources"):
+            result = await tools.get_logs(**_kwargs(limit=5))
 
         assert client.get_error_log.await_count == 2
         assert any("partial record" in w for w in result["warnings"])
@@ -436,6 +506,10 @@ class TestRecordLimitAndPaging:
             "lies outside the fetched history" in w for w in result["warnings"]
         )
         assert result["log"].splitlines()[0] == "  frame"
+        assert any(
+            "wider read for a record header failed" in record.message
+            for record in caplog.records
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("filter_name", ["search", "level"])
@@ -519,6 +593,10 @@ class TestRecordLimitAndPaging:
             offset = last["next_offset"]
 
         assert len(seen) == len(set(seen)), "a record must not be returned twice"
+        issues = [int(re.search(r"issue (\d+)", line).group(1)) for line in seen]
+        assert issues == sorted(issues, reverse=True), (
+            "newest-first paging must keep records in descending order"
+        )
 
         if len(seen) < len(records):
             # The terminal window cannot page further; its hint has to make the

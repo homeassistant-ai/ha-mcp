@@ -31,8 +31,10 @@ from .error_log_parsing import (
     _error_log_window_lines,
     _ErrorLogWindow,
     _filter_log_records,
+    _LogRecord,
     _next_page_step,
     _parse_error_log_structured,
+    _RecordPage,
     _reopen_at_record_end,
     _select_error_log_page,
     _split_log_records,
@@ -52,10 +54,49 @@ from .util_helpers import normalize_log_level
 logger = logging.getLogger(__name__)
 
 
+def _leading_tail_policy(
+    *,
+    window: _ErrorLogWindow,
+    leading_record: _LogRecord | None,
+    page: _RecordPage,
+    matches: list[_LogRecord],
+    search: str | None,
+    refetch_failed: bool,
+    entry_offsets: bool,
+) -> tuple[bool, bool, bool]:
+    """Decide what to do with a window that opens inside a record.
+
+    Returns ``(held_back, header_out_of_reach, entry_offset_partial)``.
+
+    Holding the tail back only pays off when the next window can reach its
+    header, so a record longer than a whole fetch window is returned as a
+    partial instead. On journald the reopen step would be spent in ENTRIES
+    while it is derived from lines, which can skip the withheld record, so
+    entry-offset routes keep it as a partial too. Finally, the tail is only a
+    candidate when the filters could select it: ``search`` has to hit one of
+    its lines, while a ``level`` read cannot tell because the level lives in
+    the missing header.
+    """
+    if leading_record is None or not window.has_more or refetch_failed:
+        return False, False, False
+    search_hits_tail = search is None or any(
+        search.lower() in _strip_ansi(line).lower() for line in leading_record.lines
+    )
+    header_reachable = leading_record.line_count < window.fetch_lines
+    is_partial_on_page = page.leading_partial
+    if entry_offsets:
+        return False, False, is_partial_on_page and search_hits_tail
+    if not header_reachable:
+        return False, is_partial_on_page, False
+    held_back = search_hits_tail and len(page.records) == len(matches)
+    return held_back, False, False
+
+
 def _raw_error_log_warnings(
     *,
     held_back: bool,
     header_out_of_reach: bool,
+    entry_offset_partial: bool,
     refetch_failed: bool,
     leading_partial: bool,
     truncated: _TruncatedRecord | None,
@@ -74,7 +115,12 @@ def _raw_error_log_warnings(
             "header failed; this page is the first window only."
         )
     if leading_partial:
-        if header_out_of_reach:
+        if entry_offset_partial:
+            gate = (
+                "a Supervisor/journald resume point counts entries, so the "
+                "record is returned here rather than withheld"
+            )
+        elif header_out_of_reach:
             gate = "the record is longer than one fetch window"
         elif refetch_failed:
             gate = "a wider read failed before reaching it"
@@ -389,6 +435,7 @@ class CoreLogSourcesMixin:
         except (
             HomeAssistantConnectionError,
             HomeAssistantAPIError,
+            HomeAssistantAuthError,
             TimeoutError,
             OSError,
         ) as e:
@@ -411,6 +458,7 @@ class CoreLogSourcesMixin:
         order: Literal["newest", "oldest"],
         window: _ErrorLogWindow,
         refetch_failed: bool = False,
+        entry_offsets: bool = False,
     ) -> tuple[dict[str, Any], int]:
         """Return the most recent matching records, plus the next page's step.
 
@@ -434,38 +482,14 @@ class CoreLogSourcesMixin:
         page = _select_error_log_page(matches, effective_limit, order)
         step = _next_page_step(window, page.oldest_index)
 
-        # Holding the tail back only pays off when the next window can actually
-        # reach its header. A record longer than a whole fetch window never
-        # will: re-anchoring lands inside it again and the full-window step
-        # would skip the lines the caller matched. That case is returned as a
-        # partial record instead.
-        header_reachable = (
-            leading_record is not None
-            and leading_record.line_count < window.fetch_lines
-        )
-        # The tail is a held-back candidate when the filters could select it:
-        # `search` has to hit one of its lines, while a `level` read cannot tell
-        # (the level lives in the missing header), so it stays a candidate.
-        leading_is_candidate = leading_record is not None and (
-            search is None
-            or any(
-                search.lower() in _strip_ansi(line).lower()
-                for line in leading_record.lines
-            )
-        )
-        held_back = (
-            window.has_more
-            and not refetch_failed
-            and leading_is_candidate
-            and len(page.records) == len(matches)
-            and header_reachable
-        )
-        header_out_of_reach = (
-            window.has_more
-            and not refetch_failed
-            and leading_record is not None
-            and not header_reachable
-            and page.leading_partial
+        held_back, header_out_of_reach, entry_offset_partial = _leading_tail_policy(
+            window=window,
+            leading_record=leading_record,
+            page=page,
+            matches=matches,
+            search=search,
+            refetch_failed=refetch_failed,
+            entry_offsets=entry_offsets,
         )
         if held_back and leading_record is not None:
             # Filter the leading tail out BEFORE selecting, so a record the
@@ -500,6 +524,7 @@ class CoreLogSourcesMixin:
         warnings = _raw_error_log_warnings(
             held_back=held_back,
             header_out_of_reach=header_out_of_reach,
+            entry_offset_partial=entry_offset_partial,
             refetch_failed=refetch_failed,
             leading_partial=page.leading_partial,
             truncated=page.truncated,
@@ -612,6 +637,7 @@ class CoreLogSourcesMixin:
                     order=order,
                     window=window,
                     refetch_failed=refetch_failed,
+                    entry_offsets=page.entry_offsets,
                 )
             self._apply_empty_window_warning(data, raw_text, offset, structured)
             _attach_error_log_pagination(
