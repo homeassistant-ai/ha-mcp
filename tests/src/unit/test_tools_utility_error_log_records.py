@@ -336,6 +336,39 @@ class TestRecordLimitAndPaging:
         assert second["log"].splitlines()[0] == _HEADER
 
     @pytest.mark.asyncio
+    async def test_an_unmatched_leading_partial_is_not_held_back(self) -> None:
+        """Only a matching leading tail may be withheld.
+
+        Otherwise a search that hits a newer record would emit a held-back
+        warning and re-anchor the step on a record it never matched, skipping
+        matches that did not fit the page.
+        """
+        lines = [
+            f"2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] filler {i}"
+            for i in range(2100)
+        ]
+        # A long record straddling the window's oldest edge: the window opens
+        # inside it, so it forms a leading partial that matches nothing.
+        long_start = 85
+        for i in range(30):
+            lines[long_start + i] = f"  frame {i}"
+        lines[long_start] = _HEADER
+        lines[2050] = (
+            "2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] target\n"
+            "ValueError: TARGET"
+        ).splitlines()[0]
+        lines.insert(2051, "ValueError: TARGET")
+
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(lines)
+        tools = LogTools(client)
+        result = await tools.get_logs(**_kwargs(limit=5, search="TARGET"))
+
+        assert result["returned_records"] == 1
+        assert not any("held back" in warning for warning in result.get("warnings", []))
+        assert "TARGET" in result["log"]
+
+    @pytest.mark.asyncio
     async def test_leading_partial_is_widened_to_reach_its_header(self) -> None:
         log = f"{_ERROR_RECORD}\n" + "\n".join(f"  frame {i}" for i in range(400))
 

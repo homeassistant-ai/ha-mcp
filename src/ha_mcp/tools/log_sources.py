@@ -36,6 +36,7 @@ from .error_log_parsing import (
     _reopen_at_record_end,
     _select_error_log_page,
     _split_log_records,
+    _strip_ansi,
     _TruncatedRecord,
 )
 from .helpers import exception_to_structured_error, raise_tool_error
@@ -442,10 +443,20 @@ class CoreLogSourcesMixin:
             leading_record is not None
             and leading_record.line_count < window.fetch_lines
         )
+        # The tail is a held-back candidate when the filters could select it:
+        # `search` has to hit one of its lines, while a `level` read cannot tell
+        # (the level lives in the missing header), so it stays a candidate.
+        leading_is_candidate = leading_record is not None and (
+            search is None
+            or any(
+                search.lower() in _strip_ansi(line).lower()
+                for line in leading_record.lines
+            )
+        )
         held_back = (
             window.has_more
             and not refetch_failed
-            and leading_record is not None
+            and leading_is_candidate
             and len(page.records) == len(matches)
             and header_reachable
         )
