@@ -90,6 +90,7 @@
           "llm_api_exposure": "Exponering av konversationsagentverktyg",
           "enable_startup_notification": "Startmeddelande",
           "enable_sidebar_panel": "Sidopanel för inställningar",
+          "access_off_after_restart": "Stäng av åtkomst efter en omstart",
           "oauth_redirect_allowlist": "Tillåtna OAuth-återanrops-URL:er",
           "admin_token_replacement": "Byt ut administratörsåtkomsttoken (valfritt)",
           "admin_username": "Eller växla till ett konto som endast är till för lokalt bruk skapat för HA-MCP: användarnamn (valfritt)",
@@ -112,8 +113,9 @@
           "enable_webhook": "Stäng av för endast-lokalt-läge: Home Assistant-webhooken registreras inte alls, så ingenting – inklusive Nabu Casa – kan nå servern via Home Assistant. Den direkta serverporten och sidopanelen fortsätter att fungera.",
           "enable_llm_api": "Erbjud hela verktygsuppsättningen till Home Assistant-konversationsagenter (OpenAI, Google, Ollama, ...): när aktiverat kan agenter välja 'HA-MCP Server' under Kontrollera Home Assistant och styra verktygen från Assist-chatt och röst. Aktivering gör det bara valbart – inget exponeras förrän du väljer det på en agent. Användarhandbok: {llm_api_docs_url}",
           "llm_api_exposure": "Form på verktygsuppsättningen som erbjuds konversationsagenter. Verktygssökning (standard) håller agentens kontext liten: ett kompakt API med fästa verktyg plus sök-/exekvera-metaverktyg. Fullständig katalog listar varje exponerat verktyg direkt – bättre för modeller med stor kontext. Båda registrerar de två sida vid sida så att varje agent väljer sin egen under Kontrollera Home Assistant. Exponering per verktyg hanteras i HA-MCP-inställningspanelen; detaljer: {llm_api_docs_url}",
-          "enable_startup_notification": "Visa en avisering varje gång servern startar, som pekar på inställningssidorna enbart för administratörer. Stäng av för att starta tyst – anslutnings-URL:erna finns kvar på den här skärmen.",
+          "enable_startup_notification": "Visa en avisering varje gång Home Assistant startar servern (inte när åtkomstreglaget slår på den), som pekar på inställningsytor som endast är tillgängliga för administratörer. Stäng av för att starta tyst — anslutningswebbadresserna finns kvar på den här skärmen.",
           "enable_sidebar_panel": "Visa HA-MCP-inställningspanelen i sidofältet (endast administratörer). Stäng av för att ta bort sidofältsinlägget – serveralternativen förblir tillgängliga på denna skärm.",
+          "access_off_after_restart": "Serverns åtkomstreglage behåller normalt sitt senaste tillstånd över en omstart av Home Assistant. Aktivera detta för att låta åtkomsten börja av efter varje omstart; den förblir av tills den slås på. Aktivera reglaget först (det är inaktiverat som standard): medan det är inaktiverat kan inget slå på åtkomsten igen.",
           "oauth_redirect_allowlist": "Används endast när autentiseringsläget är den hemliga webhook-URL:en. När en klient loggar in med OAuth returnerar HA-MCP endast inloggningen till en återanrops-URL i denna lista; alla andra nekas med en sida som förklarar hur man lägger till den. Ange varje återanrops-URL exakt som klienten skickar den. Ett http:// loopback-återanrop (127.0.0.1, [::1] eller localhost) matchar också på vilken port som helst. Klienter som ansluter utan en OAuth-inloggning behöver ingen post. Träder i kraft utan omstart.",
           "admin_token_replacement": "Lämna tomt för att behålla den aktuella åtkomsten; servern startar om när du växlar. En långlivad åtkomsttoken för ett administratörskonto. Din egen fungerar: öppna din profil (ditt namn längst ner i sidopanelen), välj fliken Säkerhet och välj Skapa token under Långlivade åtkomsttoken. Din egen token fungerar också utanför ditt hemmanätverk om den någonsin läcker, och Home Assistant registrerar serverns ändringar under ditt namn. Säkrare: ett konto skapat enbart för HA-MCP, med Endast lokal åtkomst aktiverat (se fälten nedan).",
           "admin_username": "Endast för ett konto som du har skapat enbart för HA-MCP, under Inställningar → Personer → Lägg till person med Tillåt inloggning, Endast lokal åtkomst och Administratör på. Ange aldrig din egen inloggning här: för att använda ditt eget konto, klistra in dess token ovan istället. HA-MCP skapar detta kontots token (med namnet HA-MCP Server), så att ingen behöver logga in som det, och lösenordet sparas inte. Dess token fungerar endast från ditt lokala nätverk, där servern körs, och Home Assistant registrerar serverns ändringar under detta konto.",
@@ -228,5 +230,12 @@
     "server_source_override": "åsidosättning av pip-krav",
     "version_not_installed": "inte installerad ännu",
     "version_unknown": "okänd"
+  },
+  "entity": {
+    "switch": {
+      "server_access": {
+        "name": "Åtkomst"
+      }
+    }
   }
 }

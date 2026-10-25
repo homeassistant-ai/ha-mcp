@@ -90,6 +90,7 @@
           "llm_api_exposure": "Zpřístupnění nástrojů konverzačního agenta",
           "enable_startup_notification": "Oznámení o spuštění",
           "enable_sidebar_panel": "Panel nastavení postranního panelu",
+          "access_off_after_restart": "Vypnout přístup po restartu",
           "oauth_redirect_allowlist": "Povolené adresy URL zpětného volání OAuth",
           "admin_token_replacement": "Nahradit přístupový token administrátora (volitelné)",
           "admin_username": "Nebo přepnout na čistě místní účet vytvořený pro HA-MCP: uživatelské jméno (volitelné)",
@@ -112,8 +113,9 @@
           "enable_webhook": "Vypněte pro režim pouze lokální: webhook Home Assistanta není vůbec registrován, takže nic – včetně Nabu Casa – nemůže dosáhnout na server přes Home Assistant. Přímý port serveru a boční panel zůstanou funkční.",
           "enable_llm_api": "Nabídněte kompletní sadu nástrojů konverzačním agentům Home Assistanta (OpenAI, Google, Ollama, ...): pokud je povoleno, agenti mohou vybrat „HA-MCP Server“ pod „Control Home Assistant“ a ovládat nástroje z chatu a hlasu Assist. Povolení pouze zpřístupní výběr – nic není vystaveno, dokud to nevyberete u agenta. Průvodce použitím: {llm_api_docs_url}",
           "llm_api_exposure": "Tvar sady nástrojů nabízených konverzačním agentům. Vyhledávání nástrojů (výchozí) udržuje kontext agenta malý: kompaktní API s připnutými nástroji plus meta-nástroje pro vyhledávání/spouštění. Úplný katalog uvádí každý vystavený nástroj přímo – lepší pro modely s velkým kontextem. Obě možnosti registrují obě vedle sebe, takže si každý agent vybere svou vlastní pod „Control Home Assistant“. Vystavení jednotlivých nástrojů se spravuje v panelu nastavení HA-MCP; podrobnosti: {llm_api_docs_url}",
-          "enable_startup_notification": "Zobrazit oznámení při každém spuštění serveru s odkazem na nastavení dostupná pouze pro administrátory. Vypnutím zajistíte tiché spuštění – připojovací adresy URL zůstanou na této obrazovce.",
+          "enable_startup_notification": "Zobrazit oznámení při každém spuštění serveru aplikací Home Assistant (ne při zapnutí přepínačem Přístup), které odkazuje na nastavení určená pouze pro správce. Vypněte pro tiché spuštění – připojovací URL adresy zůstanou na této obrazovce.",
           "enable_sidebar_panel": "Zobrazit panel nastavení HA-MCP v postranním panelu (pouze pro administrátory). Vypněte pro odstranění položky z postranního panelu – možnosti serveru zůstanou dostupné na této obrazovce.",
+          "access_off_after_restart": "Přepínač Přístup serveru obvykle zachovává svůj poslední stav po restartu Home Assistanta. Zapněte tuto možnost, chcete-li, aby byl přístup po každém restartu ve výchozím stavu vypnutý; zůstane vypnutý, dokud jej nezapnete. Nejprve přepínač zapněte (ve výchozím nastavení je zakázaný): dokud je zakázaný, nic nemůže přístup znovu zapnout.",
           "oauth_redirect_allowlist": "Použije se pouze v případě, že je režim ověřování nastaven na tajnou adresu URL webhooku. Když se klient přihlásí pomocí OAuth, HA-MCP vrátí přihlášení pouze na adresu URL zpětného volání z tohoto seznamu; jakákoliv jiná bude odmítnuta stránkou vysvětlující, jak ji přidat. Zadejte každé zpětné volání přesně tak, jak ho klient odesílá. Zpětné volání typu loopback http:// (127.0.0.1, [::1] nebo localhost) odpovídá také libovolnému portu. Klienti, kteří se připojují bez přihlášení přes OAuth, žádný záznam nepotřebují. Projeví se ihned bez nutnosti restartu.",
           "admin_token_replacement": "Ponechte prázdné pro zachování současného přístupu; server se při přepnutí restartuje. Dlouhodobý přístupový token administrátorského účtu. Funguje i váš vlastní: otevřete svůj profil (vaše jméno v dolní části bočního panelu), vyberte kartu Zabezpečení a v části Dlouhodobé přístupové tokeny vyberte Vytvořit token. Váš vlastní token funguje i mimo vaši domácí síť, pokud by někdy unikl, a Home Assistant zaznamenává změny prováděné serverem pod vaším jménem. Bezpečnější: účet vytvořený speciálně pro HA-MCP se zapnutou volbou Pouze místní přístup (viz pole níže).",
           "admin_username": "Pouze pro účet, který jste vytvořili přímo pro HA-MCP v nabídce Nastavení → Lidé → Přidat osobu se zapnutými možnostmi Povolit přihlášení, Pouze místní přístup a Správce. Nikdy zde nezadávejte své vlastní přihlašovací údaje: pokud chcete použít svůj vlastní účet, vložte raději jeho token výše. HA-MCP vytvoří token tohoto účtu (s názvem HA-MCP Server), takže se za něj nikdo nemusí přihlašovat a heslo se neukládá. Jeho token funguje pouze z vaší místní sítě, kde server běží, a Home Assistant zaznamenává změny serveru pod tímto účtem.",
@@ -228,5 +230,12 @@
     "server_source_override": "potlačení požadavku pip",
     "version_not_installed": "zatím nenainstalováno",
     "version_unknown": "neznámá"
+  },
+  "entity": {
+    "switch": {
+      "server_access": {
+        "name": "Přístup"
+      }
+    }
   }
 }

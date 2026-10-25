@@ -90,6 +90,7 @@
           "llm_api_exposure": "Exposición de herramientas al agente de conversación",
           "enable_startup_notification": "Notificación de inicio",
           "enable_sidebar_panel": "Panel de ajustes en la barra lateral",
+          "access_off_after_restart": "Desactivar el acceso después de un reinicio",
           "oauth_redirect_allowlist": "URLs de devolución de llamada de OAuth permitidas",
           "admin_token_replacement": "Reemplazar el token de acceso de administrador (opcional)",
           "admin_username": "O cambiar a una cuenta exclusiva local creada para HA-MCP: nombre de usuario (opcional)",
@@ -112,8 +113,9 @@
           "enable_webhook": "Desactívalo para el modo solo local: el webhook de Home Assistant no se registra en absoluto, así que nada —Nabu Casa incluida— puede llegar al servidor a través de Home Assistant. El puerto directo del servidor y el panel de la barra lateral siguen funcionando.",
           "enable_llm_api": "Ofrece el conjunto completo de herramientas a los agentes de conversación de Home Assistant (OpenAI, Google, Ollama, ...): mientras esté activado, los agentes pueden seleccionar 'HA-MCP Server' en Controlar Home Assistant y manejar las herramientas desde el chat y la voz de Assist. Activarlo solo lo hace seleccionable: no se expone nada hasta que lo elijas en un agente. Guía de uso: {llm_api_docs_url}",
           "llm_api_exposure": "Forma del conjunto de herramientas que se ofrece a los agentes de conversación. La búsqueda de herramientas (predeterminada) mantiene pequeño el contexto del agente: una API compacta con herramientas fijadas más metaherramientas de búsqueda y ejecución. El catálogo completo lista directamente todas las herramientas expuestas, mejor para modelos con contexto grande. Ambos registra las dos opciones en paralelo para que cada agente elija la suya en Controlar Home Assistant. La exposición por herramienta se gestiona en el panel de ajustes de HA-MCP; detalles: {llm_api_docs_url}",
-          "enable_startup_notification": "Mostrar una notificación cada vez que se inicie el servidor, apuntando a las superficies de configuración exclusivas para administradores. Desactívalo para iniciar en silencio; las URLs de conexión permanecen en esta pantalla.",
+          "enable_startup_notification": "Mostrar una notificación cada vez que Home Assistant inicie el servidor (no cuando el interruptor Access lo active), señalando las superficies de configuración exclusivas para administradores. Desactívalo para iniciar de forma silenciosa; las URL de conexión permanecerán en esta pantalla.",
           "enable_sidebar_panel": "Muestra el panel de ajustes de HA-MCP en la barra lateral (solo para administradores). Desactívalo para quitar la entrada de la barra lateral: las opciones del servidor siguen disponibles en esta pantalla.",
+          "access_off_after_restart": "El interruptor Access del servidor normalmente mantiene su último estado tras reiniciar Home Assistant. Activa esta opción para que el acceso comience desactivado después de cada reinicio; permanecerá así hasta que se encienda. Habilita el interruptor primero (está deshabilitado por defecto): mientras esté deshabilitado, nada podrá volver a activar el acceso.",
           "oauth_redirect_allowlist": "Solo se usa mientras el modo de autenticación es la URL de webhook secreta. Cuando un cliente inicia sesión con OAuth, HA-MCP devuelve el inicio de sesión solo a una URL de callback de esta lista; cualquier otra se rechaza con una página que explica cómo añadirla. Introduce cada callback exactamente como lo envía el cliente. Un callback de bucle invertido http:// (127.0.0.1, [::1] o localhost) también coincide en cualquier puerto. Los clientes que se conectan sin un inicio de sesión de OAuth no necesitan entrada. Surte efecto sin necesidad de reiniciar.",
           "admin_token_replacement": "Déjalo vacío para conservar el acceso actual; el servidor se reinicia cuando realizas el cambio. Un token de acceso de larga duración de una cuenta de administrador. El tuyo sirve: abre tu perfil (tu nombre en la parte inferior de la barra lateral), selecciona la pestaña Seguridad y, en Tokens de acceso de larga duración, selecciona Crear token. Tu token también funciona desde fuera de tu red doméstica si alguna vez se filtra, y Home Assistant registra los cambios del servidor bajo tu nombre. Más seguro: una cuenta creada solo para HA-MCP, con Acceso local únicamente activado (consulta los campos a continuación).",
           "admin_username": "Solo para una cuenta que hayas creado exclusivamente para HA-MCP, en Ajustes → Personas → Añadir persona con Permitir inicio de sesión, Solo acceso local y Administrador activados. Nunca introduzcas tu propio inicio de sesión aquí: para usar tu cuenta, pega su token arriba en su lugar. HA-MCP crea el token de esta cuenta (llamado HA-MCP Server) para que nadie tenga que iniciar sesión con ella, y la contraseña no se guarda. Su token solo funciona desde tu red local, donde se ejecuta el servidor, y Home Assistant registra los cambios del servidor bajo esta cuenta.",
@@ -228,5 +230,12 @@
     "server_source_override": "anulación de requisito de pip",
     "version_not_installed": "aún no instalado",
     "version_unknown": "desconocido"
+  },
+  "entity": {
+    "switch": {
+      "server_access": {
+        "name": "Access"
+      }
+    }
   }
 }

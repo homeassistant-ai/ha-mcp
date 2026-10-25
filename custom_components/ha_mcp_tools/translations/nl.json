@@ -90,6 +90,7 @@
           "llm_api_exposure": "Blootstelling van conversatie-agent hulpmiddelen",
           "enable_startup_notification": "Opstartmelding",
           "enable_sidebar_panel": "Zijbalk instellingenpaneel",
+          "access_off_after_restart": "Schakel toegang uit na een herstart",
           "oauth_redirect_allowlist": "Toegestane OAuth-terugbel-URL's",
           "admin_token_replacement": "Vervang het beheerderstoegangstoken (optioneel)",
           "admin_username": "Of schakel over naar een lokaal account gemaakt voor HA-MCP: gebruikersnaam (optioneel)",
@@ -112,8 +113,9 @@
           "enable_webhook": "Schakel uit voor de lokale-modus: de Home Assistant-webhook wordt helemaal niet geregistreerd, dus niets - inclusief Nabu Casa - kan de server via Home Assistant bereiken. De directe serverpoort en het zijbalkpaneel blijven werken.",
           "enable_llm_api": "Bied de volledige toolset aan Home Assistant conversatie-agents (OpenAI, Google, Ollama, ...): wanneer ingeschakeld, kunnen agents 'HA-MCP Server' selecteren onder Home Assistant bedienen en de tools aansturen vanuit Assist chat en spraak. Inschakelen maakt het alleen selecteerbaar - niets wordt blootgesteld totdat je het kiest op een agent. Gebruikershandleiding: {llm_api_docs_url}",
           "llm_api_exposure": "Vorm van de toolset die wordt aangeboden aan conversatie-agents. Tool zoeken (standaard) houdt de context van de agent klein: een compacte API met vastgezette tools plus zoek-/uitvoer meta-tools. Volledige catalogus toont elke blootgestelde tool direct - beter voor modellen met een grote context. Beide registreert de twee naast elkaar, zodat elke agent zijn eigen kiest onder Home Assistant bedienen. Blootstelling per tool wordt beheerd in het HA-MCP instellingenpaneel; details: {llm_api_docs_url}",
-          "enable_startup_notification": "Toon een melding telkens wanneer de server start, die verwijst naar de instellingenpagina's die alleen voor beheerders zijn. Schakel uit om stil te starten - de verbindings-URL's blijven op dit scherm staan.",
+          "enable_startup_notification": "Toon een melding telkens wanneer Home Assistant de server start (niet wanneer de Access-schakelaar deze inschakelt), die wijst naar de instellingenpagina's die alleen voor beheerders zijn. Schakel uit om stil te starten — de verbindings-URL's blijven op dit scherm staan.",
           "enable_sidebar_panel": "Toon het HA-MCP instellingenpaneel in de zijbalk (alleen beheerders). Schakel uit om de zijbalkvermelding te verwijderen - serveropties blijven beschikbaar op dit scherm.",
+          "access_off_after_restart": "De Access-schakelaar van de server behoudt normaal gesproken de laatste status na een herstart van Home Assistant. Schakel dit in om de toegang na elke herstart uit te laten starten; deze blijft uitgeschakeld totdat deze wordt ingeschakeld. Schakel eerst de schakelaar in (deze is standaard uitgeschakeld): zolang deze is uitgeschakeld, kan niets de toegang weer inschakelen.",
           "oauth_redirect_allowlist": "Wordt alleen gebruikt wanneer de authenticatiemodus de geheime webhook-URL is. Wanneer een client zich aanmeldt via OAuth, stuurt HA-MCP de aanmelding alleen terug naar een callback-URL op deze lijst; elke andere wordt geweigerd met een pagina waarop wordt uitgelegd hoe je deze kunt toevoegen. Voer elke callback precies in zoals de client deze verzendt. Een http:// loopback-callback (127.0.0.1, [::1] of localhost) komt ook overeen met elke poort. Clients die verbinding maken zonder OAuth-aanmelding hebben geen invoer nodig. Wordt van kracht zonder dat herstarten nodig is.",
           "admin_token_replacement": "Laat leeg om de huidige toegang te behouden; de server wordt opnieuw opgestart wanneer je wisselt. Een langdurig toegangstoken van een beheerdersaccount. Je eigen token werkt: open je profiel (je naam onderaan de zijbalk), selecteer het tabblad Beveiliging en selecteer Token maken onder Langdurige toegangstokens. Je eigen token werkt ook van buiten je thuisnetwerk als het ooit lekt, en Home Assistant legt de wijzigingen van de server vast onder je naam. Veiliger: een account dat speciaal is gemaakt voor HA-MCP, met Alleen lokale toegang ingeschakeld (zie de velden hieronder).",
           "admin_username": "Alleen voor een account dat je speciaal hebt aangemaakt voor HA-MCP, onder Instellingen → Personen → Persoon toevoegen met Inloggen toestaan, Alleen lokaal en Beheerder aan. Voer hier nooit je eigen inloggegevens in: om je eigen account te gebruiken, plak je de bijbehorende token hierboven. HA-MCP maakt de token van dit account aan (genaamd HA-MCP Server), zodat niemand hiermee hoeft in te loggen, en het wachtwoord wordt niet bewaard. De token werkt alleen vanaf je lokale netwerk waar de server draait, en Home Assistant registreert de wijzigingen van de server onder dit account.",
@@ -228,5 +230,12 @@
     "server_source_override": "pip-vereiste overschrijven",
     "version_not_installed": "nog niet geïnstalleerd",
     "version_unknown": "onbekend"
+  },
+  "entity": {
+    "switch": {
+      "server_access": {
+        "name": "Toegang"
+      }
+    }
   }
 }

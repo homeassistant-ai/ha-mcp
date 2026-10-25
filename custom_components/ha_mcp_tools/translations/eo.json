@@ -90,6 +90,7 @@
           "llm_api_exposure": "Konversacia-agenta ilo-ekspono",
           "enable_startup_notification": "Komenca sciigo",
           "enable_sidebar_panel": "Flankbreta agorda panelo",
+          "access_off_after_restart": "Malŝalti aliron post rekomenco",
           "oauth_redirect_allowlist": "Permesitaj OAuth-retrekomencaj URL-oj",
           "admin_token_replacement": "Anstataŭigi la administrantan alirtonon (laŭvola)",
           "admin_username": "Aŭ ŝalti al nur-loka konto kreita por HA-MCP: salutnomo (laŭvola)",
@@ -112,8 +113,9 @@
           "enable_webhook": "Malŝaltu por nur-loka reĝimo: la retkroĉo de Home Assistant tute ne estas registrita, do nenio — inkluzive de Nabu Casa — povas atingi la servilon per Home Assistant. La rekta servila pordo kaj la flanka panelo daŭre funkcias.",
           "enable_llm_api": "Proponu la plenan ilaron al konversaciaj agentoj de Home Assistant (OpenAI, Google, Ollama, ...): dum ebligite, agentoj povas elekti 'HA-MCP Server' sub Kontroli Home Assistant kaj uzi la ilojn el Asista babilejo kaj voĉo. Ebligo nur igas ĝin elektebla — nenio estas elmontrita ĝis vi elektas ĝin ĉe agento. Gvidilo pri uzado: {llm_api_docs_url}",
           "llm_api_exposure": "Formo de la ilaro proponita al konversaciaj agentoj. Ilo-serĉo (defaŭlta) tenas la kuntekston de la agento malgranda: kompakta API kun fiksitaj iloj plus serĉaj/ekzekutaj meta-iloj. Plena katalogo listigas ĉiun elmontritan ilon rekte — pli bone por grand-kuntekstaj modeloj. Ambaŭ registras la du flank-al-flanke, do ĉiu agento elektas sian propran sub Kontroli Home Assistant. Elmontro laŭ ilo estas administrata en la agorda panelo de HA-MCP; detaloj: {llm_api_docs_url}",
-          "enable_startup_notification": "Montri sciigon ĉiufoje kiam la servilo startas, indikante al la administrant-nuraj agordaj surfacoj. Malŝaltu por starti silente — la konektaj URL-oj restas sur ĉi tiu ekrano.",
+          "enable_startup_notification": "Montri sciigon ĉiufoje kiam Home Assistant startigas la servilon (ne kiam la alira ŝaltilo aktivigas ĝin), indikante al la agordaj surfacoj nur por administrantoj. Malŝaltu por startigi silente - la konektaj URL-oj restas sur ĉi tiu ekrano.",
           "enable_sidebar_panel": "Montru la agordan panelon de HA-MCP en la flanka kolumno (nur por administrantoj). Malŝaltu por forigi la flankan eniron — servilaj opcioj restas disponeblaj sur ĉi tiu ekrano.",
+          "access_off_after_restart": "La alira ŝaltilo de la servilo kutime konservas sian lastan staton trans Home Assistant rekomenco. Ŝaltu ĉi tion por havi aliron malŝaltita post ĉiu rekomenco; ĝi restas malŝaltita ĝis ĝi estas ŝaltita. Unue ebligu la ŝaltilon (ĝi estas malvalidigita defaŭlte): dum ĝi estas malvalidigita, nenio povas ree ŝalti aliron.",
           "oauth_redirect_allowlist": "Uzata nur dum la Aŭtentiga reĝimo estas la sekreta retmesaĝa ligilo (webhook URL). Kiam kliento ensalutas per OAuth, HA-MCP resendas la ensaluton nur al redirekta URL en ĉi tiu listo; ĉiu alia estas rifuzita per paĝo klariganta kiel aldoni ĝin. Enigu ĉiun redirekton ekzakte kiel la kliento sendas ĝin. http://-enbukla (loopback) redirekto (127.0.0.1, [::1] aŭ localhost) ankaŭ kongruas kun ajna pordo. Kliento kiu konektiĝas sen OAuth-ensaluto bezonas neniun eniron. Ekvalidas sen rekomenco.",
           "admin_token_replacement": "Lasu malplena por konservi la nunan aliron; la servilo rekomencas kiam vi ŝaltas. Longdaŭra alirtono de administranta konto. Via propra funkcias: malfermu vian profilon (via nomo ĉe la sudo de la flanka panelo), elektu la langeton Sekureco, kaj sub Longdaŭraj alirtonoj elektu Krei tonon. Via propra tono ankaŭ funkcias de ekster via hejma reto se ĝi iam elfluas, kaj Home Assistant registras la ŝanĝojn de la servilo sub via nomo. Pli sekure: konto kreita nur por HA-MCP, kun nur Loka aliro ŝaltita (vidu la kampojn sube).",
           "admin_username": "Nur por konto, kiun vi kreis nur por HA-MCP, sub Agordoj → Homoj → Aldoni personon kun Permesi ensaluton, Loka aliro nur kaj Administranto ŝaltitaj. Neniam enigu vian propran ensaluton ĉi tie: por uzi vian propran konton, algluu ties valortokenon supre anstataŭe. HA-MCP kreas la valortokenon de ĉi tiu konto (nomita HA-MCP Server), do neniu devas ensaluti kiel ĝi, kaj la pasvorto ne estas konservata. Ties valortokeno funkcias nur de via loka reto, kie la servilo rulas, kaj Home Assistant registras la ŝanĝojn de la servilo sub ĉi tiu konto.",
@@ -228,5 +230,12 @@
     "server_source_override": "pip-postula anstataŭigo",
     "version_not_installed": "ankoraŭ ne instalita",
     "version_unknown": "nekonata"
+  },
+  "entity": {
+    "switch": {
+      "server_access": {
+        "name": "Aliro"
+      }
+    }
   }
 }

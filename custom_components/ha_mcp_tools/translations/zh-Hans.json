@@ -90,6 +90,7 @@
           "llm_api_exposure": "对话智能体工具暴露方式",
           "enable_startup_notification": "启动通知",
           "enable_sidebar_panel": "侧边栏设置面板",
+          "access_off_after_restart": "重启后关闭访问权限",
           "oauth_redirect_allowlist": "允许的 OAuth 回调 URL",
           "admin_token_replacement": "替换管理员访问令牌（可选）",
           "admin_username": "或切换到为 HA-MCP 创建的仅本地账户：用户名（可选）",
@@ -112,8 +113,9 @@
           "enable_webhook": "关闭以进入仅本地模式：完全不注册 Home Assistant Webhook，因此任何一方——包括 Nabu Casa——都无法通过 Home Assistant 访问服务器。服务器端口直连和侧边栏面板仍可继续使用。",
           "enable_llm_api": "向 Home Assistant 对话智能体（OpenAI、Google、Ollama 等）提供完整工具集：启用后，智能体可在“控制 Home Assistant”下选择“HA-MCP Server”，并在 Assist 聊天和语音中使用这些工具。启用只是让它可供选择——在您为某个智能体选中它之前，不会暴露任何内容。使用指南：{llm_api_docs_url}",
           "llm_api_exposure": "提供给对话智能体的工具集形态。工具搜索（默认）可让智能体的上下文保持精简：一个包含固定工具以及搜索/执行元工具的紧凑 API。完整目录会直接列出每个已暴露的工具——更适合大上下文模型。两者会将二者并列注册，让每个智能体在“控制 Home Assistant”下各自选择。按工具的暴露设置在 HA-MCP 设置面板中管理；详情：{llm_api_docs_url}",
-          "enable_startup_notification": "每次服务器启动时显示通知，指向仅限管理员的设置界面。关闭以静默启动——连接 URL 仍保留在此屏幕上。",
+          "enable_startup_notification": "每次 Home Assistant 启动服务器时显示通知（当“Access”开关将其打开时不显示），指向仅限管理员的设置界面。关闭此选项以静默启动 - 连接 URL 仍保留在此屏幕上。",
           "enable_sidebar_panel": "在侧边栏中显示 HA-MCP 设置面板（仅管理员）。关闭则移除侧边栏条目——服务器选项仍可在此界面中使用。",
+          "access_off_after_restart": "服务器的“Access”开关通常在 Home Assistant 重启后保持其最后的状态。启用此选项可在每次重启后使访问权限默认关闭；它将保持关闭状态，直到被手动开启。请先启用该开关（默认情况下它是禁用的）：在禁用状态下，任何操作都无法重新开启访问权限。",
           "oauth_redirect_allowlist": "仅在认证模式为“保密 Webhook URL”时使用。当客户端使用 OAuth 登录时，HA-MCP 仅将登录重定向回此列表中的回调 URL；任何其他 URL 都将被拒绝，并显示一个解释如何添加它的页面。请准确按照客户端发送的格式输入每个回调。http:// 环回回调（127.0.0.1、[::1] 或 localhost）也匹配任意端口。无需 OAuth 登录即可连接的客户端不需要条目。无需重启即可生效。",
           "admin_token_replacement": "留空以保留当前访问权限；切换时服务器会重启。管理员账户的长期访问令牌。您自己的令牌也可以：打开您的个人资料（侧边栏底部的您的名字），选择“安全性”选项卡，并在“长期访问令牌”下选择“创建令牌”。如果您的令牌发生泄漏，它也可以从您的家庭网络之外工作，并且 Home Assistant 会以您的名义记录服务器的更改。更安全的方式是：创建一个专为 HA-MCP 制作的账户，并开启“仅本地访问”（参见下方的字段）。",
           "admin_username": "仅用于您专门为 HA-MCP 创建的账户，可在 “设置” → “人员” → “添加人员” 中设置，并开启“允许登录”、“仅限本地访问”和“管理员”。切勿在此输入您自己的登录名：若要使用您自己的账户，请改为在上方粘贴其令牌。HA-MCP 会创建此账户的令牌（名为 HA-MCP Server），因此无需以该账户身份登录，且密码不会被保存。该令牌仅在服务器运行的本地网络中有效，并且 Home Assistant 会在此账户下记录服务器的更改。",
@@ -228,5 +230,12 @@
     "server_source_override": "pip 依赖覆盖",
     "version_not_installed": "尚未安装",
     "version_unknown": "未知"
+  },
+  "entity": {
+    "switch": {
+      "server_access": {
+        "name": "Access"
+      }
+    }
   }
 }

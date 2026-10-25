@@ -90,6 +90,7 @@
           "llm_api_exposure": "Söhbət agentinə təqdim olunan alətlər",
           "enable_startup_notification": "Başlanğıc bildirişi",
           "enable_sidebar_panel": "Yan paneldəki parametrlər paneli",
+          "access_off_after_restart": "Yenidən başladıqdan sonra girişin bağlanması",
           "oauth_redirect_allowlist": "İcazə verilən OAuth geriyə çağırış (callback) URL-ləri",
           "admin_token_replacement": "İnzibatçı giriş tokenini əvəz edin (isteğe bağlı)",
           "admin_username": "Və ya HA-MCP üçün yaradılmış yalnız yerli hesaba keçin: istifadəçi adı (isteğe bağlı)",
@@ -112,8 +113,9 @@
           "enable_webhook": "Yalnız lokal giriş rejimi üçün söndürün: Home Assistant webhook-u ümumiyyətlə qeydiyyata alınmır, buna görə heç nə - Nabu Casa daxil olmaqla - Home Assistant vasitəsilə serverə giriş əldə edə bilmir. Serverin birbaşa giriş portu və yan panel işləməyə davam edir.",
           "enable_llm_api": "Bütün alətləri Home Assistant səsli və mətnli söhbət agentlərinə (OpenAI, Google, Ollama, ...) təqdim edin: aktiv olduqda agentlər Home Assistant-ı idarə et bölməsində 'HA-MCP Server' seçib Assist söhbətindən və səslə alətləri idarə edə bilər. Aktivləşdirmə yalnız seçmək imkanı yaradır - agent üçün onu seçənədək heç bir alət təqdim olunmur. İstifadə təlimatı: {llm_api_docs_url}",
           "llm_api_exposure": "Söhbət agentlərinə təqdim olunan alətlər toplusunun forması. Alət axtarışı (standart) agentin kontekstini kiçik saxlayır: sancaqlanmış alətlər və axtarış/icra meta-alətləri olan yığcam API. Tam kataloq təqdim olunan hər bir aləti birbaşa siyahıya alır - böyük kontekstli modellər üçün daha uyğundur. Hər ikisi seçimi ikisini də yanaşı qeydiyyata alır ki, hər agent Home Assistant-ı idarə et bölməsində öz seçimini edə bilsin. Hər alətin təqdim olunması HA-MCP parametrlər panelində idarə olunur; təfərrüatlar: {llm_api_docs_url}",
-          "enable_startup_notification": "Yalnız inzibatçı üçün olan ayar səthlərinə işarə edərək, server hər dəfə işə düşəndə bildiriş göstərin. Səssiz başlatmaq üçün söndürün — qoşulma URL-ləri bu ekranda qalır.",
+          "enable_startup_notification": "Home Assistant serveri hər dəfə işə saldıqda (Giriş açarı onu yandırdıqda deyil) yalnız administrator üçün nəzərdə tutulmuş paramertləri göstərən bildiriş göstərin. Susqunluqla başlamaq üçün söndürün - qoşulma URL-ləri bu ekranda qalır.",
           "enable_sidebar_panel": "HA-MCP parametrlər panelini yan paneldə göstərin (yalnız administratorlar üçün). Yan paneldəki qeydi çıxarmaq üçün söndürün - server parametrləri bu ekranda əlçatan qalır.",
+          "access_off_after_restart": "Serverin Giriş açarı adətən Home Assistant yenidən başladıqdan sonra son vəziyyətini saxlayır. Girişin hər yenidən başlamadan sonra bağlı qalması üçün bunu yandırın; o, yandırılana qədər bağlı qalır. Əvvəlcə açarı aktivləşdirin (susmaya görə söndürüldü): o söndürüldüyü müddətdə heç nə girişi yenidən aça bilməz.",
           "oauth_redirect_allowlist": "Yalnız Doğrulama rejimi gizli veb-qarmaq URL-i olduqda istifadə olunur. Müştəri OAuth ilə daxil olduqda, HA-MCP daxilolmanı yalnız bu siyahıdakı geriyə çağırış URL-inə qaytarır; digərləri onu necə əlavə etməyi izah edən səhifə ilə rədd edilir. Hər bir geriyə çağırışı müştərinin göndərdiyi kimi daxil edin. http:// loopback geriyə çağırışı (127.0.0.1, [::1] və ya localhost) həm də istənilən portda uyğun gəlir. OAuth girişi olmadan qoşulan müştərilərin girişə ehtiyacı yoxdur. Yenidən başlatmadan qüvvəyə minir.",
           "admin_token_replacement": "Cari girişi saxlamaq üçün boş buraxın; keçid etdiyiniz zaman server yenidən başlayır. İnzibatçı hesabının uzunmüddətli giriş tokeni. Özünüzünkü də işləyir: profilinizi açın (yan panelin aşağı hissəsindəki adınız), Təhlükəsizlik sekmesini seçin və Uzunmüddətli giriş tokenləri altında Token yarat seçiminə toxunun. Sizin öz tokeniniz hər hansı sızma baş verərsə ev şəbəkənizdən kənarda da işləyir və Home Assistant serverin dəyişikliklərini sizin adınızdan qeydə alır. Daha təhlükəsiz yol: Yalnız yerli giriş seçimi aktiv edilmiş şəkildə yalnız HA-MCP üçün yaradılmış hesab (aşağıdakı sahələrə baxın).",
           "admin_username": "Yalnızca HA-MCP üçün yaratdığınız hesab üçündür, Ayarlar → İnsanlar → Girişə icazə ver, Yalnız yerli giriş və Administrator aktiv edilmiş şəkildə Yeni şəxs əlavə edin bölməsində. Heç vaxt öz giriş məlumatlarınızı burada daxil etməyin: öz hesabınızdan istifadə etmək üçün bunun əvəzinə yuxarıdakı onun tokenini yapışdırın. HA-MCP bu hesabın tokenini yaradır (HA-MCP Server adlanır), beləliklə heç kimin bu hesabla daxil olmasına ehtiyac qalmır və şifrə saxlanılmır. Onun tokeni yalnız serverin işlədiyi yerli şəbəkənizdən işləyir və Home Assistant serverin dəyişikliklərini bu hesab altında qeyd edir.",
@@ -228,5 +230,12 @@
     "server_source_override": "pip tələbi ləğvetməsi",
     "version_not_installed": "hələ quraşdırılmayıb",
     "version_unknown": "naməlum"
+  },
+  "entity": {
+    "switch": {
+      "server_access": {
+        "name": "Giriş"
+      }
+    }
   }
 }

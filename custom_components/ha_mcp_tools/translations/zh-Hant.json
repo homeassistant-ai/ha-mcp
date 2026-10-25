@@ -90,6 +90,7 @@
           "llm_api_exposure": "對話代理工具暴露",
           "enable_startup_notification": "啟動通知",
           "enable_sidebar_panel": "側邊欄設定面板",
+          "access_off_after_restart": "重新啟動後關閉存取權",
           "oauth_redirect_allowlist": "允許的 OAuth 回呼 URL",
           "admin_token_replacement": "取代管理者存取權杖（選填）",
           "admin_username": "或者切換至為 HA-MCP 建立的僅限本機帳號：使用者名稱（選填）",
@@ -112,8 +113,9 @@
           "enable_webhook": "為僅限本機模式關閉：完全不會註冊 Home Assistant webhook，因此任何事物（包含 Nabu Casa）都無法透過 Home Assistant 連線至伺服器。直接伺服器連接埠與側邊欄面板將繼續運作。",
           "enable_llm_api": "提供完整工具集給 Home Assistant 對話代理程式（OpenAI、Google、Ollama 等）：啟用時，代理程式可在「控制 Home Assistant」下方選取「HA-MCP Server」，並從 Assist 聊天與語音中驅動工具。啟用只會使其可被選取——在您於代理程式上挑選它之前，不會暴露任何內容。使用指南：{llm_api_docs_url}",
           "llm_api_exposure": "提供給對話代理程式的工具集外觀。工具搜尋（預設）可保持代理程式的上下文簡短：具有釘選工具加上搜尋/執行中介工具的精簡 API。完整目錄直接列出每個暴露的工具——較適合大上下文模型。兩者會並排註冊，以便每個代理程式在「控制 Home Assistant」下方挑選自己的工具。個別工具暴露管理可在 HA-MCP 設定面板中進行；詳細資訊：{llm_api_docs_url}",
-          "enable_startup_notification": "每次伺服器啟動時計顯通知，指向僅限管理者的設定介面。關閉以進行無訊息啟動 — 連線 URL 仍會保留在此畫面上。",
+          "enable_startup_notification": "每次 Home Assistant 啟動伺服器時顯示通知（而非存取開關開啟時），並指向僅限管理員的設定介面。關閉此選項以安靜啟動 — 連線 URL 仍會保留在此畫面上。",
           "enable_sidebar_panel": "在側邊欄中顯示 HA-MCP 設定面板（僅限管理員）。關閉以移除側邊欄項目——伺服器選項仍可在此畫面上使用。",
+          "access_off_after_restart": "伺服器的存取開關通常會在 Home Assistant 重新啟動後保持其最後的狀態。啟用此選項可使每次重新啟動後存取權預設為關閉狀態；直到手動開啟前將保持關閉。請先啟用開關（預設為停用）：在停用狀態下，任何東西都無法重新開啟存取權。",
           "oauth_redirect_allowlist": "僅在「驗證模式」為「密密麻麻的 webhook URL」時使用。當用戶端使用 OAuth 登入時，HA-MCP 僅會將登入結果傳回此清單中的回呼 URL；任何其他 URL 都會被拒絕，並顯示說明如何新增的頁面。請完全依照用戶端傳送的格式輸入每個回呼 URL。http:// 迴圈回呼 (127.0.0.1、[::1] 或 localhost) 也會比對所有連接埠。無需透過 OAuth 登入即可連線的用戶端不需要輸入。無需重新啟動即可生效。",
           "admin_token_replacement": "保持空白以保留目前的存取權；當你切換時，伺服器會重新啟動。管理者帳號的長期存取權杖。使用你自己的也可以：開啟你的個人檔案（位於側邊欄底部的你的名字），選取「安全性」分頁，並在「長期存取權杖」下方選取「建立權杖」。如果你的權杖外洩，從你的住家網路外部也能運作，且 Home Assistant 會以你的名字記錄伺服器的變更。更安全的方式是：建立專門用於 HA-MCP 的帳號，並開啟「僅限本機存取」（請參閱下方欄位）。",
           "admin_username": "僅適用於專門為 HA-MCP 建立的帳號（在「設定」→「人員」→「新增人員」中，勾選「允許登入」、「僅限本機存取」與「管理員」）。絕對不要在此輸入您自己的登入資訊：若要使用您自己的帳號，請改將其權杖貼在上方。HA-MCP 會建立此帳號的權杖（命名為 HA-MCP Server），因此不需要任何人以該帳號登入，且不會保留密碼。其權杖僅能在伺服器執行的本機網路中運作，且 Home Assistant 會在此帳號下記錄伺服器的變更。",
@@ -228,5 +230,12 @@
     "server_source_override": "pip 需求覆寫",
     "version_not_installed": "尚未安裝",
     "version_unknown": "未知"
+  },
+  "entity": {
+    "switch": {
+      "server_access": {
+        "name": "存取"
+      }
+    }
   }
 }
