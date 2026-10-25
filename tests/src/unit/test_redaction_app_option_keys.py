@@ -152,6 +152,39 @@ def test_a_listed_group_the_schema_dropped_keeps_its_shape_and_feeds_the_scrub(
     assert values == {"inner-secret"}
 
 
+def test_a_listed_name_in_a_group_the_schema_turned_into_a_field_is_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A manual app update keeps the stored group under the new plain field.
+    _settings(monkeypatch, "password")
+    schema = [{"name": "auth", "type": "string"}]
+    options = {"auth": {"password": "group-era-pw", "user": "u"}}
+
+    out = redact_addon_options(options, schema, BACKUP_SLUG)
+    values = collect_addon_secret_values(options, schema, BACKUP_SLUG)
+
+    assert out["auth"] == {"password": REDACTED_SET, "user": "u"}
+    assert values == {"group-era-pw"}
+
+
+def test_a_listed_group_stored_as_a_plain_value_is_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _settings(monkeypatch, "creds, tokens, unset")
+    group = [{"name": "user", "type": "string"}]
+    schema = [
+        {"name": name, "type": "schema", "schema": group}
+        for name in ("creds", "tokens", "unset")
+    ]
+    options = {"creds": "field-era-pw", "tokens": ["field-era-tok"], "unset": None}
+
+    out = redact_addon_options(options, schema, BACKUP_SLUG)
+    values = collect_addon_secret_values(options, schema, BACKUP_SLUG)
+
+    assert out == {"creds": REDACTED_SET, "tokens": [REDACTED_SET], "unset": None}
+    assert values == {"field-era-pw", "field-era-tok"}
+
+
 def test_spacing_newlines_and_empty_entries_in_the_list_are_ignored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
