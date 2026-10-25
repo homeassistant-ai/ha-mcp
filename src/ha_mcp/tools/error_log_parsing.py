@@ -713,10 +713,10 @@ def _attach_error_log_pagination(
     journald page carries Supervisor's cursor for the oldest entry it fetched,
     so ``cursor_skip`` (the entries this page consumed from that cursor) turns
     into a token naming the exact resume point: every page resumes exactly,
-    whether or not it returned its whole window. Installs that read a whole
-    log file keep the integer line step. The structured summary takes the
-    integer step even on journald, because its own ``next_offset`` has to stay
-    valid for another structured call, which rejects tokens.
+    whether or not it returned its whole window. The structured summary
+    consumes its whole window, so it passes a skip of zero and its token
+    resumes behind the window; it accepts those tokens back on the next call.
+    Installs that read a whole log file keep the integer line step.
 
     ``has_more`` speaks only about history behind this window. Matches the
     ``limit`` slice left unreturned INSIDE a terminal window get a raise-the-
@@ -737,10 +737,10 @@ def _attach_error_log_pagination(
         elif isinstance(window.offset, int):
             next_offset = window.offset + step
         else:
-            # A token page always carries the block's cursor. Without one there
-            # is no anchor to advance to, so repeat the caller's token rather
-            # than silently restarting at the newest page.
-            next_offset = window.offset
+            # A token page always carries the block's cursor, so this is
+            # unreachable in practice; repeating the caller's token would loop
+            # forever on the same page, which is worse than failing loudly.
+            raise ValueError("a page with older history must carry its block's cursor")
         data["next_offset"] = next_offset
         data["pagination_hint"] = _build_error_log_pagination_hint(
             next_offset,
@@ -752,7 +752,10 @@ def _attach_error_log_pagination(
             top_n,
         )
         return
-    if window.offset and window.raw_line_count:
+    if isinstance(window.offset, int) and window.offset and window.raw_line_count:
+        # Integer offsets clamp to the oldest entries, so a terminal page can
+        # repeat an earlier one. A cursor token names the exact resume point and
+        # is trimmed at the journal's head, so it never overlaps.
         data["note"] = f"{data.get('note', '')} {_HISTORY_START_NOTE}".strip()
     if unreturned_matches > 0:
         total = data.get("total_lines", unreturned_matches)

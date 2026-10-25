@@ -16,13 +16,15 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.error_log_journald import JournaldPage, journald_page, token_skip
+from ha_mcp.client.error_log_journald import token_skip
 from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantConnectionError
 from ha_mcp.tools.error_log_parsing import (
     _split_log_records,
 )
 from ha_mcp.tools.log_common import MAX_LIMIT, SUPERVISOR_SEARCH_WINDOW_LINES
 from ha_mcp.tools.tools_logs import LogTools
+
+from ._error_log_test_helpers import journald_page_client
 
 _HEADER = (
     "2026-05-27 10:00:01.123 ERROR (MainThread) "
@@ -77,43 +79,6 @@ def _client(
             text=text, has_more=has_more, first_cursor=first_cursor
         )
     )
-    return client
-
-
-def _journald_page_client(entries: list[str]) -> AsyncMock:
-    """``get_error_log`` stub serving journald windows from ``entries``.
-
-    Implements gatewayd's ``Range: entries=<cursor>:<skip>:<count>`` contract
-    (oldest-first, forward from ``cursor + skip``, clamped to the head) so the
-    cursor tokens the tool emits are resolved the way Supervisor resolves them.
-    Each entry gets the index-based cursor ``e<n>``.
-    """
-    cursors = [f"e{index}" for index in range(len(entries))]
-    positions = {cursor: index for index, cursor in enumerate(cursors)}
-    pattern = re.compile(r"^entries=(?P<cursor>[^:]*):(?P<skip>-?\d+):(?P<count>\d+)$")
-
-    async def _fetch(range_header: str) -> JournaldPage:
-        match = pattern.match(range_header)
-        assert match, f"unexpected Range header: {range_header}"
-        skip = int(match.group("skip"))
-        count = int(match.group("count"))
-        if match.group("cursor"):
-            # A real cursor anchors on its own entry: skip 0 starts there and a
-            # negative skip reads backwards, ending one entry behind the anchor.
-            start = positions[match.group("cursor")] + skip
-        else:
-            # An empty cursor anchors on the newest entry.
-            start = len(entries) - 1 + skip
-        start = max(0, start)
-        block = entries[start : start + count]
-        first = cursors[start] if block else None
-        return JournaldPage("\n".join(block), first)
-
-    async def _page(lines: int, offset: int | str = 0) -> ErrorLogPage:
-        return await journald_page(lines, offset, _fetch)
-
-    client = AsyncMock()
-    client.get_error_log = _page
     return client
 
 
@@ -445,7 +410,7 @@ class TestRecordLimitAndPaging:
         # not clamped to the journal's start.
         entries = filler[:1999] + record + filler[2029:]
 
-        tools = LogTools(_journald_page_client(entries))
+        tools = LogTools(journald_page_client(entries))
 
         first = await tools.get_logs(**_kwargs(limit=5, search="NEEDLE"))
 
@@ -463,52 +428,59 @@ class TestRecordLimitAndPaging:
         assert "ValueError: NEEDLE" in second["log"]
 
     @pytest.mark.asyncio
-    async def test_a_structured_journald_read_hands_out_an_integer_step(
+    async def test_a_structured_journald_read_round_trips_its_token(
         self,
     ) -> None:
-        """The summary ranks the whole window, so its anchor stays an integer.
+        """The summary consumes its whole window, so its token resumes behind it.
 
-        A token would also be rejected by the next structured call, which is
-        the failure this pins: the summary path must not emit one.
+        With the integer step the next page re-counted part of this window when
+        lines arrived in between; the token is exact and the next structured
+        call accepts it.
         """
         entries = [
             f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}"
-            for i in range(2500)
+            for i in range(2510)
         ]
-        tools = LogTools(_journald_page_client(entries))
+        tools = LogTools(journald_page_client(entries))
 
         first = await tools.get_logs(**_kwargs(structured=True))
         assert first["has_more"] is True
-        assert isinstance(first["next_offset"], int)
+        token = first["next_offset"]
+        assert isinstance(token, str), "a journald summary must hand out a token"
+        assert token_skip(token) == 0
 
-        second = await tools.get_logs(
-            **_kwargs(structured=True, offset=first["next_offset"])
-        )
-        assert second["summary"]["total_raw_lines"] > 0
+        second = await tools.get_logs(**_kwargs(structured=True, offset=token))
+
+        # The two windows partition the journal: the integer step overlapped
+        # them, so their line counts also double-counted at the boundary.
+        assert not second["has_more"]
+        assert first["summary"]["total_raw_lines"] + second["summary"][
+            "total_raw_lines"
+        ] == len(entries)
 
     @pytest.mark.asyncio
     async def test_a_journald_walk_through_partial_pages_is_contiguous(
         self,
     ) -> None:
-        """Every matching line appears exactly once across token pages.
+        """A token walk returns every entry exactly once, head edge included.
 
-        A filtered journald page is partial whenever its window holds more
-        matches than ``limit``, which is the normal case. Walking on the token
-        has to hand over the unreturned part of each fetched window, not skip
-        it and not repeat it.
+        The journal is sized so the last resume point falls inside the block
+        gatewayd clamps to the journal's head: that block then runs past the
+        resume point, and returning it whole repeats entries while hiding the
+        oldest ones behind them.
         """
         entries = [
             f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}"
-            for i in range(2500)
+            for i in range(900)
         ]
-        tools = LogTools(_journald_page_client(entries))
+        tools = LogTools(journald_page_client(entries))
 
         seen: list[int] = []
         offset: int | str = 0
         pages = 0
         partial_pages = 0
-        for _ in range(200):
-            page = await tools.get_logs(**_kwargs(limit=50, offset=offset))
+        for _ in range(20):
+            page = await tools.get_logs(**_kwargs(limit=300, offset=offset))
             pages += 1
             for line in page["log"].splitlines():
                 match = re.search(r"issue (\d+)$", line)
@@ -525,10 +497,8 @@ class TestRecordLimitAndPaging:
 
         assert pages >= 2, "the fixture must force more than one page"
         assert partial_pages >= 1, "the walk must cross a page that left its window"
-        # Pages must join without a gap or a repeat: the walk's matches form one
-        # descending run from the newest record, whatever the page boundaries.
-        assert seen == list(range(seen[0], seen[0] - len(seen), -1)), (
-            "token pages must not skip or repeat records between pages"
+        assert seen == list(range(len(entries) - 1, -1, -1)), (
+            "the walk must return every entry exactly once, newest first"
         )
 
     @pytest.mark.asyncio
@@ -578,10 +548,15 @@ class TestRecordLimitAndPaging:
             await tools.get_logs(**_kwargs(offset="cursor:s=abc;i=1"))
 
     @pytest.mark.asyncio
-    async def test_a_cursor_token_is_rejected_with_structured(self) -> None:
-        tools = LogTools(_client(_ERROR_RECORD))
-        with pytest.raises(ToolError):
-            await tools.get_logs(**_kwargs(offset="cursor:abc:0", structured=True))
+    async def test_a_structured_read_accepts_a_cursor_token(self) -> None:
+        """The summary pages on the same token its own responses return."""
+        client = _client(_ERROR_RECORD)
+        tools = LogTools(client)
+
+        result = await tools.get_logs(**_kwargs(offset="cursor:abc:0", structured=True))
+
+        assert client.get_error_log.await_args.kwargs["offset"] == "cursor:abc:0"
+        assert result["structured"] is True
 
     @pytest.mark.asyncio
     async def test_an_unmatched_leading_partial_is_not_held_back(self) -> None:

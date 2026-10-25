@@ -174,12 +174,6 @@ class LogTools(
     ) -> dict[str, Any]:
         level = _validate_log_level(level)
         offset = _validate_log_offset(source, offset)
-        if structured and isinstance(offset, str):
-            raise ToolError(
-                "Cursor tokens do not apply with structured=True; the summary "
-                "ranks the whole fetched window and ignores offset",
-                log_level=TOOL_ERROR_LOG_LEVEL,
-            )
         warnings = _collect_log_warnings(
             source,
             level,
@@ -370,7 +364,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "counts raw log lines back from the newest entry, or is the "
                     "opaque token a previous page returned in 'next_offset' on "
                     "Supervisor/journald installs, which keeps paging exact "
-                    "while new log lines arrive; on fault_log it counts lines "
+                    "while new log lines arrive (`structured=True` accepts and "
+                    "returns that token too); on fault_log it counts lines "
                     "from the start of the assembled crash text. Pass the "
                     "response's 'next_offset' to continue while 'has_more' is "
                     "true."

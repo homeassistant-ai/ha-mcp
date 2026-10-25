@@ -626,9 +626,10 @@ class CoreLogSourcesMixin:
             )
 
             data: dict[str, Any]
-            # Only the raw journald path hands out a cursor token; the
-            # structured summary keeps the integer step (its next_offset must
-            # stay valid for another structured call, which rejects tokens).
+            # The structured summary consumes its whole window, so its token
+            # resumes strictly behind the window's oldest entry; the raw path
+            # sets the skip from the records it returned. Container installs
+            # have no cursor, so both fall back to the integer line step.
             cursor_skip: int | None = None
             if structured:
                 data = self._build_structured_error_log(
@@ -644,6 +645,7 @@ class CoreLogSourcesMixin:
                 # starts a whole window further back.
                 step = fetch_lines
                 effective_limit = None
+                cursor_skip = 0
             else:
                 effective_limit = _coerce_limit(
                     limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"

@@ -143,6 +143,8 @@ class TestRouteFastmcpLogsToRoot:
         """
         logger = logging.getLogger("fastmcp")
         root = logging.getLogger()
+        saved_handlers = logger.handlers[:]
+        saved_propagate = logger.propagate
         saved_level = logger.level
         saved_root = root.level
         try:
@@ -151,6 +153,8 @@ class TestRouteFastmcpLogsToRoot:
             route_fastmcp_logs_to_root()
             assert logger.getEffectiveLevel() == logging.WARNING
         finally:
+            logger.handlers[:] = saved_handlers
+            logger.propagate = saved_propagate
             logger.setLevel(saved_level)
             root.setLevel(saved_root)
 
@@ -161,8 +165,11 @@ class TestRouteFastmcpLogsToRoot:
         unload and keeps filtering every ``fastmcp`` record process-wide.
         """
         root = logging.getLogger()
+        logger = logging.getLogger("fastmcp")
         saved_handlers = root.handlers[:]
-        saved_level = logging.getLogger("fastmcp").level
+        saved_fastmcp_handlers = logger.handlers[:]
+        saved_propagate = logger.propagate
+        saved_level = logger.level
         try:
             root.handlers[:] = [logging.StreamHandler()]
             route_fastmcp_logs_to_root()
@@ -170,7 +177,9 @@ class TestRouteFastmcpLogsToRoot:
             assert root.handlers[0].filters == []
         finally:
             root.handlers[:] = saved_handlers
-            logging.getLogger("fastmcp").setLevel(saved_level)
+            logger.handlers[:] = saved_fastmcp_handlers
+            logger.propagate = saved_propagate
+            logger.setLevel(saved_level)
 
     def test_install_routes_logs_only_when_embedded(
         self, monkeypatch: pytest.MonkeyPatch

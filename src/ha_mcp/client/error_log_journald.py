@@ -53,9 +53,13 @@ def is_cursor_token(value: object) -> bool:
 def cursor_token(cursor: str, skip: int) -> str:
     """Build the opaque ``next_offset`` value resuming ``skip`` entries in.
 
-    ``skip`` counts entries forward from ``cursor`` (the oldest entry of the
-    page's fetched window) to the resume point: the first entry the page did
-    not return. Zero means the page used its whole window.
+    ``skip`` is the offset of the resume point from ``cursor`` (the oldest entry
+    of the page's fetched window); the next block ends one entry before it.
+    After a page that returned records, entry ``skip`` is the oldest entry the
+    page returned, so the next block starts with the entries fetched behind it.
+    A held-back tail sets it one past the tail's last line. Zero resumes
+    strictly behind ``cursor``, which is what a page that used its whole window
+    needs.
     """
     if skip < 0:
         raise ValueError(f"skip must not be negative, got {skip}")
@@ -170,17 +174,54 @@ async def _cursor_page(
 ) -> ErrorLogPage:
     page = await fetch(cursor_range_header(cursor, skip, lines))
     entries = page.text.splitlines()
-    if len(entries) < lines:
-        # A short block is the journal's start or a clamped anchor: no more.
-        return ErrorLogPage(
-            text=page.text, has_more=False, first_cursor=page.first_cursor
-        )
     has_more = await _has_older_than(page.first_cursor, fetch)
+    if entries and not has_more and page.first_cursor:
+        # The block starts at the journal's head, so gatewayd clamped its start
+        # and kept reading forward: it may run past the resume point and repeat
+        # entries the previous page already returned. Keep only what precedes
+        # the resume point.
+        entries = entries[
+            : await _entries_before_resume(
+                cursor, skip, len(entries), page.first_cursor, fetch
+            )
+        ]
     return ErrorLogPage(
-        text=page.text,
+        text="\n".join(entries),
         has_more=has_more,
         first_cursor=page.first_cursor,
     )
+
+
+async def _entries_before_resume(
+    cursor: str,
+    skip: int,
+    count: int,
+    head: str,
+    fetch: JournaldFetch,
+) -> int:
+    """How many entries of a head-clamped block precede the resume point.
+
+    Gatewayd anchors ``entries=<cursor>:<skip>:<count>`` at ``cursor + skip``
+    and reads ``count`` entries forward. A skip that runs past the journal's
+    start is clamped to the head rather than rejected, so the block it returns
+    can contain entries at or after the resume point. Those entries duplicate
+    the previous page and, without trimming, hide the oldest ones behind them.
+
+    The resume point is ``skip`` entries after ``cursor``. Asking for the single
+    entry ``k`` entries before it returns the head exactly when ``k`` reaches it
+    (at or past the head the start clamps there), which binary-searches its
+    position without needing per-entry cursors — Supervisor rejects a JSON
+    Accept, so cursors are the only per-entry identity it will not serve.
+    """
+    low, high = 0, count
+    while low < high:
+        middle = (low + high) // 2
+        probe = await fetch(f"entries={cursor}:{skip - middle}:1")
+        if probe.first_cursor == head:
+            high = middle
+        else:
+            low = middle + 1
+    return low
 
 
 async def _has_older_than(cursor: str | None, fetch: JournaldFetch) -> bool:
