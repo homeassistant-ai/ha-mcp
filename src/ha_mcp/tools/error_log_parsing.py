@@ -381,18 +381,6 @@ def _select_error_log_page(
     )
 
 
-def _page_without_record(page: _RecordPage, dropped: _LogRecord) -> _RecordPage:
-    """``page`` with one record removed, in the same display order."""
-    records = [record for record in page.records if record is not dropped]
-    return _RecordPage(
-        records=records,
-        lines=[line for record in records for line in record.lines],
-        oldest_index=min((record.start_index for record in records), default=None),
-        truncated=page.truncated,
-        leading_partial=any(record.header is None for record in records),
-    )
-
-
 def _parse_error_log_structured(
     raw_text: str,
     search: str | None = None,

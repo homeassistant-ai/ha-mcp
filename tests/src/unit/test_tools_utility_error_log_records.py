@@ -9,6 +9,7 @@ the oldest returned record.
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -73,7 +74,9 @@ def _client(text: str, *, has_more: bool = False) -> AsyncMock:
     return client
 
 
-def _offset_aware_page(log_lines: list[str]):
+def _offset_aware_page(
+    log_lines: list[str],
+) -> Callable[..., Awaitable[ErrorLogPage]]:
     """``get_error_log`` stub that honours ``lines``/``offset`` like a log file."""
 
     async def _page(lines: int, offset: int = 0) -> ErrorLogPage:
@@ -275,12 +278,43 @@ class TestRecordLimitAndPaging:
         client.get_error_log = _offset_aware_page(record.splitlines())
         tools = LogTools(client)
         result = await tools.get_logs(**_kwargs(limit=100, search="NEEDLE"))
-        assert result["returned_lines"] == 100
+        # The tail has no header and the window is already the search cap, so
+        # the record cannot be completed inside this page: it is held back and
+        # the whole window is consumed, rather than returning a cut fragment
+        # whose counts exclude it.
+        assert result["returned_lines"] == 0
+        assert result["returned_records"] == 0
+        assert result["total_records"] == 0
         assert result["has_more"] is True
         assert result["next_offset"] == SUPERVISOR_SEARCH_WINDOW_LINES
-        assert any(
-            "header could not be included" in warning for warning in result["warnings"]
+        assert any("held back" in warning for warning in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_a_cut_leading_partial_is_held_back_with_consistent_counts(
+        self,
+    ) -> None:
+        """A held-back tail must not be returned cut while counts drop it.
+
+        `_select_error_log_page` builds a new record when it cuts, so an
+        identity-based hold-back left the cut copy on the page: the response
+        said `returned_records=1` while `total_records` and `total_lines`
+        counted nothing, and the next page re-opened on the same record.
+        """
+        frames = "\n".join(
+            f"  frame {i}" for i in range(SUPERVISOR_SEARCH_WINDOW_LINES + 100)
         )
+        record = f"{_HEADER}\n{frames}\nValueError: NEEDLE"
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(record.splitlines())
+        tools = LogTools(client)
+        result = await tools.get_logs(**_kwargs(limit=100, search="NEEDLE"))
+
+        assert result["returned_records"] == result["returned_lines"] == 0
+        assert result["total_records"] == 0
+        assert result["total_lines"] >= result["returned_lines"]
+        assert any("held back" in warning for warning in result["warnings"])
+        assert result["has_more"] is True
+        assert result["next_offset"] == SUPERVISOR_SEARCH_WINDOW_LINES
 
     @pytest.mark.asyncio
     async def test_leading_partial_is_widened_to_reach_its_header(self) -> None:

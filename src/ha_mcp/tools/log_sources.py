@@ -32,7 +32,6 @@ from .error_log_parsing import (
     _ErrorLogWindow,
     _filter_log_records,
     _next_page_step,
-    _page_without_record,
     _parse_error_log_structured,
     _reopen_at_record_end,
     _select_error_log_page,
@@ -384,14 +383,11 @@ class CoreLogSourcesMixin:
             and len(page.records) == len(matches)
         )
         if held_back and leading_record is not None:
-            # A record longer than the page limit is already returned cut by
-            # _select_error_log_page, which builds a new record object. The
-            # identity check therefore holds back only an uncut leading tail;
-            # a cut record (including one spanning the whole window) stays
-            # visible with its partial-record warning instead of vanishing.
-            if any(record is leading_record for record in page.records):
-                page = _page_without_record(page, leading_record)
+            # Filter the leading tail out BEFORE selecting, so a record the
+            # page had to cut cannot survive in a copy: the response would
+            # then report a returned record while its counts exclude it.
             matches = [record for record in matches if record is not leading_record]
+            page = _select_error_log_page(matches, effective_limit, order)
             step = _reopen_at_record_end(window, leading_record)
 
         total_lines = sum(record.line_count for record in matches)
@@ -417,6 +413,12 @@ class CoreLogSourcesMixin:
             ),
         }
         warnings: list[str] = []
+        if held_back:
+            warnings.append(
+                "The oldest matching record opens before this window; it is "
+                "held back so the next page can return it whole with its "
+                "header."
+            )
         if refetch_failed:
             warnings.append(
                 "The wider read that would have brought the oldest record's "
