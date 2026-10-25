@@ -702,12 +702,10 @@ async def _request_viewport_image(
                     details=str(exc),
                     context={**request_context, "engine_url": engine},
                     suggestions=[
-                        "Ensure the screenshot engine app (or sidecar) is "
-                        "installed and running",
+                        "Ensure the screenshot engine app or sidecar is installed and running",
                         "If it is running, its access token is likely "
                         + f"missing or invalid — {TOKEN_HINT}",
-                        "Check HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL on "
-                        + "Docker/Container deployments",
+                        "Check HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL for Docker/Container deployments",
                     ],
                 )
             )

@@ -1,0 +1,6 @@
+{
+  "reason": "PR #2853 adds one container_only screenshot MCP E2E test. It is collected as a skip on each HAOS lane.",
+  "deltas": {
+    "haos": 1
+  }
+}
