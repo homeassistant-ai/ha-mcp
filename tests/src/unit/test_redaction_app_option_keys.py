@@ -70,8 +70,8 @@ def test_slug_scoped_key_leaves_other_apps_untouched(monkeypatch):
     assert other == BACKUP_OPTIONS
 
 
-def test_spacing_and_empty_entries_in_the_list_are_ignored(monkeypatch):
-    _settings(monkeypatch, " , days_between_backups ,, other_app: backup_password ,")
+def test_spacing_newlines_and_empty_entries_in_the_list_are_ignored(monkeypatch):
+    _settings(monkeypatch, " , days_between_backups\n,, other_app: backup_password ,")
 
     out = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
 

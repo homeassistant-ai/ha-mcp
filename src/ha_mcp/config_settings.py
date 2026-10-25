@@ -560,9 +560,10 @@ class Settings(BaseSettings):
     )
 
     # App option names to redact like ``format: password`` fields, for apps
-    # whose schema ships a secret as a plain string (#2843). Comma-separated;
-    # ``key`` applies to every app, ``<slug>:<key>`` to one. Read only while
-    # ``redact_secrets`` is on; the UI nests it under that toggle.
+    # whose schema ships a secret as a plain string (#2843). Separated by
+    # commas or newlines; ``key`` applies to every app, ``<slug>:<key>`` to
+    # one. Read only while ``redact_secrets`` is on; the UI nests it under
+    # that toggle.
     redact_app_option_keys: Annotated[
         str, Setting(surface="advanced", section="redact_keys", app=_ALL_FLAVORS)
     ] = Field("", alias="REDACT_APP_OPTION_KEYS")

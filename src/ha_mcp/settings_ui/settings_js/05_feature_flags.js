@@ -488,7 +488,7 @@ function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
     const meta = localizeMeta('advanced', f.field, {});
     const row = document.createElement('div');
     row.className = 'feature-row ' + cssClass + (lockedByGate ? ' dimmed' : '');
-    const multiline = f.field === 'extra_yaml_write_keys';
+    const multiline = f.field === 'extra_yaml_write_keys' || f.field === 'redact_app_option_keys';
     if (multiline) row.classList.add('list-editor');
 
     const info = document.createElement('div');

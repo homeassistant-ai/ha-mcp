@@ -167,11 +167,11 @@ def _iter_schema_entries(schema: Any) -> Iterable[dict[str, Any]]:
 def _operator_listed_option_keys(slug: str) -> frozenset[str]:
     """Option names ``redact_app_option_keys`` marks as secret for app ``slug``.
 
-    Entries are comma-separated; ``key`` applies to every app and
-    ``<slug>:<key>`` to that app only (#2843).
+    Entries are separated by commas or newlines; ``key`` applies to every app
+    and ``<slug>:<key>`` to that app only (#2843).
     """
     keys: set[str] = set()
-    for entry in get_global_settings().redact_app_option_keys.split(","):
+    for entry in re.split(r"[,\n]", get_global_settings().redact_app_option_keys):
         scope, sep, name = (part.strip() for part in entry.rpartition(":"))
         if name and (not sep or scope == slug):
             keys.add(name)

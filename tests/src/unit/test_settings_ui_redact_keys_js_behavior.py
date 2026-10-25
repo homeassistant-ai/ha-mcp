@@ -17,7 +17,7 @@ from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM, _assert_clea
 
 READ_INPUT = """
   const input = document.querySelector('[name="adv:redact_app_option_keys"]');
-  console.log('redact-keys', input.value, input.disabled);
+  console.log('redact-keys', input.tagName, input.value, input.disabled);
 """
 
 
@@ -83,6 +83,7 @@ def test_key_list_is_editable_only_while_redact_secrets_is_on(
     assert ("dimmed" in _row(result.dom)) is not redact_on
     assert _logged_input(result) == [
         "redact-keys",
+        "TEXTAREA",
         "backup_password",
         "false" if redact_on else "true",
     ]
@@ -104,4 +105,4 @@ def test_turning_redact_secrets_on_unlocks_the_key_list(settings_script: str) ->
     )
 
     assert "dimmed" not in _row(result.dom)
-    assert _logged_input(result)[2] == "false"
+    assert _logged_input(result)[3] == "false"
