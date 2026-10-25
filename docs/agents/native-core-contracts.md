@@ -57,9 +57,11 @@ than re-running the recorder query on another transport.
 `ha_restart` forwards Core's restart schema (`safe_mode`) and leaves the
 refusals to Core. The embedded server is the exception: it replies before the
 restart fires, so a Core refusal would reach nobody. There it reads what Core
-would refuse on before replying, the config check and `recorder/info`'s
-`migration_in_progress`, and says so in `warnings` when the recorder does not
-answer instead of claiming the check passed.
+would refuse on before replying: the config check, `recorder/info`'s
+`migration_in_progress`, and `backup/info`'s `state` (any value but `idle`, the
+same test the frontend's restart dialog applies). When the recorder or the
+backup manager does not answer, it says so in `warnings` instead of claiming
+the check passed.
 
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses

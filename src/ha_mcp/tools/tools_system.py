@@ -192,8 +192,9 @@ class SystemTools:
         configuration changes, consider ha_reload_core() instead, which reloads
         specific components without a full restart. When this server runs
         inside Home Assistant (embedded), it replies before the restart starts
-        and is unreachable until Home Assistant is back; with safe_mode it does
-        not come back at all, because it is itself a custom integration.
+        and is unreachable until Home Assistant is back; with safe_mode it
+        stays down until Home Assistant is next restarted normally, because it
+        is itself a custom integration.
 
         EXAMPLE: ha_restart(confirm=True)
         """

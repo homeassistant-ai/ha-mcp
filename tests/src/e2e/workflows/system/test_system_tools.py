@@ -979,14 +979,17 @@ class TestGetSystemHealthDiagnosticsE2E:
 
 @pytest.mark.system
 @pytest.mark.asyncio
-async def test_restart_precheck_reads_the_real_recorder_status(ha_client) -> None:
-    """A renamed Core recorder field would silently drop the embedded refusal.
+async def test_restart_precheck_reads_the_real_core_status(ha_client) -> None:
+    """A renamed Core field would silently drop an embedded refusal.
 
-    ha_restart is not called with confirm=True here (see the note above), so the
-    pre-check that guards the embedded database-upgrade refusal reads the live
-    ``recorder/info`` reply directly.
+    ha_restart is not called with confirm=True here (see the note above), so
+    this reads the live ``recorder/info`` and ``backup/info`` replies that the
+    embedded database-upgrade and running-backup refusals depend on.
     """
-    recorder = await system_restart._recorder_info(ha_client)
-
+    recorder = await system_restart._core_info(ha_client, "recorder/info")
     assert recorder is not None
     assert isinstance(recorder["migration_in_progress"], bool)
+
+    backup = await system_restart._core_info(ha_client, "backup/info")
+    assert backup is not None
+    assert isinstance(backup["state"], str)
