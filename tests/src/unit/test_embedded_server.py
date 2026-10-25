@@ -1274,7 +1274,7 @@ class TestThreadEnvStaging:
         )
         captured = {}
 
-        async def _fake_serve(_token, _stop_event):
+        async def _fake_serve(_token, _stop_event, _stop_requested):
             for key in (
                 "HOMEASSISTANT_URL",
                 "HOMEASSISTANT_TOKEN",
@@ -1520,7 +1520,7 @@ class TestThreadEnvStaging:
     def test_thread_crash_is_captured_not_raised(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path)
 
-        async def _boom(_token, _stop_event):
+        async def _boom(_token, _stop_event, _stop_requested):
             raise RuntimeError("serve failed")
 
         monkeypatch.setattr(mgr, "_serve", _boom)
@@ -1923,7 +1923,7 @@ class TestReadinessProbe:
 
         mgr, _hass, _entry = _manager(tmp_path)
 
-        async def _exit_now(access_token, stop_event):
+        async def _exit_now(access_token, stop_event, stop_requested):
             raise SystemExit(3)
 
         monkeypatch.setattr(mgr, "_serve", _exit_now)
@@ -2777,7 +2777,7 @@ class TestImportingWorkerRegistry:
         monkeypatch.setattr(es, "_IMPORTING_WORKERS", {threading.current_thread()})
         seen: list[bool] = []
 
-        async def _probe(access_token, stop_event):
+        async def _probe(access_token, stop_event, stop_requested):
             seen.append(threading.current_thread() in es._IMPORTING_WORKERS)
             raise SystemExit(3)
 
@@ -2796,7 +2796,7 @@ class TestImportingWorkerRegistry:
         mgr, _hass, _entry = _manager(tmp_path)
         monkeypatch.setattr(es, "_IMPORTING_WORKERS", {threading.current_thread()})
 
-        async def _boom(access_token, stop_event):
+        async def _boom(access_token, stop_event, stop_requested):
             raise RuntimeError("boom mid-import")
 
         monkeypatch.setattr(mgr, "_serve", _boom)
@@ -2817,7 +2817,7 @@ class TestImportingWorkerRegistry:
 
         mgr_a, _hass_a, _entry_a = _manager(tmp_path)
 
-        async def _hold(access_token, stop_event):
+        async def _hold(access_token, stop_event, stop_requested):
             # threading.Event so the MAIN thread can release a coroutine
             # running on worker A's own loop; run_in_executor keeps the
             # worker loop unblocked while waiting.

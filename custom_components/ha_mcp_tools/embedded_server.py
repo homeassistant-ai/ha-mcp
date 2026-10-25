@@ -282,7 +282,8 @@ class EmbeddedServerManager:
         # Worker-thread state. ``_loop`` and ``_stop_event`` are created in the
         # thread, so a stop can come before they exist; ``_stop_requested`` is
         # replaced by each async_start before Thread.start() and covers that gap
-        # (#2801).
+        # (#2801). _serve checks the worker's copy again before the listener,
+        # where the queued stop_event.set may not have run yet.
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
@@ -1410,7 +1411,9 @@ class EmbeddedServerManager:
         # in _serve once the import section completes, and in the finally
         # below on exit as the backstop.
         try:
-            loop.run_until_complete(self._serve(access_token, stop_event))
+            loop.run_until_complete(
+                self._serve(access_token, stop_event, stop_requested)
+            )
         except SystemExit as err:
             # uvicorn signals a startup failure (e.g. the port is already in
             # use) with SystemExit(STARTUP_FAILURE), which ``except Exception``
@@ -1443,7 +1446,12 @@ class EmbeddedServerManager:
                 _IMPORTING_WORKERS.discard(threading.current_thread())
             teardown_worker_loop(loop)
 
-    async def _serve(self, access_token: str, stop_event: asyncio.Event) -> None:  # noqa: PLR0915
+    async def _serve(  # noqa: PLR0915
+        self,
+        access_token: str,
+        stop_event: asyncio.Event,
+        stop_requested: threading.Event,
+    ) -> None:
         """Build the ha-mcp server and run it until a stop is signaled.
 
         Mirrors the CLI HTTP runner in ``ha_mcp.__main__`` without importing it
@@ -1612,9 +1620,20 @@ class EmbeddedServerManager:
         uv_server = uvicorn.Server(config)
 
         self._note_startup_phase("starting the HTTP listener")
-        stop_task = asyncio.create_task(stop_event.wait())
         try:
             async with server.mcp._lifespan_manager():
+                # A stop that came during the cold import, the server build or
+                # the lifespan entry may not have set stop_event yet: async_stop
+                # queues that set with call_soon_threadsafe and sets
+                # stop_requested first. Without this check a stopped worker
+                # would still bind the port.
+                if stop_requested.is_set():
+                    _LOGGER.debug(
+                        "HA-MCP in-process server stopped before its HTTP "
+                        "listener started"
+                    )
+                    return
+                stop_task = asyncio.create_task(stop_event.wait())
                 serve_task = asyncio.create_task(uv_server.serve())
                 done, _pending = await asyncio.wait(
                     {serve_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
