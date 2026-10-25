@@ -168,10 +168,26 @@ class _RootThresholdFilter(logging.Filter):
     INFO/DEBUG lines into HA's log and system_log that HA itself never shows.
     The user's own ``fastmcp`` level is left untouched; this only filters at
     the forwarding boundary.
+
+    Attached to the root handlers rather than to the ``fastmcp`` logger:
+    logger filters run only for records created on that exact logger, so a
+    child logger such as ``fastmcp.server.…`` would bypass one installed on
+    its parent. Handler filters see every record that reaches the handler.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if not record.name.startswith("fastmcp"):
+            return True
         return record.levelno >= logging.getLogger().getEffectiveLevel()
+
+
+def _install_root_threshold_filter() -> None:
+    """Attach ``_RootThresholdFilter`` to Home Assistant's handlers once."""
+    for handler in logging.getLogger().handlers:
+        if not any(
+            isinstance(existing, _RootThresholdFilter) for existing in handler.filters
+        ):
+            handler.addFilter(_RootThresholdFilter())
 
 
 def route_fastmcp_logs_to_root() -> None:
@@ -193,7 +209,7 @@ def route_fastmcp_logs_to_root() -> None:
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
     logger.propagate = True
-    _add_filter_once("fastmcp", _RootThresholdFilter)
+    _install_root_threshold_filter()
 
 
 def install_sdk_log_filters() -> None:

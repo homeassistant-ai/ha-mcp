@@ -162,3 +162,42 @@ class TestRouteFastmcpLogsToRoot:
             assert threshold.filter(warning)
         finally:
             root.setLevel(saved)
+
+    def test_the_threshold_filter_covers_child_loggers(self):
+        """Logger filters do not cascade, so the handler filter must see them."""
+        import logging as lg
+
+        from ha_mcp.log_filters import _RootThresholdFilter
+
+        root = lg.getLogger()
+        saved = root.level
+        try:
+            root.setLevel(lg.WARNING)
+            threshold = _RootThresholdFilter()
+            child = lg.LogRecord(
+                "fastmcp.server.lowlevel", lg.INFO, __file__, 1, "info", None, None
+            )
+            other = lg.LogRecord(
+                "homeassistant.core", lg.INFO, __file__, 1, "info", None, None
+            )
+            assert not threshold.filter(child)
+            # Only FastMCP records are gated; HA's own logging is untouched.
+            assert threshold.filter(other)
+        finally:
+            root.setLevel(saved)
+
+    def test_route_installs_the_threshold_on_root_handlers_once(self):
+        import logging as lg
+
+        from ha_mcp.log_filters import _RootThresholdFilter
+
+        root = lg.getLogger()
+        saved_handlers = root.handlers[:]
+        try:
+            root.handlers[:] = [lg.StreamHandler()]
+            route_fastmcp_logs_to_root()
+            route_fastmcp_logs_to_root()
+            filters = root.handlers[0].filters
+            assert sum(isinstance(f, _RootThresholdFilter) for f in filters) == 1
+        finally:
+            root.handlers[:] = saved_handlers
