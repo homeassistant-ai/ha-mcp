@@ -30,12 +30,18 @@ def _private_opener(path: str, flags: int) -> int:
 
 
 def _make_private(path: Path) -> None:
-    """Drop group/other access from a log file an older version created 0644."""
+    """Drop group/other access from a log file an older version created 0644.
+
+    A missing file is fine: the opener creates it owner-only. Any other
+    ``OSError`` propagates, so the caller disables logging rather than keep
+    appending to a file that stays readable by others.
+    """
     try:
-        if path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-            path.chmod(_PRIVATE_FILE_MODE)
-    except OSError:
-        pass
+        mode = path.stat().st_mode
+    except FileNotFoundError:
+        return
+    if mode & (stat.S_IRWXG | stat.S_IRWXO):
+        path.chmod(_PRIVATE_FILE_MODE)
 
 
 logger = logging.getLogger(__name__)
