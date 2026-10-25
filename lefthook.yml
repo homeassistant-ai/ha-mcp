@@ -69,11 +69,7 @@ pre-commit:
               - "tests/js/issue-intake*"
               - "tests/src/unit/test_issue_intake.py"
               - "src/ha_mcp/tools/tools_bug_report.py"
-            run: >-
-              cd tests && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE
-              -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY
-              -u GIT_ALTERNATE_OBJECT_DIRECTORIES uv run pytest
-              src/unit/test_issue_intake.py -q
+            run: cd tests && uv run pytest src/unit/test_issue_intake.py -q
           # The settings UI, consent form and site pages are tested by pytest
           # files that run their scripts in JSDOM through tests/js. The
           # unit-tests job reaches them only when a .py file is staged.
@@ -89,19 +85,9 @@ pre-commit:
             # the repository root. An empty list would make pytest collect
             # all of tests/, and a non-Python match (the duplicate-code
             # baseline names these files) makes it collect nothing.
-            run: >-
-              cd tests && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE
-              -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY
-              -u GIT_ALTERNATE_OBJECT_DIRECTORIES uv run pytest
-              $(git -C .. grep -l _js_harness -- 'tests/src/unit/*.py' | sed 's|^tests/||')
-              -n auto -q
+            run: cd tests && uv run pytest $(git -C .. grep -l _js_harness -- 'tests/src/unit/*.py' | sed 's|^tests/||') -n auto -q
           - name: unit-tests
             glob:
               - "**/*.py"
               - "pyproject.toml"
-            run: >-
-              cd tests && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE
-              -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY
-              -u GIT_ALTERNATE_OBJECT_DIRECTORIES uv run pytest
-              src/unit/ addon/test_addon_startup.py -n auto -m "not slow"
-              --tb=short -q
+            run: cd tests && uv run pytest src/unit/ addon/test_addon_startup.py -n auto -m "not slow" --tb=short -q
