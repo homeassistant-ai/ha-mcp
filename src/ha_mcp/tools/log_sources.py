@@ -28,7 +28,6 @@ from .error_log_parsing import (
     _EMPTY_FETCH_WARNING,
     _ERROR_LOG_HEADER_LOOKBACK_LINES,
     _attach_error_log_pagination,
-    _entry_page_step,
     _error_log_window_lines,
     _ErrorLogWindow,
     _filter_log_records,
@@ -481,11 +480,7 @@ class CoreLogSourcesMixin:
         leading_record = records[0] if records and records[0].header is None else None
         matches, filters_applied = _filter_log_records(records, search, level)
         page = _select_error_log_page(matches, effective_limit, order)
-        step = _next_page_step(
-            window,
-            page.oldest_index,
-            _entry_page_step(records, page.oldest_index) if entry_offsets else None,
-        )
+        step = _next_page_step(window, page.oldest_index)
 
         held_back, header_out_of_reach, entry_offset_partial = _leading_tail_policy(
             window=window,

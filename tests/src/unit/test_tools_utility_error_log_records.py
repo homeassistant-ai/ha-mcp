@@ -301,8 +301,13 @@ class TestRecordLimitAndPaging:
         assert any("partial record" in warning for warning in result["warnings"])
 
     @pytest.mark.asyncio
-    async def test_an_entry_offset_read_steps_in_entries_not_lines(self) -> None:
-        """Supervisor spends offset in entries, so the step must count records."""
+    async def test_an_entry_offset_read_steps_with_the_line_derived_step(self) -> None:
+        """Record count is not an entry count, so the line-derived step stays.
+
+        One journald entry can carry several records and one record can span
+        entries; stepping by record count under-reached and repeated pages in
+        a live run, so entry-offset routes keep the documented line step.
+        """
         records = [
             f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
             f"  frame {i}.0\n  frame {i}.1"
@@ -316,9 +321,9 @@ class TestRecordLimitAndPaging:
         result = await tools.get_logs(**_kwargs(limit=6, search="issue"))
 
         assert result["returned_records"] == 2
-        # Two records (entries) shown, so the next page starts two entries back,
-        # not six lines back.
-        assert result["next_offset"] == 2
+        # Six lines shown means six entries assumed: the same step a
+        # container install takes.
+        assert result["next_offset"] == 6
 
     @pytest.mark.asyncio
     async def test_an_entry_offset_read_returns_the_tail_as_a_partial(self) -> None:
