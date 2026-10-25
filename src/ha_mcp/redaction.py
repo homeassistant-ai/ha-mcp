@@ -275,7 +275,8 @@ def redact_addon_options(options: Any, schema: Any, slug: str) -> Any:
     name (or the name of a group containing it) is listed for ``slug`` in
     ``redact_app_option_keys``, or it holds a PEM private key. Listed options
     still stored after the app's schema dropped them, or inside a dropped
-    group, are redacted too, keeping the stored shape. Walks nested option
+    group or one the schema turned into a plain field (and a listed group
+    stored as a plain value), are redacted too, keeping the stored shape. Walks nested option
     groups recursively (a group's value may be a dict or, with ``multiple``,
     a list of dicts). Other keys without a schema entry pass through
     untouched. Non-dict ``options`` are returned as-is.
@@ -299,32 +300,44 @@ def _redact_addon_options(
         value = out[name]
         nested = entry.get("schema")
         secret = whole or name in listed
+        # A manual app update can turn a field into a group or back without
+        # Supervisor converting the stored value, so a mismatched value is
+        # walked like a stored option the schema no longer describes.
         if isinstance(nested, list):
-            if isinstance(value, dict):
-                out[name] = _redact_addon_options(value, nested, listed, secret)
-            elif isinstance(value, list):
-                out[name] = [
-                    _redact_addon_options(item, nested, listed, secret)
-                    if isinstance(item, dict)
-                    else item
-                    for item in value
-                ]
-            continue
-        if secret or _is_secret_option(entry, value, listed):
+            out[name] = _redact_group(value, nested, listed, secret)
+        elif secret or _is_secret_option(entry, value, listed):
             # multiple: true passwords are a list — sentinel_replacement
             # keeps the container shape so the option's type survives.
             out[name] = sentinel_replacement(value)
+        elif isinstance(value, (dict, list)):
+            out[name] = _redact_stored(value, listed, False)
     for name in out.keys() - known:
         out[name] = _redact_stored(out[name], listed, whole or name in listed)
     return out
+
+
+def _redact_group(
+    value: Any, schema: list[Any], listed: frozenset[str], secret: bool
+) -> Any:
+    if isinstance(value, dict):
+        return _redact_addon_options(value, schema, listed, secret)
+    if isinstance(value, list):
+        return [
+            _redact_addon_options(item, schema, listed, secret)
+            if isinstance(item, dict)
+            else _redact_stored(item, listed, secret)
+            for item in value
+        ]
+    return value if value is None else _redact_stored(value, listed, secret)
 
 
 def _redact_stored(value: Any, listed: frozenset[str], secret: bool) -> Any:
     """Redact a stored option the schema no longer describes.
 
     Supervisor keeps an option's saved value after an app update drops it
-    from the schema, so a listed secret can outlive its schema entry. Only
-    the listed names can be matched here; the shape is kept.
+    from the schema or changes its type, so a listed secret can outlive its
+    schema entry. Only the listed names can be matched here; the shape is
+    kept.
     """
     if isinstance(value, dict):
         return {
@@ -361,9 +374,12 @@ def _collect_addon_secret_values(
             for item in items:
                 if isinstance(item, dict):
                     values |= _collect_addon_secret_values(item, nested, listed, secret)
+                else:
+                    values |= _collect_stored(item, listed, secret)
             continue
-        if secret or _is_secret_option(entry, value, listed):
-            values |= _collect_stored(value, listed, True)
+        values |= _collect_stored(
+            value, listed, secret or _is_secret_option(entry, value, listed)
+        )
     for name in options.keys() - known:
         values |= _collect_stored(options[name], listed, whole or name in listed)
     return values
