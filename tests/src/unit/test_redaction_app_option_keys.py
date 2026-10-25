@@ -13,12 +13,13 @@ import pytest
 
 from ha_mcp.redaction import (
     REDACTED_SET,
-    _clear_known_secret_values,
     collect_addon_secret_values,
     known_secret_values,
     redact_addon_options,
 )
 from ha_mcp.tools.tools_addons import AddOnTools, get_addon_info
+
+from .test_redaction import _clean_registry as _clean_registry
 
 BACKUP_SLUG = "1a2b3c4d_hassio_google_drive_backup"
 BACKUP_PASSWORD = "drive-backup-encryption-pw"
@@ -40,13 +41,6 @@ BACKUP_OPTIONS = {
 BACKUP_INFO = {
     "result": {"slug": BACKUP_SLUG, "options": BACKUP_OPTIONS, "schema": BACKUP_SCHEMA}
 }
-
-
-@pytest.fixture(autouse=True)
-def _clean_registry():
-    _clear_known_secret_values()
-    yield
-    _clear_known_secret_values()
 
 
 def _settings(monkeypatch, keys: str, *, redact: bool = True) -> None:

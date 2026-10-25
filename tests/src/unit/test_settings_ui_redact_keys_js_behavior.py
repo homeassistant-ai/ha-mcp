@@ -11,20 +11,14 @@ import re
 
 import pytest
 
-from ._js_harness import HarnessResult, extract_script_body, run_script
+from ._js_harness import HarnessResult, run_script
+from .test_backup_restore_consumers import settings_script as settings_script
 from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM, _assert_clean_init
 
 READ_INPUT = """
   const input = document.querySelector('[name="adv:redact_app_option_keys"]');
   console.log('redact-keys', input.value, input.disabled);
 """
-
-
-@pytest.fixture(scope="module")
-def settings_script() -> str:
-    from ha_mcp.settings_ui import _SETTINGS_HTML
-
-    return extract_script_body(_SETTINGS_HTML)
 
 
 def _payloads(redact_on: bool) -> dict[str, dict]:
