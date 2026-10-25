@@ -71,16 +71,18 @@ the complete failure set is actually needed.
 
 Both testcontainer lanes preinstall the checkout wheel and its dependency tree
 before Home Assistant's `/init`, so a slow PyPI window can outlast the API-ready
-budget. Two opt-in variables make that survivable on a slow host or network;
-both are inert when unset, and CI leaves them unset:
+budget. Two opt-in variables make that survivable on a slow host or network:
 
 - `HA_E2E_PIP_CACHE=<dir>` binds that host directory over the image's pip cache
   (`/root/.cache/pip`) and lets the preinstalls cache wheels, so later runs skip
-  the downloads.
+  the downloads. CI sets it to a directory restored by
+  `.github/actions/ha-e2e-pip-cache`, which is why every testcontainer job there
+  carries that step.
 - `HA_E2E_READY_TIMEOUT=<seconds>` overrides the API-ready budget for both
   testcontainer lanes (480 s embedded, 60 s plain container). A value that is
   not a positive whole number of seconds fails the run instead of silently
-  falling back to the budget it was meant to escape.
+  falling back to the budget it was meant to escape. CI leaves it unset: its
+  runners are not the slow case this knob exists for.
 
 Do not set `HOMEASSISTANT_URL` manually before testcontainer E2E tests.
 `tests/.env.test` contains placeholders, and the fixture supplies the real

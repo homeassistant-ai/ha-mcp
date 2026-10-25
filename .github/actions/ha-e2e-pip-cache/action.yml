@@ -1,0 +1,44 @@
+name: Cache testcontainer pip wheels
+description: >
+  Restore and save the host directory the testcontainer E2E lanes bind over the
+  Home Assistant image's pip cache, and export HA_E2E_PIP_CACHE so their
+  in-container preinstalls reuse wheels instead of downloading the dependency
+  tree on every run.
+
+# Each testcontainer worker builds its own container and pip-installs the
+# component's pinned ha-mcp plus the checkout wheel inside it. Without this,
+# every PR pays that download per worker (about 18 containers across pr.yml's
+# five testcontainer jobs) and inherits PyPI's latency from required checks.
+# The HA image alone is already cached by the surrounding workflows; this is
+# the other half of the bring-up cost.
+#
+# The cache key carries the image reference and the component manifest because
+# the pinned ha-mcp build and the interpreter inside the image decide which
+# wheels apply. uv.lock covers the checkout's own dependency set. Restores
+# fall back to the same arch+image prefix, so a lockfile change still reuses
+# every wheel that did not move.
+
+inputs:
+  ha-image:
+    description: >
+      Home Assistant image reference used by the lane. Part of the cache key so
+      wheels never cross image/interpreter versions.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Restore and save the pip cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ${{ runner.temp }}/ha-e2e-pip
+        key: ha-e2e-pip-${{ runner.arch }}-${{ inputs.ha-image }}-${{ hashFiles('uv.lock', 'custom_components/ha_mcp_tools/manifest.json') }}
+        restore-keys: |
+          ha-e2e-pip-${{ runner.arch }}-${{ inputs.ha-image }}-
+
+    - name: Point the lanes at the cache
+      shell: bash
+      run: |
+        cache_dir="${RUNNER_TEMP}/ha-e2e-pip"
+        mkdir -p "$cache_dir"
+        echo "HA_E2E_PIP_CACHE=$cache_dir" >> "$GITHUB_ENV"
