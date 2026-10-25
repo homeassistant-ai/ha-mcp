@@ -152,8 +152,8 @@ BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
 
 
 # WebSocket commands that mint, list or revoke credentials, or manage users and
-# their passwords (`auth/long_lived_access_token` answers with a brand-new,
-# never-expiring token in plain text). A raw escape hatch has no use case that
+# their passwords (`auth/long_lived_access_token` answers with a brand-new
+# long-lived token in plain text). A raw escape hatch has no use case that
 # needs them, and their replies would land verbatim in the model context and its
 # transcript. Matched by prefix so a credential command added to HA Core later
 # is refused by default; `auth/current_user` (whoami) is the one read that stays

@@ -1,6 +1,6 @@
 """Credential and user-management WS commands stay out of the raw escape hatches.
 
-``auth/long_lived_access_token`` answers with a new, never-expiring token in
+``auth/long_lived_access_token`` answers with a new long-lived token in
 plain text, and ``auth/refresh_tokens`` / ``config/auth/list`` enumerate every
 session and user. Both raw WebSocket surfaces (ha_call_service's ``ws_command``
 and the Code Mode ``ws_send`` bridge) refuse them before dispatch, while the
@@ -37,7 +37,7 @@ CREDENTIAL_COMMANDS = [
 
 
 @pytest.mark.parametrize("command", CREDENTIAL_COMMANDS)
-def test_credential_commands_are_classified(command):
+def test_credential_commands_are_classified(command: str) -> None:
     assert is_credential_ws_command(command)
 
 
@@ -52,12 +52,12 @@ def test_credential_commands_are_classified(command):
         "authority/list",
     ],
 )
-def test_other_commands_are_not_classified(command):
+def test_other_commands_are_not_classified(command: str) -> None:
     assert not is_credential_ws_command(command)
 
 
 @pytest.mark.parametrize("command", CREDENTIAL_COMMANDS)
-async def test_call_service_rejects_credential_command(command):
+async def test_call_service_rejects_credential_command(command: str) -> None:
     tools = _make_tools({"success": True, "result": "should-never-be-returned"})
 
     with pytest.raises(ToolError) as excinfo:
@@ -67,7 +67,7 @@ async def test_call_service_rejects_credential_command(command):
     tools._client.send_websocket_message.assert_not_awaited()
 
 
-async def test_call_service_still_allows_current_user():
+async def test_call_service_still_allows_current_user() -> None:
     tools = _make_tools({"success": True, "result": {"id": "u1", "is_admin": True}})
 
     result = await tools.ha_call_service(ws_command="auth/current_user")
@@ -95,7 +95,7 @@ def _bridge() -> tuple[_SandboxBridge, MagicMock]:
     "command",
     ["auth/long_lived_access_token", "config/auth/list", "AUTH/REFRESH_TOKENS"],
 )
-async def test_sandbox_ws_send_rejects_credential_command(command):
+async def test_sandbox_ws_send_rejects_credential_command(command: str) -> None:
     bridge, client = _bridge()
 
     result = await bridge.ws_send(
@@ -106,7 +106,7 @@ async def test_sandbox_ws_send_rejects_credential_command(command):
     client.send_websocket_message.assert_not_awaited()
 
 
-async def test_sandbox_ws_send_still_allows_current_user():
+async def test_sandbox_ws_send_still_allows_current_user() -> None:
     bridge, client = _bridge()
 
     await bridge.ws_send({"type": "auth/current_user"})
