@@ -36,6 +36,7 @@ from .error_log_parsing import (
     _reopen_at_record_end,
     _select_error_log_page,
     _split_log_records,
+    _TruncatedRecord,
 )
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import (
@@ -48,6 +49,62 @@ from .log_common import (
 from .util_helpers import normalize_log_level
 
 logger = logging.getLogger(__name__)
+
+
+def _raw_error_log_warnings(
+    *,
+    held_back: bool,
+    header_out_of_reach: bool,
+    refetch_failed: bool,
+    leading_partial: bool,
+    truncated: _TruncatedRecord | None,
+    effective_limit: int,
+) -> list[str]:
+    """Warnings that explain what one raw error-log page did and did not include."""
+    warnings: list[str] = []
+    if held_back:
+        warnings.append(
+            "The oldest matching record opens before this window; it is "
+            "held back so the next page can return it whole with its header."
+        )
+    if refetch_failed:
+        warnings.append(
+            "The wider read that would have brought the oldest record's "
+            "header failed; this page is the first window only."
+        )
+    if leading_partial:
+        if header_out_of_reach:
+            gate = "the record is longer than one fetch window"
+        elif refetch_failed:
+            gate = "a wider read failed before reaching it"
+        else:
+            gate = "it lies outside the fetched history"
+        warnings.append(
+            "The oldest matched lines are the tail of a record whose "
+            f"header could not be included because {gate}; they are "
+            "returned as a partial record."
+        )
+    if truncated is not None:
+        cut = truncated.total_lines - truncated.returned_lines
+        kept = (
+            "only its header"
+            if truncated.returned_lines <= 1
+            else f"its header and last {truncated.returned_lines - 1} lines"
+        )
+        if truncated.total_lines <= MAX_LIMIT:
+            warnings.append(
+                f"The newest record is {truncated.total_lines} lines; "
+                f"'limit'={effective_limit} returned {kept} and cut {cut} "
+                f"from the middle. Repeat with "
+                f"limit={truncated.total_lines} to return it whole."
+            )
+        else:
+            warnings.append(
+                f"The newest record is {truncated.total_lines} lines, "
+                f"longer than the per-call maximum ({MAX_LIMIT}); {cut} "
+                "lines were cut."
+            )
+    return warnings
 
 
 # system_log keeps a message verbatim, so one warning that reprs a binary
@@ -376,11 +433,28 @@ class CoreLogSourcesMixin:
         page = _select_error_log_page(matches, effective_limit, order)
         step = _next_page_step(window, page.oldest_index)
 
+        # Holding the tail back only pays off when the next window can actually
+        # reach its header. A record longer than a whole fetch window never
+        # will: re-anchoring lands inside it again and the full-window step
+        # would skip the lines the caller matched. That case is returned as a
+        # partial record instead.
+        header_reachable = (
+            leading_record is not None
+            and leading_record.line_count < window.fetch_lines
+        )
         held_back = (
             window.has_more
             and not refetch_failed
             and leading_record is not None
             and len(page.records) == len(matches)
+            and header_reachable
+        )
+        header_out_of_reach = (
+            window.has_more
+            and not refetch_failed
+            and leading_record is not None
+            and not header_reachable
+            and page.leading_partial
         )
         if held_back and leading_record is not None:
             # Filter the leading tail out BEFORE selecting, so a record the
@@ -412,49 +486,14 @@ class CoreLogSourcesMixin:
                 "record's lines always stay in their original order."
             ),
         }
-        warnings: list[str] = []
-        if held_back:
-            warnings.append(
-                "The oldest matching record opens before this window; it is "
-                "held back so the next page can return it whole with its "
-                "header."
-            )
-        if refetch_failed:
-            warnings.append(
-                "The wider read that would have brought the oldest record's "
-                "header failed; this page is the first window only."
-            )
-        if page.leading_partial:
-            gate = (
-                "a wider read failed before reaching it"
-                if refetch_failed
-                else "it lies outside the fetched history"
-            )
-            warnings.append(
-                "The oldest matched lines are the tail of a record whose "
-                f"header could not be included because {gate}; they are "
-                "returned as a partial record."
-            )
-        if page.truncated is not None:
-            cut = page.truncated.total_lines - page.truncated.returned_lines
-            kept = (
-                "only its header"
-                if page.truncated.returned_lines <= 1
-                else f"its header and last {page.truncated.returned_lines - 1} lines"
-            )
-            if page.truncated.total_lines <= MAX_LIMIT:
-                warnings.append(
-                    f"The newest record is {page.truncated.total_lines} lines; "
-                    f"'limit'={effective_limit} returned {kept} and cut {cut} "
-                    f"from the middle. Repeat with "
-                    f"limit={page.truncated.total_lines} to return it whole."
-                )
-            else:
-                warnings.append(
-                    f"The newest record is {page.truncated.total_lines} lines, "
-                    f"longer than the per-call maximum ({MAX_LIMIT}); {cut} "
-                    "lines were cut."
-                )
+        warnings = _raw_error_log_warnings(
+            held_back=held_back,
+            header_out_of_reach=header_out_of_reach,
+            refetch_failed=refetch_failed,
+            leading_partial=page.leading_partial,
+            truncated=page.truncated,
+            effective_limit=effective_limit,
+        )
         if warnings:
             data["warnings"] = warnings
         if filters_applied:
