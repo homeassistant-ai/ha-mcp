@@ -35,6 +35,7 @@ from ha_mcp.client.error_log_journald import (
     is_cursor_token,
     range_header,
     token_cursor,
+    token_skip,
 )
 from ha_mcp.client.rest_client import (
     MIN_LOG_WINDOW_LINES,
@@ -121,16 +122,32 @@ class TestJournaldRangeHeader:
         assert range_header(1, 250) == "entries=:-250:1"
         assert range_header(1, 0) == "entries=:0:1"
 
-    def test_cursor_range_ends_on_the_anchor_entry(self):
-        """A cursor window returns ``lines`` entries ending at the cursor."""
-        assert cursor_range_header("s=abc;i=1", 5) == "entries=s=abc;i=1:-5:5"
+    def test_cursor_range_ends_behind_the_resume_point(self):
+        """A cursor window is the exact unfetched remainder.
+
+        Gatewayd reads ``entries=<cursor>:<skip>:<n>`` forward from
+        ``cursor + skip``, and the resume point is ``skip`` entries in, so the
+        block starts ``lines`` earlier and ends one entry behind it. Nothing
+        already returned repeats and nothing fetched behind the page is lost.
+        """
+        assert cursor_range_header("s=abc;i=1", 0, 5) == "entries=s=abc;i=1:-5:5"
+        assert cursor_range_header("s=abc;i=1", 3, 5) == "entries=s=abc;i=1:-2:5"
 
     def test_cursor_tokens_round_trip(self):
-        token = cursor_token("s=abc;i=1")
+        token = cursor_token("s=abc;i=1", 7)
         assert is_cursor_token(token)
         assert token_cursor(token) == "s=abc;i=1"
+        assert token_skip(token) == 7
         assert not is_cursor_token(12)
         assert not is_cursor_token("cursor:")
+
+    def test_a_token_without_a_skip_is_rejected(self):
+        """``cursor:abc`` cannot resume exactly, so it must not be accepted."""
+        assert is_cursor_token("cursor:s=abc;i=1")
+        with pytest.raises(ValueError):
+            token_cursor("cursor:s=abc;i=1")
+        with pytest.raises(ValueError):
+            token_skip("not-a-token")
 
 
 @pytest.mark.asyncio
@@ -573,7 +590,6 @@ class TestJournaldCursorPaging:
         self._serve(addon_client, self._page("a\nb\n"))
         page = await self._fetch(addon_client, lines=10)
         assert page.has_more is False
-        assert page.next_cursor is None
         assert addon_client._supervisor_logs_response.await_count == 1
 
     @pytest.mark.asyncio
@@ -585,54 +601,57 @@ class TestJournaldCursorPaging:
 
     @pytest.mark.asyncio
     async def test_saturated_window_probes_behind_its_cursor(self, addon_client):
-        """Two entries ending at the cursor prove there is history behind it."""
+        """A probe starting behind the cursor proves there is history behind it."""
         self._serve(
             addon_client,
             self._page("a\nb\nc\n", "c-win"),
-            self._page("older\nb\nc\n", "c-old"),
+            self._page("older\nb\n", "c-old"),
         )
         page = await self._fetch(addon_client, lines=3, offset=6)
         assert page.text == "a\nb\nc\n"
         assert page.has_more is True
-        assert page.next_cursor == "cursor:c-win"
+        assert page.first_cursor == "c-win"
         probe = addon_client._supervisor_logs_response.await_args
         assert probe.kwargs["headers"]["Range"] == "entries=c-win:-2:2"
 
     @pytest.mark.asyncio
     async def test_oldest_cursor_ends_paging(self, addon_client):
-        """At the journal's start Supervisor clamps the probe to the cursor."""
+        """At the journal's start Supervisor clamps the probe onto the cursor.
+
+        The clamped block still has its full length, so only the returned
+        first cursor can tell it apart from real history.
+        """
         self._serve(
             addon_client,
             self._page("a\nb\nc\n", "c-oldest"),
-            self._page("a\n", "c-oldest"),
+            self._page("c-oldest\nc-2\n", "c-oldest"),
         )
         page = await self._fetch(addon_client, lines=3)
         assert page.has_more is False
 
     @pytest.mark.asyncio
-    async def test_cursor_token_returns_the_entries_before_its_cursor(
+    async def test_cursor_token_returns_the_entries_behind_its_resume_point(
         self, addon_client
     ):
-        """A token page asks for lines+1 entries ending at the cursor and drops
-        the anchor line the caller already saw."""
+        """The token's skip is where the next block ends, not its own anchor."""
         self._serve(
             addon_client,
-            self._page("o1\no2\no3\nanchor\n", "c-old"),
-            self._page("p1\np2\np3\np4\n", "c-older"),
+            self._page("o1\no2\no3\n", "c-old"),
+            self._page("p1\np2\n", "c-older"),
         )
-        page = await self._fetch(addon_client, lines=3, offset="cursor:anchor-c")
-        assert page.text == "o1\no2\no3"
+        page = await self._fetch(addon_client, lines=3, offset="cursor:anchor-c:7")
+        assert page.text.splitlines() == ["o1", "o2", "o3"]
         assert page.has_more is True
-        assert page.next_cursor == "cursor:c-old"
+        assert page.first_cursor == "c-old"
         first = addon_client._supervisor_logs_response.await_args_list[0]
-        assert first.kwargs["headers"]["Range"] == "entries=anchor-c:-4:4"
+        assert first.kwargs["headers"]["Range"] == "entries=anchor-c:4:3"
 
     @pytest.mark.asyncio
     async def test_cursor_token_at_history_start_returns_nothing(self, addon_client):
-        """Only the anchor entry comes back, so the page is empty and final."""
+        """A short block is the end of the journal, so the page is final."""
         self._serve(addon_client, self._page("only\n", "c-old"))
-        page = await self._fetch(addon_client, lines=3, offset="cursor:c")
-        assert page.text == ""
+        page = await self._fetch(addon_client, lines=3, offset="cursor:c:0")
+        assert page.text.splitlines() == ["only"]
         assert page.has_more is False
 
     @pytest.mark.asyncio

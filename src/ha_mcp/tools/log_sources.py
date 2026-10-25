@@ -456,22 +456,31 @@ class CoreLogSourcesMixin:
         order: Literal["newest", "oldest"],
         window: _ErrorLogWindow,
         refetch_failed: bool = False,
-    ) -> tuple[dict[str, Any], int, bool]:
-        """Return the most recent matching records, plus the next page's step.
+    ) -> tuple[dict[str, Any], int, int]:
+        """Return the most recent matching records, plus both next-page anchors.
 
         Records are the unit: ``search`` matches any line of a record and
         ``level`` matches its header, then whole records are selected within
         the caller's line budget. ``order`` controls display direction only
         (the selected window is always the most recent one); a record's own
-        lines never reverse. The step resumes just before the oldest returned
-        record, which keeps it whole across pages where ``offset`` counts
-        lines (journald counts entries, so there the step overshoots).
+        lines never reverse.
+
+        Two anchors come back, because the two install classes page
+        differently. The integer step resumes just before the oldest returned
+        record counted from the newest line, which is what ``offset`` means on
+        container installs. The cursor skip counts entries forward from the
+        fetched window's first cursor, which is what a journald token means:
+        nothing fetched behind the page is lost and nothing returned is
+        repeated, since the next block ends exactly one entry behind the
+        resume point. Core's journald stream carries one entry per output line
+        (even a split long line arrives as one line per entry), so a line index
+        in the fetched window is the entry index the skip counts.
 
         A filtered window can open inside a record, and there the same fixed
         width keeps it opening inside that record every page. When history
         remains and nothing behind the page went unreturned, the tail is held
-        back and the step re-opens the next page at the record's last line, so
-        the record arrives whole with its header instead of split in two.
+        back and both anchors re-open the next page at the record's last line,
+        so the record arrives whole with its header instead of split in two.
         """
         records = _split_log_records(raw_log.splitlines())
         leading_record = records[0] if records and records[0].header is None else None
@@ -494,6 +503,10 @@ class CoreLogSourcesMixin:
             matches = [record for record in matches if record is not leading_record]
             page = _select_error_log_page(matches, effective_limit, order)
             step = _reopen_at_record_end(window, leading_record)
+            cursor_skip = leading_record.start_index + leading_record.line_count
+        else:
+            # Zero when nothing was shown: the whole fetched window is consumed.
+            cursor_skip = page.oldest_index or 0
 
         total_lines = sum(record.line_count for record in matches)
 
@@ -533,10 +546,7 @@ class CoreLogSourcesMixin:
             data["warnings"] = warnings
         if filters_applied:
             data["filters_applied"] = filters_applied
-        # A cursor token names the oldest entry of the whole fetched window, so
-        # it may only be handed out when this page returned that window entire.
-        consumed_whole_window = page.oldest_index in (0, None)
-        return data, step, consumed_whole_window
+        return data, step, cursor_skip
 
     @staticmethod
     def _apply_empty_window_warning(
@@ -612,13 +622,14 @@ class CoreLogSourcesMixin:
                 fetch_lines=fetch_lines,
                 raw_line_count=len(raw_text.splitlines()),
                 has_more=page.has_more,
-                next_cursor=page.next_cursor,
+                first_cursor=page.first_cursor,
             )
 
             data: dict[str, Any]
-            # The structured summary consumes the whole window; the raw path
-            # sets this from the page it selected.
-            consumed_window = True
+            # Only the raw journald path hands out a cursor token; the
+            # structured summary keeps the integer step (its next_offset must
+            # stay valid for another structured call, which rejects tokens).
+            cursor_skip: int | None = None
             if structured:
                 data = self._build_structured_error_log(
                     raw_text,
@@ -637,7 +648,7 @@ class CoreLogSourcesMixin:
                 effective_limit = _coerce_limit(
                     limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
                 )
-                data, step, consumed_window = self._build_raw_error_log(
+                data, step, cursor_skip = self._build_raw_error_log(
                     raw_text,
                     search=search,
                     level=level,
@@ -662,7 +673,7 @@ class CoreLogSourcesMixin:
                 unreturned_matches=(
                     0 if structured else data["total_lines"] - data["returned_lines"]
                 ),
-                use_cursor=consumed_window,
+                cursor_skip=cursor_skip,
             )
             return data
 

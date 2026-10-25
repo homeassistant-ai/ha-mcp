@@ -159,37 +159,6 @@ def _add_filter_once(logger_name: str, filter_cls: type[logging.Filter]) -> None
     logger.addFilter(filter_cls())
 
 
-class _RootThresholdFilter(logging.Filter):
-    """Keep FastMCP records below Home Assistant's effective level out of HA's log.
-
-    FastMCP configures its own logger at INFO. Once its records propagate to
-    HA's handlers — whose levels are NOTSET — the root logger's level is the
-    only threshold left, so without this filter the MCP stack would write
-    INFO/DEBUG lines into HA's log and system_log that HA itself never shows.
-    The user's own ``fastmcp`` level is left untouched; this only filters at
-    the forwarding boundary.
-
-    Attached to the root handlers rather than to the ``fastmcp`` logger:
-    logger filters run only for records created on that exact logger, so a
-    child logger such as ``fastmcp.server.…`` would bypass one installed on
-    its parent. Handler filters see every record that reaches the handler.
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if not record.name.startswith("fastmcp"):
-            return True
-        return record.levelno >= logging.getLogger().getEffectiveLevel()
-
-
-def _install_root_threshold_filter() -> None:
-    """Attach ``_RootThresholdFilter`` to Home Assistant's handlers once."""
-    for handler in logging.getLogger().handlers:
-        if not any(
-            isinstance(existing, _RootThresholdFilter) for existing in handler.filters
-        ):
-            handler.addFilter(_RootThresholdFilter())
-
-
 def route_fastmcp_logs_to_root() -> None:
     """Hand FastMCP's own log records to the embedding application.
 
@@ -202,6 +171,14 @@ def route_fastmcp_logs_to_root() -> None:
     propagate gives HA's handler the record, so it is formatted, level-gated
     and grouped like any other Core record.
 
+    The import-time INFO level is dropped too (``NOTSET``), so ``fastmcp``
+    follows Home Assistant's default level and honours ``logger.set_level``
+    (or a ``logger:`` entry) for it like any integration's logger. Leaving it
+    at INFO would let FastMCP records through at a level HA was told to hide;
+    a threshold filter on Core's handlers would instead override the user's
+    own level for ``fastmcp`` and would stay attached to Core's handlers after
+    the embedded entry unloads.
+
     Only the embedded server calls this. The CLI and the app launchers own
     their stdout/stderr and must keep FastMCP's own handler.
     """
@@ -209,7 +186,7 @@ def route_fastmcp_logs_to_root() -> None:
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
     logger.propagate = True
-    _install_root_threshold_filter()
+    logger.setLevel(logging.NOTSET)
 
 
 def install_sdk_log_filters() -> None:

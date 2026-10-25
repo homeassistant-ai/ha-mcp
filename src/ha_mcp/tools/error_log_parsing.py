@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal, NamedTuple
 
+from ..client.error_log_journald import cursor_token
 from ..client.rest_client import MIN_LOG_WINDOW_LINES
 from .log_common import (
     DEFAULT_LOG_LIMIT,
@@ -570,16 +571,16 @@ class _ErrorLogWindow:
     ``offset`` is the caller's paging anchor: an integer on container/pip
     installs (text LINES back from the newest one), and either an integer or
     the opaque cursor token a previous journald page returned. A token page is
-    anchored on Supervisor's ``X-First-Cursor``, so lines logged between two
-    calls cannot shift it; ``next_cursor`` carries that token for the next page
-    when the route issued one.
+    anchored on Supervisor's ``X-First-Cursor`` plus the entries a page
+    consumed, so lines logged between two calls cannot shift it;
+    ``first_cursor`` carries the raw cursor that the next token is built from.
     """
 
     offset: int | str
     fetch_lines: int
     raw_line_count: int
     has_more: bool
-    next_cursor: str | None = None
+    first_cursor: str | None = None
 
     def __post_init__(self) -> None:
         # Guards the two shapes that make paging non-terminating or
@@ -704,9 +705,18 @@ def _attach_error_log_pagination(
     structured: bool,
     top_n: int | None,
     unreturned_matches: int = 0,
-    use_cursor: bool = False,
+    cursor_skip: int | None = None,
 ) -> None:
     """Add the offset/has_more contract to an error-log response in place.
+
+    Two anchors are possible and the window decides which one is used. A
+    journald page carries Supervisor's cursor for the oldest entry it fetched,
+    so ``cursor_skip`` (the entries this page consumed from that cursor) turns
+    into a token naming the exact resume point: every page resumes exactly,
+    whether or not it returned its whole window. Installs that read a whole
+    log file keep the integer line step. The structured summary takes the
+    integer step even on journald, because its own ``next_offset`` has to stay
+    valid for another structured call, which rejects tokens.
 
     ``has_more`` speaks only about history behind this window. Matches the
     ``limit`` slice left unreturned INSIDE a terminal window get a raise-the-
@@ -721,15 +731,16 @@ def _attach_error_log_pagination(
     data["offset"] = window.offset
     data["has_more"] = window.has_more
     if window.has_more:
-        # The token names the oldest entry of the FETCHED window. Reusing it
-        # would skip everything fetched behind the returned page, so it is only
-        # used when this page consumed the whole window; otherwise the integer
-        # step resumes just before the oldest returned line.
-        next_offset: int | str = 0
-        if use_cursor and window.next_cursor:
-            next_offset = window.next_cursor
+        next_offset: int | str
+        if cursor_skip is not None and window.first_cursor:
+            next_offset = cursor_token(window.first_cursor, cursor_skip)
         elif isinstance(window.offset, int):
             next_offset = window.offset + step
+        else:
+            # A token page always carries the block's cursor. Without one there
+            # is no anchor to advance to, so repeat the caller's token rather
+            # than silently restarting at the newest page.
+            next_offset = window.offset
         data["next_offset"] = next_offset
         data["pagination_hint"] = _build_error_log_pagination_hint(
             next_offset,

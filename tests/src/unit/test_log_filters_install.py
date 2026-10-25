@@ -2,6 +2,8 @@
 
 import logging
 
+import pytest
+
 from ha_mcp.log_filters import (
     SessionDisconnectLogFilter,
     StatelessSessionLogFilter,
@@ -37,18 +39,18 @@ class TestInstallSdkLogFiltersIdempotent:
     process restart, so process-wide logger filter lists persist across
     calls -- a second call must not add a second instance of each filter."""
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         """Snapshot each target logger's current filter list."""
         self._saved = {
             name: logging.getLogger(name).filters[:] for name in _TARGET_LOGGERS
         }
 
-    def teardown_method(self):
+    def teardown_method(self) -> None:
         """Restore each target logger's filter list, undoing this test's calls."""
         for name, filters in self._saved.items():
             logging.getLogger(name).filters[:] = filters
 
-    def test_second_call_does_not_duplicate_filters(self):
+    def test_second_call_does_not_duplicate_filters(self) -> None:
         """Calling the installer twice must not attach a filter twice."""
         install_sdk_log_filters()
         install_sdk_log_filters()
@@ -70,7 +72,7 @@ class TestInstallSdkLogFiltersReplacesStaleGeneration:
     class object with the same name) must be replaced, not left to
     accumulate alongside the new one."""
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         """Snapshot each logger's filters, then plant a stale-generation
         stand-in filter on each -- the state a real reload would leave
         behind, without actually reloading any module."""
@@ -82,12 +84,12 @@ class TestInstallSdkLogFiltersReplacesStaleGeneration:
                 _make_stale_generation_filter(filter_cls)
             ]
 
-    def teardown_method(self):
+    def teardown_method(self) -> None:
         """Restore each target logger's filter list, undoing this test's calls."""
         for name, filters in self._saved.items():
             logging.getLogger(name).filters[:] = filters
 
-    def test_stale_generation_instance_is_replaced_not_duplicated(self):
+    def test_stale_generation_instance_is_replaced_not_duplicated(self) -> None:
         """A planted stale-generation filter is replaced, never duplicated."""
         stale = {name: logging.getLogger(name).filters[0] for name in _TARGET_LOGGERS}
 
@@ -110,10 +112,11 @@ class TestInstallSdkLogFiltersReplacesStaleGeneration:
 class TestRouteFastmcpLogsToRoot:
     """The embedded server hands FastMCP's records to HA's logging."""
 
-    def test_clears_handlers_and_enables_propagation(self):
+    def test_clears_handlers_and_enables_propagation(self) -> None:
         logger = logging.getLogger("fastmcp")
         saved_handlers = logger.handlers[:]
         saved_propagate = logger.propagate
+        saved_level = logger.level
         try:
             logger.handlers[:] = []
             logger.addHandler(logging.StreamHandler())
@@ -126,8 +129,52 @@ class TestRouteFastmcpLogsToRoot:
         finally:
             logger.handlers[:] = saved_handlers
             logger.propagate = saved_propagate
+            logger.setLevel(saved_level)
 
-    def test_install_routes_logs_only_when_embedded(self, monkeypatch):
+    def test_the_import_time_level_is_dropped_so_home_assistant_decides(
+        self,
+    ) -> None:
+        """FastMCP's INFO level must not outrank the level HA was told to use.
+
+        With the level left at INFO, a user who runs ``logger.set_level`` for
+        ``fastmcp`` (or sets it in ``logger:``) still sees nothing below INFO.
+        ``NOTSET`` makes the logger inherit HA's configured level, exactly as
+        an integration's logger does.
+        """
+        logger = logging.getLogger("fastmcp")
+        root = logging.getLogger()
+        saved_level = logger.level
+        saved_root = root.level
+        try:
+            root.setLevel(logging.WARNING)
+            logger.setLevel(logging.INFO)
+            route_fastmcp_logs_to_root()
+            assert logger.getEffectiveLevel() == logging.WARNING
+        finally:
+            logger.setLevel(saved_level)
+            root.setLevel(saved_root)
+
+    def test_nothing_is_attached_to_home_assistants_handlers(self) -> None:
+        """The route must not leave a filter behind on Core's handlers.
+
+        A threshold filter installed there outlives the embedded entry's
+        unload and keeps filtering every ``fastmcp`` record process-wide.
+        """
+        root = logging.getLogger()
+        saved_handlers = root.handlers[:]
+        saved_level = logging.getLogger("fastmcp").level
+        try:
+            root.handlers[:] = [logging.StreamHandler()]
+            route_fastmcp_logs_to_root()
+            route_fastmcp_logs_to_root()
+            assert root.handlers[0].filters == []
+        finally:
+            root.handlers[:] = saved_handlers
+            logging.getLogger("fastmcp").setLevel(saved_level)
+
+    def test_install_routes_logs_only_when_embedded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from ha_mcp import config, log_filters
 
         calls: list[bool] = []
@@ -143,61 +190,3 @@ class TestRouteFastmcpLogsToRoot:
         monkeypatch.setattr(config, "is_embedded_mode", lambda: False)
         log_filters.install_sdk_log_filters()
         assert calls == []
-
-    def test_the_forwarding_filter_keeps_home_assistants_threshold(self):
-        import logging as lg
-
-        from ha_mcp.log_filters import _RootThresholdFilter
-
-        root = lg.getLogger()
-        saved = root.level
-        try:
-            root.setLevel(lg.WARNING)
-            threshold = _RootThresholdFilter()
-            info = lg.LogRecord("fastmcp", lg.INFO, __file__, 1, "info", None, None)
-            warning = lg.LogRecord(
-                "fastmcp", lg.WARNING, __file__, 1, "warning", None, None
-            )
-            assert not threshold.filter(info)
-            assert threshold.filter(warning)
-        finally:
-            root.setLevel(saved)
-
-    def test_the_threshold_filter_covers_child_loggers(self):
-        """Logger filters do not cascade, so the handler filter must see them."""
-        import logging as lg
-
-        from ha_mcp.log_filters import _RootThresholdFilter
-
-        root = lg.getLogger()
-        saved = root.level
-        try:
-            root.setLevel(lg.WARNING)
-            threshold = _RootThresholdFilter()
-            child = lg.LogRecord(
-                "fastmcp.server.lowlevel", lg.INFO, __file__, 1, "info", None, None
-            )
-            other = lg.LogRecord(
-                "homeassistant.core", lg.INFO, __file__, 1, "info", None, None
-            )
-            assert not threshold.filter(child)
-            # Only FastMCP records are gated; HA's own logging is untouched.
-            assert threshold.filter(other)
-        finally:
-            root.setLevel(saved)
-
-    def test_route_installs_the_threshold_on_root_handlers_once(self):
-        import logging as lg
-
-        from ha_mcp.log_filters import _RootThresholdFilter
-
-        root = lg.getLogger()
-        saved_handlers = root.handlers[:]
-        try:
-            root.handlers[:] = [lg.StreamHandler()]
-            route_fastmcp_logs_to_root()
-            route_fastmcp_logs_to_root()
-            filters = root.handlers[0].filters
-            assert sum(isinstance(f, _RootThresholdFilter) for f in filters) == 1
-        finally:
-            root.handlers[:] = saved_handlers

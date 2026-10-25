@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from .._vendor.fastmcp.exceptions import ToolError
-from ..client.error_log_journald import is_cursor_token
+from ..client.error_log_journald import is_cursor_token, parse_cursor_token
 from ..errors import TOOL_ERROR_LOG_LEVEL
 from .error_log_parsing import _DEFAULT_TOP_N
 from .helpers import log_tool_usage
@@ -62,6 +62,14 @@ def _validate_log_offset(source: str, offset: int | str) -> int | str:
                 "'next_offset' value a previous response returned",
                 log_level=TOOL_ERROR_LOG_LEVEL,
             )
+        try:
+            parse_cursor_token(offset)
+        except ValueError as e:
+            raise ToolError(
+                f"Invalid 'offset' token for source='error_log' ({e}); pass the "
+                "'next_offset' value a previous response returned",
+                log_level=TOOL_ERROR_LOG_LEVEL,
+            ) from e
         return offset
     if offset < 0:
         raise ToolError(

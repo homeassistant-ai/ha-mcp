@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.error_log_journald import JournaldPage, journald_page, token_skip
 from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantConnectionError
 from ha_mcp.tools.error_log_parsing import (
     _split_log_records,
@@ -68,12 +69,51 @@ def _kwargs(**overrides: Any) -> dict[str, Any]:
 
 
 def _client(
-    text: str, *, has_more: bool = False, next_cursor: str | None = None
+    text: str, *, has_more: bool = False, first_cursor: str | None = None
 ) -> AsyncMock:
     client = AsyncMock()
     client.get_error_log = AsyncMock(
-        return_value=ErrorLogPage(text=text, has_more=has_more, next_cursor=next_cursor)
+        return_value=ErrorLogPage(
+            text=text, has_more=has_more, first_cursor=first_cursor
+        )
     )
+    return client
+
+
+def _journald_page_client(entries: list[str]) -> AsyncMock:
+    """``get_error_log`` stub serving journald windows from ``entries``.
+
+    Implements gatewayd's ``Range: entries=<cursor>:<skip>:<count>`` contract
+    (oldest-first, forward from ``cursor + skip``, clamped to the head) so the
+    cursor tokens the tool emits are resolved the way Supervisor resolves them.
+    Each entry gets the index-based cursor ``e<n>``.
+    """
+    cursors = [f"e{index}" for index in range(len(entries))]
+    positions = {cursor: index for index, cursor in enumerate(cursors)}
+    pattern = re.compile(r"^entries=(?P<cursor>[^:]*):(?P<skip>-?\d+):(?P<count>\d+)$")
+
+    async def _fetch(range_header: str) -> JournaldPage:
+        match = pattern.match(range_header)
+        assert match, f"unexpected Range header: {range_header}"
+        skip = int(match.group("skip"))
+        count = int(match.group("count"))
+        if match.group("cursor"):
+            # A real cursor anchors on its own entry: skip 0 starts there and a
+            # negative skip reads backwards, ending one entry behind the anchor.
+            start = positions[match.group("cursor")] + skip
+        else:
+            # An empty cursor anchors on the newest entry.
+            start = len(entries) - 1 + skip
+        start = max(0, start)
+        block = entries[start : start + count]
+        first = cursors[start] if block else None
+        return JournaldPage("\n".join(block), first)
+
+    async def _page(lines: int, offset: int | str = 0) -> ErrorLogPage:
+        return await journald_page(lines, offset, _fetch)
+
+    client = AsyncMock()
+    client.get_error_log = _page
     return client
 
 
@@ -362,24 +402,134 @@ class TestRecordLimitAndPaging:
         assert second["log"].splitlines()[0] == _HEADER
 
     @pytest.mark.asyncio
-    async def test_a_cursor_token_is_only_used_when_the_page_consumed_the_window(
+    async def test_a_partial_journald_page_resumes_at_its_oldest_returned_record(
         self,
     ) -> None:
-        """The token names the fetched window's oldest entry, so a page that
-        returned only part of it must advance by the integer step instead.
+        """A page that left part of its window behind must not jump to the top.
+
+        The token names the fetched window's first cursor plus the entries this
+        page consumed, so the next block is the exact unreturned remainder
+        instead of a restart at the newest entry.
         """
         records = "\n".join(
             f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}"
             for i in range(20)
         )
-        client = _client(records, has_more=True, next_cursor="cursor:abc")
+        client = _client(records, has_more=True, first_cursor="abc")
         tools = LogTools(client)
 
         result = await tools.get_logs(**_kwargs(limit=5))
 
         assert result["returned_lines"] == 5
-        assert result["next_offset"] != "cursor:abc"
-        assert isinstance(result["next_offset"], int)
+        assert result["next_offset"] == "cursor:abc:15"
+
+    @pytest.mark.asyncio
+    async def test_a_held_back_tail_is_reached_by_the_journald_token(
+        self,
+    ) -> None:
+        """A held-back tail must be the next page's newest edge, not skipped.
+
+        The page hands out a token whose skip lands on the tail's last line, so
+        the next block still reaches the record's header; anchoring on the
+        window's first entry instead would return nothing that matches.
+        """
+        filler = [
+            f"2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] filler {i}"
+            for i in range(4000)
+        ]
+        record = [_HEADER] + [f"  frame {i}" for i in range(1, 30)]
+        record[-1] = "ValueError: NEEDLE"
+        # The record opens just before the 2,000-entry filtered window, so the
+        # window starts inside it: its matching tail is what page 1 must hold
+        # back, and there is enough history behind it that the next block is
+        # not clamped to the journal's start.
+        entries = filler[:1999] + record + filler[2029:]
+
+        tools = LogTools(_journald_page_client(entries))
+
+        first = await tools.get_logs(**_kwargs(limit=5, search="NEEDLE"))
+
+        assert first["returned_records"] == first["returned_lines"] == 0
+        assert any("held back" in warning for warning in first["warnings"])
+        assert first["has_more"] is True
+        assert isinstance(first["next_offset"], str)
+
+        second = await tools.get_logs(
+            **_kwargs(limit=5, search="NEEDLE", offset=first["next_offset"])
+        )
+
+        assert second["returned_records"] == 1
+        assert second["log"].splitlines()[0] == _HEADER
+        assert "ValueError: NEEDLE" in second["log"]
+
+    @pytest.mark.asyncio
+    async def test_a_structured_journald_read_hands_out_an_integer_step(
+        self,
+    ) -> None:
+        """The summary ranks the whole window, so its anchor stays an integer.
+
+        A token would also be rejected by the next structured call, which is
+        the failure this pins: the summary path must not emit one.
+        """
+        entries = [
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}"
+            for i in range(2500)
+        ]
+        tools = LogTools(_journald_page_client(entries))
+
+        first = await tools.get_logs(**_kwargs(structured=True))
+        assert first["has_more"] is True
+        assert isinstance(first["next_offset"], int)
+
+        second = await tools.get_logs(
+            **_kwargs(structured=True, offset=first["next_offset"])
+        )
+        assert second["summary"]["total_raw_lines"] > 0
+
+    @pytest.mark.asyncio
+    async def test_a_journald_walk_through_partial_pages_is_contiguous(
+        self,
+    ) -> None:
+        """Every matching line appears exactly once across token pages.
+
+        A filtered journald page is partial whenever its window holds more
+        matches than ``limit``, which is the normal case. Walking on the token
+        has to hand over the unreturned part of each fetched window, not skip
+        it and not repeat it.
+        """
+        entries = [
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}"
+            for i in range(2500)
+        ]
+        tools = LogTools(_journald_page_client(entries))
+
+        seen: list[int] = []
+        offset: int | str = 0
+        pages = 0
+        partial_pages = 0
+        for _ in range(200):
+            page = await tools.get_logs(**_kwargs(limit=50, offset=offset))
+            pages += 1
+            for line in page["log"].splitlines():
+                match = re.search(r"issue (\d+)$", line)
+                if match:
+                    seen.append(int(match.group(1)))
+            if not page["has_more"]:
+                break
+            offset = page["next_offset"]
+            assert isinstance(offset, str), "journald paging must hand out a token"
+            if token_skip(offset):
+                partial_pages += 1
+        else:
+            raise AssertionError("journald walk did not reach the end of history")
+
+        assert pages >= 2, "the fixture must force more than one page"
+        assert partial_pages >= 1, "the walk must cross a page that left its window"
+        # Pages must join without a gap or a repeat: the walk's matches form one
+        # descending run from the newest record, whatever the page boundaries.
+        assert seen == list(range(seen[0], seen[0] - len(seen), -1)), (
+            "token pages must not skip or repeat records between pages"
+        )
 
     @pytest.mark.asyncio
     async def test_numeric_string_offsets_keep_working(self) -> None:
@@ -403,16 +553,16 @@ class TestRecordLimitAndPaging:
     @pytest.mark.asyncio
     async def test_a_cursor_page_emits_its_token_as_next_offset(self) -> None:
         """A journald page hands back the cursor token, and accepts it back."""
-        client = _client(_ERROR_RECORD, has_more=True, next_cursor="cursor:abc")
+        client = _client(_ERROR_RECORD, has_more=True, first_cursor="abc")
         tools = LogTools(client)
 
         first = await tools.get_logs(**_kwargs(limit=5))
-        assert first["next_offset"] == "cursor:abc"
-        assert "offset='cursor:abc'" in first["pagination_hint"]
+        assert first["next_offset"] == "cursor:abc:0"
+        assert "offset='cursor:abc:0'" in first["pagination_hint"]
 
         client.get_error_log.reset_mock()
-        await tools.get_logs(**_kwargs(limit=5, offset="cursor:abc"))
-        assert client.get_error_log.await_args.kwargs["offset"] == "cursor:abc"
+        await tools.get_logs(**_kwargs(limit=5, offset="cursor:abc:0"))
+        assert client.get_error_log.await_args.kwargs["offset"] == "cursor:abc:0"
 
     @pytest.mark.asyncio
     async def test_an_invalid_offset_token_is_rejected(self) -> None:
@@ -421,10 +571,17 @@ class TestRecordLimitAndPaging:
             await tools.get_logs(**_kwargs(offset="not-a-token"))
 
     @pytest.mark.asyncio
+    async def test_a_token_without_a_skip_is_rejected(self) -> None:
+        """The pre-skip token format cannot name a resume point."""
+        tools = LogTools(_client(_ERROR_RECORD))
+        with pytest.raises(ToolError):
+            await tools.get_logs(**_kwargs(offset="cursor:s=abc;i=1"))
+
+    @pytest.mark.asyncio
     async def test_a_cursor_token_is_rejected_with_structured(self) -> None:
         tools = LogTools(_client(_ERROR_RECORD))
         with pytest.raises(ToolError):
-            await tools.get_logs(**_kwargs(offset="cursor:abc", structured=True))
+            await tools.get_logs(**_kwargs(offset="cursor:abc:0", structured=True))
 
     @pytest.mark.asyncio
     async def test_an_unmatched_leading_partial_is_not_held_back(self) -> None:
