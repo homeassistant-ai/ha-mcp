@@ -92,20 +92,27 @@ def _leading_tail_policy(
     return held_back, False, False
 
 
-def _match_anchored_index(page: _RecordPage, search: str | None) -> int | None:
+def _match_anchored_index(
+    page: _RecordPage, search: str | None, matches: list[_LogRecord]
+) -> int | None:
     """Index of the oldest returned record's matching line, when it has one.
 
     A journald step is spent in entries, so anchoring on the header of a record
     whose match sits deeper inside it would advance past the entry the caller
-    actually matched.
+    actually matched. The page may hold a *cut* copy of that record, so the
+    lines are read from the matching record itself.
     """
     if not search or not page.records:
         return None
     oldest = min(page.records, key=lambda record: record.start_index)
+    source = next(
+        (record for record in matches if record.start_index == oldest.start_index),
+        oldest,
+    )
     needle = search.lower()
-    for index, line in enumerate(oldest.lines):
+    for index, line in enumerate(source.lines):
         if needle in _strip_ansi(line).lower():
-            return oldest.start_index + index
+            return source.start_index + index
     return None
 
 
@@ -499,7 +506,7 @@ class CoreLogSourcesMixin:
         page = _select_error_log_page(matches, effective_limit, order)
         oldest_index = page.oldest_index
         if entry_offsets:
-            anchored = _match_anchored_index(page, search)
+            anchored = _match_anchored_index(page, search, matches)
             if anchored is not None:
                 oldest_index = anchored
         step = _next_page_step(window, oldest_index)

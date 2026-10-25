@@ -353,6 +353,36 @@ class TestRecordLimitAndPaging:
         assert result["next_offset"] == 6
 
     @pytest.mark.asyncio
+    async def test_a_cut_record_still_anchors_on_its_hidden_matching_line(
+        self,
+    ) -> None:
+        """The page copy is cut; the anchor must come from the full record."""
+        filler = [
+            f"2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] filler {i}"
+            for i in range(2500)
+        ]
+        record = (
+            _HEADER
+            + "\n"
+            + "\n".join(
+                ("  ValueError: NEEDLE" if i == 5 else f"  frame {i}")
+                for i in range(20)
+            )
+        )
+        lines = filler[:1200] + record.splitlines() + filler[1200:]
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(lines, entry_offsets=True)
+        tools = LogTools(client)
+
+        result = await tools.get_logs(**_kwargs(limit=3, search="NEEDLE"))
+
+        # The page keeps the header plus its last two lines, so the matching
+        # line is not in the returned copy; the step still anchors 5 lines into
+        # the record: 2000 - (680 + 5).
+        assert "NEEDLE" not in result["log"]
+        assert result["next_offset"] == 1315
+
+    @pytest.mark.asyncio
     async def test_an_entry_offset_read_returns_the_tail_as_a_partial(self) -> None:
         """A journald route must not hold back: its resume step counts entries.
 
