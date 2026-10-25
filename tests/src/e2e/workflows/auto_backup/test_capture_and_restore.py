@@ -625,6 +625,17 @@ class TestHelperCaptureRestore:
                 },
             )
             assert edit.get("success") is not False
+            # Unless the edit wrote the registry icon, the read-back below
+            # passes whether or not the restore resets it.
+            await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_entity",
+                arguments={"entity_id": f"input_boolean.{helper_id}"},
+                predicate=lambda d: (
+                    d["entity_entry"].get("icon") == "mdi:test-tube-empty"
+                ),
+                description="edited input_boolean has the edited registry icon",
+            )
 
             # Poll until the snapshot file appears — absorbs HA storage
             # propagation delay between create and edit on slower rigs.
