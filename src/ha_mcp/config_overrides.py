@@ -484,10 +484,10 @@ def _apply_advanced_overrides(settings: "Settings") -> None:
     registry) are NEVER applied — chicken-and-egg safeguard for
     connection settings.
 
-    Addon-mode behavior: two advanced fields are in addon ``config.yaml``
-    schemas — ``backup_hint`` and ``verify_ssl`` (both stable and dev).
-    For those, ``start.py`` exports the env var on every boot and the
-    env-var-wins check below correctly skips them. All other advanced
+    Addon-mode behavior: the advanced fields that are also app options
+    (``ADDON_SYNCED_ADVANCED_FIELDS``) are in the addon ``config.yaml``
+    schemas. For those, ``start.py`` exports the env var on every boot and the
+    env-var-wins check in ``_apply_one_advanced_override`` skips them. All other advanced
     fields (code_mode_* sub-numerics, mcp_server_*, log_level, debug,
     enabled_tool_modules, fuzzy_threshold, etc.) are NOT in any addon
     schema; the override file is the authoritative source and applies

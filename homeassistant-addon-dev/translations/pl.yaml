@@ -14,11 +14,6 @@ configuration:
       wszystkich sesjach. Współbieżność wewnętrznych żądań REST, WebSocket oraz rozgałęzień
       na narzędzie pozostaje bez zmian. Wartość 0 oznacza brak limitu. Wywołanie oczekujące
       na wolne zasoby zakończy się niepowodzeniem po 60 sekundach. Zakres 0–32.
-  backup_hint:
-    name: Poziom podpowiedzi kopii zapasowej
-    description: Jak stanowczo asystenci AI są instruowani, aby sugerować pełną kopię
-      zapasową Home Assistant przed ryzykownymi zmianami. Zmienia to tylko tę podpowiedź;
-      automatyczne kopie zapasowe edycji mają własne ustawienie.
   custom_instructions:
     name: Niestandardowe instrukcje serwera
     description: Tekst wysyłany do każdego łączącego się asystenta AI jako część instrukcji

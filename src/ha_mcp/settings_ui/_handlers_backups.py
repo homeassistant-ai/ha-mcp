@@ -476,7 +476,7 @@ async def _save_backup_config_addon(
     """Add-on-mode branch of ``_save_backup_config``: merge ``clean`` into the
     Supervisor add-on options (full-replacement) and return.
 
-    ``start.py`` re-derives env vars from ``config.yaml`` on the next add-on
+    ``start.py`` re-derives env vars from ``/data/options.json`` on the next add-on
     boot, but the actual restart is fired by the user's global Restart Add-on
     button — not here — so ``restart_required=True`` and no auto-restart.
     """
@@ -489,12 +489,6 @@ async def _save_backup_config_addon(
             code=ErrorCode.INTERNAL_ERROR,
             status=500,
         )
-    # Merge ``clean`` into the *full* current options before posting.
-    # Supervisor validates against the addon schema and rejects any body
-    # missing a required key (notably ``backup_hint`` on the production /
-    # dev manifests). A previous version shipped just the auto-backup
-    # fields, producing ``addon_configuration_invalid_error: Missing option
-    # 'backup_hint' in root`` from supervisor and a confusing 400 in the UI.
     ok, sup_err = await _supervisor._supervisor_merge_and_post_options(
         server.settings.verify_ssl, clean
     )

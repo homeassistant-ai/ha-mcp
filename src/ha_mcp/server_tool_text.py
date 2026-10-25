@@ -388,17 +388,14 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "entity_id over device_id, impact analysis before renaming — see "
         "ha_get_skill_guide."
     ),
-    # ha_manage_backup: the full description is 4571 dedented chars at
-    # BACKUP_HINT=normal (4672 strong / 4598 weak) and the lite value is
-    # a little over a quarter of that. No exact pair is quoted here on
-    # purpose — three successive edits left a stale figure in this
-    # comment, so the ratio is pinned by
-    # test_backup_lite_description_stays_substantially_smaller instead,
-    # which measures both sides at test time.
+    # ha_manage_backup: the lite value is a fraction of the full
+    # description. test_backup_lite_description_stays_substantially_smaller
+    # bounds it (under 45% of the full text, over 900 chars) and measures
+    # both sides at test time, so no figure is quoted here.
     #
     # It was the largest full description in the GATEWAY catalog this was
-    # measured against, not in the repo: ha_get_system_health (5811) is
-    # larger and unmapped.
+    # measured against, not in the repo: ha_get_system_health is larger
+    # and unmapped.
     # The reduction is smaller than pure compression would give because
     # the safety content below is kept inline. The routing matrix STAYS —
     # the `action` parameter's own Field description says "Valid (scope,
@@ -418,10 +415,10 @@ LITE_DOCSTRINGS: dict[str, str] = {
     # destructiveHint is set on this tool, so the lite text keeps every
     # irreversibility marker inline rather than deferring it: the
     # restart, the confirm, the human-only enable_snapshot_delete, and
-    # each individual delete guard. It also keeps the two diagnostics
-    # that have no fallback anywhere else — the enable_auto_backup
-    # empty-list ambiguity, and the {backup_hint_text} timing sentence
-    # (resolved per-instance; see _lite_docstring_tokens).
+    # each individual delete guard. It also keeps the diagnostics that
+    # have no fallback anywhere else: a slow `create` is not a hang
+    # (retrying starts a second backup), and the enable_auto_backup
+    # empty-list ambiguity.
     "ha_manage_backup": (
         "Manage Home Assistant backups: full HA snapshots "
         "(`scope='snapshot'`) and per-entity auto-backups of agent edits "
@@ -447,8 +444,7 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "the request is explicit.\n\n"
         "Use `edits` to undo a recent agent edit to an "
         "automation/script/scene/dashboard/helper; use `snapshot` for "
-        "system-wide recovery and before irreversible operations. "
-        "{backup_hint_text}\n\n"
+        "system-wide recovery and before irreversible operations.\n\n"
         "For which recovery path fits which failure, what an archive "
         "actually contains, and the encryption key a restore needs, see "
         "ha_get_skill_guide (`references/backups.md`)."

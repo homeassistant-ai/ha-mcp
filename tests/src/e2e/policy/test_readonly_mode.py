@@ -594,8 +594,8 @@ async def test_inaddon_read_only_mode_blocks_radio_writes(
     a fresh in-process server).
 
     Enables read_only_mode through the add-on's OWN settings API — which merges it
-    into the Supervisor add-on options the production way (a bare options POST is
-    full-replacement and would drop required keys) — self-restarts ONLY the add-on
+    into the Supervisor add-on options the production way (a bare options POST
+    replaces them in full and resets the others to defaults) — self-restarts ONLY the add-on
     (~10s; Home Assistant is untouched) so it boots with ``READ_ONLY_MODE=true``,
     asserts ha_manage_radio's read action still works while a write is blocked with
     the structured READ_ONLY_MODE error, then RESTORES read-only to off.
