@@ -301,6 +301,45 @@ class TestRecordLimitAndPaging:
         assert any("partial record" in warning for warning in result["warnings"])
 
     @pytest.mark.asyncio
+    async def test_journald_entry_windows_count_entries_not_lines(self) -> None:
+        """Supervisor's window is N entries, so a multi-line entry shifts lines.
+
+        The line-model stub cannot see this: a 40-line entry inside the window
+        means the window holds 20 more lines than its entry count, and the step
+        must still advance in entries so the next page starts on new content.
+        """
+        entries = [
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}"
+            for i in range(300)
+        ]
+        entries[250] = entries[250] + "\n" + "\n".join(
+            f"  frame {i}" for i in range(40)
+        )
+
+        async def _page(lines: int, offset: int = 0) -> ErrorLogPage:
+            end = max(0, len(entries) - offset)
+            start = max(0, end - lines)
+            text = "\n".join(
+                line for entry in entries[start:end] for line in entry.splitlines()
+            )
+            return ErrorLogPage(text=text, has_more=start > 0, entry_offsets=True)
+
+        client = AsyncMock()
+        client.get_error_log = AsyncMock(side_effect=_page)
+        tools = LogTools(client)
+
+        first = await tools.get_logs(**_kwargs(limit=20))
+        # 220 entries requested; 219 single-line entries plus the 41-line one.
+        assert first["window_lines"] == 220
+        assert first["returned_records"] == 20
+        assert first["next_offset"] == 20
+
+        second = await tools.get_logs(**_kwargs(limit=20, offset=first["next_offset"]))
+        assert not (
+            set(first["log"].splitlines()) & set(second["log"].splitlines())
+        ), "paging in entries must not re-read a line"
+
+    @pytest.mark.asyncio
     async def test_an_entry_offset_read_steps_with_the_line_derived_step(self) -> None:
         """Record count is not an entry count, so the line-derived step stays.
 
