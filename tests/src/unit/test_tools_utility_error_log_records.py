@@ -486,7 +486,9 @@ class TestRecordLimitAndPaging:
         assert any("partial record" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
-    async def test_a_failed_widening_keeps_the_first_page(self, caplog) -> None:
+    async def test_a_failed_widening_keeps_the_first_page(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         leading = "  frame\nValueError: device did not respond"
         client = AsyncMock()
         client.get_error_log = AsyncMock(

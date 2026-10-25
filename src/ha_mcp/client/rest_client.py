@@ -1012,11 +1012,8 @@ class HomeAssistantClient:
         # that as "more history" forever — the small-limit loop this method
         # exists to prevent.
         shared = min(len(probe_lines), len(window_lines))
-        return ErrorLogPage(
-            text=text,
-            has_more=shared > 0 and probe_lines[:shared] != window_lines[:shared],
-            entry_offsets=True,
-        )
+        has_more = shared > 0 and probe_lines[:shared] != window_lines[:shared]
+        return ErrorLogPage(text=text, has_more=has_more, entry_offsets=True)
 
     async def get_error_log(self, lines: int, offset: int = 0) -> ErrorLogPage:
         """Get a bounded window of the Home Assistant error log.
