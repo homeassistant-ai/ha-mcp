@@ -99,6 +99,20 @@ def test_listing_a_group_redacts_every_option_inside_it(
     assert values == {"nested-upload-password"}
 
 
+def test_a_listed_option_the_schema_dropped_is_still_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Supervisor keeps a saved value after an app update removes the option.
+    _settings(monkeypatch, "old_password")
+    options = {**BACKUP_OPTIONS, "old_password": "left-over-password"}
+
+    out = redact_addon_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
+    values = collect_addon_secret_values(options, BACKUP_SCHEMA, BACKUP_SLUG)
+
+    assert out["old_password"] == REDACTED_SET
+    assert values == {"left-over-password"}
+
+
 def test_spacing_newlines_and_empty_entries_in_the_list_are_ignored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -152,6 +166,25 @@ async def test_get_app_warns_when_a_name_scoped_to_it_matches_no_option(
     assert len(result["warnings"]) == 1
     assert "backup_pasword" in result["warnings"][0]
     assert "upload" not in result["warnings"][0]
+
+
+@pytest.mark.asyncio
+async def test_get_app_does_not_warn_about_a_listed_option_the_schema_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _settings(monkeypatch, f"{BACKUP_SLUG}:old_password")
+    info = copy.deepcopy(BACKUP_INFO)
+    info["result"]["options"]["old_password"] = "left-over-password"
+
+    with patch(
+        "ha_mcp.tools.tools_addons._supervisor_api_call",
+        new_callable=AsyncMock,
+        return_value=info,
+    ):
+        result = await get_addon_info(MagicMock(), BACKUP_SLUG)
+
+    assert result["addon"]["options"]["old_password"] == REDACTED_SET
+    assert "warnings" not in result
 
 
 @pytest.mark.asyncio
