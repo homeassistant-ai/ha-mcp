@@ -477,20 +477,25 @@ class TestRecordLimitAndPaging:
         records = [
             "2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] filler\n"
             f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
-            f"  frame {i}.0"
+            f"  frame {i}.0\n  frame {i}.1\n  frame {i}.2"
             for i in range(600)
         ]
         lines = "\n".join(records).splitlines()
+        # 2,400 lines: larger than the 2,000-line filtered window, so the walk
+        # has to cross pages for the ordering assertion to mean anything.
+        assert len(lines) > SUPERVISOR_SEARCH_WINDOW_LINES
         client = AsyncMock()
         client.get_error_log = _offset_aware_page(lines)
         tools = LogTools(client)
 
         seen: list[int] = []
         offset = 0
+        pages = 0
         for _ in range(200):
             page = await tools.get_logs(
                 **_kwargs(limit=20, offset=offset, search="issue")
             )
+            pages += 1
             if page["returned_lines"]:
                 assert page["log"].splitlines()[0].startswith("2026-")
             for line in page["log"].splitlines():
@@ -503,6 +508,7 @@ class TestRecordLimitAndPaging:
         else:
             raise AssertionError("filtered walk did not reach a terminal window")
 
+        assert pages >= 2, "the fixture must force more than one page"
         assert seen, "the filtered walk returned no matches"
         assert len(seen) == len(set(seen)), "a filtered match repeated across pages"
         assert seen == sorted(seen, reverse=True), (
