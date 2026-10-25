@@ -48,13 +48,14 @@ PIP_CACHE_MOUNT_PATH = "/root/.cache/pip"
 def pip_cache_mount() -> tuple[Path, str] | None:
     """``(host_dir, container_path)`` to bind as the pip cache, or None when unset.
 
-    ``$HOME`` in the value is expanded, so a shell-style ``~/pip-cache`` works
-    without the caller resolving it first.
+    ``$HOME`` in the value is expanded and a relative path is resolved against
+    the working directory: Docker requires an absolute host path, so a relative
+    ``pip-cache`` would otherwise bind the wrong directory (or fail the mount).
     """
     raw = os.environ.get(PIP_CACHE_ENV_VAR, "").strip()
     if not raw:
         return None
-    return Path(raw).expanduser(), PIP_CACHE_MOUNT_PATH
+    return Path(raw).expanduser().resolve(), PIP_CACHE_MOUNT_PATH
 
 
 def pip_cache_flags() -> str:
@@ -78,11 +79,18 @@ def resolve_ready_timeout(default: int) -> int:
     lane would then die of the timeout it was configured to survive — with
     nothing in the log pointing at the knob.
     """
-    raw = os.environ.get(READY_TIMEOUT_ENV_VAR, "").strip()
-    if not raw:
+    raw = os.environ.get(READY_TIMEOUT_ENV_VAR)
+    if raw is None:
         return default
+    value = raw.strip()
+    if not value:
+        # Set but empty is a broken export, not an absent knob: defaulting here
+        # would reinstate the budget the caller meant to raise.
+        raise ValueError(
+            f"{READY_TIMEOUT_ENV_VAR} must be a whole number of seconds, got {raw!r}"
+        )
     try:
-        timeout = int(raw)
+        timeout = int(value)
     except ValueError:
         raise ValueError(
             f"{READY_TIMEOUT_ENV_VAR} must be a whole number of seconds, got {raw!r}"

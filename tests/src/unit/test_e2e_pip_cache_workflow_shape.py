@@ -9,6 +9,7 @@ to a required check. A comment is not a gate, so these tests read the workflow
 YAML directly and fire only when an edit drops the wiring.
 """
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,9 @@ _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 _ACTION_YML = _REPO_ROOT / ".github" / "actions" / "ha-e2e-pip-cache" / "action.yml"
 _CONTAINER_LANES = ("pr.yml", "e2e-tests.yml", "e2e-beta-tests.yml")
 _CACHE_STEP_PREFIX = "./.github/actions/ha-e2e-pip-cache"
+# Both invocation forms in use: the literal path, and the beta workflows'
+# ``pytest $PYTEST_PATHS`` with ``src/e2e/`` as the default input.
+_E2E_COMMAND = re.compile(r"pytest\s+(?:src/e2e\b|\"?\$?\{?PYTEST_PATHS)")
 
 
 def _jobs(name: str) -> dict[str, Any]:
@@ -29,8 +33,17 @@ def _jobs(name: str) -> dict[str, Any]:
 def _runs_e2e(job: dict[str, Any]) -> bool:
     """True when the job executes the E2E suite in this repo."""
     return any(
-        "pytest src/e2e/" in str(step.get("run", "")) for step in job.get("steps", [])
+        _E2E_COMMAND.search(str(step.get("run", ""))) for step in job.get("steps", [])
     )
+
+
+def test_the_lane_detection_matches_every_container_lane() -> None:
+    """A command rename must not shrink the set of jobs this test guards."""
+    for name in _CONTAINER_LANES:
+        matched = [job_name for job_name, job in _jobs(name).items() if _runs_e2e(job)]
+        assert len(matched) >= 4, (
+            f"{name}: only {matched} look like E2E jobs; the detection is stale"
+        )
 
 
 def _uses_cache_action(job: dict[str, Any]) -> bool:

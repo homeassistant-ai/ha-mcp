@@ -69,9 +69,11 @@ The root `pyproject.toml` sets `--maxfail=3`, so
 a report with three failures may be an early stop; use `--maxfail=0` only when
 the complete failure set is actually needed.
 
-Both testcontainer lanes preinstall the checkout wheel and its dependency tree
-before Home Assistant's `/init`, so a slow PyPI window can outlast the API-ready
-budget. Two opt-in variables make that survivable on a slow host or network:
+Both testcontainer lanes preinstall pip packages before Home Assistant's
+`/init` — the component's manifest requirements, and on the embedded lane the
+checkout wheel plus its whole dependency tree — so a slow PyPI window can
+outlast the API-ready budget. Two opt-in variables make that survivable on a
+slow host or network:
 
 - `HA_E2E_PIP_CACHE=<dir>` binds that host directory over the image's pip cache
   (`/root/.cache/pip`) and lets the preinstalls cache wheels, so later runs skip

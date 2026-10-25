@@ -80,7 +80,7 @@ def test_timeout_knob_raises_the_lane_budget(
     assert _conftest_knobs.resolve_ready_timeout(480) == 900
 
 
-@pytest.mark.parametrize("raw", ["abc", "480s", "480.5", "0", "-1"])
+@pytest.mark.parametrize("raw", ["abc", "480s", "480.5", "0", "-1", "", "   "])
 def test_an_unusable_timeout_is_rejected_rather_than_ignored(
     raw: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -155,6 +155,22 @@ def test_a_mounted_pip_cache_is_used_by_every_preinstall(
     installs = _preinstalls(_entrypoint_script(container))
     assert len(installs) >= 2
     assert not any("--no-cache-dir" in install for install in installs)
+
+
+def test_a_relative_cache_path_is_resolved_before_it_is_mounted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Docker needs an absolute host path; a relative value must not stay one."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, "pip-cache")
+
+    mount = _conftest_knobs.pip_cache_mount()
+
+    assert mount is not None
+    host_dir, container_dir = mount
+    assert host_dir == tmp_path / "pip-cache"
+    assert host_dir.is_absolute()
+    assert container_dir == _conftest_knobs.PIP_CACHE_MOUNT_PATH
 
 
 def test_the_cache_knob_leaves_the_plain_container_lane_alone(

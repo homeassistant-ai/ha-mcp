@@ -5,10 +5,11 @@ description: >
   in-container preinstalls reuse wheels instead of downloading the dependency
   tree on every run.
 
-# Each testcontainer worker builds its own container and pip-installs the
-# component's pinned ha-mcp plus the checkout wheel inside it. Without this,
-# every PR pays that download per worker (about 18 containers across pr.yml's
-# five testcontainer jobs) and inherits PyPI's latency from required checks.
+# Each testcontainer worker builds its own container and runs pip inside it —
+# the component's manifest requirements, plus the checkout wheel and its
+# dependency tree on the embedded lane. Without this, every PR pays those
+# downloads per worker (about 18 containers across pr.yml's five testcontainer
+# jobs) and inherits PyPI's latency from required checks.
 # The HA image alone is already cached by the surrounding workflows; this is
 # the other half of the bring-up cost.
 #
