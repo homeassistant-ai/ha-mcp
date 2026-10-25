@@ -468,7 +468,12 @@ class TestRecordLimitAndPaging:
 
     @pytest.mark.asyncio
     async def test_walking_a_filtered_read_keeps_matches_in_order(self) -> None:
-        """A filtered walk must keep cross-page ordering, not just uniqueness."""
+        """A filtered walk must keep cross-page ordering, not just uniqueness.
+
+        It runs until the terminal window (``has_more`` false) rather than a
+        fixed page count; matches left inside that window are the raised-limit
+        contract, covered separately by the exhaustiveness test.
+        """
         records = [
             "2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] filler\n"
             f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
@@ -482,7 +487,7 @@ class TestRecordLimitAndPaging:
 
         seen: list[int] = []
         offset = 0
-        for _ in range(6):
+        for _ in range(200):
             page = await tools.get_logs(
                 **_kwargs(limit=20, offset=offset, search="issue")
             )
@@ -495,6 +500,8 @@ class TestRecordLimitAndPaging:
             if not page["has_more"]:
                 break
             offset = page["next_offset"]
+        else:
+            raise AssertionError("filtered walk did not reach a terminal window")
 
         assert seen, "the filtered walk returned no matches"
         assert len(seen) == len(set(seen)), "a filtered match repeated across pages"
