@@ -510,11 +510,14 @@ class CoreLogSourcesMixin:
             "order": order,
             "note": (
                 "Returned the most recent log records matching filters, from a "
-                "bounded window of the log. 'offset' counts raw log lines back "
-                "from the newest entry; filters apply within each fetched "
-                "window, so 'total_lines' counts the lines of matching records "
-                "in this window only. 'order' controls display direction; a "
-                "record's lines always stay in their original order."
+                "bounded window of the log. 'offset' is either an integer count "
+                "back from the newest entry (raw lines on container/pip "
+                "installs, journald entries on Supervisor-backed ones) or the "
+                "opaque 'next_offset' token a previous page returned; filters "
+                "apply within each fetched window, so 'total_lines' counts the "
+                "lines of matching records in this window only. 'order' "
+                "controls display direction; a record's lines always stay in "
+                "their original order."
             ),
         }
         warnings = _raw_error_log_warnings(
