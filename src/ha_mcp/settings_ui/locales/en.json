@@ -517,7 +517,7 @@
     "advanced.extra_yaml_write_keys.label": "Extra YAML write keys",
     "advanced.extra_yaml_write_keys.help": "Extra top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Enter one key per line or separate keys with commas. Keys that redefine Home Assistant's own trust boundary can never be added and are ignored. Requires custom component 1.2.4 or newer.",
     "advanced.redact_app_option_keys.label": "Extra app option keys to redact",
-    "advanced.redact_app_option_keys.help": "App (add-on) option names to redact like password fields, for apps whose schema stores a secret as plain text (for example backup_password). Separate names with commas or new lines. A name applies to every app; write app_slug:name to limit it to one app. Used only while Redact Secrets is on. Empty by default.",
+    "advanced.redact_app_option_keys.help": "App (add-on) option names to redact like password fields, for apps whose schema stores a secret as plain text (for example backup_password). Separate names with commas or new lines. A name applies to every app; write app_slug:name to limit it to one app. Naming an option group covers every option in it. Used only while Redact Secrets is on. Empty by default.",
     "advanced.sidecar_pin_port.label": "Settings UI sidecar port",
     "advanced.sidecar_pin_port.help": "0 picks a free port on first start and keeps it for later restarts; a port in the range pins a preferred port (falls back to a free one if taken).",
     "advanced.enable_dev_mode.label": "Developer mode",

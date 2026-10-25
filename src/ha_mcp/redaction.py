@@ -8,14 +8,14 @@ surfaces stop returning operator secrets verbatim:
    proxy-mode 403 hints): every ``options`` value whose Supervisor-serialized
    ``schema`` entry carries ``format: "password"`` is replaced with a
    set/empty sentinel. The schema is authoritative — keys without a schema
-   entry are never touched, and no name-based guessing happens. Options the
-   operator lists in ``redact_app_option_keys`` and PEM private-key values
-   are treated as password fields too.
+   entry are never touched, and option names are never guessed at. The only
+   name-based match is the operator's own ``redact_app_option_keys`` list;
+   listed options and PEM private-key values are treated as password fields.
 2. **Integration options** (``ha_get_integration``): fields the
    options-flow schema marks with a password text selector are replaced the
    same way, on both the harvested options and the ``include_schema=True``
    schema echo (whose ``suggested_value`` carries the live value).
-3. **Every other tool response**: password values seen while serving 1 and 2
+3. **Every other tool response**: secret values seen while serving 1 and 2
    are remembered in a process-local known-secrets set, and
    :class:`RedactSecretsMiddleware` (registered just outside the
    entity-visibility outbound scan, which stays innermost) scrubs any
@@ -164,18 +164,50 @@ def _iter_schema_entries(schema: Any) -> Iterable[dict[str, Any]]:
             yield entry
 
 
-def _operator_listed_option_keys(slug: str) -> frozenset[str]:
-    """Option names ``redact_app_option_keys`` marks as secret for app ``slug``.
+def _listed_entries() -> list[tuple[str, str]]:
+    """``(scope, name)`` pairs from ``redact_app_option_keys`` (#2843).
 
-    Entries are separated by commas or newlines; ``key`` applies to every app
-    and ``<slug>:<key>`` to that app only (#2843).
+    Entries are separated by commas or newlines. ``name`` applies to every
+    app (scope ``""``); ``<slug>:<name>`` to one app.
     """
-    keys: set[str] = set()
+    entries: list[tuple[str, str]] = []
     for entry in re.split(r"[,\n]", get_global_settings().redact_app_option_keys):
-        scope, sep, name = (part.strip() for part in entry.rpartition(":"))
-        if name and (not sep or scope == slug):
-            keys.add(name)
-    return frozenset(keys)
+        scope, _sep, name = (part.strip() for part in entry.rpartition(":"))
+        if name:
+            entries.append((scope, name))
+    return entries
+
+
+def _scope_matches(scope: str, slug: str) -> bool:
+    # A store app's slug carries its repository's prefix (``cebe7a76_...``,
+    # ``core_...``), which the app's own docs and repository leave out, so
+    # the unprefixed slug names the app too.
+    return scope == slug or scope == slug.partition("_")[2]
+
+
+def _operator_listed_option_keys(slug: str) -> frozenset[str]:
+    return frozenset(
+        name
+        for scope, name in _listed_entries()
+        if not scope or _scope_matches(scope, slug)
+    )
+
+
+def _schema_names(schema: Any) -> set[str]:
+    names: set[str] = set()
+    for entry in _iter_schema_entries(schema):
+        names.add(entry["name"])
+        names |= _schema_names(entry.get("schema"))
+    return names
+
+
+def _within_group(
+    listed: frozenset[str], name: str, nested: list[Any]
+) -> frozenset[str]:
+    """Listing a group's name marks every option inside it."""
+    if name in listed:
+        return listed | _schema_names(nested)
+    return listed
 
 
 def _is_secret_option(
@@ -188,15 +220,57 @@ def _is_secret_option(
     )
 
 
+def redact_addon_info(
+    addon: dict[str, Any], slug: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Redacted copy of a Supervisor ``/addons/<slug>/info`` result, and warnings.
+
+    Registers the app's secret values for the known-value scrub. Without a
+    readable schema the password fields cannot be told apart, so every option
+    value is redacted, like the integration surface does.
+    """
+    options = addon.get("options")
+    schema = addon.get("schema")
+    if not isinstance(options, dict) or not options:
+        return addon, []
+    if not isinstance(schema, list) or not schema:
+        redacted = {key: sentinel_replacement(value) for key, value in options.items()}
+        return {**addon, "options": redacted}, [
+            f"redact_secrets: no options schema readable for '{slug}' — "
+            "every option value was redacted conservatively (the "
+            "password fields cannot be told apart without the schema)"
+        ]
+    listed = _operator_listed_option_keys(slug)
+    register_known_secret_values(_collect_addon_secret_values(options, schema, listed))
+    unknown = sorted(
+        {
+            name
+            for scope, name in _listed_entries()
+            if scope and _scope_matches(scope, slug)
+        }
+        - _schema_names(schema)
+    )
+    warnings = (
+        [
+            f"redact_app_option_keys names {', '.join(unknown)} for '{slug}', "
+            "but this app has no such option, so nothing was redacted for them"
+        ]
+        if unknown
+        else []
+    )
+    redacted = _redact_addon_options(options, schema, listed)
+    return {**addon, "options": redacted}, warnings
+
+
 def redact_addon_options(options: Any, schema: Any, slug: str) -> Any:
     """Copy of ``options`` with secret values sentinel-replaced.
 
     A value is secret when its schema entry carries ``format: password``, its
-    name is listed for ``slug`` in ``redact_app_option_keys``, or it holds a
-    PEM private key. Walks nested option groups recursively (a group's value
-    may be a dict or, with ``multiple``, a list of dicts). Keys without a
-    schema entry pass through untouched. Non-dict ``options`` are returned
-    as-is.
+    name (or the name of a group containing it) is listed for ``slug`` in
+    ``redact_app_option_keys``, or it holds a PEM private key. Walks nested
+    option groups recursively (a group's value may be a dict or, with
+    ``multiple``, a list of dicts). Keys without a schema entry pass through
+    untouched. Non-dict ``options`` are returned as-is.
     """
     return _redact_addon_options(options, schema, _operator_listed_option_keys(slug))
 
@@ -212,11 +286,12 @@ def _redact_addon_options(options: Any, schema: Any, listed: frozenset[str]) -> 
         value = out[name]
         nested = entry.get("schema")
         if isinstance(nested, list):
+            inner = _within_group(listed, name, nested)
             if isinstance(value, dict):
-                out[name] = _redact_addon_options(value, nested, listed)
+                out[name] = _redact_addon_options(value, nested, inner)
             elif isinstance(value, list):
                 out[name] = [
-                    _redact_addon_options(item, nested, listed)
+                    _redact_addon_options(item, nested, inner)
                     if isinstance(item, dict)
                     else item
                     for item in value
@@ -246,12 +321,13 @@ def _collect_addon_secret_values(
         value = options.get(entry["name"])
         nested = entry.get("schema")
         if isinstance(nested, list):
+            inner = _within_group(listed, entry["name"], nested)
             if isinstance(value, dict):
-                values |= _collect_addon_secret_values(value, nested, listed)
+                values |= _collect_addon_secret_values(value, nested, inner)
             elif isinstance(value, list):
                 for item in value:
                     if isinstance(item, dict):
-                        values |= _collect_addon_secret_values(item, nested, listed)
+                        values |= _collect_addon_secret_values(item, nested, inner)
             continue
         if _is_secret_option(entry, value, listed):
             candidates = value if isinstance(value, list) else [value]

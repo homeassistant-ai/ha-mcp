@@ -70,6 +70,25 @@ def test_slug_scoped_key_leaves_other_apps_untouched(monkeypatch):
     assert other == BACKUP_OPTIONS
 
 
+def test_a_scope_without_the_repository_prefix_still_names_the_app(monkeypatch):
+    _settings(monkeypatch, "hassio_google_drive_backup:backup_password")
+
+    out = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
+
+    assert out["backup_password"] == REDACTED_SET
+
+
+def test_listing_a_group_redacts_every_option_inside_it(monkeypatch):
+    _settings(monkeypatch, "upload")
+
+    out = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
+    values = collect_addon_secret_values(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
+
+    assert out["upload"] == {"backup_password": REDACTED_SET}
+    assert out["backup_password"] == BACKUP_PASSWORD
+    assert values == {"nested-upload-password"}
+
+
 def test_spacing_newlines_and_empty_entries_in_the_list_are_ignored(monkeypatch):
     _settings(monkeypatch, " , days_between_backups\n,, other_app: backup_password ,")
 
@@ -107,6 +126,17 @@ async def test_get_app_hides_a_slug_scoped_password(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_app_warns_when_a_name_scoped_to_it_matches_no_option(monkeypatch):
+    _settings(monkeypatch, f"{BACKUP_SLUG}:backup_pasword, {BACKUP_SLUG}:upload")
+
+    result = await _get_info()
+
+    assert len(result["warnings"]) == 1
+    assert "backup_pasword" in result["warnings"][0]
+    assert "upload" not in result["warnings"][0]
+
+
+@pytest.mark.asyncio
 async def test_list_is_ignored_while_redact_secrets_is_off(monkeypatch):
     _settings(monkeypatch, "backup_password", redact=False)
 
@@ -133,3 +163,4 @@ async def test_password_written_to_a_listed_key_is_registered_for_the_scrub(
         )
 
     assert "a-brand-new-password" in known_secret_values()
+    assert BACKUP_PASSWORD in known_secret_values()

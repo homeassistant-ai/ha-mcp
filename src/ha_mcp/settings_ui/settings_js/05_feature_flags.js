@@ -107,6 +107,18 @@ const MANDATORY_BPS_SUB_FLAGS = [
   'enable_strict_mandatory_bps',
 ];
 
+// Non-master toggles with rows nested under them; flipping one re-renders
+// the panel so those rows dim or undim at once.
+const PARENTS_WITH_SUB_ROWS = new Set([
+  'enable_yaml_config_editing',
+  'enable_mandatory_bps',
+  'redact_secrets',
+]);
+
+// Advanced text settings edited as a one-per-line list and saved
+// comma-joined.
+const LIST_EDITOR_FIELDS = new Set(['extra_yaml_write_keys', 'redact_app_option_keys']);
+
 // Cached add-on flag. Each settings endpoint (/api/settings/features,
 // /api/settings/advanced, /api/settings/backup-config) returns
 // ``is_addon`` so the env-locked banner copy can adapt — the addon
@@ -284,40 +296,18 @@ function renderFeatureFlags(flags) {
         // master off then back on restores the user's prior sub-flag
         // selections automatically, which is the intended UX for an
         // opt-in beta surface.
-        if (isMaster) {
-          if (_lastFeatureFlags[fieldName]) {
-            _lastFeatureFlags[fieldName] = {
-              ..._lastFeatureFlags[fieldName],
-              value: input.checked,
-            };
-            renderFeatureFlags(_lastFeatureFlags);
-          }
-        }
-        // Re-render on enable_yaml_config_editing flip so the 3
-        // packages sub-rows dim/undim immediately. Same pattern as the
-        // master flip above — value is mutated in the live cache and
-        // the panel re-renders synchronously while the save POST runs
-        // in the background.
-        if (fieldName === 'enable_yaml_config_editing') {
-          if (_lastFeatureFlags[fieldName]) {
-            _lastFeatureFlags[fieldName] = {
-              ..._lastFeatureFlags[fieldName],
-              value: input.checked,
-            };
-            renderFeatureFlags(_lastFeatureFlags);
-          }
-        }
-        // Re-render on enable_mandatory_bps / redact_secrets flips so
-        // their sub-rows dim/undim immediately. Same live-cache pattern
-        // as the master and yaml-config flips above.
-        if (fieldName === 'enable_mandatory_bps' || fieldName === 'redact_secrets') {
-          if (_lastFeatureFlags[fieldName]) {
-            _lastFeatureFlags[fieldName] = {
-              ..._lastFeatureFlags[fieldName],
-              value: input.checked,
-            };
-            renderFeatureFlags(_lastFeatureFlags);
-          }
+        //
+        // The other parents with nested rows re-render the same way, so
+        // their sub-rows dim/undim immediately.
+        if (
+          (isMaster || PARENTS_WITH_SUB_ROWS.has(fieldName)) &&
+          _lastFeatureFlags[fieldName]
+        ) {
+          _lastFeatureFlags[fieldName] = {
+            ..._lastFeatureFlags[fieldName],
+            value: input.checked,
+          };
+          renderFeatureFlags(_lastFeatureFlags);
         }
         saveFeatureFlag(fieldName, input.checked);
       });
@@ -488,7 +478,7 @@ function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
     const meta = localizeMeta('advanced', f.field, {});
     const row = document.createElement('div');
     row.className = 'feature-row ' + cssClass + (lockedByGate ? ' dimmed' : '');
-    const multiline = f.field === 'extra_yaml_write_keys' || f.field === 'redact_app_option_keys';
+    const multiline = LIST_EDITOR_FIELDS.has(f.field);
     if (multiline) row.classList.add('list-editor');
 
     const info = document.createElement('div');

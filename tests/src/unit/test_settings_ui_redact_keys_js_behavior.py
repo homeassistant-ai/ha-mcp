@@ -103,6 +103,7 @@ def test_turning_redact_secrets_on_unlocks_the_key_list(settings_script: str) ->
         """
         + READ_INPUT,
     )
+    _assert_clean_init(result)
 
     assert "dimmed" not in _row(result.dom)
     assert _logged_input(result)[3] == "false"
