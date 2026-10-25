@@ -113,6 +113,45 @@ def test_a_listed_option_the_schema_dropped_is_still_redacted(
     assert values == {"left-over-password"}
 
 
+def test_a_listed_name_inside_a_group_the_schema_dropped_is_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _settings(monkeypatch, "inner")
+    options = {**BACKUP_OPTIONS, "old_group": {"inner": "inner-secret", "x": "1"}}
+
+    out = redact_addon_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
+    values = collect_addon_secret_values(options, BACKUP_SCHEMA, BACKUP_SLUG)
+
+    assert out["old_group"] == {"inner": REDACTED_SET, "x": "1"}
+    assert values == {"inner-secret"}
+
+
+def test_a_listed_group_covers_a_stored_child_its_schema_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _settings(monkeypatch, "upload")
+    options = {**BACKUP_OPTIONS, "upload": {"backup_password": "a-pw", "old": "b-pw"}}
+
+    out = redact_addon_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
+    values = collect_addon_secret_values(options, BACKUP_SCHEMA, BACKUP_SLUG)
+
+    assert out["upload"] == {"backup_password": REDACTED_SET, "old": REDACTED_SET}
+    assert values == {"a-pw", "b-pw"}
+
+
+def test_a_listed_group_the_schema_dropped_keeps_its_shape_and_feeds_the_scrub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _settings(monkeypatch, "old_group")
+    options = {**BACKUP_OPTIONS, "old_group": {"inner": "inner-secret"}}
+
+    out = redact_addon_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
+    values = collect_addon_secret_values(options, BACKUP_SCHEMA, BACKUP_SLUG)
+
+    assert out["old_group"] == {"inner": REDACTED_SET}
+    assert values == {"inner-secret"}
+
+
 def test_spacing_newlines_and_empty_entries_in_the_list_are_ignored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
