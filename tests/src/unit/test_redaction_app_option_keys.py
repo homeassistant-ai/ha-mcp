@@ -43,14 +43,18 @@ BACKUP_INFO = {
 }
 
 
-def _settings(monkeypatch, keys: str, *, redact: bool = True) -> None:
+def _settings(
+    monkeypatch: pytest.MonkeyPatch, keys: str, *, redact: bool = True
+) -> None:
     monkeypatch.setattr(
         "ha_mcp.redaction.get_global_settings",
         lambda: SimpleNamespace(redact_secrets=redact, redact_app_option_keys=keys),
     )
 
 
-def test_listed_key_is_redacted_in_every_app_and_nothing_else(monkeypatch):
+def test_listed_key_is_redacted_in_every_app_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _settings(monkeypatch, "backup_password")
 
     for slug in (BACKUP_SLUG, "core_samba"):
@@ -60,7 +64,9 @@ def test_listed_key_is_redacted_in_every_app_and_nothing_else(monkeypatch):
         assert out["days_between_backups"] == 3
 
 
-def test_slug_scoped_key_leaves_other_apps_untouched(monkeypatch):
+def test_slug_scoped_key_leaves_other_apps_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _settings(monkeypatch, f"{BACKUP_SLUG}:backup_password")
 
     scoped = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
@@ -70,7 +76,9 @@ def test_slug_scoped_key_leaves_other_apps_untouched(monkeypatch):
     assert other == BACKUP_OPTIONS
 
 
-def test_a_scope_without_the_repository_prefix_still_names_the_app(monkeypatch):
+def test_a_scope_without_the_repository_prefix_still_names_the_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _settings(monkeypatch, "hassio_google_drive_backup:backup_password")
 
     out = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
@@ -78,7 +86,9 @@ def test_a_scope_without_the_repository_prefix_still_names_the_app(monkeypatch):
     assert out["backup_password"] == REDACTED_SET
 
 
-def test_listing_a_group_redacts_every_option_inside_it(monkeypatch):
+def test_listing_a_group_redacts_every_option_inside_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _settings(monkeypatch, "upload")
 
     out = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
@@ -89,7 +99,9 @@ def test_listing_a_group_redacts_every_option_inside_it(monkeypatch):
     assert values == {"nested-upload-password"}
 
 
-def test_spacing_newlines_and_empty_entries_in_the_list_are_ignored(monkeypatch):
+def test_spacing_newlines_and_empty_entries_in_the_list_are_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _settings(monkeypatch, " , days_between_backups\n,, other_app: backup_password ,")
 
     out = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
@@ -98,7 +110,9 @@ def test_spacing_newlines_and_empty_entries_in_the_list_are_ignored(monkeypatch)
     assert out["backup_password"] == BACKUP_PASSWORD
 
 
-def test_listed_values_feed_the_known_value_scrub(monkeypatch):
+def test_listed_values_feed_the_known_value_scrub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _settings(monkeypatch, "backup_password")
 
     values = collect_addon_secret_values(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
@@ -116,7 +130,9 @@ async def _get_info() -> dict:
 
 
 @pytest.mark.asyncio
-async def test_get_app_hides_a_slug_scoped_password(monkeypatch):
+async def test_get_app_hides_a_slug_scoped_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _settings(monkeypatch, f"{BACKUP_SLUG}:backup_password")
 
     result = await _get_info()
@@ -126,7 +142,9 @@ async def test_get_app_hides_a_slug_scoped_password(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_app_warns_when_a_name_scoped_to_it_matches_no_option(monkeypatch):
+async def test_get_app_warns_when_a_name_scoped_to_it_matches_no_option(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _settings(monkeypatch, f"{BACKUP_SLUG}:backup_pasword, {BACKUP_SLUG}:upload")
 
     result = await _get_info()
@@ -137,7 +155,9 @@ async def test_get_app_warns_when_a_name_scoped_to_it_matches_no_option(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_list_is_ignored_while_redact_secrets_is_off(monkeypatch):
+async def test_list_is_ignored_while_redact_secrets_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _settings(monkeypatch, "backup_password", redact=False)
 
     result = await _get_info()
@@ -148,8 +168,8 @@ async def test_list_is_ignored_while_redact_secrets_is_off(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_password_written_to_a_listed_key_is_registered_for_the_scrub(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _settings(monkeypatch, f"{BACKUP_SLUG}:backup_password")
     responses = [copy.deepcopy(BACKUP_INFO), {"success": True, "result": {}}]
 
