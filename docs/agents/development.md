@@ -69,6 +69,19 @@ The root `pyproject.toml` sets `--maxfail=3`, so
 a report with three failures may be an early stop; use `--maxfail=0` only when
 the complete failure set is actually needed.
 
+Both testcontainer lanes preinstall the checkout wheel and its dependency tree
+before Home Assistant's `/init`, so a slow PyPI window can outlast the API-ready
+budget. Two opt-in variables make that survivable on a slow host or network;
+both are inert when unset, and CI leaves them unset:
+
+- `HA_E2E_PIP_CACHE=<dir>` binds that host directory over the image's pip cache
+  (`/root/.cache/pip`) and lets the preinstalls cache wheels, so later runs skip
+  the downloads.
+- `HA_E2E_READY_TIMEOUT=<seconds>` overrides the API-ready budget for both
+  testcontainer lanes (480 s embedded, 60 s plain container). A value that is
+  not a positive whole number of seconds fails the run instead of silently
+  falling back to the budget it was meant to escape.
+
 Do not set `HOMEASSISTANT_URL` manually before testcontainer E2E tests.
 `tests/.env.test` contains placeholders, and the fixture supplies the real
 URL dynamically. The shared token is in `tests/test_constants.py`.
