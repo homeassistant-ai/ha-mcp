@@ -235,14 +235,17 @@ def redact_addon_info(
     schema = addon.get("schema")
     if not isinstance(options, dict) or not options:
         return addon, []
+    listed = _operator_listed_option_keys(slug)
     if not isinstance(schema, list) or not schema:
+        # Every value is masked here, but only listed ones are known secrets
+        # worth scrubbing from other responses.
+        register_known_secret_values(_collect_stored(options, listed, False))
         redacted = {key: sentinel_replacement(value) for key, value in options.items()}
         return {**addon, "options": redacted}, [
             f"redact_secrets: no options schema readable for '{slug}' — "
             "every option value was redacted conservatively (the "
             "password fields cannot be told apart without the schema)"
         ]
-    listed = _operator_listed_option_keys(slug)
     register_known_secret_values(_collect_addon_secret_values(options, schema, listed))
     unknown = sorted(
         {

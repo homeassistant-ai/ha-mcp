@@ -227,6 +227,26 @@ async def test_get_app_does_not_warn_about_a_listed_option_the_schema_dropped(
 
 
 @pytest.mark.asyncio
+async def test_get_app_without_a_schema_still_registers_listed_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _settings(monkeypatch, "backup_password")
+    info = copy.deepcopy(BACKUP_INFO)
+    info["result"]["schema"] = []
+
+    with patch(
+        "ha_mcp.tools.tools_addons._supervisor_api_call",
+        new_callable=AsyncMock,
+        return_value=info,
+    ):
+        result = await get_addon_info(MagicMock(), BACKUP_SLUG)
+
+    assert result["addon"]["options"]["backup_password"] == REDACTED_SET
+    assert BACKUP_PASSWORD in known_secret_values()
+    assert "nested-upload-password" in known_secret_values()
+
+
+@pytest.mark.asyncio
 async def test_list_is_ignored_while_redact_secrets_is_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
