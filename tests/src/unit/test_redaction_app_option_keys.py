@@ -155,16 +155,23 @@ def test_a_listed_group_the_schema_dropped_keeps_its_shape_and_feeds_the_scrub(
 def test_a_listed_name_in_a_group_the_schema_turned_into_a_field_is_redacted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A manual app update keeps the stored group under the new plain field.
+    # A manual app update keeps the stored group under the new plain field;
+    # a ``multiple`` group keeps its list of dicts.
     _settings(monkeypatch, "password")
-    schema = [{"name": "auth", "type": "string"}]
-    options = {"auth": {"password": "group-era-pw", "user": "u"}}
+    schema = [{"name": name, "type": "string"} for name in ("auth", "logins")]
+    options = {
+        "auth": {"password": "group-era-pw", "user": "u"},
+        "logins": [{"password": "multi-era-pw", "user": "a"}],
+    }
 
     out = redact_addon_options(options, schema, BACKUP_SLUG)
     values = collect_addon_secret_values(options, schema, BACKUP_SLUG)
 
-    assert out["auth"] == {"password": REDACTED_SET, "user": "u"}
-    assert values == {"group-era-pw"}
+    assert out == {
+        "auth": {"password": REDACTED_SET, "user": "u"},
+        "logins": [{"password": REDACTED_SET, "user": "a"}],
+    }
+    assert values == {"group-era-pw", "multi-era-pw"}
 
 
 def test_a_listed_group_stored_as_a_plain_value_is_redacted(
