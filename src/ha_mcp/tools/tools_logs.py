@@ -15,6 +15,7 @@ from pydantic import Field
 
 from .._vendor.fastmcp.exceptions import ToolError
 from ..client.error_log_journald import is_cursor_token
+from ..errors import TOOL_ERROR_LOG_LEVEL
 from .error_log_parsing import _DEFAULT_TOP_N
 from .helpers import log_tool_usage
 from .log_common import (
@@ -36,16 +37,21 @@ def _validate_log_offset(source: str, offset: int | str) -> int | str:
         if source != "error_log":
             raise ToolError(
                 "Cursor tokens only apply to source='error_log'; "
-                f"source='{source}' takes a non-negative integer offset"
+                f"source='{source}' takes a non-negative integer offset",
+                log_level=TOOL_ERROR_LOG_LEVEL,
             )
         if not is_cursor_token(offset):
             raise ToolError(
                 "Invalid 'offset' token for source='error_log'; pass the "
-                "'next_offset' value a previous response returned"
+                "'next_offset' value a previous response returned",
+                log_level=TOOL_ERROR_LOG_LEVEL,
             )
         return offset
     if offset < 0:
-        raise ToolError(f"'offset' must not be negative, got {offset}")
+        raise ToolError(
+            f"'offset' must not be negative, got {offset}",
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        )
     return offset
 
 
@@ -147,7 +153,8 @@ class LogTools(
         if structured and isinstance(offset, str):
             raise ToolError(
                 "Cursor tokens do not apply with structured=True; the summary "
-                "ranks the whole fetched window and ignores offset"
+                "ranks the whole fetched window and ignores offset",
+                log_level=TOOL_ERROR_LOG_LEVEL,
             )
         warnings = _collect_log_warnings(
             source,
