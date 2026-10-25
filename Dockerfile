@@ -94,8 +94,7 @@ ENV HA_MCP_BUILD_VERSION=${BUILD_VERSION}
 
 # Environment variables (can be overridden)
 ENV HOMEASSISTANT_URL="" \
-    HOMEASSISTANT_TOKEN="" \
-    BACKUP_HINT="normal"
+    HOMEASSISTANT_TOKEN=""
 
 # Default: Run in stdio mode
 # For HTTP mode: docker run ... IMAGE ha-mcp-web

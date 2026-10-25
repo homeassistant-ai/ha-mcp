@@ -717,7 +717,7 @@ class TestAddonDiscovery:
                 return {
                     "state": "started",
                     "ip_address": "172.30.33.1",
-                    "options": {"backup_hint": "normal"},
+                    "options": {"verify_ssl": True},
                 }
             if path == "/addons/ha_mcp_dev/info":
                 return {

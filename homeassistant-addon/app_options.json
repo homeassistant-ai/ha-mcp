@@ -21,20 +21,6 @@
     "always": true
   },
   {
-    "key": "backup_hint",
-    "env": "BACKUP_HINT",
-    "type": "str",
-    "default": "normal",
-    "range": null,
-    "choices": [
-      "strong",
-      "normal",
-      "weak",
-      "auto"
-    ],
-    "always": true
-  },
-  {
     "key": "custom_instructions",
     "env": "HAMCP_CUSTOM_INSTRUCTIONS",
     "type": "str",

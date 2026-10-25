@@ -14,11 +14,6 @@ configuration:
       Intern REST-, WebSocket- och per-verktyg-samtidighet förblir oförändrad. 0 behåller
       obegränsat beteende. Ett anrop som väntar på kapacitet misslyckas efter 60 sekunder.
       Intervall 0–32.
-  backup_hint:
-    name: Nivå för säkerhetskopieringstips
-    description: Hur starkt AI-assistenter uppmanas att föreslå en fullständig Home
-      Assistant-säkerhetskopia före riskabla ändringar. Det ändrar bara detta tips;
-      automatiska redigeringssäkerhetskopior har sin egen inställning.
   custom_instructions:
     name: Anpassade serverinstruktioner
     description: Text som skickas till varje AI-assistent som ansluter, som en del

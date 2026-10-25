@@ -14,12 +14,6 @@ configuration:
       pour toutes les sessions. La concurrence interne pour REST, WebSocket et la
       répartition par outil reste inchangée. 0 conserve un comportement illimité.
       Un appel en attente de capacité échoue après 60 secondes. Plage 0–32.
-  backup_hint:
-    name: Niveau d'indication de sauvegarde
-    description: Avec quelle insistance il est demandé aux assistants IA de suggérer
-      une sauvegarde complète de Home Assistant avant des modifications risquées.
-      Cela ne modifie que cette indication ; les sauvegardes automatiques de modification
-      ont leur propre paramètre.
   custom_instructions:
     name: Instructions personnalisées du serveur
     description: Texte envoyé à chaque assistant IA qui se connecte, dans le cadre

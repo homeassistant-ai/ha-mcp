@@ -10,9 +10,6 @@ configuration:
     name: Home Assistant 工具并发数
     description: 跨所有会话的外部 Home Assistant 工具调用的可选限制。内部 REST、WebSocket 和每个工具的分发并发性保持不变。0
       表示保持无限制行为。等待容量的调用将在 60 秒后失败。 范围 0–32。
-  backup_hint:
-    name: 备份提示级别
-    description: 向 AI 助手提示在进行有风险的更改之前建议进行完整 Home Assistant 备份的强烈程度。它仅更改此提示；自动编辑备份有其自己的设置。
   custom_instructions:
     name: 自定义服务器指令
     description: 作为 MCP 服务器指令的一部分发送给连接的每个 AI 助手的文本——例如家庭便签的存放位置以及何时阅读或更新它们。也是使用此工具集的

@@ -120,40 +120,6 @@ _BACKUP_DELETE_WAIT_S = 60.0
 WS_BACKUP_PREP = "ha_mcp_tools/backup_prep"
 
 
-def _get_backup_hint_text() -> str:
-    """
-    Generate dynamic backup hint text based on BACKUP_HINT config.
-
-    Returns:
-        Backup hint text appropriate for the configured hint level.
-    """
-    import os
-
-    # Get hint from environment directly to avoid requiring full settings
-    hint = os.getenv("BACKUP_HINT", "normal").lower()
-
-    hints = {
-        "strong": "Run this backup before the FIRST modification of the day/session. This is usually not required since most operations can be rolled back (the model fetches definitions before modifying). Users with daily backups configured should use 'normal' or 'weak' instead.",
-        "normal": "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",
-        "weak": "Backups are usually not required for configuration changes since most operations can be manually undone. Only run this if specifically requested or before irreversible system operations.",
-        "auto": "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",
-    }
-    if hint not in hints:
-        # Silent fallback used to be harmless; it isn't now. This value is
-        # interpolated into BOTH the full and the lite ha_manage_backup
-        # description, so a typo ("medium", "high", a stray trailing space)
-        # quietly ships the wrong guidance in two places while the docs say
-        # the setting is honoured. Env-var deployments only — the app UI is
-        # a dropdown.
-        logger.warning(
-            "BACKUP_HINT=%r is not one of %s — falling back to 'normal'.",
-            hint,
-            sorted(hints),
-        )
-        hint = "normal"
-    return hints[hint]
-
-
 async def _get_local_backup_agent_id(
     ws_client: HomeAssistantWebSocketClient,
 ) -> str:
@@ -1582,8 +1548,7 @@ def register_backup_tools(
     pair (merged into one tool, separated by ``scope``). All existing
     snapshot functionality is preserved under ``scope="snapshot"``.
     """
-    backup_hint_text = _get_backup_hint_text()
-    manage_backup_description = f"""Manage Home Assistant backups — both full HA snapshots AND per-edit auto-backups.
+    manage_backup_description = """Manage Home Assistant backups — both full HA snapshots AND per-edit auto-backups.
 
 **Pick the scope first**, then the action. Wrong scope routes through the wrong code path:
 
@@ -1604,8 +1569,8 @@ def register_backup_tools(
 - Use `scope="edits"` to undo a recent automation/script/scene/dashboard/helper edit by the agent. Lightweight, fast, no restart.
 - Use `scope="snapshot"` only for system-wide recovery (botched add-on update, mass config corruption, etc.).
 
-**`scope="snapshot"` backup-hint:**
-{backup_hint_text}
+**When to take a snapshot:**
+Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.
 
 **`(snapshot, delete)` is off by default and layered even when enabled:** a human must
 set `enable_snapshot_delete=true` (env var, web settings UI, or add-on Supervisor

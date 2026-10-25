@@ -717,19 +717,9 @@ The app remains a fully supported alternative on Home Assistant OS and Supervise
 |----------|-------------|---------|----------|
 | `HOMEASSISTANT_URL` | Your Home Assistant URL | - | Yes |
 | `HOMEASSISTANT_TOKEN` | Long-lived access token (or `demo` for demo env) | - | Yes |
-| `BACKUP_HINT` | Backup recommendation level | `normal` | No |
 | `ENABLE_SNAPSHOT_ACTIONS` | Allow full HA snapshot actions through `ha_manage_backup`; deletion also requires `ENABLE_SNAPSHOT_DELETE`. `false` blocks listing too | `true` | No |
 | `BACKUP_READ_ONLY` | Allow backup reads and block manual create, restore, and delete through `ha_manage_backup` | `false` | No |
 | `HA_MCP_DISABLE_SETTINGS_UI` | Set to `1` to skip the localhost settings-page sidecar that stdio installs spawn by default ([details](#how-do-i-open-the-ha-mcp-settings-page)) | - | No |
-
-### Backup Hint Modes
-
-| Mode | Behavior |
-|------|----------|
-| `strong` | Suggests backup before first modification each day/session |
-| `normal` | Suggests backup only before irreversible operations (recommended) |
-| `weak` | Rarely suggests backups |
-| `auto` | Same as normal (future: auto-detection) |
 
 ### Backup permissions
 

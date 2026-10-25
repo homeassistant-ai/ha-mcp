@@ -10,9 +10,6 @@ configuration:
     name: Home Assistant 工具並行數
     description: 跨所有會話的外層 Home Assistant 工具呼叫的選用限制。內部 REST、WebSocket 及每個工具的分支（fan-out）並行性保持不變。0
       表示維持無限制行為。等待容量的呼叫將在 60 秒後失敗。 範圍 0–32。
-  backup_hint:
-    name: 備份提示層級
-    description: 向 AI 助理提示在進行有風險的變更之前建議進行完整 Home Assistant 備份的強烈程度。它僅會變更此提示；自動編輯備份有其自身的設定。
   custom_instructions:
     name: 自訂伺服器指示
     description: 作為 MCP 伺服器指示的一部分，發送給每個連線的 AI 助理的文字，例如家庭記事存放的位置以及何時讀取或更新它們。這也是使用此工具集的

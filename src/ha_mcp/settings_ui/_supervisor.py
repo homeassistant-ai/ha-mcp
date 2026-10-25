@@ -4,9 +4,9 @@ Groups the two Supervisor concerns the settings handlers depend on:
 
 - **Options merge/post** (``_supervisor_fetch_current_options`` /
   ``_supervisor_merge_and_post_options``) — Supervisor's
-  ``/addons/self/options`` POST is a *full* replacement validated against
-  the addon schema, so a partial edit must be merged into the current
-  options before posting.
+  ``/addons/self/options`` POST replaces the stored options in full (keys
+  left out fall back to their defaults), so a partial edit must be merged
+  into the current options before posting.
 - **Self-restart** (``_schedule_supervisor_self_restart``) — a
   fire-and-forget ``/addons/self/restart`` POST scheduled after the
   response has flushed, so the browser isn't served a 5xx by the ingress
@@ -74,9 +74,9 @@ async def _supervisor_fetch_current_options(
 ) -> tuple[dict[str, Any], _SupervisorOptionsError | None]:
     """GET ``/addons/self/info`` and return the current options dict.
 
-    Supervisor's ``/addons/self/options`` POST is a *full* replacement
-    validated against the addon schema — every required key must be
-    present in the body. We can't ship a partial PATCH of just the
+    Supervisor's ``/addons/self/options`` POST replaces the stored options
+    in full: any key left out falls back to its ``config.yaml`` default.
+    We can't ship a partial PATCH of just the
     fields the user changed, so callers must merge their changes into
     the full current options before posting. Mirrors the pattern in
     ``homeassistant-addon/start.py::maybe_persist_secret_path`` which
@@ -146,8 +146,7 @@ async def _supervisor_merge_and_post_options(
     Necessary because supervisor's POST is full-replacement (see
     :func:`_supervisor_fetch_current_options`). Without this merge, a
     POST that only includes a handful of fields the user edited
-    drops every other key (including required ones like ``backup_hint``)
-    and supervisor rejects with a 400 ``addon_configuration_invalid_error``.
+    drops every other key, resetting those options to their defaults.
 
     Returns ``(success, error)`` where ``error`` is a
     :class:`_SupervisorOptionsError`. Transport failures (token missing,
