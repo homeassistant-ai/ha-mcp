@@ -1002,11 +1002,11 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
         if isinstance(options, dict) and options:
             if isinstance(schema, list) and schema:
                 register_known_secret_values(
-                    collect_addon_secret_values(options, schema)
+                    collect_addon_secret_values(options, schema, slug)
                 )
                 result["addon"] = {
                     **addon,
-                    "options": redact_addon_options(options, schema),
+                    "options": redact_addon_options(options, schema, slug),
                 }
             else:
                 # No readable schema (absent, malformed, or empty) — the
@@ -3071,16 +3071,16 @@ class AddOnTools:
             # password the caller is submitting right now — without it a
             # freshly written secret stays unknown to the scrub until some
             # later read harvests it.
-            if redaction_enabled() and isinstance(addon_info.get("schema"), list):
+            schema_ui: list | None = addon_info.get("schema")
+            if redaction_enabled() and isinstance(schema_ui, list):
                 register_known_secret_values(
-                    collect_addon_secret_values(current_options, addon_info["schema"])
-                    | collect_addon_secret_values(merged_options, addon_info["schema"])
+                    collect_addon_secret_values(current_options, schema_ui, slug)
+                    | collect_addon_secret_values(merged_options, schema_ui, slug)
                 )
 
             # Pre-write schema check: identify fields not in the app's schema.
             # Supervisor silently drops unknown fields on write; surfacing them
             # here lets the caller correct mistakes before any state is changed.
-            schema_ui: list | None = addon_info.get("schema")
             if schema_ui is not None:
                 allowed_keys = {item["name"] for item in schema_ui if "name" in item}
                 ignored_fields = [

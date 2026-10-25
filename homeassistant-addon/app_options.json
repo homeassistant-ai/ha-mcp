@@ -110,6 +110,15 @@
     "always": true
   },
   {
+    "key": "redact_app_option_keys",
+    "env": "REDACT_APP_OPTION_KEYS",
+    "type": "str",
+    "default": "",
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
     "key": "enable_mandatory_bps",
     "env": "ENABLE_MANDATORY_BPS",
     "type": "bool",

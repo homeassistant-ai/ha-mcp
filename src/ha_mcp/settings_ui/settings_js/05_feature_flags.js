@@ -25,7 +25,7 @@ const FEATURE_META = {
   },
   redact_secrets: {
     label: "Redact Secrets",
-    help: "Redacts secrets from tool responses before they reach the AI assistant. App (add-on) options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen (values shorter than 6 characters are skipped, since replacing tiny fragments would corrupt unrelated output). Fields not marked as passwords by their schema cannot be detected. Off by default.",
+    help: "Redacts secrets from tool responses before they reach the AI assistant. App (add-on) options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen (values shorter than 6 characters are skipped, since replacing tiny fragments would corrupt unrelated output). Other fields are not detected, except private keys in app options and the app option names listed below. Off by default.",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",
@@ -307,10 +307,10 @@ function renderFeatureFlags(flags) {
             renderFeatureFlags(_lastFeatureFlags);
           }
         }
-        // Re-render on enable_mandatory_bps flip so the strict-mode
-        // sub-row dims/undims immediately. Same live-cache pattern as
-        // the master and yaml-config flips above.
-        if (fieldName === 'enable_mandatory_bps') {
+        // Re-render on enable_mandatory_bps / redact_secrets flips so
+        // their sub-rows dim/undim immediately. Same live-cache pattern
+        // as the master and yaml-config flips above.
+        if (fieldName === 'enable_mandatory_bps' || fieldName === 'redact_secrets') {
           if (_lastFeatureFlags[fieldName]) {
             _lastFeatureFlags[fieldName] = {
               ..._lastFeatureFlags[fieldName],
@@ -384,6 +384,11 @@ function renderFeatureFlags(flags) {
         cssClass: 'mandatory-bps-sub',
         lockedByGate: !parentOn,
       });
+    }
+    // Extra app option keys to redact (#2843), nested under redact_secrets
+    // and dimmed while it is off.
+    if (fieldName === 'redact_secrets') {
+      renderAdvancedSubRows(targetBody, 'redact_keys', 'redact-sub', !f.value);
     }
     // After the enable_filesystem_tools row, inject the custom-directories
     // editor (issue #1567). Dimmed when either the master beta is off or
@@ -473,7 +478,8 @@ function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByG
 
 // Shared renderer for non-bool sub-rows that live in ADVANCED_SETTINGS_FIELDS
 // but render nested under a feature toggle (code-mode numerics under
-// enable_code_mode, extra YAML write keys under enable_yaml_config_editing).
+// enable_code_mode, extra YAML write keys under enable_yaml_config_editing,
+// extra redacted app option keys under redact_secrets).
 // They save through commitAdvancedEdit rather than saveFeatureFlag, which is
 // why renderSubFlagRows (checkbox-only) cannot serve them.
 function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {

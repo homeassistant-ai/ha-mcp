@@ -31,6 +31,7 @@ AdvancedSection = Literal[
     "sidecar",
     "beta_codemode",
     "beta_yamlkeys",
+    "redact_keys",
     "developer",
 ]
 
