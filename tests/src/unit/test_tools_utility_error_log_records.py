@@ -326,6 +326,33 @@ class TestRecordLimitAndPaging:
         assert result["next_offset"] == 6
 
     @pytest.mark.asyncio
+    async def test_a_filtered_entry_offset_step_anchors_on_the_matching_line(
+        self,
+    ) -> None:
+        """On journald, resume from the line that matched, not the header.
+
+        Anchoring on a header whose match sits deeper would advance the entry
+        offset past the entry the caller matched.
+        """
+        records = [
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
+            f"  frame {i}.0\n  ValueError: NEEDLE {i}\n  frame {i}.1"
+            for i in range(600)
+        ]
+        lines = "\n".join(records).splitlines()
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(lines, entry_offsets=True)
+        tools = LogTools(client)
+
+        result = await tools.get_logs(**_kwargs(limit=10, search="NEEDLE"))
+
+        assert result["returned_records"] == 2
+        # The oldest shown record starts 8 lines back in the 2000-line window
+        # and its match is two lines in, so the step is 6 — not the 8 a
+        # header-anchored step would use.
+        assert result["next_offset"] == 6
+
+    @pytest.mark.asyncio
     async def test_an_entry_offset_read_returns_the_tail_as_a_partial(self) -> None:
         """A journald route must not hold back: its resume step counts entries.
 
