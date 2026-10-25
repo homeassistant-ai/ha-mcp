@@ -1,4 +1,4 @@
-"""Restart request behind ha_restart (config check, then homeassistant.restart)."""
+"""Restart request behind ha_restart (pre-checks, then homeassistant.restart)."""
 
 import asyncio
 import logging
@@ -9,6 +9,7 @@ import httpx
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_embedded
+from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, raise_tool_error
 
@@ -23,13 +24,13 @@ _EMBEDDED_RESTART_DELAY_S = 1.0
 _RESTART_TASKS: set[asyncio.Task[None]] = set()
 
 
-def _schedule_embedded_restart(client: Any) -> None:
+def _schedule_embedded_restart(client: Any, data: dict[str, Any]) -> None:
     """Fire ``homeassistant.restart`` after this tool's reply has flushed."""
 
     async def _restart() -> None:
         await asyncio.sleep(_EMBEDDED_RESTART_DELAY_S)
         try:
-            await client.call_service("homeassistant", "restart", {})
+            await client.call_service("homeassistant", "restart", data)
         except Exception as exc:
             # No caller left to answer; WARNING is the level HA surfaces. A
             # lost reply means the restart reached HA and it went down first
@@ -48,9 +49,41 @@ def _schedule_embedded_restart(client: Any) -> None:
     task.add_done_callback(_RESTART_TASKS.discard)
 
 
-async def restart_home_assistant(client: Any) -> dict[str, Any]:
+async def _recorder_info(client: Any) -> dict[str, Any] | None:
+    """Core's ``recorder/info``, or None when the recorder does not answer."""
+    try:
+        info = await client.send_websocket_message({"type": "recorder/info"})
+    except HomeAssistantConnectionError:
+        return None
+    if not info.get("success"):
+        return None
+    result = info.get("result")
+    return result if isinstance(result, dict) else None
+
+
+async def restart_home_assistant(
+    client: Any, *, confirm: bool, safe_mode: bool = False
+) -> dict[str, Any]:
     """Validate the config, then restart Home Assistant."""
+    if not confirm:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Restart not confirmed",
+                details=(
+                    "You must set confirm=True to restart Home Assistant. "
+                    "This is a safety measure to prevent accidental restarts."
+                ),
+                suggestions=[
+                    'Pre-check config via ha_get_system_health(include="config_check")',
+                    "Call ha_restart(confirm=True) to proceed with restart",
+                    "Consider using ha_reload_core() for config-only changes",
+                ],
+            )
+        )
+
     restart_initiated = False
+    data = {"safe_mode": safe_mode}
     try:
         # Check configuration first as a safety measure
         config_result = await client.check_config()
@@ -71,8 +104,43 @@ async def restart_home_assistant(client: Any) -> dict[str, Any]:
         if is_embedded():
             # This server runs inside HA and stops with it: on HAOS the
             # restart call never returns before Core is killed, so reply
-            # first and restart after (#2691).
-            _schedule_embedded_restart(client)
+            # first and restart after (#2691). Core's refusal during a
+            # database upgrade would then reach nobody, so read Core's own
+            # flag first (#2632).
+            warnings = [
+                "Calls may fail while this server starts. "
+                "Try again after a few seconds."
+            ]
+            if safe_mode:
+                warnings.append(
+                    "Safe mode loads no custom integrations, and this server is "
+                    "one: it stays down until Home Assistant is restarted "
+                    "normally from its UI."
+                )
+            recorder = await _recorder_info(client)
+            if recorder is None:
+                warnings.append(
+                    "Could not read the recorder status to check for a database "
+                    "upgrade; Home Assistant refuses to restart during one."
+                )
+            elif recorder.get("migration_in_progress"):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_LOCKED,
+                        "A database upgrade is in progress - restart refused",
+                        details=(
+                            "Home Assistant cannot restart while the recorder "
+                            "is upgrading its database."
+                        ),
+                        context={"recorder": recorder},
+                        suggestions=[
+                            "Wait for the upgrade to finish, then call "
+                            "ha_restart(confirm=True) again"
+                        ],
+                    )
+                )
+
+            _schedule_embedded_restart(client, data)
             return {
                 "success": True,
                 "message": (
@@ -80,16 +148,13 @@ async def restart_home_assistant(client: Any) -> dict[str, Any]:
                     "inside Home Assistant and goes down with it; calls fail "
                     "until it is back (1-5 minutes)."
                 ),
-                "warnings": [
-                    "Calls may fail while this server starts. "
-                    "Try again after a few seconds."
-                ],
+                "warnings": warnings,
             }
 
         # Call the restart service - mark as initiated before the call
         # as the connection may be closed before we get a response
         restart_initiated = True
-        await client.call_service("homeassistant", "restart", {})
+        await client.call_service("homeassistant", "restart", data)
 
         return {
             "success": True,
