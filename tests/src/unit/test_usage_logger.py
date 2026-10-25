@@ -1,6 +1,8 @@
 """Unit tests for the usage logger with ring buffer."""
 
 import asyncio
+import stat
+import sys
 import tempfile
 import threading
 import time
@@ -407,3 +409,40 @@ class TestParameterRedaction:
         assert "lock.front" in content
         entry = json.loads(content.splitlines()[0])
         assert entry["parameters"]["data"]["code"] == _REDACTED_VALUE
+
+
+class TestLogFileMode:
+    """mcp_usage.jsonl records tool arguments and results, so only the owner reads it."""
+
+    @staticmethod
+    def _write_one(log_path: Path) -> None:
+        logger = UsageLogger(str(log_path), ring_buffer_size=5)
+        try:
+            logger.log_tool_usage(
+                tool_name="ha_get_state",
+                parameters={"entity_id": "sun.sun"},
+                execution_time_ms=1.0,
+                success=True,
+            )
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                if log_path.exists() and log_path.read_text().strip():
+                    break
+                time.sleep(0.05)
+        finally:
+            logger.shutdown()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+    def test_new_log_file_is_owner_only(self, tmp_path):
+        log_path = tmp_path / "logs" / "usage.jsonl"
+        self._write_one(log_path)
+        assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(log_path.parent.stat().st_mode) == 0o700
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+    def test_existing_world_readable_log_is_tightened(self, tmp_path):
+        log_path = tmp_path / "usage.jsonl"
+        log_path.write_text("")
+        log_path.chmod(0o644)
+        self._write_one(log_path)
+        assert stat.S_IMODE(log_path.stat().st_mode) == 0o600

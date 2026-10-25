@@ -5,6 +5,8 @@ Usage logging for MCP tool calls to track usage patterns and performance metrics
 import copy
 import json
 import logging
+import os
+import stat
 import threading
 import time
 from collections import deque
@@ -17,6 +19,24 @@ from queue import Queue
 from typing import Any
 
 from .data_paths import get_data_dir
+
+# The usage log records tool arguments and results, so it is created owner-only.
+_PRIVATE_FILE_MODE = 0o600
+
+
+def _private_opener(path: str, flags: int) -> int:
+    """``open()`` opener that creates the file with ``_PRIVATE_FILE_MODE``."""
+    return os.open(path, flags, _PRIVATE_FILE_MODE)
+
+
+def _make_private(path: Path) -> None:
+    """Drop group/other access from a log file an older version created 0644."""
+    try:
+        if path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+            path.chmod(_PRIVATE_FILE_MODE)
+    except OSError:
+        pass
+
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +335,8 @@ class UsageLogger:
             self.log_file_path = get_data_dir() / "logs" / "mcp_usage.jsonl"
 
         try:
-            self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
+            self.log_file_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _make_private(self.log_file_path)
         except OSError as e:
             # Directory creation failed (e.g., read-only filesystem). Surface
             # the reason instead of silently dropping every log — operators
@@ -366,7 +387,9 @@ class UsageLogger:
     def _write_log_entry(self, log_entry: ToolUsageLog) -> None:
         """Write single log entry to disk."""
         try:
-            with open(self.log_file_path, "a", encoding="utf-8") as f:
+            with open(
+                self.log_file_path, "a", encoding="utf-8", opener=_private_opener
+            ) as f:
                 json.dump(asdict(log_entry), f, ensure_ascii=False)
                 f.write("\n")
         except Exception:  # noqa: BLE001
