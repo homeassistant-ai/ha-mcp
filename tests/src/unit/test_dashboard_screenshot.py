@@ -8,7 +8,7 @@ Covers everything that runs inside ha-mcp itself — no container, no engine:
 - the capture HTTP client (URL/param building, PNG return, error -> ToolError)
 - the graceful get/set screenshot helper (feature-off / failure -> warning)
 
-The Supervisor auto-discovery branch + addon lifecycle are exercised end to end
+The Supervisor auto-discovery branch + app (add-on) lifecycle are exercised end to end
 against a mock engine in the HAOS inaddon lane
 (tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py).
 """
@@ -487,8 +487,8 @@ class TestResolveEngine:
     async def test_explicit_url_picks_up_addon_credential_in_addon_mode(
         self, monkeypatch: Any
     ) -> None:
-        # An explicit engine URL on HA OS must not disable the theme guard:
-        # the Puppet add-on's credential is still discovered best-effort.
+        # An explicit engine URL on HA OS must not disable the Puppet theme
+        # guard: the add-on credential is still discovered best-effort.
         from ha_mcp.dashboard_screenshot import provision
         from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential
 

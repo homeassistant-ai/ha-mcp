@@ -433,7 +433,7 @@ def resolve_dashboard_view(
         elif has_static_views:
             warning = (
                 "No view_path was supplied; the dashboard base route renders "
-                "the first view visible to Puppet's Home Assistant user."
+                "the first view visible to the screenshot engine's Home Assistant user."
             )
         else:
             warning = (
@@ -663,7 +663,7 @@ async def resolve_dashboard_render_target(
             stable=False,
             warnings=(
                 "No named view path was supplied; the built-in dashboard base route "
-                "renders the first view visible to Puppet's Home Assistant user.",
+                "renders the first view visible to the screenshot engine's Home Assistant user.",
             ),
         )
     config = await fetch_dashboard_render_config(client, url_path)
