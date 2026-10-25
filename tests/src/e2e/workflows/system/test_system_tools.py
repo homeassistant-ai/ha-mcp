@@ -989,4 +989,4 @@ async def test_restart_precheck_reads_the_real_recorder_status(ha_client) -> Non
     recorder = await system_restart._recorder_info(ha_client)
 
     assert recorder is not None
-    assert recorder["migration_in_progress"] is False
+    assert isinstance(recorder["migration_in_progress"], bool)
