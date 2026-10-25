@@ -151,6 +151,60 @@ BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
 )
 
 
+# WebSocket commands that mint, list or revoke credentials, or manage users and
+# their passwords (`auth/long_lived_access_token` answers with a brand-new,
+# never-expiring token in plain text). A raw escape hatch has no use case that
+# needs them, and their replies would land verbatim in the model context and its
+# transcript. Matched by prefix so a credential command added to HA Core later
+# is refused by default; `auth/current_user` (whoami) is the one read that stays
+# open. Shared by the same two raw WebSocket surfaces as the list above.
+_CREDENTIAL_WS_PREFIXES: tuple[str, ...] = (
+    "auth/",
+    "config/auth/",
+    "config/auth_provider/",
+)
+_CREDENTIAL_WS_ALLOWED: frozenset[str] = frozenset({"auth/current_user"})
+
+
+def is_credential_ws_command(command: str) -> bool:
+    """True when ``command`` mints, lists or revokes credentials or manages users."""
+    normalized = command.strip().lower()
+    if normalized in _CREDENTIAL_WS_ALLOWED:
+        return False
+    return normalized.startswith(_CREDENTIAL_WS_PREFIXES)
+
+
+def raw_ws_refusal(command: str, *, sandbox: bool = False) -> str | None:
+    """Why a raw WebSocket surface refuses ``command``, or ``None`` to send it.
+
+    One rule set for ha_call_service's ``ws_command`` (``sandbox=False``) and the
+    Code Mode ``ws_send`` bridge (``sandbox=True``), worded for each surface.
+    """
+    if command.strip().lower() in BLOCKED_WS_WRITE_COMMANDS:
+        if sandbox:
+            return (
+                f"WebSocket command {command!r} is blocked from the "
+                "sandbox. Use the corresponding wrapping tool via "
+                "call_tool (e.g. ha_config_set_dashboard, "
+                "ha_set_area_or_floor, ha_set_device, ha_set_entity) "
+                "so validation runs."
+            )
+        return (
+            f"ws_command '{command}' mutates persistent state that a "
+            "dedicated tool guards with backups and conflict checks. Use "
+            "the corresponding ha-mcp tool (e.g. ha_config_set_dashboard, "
+            "ha_set_area_or_floor, ha_remove_entity) instead."
+        )
+    if is_credential_ws_command(command):
+        where = "blocked from the sandbox" if sandbox else "not exposed by ws_command"
+        return (
+            f"WebSocket command {command!r} is {where}: it mints, lists or "
+            "revokes credentials or manages users. Manage tokens and users in "
+            "the Home Assistant UI (Profile > Security, Settings > People)."
+        )
+    return None
+
+
 # Fields surfaced from each repair issue. Includes `ignored` / `dismissed_version`
 # so callers can distinguish active vs. user-dismissed repairs when both are
 # returned (e.g., `include_dismissed_repairs=True`).
