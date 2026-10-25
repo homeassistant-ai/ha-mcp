@@ -107,7 +107,7 @@ def _collect_log_warnings(
     end_time: str | None,
     slug: str | None,
     order: Literal["newest", "oldest"],
-    offset: int,
+    offset: int | str,
 ) -> list[str]:
     warnings: list[str] = []
     if source == "logger" and order != "newest":

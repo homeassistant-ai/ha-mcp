@@ -567,19 +567,19 @@ class _ErrorLogWindow:
     establish it (a full journald window proves nothing on its own — see
     ``_journald_error_log_page``).
 
-    ``offset`` addresses journald ENTRIES on Supervisor-backed installs and
-    text LINES on container/pip ones; the two coincide only while every entry
-    is a single line, which a traceback is not. Paging is therefore exact on
-    container and approximate on journald: a step derived from line counts is
-    spent in entry units there, and since an entry is at least one line it
-    overshoots — it skips more history than the lines it counted. The cap at
-    ``fetch_lines`` bounds that skip to one window.
+    ``offset`` is the caller's paging anchor: an integer on container/pip
+    installs (text LINES back from the newest one), and either an integer or
+    the opaque cursor token a previous journald page returned. A token page is
+    anchored on Supervisor's ``X-First-Cursor``, so lines logged between two
+    calls cannot shift it; ``next_cursor`` carries that token for the next page
+    when the route issued one.
     """
 
-    offset: int
+    offset: int | str
     fetch_lines: int
     raw_line_count: int
     has_more: bool
+    next_cursor: str | None = None
 
     def __post_init__(self) -> None:
         # Guards the two shapes that make paging non-terminating or
@@ -587,7 +587,7 @@ class _ErrorLogWindow:
         # can only fire on a code bug, never on caller input.
         if self.fetch_lines < 1:
             raise ValueError(f"fetch_lines must be at least 1, got {self.fetch_lines}")
-        if self.offset < 0:
+        if isinstance(self.offset, int) and self.offset < 0:
             raise ValueError(f"offset must not be negative, got {self.offset}")
 
 
@@ -660,7 +660,7 @@ def _reopen_at_record_end(window: _ErrorLogWindow, record: _LogRecord) -> int:
 
 
 def _build_error_log_pagination_hint(
-    next_offset: int,
+    next_offset: int | str,
     limit: int | None,
     search: str | None,
     level: str | None,
@@ -686,7 +686,7 @@ def _build_error_log_pagination_hint(
         parts.append(f"level={level!r}")
     if search:
         parts.append(f"search={search!r}")
-    parts.append(f"offset={next_offset}")
+    parts.append(f"offset={next_offset!r}")
     return (
         "Older entries remain behind this window. To read further back, "
         f"use: ha_get_logs({', '.join(parts)})"
@@ -720,9 +720,12 @@ def _attach_error_log_pagination(
     data["offset"] = window.offset
     data["has_more"] = window.has_more
     if window.has_more:
-        data["next_offset"] = window.offset + step
+        next_offset: int | str = window.next_cursor or 0
+        if window.next_cursor is None:
+            next_offset = window.offset + step if isinstance(window.offset, int) else 0
+        data["next_offset"] = next_offset
         data["pagination_hint"] = _build_error_log_pagination_hint(
-            window.offset + step,
+            next_offset,
             limit,
             search,
             level,

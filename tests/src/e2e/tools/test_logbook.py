@@ -523,8 +523,8 @@ async def test_logs_error_log_pagination_advances(mcp_client):
             if not page["has_more"]:
                 logger.info(f"Paging ended after {len(seen)} page(s)")
                 return
-            assert page["next_offset"] > offset, (
-                f"next_offset {page['next_offset']} must advance past {offset}"
+            assert page["next_offset"] != offset, (
+                f"next_offset {page['next_offset']!r} must advance past {offset!r}"
             )
             offset = page["next_offset"]
 

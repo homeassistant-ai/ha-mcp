@@ -29,6 +29,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from ha_mcp.client.error_log_journald import (
+    cursor_range_header,
+    cursor_token,
+    is_cursor_token,
+    range_header,
+    token_cursor,
+)
 from ha_mcp.client.rest_client import (
     MIN_LOG_WINDOW_LINES,
     HomeAssistantAPIError,
@@ -99,23 +106,31 @@ class TestJournaldRangeHeader:
 
     def test_newest_window_matches_supervisors_own_lines_translation(self):
         """Supervisor builds ``entries=:-{N-1}:{N}`` for its own ``?lines=N``."""
-        assert HomeAssistantClient._journald_range_header(100, 0) == "entries=:-99:100"
+        assert range_header(100, 0) == "entries=:-99:100"
 
     def test_offset_moves_the_window_further_back(self):
         """The window ends ``offset`` entries before the newest one."""
-        assert (
-            HomeAssistantClient._journald_range_header(100, 250) == "entries=:-349:100"
-        )
+        assert range_header(100, 250) == "entries=:-349:100"
 
     def test_one_entry_window_is_expressible_only_with_an_offset(self):
-        """The probe's shape: a single entry, ``offset`` back from the newest.
+        """A single-entry window degenerates at offset 0.
 
-        At offset 0 the same formula degenerates to ``entries=:0:1``, whose
-        non-negative skip reads from the OLDEST entry — which is why callers
+        ``entries=:0:1`` reads from the OLDEST entry, which is why callers
         anchoring at the newest end floor their window instead.
         """
-        assert HomeAssistantClient._journald_range_header(1, 250) == "entries=:-250:1"
-        assert HomeAssistantClient._journald_range_header(1, 0) == "entries=:0:1"
+        assert range_header(1, 250) == "entries=:-250:1"
+        assert range_header(1, 0) == "entries=:0:1"
+
+    def test_cursor_range_ends_on_the_anchor_entry(self):
+        """A cursor window returns ``lines`` entries ending at the cursor."""
+        assert cursor_range_header("s=abc;i=1", 5) == "entries=s=abc;i=1:-5:5"
+
+    def test_cursor_tokens_round_trip(self):
+        token = cursor_token("s=abc;i=1")
+        assert is_cursor_token(token)
+        assert token_cursor(token) == "s=abc;i=1"
+        assert not is_cursor_token(12)
+        assert not is_cursor_token("cursor:")
 
 
 @pytest.mark.asyncio
@@ -529,17 +544,9 @@ class TestContainerBranchWindowing:
         assert page.has_more is True
 
 
-class TestJournaldHasMoreProbe:
-    """``has_more`` on the Supervisor-backed routes.
-
-    systemd's journal-gatewayd does not guard its negative-skip branch
-    (``sd_journal_previous_skip(-n_skip + 1)`` never reports END_OF_STREAM the
-    way the positive branch does), so an offset past the start of the journal
-    CLAMPS to the oldest entry and still answers with a full window. A
-    count-based ``has_more`` therefore never goes false once the offset
-    overshoots, and an agent following the pagination hint loops on identical
-    pages — on exactly the install class #2279 is about.
-    """
+class TestJournaldCursorPaging:
+    """``X-First-Cursor`` anchors paging, so lines logged between calls cannot
+    shift a page: the token names the entry the next page ends at."""
 
     @pytest.fixture
     def addon_client(self, client):
@@ -548,9 +555,13 @@ class TestJournaldHasMoreProbe:
         return client
 
     @staticmethod
-    def _serve(client, *bodies):
-        """Answer successive Supervisor fetches with the given bodies."""
-        client._supervisor_logs_get = AsyncMock(side_effect=list(bodies))
+    def _page(text: str, cursor: str | None = "c0"):
+        headers = {"X-First-Cursor": cursor} if cursor else {}
+        return SimpleNamespace(text=text, headers=headers)
+
+    @staticmethod
+    def _serve(client, *pages):
+        client._supervisor_logs_response = AsyncMock(side_effect=list(pages))
 
     async def _fetch(self, client, **kwargs):
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
@@ -558,120 +569,80 @@ class TestJournaldHasMoreProbe:
 
     @pytest.mark.asyncio
     async def test_short_window_needs_no_probe(self, addon_client):
-        """Nothing clamps a window smaller than asked, so short means done."""
-        self._serve(addon_client, "a\nb\n")
+        """Nothing clamps a window smaller than asked for, so short means done."""
+        self._serve(addon_client, self._page("a\nb\n"))
         page = await self._fetch(addon_client, lines=10)
         assert page.has_more is False
-        assert addon_client._supervisor_logs_get.await_count == 1
+        assert page.next_cursor is None
+        assert addon_client._supervisor_logs_response.await_count == 1
 
     @pytest.mark.asyncio
     async def test_empty_window_needs_no_probe(self, addon_client):
-        self._serve(addon_client, "")
+        self._serve(addon_client, self._page(""))
         page = await self._fetch(addon_client, lines=10)
         assert page.has_more is False
-        assert addon_client._supervisor_logs_get.await_count == 1
+        assert addon_client._supervisor_logs_response.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_saturated_window_probes_the_block_behind_it(self, addon_client):
-        """A differing block one step further back proves deeper history."""
-        self._serve(addon_client, "a\nb\nc\n", "older entry\n")
+    async def test_saturated_window_probes_behind_its_cursor(self, addon_client):
+        """Two entries ending at the cursor prove there is history behind it."""
+        self._serve(
+            addon_client,
+            self._page("a\nb\nc\n", "c-win"),
+            self._page("older\nb\nc\n", "c-old"),
+        )
         page = await self._fetch(addon_client, lines=3, offset=6)
         assert page.text == "a\nb\nc\n"
         assert page.has_more is True
-        probe = addon_client._supervisor_logs_get.await_args
-        assert probe.args == ("core",)
-        assert probe.kwargs == {"lines": 8, "offset": 9}
+        assert page.next_cursor == "cursor:c-win"
+        probe = addon_client._supervisor_logs_response.await_args
+        assert probe.kwargs["headers"]["Range"] == "entries=c-win:-2:2"
 
     @pytest.mark.asyncio
-    async def test_clamped_probe_matching_the_window_ends_paging(self, addon_client):
-        """The clamp's signature: the probe returns the window's own first entry.
-
-        Past the start of the journal the gateway hands back the oldest entry
-        instead of nothing, so identity — not emptiness — is what says stop.
-        """
-        self._serve(addon_client, "oldest\nb\nc\n", "oldest\n")
-        page = await self._fetch(addon_client, lines=3, offset=900)
-        assert page.has_more is False
-
-    @pytest.mark.asyncio
-    async def test_empty_probe_ends_paging(self, addon_client):
-        self._serve(addon_client, "a\nb\nc\n", "")
+    async def test_oldest_cursor_ends_paging(self, addon_client):
+        """At the journal's start Supervisor clamps the probe to the cursor."""
+        self._serve(
+            addon_client,
+            self._page("a\nb\nc\n", "c-oldest"),
+            self._page("a\n", "c-oldest"),
+        )
         page = await self._fetch(addon_client, lines=3)
         assert page.has_more is False
 
     @pytest.mark.asyncio
-    async def test_stripped_range_header_terminates_paging(self, addon_client):
-        """An intermediary may drop ``Range`` (RFC 7233 allows it).
-
-        Supervisor then serves its default window for every request, so window
-        and probe come back identical — and the identity check stops paging
-        instead of handing the agent the same page forever.
-        """
-        default_window = "".join(f"line{i}\n" for i in range(100))
-        self._serve(addon_client, default_window, default_window)
-        page = await self._fetch(addon_client, lines=100, offset=400)
-        assert page.has_more is False
-
-    @pytest.mark.asyncio
-    async def test_probe_compares_entries_not_counts(self, addon_client):
-        """A multi-line traceback must not read as 'more history'.
-
-        The line count over-estimates entries, so it can only over-trigger the
-        probe; the probe's identity check is what answers.
-        """
-        window = "oldest\n  frame one\n  frame two\n"
-        self._serve(addon_client, window, "oldest\n  frame one\n")
-        page = await self._fetch(addon_client, lines=2, offset=10)
-        assert page.has_more is False
-
-    @pytest.mark.asyncio
-    async def test_boundary_duplicate_line_does_not_end_paging(self, addon_client):
-        """One duplicated line at the window boundary must not read as done.
-
-        The entry just behind the window renders identically to the window's
-        oldest line ("dup"), which false-matched a one-line probe; the block
-        probe sees the differing context behind it.
-        """
-        window = "dup\n" + "".join(f"w{i}\n" for i in range(1, 4))
-        probe = "".join(f"x{i}\n" for i in range(7)) + "dup\n"
-        self._serve(addon_client, window, probe)
-        page = await self._fetch(addon_client, lines=4, offset=0)
+    async def test_cursor_token_returns_the_entries_before_its_cursor(
+        self, addon_client
+    ):
+        """A token page asks for lines+1 entries ending at the cursor and drops
+        the anchor line the caller already saw."""
+        self._serve(
+            addon_client,
+            self._page("o1\no2\no3\nanchor\n", "c-old"),
+            self._page("p1\np2\np3\np4\n", "c-older"),
+        )
+        page = await self._fetch(addon_client, lines=3, offset="cursor:anchor-c")
+        assert page.text == "o1\no2\no3"
         assert page.has_more is True
+        assert page.next_cursor == "cursor:c-old"
+        first = addon_client._supervisor_logs_response.await_args_list[0]
+        assert first.kwargs["headers"]["Range"] == "entries=anchor-c:-4:4"
 
     @pytest.mark.asyncio
-    async def test_uniform_duplicate_run_reads_as_end_of_history(self, addon_client):
-        """Accepted imprecision: _PROBE_ENTRIES identical lines straddling the
-        boundary stop paging — and what a false stop skips there is more of
-        the same duplicates, so nothing distinguishable is lost."""
-        window = "dup\n" * 10
-        probe = "dup\n" * 8
-        self._serve(addon_client, window, probe)
-        page = await self._fetch(addon_client, lines=10, offset=0)
+    async def test_cursor_token_at_history_start_returns_nothing(self, addon_client):
+        """Only the anchor entry comes back, so the page is empty and final."""
+        self._serve(addon_client, self._page("only\n", "c-old"))
+        page = await self._fetch(addon_client, lines=3, offset="cursor:c")
+        assert page.text == ""
         assert page.has_more is False
 
     @pytest.mark.asyncio
-    async def test_small_window_clamp_still_ends_paging(self, addon_client):
-        """A probe longer than the window must not read the clamp as "more".
-
-        With lines < _PROBE_ENTRIES and an offset past the journal start,
-        both requests clamp to the oldest entry and the probe comes back
-        LONGER than the window; comparing full lengths would report more
-        history forever. The shared-prefix compare says done.
-        """
-        window = "j0\nj1\n"
-        probe = "".join(f"j{i}\n" for i in range(8))
-        self._serve(addon_client, window, probe)
-        page = await self._fetch(addon_client, lines=2, offset=500)
-        assert page.has_more is False
-
-    @pytest.mark.asyncio
-    async def test_proxied_route_probes_the_same_way(self, client):
-        """The supervised proxy route runs the identical protocol."""
+    async def test_proxied_route_uses_the_same_protocol(self, client):
+        """The supervised proxy route pages and probes identically."""
         client._request = AsyncMock(return_value={"components": ["hassio"]})
         client._raw_request = AsyncMock(
             side_effect=[
-                SimpleNamespace(text="a\nb\n"),
-                SimpleNamespace(text="older\n"),
+                self._page("a\nb\n", "c-win"),
+                self._page("older\nb\n", "c-old"),
             ]
         )
 
@@ -680,12 +651,9 @@ class TestJournaldHasMoreProbe:
 
         assert page.has_more is True
         probe_headers = client._raw_request.await_args.kwargs["headers"]
-        # Probe block: 8 entries ending just behind the window (offset 4 +
-        # window 2 -> skip 13, count 8).
-        assert probe_headers["Range"] == "entries=:-13:8"
+        assert probe_headers["Range"] == "entries=c-win:-2:2"
 
 
-@pytest.mark.asyncio
 async def test_get_error_log_probe_401_never_reaches_the_container_branch(client):
     """A dead token surfaces as an auth error, not as a 404 from /error_log.
 

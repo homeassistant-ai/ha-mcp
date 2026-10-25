@@ -16,3 +16,4 @@ class ErrorLogPage:
 
     text: str
     has_more: bool
+    next_cursor: str | None = None

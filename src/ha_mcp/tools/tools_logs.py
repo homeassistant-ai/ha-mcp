@@ -13,6 +13,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from .._vendor.fastmcp.exceptions import ToolError
+from ..client.error_log_journald import is_cursor_token
 from .error_log_parsing import _DEFAULT_TOP_N
 from .helpers import log_tool_usage
 from .log_common import (
@@ -26,6 +28,25 @@ from .log_sources_fault import FaultLogSourceMixin
 from .log_sources_logbook import LogbookLogSourceMixin
 from .log_sources_supervisor import SupervisorLogSourcesMixin
 from .tool_hints import read_only_hints
+
+
+def _validate_log_offset(source: str, offset: int | str) -> int | str:
+    """Validate a paging anchor: an integer, or an error-log cursor token."""
+    if isinstance(offset, str):
+        if source != "error_log":
+            raise ToolError(
+                "Cursor tokens only apply to source='error_log'; "
+                f"source='{source}' takes a non-negative integer offset"
+            )
+        if not is_cursor_token(offset):
+            raise ToolError(
+                "Invalid 'offset' token for source='error_log'; pass the "
+                "'next_offset' value a previous response returned"
+            )
+        return offset
+    if offset < 0:
+        raise ToolError(f"'offset' must not be negative, got {offset}")
+    return offset
 
 
 class LogTools(
@@ -49,7 +70,7 @@ class LogTools(
         device_id: str | None,
         context_id: str | None,
         end_time: str | None,
-        offset: int,
+        offset: int | str,
         compact: bool,
         level: str | None,
         slug: str | None,
@@ -57,6 +78,7 @@ class LogTools(
         structured: bool = False,
         top_n: int | None = None,
     ) -> dict[str, Any]:
+        numeric_offset = offset if isinstance(offset, int) else 0
         if source == "logbook":
             return await self._get_logbook(
                 hours_back=hours_back,
@@ -65,7 +87,7 @@ class LogTools(
                 context_id=context_id,
                 end_time=end_time,
                 limit=limit,
-                offset=offset,
+                offset=numeric_offset,
                 search=search,
                 compact=compact,
                 order=order,
@@ -90,7 +112,7 @@ class LogTools(
             return await self._get_logger_info(limit=limit, search=search)
         if source == "fault_log":
             return await self._get_fault_log(
-                limit=limit, search=search, offset=offset, order=order
+                limit=limit, search=search, offset=numeric_offset, order=order
             )
         if source == "system_service":
             assert slug is not None  # guaranteed by _validate_log_slug
@@ -112,7 +134,7 @@ class LogTools(
         device_id: str | None,
         context_id: str | None,
         end_time: str | None,
-        offset: int,
+        offset: int | str,
         compact: bool,
         level: str | None,
         slug: str | None,
@@ -121,6 +143,12 @@ class LogTools(
         top_n: int | None = None,
     ) -> dict[str, Any]:
         level = _validate_log_level(level)
+        offset = _validate_log_offset(source, offset)
+        if structured and isinstance(offset, str):
+            raise ToolError(
+                "Cursor tokens do not apply with structured=True; the summary "
+                "ranks the whole fetched window and ignores offset"
+            )
         warnings = _collect_log_warnings(
             source,
             level,
@@ -303,16 +331,18 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(description="Logbook only: end of the window (ISO datetime)."),
         ] = None,
         offset: Annotated[
-            int,
+            int | str,
             Field(
-                ge=0,
                 description=(
                     "Page deeper into source='logbook', 'error_log' and "
                     "'fault_log' (ignored for other sources). On error_log it "
-                    "counts raw log lines back from the newest entry; on "
-                    "fault_log it counts lines from the start of the assembled "
-                    "crash text. Pass the response's 'next_offset' to continue "
-                    "while 'has_more' is true."
+                    "counts raw log lines back from the newest entry, or is the "
+                    "opaque token a previous page returned in 'next_offset' on "
+                    "Supervisor/journald installs, which keeps paging exact "
+                    "while new log lines arrive; on fault_log it counts lines "
+                    "from the start of the assembled crash text. Pass the "
+                    "response's 'next_offset' to continue while 'has_more' is "
+                    "true."
                 ),
             ),
         ] = 0,

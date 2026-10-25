@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantConnectionError
 from ha_mcp.tools.error_log_parsing import (
     _split_log_records,
@@ -66,10 +67,12 @@ def _kwargs(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-def _client(text: str, *, has_more: bool = False) -> AsyncMock:
+def _client(
+    text: str, *, has_more: bool = False, next_cursor: str | None = None
+) -> AsyncMock:
     client = AsyncMock()
     client.get_error_log = AsyncMock(
-        return_value=ErrorLogPage(text=text, has_more=has_more)
+        return_value=ErrorLogPage(text=text, has_more=has_more, next_cursor=next_cursor)
     )
     return client
 
@@ -357,6 +360,32 @@ class TestRecordLimitAndPaging:
         )
         assert second["returned_records"] == 1
         assert second["log"].splitlines()[0] == _HEADER
+
+    @pytest.mark.asyncio
+    async def test_a_cursor_page_emits_its_token_as_next_offset(self) -> None:
+        """A journald page hands back the cursor token, and accepts it back."""
+        client = _client(_ERROR_RECORD, has_more=True, next_cursor="cursor:abc")
+        tools = LogTools(client)
+
+        first = await tools.get_logs(**_kwargs(limit=5))
+        assert first["next_offset"] == "cursor:abc"
+        assert "offset='cursor:abc'" in first["pagination_hint"]
+
+        client.get_error_log.reset_mock()
+        await tools.get_logs(**_kwargs(limit=5, offset="cursor:abc"))
+        assert client.get_error_log.await_args.kwargs["offset"] == "cursor:abc"
+
+    @pytest.mark.asyncio
+    async def test_an_invalid_offset_token_is_rejected(self) -> None:
+        tools = LogTools(_client(_ERROR_RECORD))
+        with pytest.raises(ToolError):
+            await tools.get_logs(**_kwargs(offset="not-a-token"))
+
+    @pytest.mark.asyncio
+    async def test_a_cursor_token_is_rejected_with_structured(self) -> None:
+        tools = LogTools(_client(_ERROR_RECORD))
+        with pytest.raises(ToolError):
+            await tools.get_logs(**_kwargs(offset="cursor:abc", structured=True))
 
     @pytest.mark.asyncio
     async def test_an_unmatched_leading_partial_is_not_held_back(self) -> None:

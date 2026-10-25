@@ -396,7 +396,7 @@ class CoreLogSourcesMixin:
     async def _widen_error_log_for_record_header(
         self,
         fetch_lines: int,
-        offset: int,
+        offset: int | str,
         raw_text: str,
         page: ErrorLogPage,
     ) -> tuple[int, ErrorLogPage, str, bool]:
@@ -534,7 +534,7 @@ class CoreLogSourcesMixin:
 
     @staticmethod
     def _apply_empty_window_warning(
-        data: dict[str, Any], raw_text: str, offset: int, structured: bool
+        data: dict[str, Any], raw_text: str, offset: int | str, structured: bool
     ) -> None:
         """Tell an empty terminal page apart from an empty fetch.
 
@@ -568,7 +568,7 @@ class CoreLogSourcesMixin:
         search: str | None = None,
         level: str | None = None,
         order: Literal["newest", "oldest"] = "newest",
-        offset: int = 0,
+        offset: int | str = 0,
         structured: bool = False,
         top_n: int | None = None,
     ) -> dict[str, Any]:
@@ -577,8 +577,9 @@ class CoreLogSourcesMixin:
         Container/pip installs read the plain ``home-assistant.log`` file;
         Supervisor-backed installs read HA Core's journald stream instead.
         Either way only the requested window is fetched, and ``offset`` pages
-        deeper into the history (#2279) — in file lines on container installs,
-        in journald entries on Supervisor-backed ones.
+        deeper into the history (#2279): in file lines on container installs,
+        and either an integer entry offset or the opaque cursor token a
+        previous journald page returned on Supervisor-backed ones.
 
         With ``structured=True`` the raw text is collapsed into a counted,
         component-grouped summary instead (see ``_parse_error_log_structured``);
@@ -605,6 +606,7 @@ class CoreLogSourcesMixin:
                 fetch_lines=fetch_lines,
                 raw_line_count=len(raw_text.splitlines()),
                 has_more=page.has_more,
+                next_cursor=page.next_cursor,
             )
 
             if structured:
