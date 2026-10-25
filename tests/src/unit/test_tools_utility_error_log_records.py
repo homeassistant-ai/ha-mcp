@@ -312,8 +312,8 @@ class TestRecordLimitAndPaging:
             f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}"
             for i in range(300)
         ]
-        entries[250] = entries[250] + "\n" + "\n".join(
-            f"  frame {i}" for i in range(40)
+        entries[250] = (
+            entries[250] + "\n" + "\n".join(f"  frame {i}" for i in range(40))
         )
 
         async def _page(lines: int, offset: int = 0) -> ErrorLogPage:
@@ -335,9 +335,9 @@ class TestRecordLimitAndPaging:
         assert first["next_offset"] == 20
 
         second = await tools.get_logs(**_kwargs(limit=20, offset=first["next_offset"]))
-        assert not (
-            set(first["log"].splitlines()) & set(second["log"].splitlines())
-        ), "paging in entries must not re-read a line"
+        assert not (set(first["log"].splitlines()) & set(second["log"].splitlines())), (
+            "paging in entries must not re-read a line"
+        )
 
     @pytest.mark.asyncio
     async def test_an_entry_offset_read_steps_with_the_line_derived_step(self) -> None:
