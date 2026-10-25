@@ -456,7 +456,7 @@ class CoreLogSourcesMixin:
         order: Literal["newest", "oldest"],
         window: _ErrorLogWindow,
         refetch_failed: bool = False,
-    ) -> tuple[dict[str, Any], int]:
+    ) -> tuple[dict[str, Any], int, bool]:
         """Return the most recent matching records, plus the next page's step.
 
         Records are the unit: ``search`` matches any line of a record and
@@ -533,7 +533,10 @@ class CoreLogSourcesMixin:
             data["warnings"] = warnings
         if filters_applied:
             data["filters_applied"] = filters_applied
-        return data, step
+        # A cursor token names the oldest entry of the whole fetched window, so
+        # it may only be handed out when this page returned that window entire.
+        consumed_whole_window = page.oldest_index in (0, None)
+        return data, step, consumed_whole_window
 
     @staticmethod
     def _apply_empty_window_warning(
@@ -612,6 +615,10 @@ class CoreLogSourcesMixin:
                 next_cursor=page.next_cursor,
             )
 
+            data: dict[str, Any]
+            # The structured summary consumes the whole window; the raw path
+            # sets this from the page it selected.
+            consumed_window = True
             if structured:
                 data = self._build_structured_error_log(
                     raw_text,
@@ -630,7 +637,7 @@ class CoreLogSourcesMixin:
                 effective_limit = _coerce_limit(
                     limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
                 )
-                data, step = self._build_raw_error_log(
+                data, step, consumed_window = self._build_raw_error_log(
                     raw_text,
                     search=search,
                     level=level,
@@ -655,6 +662,7 @@ class CoreLogSourcesMixin:
                 unreturned_matches=(
                     0 if structured else data["total_lines"] - data["returned_lines"]
                 ),
+                use_cursor=consumed_window,
             )
             return data
 

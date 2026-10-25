@@ -362,6 +362,45 @@ class TestRecordLimitAndPaging:
         assert second["log"].splitlines()[0] == _HEADER
 
     @pytest.mark.asyncio
+    async def test_a_cursor_token_is_only_used_when_the_page_consumed_the_window(
+        self,
+    ) -> None:
+        """The token names the fetched window's oldest entry, so a page that
+        returned only part of it must advance by the integer step instead.
+        """
+        records = "\n".join(
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}"
+            for i in range(20)
+        )
+        client = _client(records, has_more=True, next_cursor="cursor:abc")
+        tools = LogTools(client)
+
+        result = await tools.get_logs(**_kwargs(limit=5))
+
+        assert result["returned_lines"] == 5
+        assert result["next_offset"] != "cursor:abc"
+        assert isinstance(result["next_offset"], int)
+
+    @pytest.mark.asyncio
+    async def test_numeric_string_offsets_keep_working(self) -> None:
+        """The offset union admits strings now; a stringified integer still works."""
+        client = _client(_ERROR_RECORD)
+        tools = LogTools(client)
+
+        await tools.get_logs(**_kwargs(offset="7"))
+        assert client.get_error_log.await_args.kwargs["offset"] == 7
+
+        client.get_error_log.reset_mock()
+        await tools.get_logs(**_kwargs(offset=""))
+        assert client.get_error_log.await_args.kwargs["offset"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_negative_string_offset_is_rejected(self) -> None:
+        tools = LogTools(_client(_ERROR_RECORD))
+        with pytest.raises(ToolError):
+            await tools.get_logs(**_kwargs(offset="-2"))
+
+    @pytest.mark.asyncio
     async def test_a_cursor_page_emits_its_token_as_next_offset(self) -> None:
         """A journald page hands back the cursor token, and accepts it back."""
         client = _client(_ERROR_RECORD, has_more=True, next_cursor="cursor:abc")

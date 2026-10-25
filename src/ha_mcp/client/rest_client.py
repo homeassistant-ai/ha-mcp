@@ -68,16 +68,6 @@ _MAX_REQUEST_ATTEMPTS = 3
 # client mirrors that on every route, so all install types serve the same slice.
 # Shared with the tool layer, which sizes its fetch window against it.
 MIN_LOG_WINDOW_LINES = 2
-# Entries the has_more probe reads from just behind a full window. A one-entry
-# probe compared one rendered line, which a boundary duplicate (the same
-# timestamp-less traceback line logged twice) could false-match into "end of
-# history". Comparing a block this deep requires that many CONSECUTIVE
-# identical lines to straddle the boundary — and then the history a false stop
-# skips is more of the same duplicates. Timestamps cannot close the gap
-# instead: the colliding lines are exactly the ones without them, and
-# journald's cursor/timestamp metadata exists only in the journal export
-# format, which the hassio-proxy route cannot request.
-_PROBE_ENTRIES = 8
 NON_ADMIN_TOKEN_WARNING = (
     "ha-mcp does not officially support non-admin Home Assistant tokens. They "
     "still work, but admin-only operations fail. Use a long-lived access token "

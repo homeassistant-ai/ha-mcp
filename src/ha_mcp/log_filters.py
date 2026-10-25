@@ -159,6 +159,21 @@ def _add_filter_once(logger_name: str, filter_cls: type[logging.Filter]) -> None
     logger.addFilter(filter_cls())
 
 
+class _RootThresholdFilter(logging.Filter):
+    """Keep FastMCP records below Home Assistant's effective level out of HA's log.
+
+    FastMCP configures its own logger at INFO. Once its records propagate to
+    HA's handlers — whose levels are NOTSET — the root logger's level is the
+    only threshold left, so without this filter the MCP stack would write
+    INFO/DEBUG lines into HA's log and system_log that HA itself never shows.
+    The user's own ``fastmcp`` level is left untouched; this only filters at
+    the forwarding boundary.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno >= logging.getLogger().getEffectiveLevel()
+
+
 def route_fastmcp_logs_to_root() -> None:
     """Hand FastMCP's own log records to the embedding application.
 
@@ -178,6 +193,7 @@ def route_fastmcp_logs_to_root() -> None:
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
     logger.propagate = True
+    _add_filter_once("fastmcp", _RootThresholdFilter)
 
 
 def install_sdk_log_filters() -> None:

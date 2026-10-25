@@ -704,6 +704,7 @@ def _attach_error_log_pagination(
     structured: bool,
     top_n: int | None,
     unreturned_matches: int = 0,
+    use_cursor: bool = False,
 ) -> None:
     """Add the offset/has_more contract to an error-log response in place.
 
@@ -720,9 +721,15 @@ def _attach_error_log_pagination(
     data["offset"] = window.offset
     data["has_more"] = window.has_more
     if window.has_more:
-        next_offset: int | str = window.next_cursor or 0
-        if window.next_cursor is None:
-            next_offset = window.offset + step if isinstance(window.offset, int) else 0
+        # The token names the oldest entry of the FETCHED window. Reusing it
+        # would skip everything fetched behind the returned page, so it is only
+        # used when this page consumed the whole window; otherwise the integer
+        # step resumes just before the oldest returned line.
+        next_offset: int | str = 0
+        if use_cursor and window.next_cursor:
+            next_offset = window.next_cursor
+        elif isinstance(window.offset, int):
+            next_offset = window.offset + step
         data["next_offset"] = next_offset
         data["pagination_hint"] = _build_error_log_pagination_hint(
             next_offset,

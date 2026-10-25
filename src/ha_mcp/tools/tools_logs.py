@@ -34,6 +34,22 @@ from .tool_hints import read_only_hints
 def _validate_log_offset(source: str, offset: int | str) -> int | str:
     """Validate a paging anchor: an integer, or an error-log cursor token."""
     if isinstance(offset, str):
+        text = offset.strip()
+        if not text:
+            # An empty string means "no anchor"; MCP clients stringify 0.
+            return 0
+        if text.lstrip("-").isdigit():
+            # Clients that stringify integers used to reach the integer schema;
+            # keep that working now that the union admits strings.
+            numeric = int(text)
+            if numeric < 0:
+                raise ToolError(
+                    f"'offset' must not be negative, got {numeric}",
+                    log_level=TOOL_ERROR_LOG_LEVEL,
+                )
+            return numeric
+        offset = text
+    if isinstance(offset, str):
         if source != "error_log":
             raise ToolError(
                 "Cursor tokens only apply to source='error_log'; "

@@ -599,13 +599,13 @@ class TestGetErrorLogBranchSelection:
         )
 
     @staticmethod
-    def _serve_supervisor(client, text="x"):
+    def _serve_supervisor(client: HomeAssistantClient, text: str = "x") -> None:
         client._supervisor_logs_response = AsyncMock(
             return_value=SimpleNamespace(text=text, headers={})
         )
 
     @staticmethod
-    def _serve_proxy(client):
+    def _serve_proxy(client: HomeAssistantClient) -> None:
         client._request = AsyncMock(return_value={"components": ["hassio"]})
         client._raw_request = AsyncMock(
             return_value=SimpleNamespace(text="x", headers={})

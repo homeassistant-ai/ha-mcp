@@ -143,3 +143,22 @@ class TestRouteFastmcpLogsToRoot:
         monkeypatch.setattr(config, "is_embedded_mode", lambda: False)
         log_filters.install_sdk_log_filters()
         assert calls == []
+
+    def test_the_forwarding_filter_keeps_home_assistants_threshold(self):
+        import logging as lg
+
+        from ha_mcp.log_filters import _RootThresholdFilter
+
+        root = lg.getLogger()
+        saved = root.level
+        try:
+            root.setLevel(lg.WARNING)
+            threshold = _RootThresholdFilter()
+            info = lg.LogRecord("fastmcp", lg.INFO, __file__, 1, "info", None, None)
+            warning = lg.LogRecord(
+                "fastmcp", lg.WARNING, __file__, 1, "warning", None, None
+            )
+            assert not threshold.filter(info)
+            assert threshold.filter(warning)
+        finally:
+            root.setLevel(saved)
