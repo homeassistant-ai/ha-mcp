@@ -226,10 +226,62 @@ class TestBuildTextDiffResponse:
         assert r["truncated"] is False
         assert "-B" in r["diff"] and "+b" in r["diff"]
 
-    def test_unchanged_when_identical(self) -> None:
-        r = _build_text_diff_response("snap", "file", "p", "t0", "same\n", "same\n")
+    @pytest.mark.parametrize("text", ["", "same", "same\n"])
+    def test_unchanged_when_identical(self, text: str) -> None:
+        r = _build_text_diff_response("snap", "file", "p", "t0", text, text)
         assert r["unchanged"] is True
         assert r["diff"] == ""
+
+    @pytest.mark.parametrize(
+        ("stored", "current", "expected_changes"),
+        [
+            (
+                "name: demo\n",
+                "name: demo",
+                "-name: demo\n\\ No newline at end of file\n+name: demo",
+            ),
+            (
+                "name: demo",
+                "name: demo\n",
+                "-name: demo\n+name: demo\n\\ No newline at end of file",
+            ),
+            (
+                "name: saved",
+                "name: live",
+                "-name: live\n\\ No newline at end of file\n+name: saved\n\\ No newline at end of file",
+            ),
+        ],
+        ids=[
+            "restore-final-newline",
+            "remove-final-newline",
+            "neither-has-final-newline",
+        ],
+    )
+    def test_missing_final_newline_is_visible_in_diff(
+        self, stored: str, current: str, expected_changes: str
+    ) -> None:
+        """A text backup must expose EOF changes on the correct side of the diff."""
+        r = _build_text_diff_response("snap", "file", "p", "t0", stored, current)
+        assert r["unchanged"] is False
+        assert (
+            r["diff"] == "--- current\n+++ snapshot\n@@ -1 +1 @@\n" + expected_changes
+        )
+
+    def test_unicode_separator_is_content_not_a_new_line(self) -> None:
+        r = _build_text_diff_response(
+            "snap", "file", "p", "t0", "first\nsecond\n", "first\u2028second\n"
+        )
+        assert r["unchanged"] is False
+        assert r["diff"] == (
+            "--- current\n+++ snapshot\n@@ -1 +1,2 @@\n"
+            "-first\u2028second\n+first\n+second"
+        )
+
+    def test_missing_newline_marker_counts_toward_output_cap(self) -> None:
+        stored = "\n".join(f"line{i}" for i in range(_MAX_DIFF_LINES - 3))
+        r = _build_text_diff_response("snap", "file", "p", "t0", stored, "")
+        assert r["truncated"] is True
+        assert len(r["diff"].split("\n")) <= _MAX_DIFF_LINES
 
     def test_missing_target(self) -> None:
         r = _build_text_diff_response("snap", "file", "p", "t0", "x\n", None)
