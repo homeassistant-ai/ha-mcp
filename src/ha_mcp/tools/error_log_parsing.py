@@ -625,20 +625,41 @@ def _error_log_window_lines(
     return max(effective_limit + _ERROR_LOG_HEADER_LOOKBACK_LINES, MIN_LOG_WINDOW_LINES)
 
 
-def _next_page_step(window: _ErrorLogWindow, oldest_index: int | None) -> int:
+def _entry_page_step(records: list[_LogRecord], oldest_index: int | None) -> int | None:
+    """Step in journald-entry units: each record is one entry.
+
+    Supervisor spends ``offset`` in entries, so on that route the step counts
+    the records (entries) behind the oldest one shown instead of raw lines,
+    which would overshoot past whole entries.
+    """
+    if oldest_index is None:
+        return None
+    for position, record in enumerate(records):
+        if record.start_index == oldest_index:
+            return len(records) - position
+    return None
+
+
+def _next_page_step(
+    window: _ErrorLogWindow,
+    oldest_index: int | None,
+    entry_step: int | None = None,
+) -> int:
     """How far back the next page's ``offset`` sits from this one's.
 
     The next page resumes just before the oldest returned record's first line
     (its header when whole). On container and pip installs, where ``offset``
     counts lines, that keeps every record whole across pages. On journald
-    ``offset`` counts entries, so a line-counted step is spent faster and
-    overshoots, skipping more history than it counted — the mismatch described
-    on ``_ErrorLogWindow``. The cap at the window size bounds that skip to one
-    window. Nothing shown means nothing to resume before, so the whole window
-    is consumed.
+    ``offset`` counts entries, so ``entry_step`` — the number of records
+    behind the oldest one shown — is spent instead; a line-counted step there
+    would overshoot past whole entries. The cap at the window size bounds any
+    remaining error to one window. Nothing shown means nothing to resume
+    before, so the whole window is consumed.
     """
     if oldest_index is None:
         return window.fetch_lines
+    if entry_step is not None:
+        return min(entry_step, window.fetch_lines)
     return min(window.raw_line_count - oldest_index, window.fetch_lines)
 
 

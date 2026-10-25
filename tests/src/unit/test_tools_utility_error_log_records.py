@@ -301,6 +301,26 @@ class TestRecordLimitAndPaging:
         assert any("partial record" in warning for warning in result["warnings"])
 
     @pytest.mark.asyncio
+    async def test_an_entry_offset_read_steps_in_entries_not_lines(self) -> None:
+        """Supervisor spends offset in entries, so the step must count records."""
+        records = [
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
+            f"  frame {i}.0\n  frame {i}.1"
+            for i in range(800)
+        ]
+        lines = "\n".join(records).splitlines()
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(lines, entry_offsets=True)
+        tools = LogTools(client)
+
+        result = await tools.get_logs(**_kwargs(limit=6, search="issue"))
+
+        assert result["returned_records"] == 2
+        # Two records (entries) shown, so the next page starts two entries back,
+        # not six lines back.
+        assert result["next_offset"] == 2
+
+    @pytest.mark.asyncio
     async def test_an_entry_offset_read_returns_the_tail_as_a_partial(self) -> None:
         """A journald route must not hold back: its resume step counts entries.
 
@@ -400,6 +420,46 @@ class TestRecordLimitAndPaging:
         assert result["returned_records"] == 1
         assert not any("held back" in warning for warning in result.get("warnings", []))
         assert "TARGET" in result["log"]
+
+    @pytest.mark.asyncio
+    async def test_a_filtered_read_is_exhaustive_through_the_terminal_hint(
+        self,
+    ) -> None:
+        """A filtered read must reach every match, not just a page or two.
+
+        A filtered window is fixed at the search-window bound, so matches left
+        inside a terminal window are reachable only by raising the limit. With
+        the whole matching set inside one hinted call, the union has to cover
+        every match exactly once.
+        """
+        records = [
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
+            f"  frame {i}.0"
+            for i in range(200)
+        ]
+        lines = "\n".join(records).splitlines()
+        client = AsyncMock()
+        client.get_error_log = _offset_aware_page(lines)
+        tools = LogTools(client)
+
+        first = await tools.get_logs(**_kwargs(limit=20, search="issue"))
+        assert first["has_more"] is False
+        first_seen = {
+            line for line in first["log"].splitlines() if line.startswith("2026-")
+        }
+        hint = first.get("pagination_hint") or ""
+        match = re.search(r"limit=(\d+)", hint)
+        assert match, f"terminal hint must name an actionable limit: {hint}"
+
+        final = await tools.get_logs(
+            **_kwargs(limit=int(match.group(1)), search="issue", offset=0)
+        )
+        final_seen = {
+            line for line in final["log"].splitlines() if line.startswith("2026-")
+        }
+
+        assert set(final_seen) >= set(first_seen)
+        assert len(final_seen) == len(records)
 
     @pytest.mark.asyncio
     async def test_walking_a_filtered_read_keeps_matches_in_order(self) -> None:
@@ -577,6 +637,7 @@ class TestRecordLimitAndPaging:
         tools = LogTools(client)
 
         seen: list[str] = []
+        page_seen: list[str] = []
         offset = 0
         last: dict[str, Any] = {}
         for _ in range(40):
@@ -587,9 +648,10 @@ class TestRecordLimitAndPaging:
                     .splitlines()[0]
                     .startswith("2026-05-27 10:00:00.000 ERROR")
                 ), "every page must open on a record header"
-            seen.extend(
+            page_seen = [
                 line for line in last["log"].splitlines() if line.startswith("2026-")
-            )
+            ]
+            seen.extend(page_seen)
             if not last["has_more"]:
                 break
             offset = last["next_offset"]
@@ -614,6 +676,9 @@ class TestRecordLimitAndPaging:
                 line for line in final["log"].splitlines() if line.startswith("2026-")
             ]
             assert final["has_more"] is False
+            # The hinted request re-reads the terminal window with a wider
+            # limit, so it must include everything that window already showed.
+            assert set(final_seen) >= set(page_seen)
             assert len(set(seen) | set(final_seen)) == len(records), (
                 "the terminal hint must make every remaining record reachable"
             )
