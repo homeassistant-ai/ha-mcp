@@ -15,6 +15,7 @@ from ...utilities.assertions import MCPAssertions, safe_call_tool
 from .test_capture_and_restore import (
     _HA_PROPAGATION_SETTLE_SECONDS,
     _backups_for,
+    _delete_leftover_backup,
     _enable_auto_backup,
     _update_automation,
     _wait_for_backup,
@@ -46,66 +47,70 @@ class TestAutomationCaptureRestore:
         )
         assert create.get("success") is not False
 
-        # Edit it once — decorator captures pre-edit state.
-        edited = {**original, "alias": f"E2E Backup Edited {suffix}"}
-        await _update_automation(mcp_client, identifier, edited)
+        backup_name = None
+        try:
+            # Edit it once — decorator captures pre-edit state.
+            edited = {**original, "alias": f"E2E Backup Edited {suffix}"}
+            await _update_automation(mcp_client, identifier, edited)
 
-        # List backups; ours should be there.
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "automation",
-                "entity_id": identifier,
-            },
-        )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="automation", entity_id=identifier)
-        assert len(mine) >= 1
-
-        backup_name = mine[0]["name"]
-
-        # View
-        view = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {"scope": "edits", "action": "view", "backup_name": backup_name},
-        )
-        assert view.get("success") is True
-
-        # Restore
-        restore = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {"scope": "edits", "action": "restore", "backup_name": backup_name},
-        )
-        assert restore.get("success") is True
-        # A safety backup is taken before re-applying.
-        assert restore.get("data", {}).get("safety_backup") is not None
-        # The restore puts the pre-edit alias back.
-        async with MCPAssertions(mcp_client) as mcp:
-            restored = await mcp.call_tool_success(
-                "ha_config_get_automation", {"identifier": identifier}
+            # List backups; ours should be there.
+            listing = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {
+                    "scope": "edits",
+                    "action": "list",
+                    "domain": "automation",
+                    "entity_id": identifier,
+                },
             )
-        assert restored["config"]["alias"] == original["alias"]
+            assert listing.get("success") is True
+            entries = listing.get("data", {}).get("backups", [])
+            mine = _backups_for(entries, domain="automation", entity_id=identifier)
+            assert len(mine) >= 1
 
-        # Delete
-        delete = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {"scope": "edits", "action": "delete", "backup_name": backup_name},
-        )
-        assert delete.get("success") is True
+            backup_name = mine[0]["name"]
 
-        # Cleanup: remove the automation we created.
-        await safe_call_tool(
-            mcp_client,
-            "ha_config_remove_automation",
-            {"identifier": identifier},
-        )
+            # View
+            view = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "view", "backup_name": backup_name},
+            )
+            assert view.get("success") is True
+
+            # Restore
+            restore = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "restore", "backup_name": backup_name},
+            )
+            assert restore.get("success") is True
+            # A safety backup is taken before re-applying.
+            assert restore.get("data", {}).get("safety_backup") is not None
+            # The restore puts the pre-edit alias back.
+            async with MCPAssertions(mcp_client) as mcp:
+                restored = await mcp.call_tool_success(
+                    "ha_config_get_automation", {"identifier": identifier}
+                )
+            assert restored["config"]["alias"] == original["alias"]
+
+            # Delete
+            delete = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "delete", "backup_name": backup_name},
+            )
+            assert delete.get("success") is True
+            backup_name = None
+        finally:
+            # Cleanup: remove the automation we created.
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_automation",
+                {"identifier": identifier},
+            )
+            await _delete_leftover_backup(mcp_client, backup_name)
 
 
 # ---------------------------------------------------------------- script lane
@@ -137,49 +142,54 @@ class TestScriptCaptureRestore:
         )
         if create.get("success") is False:
             pytest.skip(f"script create unsupported: {create}")
-        # Settle so the decorator's pre-edit fetch finds the script.
-        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
-        # Edit triggers capture.
-        await MCPAssertions(mcp_client).call_tool_success(
-            "ha_config_set_script",
-            {
-                "script_id": script_id,
-                "config": {
-                    "alias": f"E2E Backup Script {script_id} edited",
-                    "sequence": [{"service": "homeassistant.no_op"}],
-                },
-            },
-        )
-        backup_name = await _wait_for_backup(
-            mcp_client, domain="script", entity_id=script_id
-        )
-
-        restore = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {"scope": "edits", "action": "restore", "backup_name": backup_name},
-        )
-        assert restore.get("success") is True
-        assert restore.get("data", {}).get("safety_backup") is not None
-        async with MCPAssertions(mcp_client) as mcp:
-            restored = await mcp.call_tool_success(
-                "ha_config_get_script", {"script_id": script_id}
+        backup_name = None
+        try:
+            # Settle so the decorator's pre-edit fetch finds the script.
+            await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
+            # Edit triggers capture.
+            async with MCPAssertions(mcp_client) as mcp:
+                await mcp.call_tool_success(
+                    "ha_config_set_script",
+                    {
+                        "script_id": script_id,
+                        "config": {
+                            "alias": f"E2E Backup Script {script_id} edited",
+                            "sequence": [{"service": "homeassistant.no_op"}],
+                        },
+                    },
+                )
+            backup_name = await _wait_for_backup(
+                mcp_client, domain="script", entity_id=script_id
             )
-        assert restored["config"]["alias"] == f"E2E Backup Script {script_id}"
 
-        delete = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {"scope": "edits", "action": "delete", "backup_name": backup_name},
-        )
-        assert delete.get("success") is True
+            restore = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "restore", "backup_name": backup_name},
+            )
+            assert restore.get("success") is True
+            assert restore.get("data", {}).get("safety_backup") is not None
+            async with MCPAssertions(mcp_client) as mcp:
+                restored = await mcp.call_tool_success(
+                    "ha_config_get_script", {"script_id": script_id}
+                )
+            assert restored["config"]["alias"] == f"E2E Backup Script {script_id}"
 
-        # Cleanup
-        await safe_call_tool(
-            mcp_client,
-            "ha_config_remove_script",
-            {"script_id": script_id},
-        )
+            delete = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "delete", "backup_name": backup_name},
+            )
+            assert delete.get("success") is True
+            backup_name = None
+        finally:
+            # Cleanup
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_script",
+                {"script_id": script_id},
+            )
+            await _delete_leftover_backup(mcp_client, backup_name)
 
 
 # ---------------------------------------------------------------- scene lane
@@ -209,45 +219,50 @@ class TestSceneCaptureRestore:
         )
         if create.get("success") is False:
             pytest.skip(f"scene create unsupported: {create}")
-        # Settle so the decorator's pre-edit fetch finds the scene.
-        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
-        await MCPAssertions(mcp_client).call_tool_success(
-            "ha_config_set_scene",
-            {
-                "scene_id": scene_id,
-                "config": {
-                    "name": f"E2E Backup Scene {scene_id} edited",
-                    "entities": {},
-                },
-            },
-        )
-        backup_name = await _wait_for_backup(
-            mcp_client, domain="scene", entity_id=scene_id
-        )
-
-        restore = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {"scope": "edits", "action": "restore", "backup_name": backup_name},
-        )
-        assert restore.get("success") is True
-        assert restore.get("data", {}).get("safety_backup") is not None
-        async with MCPAssertions(mcp_client) as mcp:
-            restored = await mcp.call_tool_success(
-                "ha_config_get_scene", {"scene_id": scene_id}
+        backup_name = None
+        try:
+            # Settle so the decorator's pre-edit fetch finds the scene.
+            await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
+            async with MCPAssertions(mcp_client) as mcp:
+                await mcp.call_tool_success(
+                    "ha_config_set_scene",
+                    {
+                        "scene_id": scene_id,
+                        "config": {
+                            "name": f"E2E Backup Scene {scene_id} edited",
+                            "entities": {},
+                        },
+                    },
+                )
+            backup_name = await _wait_for_backup(
+                mcp_client, domain="scene", entity_id=scene_id
             )
-        assert restored["config"]["name"] == f"E2E Backup Scene {scene_id}"
 
-        delete = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {"scope": "edits", "action": "delete", "backup_name": backup_name},
-        )
-        assert delete.get("success") is True
+            restore = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "restore", "backup_name": backup_name},
+            )
+            assert restore.get("success") is True
+            assert restore.get("data", {}).get("safety_backup") is not None
+            async with MCPAssertions(mcp_client) as mcp:
+                restored = await mcp.call_tool_success(
+                    "ha_config_get_scene", {"scene_id": scene_id}
+                )
+            assert restored["config"]["name"] == f"E2E Backup Scene {scene_id}"
 
-        # Cleanup
-        await safe_call_tool(
-            mcp_client,
-            "ha_config_remove_scene",
-            {"scene_id": scene_id},
-        )
+            delete = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "delete", "backup_name": backup_name},
+            )
+            assert delete.get("success") is True
+            backup_name = None
+        finally:
+            # Cleanup
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_scene",
+                {"scene_id": scene_id},
+            )
+            await _delete_leftover_backup(mcp_client, backup_name)
