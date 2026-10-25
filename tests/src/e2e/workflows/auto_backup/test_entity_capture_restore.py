@@ -49,10 +49,12 @@ class TestEntityCaptureRestore:
                     mcp_client, domain="entity", entity_id=entity_id
                 )
 
-                await mcp.call_tool_success(
+                restore = await mcp.call_tool_success(
                     "ha_manage_backup",
                     {"scope": "edits", "action": "restore", "backup_name": backup_name},
                 )
+                # The safety backup must find the entity under its new ID.
+                assert restore["data"]["safety_backup"] is not None
                 # A restore that only reset the state, as it once did, leaves
                 # the entity renamed and hidden: the old ID is then not found.
                 restored = await mcp.call_tool_success(

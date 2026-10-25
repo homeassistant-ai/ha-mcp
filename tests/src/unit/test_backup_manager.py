@@ -930,10 +930,10 @@ def test_destructive_tools_carry_auto_backup_decorator() -> None:
 
     tools_dir = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools"
     # (fname, func, domain, id_param-or-None, mandatory). The file/YAML writes
-    # (#1579) are mandatory; ha_config_set_yaml computes its key via id_fn so it
-    # has no id_param to assert.
+    # (#1579) are mandatory; ha_config_set_yaml and ha_remove_entity compute their
+    # key via id_fn (test_entity_backup.py pins the entity one), so no id_param.
     checks = [
-        ("tools_entities.py", "ha_remove_entity", "entity", "entity_id", False),
+        ("tools_entities.py", "ha_remove_entity", "entity", None, False),
         ("tools_registry.py", "ha_set_device", "device", "device_id", False),
         ("tools_registry.py", "ha_remove_device", "device", "device_id", False),
         ("tools_filesystem.py", "ha_write_file", "file", "path", True),

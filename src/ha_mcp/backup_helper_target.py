@@ -16,6 +16,7 @@ import json
 from typing import Any, NoReturn
 
 from ._vendor.fastmcp.exceptions import ToolError
+from .backup_entities import current_entity_id
 from .backup_entity_ids import _manager
 
 
@@ -85,6 +86,8 @@ async def safety_target(
     fails, and overwrites nothing that needs a backup.
     """
     bm = _manager()
+    if domain == "entity":
+        return await current_entity_id(client, entity_id, config)
     platform = domain.removeprefix("helper_")
     stored = config.get("id") if isinstance(config, dict) else None
     if not stored or platform not in bm._HELPER_LIST_TYPES:

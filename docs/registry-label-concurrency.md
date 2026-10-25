@@ -22,6 +22,7 @@ removed automatically.
 | Label/category registry metadata and other entity/device registry fields | Send only explicitly supplied fields | No client-side label merge. |
 | Template helper identity restore | Restore the saved entity ID/name, then verify | Lock both the created and saved entity IDs in sorted order, re-read after acquiring them, and hold through verification. |
 | Area backup restore | Deliberately replace saved registry values | Share the area lock for the replacement write; the wider restore remains non-atomic. |
+| Entity backup restore | Deliberately replace saved registry values, renaming the entity back | Lock both the current and the saved entity ID in sorted order and re-read the entry under them, as the template identity restore does. |
 
 The lock does not coordinate separate processes/event loops, the Home Assistant
 UI, automations, or other integrations. Home Assistant provides no conditional

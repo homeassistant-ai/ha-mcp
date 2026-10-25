@@ -226,6 +226,18 @@ def _match_registry_by_unique_id(
     return matches
 
 
+def _single_entity_target(kw: dict[str, Any]) -> str:
+    """The entity a call backs up; a bulk call (a longer list) backs up none.
+
+    Snapshotting only the first entity of a list would leave the rest without
+    a backup while looking covered. The capture treats "" as "no entity".
+    """
+    entity_id = kw.get("entity_id")
+    if isinstance(entity_id, list):
+        return str(entity_id[0]) if len(entity_id) == 1 else ""
+    return str(entity_id or "")
+
+
 def _format_entity_entry(entry: dict[str, Any]) -> dict[str, Any]:
     """Format entity registry entry for API response."""
     return {
@@ -1458,18 +1470,7 @@ class EntityTools:
             "Set Entity", destructive=True, idempotent=True, open_world=False
         ),
     )
-    @with_auto_backup(
-        domain="entity",
-        # Bulk calls (entity_id is a list) intentionally skip the
-        # decorator path: we'd otherwise snapshot only the first entity
-        # and silently leave the rest of the list un-protected. The
-        # capture pipeline treats "" as "no entity" and no-ops.
-        id_fn=lambda kw: (
-            ""
-            if isinstance(kw.get("entity_id"), list)
-            else str(kw.get("entity_id") or "")
-        ),
-    )
+    @with_auto_backup(domain="entity", id_fn=_single_entity_target)
     @log_tool_usage
     async def ha_set_entity(
         self,
@@ -2115,9 +2116,7 @@ class EntityTools:
             "Remove Entity", destructive=True, idempotent=True, open_world=False
         ),
     )
-    # Only a single id is snapshotted (id_param): a bulk list stringifies to no
-    # matching target, so bulk removal is not individually backed up.
-    @with_auto_backup(domain="entity", id_param="entity_id")
+    @with_auto_backup(domain="entity", id_fn=_single_entity_target)
     @log_tool_usage
     async def ha_remove_entity(
         self,
@@ -2139,8 +2138,9 @@ class EntityTools:
         or stale entity entries: if the underlying device, integration or
         stored helper is still there, the entity may be re-added on the next HA
         restart or reload; for a stored helper's entity a single-id removal
-        names the tool that removes the helper. This cannot be undone without restoring
-        from backup. For most use cases, consider disabling instead:
+        names the tool that removes the helper. An entity added again while its
+        config entry exists, or within 30 days, gets back the registry settings
+        it had. For most use cases, consider disabling instead:
         ha_set_entity(entity_id="sensor.old", enabled=False).
 
         BULK MODE:

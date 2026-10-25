@@ -83,6 +83,7 @@ from .backup_diff import (
     _compute_json_patch,
     _summarize_patch_counts,
 )
+from .backup_entities import current_entity_id, fetch_entity, restore_entity
 from .backup_entity_ids import (
     _restore_entity_ids,
     update_with_registry_icon,
@@ -1655,7 +1656,10 @@ class BackupManager:
         handler = self.handler_for(domain)
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
-        current = await handler.fetch(self._client, data["entity_id"])
+        target = data["entity_id"]
+        if domain == "entity":
+            target = await current_entity_id(self._client, target, data["config"])
+        current = await handler.fetch(self._client, target) if target else None
         if domain == "dashboard":
             _stored, legacy = dashboard_snapshot(data)
             current = dashboard_comparison(current, legacy=legacy)
@@ -2654,25 +2658,6 @@ async def _restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
         "services/todo/add_item",
         {"entity_id": cal, **data},
     )
-
-
-# Generic entity (ha_set_entity) — fetch via state API, restore by re-setting.
-
-
-async def _fetch_entity_state(client: Any, entity_id: str) -> Any:
-    return await _rest_get_or_none(client, f"states/{entity_id}")
-
-
-async def _restore_entity_state(client: Any, entity_id: str, config: Any) -> Any:
-    # ha_set_entity just calls /api/states/<entity_id> POST with state+attributes.
-    if isinstance(config, dict):
-        payload = {
-            "state": config.get("state"),
-            "attributes": config.get("attributes", {}),
-        }
-    else:
-        payload = {"state": str(config)}
-    return await _rest_post(client, f"states/{entity_id}", payload)
 
 
 # Devices — config/device_registry/{list,update}. ``ha_set_device`` mutates
@@ -3920,7 +3905,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
         DomainHandler("area_or_floor", _fetch_area_or_floor, _restore_area_or_floor)
     )
     mgr.register(DomainHandler("todo_item", _fetch_todo_item, _restore_todo_item))
-    mgr.register(DomainHandler("entity", _fetch_entity_state, _restore_entity_state))
+    mgr.register(DomainHandler("entity", fetch_entity, restore_entity))
     mgr.register(DomainHandler("device", _fetch_device, _restore_device))
     mgr.register(DomainHandler("integration", fetch_integration, restore_integration))
     mgr.register(DomainHandler("file", _fetch_file, _restore_file))
