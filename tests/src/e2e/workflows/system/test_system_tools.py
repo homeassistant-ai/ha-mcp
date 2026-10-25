@@ -18,6 +18,8 @@ import logging
 
 import pytest
 
+from ha_mcp.tools import system_restart
+
 from ...utilities.assertions import (
     extract_error_message,
     parse_mcp_result,
@@ -973,3 +975,18 @@ class TestGetSystemHealthDiagnosticsE2E:
         assert has_data ^ has_error, (
             f"Diagnostics sub-dict should have exactly one of 'data' or 'error'. Got: {diag}"
         )
+
+
+@pytest.mark.system
+@pytest.mark.asyncio
+async def test_restart_precheck_reads_the_real_recorder_status(ha_client) -> None:
+    """A renamed Core recorder field would silently drop the embedded refusal.
+
+    ha_restart is not called with confirm=True here (see the note above), so the
+    pre-check that guards the embedded database-upgrade refusal reads the live
+    ``recorder/info`` reply directly.
+    """
+    recorder = await system_restart._recorder_info(ha_client)
+
+    assert recorder is not None
+    assert recorder["migration_in_progress"] is False
