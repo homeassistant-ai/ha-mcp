@@ -159,6 +159,27 @@ def _add_filter_once(logger_name: str, filter_cls: type[logging.Filter]) -> None
     logger.addFilter(filter_cls())
 
 
+def route_fastmcp_logs_to_root() -> None:
+    """Hand FastMCP's own log records to the embedding application.
+
+    The vendored FastMCP configures the ``fastmcp`` logger at import time with
+    ``propagate = False`` and a RichHandler of its own. In the in-process
+    embedded server that means its records bypass Home Assistant's logging:
+    they reach Core's stream without HA's header, never reach ``system_log``,
+    and error-log record grouping reads them as continuation lines of whatever
+    record preceded them. Clearing the handlers and letting the logger
+    propagate gives HA's handler the record, so it is formatted, level-gated
+    and grouped like any other Core record.
+
+    Only the embedded server calls this. The CLI and the app launchers own
+    their stdout/stderr and must keep FastMCP's own handler.
+    """
+    logger = logging.getLogger("fastmcp")
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+    logger.propagate = True
+
+
 def install_sdk_log_filters() -> None:
     """Attach the suppression/demotion filters above to their MCP SDK loggers.
 
@@ -170,3 +191,10 @@ def install_sdk_log_filters() -> None:
     """
     _add_filter_once("mcp.server.streamable_http", StatelessSessionLogFilter)
     _add_filter_once("mcp.server.streamable_http_manager", SessionDisconnectLogFilter)
+    # Embedded-only: give FastMCP's own records to Home Assistant's logging so
+    # they carry HA's header, respect HA's levels and reach system_log. The CLI
+    # and app launchers own their output and keep FastMCP's handler.
+    from .config import is_embedded_mode
+
+    if is_embedded_mode():
+        route_fastmcp_logs_to_root()

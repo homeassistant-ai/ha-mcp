@@ -12,11 +12,7 @@ class ErrorLogPage:
     ``has_more`` cannot be derived by the caller from ``text``: a journald
     window that comes back full may or may not have anything behind it (see
     ``_journald_error_log_page``), and only the fetching route knows which.
-
-    ``entry_offsets`` says what ``offset`` counts on this route: journald
-    entries on Supervisor-backed installs, text lines on container/pip ones.
     """
 
     text: str
     has_more: bool
-    entry_offsets: bool = False

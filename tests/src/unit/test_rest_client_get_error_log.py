@@ -475,14 +475,6 @@ class TestContainerBranchWindowing:
             return await container_client.get_error_log(**kwargs)
 
     @pytest.mark.asyncio
-    async def test_container_pages_report_line_offsets(
-        self, container_client: HomeAssistantClient
-    ) -> None:
-        """The file path counts offset in lines, and says so."""
-        page = await self._fetch(container_client, lines=3)
-        assert page.entry_offsets is False
-
-    @pytest.mark.asyncio
     async def test_offset_window_is_taken_from_the_tail(self, container_client):
         """lines=3, offset=2 → the 3 lines ending 2 back from the newest."""
         page = await self._fetch(container_client, lines=3, offset=2)
@@ -563,24 +555,6 @@ class TestJournaldHasMoreProbe:
     async def _fetch(self, client, **kwargs):
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
             return await client.get_error_log(**kwargs)
-
-    @pytest.mark.asyncio
-    async def test_journald_pages_report_entry_offsets(
-        self, addon_client: HomeAssistantClient
-    ) -> None:
-        """A journald page counts offset in entries, and says so."""
-        self._serve(addon_client, "a\nb\n")
-        page = await self._fetch(addon_client, lines=10)
-        assert page.entry_offsets is True
-
-    @pytest.mark.asyncio
-    async def test_a_saturated_journald_page_also_reports_entry_offsets(
-        self, addon_client: HomeAssistantClient
-    ) -> None:
-        """The probe-terminated path sets the same metadata as the short one."""
-        self._serve(addon_client, "a\nb\nc\n", "older entry\n")
-        page = await self._fetch(addon_client, lines=3, offset=6)
-        assert page.entry_offsets is True
 
     @pytest.mark.asyncio
     async def test_short_window_needs_no_probe(self, addon_client):

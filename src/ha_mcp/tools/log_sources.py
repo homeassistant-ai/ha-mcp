@@ -62,65 +62,34 @@ def _leading_tail_policy(
     matches: list[_LogRecord],
     search: str | None,
     refetch_failed: bool,
-    entry_offsets: bool,
-) -> tuple[bool, bool, bool]:
+) -> tuple[bool, bool]:
     """Decide what to do with a window that opens inside a record.
 
-    Returns ``(held_back, header_out_of_reach, entry_offset_partial)``.
+    Returns ``(held_back, header_out_of_reach)``.
 
     Holding the tail back only pays off when the next window can reach its
     header, so a record longer than a whole fetch window is returned as a
-    partial instead. On journald the reopen step would be spent in ENTRIES
-    while it is derived from lines, which can skip the withheld record, so
-    entry-offset routes keep it as a partial too. Finally, the tail is only a
-    candidate when the filters could select it: ``search`` has to hit one of
-    its lines, while a ``level`` read cannot tell because the level lives in
-    the missing header.
+    partial instead. The tail is only a candidate when the filters could
+    select it: ``search`` has to hit one of its lines, while a ``level`` read
+    cannot tell because the level lives in the missing header.
     """
     if leading_record is None or not window.has_more or refetch_failed:
-        return False, False, False
+        return False, False
     search_hits_tail = search is None or any(
         search.lower() in _strip_ansi(line).lower() for line in leading_record.lines
     )
     header_reachable = leading_record.line_count < window.fetch_lines
-    is_partial_on_page = page.leading_partial
-    if entry_offsets:
-        return False, False, is_partial_on_page and search_hits_tail
     if not header_reachable:
-        return False, is_partial_on_page, False
+        return False, page.leading_partial
     held_back = search_hits_tail and len(page.records) == len(matches)
-    return held_back, False, False
-
-
-def _match_anchored_index(
-    page: _RecordPage, search: str | None, matches: list[_LogRecord]
-) -> int | None:
-    """Index of the oldest returned record's matching line, when it has one.
-
-    A journald step is spent in entries, so anchoring on the header of a record
-    whose match sits deeper inside it would advance past the entry the caller
-    actually matched. The page may hold a *cut* copy of that record, so the
-    lines are read from the matching record itself.
-    """
-    if not search or not page.records:
-        return None
-    oldest = min(page.records, key=lambda record: record.start_index)
-    source = next(
-        (record for record in matches if record.start_index == oldest.start_index),
-        oldest,
-    )
-    needle = search.lower()
-    for index, line in enumerate(source.lines):
-        if needle in _strip_ansi(line).lower():
-            return source.start_index + index
-    return None
+    return held_back, False
 
 
 def _raw_error_log_warnings(
     *,
     held_back: bool,
     header_out_of_reach: bool,
-    entry_offset_partial: bool,
+    level: str | None,
     refetch_failed: bool,
     leading_partial: bool,
     truncated: _TruncatedRecord | None,
@@ -129,8 +98,13 @@ def _raw_error_log_warnings(
     """Warnings that explain what one raw error-log page did and did not include."""
     warnings: list[str] = []
     if held_back:
+        subject = (
+            "The oldest record at this window's edge"
+            if level
+            else "The oldest matching record"
+        )
         warnings.append(
-            "The oldest matching record opens before this window; it is "
+            f"{subject} opens before this window; it is "
             "held back so the next page can return it whole with its header."
         )
     if refetch_failed:
@@ -139,19 +113,19 @@ def _raw_error_log_warnings(
             "header failed; this page is the first window only."
         )
     if leading_partial:
-        if entry_offset_partial:
-            gate = (
-                "a Supervisor/journald resume point counts entries, so the "
-                "record is returned here rather than withheld"
-            )
-        elif header_out_of_reach:
+        if header_out_of_reach:
             gate = "the record is longer than one fetch window"
         elif refetch_failed:
             gate = "a wider read failed before reaching it"
         else:
             gate = "it lies outside the fetched history"
+        subject = (
+            "The oldest lines at this window's edge are"
+            if level
+            else "The oldest matched lines are"
+        )
         warnings.append(
-            "The oldest matched lines are the tail of a record whose "
+            f"{subject} the tail of a record whose "
             f"header could not be included because {gate}; they are "
             "returned as a partial record."
         )
@@ -482,7 +456,6 @@ class CoreLogSourcesMixin:
         order: Literal["newest", "oldest"],
         window: _ErrorLogWindow,
         refetch_failed: bool = False,
-        entry_offsets: bool = False,
     ) -> tuple[dict[str, Any], int]:
         """Return the most recent matching records, plus the next page's step.
 
@@ -504,21 +477,15 @@ class CoreLogSourcesMixin:
         leading_record = records[0] if records and records[0].header is None else None
         matches, filters_applied = _filter_log_records(records, search, level)
         page = _select_error_log_page(matches, effective_limit, order)
-        oldest_index = page.oldest_index
-        if entry_offsets:
-            anchored = _match_anchored_index(page, search, matches)
-            if anchored is not None:
-                oldest_index = anchored
-        step = _next_page_step(window, oldest_index)
+        step = _next_page_step(window, page.oldest_index)
 
-        held_back, header_out_of_reach, entry_offset_partial = _leading_tail_policy(
+        held_back, header_out_of_reach = _leading_tail_policy(
             window=window,
             leading_record=leading_record,
             page=page,
             matches=matches,
             search=search,
             refetch_failed=refetch_failed,
-            entry_offsets=entry_offsets,
         )
         if held_back and leading_record is not None:
             # Filter the leading tail out BEFORE selecting, so a record the
@@ -553,7 +520,7 @@ class CoreLogSourcesMixin:
         warnings = _raw_error_log_warnings(
             held_back=held_back,
             header_out_of_reach=header_out_of_reach,
-            entry_offset_partial=entry_offset_partial,
+            level=level,
             refetch_failed=refetch_failed,
             leading_partial=page.leading_partial,
             truncated=page.truncated,
@@ -666,7 +633,6 @@ class CoreLogSourcesMixin:
                     order=order,
                     window=window,
                     refetch_failed=refetch_failed,
-                    entry_offsets=page.entry_offsets,
                 )
             self._apply_empty_window_warning(data, raw_text, offset, structured)
             _attach_error_log_pagination(

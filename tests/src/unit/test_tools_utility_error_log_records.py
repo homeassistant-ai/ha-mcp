@@ -75,18 +75,14 @@ def _client(text: str, *, has_more: bool = False) -> AsyncMock:
 
 
 def _offset_aware_page(
-    log_lines: list[str], *, entry_offsets: bool = False
+    log_lines: list[str],
 ) -> Callable[..., Awaitable[ErrorLogPage]]:
     """``get_error_log`` stub that honours ``lines``/``offset`` like a log file."""
 
     async def _page(lines: int, offset: int = 0) -> ErrorLogPage:
         end = max(0, len(log_lines) - offset)
         start = max(0, end - lines)
-        return ErrorLogPage(
-            text="\n".join(log_lines[start:end]),
-            has_more=start > 0,
-            entry_offsets=entry_offsets,
-        )
+        return ErrorLogPage(text="\n".join(log_lines[start:end]), has_more=start > 0)
 
     return _page
 
@@ -301,154 +297,27 @@ class TestRecordLimitAndPaging:
         assert any("partial record" in warning for warning in result["warnings"])
 
     @pytest.mark.asyncio
-    async def test_journald_entry_windows_count_entries_not_lines(self) -> None:
-        """Supervisor's window is N entries, so a multi-line entry shifts lines.
+    async def test_a_level_read_held_back_does_not_claim_a_match(self) -> None:
+        """A level read cannot know the withheld tail matches, so say so.
 
-        The line-model stub cannot see this: a 40-line entry inside the window
-        means the window holds 20 more lines than its entry count, and the step
-        must still advance in entries so the next page starts on new content.
-        """
-        entries = [
-            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}"
-            for i in range(300)
-        ]
-        entries[250] = (
-            entries[250] + "\n" + "\n".join(f"  frame {i}" for i in range(40))
-        )
-
-        async def _page(lines: int, offset: int = 0) -> ErrorLogPage:
-            end = max(0, len(entries) - offset)
-            start = max(0, end - lines)
-            text = "\n".join(
-                line for entry in entries[start:end] for line in entry.splitlines()
-            )
-            return ErrorLogPage(text=text, has_more=start > 0, entry_offsets=True)
-
-        client = AsyncMock()
-        client.get_error_log = AsyncMock(side_effect=_page)
-        tools = LogTools(client)
-
-        first = await tools.get_logs(**_kwargs(limit=20))
-        # 220 entries requested; 219 single-line entries plus the 41-line one.
-        assert first["window_lines"] == 220
-        assert first["returned_records"] == 20
-        assert first["next_offset"] == 20
-
-        second = await tools.get_logs(**_kwargs(limit=20, offset=first["next_offset"]))
-        assert not (set(first["log"].splitlines()) & set(second["log"].splitlines())), (
-            "paging in entries must not re-read a line"
-        )
-
-    @pytest.mark.asyncio
-    async def test_an_entry_offset_read_steps_with_the_line_derived_step(self) -> None:
-        """Record count is not an entry count, so the line-derived step stays.
-
-        One journald entry can carry several records and one record can span
-        entries; stepping by record count under-reached and repeated pages in
-        a live run, so entry-offset routes keep the documented line step.
-        """
-        records = [
-            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
-            f"  frame {i}.0\n  frame {i}.1"
-            for i in range(800)
-        ]
-        lines = "\n".join(records).splitlines()
-        client = AsyncMock()
-        client.get_error_log = _offset_aware_page(lines, entry_offsets=True)
-        tools = LogTools(client)
-
-        result = await tools.get_logs(**_kwargs(limit=6, search="issue"))
-
-        assert result["returned_records"] == 2
-        # Six lines shown means six entries assumed: the same step a
-        # container install takes.
-        assert result["next_offset"] == 6
-
-    @pytest.mark.asyncio
-    async def test_a_filtered_entry_offset_step_anchors_on_the_matching_line(
-        self,
-    ) -> None:
-        """On journald, resume from the line that matched, not the header.
-
-        Anchoring on a header whose match sits deeper would advance the entry
-        offset past the entry the caller matched.
-        """
-        records = [
-            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
-            f"  frame {i}.0\n  ValueError: NEEDLE {i}\n  frame {i}.1"
-            for i in range(600)
-        ]
-        lines = "\n".join(records).splitlines()
-        client = AsyncMock()
-        client.get_error_log = _offset_aware_page(lines, entry_offsets=True)
-        tools = LogTools(client)
-
-        result = await tools.get_logs(**_kwargs(limit=10, search="NEEDLE"))
-
-        assert result["returned_records"] == 2
-        # The oldest shown record starts 8 lines back in the 2000-line window
-        # and its match is two lines in, so the step is 6 — not the 8 a
-        # header-anchored step would use.
-        assert result["next_offset"] == 6
-
-    @pytest.mark.asyncio
-    async def test_a_cut_record_still_anchors_on_its_hidden_matching_line(
-        self,
-    ) -> None:
-        """The page copy is cut; the anchor must come from the full record."""
-        filler = [
-            f"2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] filler {i}"
-            for i in range(2500)
-        ]
-        record = (
-            _HEADER
-            + "\n"
-            + "\n".join(
-                ("  ValueError: NEEDLE" if i == 5 else f"  frame {i}")
-                for i in range(20)
-            )
-        )
-        lines = filler[:1200] + record.splitlines() + filler[1200:]
-        client = AsyncMock()
-        client.get_error_log = _offset_aware_page(lines, entry_offsets=True)
-        tools = LogTools(client)
-
-        result = await tools.get_logs(**_kwargs(limit=3, search="NEEDLE"))
-
-        # The page keeps the header plus its last two lines, so the matching
-        # line is not in the returned copy; the step still anchors 5 lines into
-        # the record: 2000 - (680 + 5).
-        assert "NEEDLE" not in result["log"]
-        assert result["next_offset"] == 1315
-
-    @pytest.mark.asyncio
-    async def test_an_entry_offset_read_returns_the_tail_as_a_partial(self) -> None:
-        """A journald route must not hold back: its resume step counts entries.
-
-        The reopen step is derived from lines, so on an entry-offset route it
-        can skip the withheld record; the tail is returned here instead.
+        The level lives in the missing header; the warning must talk about the
+        window's edge, not about a matching record.
         """
         filler = [
             f"2026-05-27 10:00:00.000 WARNING (MainThread) [a.b.c] filler {i}"
             for i in range(3970)
         ]
-        record = (
-            _HEADER
-            + "\n"
-            + "\n".join(f"  frame {i}" for i in range(40))
-            + "\nValueError: NEEDLE"
-        )
+        record = _HEADER + "\n" + "\n".join(f"  frame {i}" for i in range(40))
         lines = filler[:1985] + record.splitlines() + filler[1985:]
         client = AsyncMock()
-        client.get_error_log = _offset_aware_page(lines, entry_offsets=True)
+        client.get_error_log = _offset_aware_page(lines)
         tools = LogTools(client)
 
-        result = await tools.get_logs(**_kwargs(limit=20, search="NEEDLE"))
+        result = await tools.get_logs(**_kwargs(limit=20, level="ERROR"))
 
-        assert result["returned_records"] == 1
-        assert result["total_records"] == 1
-        assert any("counts entries" in warning for warning in result["warnings"])
-        assert result["has_more"] is True
+        warning = next(w for w in result["warnings"] if "held back" in w)
+        assert "at this window's edge" in warning
+        assert "matching" not in warning
 
     @pytest.mark.asyncio
     async def test_a_cut_leading_partial_is_held_back_with_consistent_counts(

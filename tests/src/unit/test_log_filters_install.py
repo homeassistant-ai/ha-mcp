@@ -6,6 +6,7 @@ from ha_mcp.log_filters import (
     SessionDisconnectLogFilter,
     StatelessSessionLogFilter,
     install_sdk_log_filters,
+    route_fastmcp_logs_to_root,
 )
 
 _TARGET_LOGGERS = {
@@ -104,3 +105,41 @@ class TestInstallSdkLogFiltersReplacesStaleGeneration:
             assert isinstance(filters[0], filter_cls), (
                 f"{name}'s replacement filter must be the current, real {filter_cls.__name__}"
             )
+
+
+class TestRouteFastmcpLogsToRoot:
+    """The embedded server hands FastMCP's records to HA's logging."""
+
+    def test_clears_handlers_and_enables_propagation(self):
+        logger = logging.getLogger("fastmcp")
+        saved_handlers = logger.handlers[:]
+        saved_propagate = logger.propagate
+        try:
+            logger.handlers[:] = []
+            logger.addHandler(logging.StreamHandler())
+            logger.propagate = False
+
+            route_fastmcp_logs_to_root()
+
+            assert logger.handlers == []
+            assert logger.propagate is True
+        finally:
+            logger.handlers[:] = saved_handlers
+            logger.propagate = saved_propagate
+
+    def test_install_routes_logs_only_when_embedded(self, monkeypatch):
+        from ha_mcp import config, log_filters
+
+        calls: list[bool] = []
+        monkeypatch.setattr(
+            log_filters, "route_fastmcp_logs_to_root", lambda: calls.append(True)
+        )
+
+        monkeypatch.setattr(config, "is_embedded_mode", lambda: True)
+        log_filters.install_sdk_log_filters()
+        assert calls == [True]
+
+        calls.clear()
+        monkeypatch.setattr(config, "is_embedded_mode", lambda: False)
+        log_filters.install_sdk_log_filters()
+        assert calls == []
