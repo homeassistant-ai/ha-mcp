@@ -4,9 +4,10 @@ Exercises the capture → restore → delete loop for the domains below, plus
 the polymorphic ``ha_manage_backup`` tool's gating against accidental
 wrong-mode usage. Other domains have their own files in this package: the
 automation, script and scene lanes are in test_config_capture_restore.py,
-label, category, zone and area in test_registry_capture_restore.py, and
-groups, dashboard and resource deletes, more helper types and the
-recreation of a deleted template helper in the remaining test_*.py files.
+label, category, zone and area in test_registry_capture_restore.py, the
+entity lane in test_entity_capture_restore.py, and groups, dashboard and
+resource deletes, more helper types and the recreation of a deleted template
+helper in the remaining test_*.py files.
 
 The auto-backup decorator is gated by ``ENABLE_AUTO_BACKUP=true``. These
 tests set that via env var before each test and explicitly call
@@ -1255,73 +1256,6 @@ class TestToggleOffSkipsCapture:
             mcp_client,
             "ha_config_remove_automation",
             {"identifier": identifier},
-        )
-
-
-# ---------------------------------------------------------------- entity lane
-
-
-@pytest.mark.convenience
-@pytest.mark.cleanup
-@pytest.mark.external_only
-class TestEntityStateCaptureRestore:
-    """Generic-entity restore is Group 3 (POST ``/api/states/<entity>``).
-    Uses an existing default-fixture entity rather than creating one;
-    ``ha_set_entity`` operates on entities provisioned by integrations,
-    not entity registry creations from scratch. The test edits an
-    attribute the testcontainer doesn't otherwise touch (``hidden``)
-    so cleanup is well-bounded."""
-
-    async def test_entity_full_loop(
-        self, mcp_client, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _enable_auto_backup(monkeypatch)
-        # Use a stable testcontainer light entity. If it's missing on
-        # this rig, skip rather than fail — keeps the test honest about
-        # what it actually requires.
-        entity_id = "light.bed_light"
-        state = await safe_call_tool(
-            mcp_client, "ha_get_state", {"entity_id": entity_id}
-        )
-        if state.get("success") is False:
-            pytest.skip(f"{entity_id} not present on this HA: {state}")
-
-        # Edit — toggle the ``hidden`` flag; capture fires.
-        edit = await safe_call_tool(
-            mcp_client, "ha_set_entity", {"entity_id": entity_id, "hidden": True}
-        )
-        if edit.get("success") is False:
-            pytest.skip(f"ha_set_entity unsupported on this HA: {edit}")
-
-        try:
-            backup_name = await _wait_for_backup(
-                mcp_client, domain="entity", entity_id=entity_id, timeout=10
-            )
-        except TimeoutError:
-            # ha_set_entity may take the entity-registry path (no /api/states
-            # POST) on some HA versions; if so the entity-domain handler
-            # won't fire. Surface clearly rather than asserting wrong.
-            pytest.skip("entity-domain handler did not capture for this edit")
-            return  # unreachable: pytest.skip raises Skipped
-
-        restore = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {"scope": "edits", "action": "restore", "backup_name": backup_name},
-        )
-        assert restore.get("success") is True
-        assert restore.get("data", {}).get("safety_backup") is not None
-
-        delete = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {"scope": "edits", "action": "delete", "backup_name": backup_name},
-        )
-        assert delete.get("success") is True
-
-        # Best-effort cleanup — restore the un-hidden default.
-        await safe_call_tool(
-            mcp_client, "ha_set_entity", {"entity_id": entity_id, "hidden": False}
         )
 
 
