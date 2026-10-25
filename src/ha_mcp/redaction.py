@@ -273,13 +273,13 @@ def redact_addon_options(options: Any, schema: Any, slug: str) -> Any:
 
     A value is secret when its schema entry carries ``format: password``, its
     name (or the name of a group containing it) is listed for ``slug`` in
-    ``redact_app_option_keys``, or it holds a PEM private key. Listed options
-    still stored after the app's schema dropped them, or inside a dropped
-    group or one the schema turned into a plain field (and a listed group
-    stored as a plain value), are redacted too, keeping the stored shape. Walks nested option
-    groups recursively (a group's value may be a dict or, with ``multiple``,
-    a list of dicts). Other keys without a schema entry pass through
-    untouched. Non-dict ``options`` are returned as-is.
+    ``redact_app_option_keys``, or it holds a PEM private key. Listed names
+    are also redacted in values Supervisor kept after an app update dropped
+    the option or changed it between a group and a plain field, keeping the
+    stored shape around them. Walks nested option groups recursively (a
+    group's value may be a dict or, with ``multiple``, a list of dicts).
+    Other keys without a schema entry pass through untouched. Non-dict
+    ``options`` are returned as-is.
     """
     return _redact_addon_options(options, schema, _operator_listed_option_keys(slug))
 
