@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
@@ -528,6 +529,8 @@ class TestWaitingForTheBackup:
         [
             pytest.param(HomeAssistantConnectionError("closed"), id="closed"),
             pytest.param(HomeAssistantCommandTimeout("no reply"), id="no-answer"),
+            pytest.param(OSError("broken pipe"), id="send-failed"),
+            pytest.param(ConnectionClosed(None, None), id="closed-mid-write"),
         ],
     )
     async def test_listing_failure_after_the_backup_finished_says_to_check_the_list(
@@ -547,6 +550,25 @@ class TestWaitingForTheBackup:
             await _run(create_backup, ws, _client())
         assert ErrorCode.CONNECTION_FAILED.value in str(exc_info.value)
         assert "Check the snapshot list" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(OSError("broken pipe"), id="send-failed"),
+            pytest.param(ConnectionClosed(None, None), id="closed-mid-write"),
+        ],
+    )
+    async def test_failed_send_of_the_backup_request_says_to_check_the_list(
+        self, error
+    ) -> None:
+        """The request may have reached Home Assistant before the send failed."""
+        ws = FakeWS(errors={"backup/generate": error})
+        with pytest.raises(ToolError) as exc_info:
+            await _run(create_backup, ws, _client())
+        assert ErrorCode.CONNECTION_FAILED.value in str(exc_info.value)
+        assert "Check the snapshot list" in str(exc_info.value)
+        ws.release_subscription.assert_awaited_once_with(7)
 
     @pytest.mark.asyncio
     async def test_subscription_is_released_when_the_backup_cannot_start(

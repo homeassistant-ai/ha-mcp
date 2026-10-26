@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
@@ -418,6 +419,20 @@ class TestRestore:
             ),
             pytest.param(
                 [], HomeAssistantCommandTimeout("no reply"), None, id="timeout-no-event"
+            ),
+            pytest.param(
+                [{"manager_state": "restore_backup", "state": "core_restart"}],
+                ConnectionClosed(None, None),
+                "Home Assistant accepted the restore but did not confirm it "
+                "before the connection closed",
+                id="closed-mid-write",
+            ),
+            pytest.param(
+                [{"manager_state": "restore_backup", "state": "in_progress"}],
+                OSError("broken pipe"),
+                "Home Assistant accepted the restore but did not confirm it "
+                "before the connection closed",
+                id="send-failed",
             ),
             pytest.param(
                 [{"manager_state": "restore_backup", "state": "in_progress"}],

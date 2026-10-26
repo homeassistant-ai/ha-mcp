@@ -12,6 +12,7 @@ from typing import Any, cast
 
 from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
 from ..client.rest_client import (
     HomeAssistantClient,
@@ -119,7 +120,14 @@ async def _send_restore(
     except HomeAssistantCommandNotSent:
         # Another client's restore event must not read as this one's.
         raise
-    except (HomeAssistantConnectionError, HomeAssistantCommandTimeout) as err:
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantCommandTimeout,
+        # send_command passes a failed send on unwrapped; the frame may have
+        # reached Home Assistant all the same.
+        OSError,
+        ConnectionClosed,
+    ) as err:
         # The close can come before the collector read the last events.
         _drain_events(queue, events)
         restore = [e for e in events if e.get("manager_state") == "restore_backup"]

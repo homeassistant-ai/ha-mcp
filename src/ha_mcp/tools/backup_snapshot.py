@@ -14,6 +14,7 @@ from typing import Any, NoReturn, cast
 
 from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
 from ..client.rest_client import (
     HomeAssistantClient,
@@ -235,14 +236,30 @@ async def _generate_backup(
         _require_idle(queue)
         if name is not None:
             params["name"] = name
-        job = await ws_client.send_command(command, **params)
+        try:
+            job = await ws_client.send_command(command, **params)
+        except (OSError, ConnectionClosed):
+            # A failed send does not prove Home Assistant did not get it.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "The connection failed while sending the backup request; "
+                    "Home Assistant may have started the backup",
+                    suggestions=[_CHECK_LIST_SUGGESTION],
+                )
+            )
         job_id = job["result"]["backup_job_id"]
         outcome = await _wait_for_backup(queue, job_id, started, ctx)
     finally:
         await ws_client.release_subscription(sub_id)
     try:
         listing = await _backup_info(ws_client)
-    except (HomeAssistantConnectionError, HomeAssistantCommandTimeout):
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantCommandTimeout,
+        OSError,
+        ConnectionClosed,
+    ):
         # The job finished, so the backup may exist although it is not listed.
         raise_tool_error(
             create_error_response(
