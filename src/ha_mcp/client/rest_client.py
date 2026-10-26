@@ -2039,7 +2039,9 @@ class HomeAssistantClient:
                     return {
                         "success": False,
                         "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
-                        "error_code": getattr(e, "code", None),
+                        "error_code": e.code
+                        if isinstance(e, HomeAssistantCommandError)
+                        else None,
                         "suggestions": [
                             "This may be caused by a reverse proxy or security filter",
                             "Try simplifying the request (e.g., shorter templates, fewer parameters)",
@@ -2052,13 +2054,14 @@ class HomeAssistantClient:
                 # Unknown command." is undiagnosable from a user's log
                 # (issue #1889 took a live reproduction to attribute).
                 logger.error(f"WebSocket message failed ({message.get('type')}): {e}")
-                # Preserve HA's structured error code (e.g. ``not_found``) so callers
-                # can distinguish HA's authoritative verdict from a transient failure
-                # instead of only seeing the stringified message.
+                # Only a protocol rejection establishes HA's error code; a local
+                # exception's ``code`` attribute says nothing about the write outcome.
                 return {
                     "success": False,
                     "error": str(e),
-                    "error_code": getattr(e, "code", None),
+                    "error_code": e.code
+                    if isinstance(e, HomeAssistantCommandError)
+                    else None,
                 }
 
         # Unreachable: every attempt either returns, raises, or ``continue``s,
