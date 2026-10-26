@@ -136,6 +136,9 @@ def _assert_receipt(result: dict[str, Any], target: str, value: str) -> None:
         "value": value,
         "details": {"values": [0, False, ""], "empty": {}},
     }
+    values = result["service_response"]["details"]["values"]
+    assert type(values[0]) is int
+    assert values[1] is False
 
 
 async def test_service_response_keeps_payload_and_projected_mutation_together(
