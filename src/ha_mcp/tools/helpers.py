@@ -24,6 +24,11 @@ from ..client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
+from ..client.service_errors import (
+    HomeAssistantServiceAuthOutcomeUnknown,
+    HomeAssistantServiceConnectionOutcomeUnknown,
+    HomeAssistantWebSocketServiceError,
+)
 from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..errors import (
     TOOL_ERROR_LOG_LEVEL,
@@ -37,6 +42,7 @@ from ..errors import (
 )
 from ..utils.usage_logger import log_tool_call
 from .coercion import UNSET
+from .service_outcome import create_service_outcome_unknown_error
 
 logger = logging.getLogger(__name__)
 
@@ -361,6 +367,17 @@ def _classify_exception(
     context: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Classify exception into structured error response by type, then message."""
+    if isinstance(
+        error,
+        (
+            HomeAssistantServiceAuthOutcomeUnknown,
+            HomeAssistantServiceConnectionOutcomeUnknown,
+        ),
+    ) or (
+        isinstance(error, HomeAssistantWebSocketServiceError)
+        and error.code != "unknown_command"
+    ):
+        return create_service_outcome_unknown_error(error, context=context)
     result: dict[str, Any] | None = None
 
     # Type-based classification
@@ -510,7 +527,7 @@ def _classify_by_message(
 
 # Environment failures: the classified guidance (token, admin rights, reachability)
 # is what fixes them and most callers do not anticipate them, so it leads and a
-# caller's own hints follow. Every other code keeps the caller's list as given.
+# caller's own hints follow. Unknown outcomes also retain their retry guidance.
 _ENVIRONMENT_CODES = frozenset(
     {
         ErrorCode.AUTH_INVALID_TOKEN.value,
@@ -523,10 +540,10 @@ _ENVIRONMENT_CODES = frozenset(
 
 
 def _with_classified_suggestions(
-    error: dict[str, Any], suggestions: list[str]
+    error: dict[str, Any], suggestions: list[str], *, preserve: bool = False
 ) -> list[str]:
-    """Put the classified suggestions of an environment code before the caller's."""
-    if error.get("code") not in _ENVIRONMENT_CODES:
+    """Keep classified environment or uncertain-outcome guidance before caller hints."""
+    if not preserve and error.get("code") not in _ENVIRONMENT_CODES:
         return suggestions
     classified = error.get("suggestions") or (
         [error["suggestion"]] if error.get("suggestion") else []
@@ -603,8 +620,8 @@ def exception_to_structured_error(
         suggestions: Optional list of actionable suggestions to embed in the error.
                     Saves callers from manually inserting suggestions after the call.
                     They replace the classified ones, except for the AUTH_*,
-                    CONNECTION_FAILED and CONNECTION_TIMEOUT codes, where they
-                    follow them (duplicates dropped).
+                    CONNECTION_FAILED and CONNECTION_TIMEOUT codes and unknown
+                    write outcomes, where they follow them (duplicates dropped).
 
     Returns:
         Structured error response dictionary (only if raise_error=False)
@@ -647,7 +664,11 @@ def exception_to_structured_error(
         # rely on the plural key being present even for single-item caller
         # suggestions. Setting both keeps response consumers on both code
         # paths working.
-        suggestions = _with_classified_suggestions(error_response["error"], suggestions)
+        suggestions = _with_classified_suggestions(
+            error_response["error"],
+            suggestions,
+            preserve=error_response.get("write_outcome_unknown") is True,
+        )
         error_response["error"]["suggestion"] = suggestions[0]
         error_response["error"]["suggestions"] = suggestions
 

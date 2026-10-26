@@ -24,6 +24,10 @@ from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandError,
 )
+from ha_mcp.client.service_errors import (
+    HomeAssistantServiceAuthOutcomeUnknown,
+    HomeAssistantWebSocketServiceError,
+)
 from ha_mcp.errors import ErrorCode
 from ha_mcp.tools.helpers import exception_to_structured_error
 
@@ -403,7 +407,7 @@ async def test_non_admin_service_call_keeps_the_response_shape(client):
 
 
 @pytest.mark.asyncio
-async def test_admin_only_service_refusal_raises_admin_required(client):
+async def test_generic_unauthorized_text_retains_the_handler_error(client):
     client.send_websocket_message = AsyncMock(
         return_value={
             "success": False,
@@ -411,9 +415,10 @@ async def test_admin_only_service_refusal_raises_admin_required(client):
             "error_code": "home_assistant_error",
         }
     )
-    with pytest.raises(HomeAssistantAdminRequiredError) as exc:
+    with pytest.raises(HomeAssistantWebSocketServiceError) as exc:
         await client.call_service("automation", "reload")
-    assert "automation.reload" in str(exc.value)
+    assert exc.value.code == "home_assistant_error"
+    assert "Unauthorized" in str(exc.value)
     client.httpx_client.request.assert_not_awaited()
 
 
@@ -467,22 +472,29 @@ async def test_unknown_status_service_calls_let_one_401_out(client):
         *(client.call_service("automation", "reload") for _ in range(4)),
         return_exceptions=True,
     )
-    assert all(isinstance(r, HomeAssistantAdminRequiredError) for r in results)
+    assert (
+        sum(isinstance(r, HomeAssistantServiceAuthOutcomeUnknown) for r in results) == 1
+    )
+    assert sum(isinstance(r, HomeAssistantWebSocketServiceError) for r in results) == 3
     client.httpx_client.request.assert_awaited_once()
-    assert client.send_websocket_message.await_count == 4
+    assert client.send_websocket_message.await_count == 3
 
 
 @pytest.mark.asyncio
-async def test_401_on_a_service_for_a_cached_admin_falls_back_to_websocket(client):
-    """A token demoted after the probe answered must not keep sending 401s."""
+async def test_service_401_latches_future_calls_without_replaying_the_first(client):
+    """A cached admin's 401 is unknown; only a subsequent call selects WS."""
     client._current_user = AsyncMock(return_value=_current_user(True))
     client.httpx_client.request = AsyncMock(return_value=_response(401))
     client.send_websocket_message = AsyncMock(
         return_value={"success": False, "error": "Command failed: Unauthorized"}
     )
-    for _ in range(2):
-        with pytest.raises(HomeAssistantAdminRequiredError):
-            await client.call_service("automation", "reload")
+    with pytest.raises(HomeAssistantServiceAuthOutcomeUnknown) as caught:
+        await client.call_service("automation", "reload")
+    assert caught.value.status_code == 401
+    client.send_websocket_message.assert_not_awaited()
+    with pytest.raises(HomeAssistantWebSocketServiceError):
+        await client.call_service("automation", "reload")
+    client.send_websocket_message.assert_awaited_once()
     client.httpx_client.request.assert_awaited_once()
     assert client.admin_route_refused is True
 

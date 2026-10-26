@@ -21,6 +21,10 @@ from ..client.rest_client import (
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
+from ..client.service_errors import (
+    HomeAssistantCommandOutcomeUnknown,
+    HomeAssistantWebSocketServiceError,
+)
 from ..client.websocket_client import get_websocket_client
 from ..errors import (
     ErrorCode,
@@ -57,6 +61,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .response_helpers import compact_service_result, project_entity_record
+from .service_outcome import create_service_outcome_unknown_error
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     _SERVICE_TO_STATE,
@@ -887,25 +892,9 @@ class ServiceTools:
     ) -> NoReturn:
         """Fail an uncertain service write without claiming acceptance or retrying."""
         raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"The outcome of {domain}.{service} is unknown; it may have taken effect.",
-                details=str(error),
-                context={
-                    "domain": domain,
-                    "service": service,
-                    "entity_id": entity_id,
-                    "write_outcome_unknown": True,
-                    "ha_error_code": (
-                        error.code
-                        if isinstance(error, HomeAssistantCommandError)
-                        else None
-                    ),
-                },
-                suggestions=[
-                    "Check the target state and Home Assistant logs before retrying; "
-                    "the service may already have acted."
-                ],
+            create_service_outcome_unknown_error(
+                error,
+                context={"domain": domain, "service": service, "entity_id": entity_id},
             )
         )
 
@@ -1168,8 +1157,9 @@ class ServiceTools:
     ) -> NoReturn:
         """Keep an unanswered write distinct from a connection establishment failure."""
         cause = error.__cause__
-        if isinstance(cause, httpx.TimeoutException) and not isinstance(
-            cause, (httpx.ConnectTimeout, httpx.PoolTimeout)
+        if isinstance(error, HomeAssistantCommandOutcomeUnknown) or (
+            isinstance(cause, httpx.TimeoutException)
+            and not isinstance(cause, (httpx.ConnectTimeout, httpx.PoolTimeout))
         ):
             self._raise_service_outcome_unknown(
                 error, domain=domain, service=service, entity_id=entity_id
@@ -1193,6 +1183,13 @@ class ServiceTools:
         entity_id: str | None,
     ) -> NoReturn:
         """Raise a structured ToolError for an unexpected ha_call_service failure."""
+        context: dict[str, Any] = {
+            "domain": domain,
+            "service": service,
+            "entity_id": entity_id,
+        }
+        if isinstance(error, HomeAssistantWebSocketServiceError):
+            context["ha_error_code"] = error.code
         suggestions = _build_service_suggestions(domain, service, entity_id)
         if entity_id:
             suggestions.append(
@@ -1200,11 +1197,7 @@ class ServiceTools:
             )
         exception_to_structured_error(
             error,
-            context={
-                "domain": domain,
-                "service": service,
-                "entity_id": entity_id,
-            },
+            context=context,
             suggestions=suggestions,
         )
 

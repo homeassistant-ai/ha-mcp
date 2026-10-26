@@ -127,6 +127,8 @@ class HomeAssistantAdminRequiredError(HomeAssistantAuthError):
     A REST request is refused locally, never sent: Home Assistant would answer
     401 and count it toward its IP ban (#2546). A service call is refused by
     Home Assistant over WebSocket, where a refusal is not counted.
+    A service authorization diagnostic alone does not prove it had no effect;
+    service wrappers retain that uncertainty in a dedicated subtype.
     """
 
 
@@ -730,11 +732,9 @@ class HomeAssistantClient:
         payload: dict[str, Any],
         return_response: bool,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """POST the service call; on a 401 latch and retry it over WebSocket.
+        """POST once; a 401 latches WS for later calls without replaying this one."""
+        from .service_errors import HomeAssistantServiceAuthOutcomeUnknown
 
-        A 401 means Home Assistant refused before running the service, so the
-        WebSocket retry cannot apply it twice.
-        """
         # Build query params for return_response
         params = {}
         if return_response:
@@ -747,12 +747,14 @@ class HomeAssistantClient:
                 json=payload,
                 params=params if params else None,
             )
-        except HomeAssistantAuthError:
+        except HomeAssistantAuthError as exc:
             self._is_admin = None
             self._admin_route_refused = True
-            return await self._call_service_over_websocket(
-                domain, service, payload, return_response
-            )
+            # Core's HTTP wrapper also converts Unauthorized raised AFTER a
+            # service effect to 401. Neither that status nor its text is preflight.
+            raise HomeAssistantServiceAuthOutcomeUnknown(
+                f"HTTP 401 after requesting {domain}.{service}: {exc}", status_code=401
+            ) from exc
 
         # When return_response is True, HA returns a dict with service_response key
         if return_response:
@@ -773,33 +775,36 @@ class HomeAssistantClient:
         payload: dict[str, Any],
         return_response: bool,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """Call a service for a non-admin token, in ``call_service``'s return shape.
-
-        Over REST an admin-only service answers a non-admin with a 401 that
-        ``http.ban`` counts; over WebSocket the refusal is only an error
-        (#2546). WebSocket reports no changed states, so that list is empty.
-        """
-        reply = await self.send_websocket_message(
-            {
-                "type": "call_service",
-                "domain": domain,
-                "service": service,
-                "service_data": payload,
-                "return_response": return_response,
-            }
+        """Call over WS without REST's non-admin 401/IP-ban side effect."""
+        from .service_errors import (
+            HomeAssistantCommandOutcomeUnknown,
+            HomeAssistantServiceConnectionOutcomeUnknown,
+            HomeAssistantWebSocketServiceAuthError,
+            HomeAssistantWebSocketServiceError,
         )
+
+        try:
+            reply = await self.send_websocket_message(
+                {
+                    "type": "call_service",
+                    "domain": domain,
+                    "service": service,
+                    "service_data": payload,
+                    "return_response": return_response,
+                }
+            )
+        except HomeAssistantCommandOutcomeUnknown as exc:
+            raise HomeAssistantServiceConnectionOutcomeUnknown(str(exc)) from exc
         if not reply.get("success"):
             error = str(reply.get("error", "Service call failed"))
-            if error.removeprefix("Command failed: ") == "Unauthorized":
-                raise HomeAssistantAdminRequiredError(
-                    f"Service {domain}.{service} is admin-only in Home Assistant "
-                    "and this token's user is not an administrator"
+            code = reply.get("error_code")
+            if code == "unauthorized":
+                raise HomeAssistantWebSocketServiceAuthError(
+                    f"Service {domain}.{service} returned an authorization error: {error}",
+                    status_code=None,
+                    code=code,
                 )
-            raise HomeAssistantAPIError(
-                f"API error: 400 - {error}",
-                status_code=400,
-                response_data={"message": error},
-            )
+            raise HomeAssistantWebSocketServiceError(error, code=code)
         if return_response:
             result = reply.get("result") or {}
             return {"changed_states": [], "service_response": result.get("response")}
@@ -1951,6 +1956,7 @@ class HomeAssistantClient:
         real HA credentials from the token claims, not the global sentinel
         settings.
         """
+        from .service_errors import HomeAssistantCommandOutcomeUnknown
         from .websocket_client import get_websocket_client
 
         max_retries = 2
@@ -1999,24 +2005,18 @@ class HomeAssistantClient:
                     await asyncio.sleep(retry_delay)
                     continue
 
-                # A pool failure precedes dispatch. Afterwards, socket/no-answer
-                # errors may follow a partial write and must never become NotSent.
                 if acquiring or isinstance(e, _NO_ANSWER_ERRORS):
-                    # One error channel for "no answer came back" (#1947): the
-                    # caller decides the policy, rather than every consumer
-                    # having to notice a marker on an otherwise ordinary
-                    # failure envelope. Callers that legitimately continue on a
-                    # missing answer catch this and say in ``warnings`` what
-                    # they skipped; callers whose output would read as a
-                    # negative finding let it propagate.
                     logger.error(
                         f"WebSocket transport failed ({message.get('type')}): {e}"
                     )
-                    if isinstance(e, HomeAssistantConnectionError):
-                        # Already the right class — re-raise unchanged so
-                        # subtypes (``HomeAssistantCommandNotSent``) and the
-                        # original traceback survive.
+                    if isinstance(e, HomeAssistantCommandNotSent) or (
+                        acquiring and isinstance(e, HomeAssistantConnectionError)
+                    ):
                         raise
+                    if not acquiring:
+                        # A local type survives wrappers without trusting remote
+                        # JSON. The original exception remains available as cause.
+                        raise HomeAssistantCommandOutcomeUnknown(error_str) from e
                     raise HomeAssistantConnectionError(error_str) from e
 
                 # Deliberate asymmetry (#1966 review item 8): a 403 that
