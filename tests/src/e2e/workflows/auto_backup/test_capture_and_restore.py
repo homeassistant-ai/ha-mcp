@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, extract_error_message, safe_call_tool
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_entity_state, wait_for_tool_result
 
@@ -148,29 +148,28 @@ class TestManageBackupGating:
     """Strong gating against wrong-mode usage on the merged tool."""
 
     async def test_rejects_invalid_combo(self, mcp_client) -> None:
+        mcp = MCPAssertions(mcp_client)
         # (snapshot, view) is not a valid combo — snapshot supports only
         # create/list/restore ((snapshot, list) became valid in #1586).
-        result = await safe_call_tool(
-            mcp_client,
+        result = await mcp.call_tool_failure(
             "ha_manage_backup",
             {"scope": "snapshot", "action": "view"},
+            expected_error="Invalid combination",
         )
         assert result.get("success") is False
         error = result.get("error", {})
-        msg = error.get("message", "") if isinstance(error, dict) else ""
-        assert "Invalid combination" in msg
         # Helpful suggestion lists the valid combos.
         suggestions = error.get("suggestions", []) if isinstance(error, dict) else []
         assert any("Valid combinations" in s for s in suggestions)
 
     async def test_edits_create_requires_domain_and_entity_id(self, mcp_client) -> None:
+        mcp = MCPAssertions(mcp_client)
         # (edits, create) is the on-demand-snapshot combo — needs both
         # ``domain`` and ``entity_id`` to know what to capture. The
         # bare call must fail with a structured validation error rather
         # than silently routing through the decorator's auto-on-write
         # path (which only fires on actual writes).
-        result = await safe_call_tool(
-            mcp_client,
+        result = await mcp.call_tool_failure(
             "ha_manage_backup",
             {"scope": "edits", "action": "create"},
         )
@@ -180,34 +179,33 @@ class TestManageBackupGating:
         assert "domain" in msg or "entity_id" in msg
 
     async def test_snapshot_restore_requires_backup_id(self, mcp_client) -> None:
+        mcp = MCPAssertions(mcp_client)
         # Validation should mention that backup_id is missing — not silently dispatch.
-        result = await safe_call_tool(
-            mcp_client,
+        result = await mcp.call_tool_failure(
             "ha_manage_backup",
             {"scope": "snapshot", "action": "restore"},
         )
         assert result.get("success") is False
 
     async def test_edits_restore_requires_backup_name(self, mcp_client) -> None:
-        result = await safe_call_tool(
-            mcp_client,
+        mcp = MCPAssertions(mcp_client)
+        result = await mcp.call_tool_failure(
             "ha_manage_backup",
             {"scope": "edits", "action": "restore"},
         )
         assert result.get("success") is False
 
     async def test_edits_diff_requires_backup_name(self, mcp_client) -> None:
+        mcp = MCPAssertions(mcp_client)
         # Same shape as restore — diff needs a concrete backup to compare
         # against, so the bare call must fail with a structured
         # validation error rather than dispatching against nothing.
-        result = await safe_call_tool(
-            mcp_client,
+        result = await mcp.call_tool_failure(
             "ha_manage_backup",
             {"scope": "edits", "action": "diff"},
+            expected_error="backup_name",
         )
         assert result.get("success") is False
-        msg = extract_error_message(result)
-        assert "backup_name" in msg
 
 
 # ---------------------------------------------------------------- list
@@ -219,8 +217,9 @@ class TestListEditsBackups:
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _enable_auto_backup(monkeypatch)
-        result = await safe_call_tool(
-            mcp_client, "ha_manage_backup", {"scope": "edits", "action": "list"}
+        mcp = MCPAssertions(mcp_client)
+        result = await mcp.call_tool_success(
+            "ha_manage_backup", {"scope": "edits", "action": "list"}
         )
         assert result.get("success") is True
         data = result.get("data", {})
@@ -264,16 +263,14 @@ class TestEditsCreateOnDemandSnapshot:
             "trigger": [{"platform": "time", "at": "12:00:00"}],
             "action": [{"service": "homeassistant.no_op"}],
         }
-        create = await safe_call_tool(
-            mcp_client,
+        mcp = MCPAssertions(mcp_client)
+        await mcp.call_tool_success(
             "ha_config_set_automation",
             {"config": original, "identifier": identifier},
         )
-        assert create.get("success") is not False
 
         # On-demand snapshot.
-        snap = await safe_call_tool(
-            mcp_client,
+        snap = await mcp.call_tool_success(
             "ha_manage_backup",
             {
                 "scope": "edits",
@@ -291,8 +288,7 @@ class TestEditsCreateOnDemandSnapshot:
         assert data.get("size", 0) > 0
 
         # The snapshot must also show up in the list query.
-        listing = await safe_call_tool(
-            mcp_client,
+        listing = await mcp.call_tool_success(
             "ha_manage_backup",
             {
                 "scope": "edits",
@@ -324,8 +320,8 @@ class TestEditsCreateOnDemandSnapshot:
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _enable_auto_backup(monkeypatch)
-        result = await safe_call_tool(
-            mcp_client,
+        mcp = MCPAssertions(mcp_client)
+        result = await mcp.call_tool_failure(
             "ha_manage_backup",
             {
                 "scope": "edits",
@@ -376,13 +372,13 @@ class TestAutomationDiff:
             "ha_config_set_automation",
             {"config": original, "identifier": identifier},
         )
+        mcp = MCPAssertions(mcp_client)
         # Capture via (edits, create) so stored == current by
         # construction. The decorator's auto-on-write path is
         # unreliable here: snapshot filenames are seconds-resolution,
         # so a mutate-then-restore inside the same second clobbers
         # the first capture.
-        create_result = await safe_call_tool(
-            mcp_client,
+        create_result = await mcp.call_tool_success(
             "ha_manage_backup",
             {
                 "scope": "edits",
@@ -394,8 +390,7 @@ class TestAutomationDiff:
         assert create_result.get("success") is True
         backup_name = create_result["data"]["backup_name"]
 
-        diff = await safe_call_tool(
-            mcp_client,
+        diff = await mcp.call_tool_success(
             "ha_manage_backup",
             {"scope": "edits", "action": "diff", "backup_name": backup_name},
         )
@@ -444,8 +439,8 @@ class TestAutomationDiff:
             mcp_client, domain="automation", entity_id=identifier
         )
 
-        diff = await safe_call_tool(
-            mcp_client,
+        mcp = MCPAssertions(mcp_client)
+        diff = await mcp.call_tool_success(
             "ha_manage_backup",
             {"scope": "edits", "action": "diff", "backup_name": backup_name},
         )
@@ -509,8 +504,8 @@ class TestAutomationDiff:
             {"identifier": identifier},
         )
 
-        diff = await safe_call_tool(
-            mcp_client,
+        mcp = MCPAssertions(mcp_client)
+        diff = await mcp.call_tool_success(
             "ha_manage_backup",
             {"scope": "edits", "action": "diff", "backup_name": backup_name},
         )
@@ -563,8 +558,8 @@ class TestAutomationDiff:
             mcp_client, domain="automation", entity_id=identifier
         )
 
-        diff = await safe_call_tool(
-            mcp_client,
+        mcp = MCPAssertions(mcp_client)
+        diff = await mcp.call_tool_success(
             "ha_manage_backup",
             {"scope": "edits", "action": "diff", "backup_name": backup_name},
         )
@@ -597,9 +592,9 @@ class TestHelperCaptureRestore:
         covers the complex-nested-config angle on the same mechanism."""
         _enable_auto_backup(monkeypatch)
         helper_id = f"e2e_bk_{uuid.uuid4().hex[:8]}"
+        mcp = MCPAssertions(mcp_client)
         # Create
-        create = await safe_call_tool(
-            mcp_client,
+        await mcp.call_tool_success(
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
@@ -607,7 +602,6 @@ class TestHelperCaptureRestore:
                 "icon": "mdi:test-tube",
             },
         )
-        assert create.get("success") is not False
         backup_name = None
         try:
             # Let HA index the new helper before the edit fires; otherwise the
@@ -615,8 +609,7 @@ class TestHelperCaptureRestore:
             await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
             # Edit so capture fires (the create call may or may not capture
             # depending on whether helper_id is None — edit definitely does).
-            edit = await safe_call_tool(
-                mcp_client,
+            await mcp.call_tool_success(
                 "ha_config_set_helper",
                 {
                     "helper_type": "input_boolean",
@@ -625,7 +618,6 @@ class TestHelperCaptureRestore:
                     "icon": "mdi:test-tube-empty",
                 },
             )
-            assert edit.get("success") is not False
             # Unless the edit wrote the registry icon, the read-back below
             # passes whether or not the restore resets it.
             await wait_for_tool_result(
@@ -645,8 +637,7 @@ class TestHelperCaptureRestore:
             )
 
             # Restore — exercises ``input_boolean/update`` WS command.
-            restore = await safe_call_tool(
-                mcp_client,
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -666,8 +657,7 @@ class TestHelperCaptureRestore:
             )
 
             # Delete the snapshot.
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )
@@ -828,9 +818,9 @@ class TestTemplateHelperCaptureRestore:
 
         entry_id = None
         backup_names: set[str] = set()
+        mcp = MCPAssertions(mcp_client)
         try:
-            create = await safe_call_tool(
-                mcp_client,
+            create = await mcp.call_tool_success(
                 "ha_config_set_helper",
                 {
                     "helper_type": "template",
@@ -873,8 +863,7 @@ class TestTemplateHelperCaptureRestore:
             }
             if template_type == "sensor":
                 changed["unit_of_measurement"] = "W"
-            edit = await safe_call_tool(
-                mcp_client,
+            edit = await mcp.call_tool_success(
                 "ha_config_set_helper",
                 {"helper_type": "template", "helper_id": entry_id, "config": changed},
             )
@@ -908,8 +897,7 @@ class TestTemplateHelperCaptureRestore:
                 mcp_client, domain="helper_template", entity_id=entry_id
             )
             backup_names.add(name)
-            viewed = await safe_call_tool(
-                mcp_client,
+            viewed = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "view", "backup_name": name},
             )
@@ -926,16 +914,15 @@ class TestTemplateHelperCaptureRestore:
                 await _assert_template_degraded_scrub_refused(
                     mcp_client, config_path, entry_id, name, edited_options
                 )
-            restored = await safe_call_tool(
-                mcp_client,
+            restored = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": name},
             )
             assert restored.get("success") is True, restored
             assert restored["data"]["safety_backup"] is not None
             backup_names.add(restored["data"]["safety_backup"])
-            after = await safe_call_tool(
-                mcp_client, "ha_config_list_helpers", {"helper_type": "template"}
+            after = await mcp.call_tool_success(
+                "ha_config_list_helpers", {"helper_type": "template"}
             )
             assert (
                 next(
@@ -951,7 +938,6 @@ class TestTemplateHelperCaptureRestore:
                 "12" if template_type == "sensor" else "on",
                 timeout=20,
             ), f"Template helper {entity_id} did not activate the restored state"
-            mcp = MCPAssertions(mcp_client)
             await mcp.call_tool_success(
                 "ha_remove_helpers_integrations",
                 {"target": entity_id, "helper_type": "template", "confirm": True},
@@ -1020,8 +1006,8 @@ class TestComplexHelperCaptureRestore:
             ],
             "friday": [{"from": "08:30:00", "to": "14:30:00"}],
         }
-        create = await safe_call_tool(mcp_client, "ha_config_set_helper", original)
-        assert create.get("success") is not False
+        mcp = MCPAssertions(mcp_client)
+        await mcp.call_tool_success("ha_config_set_helper", original)
         backup_name = None
         try:
             # Let HA index the new helper before the edit fires; the decorator's
@@ -1044,8 +1030,7 @@ class TestComplexHelperCaptureRestore:
                 "wednesday": [],
                 "friday": [{"from": "08:30:00", "to": "14:30:00"}],
             }
-            edit = await safe_call_tool(mcp_client, "ha_config_set_helper", edited)
-            assert edit.get("success") is not False
+            await mcp.call_tool_success("ha_config_set_helper", edited)
 
             # Poll until the schedule snapshot appears so an HA storage
             # propagation race doesn't masquerade as a real assert.
@@ -1058,8 +1043,7 @@ class TestComplexHelperCaptureRestore:
             # <YAML payload>}`` and the payload's ``config`` key holds the
             # original entity config (schedule shape:
             # ``config.monday = [{"from": "...", "to": "..."}, ...]``).
-            view = await safe_call_tool(
-                mcp_client,
+            view = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "view", "backup_name": backup_name},
             )
@@ -1074,8 +1058,7 @@ class TestComplexHelperCaptureRestore:
 
             # Restore — exercises ``schedule/update`` WS with the full nested
             # payload reconstructed from YAML. Safety backup must exist.
-            restore = await safe_call_tool(
-                mcp_client,
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -1097,8 +1080,7 @@ class TestComplexHelperCaptureRestore:
                 ], day
 
             # Delete the snapshot.
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )
@@ -1154,8 +1136,8 @@ class TestDashboardCaptureRestore:
             )
 
             # Restore — fires ``lovelace/config/save``.
-            restore = await safe_call_tool(
-                mcp_client,
+            mcp = MCPAssertions(mcp_client)
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -1167,8 +1149,7 @@ class TestDashboardCaptureRestore:
                 )
             assert restored["config"]["views"] == []
 
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )
@@ -1214,11 +1195,12 @@ class TestToggleOffSkipsCapture:
 
     async def _run_disabled_capture_check(self, mcp_client) -> None:
 
+        mcp = MCPAssertions(mcp_client)
         # Count before
-        before = await safe_call_tool(
-            mcp_client, "ha_manage_backup", {"scope": "edits", "action": "list"}
+        before = await mcp.call_tool_success(
+            "ha_manage_backup", {"scope": "edits", "action": "list"}
         )
-        n_before = before.get("data", {}).get("count", 0)
+        n_before = before["data"]["count"]
 
         # Edit any automation — backup should NOT be captured.
         identifier = f"e2e_off_{uuid.uuid4().hex[:8]}"
@@ -1245,10 +1227,10 @@ class TestToggleOffSkipsCapture:
         )
 
         # Count after — must be unchanged because feature was off.
-        after = await safe_call_tool(
-            mcp_client, "ha_manage_backup", {"scope": "edits", "action": "list"}
+        after = await mcp.call_tool_success(
+            "ha_manage_backup", {"scope": "edits", "action": "list"}
         )
-        n_after = after.get("data", {}).get("count", 0)
+        n_after = after["data"]["count"]
         assert n_after == n_before
 
         # Cleanup
@@ -1293,26 +1275,24 @@ class TestDashboardResourceCaptureRestore:
         assert resource_id, f"resource_id missing: {create}"
         backup_name = None
         try:
+            mcp = MCPAssertions(mcp_client)
             # Settle so the decorator's pre-edit fetch finds the resource.
             await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
             # Edit — change the URL so capture fires.
-            edit = await safe_call_tool(
-                mcp_client,
+            await mcp.call_tool_success(
                 "ha_config_set_dashboard_resource",
                 {
                     "resource_id": resource_id,
                     "url": f"/local/e2e-bk-{suffix}-edited.js",
                 },
             )
-            assert edit.get("success") is not False
 
             backup_name = await _wait_for_backup(
                 mcp_client, domain="dashboard_resource", entity_id=str(resource_id)
             )
 
-            restore = await safe_call_tool(
-                mcp_client,
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -1329,8 +1309,7 @@ class TestDashboardResourceCaptureRestore:
             assert restored is not None, f"resource {resource_id} missing: {listed}"
             assert restored["url"] == f"/local/e2e-bk-{suffix}.js"
 
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )
@@ -1373,8 +1352,8 @@ class TestDashboardResourceCaptureRestore:
         assert resource_id, f"resource_id missing: {create}"
         await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
-        edit = await safe_call_tool(
-            mcp_client,
+        mcp = MCPAssertions(mcp_client)
+        await mcp.call_tool_success(
             "ha_config_set_dashboard_resource",
             {
                 "resource_id": resource_id,
@@ -1382,14 +1361,12 @@ class TestDashboardResourceCaptureRestore:
                 "resource_type": "module",
             },
         )
-        assert edit.get("success") is not False
 
         backup_name = await _wait_for_backup(
             mcp_client, domain="dashboard_resource", entity_id=str(resource_id)
         )
 
-        restore = await safe_call_tool(
-            mcp_client,
+        restore = await mcp.call_tool_success(
             "ha_manage_backup",
             {"scope": "edits", "action": "restore", "backup_name": backup_name},
         )
@@ -1398,10 +1375,8 @@ class TestDashboardResourceCaptureRestore:
         # The restored resource must carry the ORIGINAL content back,
         # byte-identical — a snapshot that dropped or mangled the data: URI
         # would still "restore" successfully without this assertion.
-        listed = await safe_call_tool(
-            mcp_client,
-            "ha_config_list_dashboard_resources",
-            {"include_content": True},
+        listed = await mcp.call_tool_success(
+            "ha_config_list_dashboard_resources", {"include_content": True}
         )
         restored = next(
             (r for r in listed.get("resources", []) if r.get("id") == resource_id),
@@ -1527,13 +1502,12 @@ class TestCalendarCaptureRestore:
             # freshly-written iCal event can lag behind the create response).
             await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
+            mcp = MCPAssertions(mcp_client)
             # Delete the event — pre-delete capture fires (calendar_event).
-            removed = await safe_call_tool(
-                mcp_client,
+            await mcp.call_tool_success(
                 "ha_config_remove_calendar_event",
                 {"entity_id": entity_id, "uid": uid},
             )
-            assert removed.get("success") is not False, f"remove failed: {removed}"
             # Wait for the event to be gone, or the read-back after the restore
             # could see an event the removal never took out.
             await wait_for_tool_result(
@@ -1558,15 +1532,13 @@ class TestCalendarCaptureRestore:
                     "this HA rig (calendar capture/indexing timing); the unit "
                     "test test_backup_manager covers the payload shape"
                 )
-            view = await safe_call_tool(
-                mcp_client,
+            view = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "view", "backup_name": backup_name},
             )
             assert view.get("success") is True
 
-            restore = await safe_call_tool(
-                mcp_client,
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -1646,12 +1618,11 @@ class TestTodoCaptureRestore:
 
             # Edit the item BY SUMMARY — the exact form that was silently
             # skipped before the fetch matched on summary as well as uid.
-            edited = await safe_call_tool(
-                mcp_client,
+            mcp = MCPAssertions(mcp_client)
+            await mcp.call_tool_success(
                 "ha_set_todo_item",
                 {"entity_id": entity_id, "item": summary, "status": "completed"},
             )
-            assert edited.get("success") is not False, f"todo edit failed: {edited}"
 
             try:
                 backup_name = await _wait_for_backup(
@@ -1667,8 +1638,7 @@ class TestTodoCaptureRestore:
                     "test_fetch_todo_item_matches_by_summary is the hard guard "
                     "for the summary-match fix"
                 )
-            view = await safe_call_tool(
-                mcp_client,
+            view = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "view", "backup_name": backup_name},
             )

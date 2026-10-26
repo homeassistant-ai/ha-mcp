@@ -38,14 +38,13 @@ class TestAutomationCaptureRestore:
             "trigger": [{"platform": "time", "at": "12:00:00"}],
             "action": [{"service": "homeassistant.no_op"}],
         }
+        mcp = MCPAssertions(mcp_client)
         # Create — pass identifier so the tool doesn't reject the call as
         # an ambiguous create-with-explicit-id.
-        create = await safe_call_tool(
-            mcp_client,
+        await mcp.call_tool_success(
             "ha_config_set_automation",
             {"config": original, "identifier": identifier},
         )
-        assert create.get("success") is not False
 
         backup_name = None
         try:
@@ -54,8 +53,7 @@ class TestAutomationCaptureRestore:
             await _update_automation(mcp_client, identifier, edited)
 
             # List backups; ours should be there.
-            listing = await safe_call_tool(
-                mcp_client,
+            listing = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {
                     "scope": "edits",
@@ -72,16 +70,14 @@ class TestAutomationCaptureRestore:
             backup_name = mine[0]["name"]
 
             # View
-            view = await safe_call_tool(
-                mcp_client,
+            view = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "view", "backup_name": backup_name},
             )
             assert view.get("success") is True
 
             # Restore
-            restore = await safe_call_tool(
-                mcp_client,
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -96,8 +92,7 @@ class TestAutomationCaptureRestore:
             assert restored["config"]["alias"] == original["alias"]
 
             # Delete
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )
@@ -162,8 +157,8 @@ class TestScriptCaptureRestore:
                 mcp_client, domain="script", entity_id=script_id
             )
 
-            restore = await safe_call_tool(
-                mcp_client,
+            mcp = MCPAssertions(mcp_client)
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -175,8 +170,7 @@ class TestScriptCaptureRestore:
                 )
             assert restored["config"]["alias"] == f"E2E Backup Script {script_id}"
 
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )
@@ -238,8 +232,8 @@ class TestSceneCaptureRestore:
                 mcp_client, domain="scene", entity_id=scene_id
             )
 
-            restore = await safe_call_tool(
-                mcp_client,
+            mcp = MCPAssertions(mcp_client)
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -251,8 +245,7 @@ class TestSceneCaptureRestore:
                 )
             assert restored["config"]["name"] == f"E2E Backup Scene {scene_id}"
 
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )

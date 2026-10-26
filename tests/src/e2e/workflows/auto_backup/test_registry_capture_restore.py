@@ -53,12 +53,12 @@ class TestLabelCaptureRestore:
         assert label_id, f"label_id missing from create response: {create}"
         backup_name = None
         try:
+            mcp = MCPAssertions(mcp_client)
             # Settle so the decorator's pre-edit fetch finds the label.
             await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
             # Edit — change name + color so capture fires.
-            edit = await safe_call_tool(
-                mcp_client,
+            await mcp.call_tool_success(
                 "ha_config_set_label",
                 {
                     "label_id": label_id,
@@ -66,14 +66,12 @@ class TestLabelCaptureRestore:
                     "color": "red",
                 },
             )
-            assert edit.get("success") is not False
 
             backup_name = await _wait_for_backup(
                 mcp_client, domain="label", entity_id=label_id
             )
 
-            restore = await safe_call_tool(
-                mcp_client,
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -86,8 +84,7 @@ class TestLabelCaptureRestore:
             assert restored["label"]["name"] == f"e2e_bk_label_{suffix}"
             assert restored["label"]["color"] == "blue"
 
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )
@@ -136,11 +133,11 @@ class TestCategoryCaptureRestore:
         composite = f"{scope}:{cat_id}"
         backup_name = None
         try:
+            mcp = MCPAssertions(mcp_client)
             # Settle so the decorator's pre-edit fetch finds the category.
             await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
-            edit = await safe_call_tool(
-                mcp_client,
+            await mcp.call_tool_success(
                 "ha_config_set_category",
                 {
                     "category_id": cat_id,
@@ -149,14 +146,12 @@ class TestCategoryCaptureRestore:
                     "icon": "mdi:tag-outline",
                 },
             )
-            assert edit.get("success") is not False
 
             backup_name = await _wait_for_backup(
                 mcp_client, domain="category", entity_id=composite
             )
 
-            restore = await safe_call_tool(
-                mcp_client,
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -169,8 +164,7 @@ class TestCategoryCaptureRestore:
             assert restored["category"]["name"] == f"e2e_bk_cat_{suffix}"
             assert restored["category"]["icon"] == "mdi:tag"
 
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )
@@ -220,11 +214,11 @@ class TestZoneCaptureRestore:
         assert zone_id, f"zone_id missing: {create}"
         backup_name = None
         try:
+            mcp = MCPAssertions(mcp_client)
             # Settle so the decorator's pre-edit fetch finds the zone.
             await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
-            edit = await safe_call_tool(
-                mcp_client,
+            await mcp.call_tool_success(
                 "ha_set_zone",
                 {
                     "zone_id": zone_id,
@@ -232,14 +226,12 @@ class TestZoneCaptureRestore:
                     "radius": 250,
                 },
             )
-            assert edit.get("success") is not False
 
             backup_name = await _wait_for_backup(
                 mcp_client, domain="zone", entity_id=zone_id
             )
 
-            restore = await safe_call_tool(
-                mcp_client,
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -252,8 +244,7 @@ class TestZoneCaptureRestore:
             assert restored["zone"]["name"] == f"e2e_bk_zone_{suffix}"
             assert restored["zone"]["radius"] == 150
 
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )
@@ -274,9 +265,8 @@ class TestZoneCaptureRestore:
 class TestAreaCaptureRestore:
     """Area restore is Group 2 (``config/area_registry/update``). The
     handler keys on ``area:<area_id>`` and dispatches to area or floor
-    based on the prefix — floor uses the identical mechanism with a
-    different registry, so area-only coverage proves both
-    code paths."""
+    based on the prefix. This lane runs only the area branch; the floor
+    branch (``config/floor_registry/update``) is not exercised here."""
 
     async def test_area_full_loop(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
@@ -299,11 +289,11 @@ class TestAreaCaptureRestore:
         composite = f"area:{area_id}"
         backup_name = None
         try:
+            mcp = MCPAssertions(mcp_client)
             # Settle so the decorator's pre-edit fetch finds the area.
             await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
-            edit = await safe_call_tool(
-                mcp_client,
+            await mcp.call_tool_success(
                 "ha_set_area_or_floor",
                 {
                     "kind": "area",
@@ -312,14 +302,12 @@ class TestAreaCaptureRestore:
                     "icon": "mdi:sofa-outline",
                 },
             )
-            assert edit.get("success") is not False
 
             backup_name = await _wait_for_backup(
                 mcp_client, domain="area_or_floor", entity_id=composite
             )
 
-            restore = await safe_call_tool(
-                mcp_client,
+            restore = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "restore", "backup_name": backup_name},
             )
@@ -335,8 +323,7 @@ class TestAreaCaptureRestore:
             assert restored["name"] == f"e2e_bk_area_{suffix}"
             assert restored["icon"] == "mdi:sofa"
 
-            delete = await safe_call_tool(
-                mcp_client,
+            delete = await mcp.call_tool_success(
                 "ha_manage_backup",
                 {"scope": "edits", "action": "delete", "backup_name": backup_name},
             )

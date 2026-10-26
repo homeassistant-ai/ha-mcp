@@ -8,7 +8,11 @@ import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 from ...utilities.wait_helpers import wait_for_tool_result
-from .test_capture_and_restore import _enable_auto_backup, _wait_for_backup
+from .test_capture_and_restore import (
+    _delete_leftover_backup,
+    _enable_auto_backup,
+    _wait_for_backup,
+)
 
 
 @pytest.mark.convenience
@@ -18,7 +22,10 @@ class TestEntityCaptureRestore:
     """``ha_set_entity`` writes the entity registry, so its backup must bring
     registry settings back. The lane edits a disposable input_boolean rather
     than a demo entity other lanes use, and renames it, which the restore must
-    undo through the registry entry's stable id."""
+    undo through the registry entry's stable id. The edit also flips the
+    entity's Assist exposure, kept in the registry entry's options, which the
+    restore must reset; and as it re-enables nothing, the restore must not ask
+    for a restart."""
 
     async def test_restore_renames_back_and_unhides(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
@@ -41,9 +48,20 @@ class TestEntityCaptureRestore:
                     predicate=lambda d: d["entity_entry"]["hidden"] is False,
                     description=f"{entity_id} in the entity registry",
                 )
+                exposure = await mcp.call_tool_success(
+                    "ha_get_entity_exposure", {"entity_id": entity_id}
+                )
+                exposed = exposure["exposed_to"]["conversation"]
+                # The edit flips the exposure read above, so the read-back after
+                # the restore fails if the restore leaves exposure as edited.
                 await mcp.call_tool_success(
                     "ha_set_entity",
-                    {"entity_id": entity_id, "hidden": True, "new_entity_id": renamed},
+                    {
+                        "entity_id": entity_id,
+                        "hidden": True,
+                        "new_entity_id": renamed,
+                        "expose_to": {"conversation": not exposed},
+                    },
                 )
                 backup_name = await _wait_for_backup(
                     mcp_client, domain="entity", entity_id=entity_id
@@ -55,24 +73,23 @@ class TestEntityCaptureRestore:
                 )
                 # The safety backup must find the entity under its new ID.
                 assert restore["data"]["safety_backup"] is not None
+                # Core 2026.10 reports require_restart for any update that sends
+                # disabled_by=None to an entity without a config entry, such as
+                # this helper, although it was never disabled.
+                assert not restore["data"]["result"].get("require_restart")
                 # A restore that only reset the state, as it once did, leaves
                 # the entity renamed and hidden: the old ID is then not found.
                 restored = await mcp.call_tool_success(
                     "ha_get_entity", {"entity_id": entity_id}
                 )
                 assert restored["entity_entry"]["hidden"] is False
+                exposure = await mcp.call_tool_success(
+                    "ha_get_entity_exposure", {"entity_id": entity_id}
+                )
+                assert exposure["exposed_to"]["conversation"] is exposed
             finally:
                 for target in (entity_id, renamed):
                     await safe_call_tool(
                         mcp_client, "ha_remove_helpers_integrations", {"target": target}
                     )
-                if backup_name:
-                    await safe_call_tool(
-                        mcp_client,
-                        "ha_manage_backup",
-                        {
-                            "scope": "edits",
-                            "action": "delete",
-                            "backup_name": backup_name,
-                        },
-                    )
+                await _delete_leftover_backup(mcp_client, backup_name)
