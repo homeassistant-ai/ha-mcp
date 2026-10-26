@@ -19,7 +19,7 @@
   "src/ha_mcp/tools/device_control.py": 1676,
   "src/ha_mcp/tools/smart_search/_deep.py": 1728,
   "src/ha_mcp/tools/smart_search/_entities.py": 1002,
-  "src/ha_mcp/tools/tools_addons.py": 4072,
+  "src/ha_mcp/tools/tools_addons.py": 4046,
   "src/ha_mcp/tools/tools_bug_report.py": 1345,
   "src/ha_mcp/tools/tools_code.py": 1429,
   "src/ha_mcp/tools/tools_config_automations.py": 1975,
