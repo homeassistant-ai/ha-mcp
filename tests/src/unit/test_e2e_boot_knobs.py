@@ -64,6 +64,33 @@ def _mount_targets(container) -> dict[str, str]:
     return {str(host): mapping["bind"] for host, mapping in container.volumes.items()}
 
 
+def _stub_container_tools(tmp_path: Path, pip_status: int) -> tuple[Path, Path]:
+    """Stand-ins for the container's ``pip``/``chown``/``stat`` and their call log."""
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    calls = tmp_path / "calls.log"
+    stubs = {
+        "pip": f'#!/bin/sh\necho "pip $*" >> {calls}\nexit {pip_status}\n',
+        "chown": f'#!/bin/sh\necho "chown $*" >> {calls}\nexit 0\n',
+        "stat": "#!/bin/sh\necho 1000:1000\n",
+    }
+    for name, body in stubs.items():
+        stub = stub_bin / name
+        stub.write_text(body, encoding="utf-8")
+        stub.chmod(0o755)
+    return stub_bin, calls
+
+
+def _run_entrypoint(script: str, stub_bin: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sh", "-c", script],
+        check=False,
+        env={**os.environ, "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # HA_E2E_READY_TIMEOUT
 # ---------------------------------------------------------------------------
@@ -215,26 +242,8 @@ def test_a_failed_preinstall_still_hands_the_cache_back(
         _conftest_testcontainer._build_ha_testcontainer(config, False, None)
     )
 
-    stub_bin = tmp_path / "bin"
-    stub_bin.mkdir()
-    calls = tmp_path / "calls.log"
-    stubs = {
-        "pip": f'#!/bin/sh\necho "pip $*" >> {calls}\nexit 3\n',
-        "chown": f'#!/bin/sh\necho "chown $*" >> {calls}\nexit 0\n',
-        "stat": "#!/bin/sh\necho 1000:1000\n",
-    }
-    for name, body in stubs.items():
-        stub = stub_bin / name
-        stub.write_text(body, encoding="utf-8")
-        stub.chmod(0o755)
-
-    result = subprocess.run(
-        ["sh", "-c", script],
-        check=False,
-        env={**os.environ, "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}"},
-        capture_output=True,
-        text=True,
-    )
+    stub_bin, calls = _stub_container_tools(tmp_path, pip_status=3)
+    result = _run_entrypoint(script, stub_bin)
 
     assert result.returncode == 3, result.stderr
     invocations = calls.read_text(encoding="utf-8").splitlines()
@@ -243,6 +252,36 @@ def test_a_failed_preinstall_still_hands_the_cache_back(
         f"chown -R 1000:1000 {_conftest_knobs.PIP_CACHE_MOUNT_PATH}"
     )
     assert any(call.startswith("pip install ") for call in invocations)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="the container lanes are POSIX-only"
+)
+def test_a_successful_preinstall_still_boots_home_assistant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Handing the cache back must not replace booting HA after a good install."""
+    config = _config_dir(tmp_path, ["ruamel.yaml"])
+    cache_dir = tmp_path / "pip-cache"
+    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
+    script = _entrypoint_script(
+        _conftest_testcontainer._build_ha_testcontainer(config, False, None)
+    )
+    stub_bin, calls = _stub_container_tools(tmp_path, pip_status=0)
+    booted = tmp_path / "booted"
+    init_stub = tmp_path / "init"
+    init_stub.write_text(f"#!/bin/sh\ntouch {booted}\nexit 7\n", encoding="utf-8")
+    init_stub.chmod(0o755)
+    script = script.replace("exec /init", f"exec {init_stub}")
+
+    result = _run_entrypoint(script, stub_bin)
+
+    assert result.returncode == 7, result.stderr
+    assert booted.exists()
+    invocations = calls.read_text(encoding="utf-8").splitlines()
+    assert invocations[-1] == (
+        f"chown -R 1000:1000 {_conftest_knobs.PIP_CACHE_MOUNT_PATH}"
+    )
 
 
 def test_a_relative_cache_path_is_resolved_before_it_is_mounted(
