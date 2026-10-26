@@ -107,6 +107,13 @@ configuration:
       isə serverin artıq gördüyü məxfi dəyərlərdən təmizlənir (6 simvoldan qısa dəyərlər
       nəzərə alınmır, çünki kiçik fraqmentlərin əvəzlənməsi əlaqəsiz çıxışı korlayardı).
       Sxemdə parol kimi işarələnməyən sahələr aşkarlana bilmir. Standart olaraq deaktivdir.
+  redact_app_option_keys:
+    name: Extra app option keys to redact
+    description: App (add-on) option names to redact like password fields, for apps
+      whose schema stores a secret as plain text (for example backup_password). Separate
+      names with commas or new lines. A name applies to every app; write app_slug:name
+      to limit it to one app. Naming an option group covers every option in it. Used
+      only while Redact Secrets is on. Empty by default.
   enable_mandatory_bps:
     name: Yazma zamanı ən yaxşı təcrübələr üzrə bacarıq təlimatlarını əlavə et
     description: 'Yazma alətlərinin bacarıq məzmunu təqdim etməsi funksiyası üçün

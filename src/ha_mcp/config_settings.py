@@ -559,6 +559,21 @@ class Settings(BaseSettings):
         Field(False, alias="REDACT_SECRETS")
     )
 
+    # App option names to redact like ``format: password`` fields, for apps
+    # whose schema ships a secret as a plain string (#2843). Format: see
+    # ``redaction._listed_entries``. Consulted only while ``redact_secrets``
+    # is on; the UI nests it under that toggle. Restart-required because the
+    # app reads its options only at start, though other installs apply it live.
+    redact_app_option_keys: Annotated[
+        str,
+        Setting(
+            surface="advanced",
+            section="redact_keys",
+            app=_ALL_FLAVORS,
+            restart_required=True,
+        ),
+    ] = Field("", alias="REDACT_APP_OPTION_KEYS")
+
     # Mandatory best-practice skills — server-side master switch for the
     # write-tool skill_content delivery feature (issue #1182). When True
     # (default), the six write tools (automations / scripts / scenes /

@@ -25,7 +25,7 @@ const FEATURE_META = {
   },
   redact_secrets: {
     label: "Redact Secrets",
-    help: "Redacts secrets from tool responses before they reach the AI assistant. App (add-on) options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen (values shorter than 6 characters are skipped, since replacing tiny fragments would corrupt unrelated output). Fields not marked as passwords by their schema cannot be detected. Off by default.",
+    help: "Redacts secrets from tool responses before they reach the AI assistant. App (add-on) options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen (values shorter than 6 characters are skipped, since replacing tiny fragments would corrupt unrelated output). Other fields are not detected, except private keys in app options and the app option names listed below. Off by default.",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",
@@ -106,6 +106,18 @@ const YAML_PACKAGES_SUB_FLAGS = [
 const MANDATORY_BPS_SUB_FLAGS = [
   'enable_strict_mandatory_bps',
 ];
+
+// Non-master toggles with rows nested under them; flipping one re-renders
+// the panel so those rows dim or undim at once.
+const PARENTS_WITH_SUB_ROWS = new Set([
+  'enable_yaml_config_editing',
+  'enable_mandatory_bps',
+  'redact_secrets',
+]);
+
+// Advanced text settings edited as a one-per-line list and saved
+// comma-joined.
+const LIST_EDITOR_FIELDS = new Set(['extra_yaml_write_keys', 'redact_app_option_keys']);
 
 // Cached add-on flag. Each settings endpoint (/api/settings/features,
 // /api/settings/advanced, /api/settings/backup-config) returns
@@ -284,40 +296,18 @@ function renderFeatureFlags(flags) {
         // master off then back on restores the user's prior sub-flag
         // selections automatically, which is the intended UX for an
         // opt-in beta surface.
-        if (isMaster) {
-          if (_lastFeatureFlags[fieldName]) {
-            _lastFeatureFlags[fieldName] = {
-              ..._lastFeatureFlags[fieldName],
-              value: input.checked,
-            };
-            renderFeatureFlags(_lastFeatureFlags);
-          }
-        }
-        // Re-render on enable_yaml_config_editing flip so the 3
-        // packages sub-rows dim/undim immediately. Same pattern as the
-        // master flip above — value is mutated in the live cache and
-        // the panel re-renders synchronously while the save POST runs
-        // in the background.
-        if (fieldName === 'enable_yaml_config_editing') {
-          if (_lastFeatureFlags[fieldName]) {
-            _lastFeatureFlags[fieldName] = {
-              ..._lastFeatureFlags[fieldName],
-              value: input.checked,
-            };
-            renderFeatureFlags(_lastFeatureFlags);
-          }
-        }
-        // Re-render on enable_mandatory_bps flip so the strict-mode
-        // sub-row dims/undims immediately. Same live-cache pattern as
-        // the master and yaml-config flips above.
-        if (fieldName === 'enable_mandatory_bps') {
-          if (_lastFeatureFlags[fieldName]) {
-            _lastFeatureFlags[fieldName] = {
-              ..._lastFeatureFlags[fieldName],
-              value: input.checked,
-            };
-            renderFeatureFlags(_lastFeatureFlags);
-          }
+        //
+        // The other parents with nested rows re-render the same way, so
+        // their sub-rows dim/undim immediately.
+        if (
+          (isMaster || PARENTS_WITH_SUB_ROWS.has(fieldName)) &&
+          _lastFeatureFlags[fieldName]
+        ) {
+          _lastFeatureFlags[fieldName] = {
+            ..._lastFeatureFlags[fieldName],
+            value: input.checked,
+          };
+          renderFeatureFlags(_lastFeatureFlags);
         }
         saveFeatureFlag(fieldName, input.checked);
       });
@@ -384,6 +374,11 @@ function renderFeatureFlags(flags) {
         cssClass: 'mandatory-bps-sub',
         lockedByGate: !parentOn,
       });
+    }
+    // Extra app option keys to redact (#2843), nested under redact_secrets
+    // and dimmed while it is off.
+    if (fieldName === 'redact_secrets') {
+      renderAdvancedSubRows(targetBody, 'redact_keys', 'redact-sub', !f.value);
     }
     // After the enable_filesystem_tools row, inject the custom-directories
     // editor (issue #1567). Dimmed when either the master beta is off or
@@ -473,7 +468,8 @@ function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByG
 
 // Shared renderer for non-bool sub-rows that live in ADVANCED_SETTINGS_FIELDS
 // but render nested under a feature toggle (code-mode numerics under
-// enable_code_mode, extra YAML write keys under enable_yaml_config_editing).
+// enable_code_mode, extra YAML write keys under enable_yaml_config_editing,
+// extra redacted app option keys under redact_secrets).
 // They save through commitAdvancedEdit rather than saveFeatureFlag, which is
 // why renderSubFlagRows (checkbox-only) cannot serve them.
 function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
@@ -482,7 +478,7 @@ function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
     const meta = localizeMeta('advanced', f.field, {});
     const row = document.createElement('div');
     row.className = 'feature-row ' + cssClass + (lockedByGate ? ' dimmed' : '');
-    const multiline = f.field === 'extra_yaml_write_keys';
+    const multiline = LIST_EDITOR_FIELDS.has(f.field);
     if (multiline) row.classList.add('list-editor');
 
     const info = document.createElement('div');

@@ -8,12 +8,14 @@ surfaces stop returning operator secrets verbatim:
    proxy-mode 403 hints): every ``options`` value whose Supervisor-serialized
    ``schema`` entry carries ``format: "password"`` is replaced with a
    set/empty sentinel. The schema is authoritative — keys without a schema
-   entry are never touched, and no name-based guessing happens.
+   entry are never touched, and option names are never guessed at. The only
+   name-based match is the operator's own ``redact_app_option_keys`` list;
+   listed options and PEM private-key values are treated as password fields.
 2. **Integration options** (``ha_get_integration``): fields the
    options-flow schema marks with a password text selector are replaced the
    same way, on both the harvested options and the ``include_schema=True``
    schema echo (whose ``suggested_value`` carries the live value).
-3. **Every other tool response**: password values seen while serving 1 and 2
+3. **Every other tool response**: secret values seen while serving 1 and 2
    are remembered in a process-local known-secrets set, and
    :class:`RedactSecretsMiddleware` (registered just outside the
    entity-visibility outbound scan, which stays innermost) scrubs any
@@ -162,61 +164,237 @@ def _iter_schema_entries(schema: Any) -> Iterable[dict[str, Any]]:
             yield entry
 
 
-def redact_addon_options(options: Any, schema: Any) -> Any:
-    """Copy of ``options`` with ``format: password`` values sentinel-replaced.
+def _listed_entries() -> list[tuple[str, str]]:
+    """``(scope, name)`` pairs from ``redact_app_option_keys`` (#2843).
 
-    Walks nested option groups recursively (a group's value may be a dict or,
-    with ``multiple``, a list of dicts). Keys without a schema entry pass
-    through untouched. Non-dict ``options`` are returned as-is.
+    Entries are separated by commas or newlines. ``name`` applies to every
+    app (scope ``""``); ``<slug>:<name>`` to one app.
     """
+    entries: list[tuple[str, str]] = []
+    for entry in re.split(r"[,\n]", get_global_settings().redact_app_option_keys):
+        scope, _sep, name = (part.strip() for part in entry.rpartition(":"))
+        if name:
+            entries.append((scope, name))
+    return entries
+
+
+def _scope_matches(scope: str, slug: str) -> bool:
+    # A store app's slug carries its repository's prefix (``cebe7a76_...``,
+    # ``core_...``), which the app's own docs and repository leave out, so
+    # the unprefixed slug names the app too.
+    return scope == slug or scope == slug.partition("_")[2]
+
+
+def _operator_listed_option_keys(slug: str) -> frozenset[str]:
+    return frozenset(
+        name
+        for scope, name in _listed_entries()
+        if not scope or _scope_matches(scope, slug)
+    )
+
+
+def _schema_names(schema: Any) -> set[str]:
+    names: set[str] = set()
+    for entry in _iter_schema_entries(schema):
+        names.add(entry["name"])
+        names |= _schema_names(entry.get("schema"))
+    return names
+
+
+def _option_names(options: Any) -> set[str]:
+    names: set[str] = set()
+    items = options if isinstance(options, list) else [options]
+    for item in items:
+        if isinstance(item, dict):
+            for name, value in item.items():
+                names.add(name)
+                names |= _option_names(value)
+    return names
+
+
+def _is_secret_option(
+    entry: dict[str, Any], value: Any, listed: frozenset[str]
+) -> bool:
+    return (
+        entry.get("format") == "password"
+        or entry["name"] in listed
+        or contains_pem_private_key(value)
+    )
+
+
+def redact_addon_info(
+    addon: dict[str, Any], slug: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Redacted copy of a Supervisor ``/addons/<slug>/info`` result, and warnings.
+
+    Registers the app's secret values for the known-value scrub. Without a
+    readable schema the password fields cannot be told apart, so every option
+    value is redacted, like the integration surface does.
+    """
+    options = addon.get("options")
+    schema = addon.get("schema")
+    if not isinstance(options, dict) or not options:
+        return addon, []
+    listed = _operator_listed_option_keys(slug)
+    if not isinstance(schema, list) or not schema:
+        # Every value is masked here, but only listed ones are known secrets
+        # worth scrubbing from other responses.
+        register_known_secret_values(_collect_stored(options, listed, False))
+        redacted = {key: sentinel_replacement(value) for key, value in options.items()}
+        return {**addon, "options": redacted}, [
+            f"redact_secrets: no options schema readable for '{slug}' — "
+            "every option value was redacted conservatively (the "
+            "password fields cannot be told apart without the schema)"
+        ]
+    register_known_secret_values(_collect_addon_secret_values(options, schema, listed))
+    unknown = sorted(
+        {
+            name
+            for scope, name in _listed_entries()
+            if scope and _scope_matches(scope, slug)
+        }
+        - _schema_names(schema)
+        - _option_names(options)
+    )
+    warnings = (
+        [
+            f"redact_app_option_keys names {', '.join(unknown)} for '{slug}', "
+            "but this app has no such option, so nothing was redacted for them"
+        ]
+        if unknown
+        else []
+    )
+    redacted = _redact_addon_options(options, schema, listed)
+    return {**addon, "options": redacted}, warnings
+
+
+def redact_addon_options(options: Any, schema: Any, slug: str) -> Any:
+    """Copy of ``options`` with secret values sentinel-replaced.
+
+    A value is secret when its schema entry carries ``format: password``, its
+    name (or the name of a group containing it) is listed for ``slug`` in
+    ``redact_app_option_keys``, or it holds a PEM private key. Listed names
+    are also redacted in values Supervisor kept after an app update dropped
+    the option or changed it between a group and a plain field, keeping the
+    stored shape around them. Walks nested option groups recursively (a
+    group's value may be a dict or, with ``multiple``, a list of dicts).
+    Other keys without a schema entry pass through untouched. Non-dict
+    ``options`` are returned as-is.
+    """
+    return _redact_addon_options(options, schema, _operator_listed_option_keys(slug))
+
+
+def _redact_addon_options(
+    options: Any, schema: Any, listed: frozenset[str], whole: bool = False
+) -> Any:
+    """``whole``: the options sit inside a listed group, so all are secret."""
     if not isinstance(options, dict):
         return options
     out = dict(options)
+    known: set[str] = set()
     for entry in _iter_schema_entries(schema):
         name = entry["name"]
+        known.add(name)
         if name not in out:
             continue
         value = out[name]
         nested = entry.get("schema")
+        secret = whole or name in listed
+        # A manual app update can turn a field into a group or back without
+        # Supervisor converting the stored value, so a mismatched value is
+        # walked like a stored option the schema no longer describes.
         if isinstance(nested, list):
-            if isinstance(value, dict):
-                out[name] = redact_addon_options(value, nested)
-            elif isinstance(value, list):
-                out[name] = [
-                    redact_addon_options(item, nested)
-                    if isinstance(item, dict)
-                    else item
-                    for item in value
-                ]
-            continue
-        if entry.get("format") == "password" or contains_pem_private_key(value):
+            out[name] = _redact_group(value, nested, listed, secret)
+        elif secret or _is_secret_option(entry, value, listed):
             # multiple: true passwords are a list — sentinel_replacement
             # keeps the container shape so the option's type survives.
             out[name] = sentinel_replacement(value)
+        elif isinstance(value, (dict, list)):
+            out[name] = _redact_stored(value, listed, False)
+    for name in out.keys() - known:
+        out[name] = _redact_stored(out[name], listed, whole or name in listed)
     return out
 
 
-def collect_addon_secret_values(options: Any, schema: Any) -> set[str]:
-    """Live ``format: password`` option values, for the known-value scrub."""
+def _redact_group(
+    value: Any, schema: list[Any], listed: frozenset[str], secret: bool
+) -> Any:
+    if isinstance(value, dict):
+        return _redact_addon_options(value, schema, listed, secret)
+    if isinstance(value, list):
+        return [
+            _redact_addon_options(item, schema, listed, secret)
+            if isinstance(item, dict)
+            else _redact_stored(item, listed, secret)
+            for item in value
+        ]
+    return value if value is None else _redact_stored(value, listed, secret)
+
+
+def _redact_stored(value: Any, listed: frozenset[str], secret: bool) -> Any:
+    """Redact a stored option the schema no longer describes.
+
+    Supervisor keeps an option's saved value after an app update drops it
+    from the schema or changes its type, so a listed secret can outlive its
+    schema entry. Only the listed names can be matched here; the shape is
+    kept.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _redact_stored(item, listed, secret or key in listed)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_stored(item, listed, secret) for item in value]
+    return sentinel_replacement(value) if secret else value
+
+
+def collect_addon_secret_values(options: Any, schema: Any, slug: str) -> set[str]:
+    """Live secret option values (see ``redact_addon_options``), for the scrub."""
+    return _collect_addon_secret_values(
+        options, schema, _operator_listed_option_keys(slug)
+    )
+
+
+def _collect_addon_secret_values(
+    options: Any, schema: Any, listed: frozenset[str], whole: bool = False
+) -> set[str]:
     values: set[str] = set()
     if not isinstance(options, dict):
         return values
+    known: set[str] = set()
     for entry in _iter_schema_entries(schema):
-        value = options.get(entry["name"])
+        name = entry["name"]
+        known.add(name)
+        value = options.get(name)
         nested = entry.get("schema")
+        secret = whole or name in listed
         if isinstance(nested, list):
-            if isinstance(value, dict):
-                values |= collect_addon_secret_values(value, nested)
-            elif isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict):
-                        values |= collect_addon_secret_values(item, nested)
+            items = value if isinstance(value, list) else [value]
+            for item in items:
+                if isinstance(item, dict):
+                    values |= _collect_addon_secret_values(item, nested, listed, secret)
+                else:
+                    values |= _collect_stored(item, listed, secret)
             continue
-        if entry.get("format") == "password" or contains_pem_private_key(value):
-            candidates = value if isinstance(value, list) else [value]
-            for candidate in candidates:
-                values |= known_values_for_option_item(candidate)
+        values |= _collect_stored(
+            value, listed, secret or _is_secret_option(entry, value, listed)
+        )
+    for name in options.keys() - known:
+        values |= _collect_stored(options[name], listed, whole or name in listed)
     return values
+
+
+def _collect_stored(value: Any, listed: frozenset[str], secret: bool) -> set[str]:
+    """Known-value strings of a stored option (see ``_redact_stored``)."""
+    if isinstance(value, dict):
+        values: set[str] = set()
+        for key, item in value.items():
+            values |= _collect_stored(item, listed, secret or key in listed)
+        return values
+    if isinstance(value, list):
+        return set().union(*(_collect_stored(item, listed, secret) for item in value))
+    return known_values_for_option_item(value) if secret else set()
 
 
 def sentinel_option_keys(options: Any, _prefix: str = "") -> list[str]:
