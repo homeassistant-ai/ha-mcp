@@ -801,6 +801,8 @@ class UpdateTools:
             except Exception as e:  # noqa: BLE001
                 # Batch item failure — collect, don't raise.
                 results.append(create_service_item_error(e, context={"entity_id": eid}))
+                if is_service_outcome_unknown(e):
+                    break
         return results, succeeded
 
     async def _execute_batch_action(
@@ -1059,11 +1061,11 @@ class UpdateTools:
         issue_id to 'ignore_repair' / 'unignore_repair'. In Read Only Mode the
         read actions ('list', 'get') stay available; write actions are blocked.
 
-        'install' blocks until each update finishes (minutes). One that outlasts
-        the request timeout ends the call with a connection timeout while it
-        keeps running, and a Core update restarts Home Assistant; neither means
-        failure, but later batch targets were not started. Confirm per entity
-        with action='get'; finished updates drop out of 'list', which also
+        'install' blocks until each update finishes (minutes). Any unknown
+        service outcome stops the batch, preserving earlier results and the
+        current item's diagnostic; later targets are listed in not_attempted.
+        An update may still be running, or Core restarting. Check the affected
+        entity with action='get' before retrying. Finished updates drop out of 'list', which also
         returns ha_mcp_update — this MCP server's own update status {current,
         latest, update_available}, so a newer ha-mcp release can be flagged.
 

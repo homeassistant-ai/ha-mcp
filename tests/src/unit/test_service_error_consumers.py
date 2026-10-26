@@ -1,6 +1,7 @@
 """Real service errors retain their outcome through domain-specific consumers."""
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock
 
 import httpx
@@ -126,29 +127,57 @@ async def test_partial_service_consumers_keep_unknown_outcome(
     assert "before retrying" in error["error"]["suggestion"]
 
 
-@pytest.mark.parametrize("failure", ["timeout", "auth"])
+@pytest.mark.parametrize(
+    "failure,http_status,native_code,diagnostic",
+    [
+        ("timeout", None, None, "reply lost after update effect"),
+        ("auth", 401, None, "HTTP 401"),
+        ("api", 500, None, "API error after update effect"),
+        ("ws", None, "not_found", "WS error after update effect"),
+    ],
+)
 async def test_update_batch_retains_prior_results_and_stops_after_unknown_effect(
-    monkeypatch: pytest.MonkeyPatch, failure: str
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    http_status: int | None,
+    native_code: str | None,
+    diagnostic: str,
 ) -> None:
     effects: list[str] = []
     targets = ["update.first", "update.uncertain", "update.unattempted"]
 
     def post(request: httpx.Request) -> httpx.Response:
+        assert failure != "ws"
         effects.append(json.loads(request.content)["entity_id"])
         if len(effects) == 1:
             return httpx.Response(200, json=[])
         if failure == "timeout":
             raise httpx.ReadTimeout("reply lost after update effect")
+        if failure == "api":
+            return httpx.Response(
+                500, json={"message": "API error after update effect"}
+            )
         return httpx.Response(401, json={"message": "unauthorized after update effect"})
 
+    async def websocket(message: dict[str, Any]) -> dict[str, Any]:
+        assert failure == "ws"
+        effects.append(message["service_data"]["entity_id"])
+        if len(effects) == 1:
+            return {"success": True, "result": {}}
+        return {
+            "success": False,
+            "error": "WS error after update effect",
+            "error_code": "not_found",
+        }
+
     async with HomeAssistantClient(
-        "http://update.test", "test-token", is_admin=True
+        "http://update.test", "test-token", is_admin=failure != "ws"
     ) as client:
         await client.httpx_client.aclose()
         client.httpx_client = httpx.AsyncClient(
             base_url="http://update.test/api", transport=httpx.MockTransport(post)
         )
-        ws = AsyncMock(side_effect=AssertionError("must not replay or continue"))
+        ws = AsyncMock(side_effect=websocket)
         monkeypatch.setattr(client, "send_websocket_message", ws)
         tools = UpdateTools(client)
         monkeypatch.setattr(
@@ -158,7 +187,10 @@ async def test_update_batch_retains_prior_results_and_stops_after_unknown_effect
             tools, "_verify_targets_exist", AsyncMock(return_value=(targets, []))
         )
         result = await tools._execute_batch_action("install", targets, None, False)
-        ws.assert_not_awaited()
+        if failure == "ws":
+            assert ws.await_count == 2
+        else:
+            ws.assert_not_awaited()
     assert effects == targets[:2]
     assert result["success"] is False
     assert result["requested"] == 3
@@ -167,10 +199,8 @@ async def test_update_batch_retains_prior_results_and_stops_after_unknown_effect
     uncertain = result["results"][1]
     assert uncertain["entity_id"] == targets[1]
     assert uncertain["write_outcome_unknown"] is True
-    if failure == "timeout":
-        assert "reply lost after update effect" in uncertain["error"]["details"]
-    else:
-        assert uncertain["http_status"] == 401
-        assert "HTTP 401" in uncertain["error"]["details"]
+    assert uncertain.get("http_status") == http_status
+    assert uncertain.get("ha_error_code") == native_code
+    assert diagnostic in uncertain["error"]["details"]
     assert "before retrying" in uncertain["error"]["suggestion"]
     assert result["not_attempted"] == [targets[2]]
