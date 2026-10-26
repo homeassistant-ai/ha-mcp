@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,39 @@ def _is_valid_hacs_frontend(path: Path) -> bool:
     return all((path / name).is_file() for name in ("__init__.py", "entrypoint.js"))
 
 
+class _HacsMetadataRedirectRefused(urllib.request.HTTPRedirectHandler):
+    """Keep metadata credentials on the fixed GitHub API endpoint."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        raise urllib.error.HTTPError(
+            req.full_url, code, "HACS release metadata redirect refused", headers, fp
+        )
+
+
+def _hacs_frontend_release_tag() -> str:
+    request = urllib.request.Request(
+        "https://api.github.com/repos/hacs/frontend/releases/latest",
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    token = os.environ.get("HACS_FRONTEND_GITHUB_TOKEN") or os.environ.get(
+        "GITHUB_TOKEN"
+    )
+    if token:
+        request.add_unredirected_header("Authorization", f"Bearer {token}")
+    opener = urllib.request.build_opener(_HacsMetadataRedirectRefused())
+    with opener.open(request, timeout=30) as response:
+        tag_name: str = json.loads(response.read())["tag_name"]
+    return tag_name
+
+
 def _download_hacs_frontend(frontend_dir: Path) -> None:
     """Download the latest HACS frontend release into ``frontend_dir``."""
     import tarfile
@@ -235,11 +269,7 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
     logger.info("HACS frontend not found, downloading...")
 
     try:
-        # Get the latest frontend version from GitHub API
-        api_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
-        with urllib.request.urlopen(api_url, timeout=30) as response:
-            release_data = json.loads(response.read())
-            tag_name = release_data["tag_name"]
+        tag_name = _hacs_frontend_release_tag()
 
         # Download and extract the frontend
         tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"

@@ -115,6 +115,7 @@ jobs:
         exit $exit_code
       env:
         HAMCP_ENV_FILE: "tests/.env.test"
+        HACS_FRONTEND_GITHUB_TOKEN: ${{ github.token }}
 
     - name: Upload performance results
       if: always()

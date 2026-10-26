@@ -6,14 +6,28 @@ import errno
 import importlib.util
 import io
 import json
+import logging
+import os
 import tarfile
 import urllib.error
+import urllib.request
+import urllib.response
+from collections.abc import Callable
+from http.client import HTTPMessage
 from pathlib import Path
 from types import ModuleType
 from typing import Any, NoReturn
 from unittest.mock import MagicMock
 
 import pytest
+
+_REAL_BUILD_OPENER = urllib.request.build_opener
+
+
+@pytest.fixture(autouse=True)
+def isolated_github_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("HACS_FRONTEND_GITHUB_TOKEN", raising=False)
 
 
 @pytest.fixture
@@ -43,24 +57,67 @@ def _archive(files: dict[str, bytes]) -> bytes:
     return stream.getvalue()
 
 
+class _HTTPResponse(urllib.response.addinfourl):
+    msg: str
+
+
+def _http_response(
+    request: urllib.request.Request,
+    payload: bytes,
+    status: int = 200,
+    location: str | None = None,
+) -> _HTTPResponse:
+    headers = HTTPMessage()
+    if location:
+        headers["Location"] = location
+    response = _HTTPResponse(io.BytesIO(payload), headers, request.full_url, status)
+    response.msg = "rate limit exceeded" if status == 403 else "fixture response"
+    return response
+
+
+def _stub_http(
+    seed: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    respond: Callable[[urllib.request.Request], urllib.response.addinfourl],
+) -> None:
+    class HTTPTransport(urllib.request.HTTPHandler):
+        def http_open(self, request: urllib.request.Request) -> Any:
+            return respond(request)
+
+    class HTTPSTransport(urllib.request.HTTPSHandler):
+        def https_open(self, request: urllib.request.Request) -> Any:
+            return respond(request)
+
+    def build_opener(*handlers: Any) -> urllib.request.OpenerDirector:
+        return _REAL_BUILD_OPENER(
+            urllib.request.ProxyHandler({}),
+            HTTPTransport(),
+            HTTPSTransport(),
+            *handlers,
+        )
+
+    monkeypatch.setattr(seed.urllib.request, "build_opener", build_opener)
+    monkeypatch.setattr(seed.urllib.request, "urlopen", build_opener().open)
+
+
 def _serve_archive(
     seed: ModuleType, monkeypatch: pytest.MonkeyPatch, payload: bytes
 ) -> None:
     responses = iter([json.dumps({"tag_name": "1.0.0"}).encode(), payload])
-
-    def urlopen(url: str, timeout: int) -> io.BytesIO:
-        return io.BytesIO(next(responses))
-
-    monkeypatch.setattr(seed.urllib.request, "urlopen", urlopen)
+    _stub_http(
+        seed,
+        monkeypatch,
+        lambda request: _http_response(request, next(responses)),
+    )
 
 
 def test_download_failure_aborts_bootstrap_and_releases_lock(
     seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def unavailable(*args: Any, **kwargs: Any) -> NoReturn:
+    def unavailable(request: urllib.request.Request) -> NoReturn:
         raise urllib.error.URLError("fixture network unavailable")
 
-    monkeypatch.setattr(seed.urllib.request, "urlopen", unavailable)
+    _stub_http(seed, monkeypatch, unavailable)
     with pytest.raises(urllib.error.URLError, match="fixture network unavailable"):
         seed._ensure_hacs_frontend(state)
     assert not (state / ".hacs_frontend.lock").exists()
@@ -307,4 +364,162 @@ def test_failed_rename_preserves_concurrent_destination_and_cleans_staging(
     assert (frontend / "other-owner.txt").read_text(encoding="utf-8") == "preserve me"
     assert list(frontend.iterdir()) == [frontend / "other-owner.txt"]
     assert list(frontend.parent.iterdir()) == [frontend]
+    assert not (state / ".hacs_frontend.lock").exists()
+
+
+@pytest.mark.parametrize(
+    ("credential", "github_fallback"),
+    [
+        ("GITHUB_TOKEN", False),
+        ("HACS_FRONTEND_GITHUB_TOKEN", False),
+        ("HACS_FRONTEND_GITHUB_TOKEN", True),
+    ],
+    ids=["job-token", "metadata-alias-only", "metadata-alias-priority"],
+)
+def test_token_authenticates_only_fixed_metadata_request(
+    seed: ModuleType,
+    state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    credential: str,
+    github_fallback: bool,
+) -> None:
+    token = "fixture-metadata-token"
+    caplog.set_level(logging.DEBUG, logger=seed.__name__)
+    if github_fallback:
+        monkeypatch.setenv("GITHUB_TOKEN", "fixture-fallback-token")
+    monkeypatch.setenv(credential, token)
+    github_token_before = os.environ.get("GITHUB_TOKEN")
+    metadata_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
+    asset_url = "https://github.com/hacs/frontend/releases/download/1.0.0/hacs_frontend-1.0.0.tar.gz"
+    download_url = (
+        "https://release-assets.githubusercontent.com/fixture/frontend.tar.gz"
+    )
+    requests: list[urllib.request.Request] = []
+    payload = _archive(
+        {
+            "hacs_frontend/__init__.py": b"VERSION = 'fixture'",
+            "hacs_frontend/entrypoint.js": b"export {};",
+        }
+    )
+
+    def respond(request: urllib.request.Request) -> urllib.response.addinfourl:
+        requests.append(request)
+        if request.full_url == metadata_url:
+            if request.get_header("Authorization") != f"Bearer {token}":
+                return _http_response(request, b"rate limit exceeded", 403)
+            return _http_response(request, b'{"tag_name":"1.0.0"}')
+        if request.full_url == asset_url:
+            return _http_response(request, b"", 302, download_url)
+        assert request.full_url == download_url
+        return _http_response(request, payload)
+
+    _stub_http(seed, monkeypatch, respond)
+    seed._ensure_hacs_frontend(state)
+
+    assert os.environ.get("GITHUB_TOKEN") == github_token_before
+    assert [request.full_url for request in requests] == [
+        metadata_url,
+        asset_url,
+        download_url,
+    ]
+    assert [request.get_header("Authorization") for request in requests] == [
+        f"Bearer {token}",
+        None,
+        None,
+    ]
+    redirected = urllib.request.HTTPRedirectHandler().redirect_request(
+        requests[0],
+        io.BytesIO(),
+        302,
+        "Found",
+        HTTPMessage(),
+        "https://redirect.invalid/",
+    )
+    assert redirected is not None
+    assert redirected.get_header("Authorization") is None
+    assert token not in caplog.text
+    assert "fixture-fallback-token" not in caplog.text
+    for path in state.rglob("*"):
+        if path.is_file():
+            assert token.encode() not in path.read_bytes()
+            assert b"fixture-fallback-token" not in path.read_bytes()
+
+
+def test_metadata_redirect_is_refused_before_any_other_host_is_contacted(
+    seed: ModuleType,
+    state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    token = "fixture-metadata-token"
+    monkeypatch.setenv("GITHUB_TOKEN", token)
+    caplog.set_level(logging.DEBUG, logger=seed.__name__)
+    metadata_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
+    requests: list[str] = []
+
+    def respond(request: urllib.request.Request) -> urllib.response.addinfourl:
+        requests.append(request.full_url)
+        if request.full_url == metadata_url:
+            return _http_response(request, b"", 302, "https://redirect.invalid/release")
+        pytest.fail("The metadata redirect was followed")
+
+    _stub_http(seed, monkeypatch, respond)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        seed._ensure_hacs_frontend(state)
+    assert error.value.code == 302
+    assert requests == [metadata_url]
+    assert token not in caplog.text
+    assert not _frontend(state).exists()
+    assert not (state / ".hacs_frontend.lock").exists()
+
+
+def test_local_metadata_lookup_without_a_token_remains_anonymous(
+    seed: ModuleType, state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[urllib.request.Request] = []
+    responses = iter(
+        [
+            b'{"tag_name":"1.0.0"}',
+            _archive(
+                {
+                    "hacs_frontend/__init__.py": b"VERSION = 'fixture'",
+                    "hacs_frontend/entrypoint.js": b"export {};",
+                }
+            ),
+        ]
+    )
+
+    def respond(request: urllib.request.Request) -> urllib.response.addinfourl:
+        requests.append(request)
+        return _http_response(request, next(responses))
+
+    _stub_http(seed, monkeypatch, respond)
+    seed._ensure_hacs_frontend(state)
+    assert len(requests) == 2
+    assert all(request.get_header("Authorization") is None for request in requests)
+
+
+def test_authenticated_metadata_failure_is_not_retried_or_logged_with_token(
+    seed: ModuleType,
+    state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    token = "fixture-sensitive-token"
+    caplog.set_level(logging.DEBUG, logger=seed.__name__)
+    monkeypatch.setenv("GITHUB_TOKEN", token)
+    requests: list[str] = []
+
+    def respond(request: urllib.request.Request) -> urllib.response.addinfourl:
+        requests.append(request.full_url)
+        return _http_response(request, b"rate limit exceeded", 403)
+
+    _stub_http(seed, monkeypatch, respond)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        seed._ensure_hacs_frontend(state)
+    assert error.value.code == 403
+    assert requests == ["https://api.github.com/repos/hacs/frontend/releases/latest"]
+    assert token not in caplog.text
+    assert not _frontend(state).exists()
     assert not (state / ".hacs_frontend.lock").exists()
