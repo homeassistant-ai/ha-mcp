@@ -178,6 +178,36 @@ async def test_ws_native_error_distinguishes_preflight_from_handler_failure(
     send.assert_awaited_once()
 
 
+async def test_restart_success_payload_cannot_replace_its_protocol_envelope(
+    restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Error-looking payload fields do not override Core's successful result frame."""
+    client, ws = restart_client
+    effects = 0
+
+    async def respond(message: dict[str, Any]) -> None:
+        nonlocal effects
+        effects += 1
+        await ws._process_message(
+            {
+                "id": message["id"],
+                "type": "result",
+                "success": True,
+                "result": {"success": False, "error_code": "invalid_format"},
+            }
+        )
+
+    monkeypatch.setattr(ws, "send_json_message", AsyncMock(side_effect=respond))
+
+    result = await SystemTools(client).ha_restart(confirm=True)
+
+    assert effects == 1
+    assert result["success"] is True
+    assert result["requested"] is True
+    assert result.get("execution_status") != "not_started"
+
+
 async def test_unexpected_ws_frame_cannot_assert_native_error_provenance(
     restart_client: tuple[HomeAssistantClient, HomeAssistantWebSocketClient],
     monkeypatch: pytest.MonkeyPatch,
