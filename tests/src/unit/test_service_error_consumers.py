@@ -124,3 +124,53 @@ async def test_partial_service_consumers_keep_unknown_outcome(
     assert error["http_status"] == 500
     assert "not found after effect" in error["error"]["details"]
     assert "before retrying" in error["error"]["suggestion"]
+
+
+@pytest.mark.parametrize("failure", ["timeout", "auth"])
+async def test_update_batch_retains_prior_results_and_stops_after_unknown_effect(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    effects: list[str] = []
+    targets = ["update.first", "update.uncertain", "update.unattempted"]
+
+    def post(request: httpx.Request) -> httpx.Response:
+        effects.append(json.loads(request.content)["entity_id"])
+        if len(effects) == 1:
+            return httpx.Response(200, json=[])
+        if failure == "timeout":
+            raise httpx.ReadTimeout("reply lost after update effect")
+        return httpx.Response(401, json={"message": "unauthorized after update effect"})
+
+    async with HomeAssistantClient(
+        "http://update.test", "test-token", is_admin=True
+    ) as client:
+        await client.httpx_client.aclose()
+        client.httpx_client = httpx.AsyncClient(
+            base_url="http://update.test/api", transport=httpx.MockTransport(post)
+        )
+        ws = AsyncMock(side_effect=AssertionError("must not replay or continue"))
+        monkeypatch.setattr(client, "send_websocket_message", ws)
+        tools = UpdateTools(client)
+        monkeypatch.setattr(
+            tools, "_resolve_update_targets", AsyncMock(return_value=targets)
+        )
+        monkeypatch.setattr(
+            tools, "_verify_targets_exist", AsyncMock(return_value=(targets, []))
+        )
+        result = await tools._execute_batch_action("install", targets, None, False)
+        ws.assert_not_awaited()
+    assert effects == targets[:2]
+    assert result["success"] is False
+    assert result["requested"] == 3
+    assert result["succeeded"] == 1
+    assert result["results"][0] == {"success": True, "entity_id": targets[0]}
+    uncertain = result["results"][1]
+    assert uncertain["entity_id"] == targets[1]
+    assert uncertain["write_outcome_unknown"] is True
+    if failure == "timeout":
+        assert "reply lost after update effect" in uncertain["error"]["details"]
+    else:
+        assert uncertain["http_status"] == 401
+        assert "HTTP 401" in uncertain["error"]["details"]
+    assert "before retrying" in uncertain["error"]["suggestion"]
+    assert result["not_attempted"] == [targets[2]]

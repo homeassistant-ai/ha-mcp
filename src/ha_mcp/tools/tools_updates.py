@@ -20,6 +20,7 @@ from ..client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
+from ..client.service_errors import is_service_outcome_unknown
 from ..errors import ErrorCode, create_error_response
 from .coercion import JSON_STRING_COERCION
 from .helpers import (
@@ -792,11 +793,11 @@ class UpdateTools:
                 await self._client.call_service("update", action, data)
                 results.append({"success": True, "entity_id": eid})
                 succeeded += 1
-            except (HomeAssistantConnectionError, HomeAssistantAuthError):
-                # Fatal transport/auth failure — the connection is gone,
-                # so remaining items would fail identically. Propagate to
-                # surface the root cause instead of N per-item errors.
-                raise
+            except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                if not is_service_outcome_unknown(e):
+                    raise
+                results.append(create_service_item_error(e, context={"entity_id": eid}))
+                break
             except Exception as e:  # noqa: BLE001
                 # Batch item failure — collect, don't raise.
                 results.append(create_service_item_error(e, context={"entity_id": eid}))
@@ -834,6 +835,8 @@ class UpdateTools:
             "failed": failed,
             "results": results,
         }
+        if len(call_results) < len(targets):
+            response["not_attempted"] = targets[len(call_results) :]
         if not requested:
             response["note"] = "No matching pending updates to act on."
         elif action == "install" and succeeded:
